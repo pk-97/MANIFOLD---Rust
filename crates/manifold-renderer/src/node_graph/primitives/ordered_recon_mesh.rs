@@ -298,8 +298,9 @@ mod gpu_tests {
             uv,
             _pad2: [3.0, -5.0],
             tangent,
+            color: [1.0; 4],
         }
-    }
+}
 
     fn dispatch(
         wgsl: &str,

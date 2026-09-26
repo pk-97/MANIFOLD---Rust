@@ -24,6 +24,10 @@ use manifold_renderer::preset_runtime::PresetRuntime;
 use crate::harness;
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
+    render_frames(json, 2)
+}
+
+fn render_frames(json: &str, frames: i64) -> (Vec<u8>, u32, u32) {
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -38,7 +42,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     .unwrap_or_else(|e| panic!("glass scene graph must build: {e}\n{json}"));
 
     let target = h.make_target("render-scene-glass");
-    for frame in 0..2 {
+    for frame in 0..frames {
         let ctx = PresetContext {
             time: 0.1,
             beat: 0.2,
@@ -54,17 +58,24 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        let mut enc = h.device.create_encoder("render-scene-glass-enc");
-        {
-            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
-            runtime.render(
-                &mut gpu,
-                &target.texture,
-                &ctx,
-                &manifold_core::params::ParamManifest::default(),
-            );
+        let mut draw = || {
+            let mut enc = h.device.create_encoder("render-scene-glass-enc");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+                runtime.render(
+                    &mut gpu,
+                    &target.texture,
+                    &ctx,
+                    &manifold_core::params::ParamManifest::default(),
+                );
+            }
+            enc.commit_and_wait_completed();
+        };
+        if frames > 2 && frame == frames - 1 {
+            harness::assert_rt_dispatched(&mut draw, "glass above opaque geometry");
+        } else {
+            draw();
         }
-        enc.commit_and_wait_completed();
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -263,7 +274,12 @@ fn swapping_pane_positions_swaps_the_blend_order() {
     let expected_2 = over(blue, a_blue, mid_2);
 
     assert_rgb_close(got_1, expected_1, 0.02, "sort config 1 (red nearer)");
-    assert_rgb_close(got_2, expected_2, 0.02, "sort config 2 (blue nearer, swapped)");
+    assert_rgb_close(
+        got_2,
+        expected_2,
+        0.02,
+        "sort config 2 (blue nearer, swapped)",
+    );
     let delta: f32 = (0..3).map(|c| (got_1[c] - got_2[c]).abs()).sum();
     assert!(
         delta > 0.05,
@@ -287,11 +303,24 @@ fn blend_object_fully_behind_opaque_contributes_nothing() {
     let (glass_nodes, glass_ids) = plane_object(200, 0.0, glass_color, 0.8, 2);
 
     let with_glass_nodes = format!("{opaque_nodes}{glass_nodes}");
-    let with_glass_wires =
-        format!("{}{}", wire_object(&opaque_ids, 0), wire_object(&glass_ids, 1));
-    let with_glass_json = assemble("OccludedGlassPresent", &with_glass_nodes, &with_glass_wires, 2);
+    let with_glass_wires = format!(
+        "{}{}",
+        wire_object(&opaque_ids, 0),
+        wire_object(&glass_ids, 1)
+    );
+    let with_glass_json = assemble(
+        "OccludedGlassPresent",
+        &with_glass_nodes,
+        &with_glass_wires,
+        2,
+    );
 
-    let without_glass_json = assemble("OccludedGlassAbsent", &opaque_nodes, &wire_object(&opaque_ids, 0), 1);
+    let without_glass_json = assemble(
+        "OccludedGlassAbsent",
+        &opaque_nodes,
+        &wire_object(&opaque_ids, 0),
+        1,
+    );
 
     let (with_bytes, w, h) = render_readback(&with_glass_json);
     let (without_bytes, _, _) = render_readback(&without_glass_json);
@@ -357,7 +386,10 @@ fn total_luma(bytes: &[u8]) -> f64 {
         let r = f16::from_le_bytes([px[0], px[1]]).to_f32();
         let g = f16::from_le_bytes([px[2], px[3]]).to_f32();
         let b = f16::from_le_bytes([px[4], px[5]]).to_f32();
-        assert!(r.is_finite() && g.is_finite() && b.is_finite(), "non-finite pixel");
+        assert!(
+            r.is_finite() && g.is_finite() && b.is_finite(),
+            "non-finite pixel"
+        );
         sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) as f64;
     }
     sum
@@ -377,12 +409,22 @@ fn blend_material_casts_no_shadow() {
 
     let shadows_on_nodes = format!("{}{occ_nodes}", ground_and_sun_nodes(true));
     let shadows_on_wires = format!("{GROUND_AND_SUN_WIRES}{occ_wires}");
-    let shadows_on_json =
-        assemble_with_lights("BlendCastsNoShadowOn", &shadows_on_nodes, &shadows_on_wires, 2, 1);
+    let shadows_on_json = assemble_with_lights(
+        "BlendCastsNoShadowOn",
+        &shadows_on_nodes,
+        &shadows_on_wires,
+        2,
+        1,
+    );
 
     let shadows_off_nodes = format!("{}{occ_nodes}", ground_and_sun_nodes(false));
-    let shadows_off_json =
-        assemble_with_lights("BlendCastsNoShadowOff", &shadows_off_nodes, &shadows_on_wires, 2, 1);
+    let shadows_off_json = assemble_with_lights(
+        "BlendCastsNoShadowOff",
+        &shadows_off_nodes,
+        &shadows_on_wires,
+        2,
+        1,
+    );
 
     let (on_bytes, _w, _h) = render_readback(&shadows_on_json);
     let (off_bytes, _, _) = render_readback(&shadows_off_json);
@@ -390,12 +432,132 @@ fn blend_material_casts_no_shadow() {
     let sum_on = total_luma(&on_bytes);
     let sum_off = total_luma(&off_bytes);
 
-    eprintln!("blend-casts-no-shadow luma: cast_shadows=1 -> {sum_on:.1}, cast_shadows=0 -> {sum_off:.1}");
+    eprintln!(
+        "blend-casts-no-shadow luma: cast_shadows=1 -> {sum_on:.1}, cast_shadows=0 -> {sum_off:.1}"
+    );
     let drop = (sum_off - sum_on).abs() / sum_off;
     assert!(
         drop < 0.01,
         "a Blend occluder must cast NO shadow regardless of the light's cast_shadows flag: \
          cast_shadows=1 luma={sum_on:.1} cast_shadows=0 luma={sum_off:.1} differ by {:.2}% (expected < 1%)",
         drop * 100.0
+    );
+}
+
+/// A real transmission material, with an opaque coloured background. The
+/// zero-specular case isolates transmitted radiance from the reflection lobe.
+fn transmission_scene(exposure: f32, transmission: f32, rt_reflections: bool) -> String {
+    use serde_json::json;
+    let (bg, bg_ids) = plane_object(100, 0.0, [0.15, 0.3, 0.6], 1.0, 0);
+    let (fg, fg_ids) = plane_object(200, 1.0, [1.0; 3], 1.0, 2);
+    let mut graph: serde_json::Value = serde_json::from_str(&assemble(
+        "TransmissionFidelity",
+        &format!("{bg}{fg}"),
+        &format!("{}{}", wire_object(&bg_ids, 0), wire_object(&fg_ids, 1)),
+        2,
+    ))
+    .unwrap();
+    let nodes = graph["nodes"].as_array_mut().unwrap();
+    let glass = nodes.iter_mut().find(|n| n["id"] == 203).unwrap();
+    glass["typeId"] = json!("node.pbr_material");
+    for (key, value) in [
+        ("transmission", transmission),
+        ("ambient", 0.0),
+        ("metallic", if transmission > 0.0 { 0.0 } else { 1.0 }),
+        ("roughness", 0.15),
+        ("specular", 0.0),
+        ("ior", 1.0),
+    ] {
+        glass["params"][key] = json!({"type":"Float", "value":value});
+    }
+    let scene = nodes.iter_mut().find(|n| n["id"] == 20).unwrap();
+    for (key, value) in [
+        ("rt_enabled", rt_reflections),
+        ("rt_reflections", rt_reflections),
+        ("rt_gi", false),
+        ("rt_ao", false),
+        ("rt_shadows", false),
+    ] {
+        scene["params"][key] = json!({"type":"Bool", "value":value});
+    }
+    nodes.push(json!({"id":4,"nodeId":"lens","typeId":"node.camera_lens",
+        "params":{"exposure_ev":{"type":"Float","value":exposure}}}));
+    nodes.push(
+        json!({"id":5,"nodeId":"env","typeId":"node.bake_environment",
+        "params":{"width":{"type":"Int","value":64},"height":{"type":"Int","value":32},
+            "intensity":{"type":"Float","value":1.0}}}),
+    );
+    let wires = graph["wires"].as_array_mut().unwrap();
+    let camera = wires.iter_mut().find(|w| w["toPort"] == "camera").unwrap();
+    camera["fromNode"] = json!(4);
+    wires.push(json!({"fromNode":3,"fromPort":"out","toNode":4,"toPort":"camera"}));
+    wires.push(json!({"fromNode":5,"fromPort":"envmap","toNode":20,"toPort":"envmap"}));
+    graph.to_string()
+}
+
+#[test]
+fn transmission_applies_camera_exposure_once() {
+    let (a, w, h) = render_readback(&transmission_scene(0.0, 1.0, false));
+    let (b, _, _) = render_readback(&transmission_scene(1.0, 1.0, false));
+    let neutral = center_rgb(&a, w, h);
+    assert_rgb_close(neutral, [0.15, 0.3, 0.6], 0.012, "neutral glass radiance");
+    assert_rgb_close(
+        center_rgb(&b, w, h),
+        neutral.map(|v| v * 2.0),
+        0.015,
+        "one stop through glass",
+    );
+}
+
+#[test]
+fn transparent_reflection_does_not_read_opaque_surface_rt_lighting() {
+    let (a, w, h) = render_frames(&transmission_scene(0.0, 0.0, false), 2);
+    let (b, _, _) = render_frames(&transmission_scene(0.0, 0.0, true), 48);
+    let expected = center_rgb(&a, w, h);
+    assert!(
+        expected.iter().sum::<f32>() > 0.1,
+        "reflection control must be lit"
+    );
+    assert_rgb_close(
+        center_rgb(&b, w, h),
+        expected,
+        0.015,
+        "transparent surface owns its reflection above opaque geometry",
+    );
+}
+
+#[test]
+fn stacked_transmission_preserves_both_panes_tint() {
+    use serde_json::json;
+    let mut graph: serde_json::Value =
+        serde_json::from_str(&transmission_scene(0.0, 1.0, false)).unwrap();
+    let nodes = graph["nodes"].as_array_mut().unwrap();
+    let pane = nodes.iter_mut().find(|n| n["id"] == 203).unwrap();
+    pane["params"]["color_g"] = json!({"type":"Float", "value":0.5});
+    let mut near_material = pane.clone();
+    near_material["id"] = json!(303);
+    near_material["nodeId"] = json!("near_material");
+    near_material["params"]["color_g"]["value"] = json!(1.0);
+    near_material["params"]["color_r"]["value"] = json!(0.5);
+    nodes.push(near_material);
+    nodes.push(
+        json!({"id":302,"nodeId":"near_transform","typeId":"node.transform_3d",
+        "params":{"pos_y":{"type":"Float","value":2.0}}}),
+    );
+    nodes.iter_mut().find(|n| n["id"] == 20).unwrap()["params"]["objects"]["value"] = json!(3);
+    let wires = graph["wires"].as_array_mut().unwrap();
+    for (from, port, to_port) in [
+        (201, "out", "mesh_2"),
+        (302, "transform", "transform_2"),
+        (303, "out", "material_2"),
+    ] {
+        wires.push(json!({"fromNode":from,"fromPort":port,"toNode":20,"toPort":to_port}));
+    }
+    let (bytes, w, h) = render_readback(&graph.to_string());
+    assert_rgb_close(
+        center_rgb(&bytes, w, h),
+        [0.075, 0.15, 0.6],
+        0.012,
+        "stacked glass tint",
     );
 }

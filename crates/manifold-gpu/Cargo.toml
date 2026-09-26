@@ -20,6 +20,7 @@ gpu-proofs = []
 [dependencies]
 ahash = { workspace = true }
 arrayvec = "0.7"
+bytemuck = { version = "1", features = ["derive"] }
 # Shared vocabulary (cold-touch detector only — no project model).
 manifold-foundation = { path = "../manifold-foundation" }
 # WGSL parsing + validation + MSL output + SPIR-V output

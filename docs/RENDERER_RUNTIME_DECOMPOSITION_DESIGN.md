@@ -44,7 +44,8 @@ Classification: **exists** — all oracles, all move tooling, all three table pr
 | `mod.rs` | module decls + re-exports (external callers keep `node_graph::gltf_import::{assemble_import_graph, assemble_merge_plan, ImportReport, MergePlan, …}` paths); the shared consts `MODEL_FILE_PARAM_ID`/`HDRI_FILE_PARAM_ID` (:54/:59, `pub(super)` — used by materials/object_group/scene); `assemble_import_graph` :658 (the entry) | ~130 |
 | `assembly.rs` | graph ops: `plain_node`, `wire`, `float`/`int`/`bool_val`/`enum_val`/`table`; naming: `sanitize_identifier`, `collides_with_object_group_inner_handle`, `unique_group_name`, `group_tint` | ~260 |
 | `animation.rs` | `skeleton_pose_clip_durations`, `rigid_multi_node_clip_durations`, `morph_weights_topology` (:224–354 EXCEPT `IMPORT_FILL_DEFAULT`/`IMPORT_STRIPS_DEFAULT` — sole consumer is scene code, they go to `scene.rs`) | ~130 |
-| `materials.rs` | `wire_map_texture` (:122–196); after P3-D also `MAP_FAMILIES` + `MATERIAL_PARAMS` tables and their walks | ~90 → ~350 post-P3-D |
+| `materials.rs` | Texture-source wiring and the private `MAP_FAMILIES` catalog. The 2026-09-26 material corrections keep this within its 450-line ceiling by separating parameter serialization below. | ~350 |
+| `materials/params.rs` | Private `MATERIAL_PARAMS` catalog and per-map UV/sampler parameter serialization; `materials::write_material_params` remains the caller seam. | ~350 |
 | `cards.rs` | `card_param`, `card_binding`, `animation_card_params`, `clip_labels`, `animation_card_bindings` (:355–553) | ~200 |
 | `object_group.rs` | `ObjectGroupOutput` :670 + `build_object_group` :702–2008, verbatim | ~1,320 → ~820 post-P3-D |
 | `scene.rs` | `build_import_graph` :2009–2664 (camera/lens/sun/env/ao/final assembly + the env card cluster) + `IMPORT_FILL_DEFAULT`/`IMPORT_STRIPS_DEFAULT` | ~660 |
@@ -155,7 +156,7 @@ Every P3-A change is semantic (signatures change) — compiler-driven migration 
 | INV-R6 No regrowth | `godfile_regrowth` ceilings for every new module at P3-Z, incl. the named exceptions (core.rs ~2k, fused.rs ~1.5k) |
 | INV-R7 Map stays true | landing diff includes FREEZE_COMPILER_MAP section 2 row updates (D5); reviewer checks presence |
 | INV-R8 Importer output equivalence (P3-D + P3-A gltf slices) | capture-first def-JSON diff: pre-change dump vs post-change dump, byte-diff empty, every bundled fixture + BOTH held-out fixtures (rosetta stone, AMG GT3). Harness (P3-D S0 deliverables, by name): `scripts/gltf_def_capture.py`; a `--dump-def` mode on the existing import bin (⚠ VERIFY-AT-IMPL: `src/bin/render_import.rs` is the expected host — `ls crates/manifold-renderer/src/bin/`); `#[derive(serde::Serialize)]` added to `ImportReport` (the ONE sanctioned non-move edit — runtime-only type, no `.manifold` exposure). Held-out half runs in the MAIN checkout; the script errors loudly on a missing fixture — never the if-present self-skip |
-| INV-R9 One consumer per table | `MAP_FAMILIES`/`MATERIAL_PARAMS` are module-private (no `pub`); negative gate: `rg 'MAP_FAMILIES|MATERIAL_PARAMS' crates/manifold-renderer/ -g '!*/materials.rs'` → zero hits |
+| INV-R9 One consumer per table | `MAP_FAMILIES`/`MATERIAL_PARAMS` stay module-private in `materials.rs` and `materials/params.rs`, each with one wiring/serialization walk; callers use the existing helper API. |
 | INV-R10 No stringly tables | T1/T2 are `const` typed Rust; negative gate: `git diff --stat` per P3-D slice confined to the named `.rs` targets + the S0 harness files — zero new config files |
 
 ---

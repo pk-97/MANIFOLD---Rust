@@ -90,6 +90,10 @@ pub struct SceneObject {
     pub specular_color_map: Option<Slot>,
     /// `Texture2D` slot — transmission map.
     pub transmission_map: Option<Slot>,
+    /// `Texture2D` slot — diffuse-transmission factor map (A channel).
+    pub diffuse_transmission_map: Option<Slot>,
+    /// `Texture2D` slot — diffuse-transmission colour map (RGB channels).
+    pub diffuse_transmission_color_map: Option<Slot>,
     /// `Texture2D` slot — volume thickness map.
     pub volume_thickness_map: Option<Slot>,
     /// `Array<InstanceTransform>` slot, for instanced draws. `None` for a
@@ -217,6 +221,8 @@ mod tests {
             specular_map: None,
             specular_color_map: None,
             transmission_map: None,
+            diffuse_transmission_map: None,
+            diffuse_transmission_color_map: None,
             volume_thickness_map: None,
             instances: None,
             instance_count: None,
@@ -254,6 +260,8 @@ mod tests {
             specular_map: None,
             specular_color_map: None,
             transmission_map: None,
+            diffuse_transmission_map: None,
+            diffuse_transmission_color_map: None,
             volume_thickness_map: None,
             instances: Some(Slot(2)),
             instance_count: None,

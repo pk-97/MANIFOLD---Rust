@@ -9,7 +9,7 @@ fn orthogonal_frame(normal_in: vec3<f32>, tangent_in: vec4<f32>) -> Element {
     let tangent_length = length(tangent_xyz);
     var tangent = vec3<f32>(0.0, 0.0, 0.0);
     if tangent_length > 1e-12 { tangent = tangent_xyz / tangent_length; }
-    return Element(vec3<f32>(0.0), normal, vec2<f32>(0.0), vec4<f32>(tangent, tangent_in.w));
+    return Element(vec3<f32>(0.0), normal, vec2<f32>(0.0), vec2<f32>(0.0), vec4<f32>(tangent, tangent_in.w), vec4<f32>(1.0));
 }
 
 fn body(idx: u32, count: u32, e_map: Element2) -> Element {
@@ -35,8 +35,10 @@ fn body(idx: u32, count: u32, e_map: Element2) -> Element {
     if bary.x == 0.0 && bary.y == 0.0 && bary.z == 1.0 { return c; }
     let position = a.position * bary.x + b.position * bary.y + c.position * bary.z;
     let uv = a.uv * bary.x + b.uv * bary.y + c.uv * bary.z;
+    let uv1 = a.uv1 * bary.x + b.uv1 * bary.y + c.uv1 * bary.z;
     let normal = a.normal * bary.x + b.normal * bary.y + c.normal * bary.z;
     let tangent = a.tangent * bary.x + b.tangent * bary.y + c.tangent * bary.z;
+    let color = a.color * bary.x + b.color * bary.y + c.color * bary.z;
     let frame = orthogonal_frame(normal, tangent);
-    return Element(position, frame.normal, uv, frame.tangent);
+    return Element(position, frame.normal, uv, uv1, frame.tangent, color);
 }

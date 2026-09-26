@@ -22,5 +22,5 @@ fn body(
     let p = e_in.position * frequency + time * speed;
     let n = simplex3d(p);
     let displaced = e_in.position + e_in.normal * (amount * n * w);
-    return Element(displaced, e_in.normal, e_in.uv, e_in.tangent);
+    return Element(displaced, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

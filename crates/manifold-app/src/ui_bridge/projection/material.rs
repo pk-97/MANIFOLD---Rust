@@ -39,6 +39,8 @@ fn colour(value: core::MaterialColour) -> ui::MaterialColour {
         core::MaterialColour::Emission => ui::MaterialColour::Emission,
         core::MaterialColour::Sheen => ui::MaterialColour::Sheen,
         core::MaterialColour::Attenuation => ui::MaterialColour::Attenuation,
+        core::MaterialColour::Subsurface => ui::MaterialColour::Subsurface,
+        core::MaterialColour::Translucency => ui::MaterialColour::Translucency,
     }
 }
 
@@ -86,6 +88,7 @@ fn group(value: core::MaterialGroup) -> ui::MaterialGroup {
         core::MaterialGroup::Opacity => ui::MaterialGroup::Opacity,
         core::MaterialGroup::Feature(f) => ui::MaterialGroup::Feature(feature(f)),
         core::MaterialGroup::Advanced => ui::MaterialGroup::Advanced,
+        core::MaterialGroup::Subsurface => ui::MaterialGroup::Subsurface,
     }
 }
 pub(super) fn role(value: core::MaterialParamRole) -> ui::MaterialParamRole {

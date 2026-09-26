@@ -134,8 +134,9 @@ mod gpu_tests {
             uv,
             _pad2: [23.0, 29.0],
             tangent,
+            color: [1.0; 4],
         }
-    }
+}
 
     fn map(bary: [f32; 3], triangle: f32) -> Vec4Vertex {
         Vec4Vertex {
@@ -457,10 +458,14 @@ mod gpu_tests {
             crate::node_graph::freeze::codegen::ENTRY,
             "fused-cut-remap-test",
         );
-        let source_buf = device.create_buffer_shared((source.len() * 64) as u64);
+        let source_buf = device.create_buffer_shared(
+            (source.len() * std::mem::size_of::<MeshVertex>()) as u64,
+        );
         let map_buf = device.create_buffer_shared((maps.len() * 16) as u64);
         let weights_buf = device.create_buffer_shared((weights.len() * 4) as u64);
-        let output_buf = device.create_buffer_shared((maps.len() * 64) as u64);
+        let output_buf = device.create_buffer_shared(
+            (maps.len() * std::mem::size_of::<MeshVertex>()) as u64,
+        );
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(&source));
             map_buf.write(0, bytemuck::cast_slice(&maps));
@@ -600,9 +605,13 @@ mod gpu_tests {
             1,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
-        let source = device.create_buffer_shared(64 * 3);
+        let source = device.create_buffer_shared(
+            std::mem::size_of::<MeshVertex>() as u64 * 3,
+        );
         let maps = device.create_buffer_shared(16 * 2);
-        let output = device.create_buffer_shared(64 * 2);
+        let output = device.create_buffer_shared(
+            std::mem::size_of::<MeshVertex>() as u64 * 2,
+        );
         let source_slot = backend.pre_bind_array(ResourceId(0), source);
         let map_slot = backend.pre_bind_array(ResourceId(1), maps);
         let output_slot = backend.pre_bind_array(ResourceId(2), output);

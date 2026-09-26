@@ -162,21 +162,29 @@ fn import_tail_is_byte_clean_passthrough_at_neutral_lens() {
     // can finish before the mesh becomes ready; a black pending frame is
     // not evidence about the neutral lens. Require both non-black output
     // and byte stability, with a deadline so a stuck import still fails.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let started = std::time::Instant::now();
+    // Cold Metal material pipelines can finish only after the first texture
+    // publication (observed at 8s on the third pair). Include that startup
+    // work in a bounded deadline without accepting partially loaded frames.
+    let deadline = started + std::time::Duration::from_secs(30);
     let visible = |bytes: &[u8]| bytes.chunks_exact(8).any(|px| {
         half::f16::from_bits(u16::from_le_bytes([px[0], px[1]])).to_f32() > 0.03
     });
     let mut previous: Option<(Vec<u8>, Vec<u8>)> = None;
+    let mut attempts = 0;
     let (a, b) = loop {
+        attempts += 1;
         let a = render_one(h, &mut with_tail, &manifest_tail, 0);
         let b = render_one(h, &mut stripped, &manifest_stripped, 0);
-        if visible(&a) && visible(&b)
+        if visible(&a) && visible(&b) && !with_tail.io_pending() && !stripped.io_pending()
             && previous.as_ref().is_some_and(|(pa, pb)| *pa == a && *pb == b)
         {
             break (a, b);
         }
         assert!(std::time::Instant::now() < deadline,
-            "import variants did not reach stable, non-black output");
+            "import variants did not converge after {attempts} pairs in {:?}: visible={}/{}, pending={}/{}, stable={}",
+            started.elapsed(), visible(&a), visible(&b), with_tail.io_pending(), stripped.io_pending(),
+            previous.as_ref().is_some_and(|(pa, pb)| *pa == a && *pb == b));
         previous = Some((a, b));
         std::thread::sleep(std::time::Duration::from_millis(1));
     };

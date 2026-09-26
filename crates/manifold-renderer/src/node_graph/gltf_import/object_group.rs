@@ -143,41 +143,11 @@ pub(super) fn build_object_group(
         // (wired below, same doctrine as sheen/iridescence/anisotropy in
         // E3/E4/E5) — no report line for any of them any more.
         //
-        // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_texture_transform is
-        // applied per-map (all five families) — the only variant still
-        // unmapped is a texCoord index override (v1 imports TEXCOORD_0
-        // only), which is reported rather than silently dropped.
-        if m.uv_tex_coord_override {
-            report_lines.push(format!(
-                "{group_name}: KHR_texture_transform.texCoord override — only TEXCOORD_0 is imported in v1, the override is ignored (report-only; the transform itself IS applied)"
-            ));
-        }
-        // `render_scene` shipped no per-object normal-scale / occlusion-strength
-        // uniform (F-P2's texture ports carry no multiplier) — a non-neutral
-        // value is genuinely unmapped, not silently dropped, so it's a report
-        // line rather than an applied effect. Neutral (1.0, or no texture
-        // wired) produces no line — the common case stays quiet.
-        if m.normal_texture.is_some() && (m.normal_scale - 1.0).abs() > 1e-4 {
-            report_lines.push(format!(
-                "{group_name}: normalTexture.scale = {:.2} (≠1.0) not applied — render_scene has no per-object normal-scale port yet (report-only)",
-                m.normal_scale
-            ));
-        }
-        if m.occlusion_texture.is_some() && (m.occlusion_strength - 1.0).abs() > 1e-4 {
-            report_lines.push(format!(
-                "{group_name}: occlusionTexture.strength = {:.2} (≠1.0) not applied — render_scene has no per-object occlusion-strength port yet (report-only)",
-                m.occlusion_strength
-            ));
-        }
-        // BUG-5mma: a shared constant COLOR_0 across every primitive using
-        // this material is already folded into `base_color_factor` above —
-        // this only fires when the color genuinely varies (within a
-        // primitive, between primitives sharing the material, or a mix of
-        // colored/uncolored primitives), which `MeshVertex`'s frozen ABI has
-        // nowhere to store.
+        // Vertex colour remains on the mesh, so sharing a material does not
+        // collapse distinct per-primitive or per-corner colours.
         if m.vertex_color_varies {
             report_lines.push(format!(
-                "{group_name}: per-vertex COLOR_0 varies across the primitives sharing this material — vertex colors not supported, ignored (a shared constant tint would have been folded into base color)"
+                "{group_name}: varying per-vertex COLOR_0 preserved, including alpha"
             ));
         }
         // IMPORT_FIDELITY_DESIGN.md D8: glTF BLEND and
@@ -244,6 +214,7 @@ pub(super) fn build_object_group(
                     .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
                 n.params
                     .insert("source_bbox_radius".to_string(), float(bbox_radius));
+                n.params.insert("vertex_colors".to_string(), bool_val(true));
                 n
             };
             group_nodes.push(skinned_src);
@@ -332,6 +303,7 @@ pub(super) fn build_object_group(
                     .insert("source_vertex_count".to_string(), int(m.vertex_count as i32));
                 n.params
                     .insert("source_bbox_radius".to_string(), float(bbox_radius));
+                n.params.insert("vertex_colors".to_string(), bool_val(true));
                 n
             };
             group_nodes.push(rigid_src);
@@ -411,6 +383,7 @@ pub(super) fn build_object_group(
             mesh_node
                 .params
                 .insert("source_bbox_radius".to_string(), float(bbox_radius));
+            mesh_node.params.insert("vertex_colors".to_string(), bool_val(true));
             // BUG-221: shift this object's OWN mesh so local (0,0,0)
             // lands on ITS OWN bbox center (m.own_center), not the
             // shared whole-scene center below — see build_object_group's
@@ -609,7 +582,9 @@ pub(super) fn build_object_group(
         mat_node.params.insert("color_a".to_string(), float(effective_alpha));
         mat_node
             .params
-            .insert("roughness".to_string(), float(m.roughness.max(0.01)));
+            .insert("roughness".to_string(), float(if m.mr_texture_is_gloss_alpha {
+                1.0 // The texture conversion already applies the authored gloss factor.
+            } else { m.roughness.max(0.01) }));
         // 0.0 ambient: no flat fill floor, so the shadow side of a matte model
         // goes to true black under the default single-key rig — the hard,
         // dramatic "lit only by scene lights" look. The shared Ambient card
@@ -1055,4 +1030,3 @@ pub(super) fn build_object_group(
         animated,
     }
 }
-

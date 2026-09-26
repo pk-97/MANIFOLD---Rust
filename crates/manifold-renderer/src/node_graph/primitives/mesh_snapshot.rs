@@ -356,7 +356,8 @@ fn quad_verts() -> Vec<MeshVertex> {
         uv: [u, w],
         _pad2: [0.0, 0.0],
         tangent: [0.0; 4],
-    };
+            color: [1.0; 4],
+};
     vec![
         v(-1.0, -1.0, 0.0, 0.0),
         v(1.0, -1.0, 1.0, 0.0),
@@ -381,7 +382,8 @@ fn back_facing_tri() -> Vec<MeshVertex> {
         uv: [0.5, 0.5],
         _pad2: [0.0, 0.0],
         tangent: [0.0; 4],
-    };
+            color: [1.0; 4],
+};
     vec![v(-1.0, -1.0), v(1.0, -1.0), v(0.0, 1.0)]
 }
 
@@ -1424,7 +1426,8 @@ fn walk_gltf_node(
                         uv,
                         _pad2: [0.0, 0.0],
                         tangent: [0.0; 4],
-                    });
+                            color: [1.0; 4],
+});
                 }
             }
         }

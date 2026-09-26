@@ -7498,7 +7498,9 @@ struct Element {
     position: vec3<f32>,
     normal: vec3<f32>,
     uv: vec2<f32>,
+    uv1: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 }
 
 struct Params {
@@ -7670,7 +7672,7 @@ fn n2_body(
         nrm.x = nz * sn + nx * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.tangent);
+    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }
 
 fn n3_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
@@ -7734,7 +7736,7 @@ fn n4_body(
         nrm.x = nz * sn + nx * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.tangent);
+    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }
 
 fn n5_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
@@ -7767,7 +7769,9 @@ struct Element {
     position: vec3<f32>,
     normal: vec3<f32>,
     uv: vec2<f32>,
+    uv1: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 }
 
 struct Params {
@@ -7939,7 +7943,7 @@ fn n2_body(
         nrm.x = nz * sn + nx * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.tangent);
+    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }
 
 fn n3_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
@@ -8003,7 +8007,7 @@ fn n4_body(
         nrm.x = nz * sn + nx * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.tangent);
+    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }
 
 fn n5_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
@@ -8036,7 +8040,9 @@ struct Element {
     position: vec3<f32>,
     normal: vec3<f32>,
     uv: vec2<f32>,
+    uv1: vec2<f32>,
     tangent: vec4<f32>,
+    color: vec4<f32>,
 }
 
 struct Params {
@@ -8208,7 +8214,7 @@ fn n2_body(
         nrm.x = nz * sn + nx * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.tangent);
+    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }
 
 fn n3_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {
@@ -8272,7 +8278,7 @@ fn n4_body(
         nrm.x = nz * sn + nx * c;
     }
 
-    return Element(pos, nrm, e_in.uv, e_in.tangent);
+    return Element(pos, nrm, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }
 
 fn n5_body(idx: u32, count: u32, e_in: Element, angle_x: f32, angle_y: f32, angle_z: f32) -> Element {

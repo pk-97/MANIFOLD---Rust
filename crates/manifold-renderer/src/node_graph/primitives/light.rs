@@ -6,7 +6,7 @@
 //! shadow-aware mesh renderers — take it as a single `light: Light`
 //! input instead of scattered `light_x/y/z/intensity` scalars.
 //!
-//! Two modes via the `mode` enum, matching Blender / TouchDesigner /
+//! Three modes via the `mode` enum, matching Blender / TouchDesigner /
 //! Unity convention:
 //!
 //! - **Sun** — parallel rays from a directional source. `pos` anchors the
@@ -15,10 +15,11 @@
 //! - **Point** — omnidirectional source at `pos`. `aim - pos` gives the
 //!   shadow camera's forward direction (single-cubemap-face approximation
 //!   for v1); `range` is the attenuation half-distance.
+//! - **Spot** — point source restricted to the cone around `aim - pos`.
 //!
 //! Per the design audit, `range` is a unified param that means "how far
-//! does this light reach" in both modes — sun's ortho half-extent and
-//! point's attenuation half-distance share the same conceptual knob, so
+//! does this light reach" in all modes — sun's ortho half-extent and
+//! point/spot attenuation range share the same conceptual knob, so
 //! no slider is dead-state in any mode.
 //!
 //! Colour is premultiplied with `intensity` at emission so downstream
@@ -28,11 +29,12 @@
 
 use std::borrow::Cow;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::light::{Light, ShadowSoftness};
+use crate::node_graph::light::{Light, LightFalloff, ShadowSoftness};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-const LIGHT_MODES: &[&str] = &["Sun", "Point"];
+const LIGHT_MODES: &[&str] = &["Sun", "Point", "Spot"];
+const LIGHT_FALLOFFS: &[&str] = &["Legacy", "Inverse Square"];
 const SHADOW_SOFTNESS_LABELS: &[&str] = &["Hard", "Soft", "VerySoft", "Contact"];
 
 crate::primitive! {
@@ -51,6 +53,8 @@ crate::primitive! {
         color_b: ScalarF32 optional,
         intensity: ScalarF32 optional,
         range: ScalarF32 optional,
+        inner_cone_angle: ScalarF32 optional,
+        outer_cone_angle: ScalarF32 optional,
         cast_shadows: ScalarF32 optional,
         shadow_bias: ScalarF32 optional,
         light_size: ScalarF32 optional,
@@ -152,7 +156,31 @@ crate::primitive! {
             label: "Range",
             ty: ParamType::Float,
             default: ParamValue::Float(30.0),
-            range: Some((0.01, 200.0)),
+            range: Some((0.0, 200.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("falloff"),
+            label: "Falloff",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (LIGHT_FALLOFFS.len() - 1) as f32)),
+            enum_values: LIGHT_FALLOFFS,
+        },
+        ParamDef {
+            name: Cow::Borrowed("inner_cone_angle"),
+            label: "Inner Cone Angle",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, std::f32::consts::FRAC_PI_2)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("outer_cone_angle"),
+            label: "Outer Cone Angle",
+            ty: ParamType::Float,
+            default: ParamValue::Float(std::f32::consts::FRAC_PI_4),
+            range: Some((0.0, std::f32::consts::FRAC_PI_2)),
             enum_values: &[],
         },
         ParamDef {
@@ -236,6 +264,14 @@ impl Primitive for LightNode {
         let color_b = ctx.scalar_or_param("color_b", 1.0);
         let intensity = ctx.scalar_or_param("intensity", 1.0);
         let range = ctx.scalar_or_param("range", 30.0);
+        let inner_cone_angle = ctx.scalar_or_param("inner_cone_angle", 0.0);
+        let outer_cone_angle = ctx.scalar_or_param("outer_cone_angle", std::f32::consts::FRAC_PI_4);
+        let falloff_idx = match ctx.params.get("falloff") {
+            Some(ParamValue::Enum(v)) => (*v).min((LIGHT_FALLOFFS.len() - 1) as u32),
+            Some(ParamValue::Float(f)) => f.round().clamp(0.0, (LIGHT_FALLOFFS.len() - 1) as f32) as u32,
+            _ => 0,
+        };
+        let falloff = if falloff_idx == 1 { LightFalloff::InverseSquare } else { LightFalloff::Legacy };
         let cast_shadows_f = ctx.scalar_or_param("cast_shadows", 1.0);
         let cast_shadows = cast_shadows_f > 0.5;
         let shadow_bias = ctx.scalar_or_param("shadow_bias", 0.003);
@@ -270,17 +306,38 @@ impl Primitive for LightNode {
         let color_rgb = [color_r, color_g, color_b];
 
         let light = match mode_idx {
-            1 => Light::point(
-                pos,
-                aim,
-                color_rgb,
-                intensity,
-                range,
-                cast_shadows,
-                shadow_softness,
-                shadow_bias,
-                shadow_resolution,
-            ),
+            1 => {
+                let mut light = Light::point(
+                    pos,
+                    aim,
+                    color_rgb,
+                    intensity,
+                    range,
+                    cast_shadows,
+                    shadow_softness,
+                    shadow_bias,
+                    shadow_resolution,
+                );
+                light.falloff = falloff;
+                light
+            }
+            2 => {
+                let mut light = Light::spot(
+                    pos,
+                    aim,
+                    color_rgb,
+                    intensity,
+                    range,
+                    inner_cone_angle,
+                    outer_cone_angle,
+                    cast_shadows,
+                    shadow_softness,
+                    shadow_bias,
+                    shadow_resolution,
+                );
+                light.falloff = falloff;
+                light
+            }
             _ => Light::sun(
                 pos,
                 aim,
@@ -335,6 +392,9 @@ mod tests {
             "color_b",
             "intensity",
             "range",
+            "falloff",
+            "inner_cone_angle",
+            "outer_cone_angle",
             "cast_shadows",
             "shadow_softness",
             "shadow_bias",

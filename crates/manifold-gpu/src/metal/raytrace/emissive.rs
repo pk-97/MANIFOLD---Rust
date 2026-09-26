@@ -320,7 +320,9 @@ pub(crate) fn encode_emissive_table(
             index_base_addr: obj.index_buffer.map_or(0, GpuBuffer::gpu_address),
             vertex_stride: obj.vertex_stride,
             vertex_offset: obj.vertex_offset,
-            uv_offset: obj.uv_offset,
+            uv_offset: if obj.material_attributes.sampling[4][0] == 1 {
+                obj.material_attributes.uv1_offset
+            } else { obj.uv_offset },
             tri_count: obj.triangle_count,
             candidate_base,
             slot_base: object_slot_base,

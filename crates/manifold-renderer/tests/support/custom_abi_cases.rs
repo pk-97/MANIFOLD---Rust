@@ -238,15 +238,8 @@ pub const CASES: &[CustomAbiCase] = &[
     },
     CustomAbiCase {
         source: "render_3d_mesh.rs",
-        rust_struct: "MaterialRenderUniforms",
+        rust_struct: "GBufferUniforms",
         shader: "shaders/render_3d_mesh.wgsl",
-        shader_struct: "Uniforms",
-        aliases: &[],
-    },
-    CustomAbiCase {
-        source: "render_instanced_3d_mesh.rs",
-        rust_struct: "InstancedMaterialUniforms",
-        shader: "shaders/render_instanced_3d_mesh.wgsl",
         shader_struct: "Uniforms",
         aliases: &[],
     },
@@ -262,6 +255,13 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "RenderSceneUniforms",
         shader: "shaders/render_scene.wgsl",
         shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "render_scene.rs",
+        rust_struct: "MaterialMapUniform",
+        shader: "shaders/render_scene.wgsl",
+        shader_struct: "MaterialMapUniform",
         aliases: &[],
     },
     CustomAbiCase {

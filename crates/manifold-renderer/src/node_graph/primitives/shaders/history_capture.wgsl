@@ -13,7 +13,7 @@ struct Capture {
     instance_capture: u32,
     _pad: vec2<u32>,
 };
-struct Vertex { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32> };
+struct Vertex { position: vec3<f32>, _p: f32, normal: vec3<f32>, _n: f32, uv: vec2<f32>, _u: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> };
 struct I { pos_scale: vec4<f32>, rot_pad: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Capture;
 @group(0) @binding(1) var<storage, read> source: array<Vertex>;

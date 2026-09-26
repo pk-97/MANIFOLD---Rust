@@ -242,8 +242,9 @@ mod gpu_tests {
             uv,
             _pad2: [0.0, 0.0],
             tangent: [0.0; 4],
+            color: [1.0; 4],
         }
-    }
+}
 
     #[test]
     fn generated_plane_mesh_matches_cpu_expected_positions_normals_and_uvs() {

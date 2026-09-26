@@ -195,8 +195,6 @@ fn draco_primitive_reports_instead_of_vanishing_silently() {
 fn ktx2_texture_reports_instead_of_aborting_whole_import() {
     let path = write_synthetic_ktx2_glb();
     let result = assemble_import_graph(&path);
-    std::fs::remove_file(&path).ok();
-
     let (_def, report) =
         result.expect("a KTX2-textured glb must still import — no BasisU transcoder is a per-texture degrade, not a whole-file failure");
 
@@ -211,38 +209,26 @@ fn ktx2_texture_reports_instead_of_aborting_whole_import() {
     );
 }
 
-/// BUG-pm9m: TEXCOORD_1 is silently ignored today — every texture map
-/// samples UV0 regardless of its own `texCoord` index, and any TEXCOORD_1+
-/// attribute a primitive carries is dropped with no trace. Neither is
-/// fixed here (that's a priced ABI decision — `MeshVertex` carries one UV
-/// channel), but both must now surface as report lines instead of a
-/// silent wrong-UV render.
+/// BUG-pm9m: TEXCOORD_1 is preserved in MeshVertex's second UV lane and
+/// texture-map metadata retains its authored texCoord selection.
 #[test]
 fn texcoord_1_reports_instead_of_silently_sampling_uv0() {
     let path = write_synthetic_multi_uv_glb();
     let result = assemble_import_graph(&path);
-    std::fs::remove_file(&path).ok();
-
     let (_def, report) =
         result.expect("a TEXCOORD_1-carrying glb must still import — this is a report-only degrade");
 
     assert_eq!(report.material_count, 1, "Mat0's triangle must import despite the TEXCOORD_1 references");
-    assert!(
-        report
-            .report_lines
-            .iter()
-            .any(|l| l.contains("occlusion") && l.contains("TEXCOORD_1")),
-        "report must name the occlusion texture's TEXCOORD_1 override, got: {:?}",
-        report.report_lines
-    );
-    assert!(
-        report
-            .report_lines
-            .iter()
-            .any(|l| l.contains("TEXCOORD_1") && l.contains("ignored")),
-        "report must name the primitive's own TEXCOORD_1 attribute as ignored, got: {:?}",
-        report.report_lines
-    );
+    assert!(!report.report_lines.iter().any(|l| l.contains("additional UV sets are ignored")));
+
+    let verts = super::gltf_load::load_gltf_mesh(
+        &path,
+        super::gltf_load::GltfMeshSelector::WholeScene,
+    )
+    .expect("load the synthetic multi-UV mesh");
+    assert!(verts.iter().any(|v| (v._pad2[1] - 0.5).abs() < 1e-6));
+    assert!(verts.iter().any(|v| (v._pad2[1] - 1.5).abs() < 1e-6));
+    std::fs::remove_file(&path).ok();
 }
 
 /// BUG-7w79: a meshopt-compressed primitive must never be read as raw
@@ -378,6 +364,11 @@ fn default_material_primitive_imports_as_one_object() {
         Some(&int(super::gltf_load::DEFAULT_MATERIAL_MESH_PARAM)),
         "the synthetic object's mesh source must select via the D4 sentinel, not a real \
          material index or the -1 'unset' value"
+    );
+    assert_eq!(
+        mesh_node.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new imports must explicitly enable authored vertex colors"
     );
 
     // Structural gate: compiles through the real registry.
@@ -776,6 +767,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         emissive_strength: 1.0,
         ior: 1.5,
         specular_factor: 1.0,
+        legacy_specular_factor: None,
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
@@ -784,14 +776,17 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
         occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
         emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        uv_tex_coord_override: false,
+        core_tex_coords: [0; 5],
         mr_texture_is_gloss_alpha: false,
         transmission_factor: 0.0,
         transmission_texture: None,
         diffuse_transmission_factor: 0.0,
+        diffuse_transmission_color: [1.0, 1.0, 1.0],
         diffuse_transmission_texture: None,
+        diffuse_transmission_color_texture: None,
         clearcoat_factor: 0.0,
         clearcoat_roughness_factor: 0.0,
+        clearcoat_normal_scale: 1.0,
         clearcoat_texture: None,
         clearcoat_roughness_texture: None,
         clearcoat_normal_texture: None,
@@ -822,6 +817,7 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
         occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
         emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
+        extension_maps: [crate::node_graph::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
         morph: None,
@@ -1207,6 +1203,7 @@ pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> supe
         emissive_strength: 2.5,
         ior: 1.5,
         specular_factor: 1.0,
+        legacy_specular_factor: None,
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
@@ -1215,14 +1212,17 @@ pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> supe
         mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
         occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
         emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        uv_tex_coord_override: false,
+        core_tex_coords: [0; 5],
         mr_texture_is_gloss_alpha: false,
         transmission_factor: 0.0,
         transmission_texture: None,
         diffuse_transmission_factor: 0.0,
+        diffuse_transmission_color: [1.0, 1.0, 1.0],
         diffuse_transmission_texture: None,
+        diffuse_transmission_color_texture: None,
         clearcoat_factor: 0.0,
         clearcoat_roughness_factor: 0.0,
+        clearcoat_normal_scale: 1.0,
         clearcoat_texture: None,
         clearcoat_roughness_texture: None,
         clearcoat_normal_texture: None,
@@ -1253,6 +1253,7 @@ pub(super) fn full_material(material_index: u32, name: &str, verts: u32) -> supe
         mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
         occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
         emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
+        extension_maps: [crate::node_graph::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
         morph: None,
@@ -1306,6 +1307,11 @@ fn build_import_graph_seeds_source_vertex_count_and_bbox_radius() {
     // object 1.
     let mut seen_counts: Vec<i32> = Vec::new();
     for mesh in &mesh_sources {
+        assert_eq!(
+            mesh.params.get("vertex_colors"),
+            Some(&bool_val(true)),
+            "every new static mesh source must explicitly enable authored vertex colors"
+        );
         let vcount = match mesh.params.get("source_vertex_count") {
             Some(SerializedParamValue::Int { value }) => *value,
             other => panic!("expected an Int source_vertex_count, got {other:?}"),
@@ -2315,8 +2321,11 @@ fn merge_into_a_def_without_render_scene_errors() {
 /// Linear (1) — the data-map convention (raw bytes ARE the value).
 #[test]
 fn imports_all_map_kinds_with_correct_color_spaces() {
+    let mut material = full_material(0, "Helmet", 1000);
+    material.diffuse_transmission_texture = Some(5);
+    material.diffuse_transmission_color_texture = Some(6);
     let summary = GltfImportSummary {
-        materials: vec![full_material(0, "Helmet", 1000)],
+        materials: vec![material],
         bbox_min: [-1.0, -1.0, -1.0],
         bbox_max: [1.0, 1.0, 1.0],
         camera_count: 0,
@@ -2348,7 +2357,14 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
         .iter()
         .find(|n| n.type_id == "node.scene_object")
         .expect("scene_object bind node");
-    for port in ["normal_map", "mr_map", "occlusion_map", "emissive_map"] {
+    for port in [
+        "normal_map",
+        "mr_map",
+        "occlusion_map",
+        "emissive_map",
+        "diffuse_transmission_map",
+        "diffuse_transmission_color_map",
+    ] {
         assert!(
             flat.wires.iter().any(|w| w.to_node == scene_object.id && w.to_port == port),
             "expected a wire into scene_object port `{port}`"
@@ -2375,6 +2391,8 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
     expect_color_space("mr_tex_", 1); // metallic-roughness: Linear
     expect_color_space("occlusion_tex_", 1); // occlusion: Linear
     expect_color_space("emissive_tex_", 0); // emissive: sRGB
+    expect_color_space("diffuse_transmission_tex_", 1); // factor: Linear (alpha)
+    expect_color_space("diffuse_transmission_color_tex_", 0); // colour: sRGB (RGB)
 
     // KHR_materials_emissive_strength folds into the existing
     // emission_intensity param rather than growing a new one (D5).
@@ -2395,6 +2413,50 @@ fn imports_all_map_kinds_with_correct_color_spaces() {
         "a fully-mapped material with no clearcoat/transmission/BLEND should report nothing, got {:?}",
         report.report_lines
     );
+}
+
+#[test]
+fn material_scalar_extensions_are_imported_without_obsolete_reports() {
+    let mut m = full_material(0, "Scalar Fidelity", 1000);
+    m.normal_scale = -0.35;
+    m.clearcoat_normal_scale = -0.6;
+    m.occlusion_strength = 0.42;
+    m.diffuse_transmission_factor = 0.7;
+    m.diffuse_transmission_color = [0.2, 0.3, 0.4];
+    let summary = GltfImportSummary {
+        materials: vec![m],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_material_scalar_extensions.glb");
+    let (def, report) = build_import_graph(&summary, path).expect("build graph");
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten");
+    let mat = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.pbr_material")
+        .expect("pbr_material node");
+    assert_eq!(mat.params.get("normal_scale"), Some(&float(-0.35)));
+    assert_eq!(mat.params.get("clearcoat_normal_scale"), Some(&float(-0.6)));
+    assert_eq!(mat.params.get("occlusion_strength"), Some(&float(0.42)));
+    assert_eq!(mat.params.get("translucency"), Some(&float(0.7)));
+    assert_eq!(mat.params.get("translucency_color_r"), Some(&float(0.2)));
+    assert_eq!(mat.params.get("translucency_color_g"), Some(&float(0.3)));
+    assert_eq!(mat.params.get("translucency_color_b"), Some(&float(0.4)));
+    assert!(report.report_lines.iter().all(|line| {
+        !line.contains("normalTexture.scale")
+            && !line.contains("occlusionTexture.strength")
+            && !line.contains("diffuseTransmissionColorFactor")
+    }));
 }
 
 /// BUG-pt6g (Peter's ruling, supersedes BUG-w5wv): a material with
@@ -2533,9 +2595,7 @@ fn orm_packed_occlusion_and_mr_share_one_texture_source_node() {
 }
 
 /// BUG-5mma (BUG-177 (glb-vertex-colors-not-wired-color0-never-read)): the
-/// constant-vs-varying fold itself is proven at the parse layer
-/// (`gltf_load.rs`'s `constant_vertex_color_folds_into_base_color_factor`/
-/// `varying_vertex_color_within_one_primitive_is_not_folded`) — this test
+/// vertex colour loading is proven at the parse layer — this test
 /// covers the OTHER half, the D9 report-line wiring in `object_group.rs`:
 /// `vertex_color_varies = true` on a `GltfMaterialInfo` must produce a
 /// report line naming the material and leave `color_r`/`color_g`/`color_b`
@@ -2567,7 +2627,7 @@ fn vertex_color_varies_flag_produces_report_line_and_leaves_base_color_alone() {
         report
             .report_lines
             .iter()
-            .any(|l| l.contains("COLOR_0 varies") && l.contains("vertex colors not supported")),
+            .any(|l| l.contains("varying per-vertex COLOR_0") && l.contains("preserved, including alpha")),
         "expected a per-vertex COLOR_0 varies report line, got {:?}",
         report.report_lines
     );
@@ -3130,6 +3190,16 @@ fn skinned_import_gets_no_rigid_animation_source() {
         flat.nodes.iter().any(|n| n.type_id == "node.gltf_skeleton_pose"),
         "rigged import must drive its mesh through node.gltf_skeleton_pose"
     );
+    let skinned_source = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.gltf_skinned_mesh_source")
+        .expect("rigged import must contain a skinned mesh source");
+    assert_eq!(
+        skinned_source.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new skinned imports must explicitly enable authored vertex colors"
+    );
     assert!(
         !flat.nodes.iter().any(|n| n.type_id == "node.gltf_animation_source"),
         "a skinned object's positioning comes entirely from its joint palette — \
@@ -3161,9 +3231,15 @@ fn skin_and_morph_combination_composes_instead_of_dropping() {
     );
 
     let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
-    assert!(
-        flat.nodes.iter().any(|n| n.type_id == "node.gltf_skinned_mesh_source"),
-        "skin+morph object must still be driven by node.gltf_skinned_mesh_source"
+    let skinned_source = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.gltf_skinned_mesh_source")
+        .expect("skin+morph object must still be driven by node.gltf_skinned_mesh_source");
+    assert_eq!(
+        skinned_source.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new skin+morph imports must explicitly enable authored vertex colors"
     );
     let blend = flat
         .nodes
@@ -3662,6 +3738,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         emissive_strength: 1.0,
         ior: 1.5,
         specular_factor: 1.0,
+        legacy_specular_factor: None,
         specular_color_factor: [1.0, 1.0, 1.0],
         specular_texture: None,
         specular_color_texture: None,
@@ -3670,14 +3747,17 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         mr_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
         occlusion_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
         emissive_uv_transform: super::gltf_load::IDENTITY_UV_TRANSFORM,
-        uv_tex_coord_override: false,
+        core_tex_coords: [0; 5],
         mr_texture_is_gloss_alpha: false,
         transmission_factor: 0.0,
         transmission_texture: None,
         diffuse_transmission_factor: 0.0,
+        diffuse_transmission_color: [1.0, 1.0, 1.0],
         diffuse_transmission_texture: None,
+        diffuse_transmission_color_texture: None,
         clearcoat_factor: 0.0,
         clearcoat_roughness_factor: 0.0,
+        clearcoat_normal_scale: 1.0,
         clearcoat_texture: None,
         clearcoat_roughness_texture: None,
         clearcoat_normal_texture: None,
@@ -3708,6 +3788,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
         mr_sampler: super::gltf_load::GltfSamplerInfo::default(),
         occlusion_sampler: super::gltf_load::GltfSamplerInfo::default(),
         emissive_sampler: super::gltf_load::GltfSamplerInfo::default(),
+        extension_maps: [crate::node_graph::material::MaterialMapInfo::default(); 14],
         animations: Vec::new(),
         skin: None,
         morph: None,
@@ -4813,6 +4894,17 @@ fn rigid_multi_node_held_out_fixture_renders_four_distinct_poses() {
          palette — if this fails, the fixture no longer exercises the case this test gates \
          (report: {:?})",
         report.report_lines
+    );
+    let flat = manifold_core::flatten::flatten_groups(&def).expect("flatten import def");
+    let rigid_source = flat
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.gltf_skinned_mesh_source")
+        .expect("rigid multi-node import must contain a skinned mesh source");
+    assert_eq!(
+        rigid_source.params.get("vertex_colors"),
+        Some(&bool_val(true)),
+        "new rigid multi-node imports must explicitly enable authored vertex colors"
     );
     let duration_s = skeleton_pose_duration_s_or_static(&def);
     assert!(duration_s > 0.0, "node-slot object must resolve a positive clip duration");
@@ -6663,4 +6755,69 @@ fn orbit_camera_range_override_never_moves_defaults() {
         assert!(spec.default_value >= spec.min, "{param}: default {} must be >= min {}", spec.default_value, spec.min);
         assert!(spec.default_value <= spec.max, "{param}: default {} must be <= max {}", spec.default_value, spec.max);
     }
+}
+
+/// KHR_lights_punctual assembly keeps authored photometric values and cone
+/// metadata in the graph. An authored light also replaces the synthetic sun
+/// slot, so the render_scene port count and wire target stay one-to-one.
+#[test]
+fn authored_spot_light_preserves_raw_intensity_cone_and_physical_range() {
+    use super::gltf_load::{GltfLightKind, GltfPunctualLight};
+
+    let summary = GltfImportSummary {
+        materials: vec![full_material(0, "SpotMaterial", 3)],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: vec![GltfPunctualLight {
+            name: Some("Key Spot".to_string()),
+            kind: GltfLightKind::Spot {
+                inner_cone_angle: 0.2,
+                outer_cone_angle: 0.5,
+            },
+            color: [0.25, 0.5, 0.75],
+            intensity: 2400.0,
+            range: Some(12.5),
+            world_pos: [1.0, 2.0, 3.0],
+            world_forward: [0.0, 0.0, -1.0],
+        }],
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+
+    let path = std::path::Path::new("/tmp/synthetic_authored_spot.glb");
+    let (def, report) = build_import_graph(&summary, path).expect("build authored spot graph");
+    let render = def
+        .nodes
+        .iter()
+        .find(|n| n.type_id == "node.render_scene")
+        .expect("render_scene node");
+    assert_eq!(render.params.get("lights"), Some(&int(1)));
+    assert!(
+        !def.nodes.iter().any(|n| n.node_id == "sun"),
+        "authored lights must not get a synthetic sun"
+    );
+
+    let light = def
+        .nodes
+        .iter()
+        .find(|n| n.node_id == "light_0")
+        .expect("authored light_0 node");
+    assert_eq!(light.params.get("mode"), Some(&enum_val(2)));
+    assert_eq!(light.params.get("falloff"), Some(&enum_val(1)));
+    assert_eq!(light.params.get("intensity"), Some(&float(2400.0)));
+    assert_eq!(light.params.get("range"), Some(&float(12.5)));
+    assert_eq!(light.params.get("inner_cone_angle"), Some(&float(0.2)));
+    assert_eq!(light.params.get("outer_cone_angle"), Some(&float(0.5)));
+    assert!(def.wires.iter().any(|wire| {
+        wire.from_node == light.id && wire.to_node == render.id && wire.to_port == "light_0"
+    }));
+    assert!(report.report_lines.iter().any(|line| {
+        line.contains("raw") && line.contains("candela") && line.contains("spot cone")
+    }));
 }

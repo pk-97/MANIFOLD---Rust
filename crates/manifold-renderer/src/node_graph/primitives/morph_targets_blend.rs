@@ -217,8 +217,8 @@ mod gpu_tests {
     use super::*;
 
     fn mk_vertex(pos: [f32; 3], normal: [f32; 3]) -> MeshVertex {
-        MeshVertex { position: pos, _pad0: 0.0, normal, _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4] }
-    }
+        MeshVertex { position: pos, _pad0: 0.0, normal, _pad1: 0.0, uv: [0.0, 0.0], _pad2: [0.0, 0.0], tangent: [0.0; 4], color: [1.0; 4] }
+}
 
     /// Generated standalone kernel (the shipping runtime path).
     fn generated_wgsl() -> String {

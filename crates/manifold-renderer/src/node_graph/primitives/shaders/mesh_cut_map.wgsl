@@ -14,7 +14,7 @@ struct Params {
     direction: vec3<f32>,
     _pad2: f32,
 };
-struct MeshVertex { position: vec3<f32>, _pad0: f32, normal: vec3<f32>, _pad1: f32, uv: vec2<f32>, _pad2: vec2<f32>, tangent: vec4<f32> };
+struct MeshVertex { position: vec3<f32>, _pad0: f32, normal: vec3<f32>, _pad1: f32, uv: vec2<f32>, _pad2: vec2<f32>, tangent: vec4<f32>, color: vec4<f32> };
 struct Vec4Vertex { position: vec4<f32> };
 struct CutVertex { position: vec3<f32>, barycentric: vec3<f32> };
 struct Polygon { vertices: array<CutVertex, 9>, count: u32, valid: bool };

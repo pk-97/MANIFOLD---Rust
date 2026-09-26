@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn material_inspector_metadata_classifies_every_descriptor() {
         let metadata = metadata_for_node_type("node.pbr_material");
-        assert_eq!(metadata.len(), 96);
+        assert_eq!(metadata.len(), 290);
         assert!(metadata.iter().all(|param| param.material_role.is_some()));
         assert_eq!(
             metadata

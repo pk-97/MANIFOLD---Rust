@@ -38,5 +38,5 @@ fn body(idx: u32, count: u32, e_in: Element, amplitude: f32, frequency: f32, pha
         let tangent_len = length(orthogonal);
         if tangent_len > EPS { tangent = vec4<f32>(orthogonal / tangent_len, e_in.tangent.w); }
     }
-    return Element(p, new_normal, e_in.uv, tangent);
+    return Element(p, new_normal, e_in.uv, e_in.uv1, tangent, e_in.color);
 }

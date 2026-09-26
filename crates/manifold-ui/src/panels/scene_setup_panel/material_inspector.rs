@@ -78,6 +78,7 @@ impl ScenePanel {
                 match group {
                     MaterialGroup::Surface => "Surface".to_string(),
                     MaterialGroup::Opacity => "Opacity & Cutout".to_string(),
+                    MaterialGroup::Subsurface => "Subsurface".to_string(),
                     MaterialGroup::Feature(feature) => match feature {
                         crate::param_surface::MaterialFeature::Coat => "Coat".to_string(),
                         crate::param_surface::MaterialFeature::Iridescence => {
@@ -230,7 +231,9 @@ impl ScenePanel {
                 matches!(port, "sheen_color_map" | "sheen_roughness_map")
             }
             crate::param_surface::MaterialFeature::Anisotropy => port == "anisotropy_map",
-            crate::param_surface::MaterialFeature::Translucency => port == "volume_thickness_map",
+            crate::param_surface::MaterialFeature::Translucency => matches!(
+                port, "diffuse_transmission_map" | "diffuse_transmission_color_map"
+            ),
         }
     }
 
@@ -369,6 +372,8 @@ impl ScenePanel {
             | Some(MaterialParamRole::Colour(MaterialGroup::Surface, ..)) => 0,
             Some(MaterialParamRole::Scalar(MaterialGroup::Opacity))
             | Some(MaterialParamRole::Colour(MaterialGroup::Opacity, ..)) => 1,
+            Some(MaterialParamRole::Scalar(MaterialGroup::Subsurface))
+            | Some(MaterialParamRole::Colour(MaterialGroup::Subsurface, ..)) => 9,
             Some(MaterialParamRole::FeatureMode(feature))
             | Some(MaterialParamRole::Scalar(MaterialGroup::Feature(feature)))
             | Some(MaterialParamRole::Colour(MaterialGroup::Feature(feature), ..)) => {
@@ -851,6 +856,8 @@ impl ScenePanel {
                 crate::param_surface::MaterialColour::Emission => "Emission colour",
                 crate::param_surface::MaterialColour::Sheen => "Sheen colour",
                 crate::param_surface::MaterialColour::Attenuation => "Attenuation colour",
+                crate::param_surface::MaterialColour::Subsurface => "Scattering colour",
+                crate::param_surface::MaterialColour::Translucency => "Translucency colour",
             },
             label_style(),
         );
@@ -1464,14 +1471,20 @@ mod tests {
                 0.5,
                 0.5,
             ),
+            material_test_row(
+                "subsurface_mode",
+                MaterialParamRole::Scalar(MaterialGroup::Subsurface),
+                0.0,
+                0.0,
+            ),
         ];
         let panel = ScenePanel::new();
-        let mut indices = [0usize, 1, 2, 3];
+        let mut indices = [0usize, 1, 2, 3, 4];
         indices.sort_by_key(|&index| panel.material_bucket(&rows[index]));
         assert_eq!(
             indices,
-            [3, 2, 1, 0],
-            "surface, opacity, feature, advanced order"
+            [3, 2, 1, 4, 0],
+            "surface, opacity, feature, subsurface, advanced order"
         );
         let names: Vec<String> = indices
             .iter()
@@ -1479,9 +1492,10 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["Surface", "Opacity & Cutout", "Coat", "Advanced"]
+            vec!["Surface", "Opacity & Cutout", "Coat", "Subsurface", "Advanced"]
         );
         assert!(names.windows(2).all(|pair| pair[0] != pair[1]));
+        assert!(!panel.material_section_folded("Subsurface"));
     }
 
     #[test]

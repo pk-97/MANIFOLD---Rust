@@ -25,5 +25,5 @@ fn body(
     let envelope = simplex3d(noise_pos) * 0.5 + 0.5;
     var displaced = e_in.position;
     displaced.y = displaced.y - amount * envelope * w;
-    return Element(displaced, e_in.normal, e_in.uv, e_in.tangent);
+    return Element(displaced, e_in.normal, e_in.uv, e_in.uv1, e_in.tangent, e_in.color);
 }

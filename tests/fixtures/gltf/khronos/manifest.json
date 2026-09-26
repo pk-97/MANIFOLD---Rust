@@ -703,7 +703,8 @@
         "mean_abs_tol": 2.0
       }
     ],
-    "status": "expect_pass"
+    "status": "expect_pass",
+    "note": "Imported punctual lights retain authored photometric intensity (512.25 directional and 1500 point). The default zero-EV camera clips bright regions; reducing camera exposure is independent of preserving these source light values."
   },
   {
     "asset": "PointLightIntensityTest.glb",
@@ -1363,24 +1364,24 @@
     "asset": "TransmissionRoughnessTest.glb",
     "checks": [
       {
-        "kind": "region_mean_luminance_below",
+        "kind": "region_stddev_above",
         "region": [
-          0.615,
-          0.444,
-          0.651,
-          0.514
-        ],
-        "reference_region": [
           0.482,
           0.444,
           0.521,
           0.514
         ],
-        "value": 0.75
+        "reference_region": [
+          0.615,
+          0.444,
+          0.651,
+          0.514
+        ],
+        "value": 1.5
       }
     ],
     "status": "expect_pass",
-    "note": "GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2b: rough transmissive tiles sample a coarser mip of opaque_scene_color than smooth tiles (roughness-driven refraction blur), reading darker/flatter -- the old approximation had no mip-blur mechanism at all"
+    "note": "The smooth transmissive tile must retain more background detail than the rough tile (luminance standard deviation, at least 1.5x). Blur redistributes radiance; it need not darken a tile. This replaces the old brightness proxy after correct empty-background environment coverage raised rough-tile luminance."
   },
   {
     "asset": "TransmissionTest.glb",
@@ -1546,7 +1547,7 @@
       }
     ],
     "status": "expect_pass",
-    "note": "BUG-171 PARTIALLY FIXED (GLB_XFAIL_BURNDOWN_DESIGN.md P3/D4): the materialless primitive is no longer silently dropped -- it gets the glTF spec default material (base color white, metallic 1.0, roughness 1.0) and imports/renders as one object (previously errored 'no materials with geometry'). KNOWN GAP, ESCALATED (not implemented this phase): COLOR_0 (per-vertex color) is NOT read anywhere in the mesh pipeline -- MeshVertex (crates/manifold-renderer/src/generators/mesh_common.rs) has no color field, and it is the shared GPU vertex format for ~30 node-graph primitives/shaders, not gltf-import-local. Adding a color channel is a structural ABI change (MeshVertex size/layout, MESH_VERTEX_SPECS, every WGSL 'struct Vertex' hand-copy) beyond this phase's scope per DESIGN_DOC_STANDARD.md's escalate-line ('changing a public API shape the doc doesn't specify') -- escalated to BUG-175 rather than improvised. This box currently renders as a flat uniform gray box, NOT with its per-vertex colors."
+    "note": "COLOR_0 RGBA is retained in the 80-byte MeshVertex layout and multiplies the glTF default material. The reviewed golden contains the authored varying vertex colors."
   },
   {
     "asset": "RecursiveSkeletons.glb",

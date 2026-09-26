@@ -19,7 +19,7 @@ struct PrefilterUniforms {
     src_width: u32,
     src_height: u32,
     roughness: f32,
-    _pad0: f32,
+    sheen: f32,
     _pad1: f32,
     _pad2: f32,
 }
@@ -50,7 +50,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var weight_sum = 0.0;
     for (var i: u32 = 0u; i < PREFILTER_SAMPLES; i = i + 1u) {
         let xi = pbr_hammersley(i, PREFILTER_SAMPLES);
-        let H = pbr_importance_sample_ggx(xi, roughness, N);
+        var H = pbr_importance_sample_ggx(xi, roughness, N);
+        if u.sheen > 0.5 {
+            H = pbr_importance_sample_charlie(xi, roughness, N);
+        }
         let L = normalize(2.0 * dot(N, H) * H - N); // reflect(-N, H), V=N
         let NdotL = dot(N, L);
         if NdotL > 0.0 {

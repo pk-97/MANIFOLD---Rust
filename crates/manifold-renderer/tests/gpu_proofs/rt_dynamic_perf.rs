@@ -144,7 +144,7 @@ fn small_triangle(device: &GpuDevice) -> GpuBuffer {
 }
 
 fn object<'a>(buffer: &'a GpuBuffer, triangles: u32) -> RtObjectGeometry<'a> {
-    RtObjectGeometry {
+    RtObjectGeometry { material_attributes: Default::default(),
         vertex_buffer: buffer,
         vertex_stride: VERTEX_STRIDE,
         vertex_offset: 0,
@@ -160,6 +160,7 @@ fn object<'a>(buffer: &'a GpuBuffer, triangles: u32) -> RtObjectGeometry<'a> {
         mr_texture: None,
         normal_texture: None,
         emissive_texture: None,
+        extra_material_textures: [None; 3],
         emissive_uv_m: [1.0, 0.0, 0.0, 1.0],
         emissive_uv_t: [0.0, 0.0],
         cast_shadows: true,
@@ -168,6 +169,12 @@ fn object<'a>(buffer: &'a GpuBuffer, triangles: u32) -> RtObjectGeometry<'a> {
         instance_slots: 0,
         appearance_weights: None,
         appearance_gain: 1.0,
+        base_color_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        mr_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_uv_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        normal_scale: 1.0,
+        base_color_alpha: 1.0,
+        tangent_offset: u32::MAX,
     }
 }
 

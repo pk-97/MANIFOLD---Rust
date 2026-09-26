@@ -18,18 +18,19 @@
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
-/// A 3D mesh vertex with surface normal, UV, and tangent. Used by
+/// A 3D mesh vertex with surface normal, UV0/UV1, and tangent. Used by
 /// `node.grid_mesh` and consumed by `node.render_mesh`.
 ///
-/// Layout (64 bytes, std430 / 16-byte aligned):
+/// Layout (80 bytes, std430 / 16-byte aligned):
 /// - position(12) + pad(4)
 /// - normal(12)   + pad(4)
-/// - uv(8)        + pad(8)
+/// - uv0(8)       + uv1(8) (`_pad2` is the retained historical field name)
 /// - tangent(16)  — glTF TANGENT: xyz = tangent direction, w = ±1
 ///   bitangent sign (glTF spec). `[0,0,0,0]` = ABSENT (procedural
 ///   meshes, glTF without TANGENT): the shader falls back to the
 ///   derived cotangent frame. The w-is-zero test is safe because a
 ///   real glTF tangent always carries w ∈ {-1, +1}.
+/// - color(16)      — linear RGBA COLOR_0; procedural vertices use white.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshVertex {
@@ -38,20 +39,31 @@ pub struct MeshVertex {
     pub normal: [f32; 3],
     pub _pad1: f32,
     pub uv: [f32; 2],
+    /// UV1/TEXCOORD_1. `_pad2` is retained for source compatibility with
+    /// older producers that treated this slot as padding.
     pub _pad2: [f32; 2],
     pub tangent: [f32; 4],
+    pub color: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<MeshVertex>() == 64);
+const _: () = {
+    assert!(std::mem::size_of::<MeshVertex>() == 80);
+    assert!(std::mem::offset_of!(MeshVertex, uv) == 32);
+    assert!(std::mem::offset_of!(MeshVertex, _pad2) == 40);
+    assert!(std::mem::offset_of!(MeshVertex, tangent) == 48);
+    assert!(std::mem::offset_of!(MeshVertex, color) == 64);
+};
 
 /// Channels signature for [`MeshVertex`] per `docs/CHANNEL_TYPE_SYSTEM.md` section 6.2.
-/// Std430 stride 64 matches the existing `#[repr(C)]` struct (vec3+vec3+vec2+vec4
-/// with std430 alignment producing the same 64 bytes).
+/// Std430 stride 80 matches the existing `#[repr(C)]` struct
+/// (vec3+vec3+vec2+vec2+vec4+vec4 with std430 alignment producing 80 bytes).
 pub const MESH_VERTEX_SPECS: &[ChannelSpec] = &[
     ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::NORMAL,   ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::UV,       ty: ChannelElementType::Vec2F },
+    ChannelSpec { name: well_known::UV1,      ty: ChannelElementType::Vec2F },
     ChannelSpec { name: well_known::TANGENT,  ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::COLOR,    ty: ChannelElementType::Vec4F },
 ];
 
 impl KnownItem for MeshVertex {
@@ -399,6 +411,20 @@ mod mesh_common_specs_drift {
             std::mem::size_of::<MeshVertex>(),
             "MESH_VERTEX_SPECS std430 stride drifted from struct MeshVertex size."
         );
+    }
+
+    #[test]
+    fn mesh_vertex_layout_preserves_uv1_slot_before_tangent() {
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 80);
+        assert_eq!(std::mem::offset_of!(MeshVertex, uv), 32);
+        assert_eq!(std::mem::offset_of!(MeshVertex, _pad2), 40);
+        assert_eq!(std::mem::offset_of!(MeshVertex, tangent), 48);
+        assert_eq!(std::mem::offset_of!(MeshVertex, color), 64);
+        assert_eq!(MESH_VERTEX_SPECS[2].name, well_known::UV);
+        assert_eq!(MESH_VERTEX_SPECS[3].name, well_known::UV1);
+        assert_eq!(MESH_VERTEX_SPECS[3].ty, ChannelElementType::Vec2F);
+        assert_eq!(MESH_VERTEX_SPECS[5].name, well_known::COLOR);
+        assert_eq!(MESH_VERTEX_SPECS[5].ty, ChannelElementType::Vec4F);
     }
 
     #[test]

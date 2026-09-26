@@ -319,7 +319,7 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
         let raw = readback_raw_halves(&device, &target.texture, WIDTH, HEIGHT);
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
         prev_raw = Some(raw);
-        stable_count = if byte_stable { stable_count + 1 } else { 0 };
+        stable_count = if byte_stable && !runtime.io_pending() { stable_count + 1 } else { 0 };
         // NOT cosmetic — see render_import.rs's identical loop for why:
         // without pacing, `STABLE_STREAK` frames can render faster than a
         // background texture decode thread can swap even one map in, so a
@@ -336,6 +336,14 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
             let rgba = readback_tonemapped_rgba8(&device, &target.texture, WIDTH, HEIGHT);
             last_fraction = non_black_fraction(&rgba);
             if last_fraction > non_black_floor {
+                if let Ok(directory) = std::env::var("GLTF_CONFORMANCE_CAPTURE_DIR") {
+                    let directory = Path::new(&directory);
+                    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+                    let name = path.file_stem().ok_or("asset has no file stem")?;
+                    let output = directory.join(name).with_extension("png");
+                    std::fs::write(output, encode_rgba8_png(&rgba, WIDTH, HEIGHT))
+                        .map_err(|e| e.to_string())?;
+                }
                 return Ok(rgba);
             }
         }
@@ -527,6 +535,13 @@ fn glb_conformance_sweep() {
     let entries: Vec<ManifestEntry> =
         serde_json::from_str(&manifest_json).expect("parse manifest.json");
     assert!(!entries.is_empty(), "manifest.json must name at least one asset");
+    // Exact asset names let a failed visual contract be reproduced without
+    // rendering the whole corpus. An unset filter still runs every entry.
+    let selected = std::env::var("GLTF_CONFORMANCE_ASSETS").ok();
+    let selected: Vec<&str> = selected.as_deref().map(|s| s.split(',').collect()).unwrap_or_default();
+    for asset in &selected {
+        assert!(entries.iter().any(|entry| entry.asset == *asset), "unknown conformance asset: {asset}");
+    }
 
     let mut failures: Vec<String> = Vec::new();
     let mut expect_pass_checked = 0usize;
@@ -534,6 +549,9 @@ fn glb_conformance_sweep() {
     let mut skipped = 0usize;
 
     for entry in &entries {
+        if !selected.is_empty() && !selected.contains(&entry.asset.as_str()) {
+            continue;
+        }
         let asset_path = khronos_dir().join(&entry.asset);
         let have_fixture = asset_path.exists();
 
