@@ -1,5 +1,5 @@
 // node.coc_from_depth — hand parity oracle for the generated standalone
-// kernel (docs/CINEMATIC_POST_DESIGN.md D1). Same thin-lens CoC formula as
+// kernel (docs/CINEMATIC_POST_DESIGN.md D1). Same thin-lens CoC-radius formula as
 // coc_from_depth_body.wgsl — kept independent (not sharing Rust source) so
 // the gpu_tests parity check is a real cross-check, not a tautology.
 //
@@ -37,15 +37,16 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let raw_depth = textureLoad(depth_tex, vec2<i32>(id.xy), 0).r;
 
     let f_mm = SENSOR_H_MM / (2.0 * tan(u.fov_y * 0.5));
-    let a_mm = f_mm / u.f_stop;
+    let aperture_radius_mm = f_mm / (2.0 * u.f_stop);
     let d_mm = linearize_depth(raw_depth, u.near, u.far) * u.world_to_mm;
     let s_mm = u.focus_distance * u.world_to_mm;
     let signed_delta = d_mm - s_mm;
-    let coc_mm = a_mm * f_mm * signed_delta / (d_mm * max(s_mm - f_mm, 1.0));
-    let coc_px = clamp(abs(coc_mm) / SENSOR_H_MM * f32(dims.y), 0.0, u.max_radius);
+    let coc_radius_mm = aperture_radius_mm * f_mm * signed_delta
+        / (d_mm * max(s_mm - f_mm, 1.0));
+    let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * f32(dims.y), 0.0, u.max_radius);
     // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
-    // exactly 0 CoC (mirrors coc_from_depth_body.wgsl).
-    let coc_q = select(coc_px, 0.0, u.focus_distance <= 0.0);
+    // exactly 0 CoC radius (mirrors coc_from_depth_body.wgsl).
+    let coc_q = select(coc_radius_px, 0.0, u.focus_distance <= 0.0);
     let normalized = coc_q / u.max_radius;
     // Sign flag: 1.0 = nearer than focus, 0.0 = far-or-in-focus.
     let near_flag = select(0.0, 1.0, (signed_delta < 0.0) && (u.focus_distance > 0.0));
