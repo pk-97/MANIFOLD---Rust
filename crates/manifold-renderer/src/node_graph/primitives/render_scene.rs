@@ -1463,7 +1463,13 @@ fn compute_rt_lighting_key(
     use std::hash::{Hash, Hasher};
     let mut hasher = ahash::AHasher::default();
     k.hash(&mut hasher);
-    hasher.write(bytemuck::cast_slice(light_data));
+    for light in light_data.chunks_exact(LIGHT_VEC4_STRIDE) {
+        // A dark light has no lighting contribution. Its movement must not
+        // discard the accumulated light from other sources.
+        if light[1][..3].iter().any(|&channel| channel != 0.0) {
+            hasher.write(bytemuck::cast_slice(light));
+        }
+    }
     envmap_content.hash(&mut hasher);
     hasher.finish()
 }
@@ -5711,7 +5717,11 @@ impl RenderScene {
         for i in 0..lights_n {
             let light_slot = port_index.get(self.light_port_names[i].as_ref()).copied();
             if let Some(l) = light_slot.and_then(|s| ctx.inputs.light_slot(s)) {
-                let slot: f32 = if l.cast_shadows && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
+                // Dark lights must not enter the shared shadow history: its
+                // variance gate operates on four caster channels together,
+                // so a dark caster's shadow could disturb a lit neighbour.
+                let emits_light = l.color[..3].iter().any(|&channel| channel != 0.0);
+                let slot: f32 = if l.cast_shadows && emits_light && casters.len() < manifold_gpu::raytrace::MAX_RT_CASTERS {
                     let s = casters.len() as f32;
                     casters.push(l);
                     s

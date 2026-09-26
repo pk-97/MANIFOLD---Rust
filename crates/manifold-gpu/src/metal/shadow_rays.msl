@@ -1747,6 +1747,7 @@ static float3 rt_direct_lights(instance_acceleration_structure accel,device RtNo
     float3 total=float3(0.0f);
     for(uint i=0;i<p.light_count;++i) {
         float4 source=lights[i*4],color=lights[i*4+1],settings=lights[i*4+2];
+        if(all(color.rgb==float3(0.0f)))continue;
         float3 l=source.xyz;float attenuation=1.0f,distance=INFINITY;
         if(source.w>0.5f) {
             float3 delta=source.xyz-position;distance=length(delta);l=delta/max(distance,1e-6f);

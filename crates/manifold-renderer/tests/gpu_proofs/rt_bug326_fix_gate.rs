@@ -155,17 +155,23 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
 
     // Baseline: rt=0.
     let (mut rt_baseline, tex_baseline, base_manifest) = build_helmet_harness(h, false, false);
+    let mut baseline_frac = 0.0;
     for f in 0..600 {
         frame(&mut rt_baseline, h, &tex_baseline, f, &base_manifest);
         if !rt_baseline.warmup_pending() && f >= 89 {
-            break;
+            // Quiescent loaders can become ready on a frame whose composite
+            // was suppressed during preparation. Require a visible completed
+            // frame, just as the RT arm below does, within the same bound.
+            baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_baseline));
+            if baseline_frac > 0.0 {
+                break;
+            }
         }
         if rt_baseline.warmup_pending() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
     assert!(!rt_baseline.warmup_pending(), "baseline import did not finish loading within 600 frames");
-    let baseline_frac = non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_baseline));
     assert!(baseline_frac > 0.0, "baseline must contain lit pixels, not a vacuous zero threshold");
 
     // RT on: rt=1+refl=1. Poll until lit: the rerun suppression window
