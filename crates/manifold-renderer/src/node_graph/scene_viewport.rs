@@ -72,6 +72,26 @@ impl fmt::Display for SceneViewportError {
 
 impl std::error::Error for SceneViewportError {}
 
+/// Host-level target availability, separate from a rendered frame's validity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneViewportHostError {
+    MissingRuntime,
+    InvalidTarget(SceneViewportError),
+    Modifier(crate::preset_runtime::ModifierPreviewError),
+}
+
+impl SceneViewportHostError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::MissingRuntime => "This scene is not active at the current time.",
+            Self::InvalidTarget(SceneViewportError::TargetNotFound) => "This scene is not available in the current render.",
+            Self::InvalidTarget(SceneViewportError::NotSceneRenderer) => "Select a scene renderer to use the 3D viewport.",
+            Self::InvalidTarget(SceneViewportError::InvalidConfiguration) => "The viewport camera or dimensions are invalid.",
+            Self::Modifier(error) => error.message(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OutputLayout {
     port: &'static str,

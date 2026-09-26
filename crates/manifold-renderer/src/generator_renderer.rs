@@ -14,6 +14,13 @@ use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::frame_status::FrameRenderStatus;
+use crate::node_graph::fluid::FluidDomainSnapshot;
+use crate::node_graph::scene_viewport::{
+    SceneViewportConfig, SceneViewportHostError,
+};
+use crate::preset_runtime::ModifierPreviewContext;
+
 /// Per-clip active state.
 struct ActiveClip {
     /// Generator renders into this texture at full output resolution.
@@ -200,6 +207,12 @@ pub struct GeneratorRenderer {
     /// for this frame. Set by the host before `render_all`; a raw pointer is
     /// used because the renderer's lifetime is independent of the registry.
     layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
+    /// Render-only viewport request forwarded to the matching generator
+    /// runtime. The modifier context is shared with the host and does not
+    /// participate in graph execution.
+    scene_viewport_request: Option<(LayerId, NodeId, SceneViewportConfig)>,
+    scene_viewport_modifier: Option<Arc<ModifierPreviewContext>>,
+    scene_viewport_error: Option<SceneViewportHostError>,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -245,6 +258,9 @@ impl GeneratorRenderer {
             profiling_enabled: false,
             rt_quality: crate::node_graph::RtQuality::default(),
             layer_skin_registry: None,
+            scene_viewport_request: None,
+            scene_viewport_modifier: None,
+            scene_viewport_error: None,
         }
     }
 
@@ -300,9 +316,129 @@ impl GeneratorRenderer {
     /// depending on the unfused→fused executor rebuild to reset it.
     pub fn clear_preview(&mut self) {
         self.preview_layer = None;
+        self.scene_viewport_request = None;
+        self.scene_viewport_modifier = None;
+        self.scene_viewport_error = None;
         for state in self.layer_generators.values_mut() {
             state.generator.set_preview_node(None);
             state.generator.clear_dump_set();
+            state.generator.clear_scene_viewport();
+        }
+    }
+
+    /// Store and immediately apply the render-only scene viewport request to
+    /// currently-live runtimes. Rebuilt runtimes receive it again immediately
+    /// before their generator render in [`Self::render_all`].
+    pub fn set_scene_viewport_request(
+        &mut self,
+        request: Option<(LayerId, NodeId, SceneViewportConfig)>,
+        modifier: Option<Arc<ModifierPreviewContext>>,
+    ) {
+        self.scene_viewport_request = request;
+        self.scene_viewport_modifier = modifier;
+        self.scene_viewport_error = None;
+        self.clear_scene_viewport_runtimes();
+        self.apply_scene_viewport_to_live_runtime();
+    }
+
+    fn clear_scene_viewport_runtimes(&mut self) {
+        let requested_layer = self
+            .scene_viewport_request
+            .as_ref()
+            .map(|(layer_id, _, _)| layer_id);
+        for (layer_id, state) in self.layer_generators.iter_mut() {
+            if requested_layer != Some(layer_id) {
+                state.generator.clear_scene_viewport();
+            }
+        }
+    }
+
+    fn apply_scene_viewport_to_live_runtime(&mut self) {
+        let Some((layer_id, node_id, config)) = self.scene_viewport_request.as_ref() else {
+            return;
+        };
+        let modifier = self.scene_viewport_modifier.clone();
+        let error = {
+            let Some(state) = self.layer_generators.get_mut(layer_id) else {
+                return;
+            };
+            let result = if let Some(context) = modifier.as_deref() {
+                state
+                    .generator
+                    .set_modifier_scene_viewport(context, node_id, *config)
+            } else {
+                state
+                    .generator
+                    .set_scene_viewport_watched(node_id, *config)
+                    .map_err(SceneViewportHostError::InvalidTarget)
+            };
+            let error = result.err();
+            if error.is_some() {
+                state.generator.clear_scene_viewport();
+            }
+            error
+        };
+        if let Some(error) = error {
+            self.scene_viewport_error = Some(error);
+        } else {
+            self.scene_viewport_error = None;
+        }
+    }
+
+    /// The latest valid viewport color for `layer_id`.
+    pub fn scene_viewport_texture(
+        &self,
+        layer_id: &LayerId,
+    ) -> Option<&manifold_gpu::GpuTexture> {
+        if self.scene_viewport_error.is_some()
+            || self.scene_viewport_request.as_ref().is_none_or(|(requested, _, _)| requested != layer_id)
+        {
+            return None;
+        }
+        self.layer_generators
+            .get(layer_id)
+            .and_then(|state| state.generator.scene_viewport_texture())
+    }
+
+    pub fn scene_viewport_status(
+        &self,
+        layer_id: &LayerId,
+    ) -> Result<FrameRenderStatus, SceneViewportHostError> {
+        if let Some(error) = self.scene_viewport_error {
+            return Err(error);
+        }
+        let Some((requested, _, _)) = self.scene_viewport_request.as_ref() else {
+            return Err(SceneViewportHostError::MissingRuntime);
+        };
+        if requested != layer_id {
+            return Err(SceneViewportHostError::MissingRuntime);
+        }
+        let Some(state) = self.layer_generators.get(layer_id) else {
+            return Err(SceneViewportHostError::MissingRuntime);
+        };
+        state
+            .generator
+            .scene_viewport_status()
+            .ok_or(SceneViewportHostError::MissingRuntime)
+    }
+
+    pub fn write_scene_viewport_fluid_domains(
+        &self,
+        layer_id: &LayerId,
+        output: &mut Vec<(NodeId, FluidDomainSnapshot)>,
+    ) {
+        if self.scene_viewport_error.is_some()
+            || self.scene_viewport_request.as_ref().is_none_or(|(requested, _, _)| requested != layer_id)
+        {
+            return;
+        }
+        let Some(state) = self.layer_generators.get(layer_id) else {
+            return;
+        };
+        if let Some(context) = self.scene_viewport_modifier.as_deref() {
+            state.generator.write_modifier_fluid_domains(context, output);
+        } else {
+            state.generator.write_fluid_domains_watched(output);
         }
     }
 
@@ -768,6 +904,16 @@ impl GeneratorRenderer {
                 current_relight_params,
             );
         }
+
+        // Captures are valid only for a runtime that is actually rendered on
+        // this frame. Skipped layers must not retain the previous frame's
+        // viewport texture while the matching rebuilt runtime is re-aimed
+        // below immediately before its render.
+        self.clear_scene_viewport_runtimes();
+        // Re-aim the matching runtime even when its layer has no visible clip
+        // this frame; set_scene_viewport invalidates its capture flag without
+        // dropping the pass or its render history.
+        self.apply_scene_viewport_to_live_runtime();
 
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();

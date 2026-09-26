@@ -1,6 +1,6 @@
 //! Input mapping for the P5 interactive 3D viewport
 //! (`docs/REALTIME_3D_DESIGN.md` D7, P5 as-built note): translates raw
-//! pointer/scroll events into [`manifold_renderer::node_graph::ViewportSession`]
+//! pointer/scroll events into the editor's navigation camera
 //! calls, per the industry-standard bindings the doc commits to (D7 section 7.7):
 //! left-drag orbits, shift-drag or middle-drag pans, scroll/pinch dollies.
 //!
@@ -22,7 +22,7 @@
 //! the OS into a Ctrl-modified scroll absent a native magnify-gesture
 //! handler; a bare `PixelDelta` is a two-finger trackpad pan).
 
-use manifold_renderer::node_graph::ViewportSession;
+use manifold_renderer::node_graph::ViewportCamera;
 use winit::event::MouseButton;
 
 /// Gizmo projection operates in texture pixels; pointer events arrive in
@@ -123,19 +123,17 @@ pub fn classify_trackpad_pinch_dolly(delta: f32) -> ViewportGesture {
     ViewportGesture::TrackpadPinchDolly { delta }
 }
 
-/// Apply a classified gesture to `session` — the single call site a
-/// viewport panel's input handlers make. Each arm forwards straight to the
-/// matching `ViewportSession` method (which itself marks the session dirty
-/// via a cheap `Graph::set_param`, never a rebuild — see
-/// `viewport_session.rs`).
-pub fn apply(session: &mut ViewportSession, gesture: ViewportGesture, sens: &ViewportInputSensitivity) {
+/// Apply a classified gesture to the requested navigation camera. The
+/// displayed frame remains immutable here; content receives a new request on
+/// the next editor redraw.
+pub fn apply(camera: &mut ViewportCamera, gesture: ViewportGesture, sens: &ViewportInputSensitivity) {
     match gesture {
-        ViewportGesture::Orbit { dx, dy } => session.orbit(dx, dy, sens.orbit),
-        ViewportGesture::Pan { dx, dy } => session.pan(dx, dy, sens.pan),
-        ViewportGesture::Dolly { delta } => session.dolly(delta, sens.dolly),
-        ViewportGesture::TrackpadPan { dx, dy } => session.trackpad_pan(dx, dy, sens.trackpad_pan),
+        ViewportGesture::Orbit { dx, dy } => camera.orbit(dx, dy, sens.orbit),
+        ViewportGesture::Pan { dx, dy } => camera.pan(dx, dy, sens.pan),
+        ViewportGesture::Dolly { delta } => camera.dolly(delta, sens.dolly),
+        ViewportGesture::TrackpadPan { dx, dy } => camera.trackpad_pan(dx, dy, sens.trackpad_pan),
         ViewportGesture::TrackpadPinchDolly { delta } => {
-            session.trackpad_pinch_dolly(delta, sens.trackpad_pinch_dolly)
+            camera.trackpad_pinch_dolly(delta, sens.trackpad_pinch_dolly)
         }
     }
 }

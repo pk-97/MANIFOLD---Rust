@@ -160,6 +160,48 @@ pub fn dispatch_chain<'a>(
     rt_quality: crate::node_graph::RtQuality,
     layer_sources: &crate::layer_skin::LayerSkinRegistry,
 ) -> Option<&'a GpuTexture> {
+    let mut viewport_error = None;
+    dispatch_chain_with_scene_viewport(
+        cache,
+        gpu,
+        input_texture,
+        effects,
+        groups,
+        ctx,
+        preview_effect,
+        scope,
+        profiling,
+        rt_quality,
+        layer_sources,
+        None,
+        &mut viewport_error,
+    )
+}
+
+/// Dispatch a chain and apply a render-only scene viewport request after a
+/// rebuild, before the first graph run. Existing runtimes keep their viewport
+/// pass when the target is unchanged; [`PresetRuntime::set_scene_viewport`]
+/// only invalidates the captured frame in that case.
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_chain_with_scene_viewport<'a>(
+    cache: &'a mut Option<PresetRuntime>,
+    gpu: &mut GpuEncoder<'_>,
+    input_texture: &'a GpuTexture,
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    ctx: &PresetContext,
+    preview_effect: Option<&EffectId>,
+    scope: &str,
+    profiling: bool,
+    rt_quality: crate::node_graph::RtQuality,
+    layer_sources: &crate::layer_skin::LayerSkinRegistry,
+    scene_viewport: Option<(
+        &EffectId,
+        &manifold_core::NodeId,
+        crate::node_graph::scene_viewport::SceneViewportConfig,
+    )>,
+    scene_viewport_error: &mut Option<crate::node_graph::scene_viewport::SceneViewportHostError>,
+) -> Option<&'a GpuTexture> {
     if !effects.iter().any(|fx| fx.enabled) {
         return None;
     }
@@ -245,6 +287,16 @@ pub fn dispatch_chain<'a>(
     // from going stale.
     cg.set_rt_quality(rt_quality);
     cg.set_layer_skin_registry(Some(layer_sources));
+    if let Some((effect_id, node_id, config)) = scene_viewport {
+        match cg.set_scene_viewport(effect_id, node_id, config) {
+            Ok(()) => *scene_viewport_error = None,
+            Err(crate::node_graph::scene_viewport::SceneViewportError::TargetNotFound) => {}
+            Err(error) => {
+                *scene_viewport_error =
+                    Some(crate::node_graph::scene_viewport::SceneViewportHostError::InvalidTarget(error));
+            }
+        }
+    }
     let t0 = std::time::Instant::now();
     let ran = cg.run(gpu, input_texture, effects, groups, ctx).is_some();
     if ran {

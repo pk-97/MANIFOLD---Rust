@@ -51,6 +51,7 @@ pub struct SharedTextureBridge {
     /// until a frame completes, which requires the first frame to be written
     /// (bridge-probe measured the hang; production would hit it on launch).
     published: [AtomicBool; SURFACE_COUNT],
+    published_frames: [AtomicU64; SURFACE_COUNT],
     /// Generation counter — incremented on resize so both sides detect stale textures.
     generation: AtomicU64,
     // ── Read fence (BUG-xaw4) ─────────────────────────────────────────
@@ -211,6 +212,7 @@ impl SharedTextureBridge {
             height: AtomicU32::new(height),
             front_index: AtomicU32::new(0),
             published: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
+            published_frames: std::array::from_fn(|_| AtomicU64::new(0)),
             generation: AtomicU64::new(0),
             reads_in_flight: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
             last_publish_frame: AtomicU64::new(0),
@@ -301,6 +303,7 @@ impl SharedTextureBridge {
     /// frame counter — it stamps `last_publish_frame` for the quiet-bridge
     /// bypass in `is_reusable_ephemeral`.
     pub fn publish_front(&self, index: u32, frame: u64) {
+        self.published_frames[index as usize].store(frame, Ordering::Release);
         self.published[index as usize].store(true, Ordering::Release);
         self.last_publish_frame.store(frame, Ordering::Release);
         self.front_index.store(index, Ordering::Release);
@@ -321,6 +324,13 @@ impl SharedTextureBridge {
             }
             self.reads_in_flight[slot].fetch_sub(1, Ordering::AcqRel);
         }
+    }
+
+    /// Read only while holding the lease. The slot cannot be reused until
+    /// that lease retires, so its image and frame stamp stay paired.
+    pub fn leased_frame(&self, lease: BridgeReadLease) -> Option<u64> {
+        self.published[lease.slot].load(Ordering::Acquire)
+            .then(|| self.published_frames[lease.slot].load(Ordering::Acquire))
     }
 
     /// Mark a read lease's GPU work retired — call from the completion

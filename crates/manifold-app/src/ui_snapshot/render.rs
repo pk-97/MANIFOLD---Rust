@@ -598,6 +598,7 @@ pub fn render_graph_editor_to_png(
         tex_w,
         tex_h,
         dpi,
+        None,
     );
 
     // Node previews were painted INLINE by `canvas.render` above (each at its

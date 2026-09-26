@@ -245,10 +245,16 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   captured image and resets editor history while retaining the camera request.
   `shared_scene_viewport_*` Metal proofs cover fluid epoch/time preservation,
   changing camera pixels, resize, hidden branches and matching show frames with
-  RT/temporal rendering. App replacement remains pending: route camera commands
-  through the content thread and publish matching frame/bounds metadata with the
-  existing preview texture handoff before removing its separate `ViewportSession`.
-  **P5b/P5c (2026-07-17, same branch):** the persistent-session architecture
+  RT/temporal rendering. The app now forwards transient camera requests to the
+  primary generator/effect runtime, including the first frame after a chain rebuild.
+  The existing preview surface ring carries frame stamps; matching metadata retains
+  session/owner, camera, status and accepted fluid bounds. The editor painter draws
+  the leased image and overlays; picking uses the displayed camera, including while
+  a newer navigation request is pending. No UI solver or synchronous readback/upload
+  remains. Native content/bridge/painter proofs cover paused liquid navigation and
+  effect rebuild/disable; live window-event acceptance remains open. Watched-generator
+  state preservation is BUG-vglg.11; source-independent effect building is BUG-vglg.10.
+  **Original P5b/P5c (2026-07-17; renderer replaced above):** the persistent-session architecture
   (`ViewportSession`, amortizing the rebuild to open/def-change only) and the
   live panel wiring (dock rect in the graph-editor sidebar, `v` toggle,
   `TexturePane`/`blit_texture_pane` present path, real winit mouse/scroll

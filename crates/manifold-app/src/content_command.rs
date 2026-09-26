@@ -342,6 +342,7 @@ pub enum ContentCommand {
     /// `WatchGeneratorGraph` to drive the per-node output capture. Sent when
     /// the editor's node selection changes.
     SetGraphPreviewNode(Option<manifold_core::NodeId>),
+    SetSceneViewport(Option<std::sync::Arc<crate::scene_viewport::SceneViewportRequest>>),
     SetModifierPreviewContext {
         scope: Vec<manifold_core::NodeId>,
         object: Option<manifold_core::scene_modifier_preset::SceneNodeRef>,

@@ -1469,6 +1469,7 @@ impl ContentThread {
                 .and_then(|_| self.cached_graph_snapshot.as_ref().map(|cache| Arc::clone(&cache.target))),
             active_graph_snapshot: active_graph_snapshot_arc,
             node_preview_info: self.content_pipeline.node_preview_info(),
+            scene_viewport_frames: self.content_pipeline.scene_viewport_frames().clone(),
             live_node_params: self.content_pipeline.live_node_params(),
             node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
             clip_atlas_layout: self.content_pipeline.clip_atlas_layout().to_vec(),

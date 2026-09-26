@@ -972,6 +972,8 @@ pub struct ContentPipeline {
     /// Pulled into [`ContentState`](crate::content_state::ContentState) each
     /// frame so the editor can show a value inspector for non-image nodes.
     last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
+    scene_viewport_request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>,
+    scene_viewport_observations: crate::scene_viewport::SceneViewportObservations,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
@@ -1122,6 +1124,8 @@ impl ContentPipeline {
             node_preview_modifier: None,
             modifier_editor_watched: false,
             last_node_preview_info: None,
+            scene_viewport_request: None,
+            scene_viewport_observations: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
             hidden_layer_indices_scratch: Vec::new(),
@@ -1838,6 +1842,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.node_preview_request = request;
     }
 
+    pub fn set_scene_viewport_request(&mut self, request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>) {
+        if request.is_none() {
+            self.scene_viewport_observations.frames.fill(None);
+        }
+        self.scene_viewport_request = request;
+    }
+
+    pub fn scene_viewport_frames(&self) -> &crate::scene_viewport::SceneViewportFrames {
+        &self.scene_viewport_observations.frames
+    }
+
     /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
     #[cfg(target_os = "macos")]
     pub fn set_node_atlas_textures(
@@ -2143,6 +2158,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Reset the node-preview inspector info; the active preview path below
         // repopulates it for this frame.
         self.last_node_preview_info = None;
+        self.scene_viewport_observations.frames[self.write_surface_index] = None;
         // Reset the editor canvas's live node-param values; the watched effect
         // or generator path below repopulates them post-render so the canvas
         // shows live (modulated) values, not the frozen authoring def. Stays
@@ -2312,6 +2328,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             None => gen_renderer.clear_preview(),
                         }
 
+                        let scene_request = self.scene_viewport_request.as_ref().and_then(|request| {
+                            match request.target.host_target() {
+                                Some(manifold_core::GraphTarget::Generator(layer)) =>
+                                    Some((layer.clone(), request.node.clone(), request.config)),
+                                _ => None,
+                            }
+                        });
+                        gen_renderer.set_scene_viewport_request(scene_request,
+                            self.scene_viewport_request.as_ref().and_then(|request| request.modifier.clone()));
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -2340,10 +2365,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 let gen_ref = renderers
                     .iter()
                     .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
-                let node_tex = gen_ref.and_then(|gr| gr.preview_texture(layer_id));
-                let encoding = gen_ref
+                let viewport = self.scene_viewport_request.as_ref().filter(|request|
+                    matches!(request.target.host_target(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == layer_id));
+                let node_tex = gen_ref.and_then(|gr| if viewport.is_some() {
+                    gr.scene_viewport_texture(layer_id)
+                } else { gr.preview_texture(layer_id) });
+                if let Some(request) = viewport {
+                    self.scene_viewport_observations.scratch.clear();
+                    if let Some(gr) = gen_ref {
+                        gr.write_scene_viewport_fluid_domains(layer_id, &mut self.scene_viewport_observations.scratch);
+                    }
+                    let status = gen_ref.map(|gr| gr.scene_viewport_status(layer_id))
+                        .unwrap_or(Err(manifold_renderer::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime));
+                    self.scene_viewport_observations.record(self.write_surface_index, frame_count,
+                        self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
+                        request.clone(), status);
+                }
+                let encoding = if viewport.is_some() { Default::default() } else { gen_ref
                     .map(|gr| gr.preview_encoding(layer_id))
-                    .unwrap_or_default();
+                    .unwrap_or_default() };
                 // Value-inspector info for a non-image node: its live scalar I/O.
                 if let Some(node_id) = node_id_opt {
                     let (inputs, outputs) = gen_ref
@@ -2362,7 +2402,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         &mut gen_enc,
                         node_tex,
                         self.node_preview_textures[self.write_surface_index].as_ref(),
-                        self.node_preview_normalize,
+                        self.node_preview_normalize && viewport.is_none(),
                         encoding,
                         &self.preview_pipelines(),
                         self.preview_sampler.as_ref(),
@@ -2622,6 +2662,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
+            self.compositor.set_scene_viewport_request(self.scene_viewport_request.as_ref().and_then(|request| {
+                match &request.target {
+                    manifold_core::GraphTarget::Effect(effect) => Some((effect.clone(), request.node.clone(), request.config)),
+                    _ => None,
+                }
+            }));
             // Enable a dump on the watched effect's chain this frame. The Cmd+D
             // one-shot dumps the whole graph; the thumbnail atlas dumps only the
             // canvas's visible nodes. Cmd+D takes precedence when both are
@@ -3138,11 +3184,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // Value-inspector info for a previewed effect node: its live scalar
             // I/O + whether it produced an image. Built whenever a node is
             // watched, image or not.
+            let viewport = self.scene_viewport_request.as_ref()
+                .filter(|request| matches!(request.target, manifold_core::GraphTarget::Effect(_)));
+            if let Some(request) = viewport {
+                self.scene_viewport_observations.scratch.clear();
+                self.compositor.write_scene_viewport_fluid_domains(&mut self.scene_viewport_observations.scratch);
+                self.scene_viewport_observations.record(self.write_surface_index, frame_count,
+                    self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
+                    request.clone(), self.compositor.scene_viewport_status());
+            }
+            let node_tex = if viewport.is_some() { self.compositor.scene_viewport_texture() }
+                else { self.compositor.preview_texture() };
             if let Some((_, Some(node_id))) = &self.node_preview_request {
                 let (inputs, outputs) = self.compositor.preview_scalar_io();
                 self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
                     node_id: node_id.clone(),
-                    has_image: self.compositor.preview_texture().is_some(),
+                    has_image: node_tex.is_some(),
                     diagnostic: None,
                     inputs,
                     outputs,
@@ -3155,13 +3212,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if self.node_preview_request.is_some() {
                 self.last_live_node_params = self.compositor.live_node_params();
             }
-            if let Some(node_tex) = self.compositor.preview_texture() {
-                let encoding = self.compositor.preview_encoding();
+            if let Some(node_tex) = node_tex {
+                let encoding = if viewport.is_some() { Default::default() } else { self.compositor.preview_encoding() };
                 Self::update_node_preview(
                     &mut native_enc,
                     node_tex,
                     self.node_preview_textures[self.write_surface_index].as_ref(),
-                    self.node_preview_normalize,
+                    self.node_preview_normalize && viewport.is_none(),
                     encoding,
                     &self.preview_pipelines(),
                     self.preview_sampler.as_ref(),

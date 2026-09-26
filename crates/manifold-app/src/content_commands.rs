@@ -812,6 +812,7 @@ impl ContentThread {
             ContentCommand::Shutdown => return true,
 
             ContentCommand::WatchEffectGraph(effect_id) => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 // One unified watched target; only one canvas active at a time.
                 self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
                 // Switching what's watched invalidates any node preview.
@@ -819,16 +820,19 @@ impl ContentThread {
                 self.modifier_preview_context = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }
             ContentCommand::WatchGraphTarget(target) => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 self.watched_graph_target = target.filter(|target|target.host_target().is_some());
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }
             ContentCommand::SetModifierPreviewContext { scope, object } => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 self.modifier_preview_context = match &self.watched_graph_target {
                     Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
                         Some(std::sync::Arc::new(manifold_renderer::preset_runtime::ModifierPreviewContext {
@@ -838,7 +842,19 @@ impl ContentThread {
                 };
             }
             ContentCommand::SetGraphPreviewNode(node_id) => {
+                if self.preview_graph_node != node_id {
+                    self.content_pipeline.set_scene_viewport_request(None);
+                }
                 self.preview_graph_node = node_id;
+            }
+            ContentCommand::SetSceneViewport(request) => {
+                if request.as_ref().is_none_or(|request|
+                    Some(&request.target) == self.watched_graph_target.as_ref()
+                        && Some(&request.node) == self.preview_graph_node.as_ref()
+                        && request.modifier == self.modifier_preview_context)
+                {
+                    self.content_pipeline.set_scene_viewport_request(request);
+                }
             }
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;

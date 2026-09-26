@@ -1746,6 +1746,7 @@ mod editor_window_harness {
             tex_w,
             tex_h,
             1.0,
+            None,
         );
 
         let bytes = super::render::readback(&device, &target_tex.texture, tex_w, tex_h);

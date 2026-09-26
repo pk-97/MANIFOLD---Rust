@@ -278,6 +278,7 @@ pub(crate) fn composite_editor_frame(
     logical_w: u32,
     logical_h: u32,
     scale: f64,
+    viewport: Option<crate::scene_viewport::SceneViewportPaint<'_>>,
 ) {
     let mut encoder = device.create_encoder("Graph Editor Frame");
     encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);
@@ -307,6 +308,9 @@ pub(crate) fn composite_editor_frame(
         // the flat root-scan and the shared tree-overlay pass below draws it
         // region-aware at OVERLAY depth instead — this is the BUG-151 fix.
         ui_renderer.render_tree_range(&ui_root.tree, 0, ui_root.overlay_region_start);
+        if let Some(viewport) = viewport {
+            viewport.draw(ui_renderer);
+        }
         // Column dividers: a thin seam always, a highlight band on
         // hover/drag. Drawn after the panels so the seam reads on top of
         // both the canvas and the sidebar backgrounds.

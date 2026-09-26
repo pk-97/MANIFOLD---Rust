@@ -1,5 +1,6 @@
-//! [`ViewportSession`] — the persistent, input-driven state behind the P5
-//! interactive viewport (`docs/REALTIME_3D_DESIGN.md` D7/D9, P5).
+//! [`ViewportSession`] — an isolated cached renderer for headless viewport
+//! fixtures. The app uses the primary runtime's `SceneViewportPass` and
+//! content-owned shared textures (`docs/REALTIME_3D_DESIGN.md` D7/D9, P5).
 //!
 //! `viewport_render::render_viewport_frame` (the P5 gate) builds a brand-new
 //! `PresetRuntime` on every call — correct for a one-shot gate proof, wrong

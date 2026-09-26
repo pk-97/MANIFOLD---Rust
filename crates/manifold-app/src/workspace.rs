@@ -10,6 +10,7 @@
 //! workspace (`Application::graph_editor`).
 
 use crate::ui_root::UIRoot;
+use std::sync::Arc;
 
 /// What kind of UI a workspace is hosting. Drives input routing and
 /// per-window render specialization (e.g. only `Main` blits the
@@ -78,34 +79,22 @@ pub struct Workspace {
     /// while set seeks the content thread.
     pub timeline_scrubbing: bool,
 
-    /// P5c (`docs/REALTIME_3D_DESIGN.md`): the persistent 3D-viewport
-    /// session backing the sidebar preview pane when the previewed node is a
-    /// top-level `node.render_scene` node and the viewport is toggled open
-    /// (the `v` editor shortcut, `window_input.rs`). `None` when the
-    /// viewport is closed, no render_scene node is previewed, or the
-    /// previewed node is nested inside a group (`override_camera_def` only
-    /// splices the camera into a node found in the TOP-LEVEL `def.nodes`
-    /// list — a known P5 constraint, not new to P5c). Only meaningful on the
-    /// graph-editor `Workspace`; the main window's never touches it.
-    pub viewport_session: Option<manifold_renderer::node_graph::ViewportSession>,
+    /// Editor-owned navigation camera and the last successfully displayed
+    /// scene frame. Content owns simulation and rendering.
+    pub viewport_session: Option<crate::scene_viewport::SceneViewportNavigation>,
     /// Owner and render node of the cached scene; identical graphs on two
     /// owners must still have separate simulation and parameter histories.
     pub viewport_target: Option<(manifold_core::GraphTarget, manifold_core::NodeId)>,
     /// Accepted domains from the runtime that produced the cached viewport.
     /// Reused by rendering and picking, never substituted from another solver.
-    pub viewport_fluid_domains: Vec<(manifold_core::NodeId, manifold_renderer::node_graph::fluid::FluidDomainSnapshot)>,
-    /// UI-device-local texture pane the viewport's composited RGBA8 blits
-    /// through — the same `TexturePane::local` + `blit_texture_pane`
-    /// pattern the audio spectrogram uses (`texture_pane.rs`), never an
-    /// IOSurface bridge: the session renders and the present pass presents
-    /// on the SAME (editor UI) thread, so there is no cross-thread hand-off
-    /// to bridge.
-    pub viewport_pane: Option<crate::texture_pane::TexturePane>,
-    /// User toggle (the `v` editor shortcut): true while the viewport is
-    /// requested open. The session itself only exists while this is `true`
-    /// AND the previewed node qualifies (see `viewport_session` doc) —
-    /// toggling this off always tears the session down immediately in the
-    /// same frame, releasing its GPU resources.
+    pub viewport_fluid_domains: Vec<(
+        manifold_core::NodeId,
+        manifold_renderer::node_graph::fluid::FluidDomainSnapshot,
+    )>,
+    /// Request most recently sent to the content thread. The redraw path
+    /// replaces this when the target or requested camera changes.
+    pub viewport_request_sent: Option<Arc<crate::scene_viewport::SceneViewportRequest>>,
+    /// User toggle (the `v` editor shortcut): true while the viewport is open.
     pub viewport_open: bool,
     /// The viewport's screen rect in logical window pixels, as last computed
     /// by the present pass — `None` when the viewport isn't showing this
@@ -123,6 +112,8 @@ pub struct Workspace {
     /// (editor state per `docs/REALTIME_3D_DESIGN.md` section 5's "Forbidden"
     /// list: "viewport/gizmo state in `manifold-core`").
     pub viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode,
+    /// Persistent ground grid reused by each editor redraw.
+    pub viewport_grid_lines: Vec<manifold_renderer::node_graph::WorldLine>,
     /// Reusable world-space editor lines appended to the viewport's gizmo
     /// lines for selected scene overlays (currently fluid domain bounds).
     pub viewport_overlay_lines: Vec<manifold_renderer::node_graph::WorldLine>,
@@ -154,6 +145,8 @@ pub struct GizmoDrag {
 impl Workspace {
     pub fn new(kind: WorkspaceKind) -> Self {
         let mut ui_root = UIRoot::new();
+        let viewport_grid_lines = manifold_renderer::node_graph::grid_lines(10.0, 1.0);
+        let viewport_overlay_capacity = viewport_grid_lines.len() + 84;
         if kind == WorkspaceKind::GraphEditor {
             // BUG-121 root fix: the editor window's inspector column is the
             // authoring surface (right-lane cards + mapping drawer), never
@@ -178,15 +171,15 @@ impl Workspace {
             viewport_session: None,
             viewport_target: None,
             viewport_fluid_domains: Vec::new(),
-            viewport_pane: None,
+            viewport_request_sent: None,
             viewport_open: false,
             viewport_rect: None,
             viewport_drag: None,
             viewport_gizmo_mode: manifold_renderer::node_graph::GizmoMode::default(),
-            // 12 fluid-domain edges plus the largest (three 24-segment
-            // rotate rings) gizmo geometry, so combining them stays bounded
-            // without a display-frame reallocation.
-            viewport_overlay_lines: Vec::with_capacity(84),
+            viewport_grid_lines,
+            // Largest gizmo geometry plus the persistent grid and fluid bounds
+            // fit without a display-frame reallocation.
+            viewport_overlay_lines: Vec::with_capacity(viewport_overlay_capacity),
             viewport_selected_object: None,
             viewport_gizmo_drag: None,
         }

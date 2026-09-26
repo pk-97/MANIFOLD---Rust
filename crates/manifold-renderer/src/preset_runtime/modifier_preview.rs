@@ -48,6 +48,52 @@ pub(super) fn resolve<'a>(
 }
 
 impl super::PresetRuntime {
+    /// Aim the render-only scene viewport through the authored modifier route.
+    /// A failed route or target selection clears the previous capture before
+    /// returning the host-level error.
+    pub fn set_modifier_scene_viewport(
+        &mut self,
+        context: &ModifierPreviewContext,
+        node: &NodeId,
+        config: crate::node_graph::scene_viewport::SceneViewportConfig,
+    ) -> Result<(), crate::node_graph::scene_viewport::SceneViewportHostError> {
+        let resolved = match resolve(&self.modifier_preview_routes, context, node) {
+            Ok(resolved) => resolved.clone(),
+            Err(error) => {
+                self.clear_scene_viewport();
+                return Err(crate::node_graph::scene_viewport::SceneViewportHostError::Modifier(error));
+            }
+        };
+        self.set_scene_viewport_watched(&resolved, config)
+            .map_err(crate::node_graph::scene_viewport::SceneViewportHostError::InvalidTarget)
+    }
+
+    /// Append fluid snapshots from the selected generated modifier copy and
+    /// translate each generated node id back to its authored address in place.
+    pub fn write_modifier_fluid_domains(
+        &self,
+        context: &ModifierPreviewContext,
+        output: &mut Vec<(
+            manifold_core::NodeId,
+            crate::node_graph::fluid::FluidDomainSnapshot,
+        )>,
+    ) {
+        let start = output.len();
+        self.write_fluid_domains_watched(output);
+        let mut write = start;
+        for read in start..output.len() {
+            let authored = self
+                .modifier_preview_local_node(context, output[read].0.as_str())
+                .cloned();
+            if let Some(authored) = authored {
+                let snapshot = output[read].1;
+                output[write] = (authored, snapshot);
+                write += 1;
+            }
+        }
+        output.truncate(write);
+    }
+
     pub fn modifier_preview_local_node<'a>(
         &'a self,
         context: &ModifierPreviewContext,

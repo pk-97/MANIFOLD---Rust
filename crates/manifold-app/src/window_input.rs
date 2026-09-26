@@ -961,7 +961,7 @@ impl Application {
                     crate::viewport_input::classify_mouse_drag(button, shift, dx, dy)
             {
                 crate::viewport_input::apply(
-                    session,
+                    session.camera_mut(),
                     gesture,
                     &crate::viewport_input::ViewportInputSensitivity::default(),
                 );
@@ -1170,9 +1170,10 @@ impl Application {
         }
         let (w, h, cam, mode, selected) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };
-            let Some(session) = ed.viewport_session.as_ref() else { return false };
-            let (w, h) = session.dimensions();
-            (w, h, session.camera().to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected_object)
+            let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
+                return false;
+            };
+            (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode, ed.viewport_selected_object)
         };
         let Some(rect) = self.graph_editor.as_ref().and_then(|ed| ed.viewport_rect) else { return false };
         let Some((cx, cy)) = crate::viewport_input::gizmo_point(rect, (w, h), (cx, cy)) else { return false };
@@ -1281,8 +1282,10 @@ impl Application {
         let Some(ed) = self.graph_editor.as_ref() else { return false };
         if ed.viewport_gizmo_drag.is_none() { return false; }
         let Some(rect) = ed.viewport_rect else { return true };
-        let Some(session) = ed.viewport_session.as_ref() else { return true };
-        let Some((x, y)) = crate::viewport_input::gizmo_point(rect, session.dimensions(), (x, y)) else { return true };
+        let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
+            return true;
+        };
+        let Some((x, y)) = crate::viewport_input::gizmo_point(rect, (config.width, config.height), (x, y)) else { return true };
         if let Some(ed) = self.graph_editor.as_mut()
             && let Some(drag) = ed.viewport_gizmo_drag.as_mut()
             && let Some(domain) = drag.fluid_domain.as_mut()
@@ -1292,14 +1295,14 @@ impl Application {
                 ed.offscreen_dirty = true;
                 return true;
             }
-            if let Some(session) = ed.viewport_session.as_ref() {
-                let (w, h) = session.dimensions();
-                if let Some(delta) = domain.target.projected_drag_delta(
-                    drag.axis, &session.camera().to_camera(), w, h,
-                    (x - drag.last_x, y - drag.last_y),
-                ) {
-                    domain.update(domain.value + delta);
-                }
+            if let Some(delta) = domain.target.projected_drag_delta(
+                drag.axis,
+                &config.camera.to_camera(),
+                config.width,
+                config.height,
+                (x - drag.last_x, y - drag.last_y),
+            ) {
+                domain.update(domain.value + delta);
             }
             drag.last_x = x;
             drag.last_y = y;
@@ -1324,9 +1327,10 @@ impl Application {
         };
         let (w, h, cam, mode) = {
             let Some(ed) = self.graph_editor.as_ref() else { return true };
-            let Some(session) = ed.viewport_session.as_ref() else { return true };
-            let (w, h) = session.dimensions();
-            (w, h, session.camera().to_camera(), ed.viewport_gizmo_mode)
+            let Some(config) = ed.viewport_session.as_ref().and_then(|session| session.displayed_config()) else {
+                return true;
+            };
+            (config.width, config.height, config.camera.to_camera(), ed.viewport_gizmo_mode)
         };
         let Some((addr, current, driven)) =
             manifold_renderer::node_graph::drag_write(mode, drag.axis, &target)
@@ -1850,7 +1854,7 @@ impl Application {
                 ),
             };
             if let Some(gesture) = gesture {
-                crate::viewport_input::apply(session, gesture, &sens);
+                crate::viewport_input::apply(session.camera_mut(), gesture, &sens);
             }
             ed.offscreen_dirty = true;
             return true;
@@ -2238,10 +2242,9 @@ impl Application {
                         ed.viewport_drag = None;
                         ed.viewport_gizmo_drag = None;
                         if !ed.viewport_open {
-                            // Tear down immediately — GPU resources release
-                            // this frame, not on some later poll.
+                            // Stop sending viewport requests immediately; the
+                            // content thread owns rendering resources.
                             ed.viewport_session = None;
-                            ed.viewport_pane = None;
                             ed.viewport_rect = None;
                         }
                     }

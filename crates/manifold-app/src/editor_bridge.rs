@@ -1370,18 +1370,9 @@ impl Application {
                 self.last_modifier_preview_context = Some(context);
         }
 
-        // P5c (`docs/REALTIME_3D_DESIGN.md`): resolve whether `preview_node`
-        // qualifies for the 3D viewport (a top-level `node.render_scene`
-        // node — `find_snapshot_node` recurses into groups looking for the
-        // type, but `override_camera_def` below only splices into a node
-        // found in the def's FLAT top-level `nodes` list, so a nested
-        // render_scene fails to open with `RenderSceneNodeNotFound`, a known
-        // P5 constraint) and — only if so and the viewport is toggled open —
-        // clone its def, BEFORE the editor workspace is borrowed mutably
-        // below. `watched_def_cloned()` takes `&self` whole, which would
-        // conflict with `ws`'s later mutable borrow of `self.graph_editor`
-        // (same reason `popover_live_value` is resolved before `ws`,
-        // further down).
+        // Scene navigation requests go to the live runtime. The authored
+        // definition below is used only for scene selection and edit gizmos;
+        // camera and accepted bounds come from the displayed frame.
         let viewport_is_scene_node = self.last_preview_node.as_ref().is_some_and(|id| {
             self.content_state
                 .active_graph_snapshot
@@ -1559,12 +1550,12 @@ impl Application {
         // control / math / envelope node with no image — its value inspector text
         // in place of the image, or a placeholder when nothing is selected. The
         // master pane always shows what the live show is putting out.
-        let node_preview_info = self.content_state.node_preview_info.clone();
+        let mut node_preview_info = self.content_state.node_preview_info.clone();
         let preview_has_image = node_preview_info
             .as_ref()
             .map(|i| i.has_image)
             .unwrap_or(false);
-        let show_image = self.last_preview_node.is_some() && preview_has_image;
+        let mut show_image = self.last_preview_node.is_some() && preview_has_image;
         let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
         let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
         // Node-output monitor: title row + project-aspect body.
@@ -1576,108 +1567,88 @@ impl Application {
         let master_img_y = master_title_y + preview_title_h;
         let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, canvas_height);
 
-        // P5c (`docs/REALTIME_3D_DESIGN.md`): open/rebuild/sync the 3D
-        // viewport session and reserve its screen rect — the SAME rect the
-        // 2D node-output monitor above occupies, so the viewport slots into
-        // existing dock geometry rather than adding new dock UI. Render
-        // target pixel size tracks the pane at the window's own scale
-        // factor, same crisp-at-any-size convention the audio spectrogram
-        // uses. `viewport_def` was cloned before `ws` was borrowed (see the
-        // comment above its `let` near the top of this function); the
-        // fields read here (`self.primitive_registry`, `gpu.device`,
-        // `self.content_state`, `self.time_since_start`) are all direct
-        // field accesses on OTHER fields than `self.graph_editor`, so they
-        // coexist with `ws`'s mutable borrow without conflict.
+        #[cfg(target_os = "macos")]
+        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
         let viewport_scale = scale as f32;
         let viewport_tex_w = ((preview_w * viewport_scale).round() as u32).clamp(64, 4096);
         let viewport_tex_h = ((preview_h * viewport_scale).round() as u32).clamp(64, 4096);
-        let viewport_ctx = manifold_renderer::preset_context::PresetContext {
-            time: self.time_since_start as f64,
-            beat: mini_current_beat as f64,
-            dt,
-            width: viewport_tex_w,
-            height: viewport_tex_h,
-            output_width: viewport_tex_w,
-            output_height: viewport_tex_h,
-            aspect: viewport_tex_w as f32 / (viewport_tex_h.max(1) as f32),
-            owner_key: 0,
-            is_clip_level: false,
-            frame_count: (self.time_since_start as f64 * 60.0) as i64,
-            anim_progress: 0.0,
-            trigger_count: 0,
-        };
-        if let Some(def) = viewport_def.as_ref() {
-            // `viewport_def` is only `Some` when `viewport_is_scene_node` held,
-            // which requires `self.last_preview_node` to be `Some` — see its
-            // `let` above.
-            let render_scene_node = self.last_preview_node.clone().expect(
-                "viewport_def is only Some when viewport_is_scene_node held, which requires last_preview_node",
-            );
-            let needs_open = match ws.viewport_session.as_ref() {
-                Some(s) => s.dimensions() != (viewport_tex_w, viewport_tex_h)
-                    || !ws.viewport_target.as_ref().is_some_and(|(target, node)|
-                        Some(target) == self.watched_graph_target.as_ref() && node == &render_scene_node),
-                None => true,
-            };
-            if needs_open {
-                match manifold_renderer::node_graph::ViewportSession::open(
-                    def,
-                    &render_scene_node,
-                    &self.primitive_registry,
-                    std::sync::Arc::clone(&gpu.device),
-                    viewport_tex_w,
-                    viewport_tex_h,
-                    &viewport_ctx,
-                ) {
-                    Ok(session) => {
-                        ws.viewport_session = Some(session);
-                        ws.viewport_target = self.watched_graph_target.clone()
-                            .map(|target| (target, render_scene_node));
+        if viewport_def.is_some()
+            && let Some(target) = self.watched_graph_target.as_ref()
+            && let Some(node) = self.last_preview_node.as_ref()
+        {
+            if !ws.viewport_target.as_ref().is_some_and(|(owner, render)| owner == target && render == node)
+                || ws.viewport_session.is_none()
+            {
+                ws.viewport_session = Some(crate::scene_viewport::SceneViewportNavigation::new(viewport_tex_w, viewport_tex_h));
+                ws.viewport_target = Some((target.clone(), node.clone()));
+            }
+            let session = ws.viewport_session.as_mut().expect("navigation was created above");
+            session.config.width = viewport_tex_w;
+            session.config.height = viewport_tex_h;
+            let request = session.request(target, node, self.last_modifier_preview_context.as_ref(), ws.viewport_request_sent.as_ref());
+            if !ws.viewport_request_sent.as_ref().is_some_and(|sent| std::sync::Arc::ptr_eq(sent, &request)) {
+                if let Some(tx) = self.content_tx.as_ref() {
+                    ContentCommand::send(tx, ContentCommand::SetSceneViewport(Some(request.clone())));
+                }
+                ws.viewport_request_sent = Some(request.clone());
+            }
+            session.displayed = None;
+            #[cfg(target_os = "macos")]
+            if let Some(bridge) = self.node_preview_texture_bridge.as_ref() {
+                let lease = bridge.acquire_read();
+                let matched = bridge.leased_frame(lease).and_then(|frame| {
+                    self.content_state.scene_viewport_frames[lease.slot()].as_ref()
+                        .filter(|observation| observation.matches(&request, frame, bridge.generation()))
+                });
+                let mut used = false;
+                if let Some(frame) = matched {
+                    if !frame.has_image() {
+                        session.displayed = Some(frame.clone());
                     }
-                    Err(_e) => {
-                        // no-silent-fallbacks: a failed splice (e.g. a nested
-                        // render_scene node, the known P5 constraint above)
-                        // clears the session so the pane shows nothing rather
-                        // than a stale or wrong frame.
-                        ws.viewport_session = None;
-                        ws.viewport_pane = None;
+                    if frame.has_image()
+                        && let Some(texture) = self.ui_node_preview_textures.get(lease.slot()).and_then(Option::as_ref)
+                        && let Some(ui) = self.ui_renderer.as_mut()
+                    {
+                        ui.register_external_texture(crate::scene_viewport::texture_handle(), texture.clone());
+                        session.displayed = Some(frame.clone());
+                        bridge_leases.push((bridge.clone(), lease));
+                        used = true;
                     }
                 }
-            } else if let Some(session) = ws.viewport_session.as_mut()
-                && session.sync_def(def, &self.primitive_registry, &viewport_ctx).is_err()
-            {
-                ws.viewport_session = None;
-                ws.viewport_pane = None;
+                if !used { bridge.retire_read(lease); }
             }
         } else {
             ws.viewport_session = None;
-            ws.viewport_pane = None;
-        }
-        if ws.viewport_session.is_none() {
             ws.viewport_target = None;
+            if ws.viewport_request_sent.take().is_some()
+                && let Some(tx) = self.content_tx.as_ref()
+            {
+                ContentCommand::send(tx, ContentCommand::SetSceneViewport(None));
+            }
         }
-        ws.viewport_rect = ws
-            .viewport_session
-            .is_some()
+        ws.viewport_rect = ws.viewport_session.is_some()
             .then(|| manifold_ui::Rect::new(preview_x, node_img_y, preview_w, preview_h));
-
-        // Refresh first, then read accepted bounds from that same runtime.
-        // Card changes use bindings, so they don't rebuild the preview graph.
         ws.viewport_fluid_domains.clear();
-        if let Some(session) = ws.viewport_session.as_mut() {
-            let empty_params = manifold_core::params::ParamManifest::default();
-            let params = self.watched_graph_target.as_ref()
-                .and_then(|target| self.local_project.graph_target_owner(target))
-                .map(|owner| &owner.params).unwrap_or(&empty_params);
-            session.refresh(&viewport_ctx, params);
-            session.write_fluid_domains(&mut ws.viewport_fluid_domains);
+        ws.viewport_overlay_lines.clear();
+        if let Some(session) = ws.viewport_session.as_ref() {
+            show_image = session.displayed.as_ref().is_some_and(|frame| frame.has_image());
+            if let Some(node) = self.last_preview_node.as_ref() {
+                let info = node_preview_info.get_or_insert_with(|| crate::content_state::NodePreviewInfo {
+                    node_id: node.clone(), has_image: false, diagnostic: None,
+                    inputs: Vec::new(), outputs: Vec::new(),
+                });
+                info.has_image = show_image;
+                info.diagnostic = session.displayed.as_ref().map_or(Some("Waiting for the scene to render…"), |frame| frame.diagnostic());
+            }
+            if let Some(frame) = session.displayed.as_ref().filter(|frame| frame.has_image()) {
+                ws.viewport_fluid_domains.extend(frame.domains.iter().cloned());
+            }
             if let Some(def) = viewport_def.as_mut()
                 && let Some(target) = self.watched_graph_target.as_ref()
                 && crate::fluid_domain_edit::project_authored_params(def, &self.local_project, target).is_none()
             {
                 viewport_def = None;
             }
-            let (w, h) = session.dimensions();
             // P6: gizmo handle geometry for the current selection/mode,
             // built against THIS frame's def and editor camera — see
             // `viewport_gizmo` and the `ws.viewport_selected_object`/
@@ -1714,41 +1685,13 @@ impl Application {
                     })
                 }));
             ws.viewport_overlay_lines.clear();
+            ws.viewport_overlay_lines.extend_from_slice(&ws.viewport_grid_lines);
             if let Some(domain) = fluid_domain {
                 ws.viewport_overlay_lines.extend(
                     manifold_renderer::node_graph::viewport_overlay::fluid_domain_lines(domain),
                 );
             }
             ws.viewport_overlay_lines.extend(gizmo_lines);
-            let rgba = session.composite_overlays(
-                &manifold_renderer::node_graph::ViewportOverlayConfig::default(),
-                None,
-                &[],
-                &ws.viewport_overlay_lines,
-            );
-            let need_new_tex = !matches!(
-                ws.viewport_pane.as_ref().and_then(|p| p.local_target()),
-                Some(tex) if tex.width == w && tex.height == h
-            );
-            if need_new_tex {
-                let tex = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                    width: w,
-                    height: h,
-                    depth: 1,
-                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
-                    dimension: manifold_gpu::GpuTextureDimension::D2,
-                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
-                        | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
-                    label: "3D Viewport",
-                    mip_levels: 1,
-                });
-                ws.viewport_pane = Some(crate::texture_pane::TexturePane::local(tex));
-            }
-            if let Some(pane) = ws.viewport_pane.as_ref()
-                && let Some(tex) = pane.local_target()
-            {
-                gpu.device.upload_texture(tex, &rgba);
-            }
         }
 
         // The graph-editor panel is now just the node-output inspector + the
@@ -1905,8 +1848,7 @@ impl Application {
         // BUG-xaw4: bridge read leases taken below at each front read;
         // all retired on the final present encoder's completion (or a
         // marker buffer on the early returns).
-        #[cfg(target_os = "macos")]
-        let mut bridge_leases: crate::shared_texture::BridgeLeaseBatch = Vec::new();
+
         #[cfg(target_os = "macos")]
         {
             let atlas_handle =
@@ -1997,6 +1939,10 @@ impl Application {
             logical_w,
             logical_h,
             scale,
+            ws.viewport_session.as_ref().and_then(|session| session.displayed.as_ref())
+                .filter(|frame| frame.has_image())
+                .zip(ws.viewport_rect)
+                .map(|(frame, rect)| crate::scene_viewport::SceneViewportPaint { rect, frame, lines: &ws.viewport_overlay_lines }),
         );
         ws.offscreen_dirty = false;
 
@@ -2101,25 +2047,6 @@ impl Application {
                         "Node Preview → Sidebar",
                     );
                 }
-            }
-            // P5c 3D viewport — the persistent `ViewportSession`'s composited
-            // RGBA8 (scene + D7 overlays), uploaded into a UI-device-local
-            // pane above and blit here through the same unified
-            // `TexturePane` path the audio spectrogram uses. `Local`, never
-            // an IOSurface bridge: the session rendered on THIS (editor UI)
-            // thread just above, so there's no cross-thread hand-off.
-            if let Some(pane) = ws.viewport_pane.as_mut() {
-                crate::texture_pane::blit_texture_pane(
-                    pane,
-                    &gpu.device,
-                    &mut present_enc,
-                    blit_p,
-                    blit_s,
-                    &drawable_tex,
-                    (preview_x, node_img_y, preview_w, preview_h),
-                    scale,
-                    "Viewport → Sidebar",
-                );
             }
             // Master-out monitor — the live compositor output, the same texture
             // the main/perform window presents. Imported into `ui_preview_textures`

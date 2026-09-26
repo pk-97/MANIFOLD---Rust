@@ -194,6 +194,41 @@ pub trait Compositor: Send {
     /// editor to sample. Default no-op for compositors without effect chains.
     fn set_preview_request(&mut self, _request: Option<(EffectId, Option<NodeId>)>) {}
 
+    /// Set (or clear) the render-only scene viewport request. The request is
+    /// routed through the existing screen effect chains and never evaluates a
+    /// second graph.
+    fn set_scene_viewport_request(
+        &mut self,
+        _request: Option<(
+            EffectId,
+            NodeId,
+            crate::node_graph::scene_viewport::SceneViewportConfig,
+        )>,
+    ) {
+    }
+
+    fn scene_viewport_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
+    fn scene_viewport_status(
+        &self,
+    ) -> Result<
+        crate::frame_status::FrameRenderStatus,
+        crate::node_graph::scene_viewport::SceneViewportHostError,
+    > {
+        Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime)
+    }
+
+    fn write_scene_viewport_fluid_domains(
+        &self,
+        _output: &mut Vec<(
+            NodeId,
+            crate::node_graph::fluid::FluidDomainSnapshot,
+        )>,
+    ) {
+    }
+
     /// The captured preview texture from the most recent `render`, if a
     /// preview is active and the watched node produced one. Default `None`.
     fn preview_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
