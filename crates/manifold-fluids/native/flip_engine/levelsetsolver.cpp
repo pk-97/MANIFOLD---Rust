@@ -90,12 +90,10 @@ void LevelSetSolver::reinitializeUpwind(Array3d<float> &inputSDF,
     float dtau = _getPseudoTimeStep(inputSDF, dx);
     int numIterations = _getNumberOfIterations(maxDistance, dtau);
 
-    int isize = inputSDF.width;
-    int jsize = inputSDF.height;
-    int ksize = inputSDF.depth;
     outputSDF = inputSDF;
 
-    Array3d<float> tempSDF(isize, jsize, ksize);
+    // Preserve unmodified stencil neighbors when solverCells is a narrow band.
+    Array3d<float> tempSDF(inputSDF);
     Array3d<float> *tempPtr = &tempSDF;
     Array3d<float> *outputPtr = &outputSDF;
 

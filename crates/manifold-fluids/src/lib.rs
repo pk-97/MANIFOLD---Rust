@@ -1030,6 +1030,71 @@ mod tests {
     }
 
     #[test]
+    fn native_surface_tension_dam_break_survives_twenty_ticks() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [64, 64, 64],
+            cell_size: 4.0 / 64.0,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .expect("native world");
+        world
+            .set_liquid_options(LiquidOptions {
+                viscosity: 2.0,
+                surface_tension: 0.025,
+            })
+            .expect("liquid options");
+        world
+            .set_surface_options(SurfaceOptions {
+                particle_scale: 2.2,
+                smoothing: 0.35,
+                smoothing_iterations: 2,
+            })
+            .expect("surface options");
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.0, 0.0, 0.0],
+                    max: [4.0, 0.16, 4.0],
+                },
+                [0.0, 0.0, 0.0],
+            )
+            .expect("pool");
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.16, 0.16, 0.25],
+                    max: [1.34, 2.08, 3.75],
+                },
+                [0.0, 0.0, 0.0],
+            )
+            .expect("column");
+        world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+        let obstacle = Bounds {
+            min: [2.05, 0.0, 1.475],
+            max: [2.65, 1.16, 2.325],
+        };
+        world
+            .set_obstacle(obstacle, obstacle, obstacle)
+            .expect("obstacle");
+        for _ in 0..20 {
+            world
+                .step(Seconds(1.0 / 60.0))
+                .expect("surface-tension step");
+        }
+        let mut surface = Vec::new();
+        world.surface(&mut surface).expect("final surface");
+        assert!(!surface.is_empty(), "dam-break produced no final surface");
+        assert!(surface.iter().all(|vertex| {
+            vertex
+                .position
+                .iter()
+                .chain(vertex.normal.iter())
+                .all(|value| value.is_finite())
+        }));
+    }
+
+    #[test]
     fn whitewater_is_empty_when_disabled() {
         let mut world = super::FluidWorld::new(Config {
             cells: [8, 8, 8],
