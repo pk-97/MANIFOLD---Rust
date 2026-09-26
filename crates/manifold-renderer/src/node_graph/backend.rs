@@ -519,7 +519,7 @@ impl Backend for MockBackend {
     }
 
     fn rigid_body(&self, slot: Slot) -> Option<RigidBody> {
-        self.rigid_bodies.get(&slot).copied()
+        self.rigid_bodies.get(&slot).cloned()
     }
 
     fn set_render_mode(&mut self, slot: Slot, value: RenderMode) {

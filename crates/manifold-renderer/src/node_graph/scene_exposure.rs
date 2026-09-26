@@ -8,6 +8,7 @@
 //!   creation-site commands that cannot depend on `manifold_renderer` directly.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
+mod compound;
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
 use crate::node_graph::parameters::ParamType;
@@ -88,6 +89,8 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 && (type_id != "node.bokeh_gather"
                     || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
         })
+        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
+        .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or({
                 if matches!(pd.ty, ParamType::Angle) {
@@ -143,6 +146,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
+    let compound = compound::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
@@ -152,7 +156,7 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
-    repaired || migrated || bokeh_source_migrated
+    compound || repaired || migrated || bokeh_source_migrated
 }
 
 /// The layered gather consumes the original signed CoC and computes its own
@@ -674,7 +678,7 @@ mod tests {
     #[test]
     fn material_inspector_metadata_classifies_every_descriptor() {
         let metadata = metadata_for_node_type("node.pbr_material");
-        assert_eq!(metadata.len(), 290);
+        assert_eq!(metadata.len(), 296);
         assert!(metadata.iter().all(|param| param.material_role.is_some()));
         assert_eq!(
             metadata

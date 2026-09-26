@@ -632,6 +632,25 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupRemoveSubmesh(layer_id, render_scene_node_id, physical_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::RemoveSceneSubmeshCommand::new(
+                    target,
+                    *render_scene_node_id,
+                    *physical_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                } else if let Some(reason) = boxed.rejection_reason() {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned()));
+                }
+            }
+            DispatchResult::structural()
+        }
         ProjectAction::SceneSetupRemoveLight(layer_id, render_scene_node_id, light_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
@@ -738,14 +757,72 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::DuplicateSceneSubmeshCommand::new(
+                    target,
+                    *render_scene_node_id,
+                    *physical_index,
+                    default,
+                );
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                boxed.execute(project);
+                if boxed.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                } else if let Some(reason) = boxed.rejection_reason() {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned()));
+                }
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
+        | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
+            use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+            let enabled = matches!(action, ProjectAction::SceneSetupEnablePhysics(..));
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let physics = project.graph_for_target(&target, Some(&default))
+                    .and_then(SceneVm::from_def)
+                    .filter(|vm| vm.scene_root_node_id == *render_scene_node_id)
+                    .and_then(|vm| vm.objects.into_iter().find_map(|object| match object {
+                        SceneObjectVm::Known(row) if row.index == *object_index as usize => row.physics,
+                        _ => None,
+                    }));
+                let mut cmd: Box<dyn manifold_editing::command::Command + Send> = if let Some(physics) = physics {
+                    Box::new(manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                        target, physics.body_node_id, "enabled".into(),
+                        manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
+                        default,
+                    ).with_scope(physics.body_scope_path))
+                } else if enabled {
+                    Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
+                        target, *render_scene_node_id, *object_index,
+                        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+                        default,
+                    ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world")))
+                } else {
+                    return DispatchResult::handled();
+                };
+                cmd.execute(project);
+                if cmd.was_applied() {
+                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+                } else if let Some(reason) = cmd.rejection_reason() {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned()));
+                }
+            }
+            DispatchResult::structural()
+        }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
         // effective def through the SAME SceneVm the panel builds, takes the
         // object's current translate as the focus point, and writes camera
         // params through `apply_scene_param_write` — the one write path every
         // scene-panel control shares (bound → binding slot, else def write).
         // All writes land as ONE CompositeCommand so a frame is one undo.
-        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_index) => {
-            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
+        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_node_id) => {
+            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneVm};
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
             };
@@ -761,15 +838,11 @@ pub(super) fn dispatch_project(
                 eprintln!("[Scene] frame-selected: no scene in this graph");
                 return DispatchResult::handled();
             };
-            let Some(pos) = vm.objects.iter().find_map(|o| match o {
-                SceneObjectVm::Known(r) if r.index == *object_index => {
-                    r.transform.as_ref().map(|t| t.pos_value)
-                }
-                _ => None,
-            }) else {
-                eprintln!("[Scene] frame-selected: object {object_index} has no transform row");
+            let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&vm, *object_node_id) else {
+                eprintln!("[Scene] frame-selected: object {object_node_id} has no transform target");
                 return DispatchResult::handled();
             };
+            let pos = (target.origin[0], target.origin[1], target.origin[2]);
             // Scene radius from the item-2 bounds chain: half the largest
             // axis extent, floored at 1.0 — the scale the importer framed at.
             let radius = vm
@@ -1581,6 +1654,63 @@ mod tests {
     }
 
     #[test]
+    fn scene_setup_physics_toggle_preserves_body_settings_and_undo() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let (mut project, layer_id, scene_id) = physics_solids_layer_project();
+        let body = |project: &Project| {
+            SceneVm::from_def(&effective_def(project, &layer_id)).unwrap().objects
+                .into_iter().find_map(|object| match object {
+                    SceneObjectVm::Known(row) if row.index == 0 => row.physics,
+                    _ => None,
+                }).unwrap()
+        };
+        let original = body(&project);
+        let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        // A tuned value must survive off/on; the toggle never removes its body.
+        apply_scene_param_write(&mut project, &layer_id, original.body_scope_path.clone(),
+            original.body_node_id, "friction", 0.73).unwrap();
+        let before = effective_def(&project, &layer_id);
+        let friction = |project: &Project| {
+            effective_def(project, &layer_id).nodes.into_iter()
+                .find(|node| node.id == original.body_node_id).unwrap()
+                .params.get("friction").cloned()
+        };
+        for enabled in [false, true] {
+            let action = if enabled {
+                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), scene_id, 0)
+            } else {
+                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), scene_id, 0)
+            };
+            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                &mut selection, &mut active_layer, &mut prefs);
+            let current = body(&project);
+            assert_eq!(current.enabled, enabled);
+            assert_eq!(current.body_node_id, original.body_node_id);
+            let after = effective_def(&project, &layer_id);
+            assert_eq!(after.wires, before.wires);
+            assert_eq!(after.nodes.len(), before.nodes.len());
+            let previous = before.nodes.iter().find(|n| n.id == original.body_node_id).unwrap();
+            let actual = after.nodes.iter().find(|n| n.id == original.body_node_id).unwrap();
+            for (key, value) in &previous.params {
+                if key != "enabled" { assert_eq!(actual.params.get(key), Some(value)); }
+            }
+            let saved = serde_json::to_string(&project).unwrap();
+            let reloaded: Project = serde_json::from_str(&saved).unwrap();
+            assert_eq!(body(&reloaded).enabled, enabled);
+            assert_eq!(friction(&project), Some(SerializedParamValue::Float { value: 0.73 }));
+            assert_eq!(friction(&reloaded), Some(SerializedParamValue::Float { value: 0.73 }));
+            let crate::content_command::ContentCommand::Execute(mut cmd) = rx.try_recv().unwrap() else {
+                panic!("toggle must send an undoable edit");
+            };
+            cmd.undo(&mut project);
+            assert_eq!(body(&project).enabled, !enabled);
+            cmd.execute(&mut project);
+            assert_eq!(body(&project).enabled, enabled);
+        }
+    }
+
+    #[test]
     fn scene_setup_add_object_dispatches_add_scene_object_command() {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let original_metadata = effective_def(&project, &layer_id).preset_metadata.unwrap();
@@ -1835,12 +1965,12 @@ mod tests {
             CameraVm::Orbit(r) => r.node_doc_id,
             other => panic!("SceneStarter camera should be orbit, got {other:?}"),
         };
-        let obj_pos = vm
+        let (object_node_id, obj_pos) = vm
             .objects
             .iter()
             .find_map(|o| match o {
                 SceneObjectVm::Known(r) if r.index == 0 => {
-                    r.transform.as_ref().map(|t| t.pos_value)
+                    r.transform.as_ref().map(|t| (r.object_node_id, t.pos_value))
                 }
                 _ => None,
             })
@@ -1848,7 +1978,7 @@ mod tests {
         let (content_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
             dispatch_harness();
 
-        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, 0);
+        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
         let result = dispatch_project(
             &action,
             &mut project,

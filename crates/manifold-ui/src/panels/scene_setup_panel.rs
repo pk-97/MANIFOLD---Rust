@@ -77,6 +77,7 @@ const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
 const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
+const OBJ_OFF_PHYSICS: u64 = 36;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -396,6 +397,12 @@ pub struct ObjectKnownRow {
     /// ungrouped scene_object (D1's first-class "hand-built graph, no
     /// group" case).
     pub group_node_id: Option<u32>,
+    /// A virtual compound parent row. Parent rows precede their physical
+    /// children in the renderer's flat preorder list.
+    pub is_group: bool,
+    /// The compound parent for a child row. `None` means a top-level object
+    /// (including a virtual group parent).
+    pub parent_group_id: Option<u32>,
     pub name: String,
     pub visible: RowValue,
     pub transform: Option<Box<TransformRowVm>>,
@@ -425,6 +432,9 @@ pub struct ObjectKnownRow {
     /// P4b: the object's layer-skin row. `None` when no `node.layer_source`
     /// is wired into the object's material maps.
     pub skin: Option<SkinRowVm>,
+    pub physics_enabled: bool,
+    pub physics_available: bool,
+    pub physics_imported: bool,
 }
 
 /// One Objects-section row (D3/D4).
@@ -968,10 +978,17 @@ pub struct ScenePanel {
     /// header's "Duplicate" button, when a Known object is selected this
     /// frame — resolves to `PanelAction::SceneSetupDuplicateObject`.
     object_duplicate_ids: Vec<(NodeId, usize)>,
+    /// Child-only remove/duplicate targets. Physical indices are not unique
+    /// across a virtual group parent and its first child, so these have their
+    /// own routing tables and stable widget keys use the object node id.
+    submesh_remove_ids: Vec<(NodeId, usize)>,
+    submesh_duplicate_ids: Vec<(NodeId, usize)>,
     /// scene-panel-ux lane: `(frame_button_node_id, object_index)` for the properties
     /// header's "Frame" button, when a Known object is selected this frame
     /// — resolves to `PanelAction::SceneSetupFrameSelected`.
-    object_frame_ids: Vec<(NodeId, usize)>,
+    object_frame_ids: Vec<(NodeId, u32)>,
+    object_enable_physics_ids: Vec<(NodeId, usize)>,
+    object_disable_physics_ids: Vec<(NodeId, usize)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -979,6 +996,9 @@ pub struct ScenePanel {
     /// scene-panel-ux lane: fold state for outliner groups (Scene/Lights/Objects).
     /// UI-local, never serialized. Missing entry = expanded.
     outliner_folded: ahash::AHashMap<&'static str, bool>,
+    /// Expanded compound groups, keyed per bound layer and kept in UI state.
+    expanded_groups: std::collections::HashMap<LayerId, ahash::AHashSet<u32>>,
+    group_toggle_ids: Vec<(NodeId, u32)>,
     /// UX-P2 (D6): `(button_node_id, group_node_id)` for the single "+ Add
     /// Modifier" button built this frame, when the selected object's chain
     /// is addable (was `modifier_add_ids: Vec<(NodeId, u32, String)>`, one
@@ -1066,9 +1086,15 @@ impl Default for ScenePanel {
             object_name_ids: Vec::new(),
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
+            submesh_remove_ids: Vec::new(),
+            submesh_duplicate_ids: Vec::new(),
             object_frame_ids: Vec::new(),
+            object_enable_physics_ids: Vec::new(),
+            object_disable_physics_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
+            expanded_groups: std::collections::HashMap::new(),
+            group_toggle_ids: Vec::new(),
             add_modifier_button_id: None,
             skin_source_ids: Vec::new(),
             skin_target_ids: Vec::new(),
@@ -1337,10 +1363,15 @@ impl ScenePanel {
         self.add_plane_id = None;
         self.import_model_id = None;
         self.outliner_row_ids.clear();
+        self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
+        self.submesh_remove_ids.clear();
+        self.submesh_duplicate_ids.clear();
+        self.object_enable_physics_ids.clear();
+        self.object_disable_physics_ids.clear();
         self.add_modifier_button_id = None;
         self.skin_source_ids.clear();
         self.skin_target_ids.clear();
@@ -1641,16 +1672,51 @@ impl ScenePanel {
                 match obj {
                     ObjectRowVm::Known(row) => {
                         let label = format!("\u{25A0} {}", row.name);
-                        cy = self.build_outliner_row(
-                            tree,
-                            inner_x,
-                            inner_w,
-                            cy,
-                            &label,
-                            SceneSelection::Object(row.object_node_id),
-                            selected,
-                            EyeSlot::Live(row.visible.clone()),
-                        );
+                        if row.is_group {
+                            let expanded = self
+                                .expanded_groups
+                                .get(&vm.layer_id)
+                                .is_some_and(|groups| groups.contains(&row.object_node_id));
+                            cy = self.build_group_outliner_row(
+                                tree,
+                                inner_x,
+                                inner_w,
+                                cy,
+                                &label,
+                                row.object_node_id,
+                                selected,
+                                expanded,
+                                EyeSlot::Live(row.visible.clone()),
+                            );
+                        } else if let Some(group_id) = row.parent_group_id {
+                            let expanded = self
+                                .expanded_groups
+                                .get(&vm.layer_id)
+                                .is_some_and(|groups| groups.contains(&group_id));
+                            if expanded {
+                                cy = self.build_child_outliner_row(
+                                    tree,
+                                    inner_x,
+                                    inner_w,
+                                    cy,
+                                    &format!("\u{25A0} {}", row.name),
+                                    SceneSelection::Object(row.object_node_id),
+                                    selected,
+                                    EyeSlot::Live(row.visible.clone()),
+                                );
+                            }
+                        } else {
+                            cy = self.build_outliner_row(
+                                tree,
+                                inner_x,
+                                inner_w,
+                                cy,
+                                &label,
+                                SceneSelection::Object(row.object_node_id),
+                                selected,
+                                EyeSlot::Live(row.visible.clone()),
+                            );
+                        }
                     }
                     ObjectRowVm::Custom { index } => {
                         cy = self.build_outliner_row_static(
@@ -1735,6 +1801,109 @@ impl ScenePanel {
                 }
             }
             EyeSlot::Empty => {}
+        }
+        cy + ROW_H
+    }
+
+    /// A compound parent row: the chevron has its own hit target so folding
+    /// never changes selection, while the name remains a normal selectable
+    /// object row.
+    fn build_group_outliner_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        group_id: u32,
+        selected: SceneSelection,
+        expanded: bool,
+        eye: EyeSlot,
+    ) -> f32 {
+        let toggle_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            if expanded { "\u{25BE}" } else { "\u{25B8}" },
+            outliner_group_toggle_key(group_id),
+        );
+        self.group_toggle_ids.push((toggle_id, group_id));
+        tree.set_name(toggle_id, "scene_setup.objects.group_toggle");
+        let row_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + STEP_W,
+            cy,
+            inner_w - STEP_W * 2.0,
+            ROW_H,
+            outliner_row_style(SceneSelection::Object(group_id) == selected),
+            label,
+            outliner_row_key(SceneSelection::Object(group_id)),
+        );
+        self.outliner_row_ids.push((row_id, SceneSelection::Object(group_id)));
+        if let EyeSlot::Live(row) = eye {
+            let eye_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x + inner_w - STEP_W,
+                cy,
+                STEP_W,
+                ROW_H,
+                if row.driven { driven_label_style() } else { btn_style() },
+                if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
+                outliner_eye_key(group_id),
+            );
+            if !row.driven {
+                self.outliner_eye_ids.push((eye_id, row));
+            }
+        }
+        cy + ROW_H
+    }
+
+    /// Child rows are indented one level under their virtual parent. Their
+    /// controls keep the same trailing eye slot and selection semantics.
+    fn build_child_outliner_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        sel: SceneSelection,
+        selected: SceneSelection,
+        eye: EyeSlot,
+    ) -> f32 {
+        let indent = STEP_W;
+        let row_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + indent,
+            cy,
+            inner_w - STEP_W - indent,
+            ROW_H,
+            outliner_row_style(sel == selected),
+            label,
+            outliner_row_key(sel),
+        );
+        self.outliner_row_ids.push((row_id, sel));
+        if let EyeSlot::Live(row) = eye {
+            let object_node_id = match sel {
+                SceneSelection::Object(id) => id,
+                _ => 0,
+            };
+            let eye_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x + inner_w - STEP_W,
+                cy,
+                STEP_W,
+                ROW_H,
+                if row.driven { driven_label_style() } else { btn_style() },
+                if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
+                outliner_eye_key(object_node_id),
+            );
+            if !row.driven {
+                self.outliner_eye_ids.push((eye_id, row));
+            }
         }
         cy + ROW_H
     }
@@ -1963,6 +2132,12 @@ impl ScenePanel {
             self.properties_card.resize(0);
             return cy;
         };
+        let imported_selection = self.state.as_live().is_some_and(|vm| {
+            self.selection.get(&vm.layer_id).is_some_and(|selection| {
+                matches!(selection, SceneSelection::Object(id) if vm.objects.iter().any(|object|
+                    matches!(object, ObjectRowVm::Known(row) if row.object_node_id == *id && row.physics_imported)))
+            })
+        });
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
@@ -1983,6 +2158,8 @@ impl ScenePanel {
                 if p.spec.section.as_deref() == Some(section.as_str())
                     && owned
                     && !excluded
+                    && !(imported_selection && p.spec.name == "Shape")
+                    && (imported_selection || p.spec.name != "Collider Detail")
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
                     && self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
@@ -2334,6 +2511,16 @@ impl ScenePanel {
                     // header sync all in lockstep).
                     return (true, vec![PanelAction::Root(RootAction::OpenSceneSetup)]);
                 }
+                if let Some((_, group_id)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id) {
+                    let Some(vm) = self.state.as_live() else {
+                        return (true, Vec::new());
+                    };
+                    let groups = self.expanded_groups.entry(vm.layer_id.clone()).or_default();
+                    if !groups.insert(*group_id) {
+                        groups.remove(group_id);
+                    }
+                    return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
+                }
                 if let Some(actions) = self.object_modifier_card_click(*node_id, tree) {
                     return (true, actions);
                 }
@@ -2435,6 +2622,22 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             *index as u32,
                         )));
+                    } else if let Some((_, index)) =
+                        self.submesh_duplicate_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupDuplicateSubmesh(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
+                        )));
+                    } else if let Some((_, index)) = self.object_enable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
+                    } else if let Some((_, index)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
                     } else if let Some((light_node_id, _, current_name)) =
                         self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -2514,6 +2717,14 @@ impl ScenePanel {
                         self.object_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveObject(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
+                        )));
+                    } else if let Some((_, index)) =
+                        self.submesh_remove_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveSubmesh(
                             vm.layer_id.clone(),
                             vm.scene_root_node_id,
                             *index as u32,
@@ -2716,6 +2927,10 @@ fn outliner_row_key(sel: SceneSelection) -> u64 {
 
 fn outliner_eye_key(object_node_id: u32) -> u64 {
     OUTLINER_EYE_KEY_BASE + object_node_id as u64
+}
+
+fn outliner_group_toggle_key(group_id: u32) -> u64 {
+    (1_u64 << 62) | group_id as u64
 }
 
 /// Selected-row styling, transcribed from the `layer_header.rs` precedent
@@ -2927,6 +3142,8 @@ mod tests {
                     index: 0,
                     object_node_id: 40,
                     group_node_id: Some(42),
+                    is_group: false,
+                    parent_group_id: None,
                     name: "Azalea".to_string(),
                     visible: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 40, param_id: "visible".to_string() }, value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
                     transform: Some(Box::new(TransformRowVm {
@@ -2949,6 +3166,9 @@ mod tests {
                     modifiers_addable: true,
                     sections: Vec::new(),
                     skin: None,
+                    physics_enabled: false,
+                    physics_available: false,
+                    physics_imported: false,
                 })),
                 ObjectRowVm::Custom { index: 1 },
             ],
@@ -3010,7 +3230,7 @@ mod tests {
         // Default selection (D7): the first Known object — Azalea — so its
         // properties header + body render without any click.
         assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
-        assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's group node id (the rename address)");
+        assert_eq!(panel.object_name_ids[0].0, 40, "resolves to the selected object's node id (the rename address)");
         assert_eq!(panel.object_name_ids[0].2, "Azalea");
         // P2 slice 2a: the Properties body's actual PARAM ROWS now come from
         // `self.full_params` (the real generator `ParamSurface`, wired by
@@ -3022,6 +3242,106 @@ mod tests {
         assert!(panel.add_object_id.is_some());
         assert!(panel.add_light_id.is_some());
         assert!(panel.add_plane_id.is_some());
+    }
+
+    fn compound_shaped_vm() -> SceneSetupVm {
+        let mut vm = azalea_shaped_vm();
+        let Some(ObjectRowVm::Known(child)) = vm.objects.first().cloned() else {
+            unreachable!("azalea fixture has a known object");
+        };
+        let mut parent = (*child).clone();
+        parent.index = 0;
+        parent.object_node_id = 42;
+        parent.group_node_id = Some(42);
+        parent.is_group = true;
+        parent.parent_group_id = None;
+        parent.name = "Imported Group".to_string();
+        parent.material = ObjectMaterialVm::None;
+        parent.material_inspector = None;
+        parent.modifiers.clear();
+        parent.skin = None;
+        parent.physics_available = true;
+        parent.physics_enabled = false;
+
+        let mut child = (*child).clone();
+        child.index = 0;
+        child.object_node_id = 43;
+        child.group_node_id = Some(42);
+        child.is_group = false;
+        child.parent_group_id = Some(42);
+        child.name = "Blue Material".to_string();
+        vm.object_count = 1;
+        vm.objects = vec![
+            ObjectRowVm::Known(Box::new(parent)),
+            ObjectRowVm::Known(Box::new(child)),
+        ];
+        vm
+    }
+
+    #[test]
+    fn compound_group_chevron_expands_children_and_preserves_selection_identity() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(compound_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.group_toggle_ids.len(), 1);
+        assert_eq!(panel.outliner_row_ids.iter().filter(|(_, sel)| matches!(sel, SceneSelection::Object(_))).count(), 1);
+
+        let (toggle_id, _) = panel.group_toggle_ids[0];
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: toggle_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(actions.as_slice(), [PanelAction::Params(ParamsAction::SectionFoldToggled)]));
+
+        tree.clear();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.outliner_row_ids.iter().filter(|(_, sel)| matches!(sel, SceneSelection::Object(_))).count(), 2);
+        let child_row = panel
+            .outliner_row_ids
+            .iter()
+            .find(|(_, sel)| *sel == SceneSelection::Object(43))
+            .map(|(id, _)| *id)
+            .expect("expanded child is selectable");
+        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: child_row,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneSetupSelectionChanged(_))]));
+        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::Object(43)));
+    }
+
+    #[test]
+    fn compound_child_header_routes_submesh_duplicate_and_remove_actions() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(compound_shaped_vm())));
+        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Object(43));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        assert_eq!(panel.submesh_duplicate_ids.len(), 1);
+        assert_eq!(panel.submesh_remove_ids.len(), 1);
+
+        let duplicate_id = panel.submesh_duplicate_ids[0].0;
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: duplicate_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupDuplicateSubmesh(layer, 99, 0))] if *layer == LayerId::new("layer-1")));
+
+        let remove_id = panel.submesh_remove_ids[0].0;
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: remove_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(matches!(actions.as_slice(), [PanelAction::Project(ProjectAction::SceneSetupRemoveSubmesh(layer, 99, 0))] if *layer == LayerId::new("layer-1")));
     }
 
     /// W2-A gap fill: the outliner eye toggle (D3's on/off convention) had
@@ -3077,6 +3397,23 @@ mod tests {
             [PanelAction::Project(ProjectAction::SceneSetupParamChanged(_, _, _, param, value))]
                 if param == "visible" && *value == 1.0
         ), "hidden eye click must flip back to 1.0, got {actions_2:?}");
+    }
+
+    #[test]
+    fn imported_physics_property_has_no_legacy_split_action() {
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.physics_available = true;
+
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        assert!(texts.contains(&"Physics"), "imported object should expose the Physics property");
+        assert!(!texts.iter().any(|text| text.contains("Split into 8")), "legacy split action must stay out of the Physics property");
     }
 
     /// A one-object Vm with TWO modifiers — for exercising up/down boundary
@@ -3457,7 +3794,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_object_name_emits_rename_clicked_with_group_node_id() {
+    fn clicking_the_object_name_emits_rename_clicked_with_object_node_id() {
         let mut panel = ScenePanel::new();
         panel.open();
         panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
@@ -3474,7 +3811,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert!(matches!(
             &actions[0],
-            PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 42, n))
+            PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 40, n))
                 if *l == LayerId::new("layer-1") && n == "Azalea"
         ));
     }

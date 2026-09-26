@@ -502,8 +502,30 @@ pub(super) fn build_import_graph(
         fresh_id: &mut fresh_id,
         texture_dims: &summary.texture_dims,
     };
-    for (k, m) in materials.iter().enumerate() {
-        let mut out = build_object_group(&mut import_ctx, k, k, k, m, "anim");
+    let static_compound = materials.len() > 1
+        && materials.iter().all(|m| {
+            m.animations.iter().all(Option::is_none)
+                && m.skin.is_none()
+                && m.morph.is_none()
+                && m.rigid_multi_node.is_none()
+        });
+    let outputs = if static_compound {
+        vec![build_static_compound_group(
+            &mut import_ctx,
+            0,
+            0,
+            &materials,
+            &sanitized,
+            "anim",
+        )]
+    } else {
+        materials
+            .iter()
+            .enumerate()
+            .map(|(k, m)| build_object_group(&mut import_ctx, k, k, k, m, "anim"))
+            .collect()
+    };
+    for mut out in outputs {
         nodes.push(out.group_node);
         wires.append(&mut out.wires_to_render);
         card_params.append(&mut out.card_params);

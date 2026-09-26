@@ -1,6 +1,6 @@
 # Box3D Physics — rigid bodies as a graph citizen
 
-**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. General multi-set authoring, impulses and content colliders remain future work.**
+**Status: Physics Solids and Physics Boxes demos are on main. The integration follow-ups are implemented and locally verified, 2026-09-23; the 4K cinematic-tail cost remains a warning tracked by BUG-8a3c. Imported compound objects and the internal Shatter modifier now use the same standard Box3D world in the local flower worktree; general multi-set authoring, impulses and content colliders remain future work.**
 **Prerequisites: none for P1–P3 (renders through the shipped `node.render_copies`).
 P4 (content colliders) wants the depth-estimate primitive, already shipped.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) and section 8 (Execution protocol (how a phase is run)) before starting
@@ -44,7 +44,7 @@ Physics Solids demo. The original larger design remains a roadmap.
   unsynchronized global registry. Worlds can move between threads but cannot be
   shared by reference. This is a correctness boundary, not a claim of concurrent
   multi-world performance. No UI or project state owns native handles.
-- `node.rigid_body` emits a typed immutable `RigidBody` description. Up to sixteen
+- `node.rigid_body` emits a typed immutable `RigidBody` description. Up to 64
   `body_N` inputs share one world; matching `pose_N` outputs are ordinary `Transform`
   values feeding existing `node.scene_object` and `node.render_scene`. This bounded
   single-object path makes five separately editable solids practical; it does not
@@ -133,7 +133,7 @@ the fixed floor and two ramps). The 4,000 ceiling is a bounded demo capacity, no
 real-time limit or a Box3D engine limit.
 
 The existing `node.physics_world` accepts an optional `copies` rigid-body
-prototype alongside its sixteen individual bodies. Copies share their native
+prototype alongside its 64 individual bodies. Copies share their native
 world and contacts. `copy_layout` selects the original centered Grid or a compact
 Pile: Pile caps its cube-root-derived row width at `copy_columns`, adds bounded
 position jitter, and varies each copy’s rotation with an index-seeded hash. Reset
@@ -147,7 +147,7 @@ buffer capacity. Unwired instance count preserves existing behavior.
 
 Physics timing covers CPU stepping and pose extraction, excludes rebuilding and
 GPU rendering, and sums worlds evaluated during the live content render. It is
-not the total frame cost. No photoscan fragmentation or sand simulation is added.
+not the total frame cost. The imported-object extension below adds bounded internal Shatter fragments; sand simulation remains outside this contract.
 
 Steady-state Rust stepping and pose reads use retained storage. A bounded
 release-mode CPU comparison on Apple arm64 (8 warmup and 8 measured ticks)
@@ -166,6 +166,79 @@ and a complete two-second graph render with initial/final images. The scene-pane
 flow covers body/world controls, speed edit/undo, and the Reset button. Physics-aware
 object add, duplication and removal are covered for the shipped root-level chains;
 arbitrary graph shapes and nested scene-panel discovery remain outside that contract.
+
+## Imported object physics (2026-09-24, local worktree)
+
+The experimental dynamic triangle-mesh collision code has been removed. The
+vendored Box3D collision and solver sources remain unchanged. Imported rigid
+glTF objects use the existing `node.rigid_body` and shared `node.physics_world`.
+The original visible triangles, normals, UVs and materials are preserved.
+
+Collider preparation uses the same file, mesh/material selection, fit, recenter
+and source offset as rendering. During asset warmup, spatial triangle partitions
+are cooked with the standard Box3D convex-hull builder, with at most 42 vertices
+per hull and 64 hull shapes per body. The default is 32 fitted hulls. Open scan
+surfaces receive a small explicit shell (0.1% of mesh extent) for solid collision
+volume. These are approximate colliders; exact triangle contact is not promised.
+Runtime scale applies to both geometry and collider. Loading holds physics time;
+preparation failures are visible errors, never a fallback bounding box.
+
+The scene panel exposes Physics as an object ON/OFF property. Turning it off
+removes the body from simulation and displays its authored transform while retaining
+its settings and graph wiring. Turning it on restores participation; changing body
+membership resets the shared simulation. Existing projects default to ON.
+Shared gravity, simulation speed and reset remain under World → Physics.
+
+Static imports appear as an expandable parent with selectable material submeshes.
+The parent owns the asset-center transform, visibility and one physics body.
+Children retain their original geometry and textures, with independent local
+transforms, visibility, materials, names, duplication and removal. Parent visibility
+preserves each child's eye state. Parent Duplicate/Remove affect the whole group;
+child Duplicate/Remove affect only that child, with undo. Older compound imports
+gain identity child transforms through the existing load migration.
+
+Rendering composes parent and local matrices. Collider preparation applies the
+same child transforms and material selectors before the standard Box3D hull cook;
+removing a child also removes its collider geometry. A body supports up to 64
+material parts. Hiding a child changes rendering, not its physics participation.
+Child pivots initially share the asset origin. Animated/skinned imports retain
+their existing layout. Shatter keeps using internal fragments under the parent.
+
+Shatter is a modifier added through the existing picker after enabling Physics.
+Its Pieces preparation control selects 2–32 internal fragments, subject to the
+world's 64 body slots and at least one piece per material part. Pieces are
+distributed across material parts by triangle count. Preparation preserves original
+triangles and attributes; it does not remesh or add cut caps. Source settings stay
+locked while the modifier captures them. Deformed/skinned sources are unsupported.
+The saved scene and object list retain the original object. Modifier expansion
+creates ordinary mesh sources, scene draws and Box3D bodies in the derived graph.
+Fragments follow the intact body's pose until the Shatter button or enabled Clip
+Trigger fires. The world then disables the intact collider, enables the prepared
+fragments and transfers its pose, angular velocity and velocity at each fragment's
+center of mass. Other bodies keep their state. Each fragment uses one standard
+convex hull. Reset restores the intact body; another trigger releases it again.
+The old Split into 8 scene-panel action is removed.
+Existing Fixed/Moving/Animated, mass, friction, bounce, World controls and
+transport reset remain the project workflow.
+
+A bounded optimized CPU measurement with the original 454,840-triangle tiger lily
+used 0.006 seconds to simulate six seconds intact, and 0.081 seconds for 32
+interacting pieces (0.224 ms mean, 1.042 ms p95, 12.777 ms maximum frame).
+Asset preparation was separate: 0.688 seconds intact and 7.251 seconds for the
+benchmark's sequential 32-piece preparation. These numbers exclude rendering
+and do not establish thousands-of-pieces or whole-project frame budgets.
+
+Focused Metal proofs exercise production import, asynchronous preparation,
+manual Shatter release on a warmed runtime, visible motion, backward-time reset,
+all-hidden/restored rendering and live Physics OFF edits through the production
+fused generator factory. These compare appearance before and after the edit;
+the earlier raw-runtime check missed the fused uniform conversion bug.
+The original tiger lily is used throughout. CPU regressions cover original
+triangle/attribute preservation, compound editing and fixed-tick behaviour.
+The UI snapshot confirms one object row and retained Physics controls; full
+Shatter picker interaction remains unverified after the scripted flow stopped
+on ambiguous selectors. The supported scale is a bounded creative scene,
+not a separate offline mesh simulation engine.
 
 ## 1. Audit — what exists (verified 2026-07-07)
 

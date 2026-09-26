@@ -28,6 +28,7 @@ type EndpointKey = (SceneNodeRef, String);
 type CloneKey = (u32, Option<SceneNodeRef>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
 pub(crate) mod math_events;
+pub(crate) mod shatter;
 
 #[cfg(test)]
 mod conformance;
@@ -436,6 +437,7 @@ fn prepare_scene_modifiers_impl(
     // compact cut-map indices have no meaning to its source_face_index path.
     if math_view.is_none() {
         super::fragment_cuts::apply(&mut prepared, &mut binding_sources)?;
+        shatter::prepare(owner, &mut prepared, &index, &routes, &mut binding_sources)?;
     }
     if prepared.nodes.len() > 65_536 || prepared.wires.len() > 262_144 {
         return Err(SceneModifierExpandError::CapacityExceeded {

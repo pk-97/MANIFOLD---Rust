@@ -29,7 +29,12 @@ pub(super) fn physics_sample_steps(
         if !ancestry.insert(node_id) {
             continue;
         }
-        pending.extend(graph.wires_into(node_id).map(|wire| wire.from.0));
+        let is_body = graph.get_node(node_id).is_some_and(|node| node.node.type_id().as_str() == "node.rigid_body");
+        // Release events belong to their delivered frame. Historical pose
+        // sampling holds the last output instead of replaying trigger state.
+        pending.extend(graph.wires_into(node_id)
+            .filter(|wire| !(is_body && wire.to.1 == "release_count"))
+            .map(|wire| wire.from.0));
     }
     for node_id in &ancestry {
         let node = graph.get_node(*node_id).expect("ancestry node exists");
@@ -231,5 +236,30 @@ mod tests {
         });
         runtime.reset_state(&crate::test_device());
         assert!(runtime.last_physics_frame_time.is_none());
+    }
+
+    #[test]
+    fn physics_history_holds_release_events_without_replaying_trigger_state() {
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(
+            "../../assets/generator-presets/PhysicsSolids.json"
+        )).unwrap();
+        def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": 500, "nodeId": "release_event", "typeId": "node.trigger_gate"
+        }));
+        def["wires"].as_array_mut().unwrap().push(serde_json::json!({
+            "fromNode": 500, "fromPort": "out", "toNode": 111, "toPort": "release_count"
+        }));
+        let registry = PrimitiveRegistry::with_builtin();
+        let runtime = PresetRuntime::from_json_str(&def.to_string(), &registry)
+            .expect("release events are not replayed during historical pose sampling");
+        let event = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new("release_event")).unwrap();
+        for (step, sampled) in runtime.plan.steps().iter().zip(runtime.physics_sample_steps.as_ref().unwrap()) {
+            if step.node == event { assert!(!sampled); }
+        }
+        def["wires"].as_array_mut().unwrap().push(serde_json::json!({
+            "fromNode": 500, "fromPort": "out", "toNode": 110, "toPort": "pos_x"
+        }));
+        assert!(PresetRuntime::from_json_str(&def.to_string(), &registry).is_err(),
+            "stateful pose ancestry must still be rejected");
     }
 }

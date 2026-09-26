@@ -133,6 +133,18 @@ pub struct SceneModifierRecipe {
     pub initializers: Vec<SceneNodeInitializer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calibrations: Vec<SceneParamCalibration>,
+    /// Optional recipe metadata for a modifier that releases static fragments
+    /// on a trigger. Kept optional so existing recipes remain byte-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shatter: Option<SceneShatterRecipe>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneShatterRecipe {
+    pub fragments_param: String,
+    pub trigger_node: NodeId,
+    pub trigger_port: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -863,6 +875,31 @@ fn validate_recipe(
             return Err(SceneModifierSchemaError::InvalidRecipe {
                 path: format!("{path}.presetMetadata.params.{id}"),
                 detail: "parameter default must lie within min/max".into(),
+            });
+        }
+    }
+    if let Some(shatter) = &recipe.shatter {
+        if shatter.fragments_param.is_empty()
+            || !preparation.contains(&shatter.fragments_param)
+            || find_param(params, &shatter.fragments_param).is_none()
+        {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!(
+                    "{path}.presetMetadata.sceneModifier.shatter.fragmentsParam"
+                ),
+                detail: "fragmentsParam must name a declared preparation parameter".into(),
+            });
+        }
+        if !preparation.contains(&recipe.enabled_param) {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{path}.presetMetadata.sceneModifier.enabledParam"),
+                detail: "Shatter enabledParam must be a preparation parameter".into(),
+            });
+        }
+        if shatter.trigger_node.is_empty() || shatter.trigger_port.trim().is_empty() {
+            return Err(SceneModifierSchemaError::InvalidRecipe {
+                path: format!("{path}.presetMetadata.sceneModifier.shatter"),
+                detail: "Shatter trigger node and port must be nonempty".into(),
             });
         }
     }

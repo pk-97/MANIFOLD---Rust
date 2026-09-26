@@ -10,7 +10,7 @@ use crate::preset_runtime::PresetRuntime;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::BindingTarget;
 use super::synthetic_glbs::*;
-use manifold_core::effect_graph_def::{EffectGraphNode, GROUP_TYPE_ID, SerializedParamValue};
+use manifold_core::effect_graph_def::{EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue};
 
 fn azalea_fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -715,6 +715,95 @@ fn assembles_azalea_into_two_object_render_scene_graph() {
     assert_eq!(sun_shadow.default_value, 0.0, "shadow type default follows the node's stamped Hard value");
 }
 
+/// The tiger lily is the smallest real multi-material scan in the fixture set.
+/// Keep this CPU gate focused on the compound importer contract: one authored
+/// group owns both material outputs while source vertex totals survive.
+#[test]
+fn tiger_lily_compound_import_preserves_material_sources_and_totals() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    assert!(path.exists(), "required tiger_lily fixture is missing: {}", path.display());
+    let summary = gltf_load::gltf_import_summary(&path).expect("tiger lily summary parses");
+    let (def, report) = assemble_import_graph(&path).expect("tiger lily imports");
+    assert_eq!(report.material_count, summary.materials.len());
+    assert_eq!(report.object_count, summary.materials.len());
+    let groups: Vec<_> = def.nodes.iter().filter(|node| node.type_id == GROUP_TYPE_ID).collect();
+    let object_groups: Vec<_> = groups
+        .iter()
+        .filter(|group| group.node_id.as_str().starts_with("object_"))
+        .collect();
+    assert_eq!(object_groups.len(), 1, "static scan has one authored object group");
+    let group = object_groups[0].group.as_ref().expect("compound group body");
+    let output_ids: std::collections::HashSet<u32> = group.nodes.iter()
+        .filter(|node| node.type_id == GROUP_OUTPUT_TYPE_ID)
+        .map(|node| node.id)
+        .collect();
+    assert_eq!(output_ids.len(), summary.materials.len());
+    let output_count = group.wires.iter()
+        .filter(|wire| output_ids.contains(&wire.to_node) && wire.to_port.starts_with("object"))
+        .count();
+    assert_eq!(output_count, summary.materials.len());
+    let sources: Vec<_> = group.nodes.iter().filter(|node| node.type_id == "node.gltf_mesh_source").collect();
+    let materials: Vec<_> = group.nodes.iter().filter(|node| node.type_id == "node.pbr_material").collect();
+    assert_eq!(sources.len(), summary.materials.len());
+    assert_eq!(materials.len(), summary.materials.len());
+    let imported_total: u64 = sources.iter().map(|node| match node.params.get("source_vertex_count") {
+        Some(SerializedParamValue::Int { value }) => *value as u64,
+        other => panic!("mesh source {} lost source_vertex_count: {other:?}", node.node_id),
+    }).sum();
+    let expected_total: u64 = summary.materials.iter().map(|material| u64::from(material.vertex_count)).sum();
+    assert_eq!(imported_total, expected_total, "compound scan keeps every material's vertices");
+    let vm = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+    assert_eq!(vm.header.object_count, 1);
+    assert_eq!(vm.objects.len(), summary.materials.len() + 1);
+    let crate::node_graph::scene_vm::SceneObjectVm::Known(parent) = &vm.objects[0] else { panic!("parent") };
+    assert!(parent.is_group);
+    assert_eq!(parent.visible_addr.param_id, "parent_visible");
+    let parent_transform = parent.transform.as_ref().unwrap().node_doc_id;
+    for row in &vm.objects[1..] {
+        let crate::node_graph::scene_vm::SceneObjectVm::Known(child) = row else { panic!("child") };
+        assert_eq!(child.parent_group_id, Some(parent.object_node_id));
+        assert_ne!(child.transform.as_ref().unwrap().node_doc_id, parent_transform);
+        assert_eq!(child.visible_addr.param_id, "visible");
+        assert!(child.physics.is_none());
+        let crate::node_graph::scene_vm::MaterialVm::Known(material) = &child.material else { panic!("child material") };
+        assert_eq!(material.shared_object_count, Some(1));
+    }
+}
+
+#[test]
+fn legacy_compound_import_migrates_to_editable_children_once() {
+    use crate::node_graph::persistence::EffectGraphDefExt;
+    let path = azalea_fixture_path();
+    let (mut def, _) = assemble_import_graph(&path).unwrap();
+    let group = def.nodes.iter_mut().find(|node| node.node_id.as_str().starts_with("object_") && node.group.is_some()).unwrap().group.as_mut().unwrap();
+    let locals: std::collections::HashSet<_> = group.nodes.iter().filter(|n| n.node_id.as_str().starts_with("part_transform_")).map(|n| n.id).collect();
+    let local_ids: std::collections::HashSet<_> = group.nodes.iter().filter(|n| locals.contains(&n.id)).map(|n| n.node_id.clone()).collect();
+    group.nodes.retain(|n| !locals.contains(&n.id));
+    group.wires.retain(|w| !locals.contains(&w.from_node));
+    for w in &mut group.wires {
+        if w.to_port == "parent_transform" { w.to_port = "transform".into(); }
+    }
+    let metadata = def.preset_metadata.as_mut().unwrap();
+    let local_bindings: std::collections::HashSet<_> = metadata.bindings.iter().filter_map(|b| match &b.target {
+        BindingTarget::Node { node_id, .. } if local_ids.contains(node_id) => Some(b.id.clone()),
+        _ => None,
+    }).collect();
+    metadata.params.retain(|p| !local_bindings.contains(&p.id));
+    metadata.bindings.retain(|b| !local_bindings.contains(&b.id));
+    for binding in &mut metadata.bindings {
+        if let BindingTarget::Node { param, .. } = &mut binding.target && param == "parent_visible" { *param = "visible".into(); }
+    }
+    assert!(crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+    let saved = def.clone();
+    assert!(!crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+    assert_eq!(def, saved);
+    let vm = crate::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+    assert_eq!(vm.header.object_count, 1);
+    assert_eq!(vm.objects.len(), 3);
+    def.into_graph(&PrimitiveRegistry::with_builtin(), &Default::default()).unwrap();
+}
+
 /// Structural gate (fast, no GPU): the assembled azalea graph must
 /// compile through the real `PrimitiveRegistry` — every node type_id
 /// resolves, every wire's ports exist and type-check, both boundary
@@ -844,12 +933,11 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
     assert_eq!(report.object_count, 2);
     assert_eq!(report.textures_wired, 1);
 
-    // Top level: two per-object group boxes PLUS the "ao" presentation
-    // group PLUS the "dof" group (CINEMATIC_SCENE_TAIL D1/section 3 —
-    // coc_from_depth → bokeh_gather), no bare producer
-    // nodes.
+    // Top level: one compound object group PLUS the "ao" presentation group
+    // PLUS the "dof" group (CINEMATIC_SCENE_TAIL D1/section 3 —
+    // coc_from_depth → bokeh_gather), no bare producer nodes.
     let groups: Vec<_> = def.nodes.iter().filter(|n| n.type_id == GROUP_TYPE_ID).collect();
-    assert_eq!(groups.len(), 4, "2 object groups + ao + dof");
+    assert_eq!(groups.len(), 3, "compound object group + ao + dof");
     assert!(groups.iter().all(|g| g.group.is_some()));
     for bare in [
         "node.gltf_mesh_source",
@@ -862,29 +950,24 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
             "producer `{bare}` must live inside a group, not at the top level"
         );
     }
-    // Only the per-object groups carry a tint (CINEMATIC_POST's ao
-    // group is an untinted presentation box, not per-object identity).
+    // Only the compound object group carries a tint (CINEMATIC_POST's ao
+    // group is an untinted presentation box, not object identity).
     let object_groups: Vec<_> = groups
         .iter()
         .filter(|g| g.group.as_ref().unwrap().tint.is_some())
         .copied()
         .collect();
-    assert_eq!(object_groups.len(), 2, "one tinted group per object");
-    // Every object group's interface declares a single `object` output
-    // (SCENE_OBJECT_AND_PANEL_V2_DESIGN D1/D3 — the transform/material/
-    // mesh triplet is bound INSIDE the group by `node.scene_object` now,
-    // not exposed as separate interface ports).
-    for g in &object_groups {
-        let outputs = &g.group.as_ref().unwrap().interface.outputs;
-        assert!(
-            outputs.iter().any(|o| o.name == "object" && o.port_type == "Object"),
-            "every object group exposes a single object output"
-        );
-    }
-    // Distinct tints per object group (legibility).
+    assert_eq!(object_groups.len(), 1, "one tinted compound group");
+    // The compound group's interface exposes one Object output per material;
+    // all parts share the group's one transform and visibility binding.
+    let outputs = &object_groups[0].group.as_ref().unwrap().interface.outputs;
+    assert_eq!(outputs.len(), 2, "one Object output per material");
+    assert!(outputs.iter().all(|o| o.port_type == "Object"));
+    assert_eq!(outputs[0].name, "object");
+    assert_eq!(outputs[1].name, "object_1");
+    // A compound asset has one shared tint (legibility).
     let tints: Vec<_> = object_groups.iter().filter_map(|g| g.group.as_ref().unwrap().tint).collect();
-    assert_eq!(tints.len(), 2, "every object group gets a tint");
-    assert_ne!(tints[0], tints[1], "each object group gets its own tint");
+    assert_eq!(tints.len(), 1, "compound group gets a tint");
 
     // Flatten and prove the runtime sees the same flat wiring the ungrouped
     // assembler produced — in node_id space (survives id renumbering + handle
@@ -912,8 +995,10 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
         ("tex_0", "out", "object_0_bind", "base_color_map"),
         ("mesh_1", "vertices", "object_1_bind", "vertices"),
         ("mat_1", "out", "object_1_bind", "material"),
-        ("transform_0", "transform", "object_0_bind", "transform"),
-        ("transform_1", "transform", "object_1_bind", "transform"),
+        ("transform_0", "transform", "object_0_bind", "parent_transform"),
+        ("transform_0", "transform", "object_1_bind", "parent_transform"),
+        ("part_transform_0", "transform", "object_0_bind", "transform"),
+        ("part_transform_1", "transform", "object_1_bind", "transform"),
     ] {
         assert!(
             conn.contains(&(
@@ -977,19 +1062,20 @@ fn build_import_graph_groups_each_object_and_flattens_to_flat_wiring() {
 
     // The editor's own data path (`GraphSnapshot::from_def`, which routes a
     // grouped def through the group-preserving structural snapshot) must show
-    // all four groups as navigable boxes — each carrying its inner producers —
+    // all three groups as navigable boxes — the compound group carries both
+    // material producers while AO/DOF remain separate presentation boxes —
     // not a flat wall of nodes. This is the legibility payoff, verified at the
     // snapshot layer (the pixels still want Peter's eyes on a real model).
     let snap = crate::node_graph::GraphSnapshot::from_def(&def)
         .expect("editor snapshot builds from the grouped def");
     let snap_groups: Vec<_> =
         snap.nodes.iter().filter(|n| n.group.is_some()).collect();
-    assert_eq!(snap_groups.len(), 4, "editor snapshot shows 2 object + ao + dof group boxes");
+    assert_eq!(snap_groups.len(), 3, "editor snapshot shows compound object + ao + dof group boxes");
     let snap_object_groups: Vec<_> = snap_groups
         .iter()
         .filter(|g| g.group.as_ref().unwrap().nodes.iter().any(|inner| inner.type_id == "node.pbr_material"))
         .collect();
-    assert_eq!(snap_object_groups.len(), 2, "exactly the two object groups carry a material node");
+    assert_eq!(snap_object_groups.len(), 1, "the compound object group carries both material nodes");
 
     // Finally, it must build through the production loader (which flattens).
     let registry = PrimitiveRegistry::with_builtin();
@@ -1392,21 +1478,12 @@ fn build_import_graph_ao_group_consumes_ao_mask() {
     );
 }
 
-/// BUG-221: composed per-object recenter. The mesh source is shifted
-/// by `-own_center` (so local `(0,0,0)` becomes THIS object's own
-/// visual center, not wherever the source file authored its local
-/// origin) and the user-facing `node.transform_3d`'s `pos` is
-/// repositioned to `own_center - scene_center`, so the two compose
-/// back to the OLD whole-scene-only `-scene_center` recenter (net
-/// world placement at import time is unchanged — only the rotation
-/// pivot moves). A synthetic two-material summary with hand-picked
-/// `own_center` values (a "minimal fixture constructed
-/// programmatically" — no `.glb` on disk needed for this half of the
-/// gate) makes every expected number computable by hand; the
-/// companion `gpu-proofs` tests below prove the same claim against a
-/// real multi-object asset by rendering it.
+/// BUG-221: static compound imports use one shared transform. Every mesh
+/// source is shifted by the whole asset center and the shared user-facing
+/// transform stays at the origin, preserving the old net placement while
+/// giving all material parts one rotation/scale pivot.
 #[test]
-fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
+fn bug221_compound_transform_uses_shared_asset_center_pivot() {
     let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
     big.own_center = [5.0, 1.0, -0.5];
     let mut small = full_material(1, "Small", 1); // k=1
@@ -1466,46 +1543,29 @@ fn bug221_object_transform_recenters_about_own_bbox_center_not_scene_center() {
         float_param(transform0, "pos_y"),
         float_param(transform0, "pos_z"),
     ];
-    let own_center = [5.0_f32, 1.0, -0.5];
-
     for i in 0..3 {
         assert!(
-            (translate[i] - (-own_center[i])).abs() < 1e-5,
-            "mesh_0.translate_{i} should be -own_center[{i}]: got {translate:?}"
+            (translate[i] - (-center[i])).abs() < 1e-5,
+            "mesh_0.translate_{i} should be -scene_center[{i}]: got {translate:?}"
         );
         assert!(
-            (pos[i] - (own_center[i] - center[i])).abs() < 1e-5,
-            "transform_0.pos_{i} should be own_center[{i}] - center[{i}]: got {pos:?}"
+            pos[i].abs() < 1e-5,
+            "shared transform_0.pos_{i} should remain at the origin: got {pos:?}"
         );
-        // The composed net offset must equal the OLD whole-scene-only
-        // recenter (-center) — this is the "layout preservation"
-        // claim at value level: mesh-side translate and outer pos
-        // cancel own_center out entirely, so net world placement is
-        // byte-identical to the pre-fix formula regardless of what
-        // own_center is.
+        // The composed net offset remains the whole-scene recenter.
         assert!(
             (translate[i] + pos[i] - (-center[i])).abs() < 1e-5,
             "mesh_0.translate_{i} + transform_0.pos_{i} must equal -center[{i}] \
              (net world placement unchanged): translate={translate:?} pos={pos:?} center={center:?}"
         );
     }
-    // "Position ≈ the object's bounds center", expressed in the SAME
-    // recentered-scene coordinate space Position is shown in — a
-    // concrete, non-tautological check on top of the formula asserts
-    // above.
-    assert!((pos[0] - 3.0).abs() < 1e-5 && (pos[1] - 0.0).abs() < 1e-5 && (pos[2] - 0.0).abs() < 1e-5);
+    assert!(pos.iter().all(|value| value.abs() < 1e-5));
 }
 
-/// BUG-303: the card slider that auto-exposes `transform_0.pos_x` must
-/// default to the SAME non-origin value BUG-221 stamps onto the node itself
-/// (`own_center - center`), not the `node.transform_3d` primitive's generic
-/// `0.0` manifest default. Before the fix, `apply_binding_defaults`
-/// (`param_binding.rs`) unconditionally wrote every binding's
-/// `default_value` back onto its target node at bind time — so an imported
-/// object's real placement was clobbered back to the origin the moment the
-/// preset instantiated, even though the DEF on disk carried the right
-/// `pos_x`. Same synthetic two-material summary as the sibling BUG-221
-/// value test above, so `own_center - center` is computable by hand.
+/// BUG-303: the card slider that auto-exposes the shared `transform_0.pos_x`
+/// must default to the shared transform's origin. The mesh sources carry the
+/// whole-asset recenter, so binding defaults must not invent a per-material
+/// offset.
 #[test]
 fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin() {
     let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
@@ -1527,15 +1587,7 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
         camera_report_lines: Vec::new(),
         texture_dims: Vec::new(),
     };
-    let center = [
-        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
-        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
-        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
-    ];
-    let own_center = [5.0_f32, 1.0, -0.5];
-    let expected_pos_x = own_center[0] - center[0];
-    assert!((expected_pos_x - 0.0).abs() > 1e-3, "sanity: the expected default is genuinely non-origin");
-
+    let expected_pos_x = 0.0_f32;
     let path = std::path::Path::new("/tmp/synthetic_bug303_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
 
@@ -1550,9 +1602,8 @@ fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin(
         .expect("a binding targets transform_0.pos_x");
     assert!(
         (binding.default_value - expected_pos_x).abs() < 1e-5,
-        "transform_0.pos_x exposure default should equal own_center.x - center.x ({expected_pos_x}), \
-         got {} — a 0.0 here means the BUG-303 clobber is back",
-        binding.default_value
+        "transform_0.pos_x exposure default should equal the shared origin ({expected_pos_x}), got {}",
+        binding.default_value,
     );
 
     let spec = meta
@@ -1595,19 +1646,7 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
         camera_report_lines: Vec::new(),
         texture_dims: Vec::new(),
     };
-    let center = [
-        (summary.bbox_min[0] + summary.bbox_max[0]) * 0.5,
-        (summary.bbox_min[1] + summary.bbox_max[1]) * 0.5,
-        (summary.bbox_min[2] + summary.bbox_max[2]) * 0.5,
-    ];
-    let expected = [
-        [5.0 - center[0], 1.0 - center[1], -0.5 - center[2]],
-        [-3.0 - center[0], 0.0 - center[1], 0.0 - center[2]],
-    ];
-    assert!(
-        expected.iter().flatten().any(|v| v.abs() > 1e-3),
-        "sanity: at least one expected component is genuinely non-origin"
-    );
+    let expected = [0.0_f32, 0.0, 0.0];
 
     let path = std::path::Path::new("/tmp/synthetic_bug303_runtime_test.glb");
     let (def, _report) = build_import_graph(&summary, path).expect("build import graph");
@@ -1616,29 +1655,26 @@ fn bug303_stamped_transform_survives_preset_runtime_instantiation() {
     let runtime =
         PresetRuntime::from_def(def, &registry, None).expect("instantiate imported def");
 
-    for (k, exp) in expected.iter().enumerate() {
-        let node_id = manifold_core::NodeId::new(format!("transform_{k}"));
-        let inst = runtime
-            .graph
-            .instance_by_node_id(&node_id)
-            .unwrap_or_else(|| panic!("transform_{k} present in the live graph"));
-        for (axis, (param, want)) in ["pos_x", "pos_y", "pos_z"].iter().zip(exp).enumerate() {
+    let node_id = manifold_core::NodeId::new("transform_0");
+    let inst = runtime
+        .graph
+        .instance_by_node_id(&node_id)
+        .expect("shared transform_0 present in the live graph");
+    for (axis, (param, want)) in ["pos_x", "pos_y", "pos_z"].iter().zip(expected).enumerate() {
             let got = runtime
                 .graph
                 .get_node(inst)
                 .and_then(|n| n.params.get(*param).cloned())
-                .unwrap_or_else(|| panic!("transform_{k}.{param} readable post-build"));
+                .unwrap_or_else(|| panic!("transform_0.{param} readable post-build"));
             let crate::node_graph::parameters::ParamValue::Float(got) = got else {
-                panic!("transform_{k}.{param} is a Float param, got {got:?}");
+                panic!("transform_0.{param} is a Float param, got {got:?}");
             };
             assert!(
                 (got - want).abs() < 1e-5,
-                "transform_{k}.{param} must survive instantiation at {want} \
-                 (own_center - center, axis {axis}); got {got} — 0.0 here means \
-                 apply_binding_defaults clobbered the stamped placement again (BUG-303)"
+                "transform_0.{param} must survive instantiation at shared origin \
+                 (axis {axis}); got {got}"
             );
         }
-    }
 }
 
 /// Card-visibility curation, importer level: an imported object's
@@ -1953,7 +1989,7 @@ fn merge_bumps_objects_count_and_continues_port_indices() {
 
     assert_eq!(plan.render_scene_node_id, render_id);
     assert_eq!(plan.new_objects_count, existing_objects + 3);
-    assert_eq!(plan.new_nodes.len(), 3, "one group per incoming material");
+    assert_eq!(plan.new_nodes.len(), 1, "one compound group for the incoming asset");
 
     for k in existing_objects..(existing_objects + 3) {
         assert!(

@@ -58,6 +58,9 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
         | "ior"
         | "volume_thickness"
         | "volume_attenuation_distance"
+        | "volume_geometry"
+        | "volume_scattering_density"
+        | "volume_particle_density"
         | "dispersion"
         | "sheen_roughness"
         | "anisotropy_strength"
@@ -71,7 +74,10 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
         }
         "volume_attenuation_color_r"
         | "volume_attenuation_color_g"
-        | "volume_attenuation_color_b" => Some(MaterialGroup::Feature(MaterialFeature::Glass)),
+        | "volume_attenuation_color_b"
+        | "volume_scattering_color_r"
+        | "volume_scattering_color_g"
+        | "volume_scattering_color_b" => Some(MaterialGroup::Feature(MaterialFeature::Glass)),
         "specular_tint_r" | "specular_tint_g" | "specular_tint_b" => Some(MaterialGroup::Advanced),
         _ => None,
     };
@@ -125,6 +131,9 @@ fn feature_for_scalar(name: &str) -> MaterialFeature {
         | "ior"
         | "volume_thickness"
         | "volume_attenuation_distance"
+        | "volume_geometry"
+        | "volume_scattering_density"
+        | "volume_particle_density"
         | "dispersion" => {
             MaterialFeature::Glass
         }
@@ -144,6 +153,8 @@ fn colour_channel(name: &str) -> Option<(MaterialColour, RgbChannel)> {
         (MaterialColour::Sheen, suffix)
     } else if let Some(suffix) = name.strip_prefix("volume_attenuation_color_") {
         (MaterialColour::Attenuation, suffix)
+    } else if let Some(suffix) = name.strip_prefix("volume_scattering_color_") {
+        (MaterialColour::VolumeScattering, suffix)
     } else if let Some(suffix) = name.strip_prefix("specular_tint_") {
         (MaterialColour::Specular, suffix)
     } else if let Some(suffix) = name.strip_prefix("subsurface_color_") {
@@ -225,7 +236,7 @@ mod tests {
     #[test]
     fn material_inspector_schema_covers_pbr() {
         let params = PbrMaterial::PARAMS;
-        assert_eq!(params.len(), 290);
+        assert_eq!(params.len(), 296);
         let mut names = std::collections::HashSet::<&str>::new();
         let mut feature_modes = 0;
         let mut map_families = [0usize; 5];
@@ -255,5 +266,9 @@ mod tests {
             Some(MaterialParamRole::Scalar(MaterialGroup::Subsurface)));
         assert_eq!(material_param_role("node.pbr_material", "subsurface_color_r"),
             Some(MaterialParamRole::Colour(MaterialGroup::Subsurface, MaterialColour::Subsurface, RgbChannel::R)));
+        assert_eq!(material_param_role("node.pbr_material", "volume_scattering_color_r"),
+            Some(MaterialParamRole::Colour(MaterialGroup::Feature(MaterialFeature::Glass), MaterialColour::VolumeScattering, RgbChannel::R)));
+        assert_eq!(material_param_role("node.pbr_material", "volume_geometry"),
+            Some(MaterialParamRole::Scalar(MaterialGroup::Feature(MaterialFeature::Glass))));
     }
 }

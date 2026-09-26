@@ -62,6 +62,7 @@ macro_rules! table {
 table! {
     // GLB model / skinned / morph / animation sources. Mesh family, single file.
     "node.gltf_mesh_source" => NodeFileLoad::File(AssetFamily::Mesh),
+    "node.rigid_body" => NodeFileLoad::File(AssetFamily::Mesh),
     "node.gltf_skinned_mesh_source" => NodeFileLoad::File(AssetFamily::Mesh),
     "node.gltf_morph_deltas_source" => NodeFileLoad::File(AssetFamily::Mesh),
     "node.gltf_morph_weights" => NodeFileLoad::File(AssetFamily::Mesh),

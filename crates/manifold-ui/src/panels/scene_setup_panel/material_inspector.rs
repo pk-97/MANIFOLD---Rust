@@ -856,6 +856,7 @@ impl ScenePanel {
                 crate::param_surface::MaterialColour::Emission => "Emission colour",
                 crate::param_surface::MaterialColour::Sheen => "Sheen colour",
                 crate::param_surface::MaterialColour::Attenuation => "Attenuation colour",
+                crate::param_surface::MaterialColour::VolumeScattering => "Volume scattering colour",
                 crate::param_surface::MaterialColour::Subsurface => "Scattering colour",
                 crate::param_surface::MaterialColour::Translucency => "Translucency colour",
             },
@@ -963,14 +964,18 @@ impl ScenePanel {
             ROW_H,
             drag_value_style(),
             &row.name,
-            obj_key(row.index, OBJ_OFF_NAME),
+            obj_key(row.object_node_id as usize, OBJ_OFF_NAME),
         );
         // Stable automation name (UX-P1): `scripts/ui-flows/` selects the
         // Properties header's name text by NAME, not raw text, so a flow can
         // assert "the header text changed" without hard-coding which object
         // it changed to.
         tree.set_name(name_id, "scene_setup.properties.name_value");
-        let identity_node_id = row.group_node_id.unwrap_or(row.object_node_id);
+        let identity_node_id = if row.is_group {
+            row.group_node_id.unwrap_or(row.object_node_id)
+        } else {
+            row.object_node_id
+        };
         self.object_name_ids
             .push((identity_node_id, name_id, row.name.clone()));
 
@@ -983,9 +988,10 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             "Frame",
-            obj_key(row.index, OBJ_OFF_FRAME),
+            obj_key(row.object_node_id as usize, OBJ_OFF_FRAME),
         );
-        self.object_frame_ids.push((frame_id, row.index));
+        self.object_frame_ids.push((frame_id, row.object_node_id));
+        tree.set_name(frame_id, "scene_setup.properties.frame");
 
         let dup_id = tree.add_button_keyed(
             Some(self.content_parent),
@@ -995,9 +1001,14 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             "\u{29C9}",
-            obj_key(row.index, OBJ_OFF_REMOVE) + 1,
+            obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE) + 1,
         );
-        self.object_duplicate_ids.push((dup_id, row.index));
+        tree.set_name(dup_id, "scene_setup.properties.duplicate");
+        if row.parent_group_id.is_some() && !row.is_group {
+            self.submesh_duplicate_ids.push((dup_id, row.index));
+        } else {
+            self.object_duplicate_ids.push((dup_id, row.index));
+        }
         let remove_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x + name_w + 4.0 + frame_w + STEP_W,
@@ -1006,10 +1017,36 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             "\u{2715}",
-            obj_key(row.index, OBJ_OFF_REMOVE),
+            obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE),
         );
-        self.object_remove_ids.push((remove_id, row.index));
-        cy + ROW_H + ROW_GAP
+        if row.parent_group_id.is_some() && !row.is_group {
+            tree.set_name(remove_id, "scene_setup.properties.remove");
+            self.submesh_remove_ids.push((remove_id, row.index));
+        } else {
+            self.object_remove_ids.push((remove_id, row.index));
+        }
+        let mut next_cy = cy + ROW_H + ROW_GAP;
+        if row.physics_available && (row.parent_group_id.is_none() || row.is_group) {
+            let toggle_w = crate::slider::VALUE_BOX_W;
+            tree.add_label(
+                Some(self.content_parent), inner_x, next_cy,
+                inner_w - toggle_w - GAP, ROW_H, "Physics", label_style(),
+            );
+            let physics_id = tree.add_button_keyed(
+                Some(self.content_parent), inner_x + inner_w - toggle_w, next_cy,
+                toggle_w, ROW_H, toggle_btn_style(row.physics_enabled),
+                if row.physics_enabled { "ON" } else { "OFF" },
+                obj_key(row.object_node_id as usize, OBJ_OFF_PHYSICS),
+            );
+            tree.set_name(physics_id, "scene_setup.properties.physics");
+            if row.physics_enabled {
+                self.object_disable_physics_ids.push((physics_id, row.index));
+            } else {
+                self.object_enable_physics_ids.push((physics_id, row.index));
+            }
+            next_cy += ROW_H;
+        }
+        next_cy + ROW_GAP
     }
 
     /// Object properties body: transform/material rows followed by the
@@ -1028,6 +1065,10 @@ impl ScenePanel {
         mut cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
+        if row.is_group {
+            self.active_material_info = None;
+            return self.build_filtered_properties(tree, inner_x, inner_w, cy, &row.sections);
+        }
         // Modifier rows are rendered only inside their retained shared cards;
         // keep transform/object/material rows in the ordinary properties
         // surface and exclude every known modifier id across the scene. A
@@ -1094,7 +1135,7 @@ impl ScenePanel {
                 inner_x,
                 inner_w,
                 cy,
-                row.index,
+                row.object_node_id as usize,
                 row.group_node_id.unwrap_or(row.object_node_id),
             );
         } else {
@@ -1330,7 +1371,7 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             &format!("Source: {source_label}"),
-            obj_key(row.index, OBJ_OFF_SKIN_SOURCE),
+            obj_key(row.object_node_id as usize, OBJ_OFF_SKIN_SOURCE),
         );
         tree.set_name(source_btn, "scene_setup.skin.source");
         self.skin_source_ids
@@ -1343,7 +1384,7 @@ impl ScenePanel {
             ROW_H,
             btn_style(),
             &format!("Map: {}", skin.target_map.label()),
-            obj_key(row.index, OBJ_OFF_SKIN_TARGET),
+            obj_key(row.object_node_id as usize, OBJ_OFF_SKIN_TARGET),
         );
         tree.set_name(target_btn, "scene_setup.skin.target");
         self.skin_target_ids

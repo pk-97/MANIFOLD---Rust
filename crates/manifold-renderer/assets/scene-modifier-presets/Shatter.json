@@ -1,0 +1,267 @@
+{
+  "version": 3,
+  "name": "Shatter",
+  "presetMetadata": {
+    "id": "Shatter",
+    "displayName": "Shatter",
+    "category": "Geometry",
+    "oscPrefix": "shatter",
+    "available": true,
+    "params": [
+      {
+        "id": "fragments",
+        "name": "Pieces",
+        "min": 2.0,
+        "max": 32.0,
+        "defaultValue": 16.0,
+        "wholeNumbers": true
+      },
+      {
+        "id": "enabled",
+        "name": "Enabled",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "isToggle": true
+      },
+      {
+        "id": "shatter",
+        "name": "Shatter",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "isTrigger": true
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "isToggle": true,
+        "isTriggerGate": true
+      }
+    ],
+    "bindings": [
+      {
+        "id": "fragments",
+        "label": "Pieces",
+        "defaultValue": 16.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "fragments",
+          "param": "value"
+        },
+        "convert": {
+          "type": "IntRound"
+        }
+      },
+      {
+        "id": "enabled",
+        "label": "Enabled",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "enabled",
+          "param": "value"
+        }
+      },
+      {
+        "id": "shatter",
+        "label": "Shatter",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "manual",
+          "param": "value"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "trigger_gate",
+          "param": "enable"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      }
+    ],
+    "sceneModifier": {
+      "schemaVersion": 1,
+      "singleton": false,
+      "enabledParam": "enabled",
+      "preparationParams": [
+        "fragments",
+        "enabled"
+      ],
+      "shatter": {
+        "fragmentsParam": "fragments",
+        "triggerNode": "release",
+        "triggerPort": "out"
+      },
+      "stages": [
+        {
+          "group": "shatter_control_stage",
+          "scope": "scene",
+          "inputs": [
+            {
+              "port": "trigger_count",
+              "source": {
+                "context": {
+                  "value": "triggerCount"
+                }
+              }
+            },
+            {
+              "port": "trigger_baseline",
+              "source": {
+                "context": {
+                  "value": "triggerBaseline"
+                }
+              }
+            }
+          ],
+          "outputs": []
+        }
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "id": 1,
+      "nodeId": "shatter_control_stage",
+      "typeId": "group",
+      "handle": "ShatterControl",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "trigger_count",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "trigger_baseline",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [],
+          "params": []
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "group_trigger_count",
+            "typeId": "system.group_input",
+            "handle": "trigger_count"
+          },
+          {
+            "id": 2,
+            "nodeId": "group_trigger_baseline",
+            "typeId": "system.group_input",
+            "handle": "trigger_baseline"
+          },
+          {
+            "id": 3,
+            "nodeId": "fragments",
+            "typeId": "node.value",
+            "handle": "fragments",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 16.0
+              }
+            }
+          },
+          {
+            "id": 4,
+            "nodeId": "enabled",
+            "typeId": "node.value",
+            "handle": "enabled",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 5,
+            "nodeId": "manual",
+            "typeId": "node.value",
+            "handle": "manual",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 6,
+            "nodeId": "trigger_gate",
+            "typeId": "node.trigger_gate",
+            "handle": "trigger_gate",
+            "params": {
+              "enable": {
+                "type": "Bool",
+                "value": false
+              }
+            }
+          },
+          {
+            "id": 7,
+            "nodeId": "release",
+            "typeId": "node.math",
+            "handle": "release",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            }
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "trigger_count",
+            "toNode": 6,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "trigger_baseline",
+            "toNode": 6,
+            "toPort": "initial_count"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "b"
+          }
+        ],
+        "tint": null
+      }
+    }
+  ],
+  "wires": []
+}

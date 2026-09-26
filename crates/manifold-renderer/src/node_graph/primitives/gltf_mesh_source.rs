@@ -42,7 +42,7 @@ fn source_trace_enabled() -> bool {
 /// `fit_unit_box = false` is a STRICT no-op (early return, no float math at
 /// all) — this is what keeps every pre-existing gltf preset byte-identical
 /// after this extension ships (`fit` defaults to `none`).
-fn apply_mesh_fit(verts: Vec<MeshVertex>, fit_unit_box: bool, recenter: bool) -> Vec<MeshVertex> {
+pub(crate) fn apply_mesh_fit(verts: Vec<MeshVertex>, fit_unit_box: bool, recenter: bool) -> Vec<MeshVertex> {
     if !fit_unit_box || verts.is_empty() {
         return verts;
     }
@@ -96,7 +96,7 @@ fn apply_mesh_fit(verts: Vec<MeshVertex>, fit_unit_box: bool, recenter: bool) ->
 /// that object's transform spin it about its own visual center. `[0,0,0]`
 /// (the default) is a strict no-op — byte-identical to every pre-existing
 /// gltf preset/hand-built node that never sets this param.
-fn apply_translate(verts: Vec<MeshVertex>, offset: [f32; 3]) -> Vec<MeshVertex> {
+pub(crate) fn apply_translate(verts: Vec<MeshVertex>, offset: [f32; 3]) -> Vec<MeshVertex> {
     if offset == [0.0, 0.0, 0.0] {
         return verts;
     }
@@ -170,6 +170,8 @@ crate::primitive! {
             range: Some((-2.0, 1024.0)),
             enum_values: &[],
         },
+        ParamDef { name: Cow::Borrowed("fragment_count"), label: "Pieces", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fragment_index"), label: "Piece", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 63.0)), enum_values: &[] },
         ParamDef {
             name: Cow::Borrowed("max_capacity"),
             label: "Max Capacity",
@@ -273,8 +275,8 @@ crate::primitive! {
         // port-shadowed performance scalars, so a full re-parse on change
         // is the simple, correct choice over a second CPU-side cache tier.
         // BUG-221: translate_x/y/z joined the tuple the same way.
-        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32) =
-            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0),
+        last_key: (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, u32, u32) =
+            (String::new(), i32::MIN, i32::MIN, i32::MIN, u32::MAX, false, false, 0.0, 0.0, 0.0, 1, 0),
         // Last successfully parsed geometry (CPU-side), retained only until
         // it is uploaded to `staging`.
         cached_verts: Vec<MeshVertex> = Vec::new(),
@@ -318,8 +320,9 @@ crate::primitive! {
 
 impl Primitive for GltfMeshSource {
     fn warmup_pending(&self) -> bool {
-        // A background GLB parse is in flight.
-        self.pending_load.is_some()
+        // Parsing can finish one frame before the staged mesh is published.
+        // Keep pre-roll alive until the next run acknowledges its GPU copy.
+        self.pending_load.is_some() || self.copy_in_flight
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -357,6 +360,8 @@ impl Primitive for GltfMeshSource {
         let translate_z = ctx.param_f32("translate_z", 0.0);
 
         let translate = [translate_x, translate_y, translate_z];
+        let fragment_count = ctx.param_f32("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
+        let fragment_index = ctx.param_f32("fragment_index", 0.0).round().max(0.0) as u32;
 
         // 2. Re-trigger a background parse if the effective selection (or
         // the fit/recenter/translate_* authoring choice) changed since the
@@ -372,6 +377,8 @@ impl Primitive for GltfMeshSource {
             translate_x,
             translate_y,
             translate_z,
+            fragment_count,
+            fragment_index,
         );
         if key != self.last_key && self.pending_load.is_none() {
             if source_trace_enabled() {
@@ -422,7 +429,8 @@ impl Primitive for GltfMeshSource {
                     let result = cached_load_gltf_mesh(&path_buf, selector)
                         .map(|verts| apply_vertex_color_compat(verts, vertex_colors))
                         .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
-                        .map(|verts| apply_translate(verts, translate));
+                        .map(|verts| apply_translate(verts, translate))
+                        .and_then(|verts| crate::node_graph::physics_mesh::select_fragment(verts, fragment_count, fragment_index));
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
@@ -634,6 +642,8 @@ mod tests {
                 "mesh_index",
                 "primitive_index",
                 "material_index",
+                "fragment_count",
+                "fragment_index",
                 "max_capacity",
                 "fit",
                 "recenter",
@@ -927,11 +937,13 @@ mod gpu_tests {
         let params = params_at(path.to_str().unwrap(), -1.0, CAPACITY as f32);
         let mut prim = GltfMeshSource::new();
         settle(&mut prim, &backend, &device, &scratch, &params);
+        assert!(Primitive::warmup_pending(&prim), "the first upload is not published yet");
         assert!(prim.cached_verts.is_empty(), "staging upload should release CPU vertices");
         assert_eq!(prim.cached_verts.capacity(), 0, "staging upload should free CPU vertex backing");
         let frame1 = readback(&backend, slot);
 
         let unchanged = run_once(&mut prim, &backend, &device, &scratch, &params, frame_time());
+        assert!(!Primitive::warmup_pending(&prim), "published geometry finishes warmup");
         assert!(unchanged, "settled static frame must declare mark_outputs_unchanged");
         let frame2 = readback(&backend, slot);
         assert_eq!(frame1, frame2, "frame 2 must be bit-identical to frame 1 on a static asset");

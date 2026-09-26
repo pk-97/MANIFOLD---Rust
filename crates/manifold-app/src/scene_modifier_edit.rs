@@ -92,12 +92,18 @@ pub(crate) fn build_action(
             {
                 return Err(reason);
             }
+            let targets = if recipe.preset_metadata.as_ref()
+                .and_then(|m| m.scene_modifier.as_ref()).is_some_and(|r| r.shatter.is_some()) {
+                shatter_targets(graph, &scene)?
+            } else {
+                SceneTargetSelection::AllObjects
+            };
             let instance = prepare_new_scene_modifier(
                 graph,
                 recipe,
                 NodeId::new(manifold_core::short_id()),
                 scene,
-                SceneTargetSelection::AllObjects,
+                targets,
             )
             .map_err(|e| e.to_string())?;
             InsertSceneModifierCommand::new(
@@ -436,6 +442,30 @@ pub(crate) fn preparation_target_for_node_param(
         scale: binding.scale,
         offset: binding.offset,
     }))
+}
+
+/// Choose imported physical objects on attachment, leaving a scene's floor and
+/// ordinary props out of the saved Shatter target list. The normal target picker
+/// remains available for subsequent edits.
+fn shatter_targets(
+    graph: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &SceneNodeRef,
+) -> Result<SceneTargetSelection, String> {
+    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    let choices = manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(graph, scene)
+        .map_err(|e| e.to_string())?;
+    let vm = SceneVm::from_def(graph).ok_or("Scene objects are unavailable")?;
+    let objects: Vec<_> = vm.objects.iter().filter_map(|object| {
+        let SceneObjectVm::Known(row) = object else { return None };
+        if !row.physics_imported || row.physics.is_none() { return None; }
+        let node = descend_nodes(&graph.nodes, &row.visible_addr.scope_path)?
+            .iter().find(|n| n.id == row.visible_addr.node_doc_id)?;
+        choices.iter().find(|reference| reference.node == node.node_id).cloned()
+    }).collect();
+    if objects.is_empty() {
+        return Err("Enable Physics on an imported object before adding Shatter".into());
+    }
+    Ok(SceneTargetSelection::Explicit { objects })
 }
 
 fn descend_nodes<'a>(
@@ -872,6 +902,25 @@ mod routing_tests {
             offset: 0.0,
             default_mirrors_node_param: false,
         }
+    }
+
+    #[test]
+    fn shatter_defaults_to_imported_physics_objects_and_preserves_the_floor() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+        use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(
+            "../../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+        )).unwrap();
+        let scene = SceneNodeRef { scope: vec![], node: NodeId::new("scene") };
+        assert!(super::shatter_targets(&graph, &scene).is_err());
+        let mesh = graph.nodes.iter_mut().find(|n| n.id == 112).unwrap();
+        mesh.type_id = "node.gltf_mesh_source".into();
+        mesh.params.clear();
+        mesh.params.insert("path".into(), SerializedParamValue::String { value: "scan.glb".into() });
+        graph.wires.retain(|w| w.to_node != 112);
+        assert_eq!(super::shatter_targets(&graph, &scene).unwrap(), SceneTargetSelection::Explicit {
+            objects: vec![SceneNodeRef { scope: vec![], node: NodeId::new("physics_demo_114") }],
+        });
     }
 
     #[test]

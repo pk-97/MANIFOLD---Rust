@@ -2481,6 +2481,15 @@ fn serialized_to_f32(v: &SerializedParamValue) -> Option<f32> {
     }
 }
 
+/// Live writes must use the same numeric storage as the compiler's uniform
+/// seeds. Enum and Bool remain typed on authored nodes, but fused fields store
+/// all scalars as Float and cast to the shader type when packing uniforms.
+pub(crate) fn fused_param_value(value: &SerializedParamValue) -> ParamValue {
+    serialized_to_f32(value)
+        .map(ParamValue::Float)
+        .unwrap_or_else(|| value.clone().into())
+}
+
 fn param_value_to_f32(v: &ParamValue) -> Option<f32> {
     match v {
         ParamValue::Float(f) => Some(*f),

@@ -251,6 +251,7 @@ mod tests {
                     enabled_param: "gain".into(),
                     preparation_params: Vec::new(),
                     stages: Vec::new(),
+                    shatter: None,
                     initializers: vec![
                         SceneNodeInitializer {
                             target: SceneNodeRef {

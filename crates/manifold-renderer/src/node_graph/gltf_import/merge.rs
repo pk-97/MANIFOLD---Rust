@@ -127,14 +127,12 @@ pub struct MergePlan {
     /// The target scene's `node.render_scene` node id — informational, so
     /// the command doesn't have to re-search `def` for it.
     pub render_scene_node_id: u32,
-    /// New top-level nodes: one `GROUP_TYPE_ID` group per incoming
-    /// material, same shape [`build_import_graph`] emits per object. NO
-    /// camera, NO envmap, NO lights, NO lens — the target scene's chrome is
-    /// never touched or duplicated.
+    /// New object groups, matching [`build_import_graph`]: one compound group
+    /// for a static asset, or the existing material groups for animated assets.
+    /// Camera, environment, lights and lens remain owned by the target scene.
     pub new_nodes: Vec<EffectGraphNode>,
-    /// New top-level wires: each new group's single `object` output into
-    /// `render_scene`'s `object_{k}` port, `k` continuing from the target's
-    /// existing `objects` count.
+    /// New top-level wires: every material Object output into `render_scene`'s
+    /// `object_{k}` port, continuing from the target's existing draw count.
     pub new_wires: Vec<EffectGraphWire>,
     /// `render_scene`'s new `objects` param value (existing + incoming).
     pub new_objects_count: u32,
@@ -343,10 +341,38 @@ pub(super) fn merge_import_into_graph(
     // `object_{N}` port numbering) is a separate, already-correct offset,
     // unchanged.
     let local_k_offset = max_local_k_recursive(&def.nodes).map_or(0usize, |k| k as usize + 1);
-    for (i, m) in materials.iter().enumerate() {
-        let local_k = local_k_offset + i;
-        let port_index = existing_objects as usize + i;
-        let mut out = build_object_group(&mut import_ctx, local_k, i, port_index, m, &anim_prefix);
+    let static_compound = materials.len() > 1
+        && materials.iter().all(|m| {
+            m.animations.iter().all(Option::is_none)
+                && m.skin.is_none()
+                && m.morph.is_none()
+                && m.rigid_multi_node.is_none()
+        });
+    let asset_name = path
+        .file_stem()
+        .map(|s| sanitize_identifier(&s.to_string_lossy()))
+        .unwrap_or_else(|| "ImportedModel".to_string());
+    let mut outputs = if static_compound {
+        vec![build_static_compound_group(
+            &mut import_ctx,
+            local_k_offset,
+            existing_objects as usize,
+            &materials,
+            &asset_name,
+            &anim_prefix,
+        )]
+    } else {
+        materials
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let local_k = local_k_offset + i;
+                let port_index = existing_objects as usize + i;
+                build_object_group(&mut import_ctx, local_k, i, port_index, m, &anim_prefix)
+            })
+            .collect()
+    };
+    for mut out in outputs.drain(..) {
         // D5 scale sanity: seeded on THIS object's own transform_3d — an
         // ordinary, visible, undoable value, never hidden state. Every
         // object in one incoming asset shares the same normalize factor

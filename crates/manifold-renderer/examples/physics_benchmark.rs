@@ -6,9 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
 use manifold_core::Seconds;
-use manifold_renderer::node_graph::physics::{PhysicsStepScope, RigidBody, RigidSimulation};
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, SerializedParamValue};
+use manifold_renderer::node_graph::physics::{
+    MAX_BODIES, PhysicsStepScope, RigidBody, RigidSimulation,
+};
 use manifold_renderer::node_graph::transform::Transform;
 
 const JSON: &str = include_str!("../assets/generator-presets/PhysicsBoxes.json");
@@ -22,7 +24,14 @@ fn scalar(nodes: &BTreeMap<u32, &EffectGraphNode>, id: u32, name: &str) -> f32 {
     }
 }
 
-fn scene_inputs() -> ([Option<RigidBody>; 16], RigidBody, f32, f32, f32, f32) {
+fn scene_inputs() -> (
+    [Option<RigidBody>; MAX_BODIES],
+    RigidBody,
+    f32,
+    f32,
+    f32,
+    f32,
+) {
     let def: EffectGraphDef = serde_json::from_str(JSON).expect("PhysicsBoxes JSON");
     let nodes: BTreeMap<_, _> = def.nodes.iter().map(|node| (node.id, node)).collect();
     let body = |id: u32| RigidBody {
@@ -32,13 +41,17 @@ fn scene_inputs() -> ([Option<RigidBody>; 16], RigidBody, f32, f32, f32, f32) {
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(&nodes, id - 1, p)),
             billboard: false,
         },
+        enabled: true,
         shape: scalar(&nodes, id, "shape") as u32,
         kind: scalar(&nodes, id, "motion") as u32,
         mass: scalar(&nodes, id, "mass"),
         friction: scalar(&nodes, id, "friction"),
         bounce: scalar(&nodes, id, "bounce"),
+        collider: None,
+        fragment_parent: None,
+        release_count: 0.0,
     };
-    let mut bodies = [None; 16];
+    let mut bodies = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
         bodies[slot] = Some(body(id));
     }
@@ -54,7 +67,7 @@ fn scene_inputs() -> ([Option<RigidBody>; 16], RigidBody, f32, f32, f32, f32) {
 
 fn advance(
     sim: &mut RigidSimulation,
-    bodies: [Option<RigidBody>; 16],
+    bodies: [Option<RigidBody>; MAX_BODIES],
     prototype: RigidBody,
     count: f32,
     spacing: f32,
@@ -98,8 +111,8 @@ fn steady_samples(count: usize) {
     let _scope = PhysicsStepScope::with_preview_budget(true, std::time::Duration::ZERO);
     advance(
         &mut sim,
-        bodies,
-        prototype,
+        bodies.clone(),
+        prototype.clone(),
         count as f32,
         spacing,
         columns,
@@ -111,8 +124,8 @@ fn steady_samples(count: usize) {
     for frame in 1..=8 {
         advance(
             &mut sim,
-            bodies,
-            prototype,
+            bodies.clone(),
+            prototype.clone(),
             count as f32,
             spacing,
             columns,
@@ -126,8 +139,8 @@ fn steady_samples(count: usize) {
     for frame in 9..=16 {
         advance(
             &mut sim,
-            bodies,
-            prototype,
+            bodies.clone(),
+            prototype.clone(),
             count as f32,
             spacing,
             columns,
@@ -147,8 +160,8 @@ fn hitch_lag(count: usize) {
     let _scope = PhysicsStepScope::for_render(false);
     advance(
         &mut sim,
-        bodies,
-        prototype,
+        bodies.clone(),
+        prototype.clone(),
         count as f32,
         spacing,
         columns,
@@ -159,8 +172,8 @@ fn hitch_lag(count: usize) {
     );
     advance(
         &mut sim,
-        bodies,
-        prototype,
+        bodies.clone(),
+        prototype.clone(),
         count as f32,
         spacing,
         columns,

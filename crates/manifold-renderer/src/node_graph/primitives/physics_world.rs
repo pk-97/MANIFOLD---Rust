@@ -2,7 +2,7 @@ use crate::generators::mesh_common::InstanceTransform;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics::{BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, RigidSimulation};
+use crate::node_graph::physics::{BODY_PORTS, MAX_COPIES, POSE_PORTS, RigidSimulation};
 use crate::node_graph::primitive::Primitive;
 use std::borrow::Cow;
 
@@ -65,7 +65,7 @@ impl InstanceUploadState {
 crate::primitive! {
  name: PhysicsWorldNode,
  type_id: "node.physics_world",
- purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixteen independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
+ purpose: "Advance one shared Box3D rigid-body world at fixed 60 Hz ticks and output its body transforms. Sixty-four independently wired body descriptions and an optional reset-latched copies prototype share contacts. Gravity and simulation speed are live controls; Reset restores the authored starting poses and copy layout.",
  inputs: {
 body_0: RigidBody optional,
 body_1: RigidBody optional,
@@ -82,7 +82,55 @@ body_11: RigidBody optional,
 body_12: RigidBody optional,
 body_13: RigidBody optional,
 body_14: RigidBody optional,
- body_15: RigidBody optional,
+body_15: RigidBody optional,
+body_16: RigidBody optional,
+body_17: RigidBody optional,
+body_18: RigidBody optional,
+body_19: RigidBody optional,
+body_20: RigidBody optional,
+body_21: RigidBody optional,
+body_22: RigidBody optional,
+body_23: RigidBody optional,
+body_24: RigidBody optional,
+body_25: RigidBody optional,
+body_26: RigidBody optional,
+body_27: RigidBody optional,
+body_28: RigidBody optional,
+body_29: RigidBody optional,
+body_30: RigidBody optional,
+body_31: RigidBody optional,
+body_32: RigidBody optional,
+body_33: RigidBody optional,
+body_34: RigidBody optional,
+body_35: RigidBody optional,
+body_36: RigidBody optional,
+body_37: RigidBody optional,
+body_38: RigidBody optional,
+body_39: RigidBody optional,
+body_40: RigidBody optional,
+body_41: RigidBody optional,
+body_42: RigidBody optional,
+body_43: RigidBody optional,
+body_44: RigidBody optional,
+body_45: RigidBody optional,
+body_46: RigidBody optional,
+body_47: RigidBody optional,
+body_48: RigidBody optional,
+body_49: RigidBody optional,
+body_50: RigidBody optional,
+body_51: RigidBody optional,
+body_52: RigidBody optional,
+body_53: RigidBody optional,
+body_54: RigidBody optional,
+body_55: RigidBody optional,
+body_56: RigidBody optional,
+body_57: RigidBody optional,
+body_58: RigidBody optional,
+body_59: RigidBody optional,
+body_60: RigidBody optional,
+body_61: RigidBody optional,
+body_62: RigidBody optional,
+body_63: RigidBody optional,
 copies: RigidBody optional,
 gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional, speed: ScalarF32 optional, reset: ScalarF32 optional,
 copy_count: ScalarF32 optional, copy_spacing: ScalarF32 optional, copy_columns: ScalarF32 optional, copy_layout: ScalarF32 optional,
@@ -104,6 +152,54 @@ pose_12: Transform,
 pose_13: Transform,
 pose_14: Transform,
 pose_15: Transform,
+pose_16: Transform,
+pose_17: Transform,
+pose_18: Transform,
+pose_19: Transform,
+pose_20: Transform,
+pose_21: Transform,
+pose_22: Transform,
+pose_23: Transform,
+pose_24: Transform,
+pose_25: Transform,
+pose_26: Transform,
+pose_27: Transform,
+pose_28: Transform,
+pose_29: Transform,
+pose_30: Transform,
+pose_31: Transform,
+pose_32: Transform,
+pose_33: Transform,
+pose_34: Transform,
+pose_35: Transform,
+pose_36: Transform,
+pose_37: Transform,
+pose_38: Transform,
+pose_39: Transform,
+pose_40: Transform,
+pose_41: Transform,
+pose_42: Transform,
+pose_43: Transform,
+pose_44: Transform,
+pose_45: Transform,
+pose_46: Transform,
+pose_47: Transform,
+pose_48: Transform,
+pose_49: Transform,
+pose_50: Transform,
+pose_51: Transform,
+pose_52: Transform,
+pose_53: Transform,
+pose_54: Transform,
+pose_55: Transform,
+pose_56: Transform,
+pose_57: Transform,
+pose_58: Transform,
+pose_59: Transform,
+pose_60: Transform,
+pose_61: Transform,
+pose_62: Transform,
+pose_63: Transform,
 instances: Array(InstanceTransform),
 active_count: ScalarF32,
 physics_ms: ScalarF32,
@@ -150,11 +246,24 @@ impl Primitive for PhysicsWorldNode {
         self.simulation = RigidSimulation::default();
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let mut bodies = [None; MAX_BODIES];
+        let mut bodies = std::array::from_fn(|_| None);
+        let mut body_inputs_pending = false;
         for (i, port) in BODY_PORTS.iter().enumerate() {
-            bodies[i] = ctx.inputs.rigid_body(port);
+            if let Some(slot) = ctx.inputs.slot(port) {
+                body_inputs_pending |= !ctx.inputs.slot_content_ready(slot);
+                bodies[i] = ctx.inputs.rigid_body(port);
+                body_inputs_pending |= bodies[i].is_none();
+            }
         }
         let prototype = ctx.inputs.rigid_body("copies");
+        if let Some(slot) = ctx.inputs.slot("copies") {
+            body_inputs_pending |= !ctx.inputs.slot_content_ready(slot) || prototype.is_none();
+        }
+        if body_inputs_pending {
+            self.simulation.hold_pending(ctx.time.seconds);
+            ctx.mark_outputs_pending();
+            return;
+        }
         let gravity = [
             ctx.scalar_or_param("gravity_x", 0.0),
             ctx.scalar_or_param("gravity_y", -9.81),
@@ -167,7 +276,7 @@ impl Primitive for PhysicsWorldNode {
         let copy_columns = ctx.scalar_or_param("copy_columns", 16.0);
         let copy_layout = read_copy_layout(ctx);
         let result = self.simulation.advance_with_copy_layout(
-            bodies,
+            bodies.clone(),
             prototype,
             copy_count,
             copy_spacing,

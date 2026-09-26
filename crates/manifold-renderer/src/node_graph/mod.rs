@@ -177,5 +177,7 @@ pub use validation::{
     topological_sort, validate,
 };
 
+pub mod mesh_partition;
+pub mod physics_mesh;
 pub mod physics;
 pub mod physics_metrics;

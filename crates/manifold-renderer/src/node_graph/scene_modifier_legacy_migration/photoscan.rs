@@ -949,6 +949,7 @@ fn build_instance(
             preparation_params: Vec::new(),
             initializers: Vec::new(),
             calibrations: Vec::new(),
+            shatter: None,
             stages: vec![SceneModifierStageDef {
                 group: stage.node_id.clone(),
                 scope: SceneStageScope::EachObject,

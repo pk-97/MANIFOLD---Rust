@@ -264,6 +264,13 @@ pub enum ProjectAction {
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
     /// existing `DuplicateSceneObjectCommand` (D11).
     SceneSetupDuplicateObject(LayerId, u32, u32),
+    /// Duplicate one physical child mesh inside a compound scene object:
+    /// `(layer_id, render_scene_node_doc_id, physical_index)`.
+    SceneSetupDuplicateSubmesh(LayerId, u32, u32),
+    /// Enable standard imported-object physics: `(layer_id, render_scene_node_id, object_index)`.
+    SceneSetupEnablePhysics(LayerId, u32, u32),
+    /// Disable standard imported-object physics.
+    SceneSetupDisablePhysics(LayerId, u32, u32),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
     /// Opens a native file dialog (the app's existing open-file plumbing,
     /// same `rfd::FileDialog` pattern as `ClipReplaceAudioClicked`) and, on
@@ -276,7 +283,7 @@ pub enum ProjectAction {
     /// `(layer_id, render_scene_node_doc_id, object_index)`. Computes camera focus
     /// parameters to frame the selected object and writes them through the same
     /// param-change path every other slider uses.
-    SceneSetupFrameSelected(LayerId, u32, usize),
+    SceneSetupFrameSelected(LayerId, u32, u32),
     /// P5 "Add modifier" chip: `(layer_id, group_node_id, type_id)`.
     /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
     /// at the end of the object's stack (no position picker in v1 — D6's
@@ -296,6 +303,9 @@ pub enum ProjectAction {
     /// render_scene_node_doc_id, object_index)`. Dispatches the new
     /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupAddObject`.
     SceneSetupRemoveObject(LayerId, u32, u32),
+    /// Remove one physical child mesh inside a compound scene object:
+    /// `(layer_id, render_scene_node_doc_id, physical_index)`.
+    SceneSetupRemoveSubmesh(LayerId, u32, u32),
     /// per-row "✕" in the Lights section: `(layer_id,
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
     /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.

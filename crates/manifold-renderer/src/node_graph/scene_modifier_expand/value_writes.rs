@@ -2,17 +2,17 @@
 
 use super::value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 use super::{SceneModifierExpandError, SceneModifierNodeRoute};
-use crate::node_graph::parameters::{ParamType, ParamValue};
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::{Graph, NodeInstanceId};
 use ahash::AHashMap;
 use manifold_core::NodeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+use manifold_core::effect_graph_def::EffectGraphDef;
 use std::collections::BTreeMap;
 
 struct Destination {
     node: NodeInstanceId,
     param: String,
-    enum_as_number: bool,
+    fused: bool,
     baseline: ParamValue,
 }
 
@@ -73,7 +73,22 @@ impl PreparedGraphValueWrites {
                 host_index
                     .by_ref
                     .keys()
-                    .map(|reference| (reference.clone(), vec![reference.node.clone()]))
+                    .map(|reference| {
+                        let mut copies = vec![reference.node.clone()];
+                        // Internal Shatter draws retain the authored object's
+                        // visibility and other properties under live edits.
+                        for modifier in &owner.scene_modifiers {
+                            if modifier.graph.preset_metadata.as_ref()
+                                .and_then(|m| m.scene_modifier.as_ref())
+                                .is_none_or(|r| r.shatter.is_none()) { continue; }
+                            for piece in 0..32 {
+                                let copy = super::compiler::shatter::copy_id(&modifier.id, &reference.node, "object", piece);
+                                if graph.instance_by_node_id(&copy).is_none() { break; }
+                                copies.push(copy);
+                            }
+                        }
+                        (reference.clone(), copies)
+                    })
                     .collect()
             };
             let mut leaf_params = BTreeMap::new();
@@ -129,7 +144,7 @@ impl PreparedGraphValueWrites {
                                 .ok_or_else(|| invalid(format!("missing fused target {target}")))?;
                             (runtime_id, field.clone(), true)
                         };
-                    let parameter = graph
+                    graph
                         .get_node(runtime_id)
                         .and_then(|node| {
                             node.node
@@ -148,7 +163,7 @@ impl PreparedGraphValueWrites {
                     destinations.push(Destination {
                         node: runtime_id,
                         param,
-                        enum_as_number: fused && parameter.ty == ParamType::Int,
+                        fused,
                         baseline,
                     });
                     // A fragment's cutter shares only its partition controls.
@@ -184,7 +199,7 @@ impl PreparedGraphValueWrites {
                         destinations.push(Destination {
                             node: cutter,
                             param: source.param.clone(),
-                            enum_as_number: false,
+                            fused: false,
                             baseline,
                         });
                     }
@@ -235,10 +250,8 @@ impl PreparedGraphValueWrites {
             for write in &batch.writes {
                 let value = write.source.value(local)?;
                 for destination in &write.destinations {
-                    let value = match (destination.enum_as_number, value) {
-                        (true, Some(SerializedParamValue::Enum { value: index })) => {
-                            ParamValue::Float(*index as f32)
-                        }
+                    let value = match (destination.fused, value) {
+                        (true, Some(value)) => crate::node_graph::freeze::install::fused_param_value(value),
                         (_, Some(value)) => value.clone().into(),
                         (_, None) => destination.baseline.clone(),
                     };

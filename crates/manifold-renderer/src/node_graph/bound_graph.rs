@@ -574,7 +574,7 @@ pub fn apply_inner_param_overrides(
                 let Some((_, inst)) = node_map.iter().find(|(nid, _)| nid == fused_id) else {
                     continue;
                 };
-                let _ = graph.set_param(*inst, field, value.clone().into());
+                let _ = graph.set_param(*inst, field, super::freeze::install::fused_param_value(value));
             }
         }
     }
@@ -781,6 +781,43 @@ mod tests {
             "fused-away inner-param override must reach the live kernel via the \
              retarget map (BUG-006)",
         );
+    }
+
+    #[test]
+    fn fused_live_writes_preserve_enum_and_bool_uniform_values() {
+        use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
+        for prepared in [false, true] {
+            let mut graph = Graph::new();
+            // A scalar destination stands in for the numeric field emitted by
+            // fusion. The authored enum/toggle still retains its typed value.
+            let fused = graph.add_node_named("fused", Box::new(AffineTransform::new()));
+            graph.set_node_id(fused, NodeId::new("fused_region_0"));
+            let node_map = vec![(NodeId::new("fused_region_0"), fused)];
+            let retarget = AHashMap::from_iter([(
+                ("gain".into(), "scale".into()),
+                (NodeId::new("fused_region_0"), "scale".into()),
+            )]);
+            let mut def = def_scale_named("gain", 0.0);
+            let mut bound = BoundGraph::new(vec![], &mut graph, None);
+            bound.fused_retarget = retarget.clone();
+            if prepared {
+                bound.prepared_value_writes = Some(PreparedGraphValueWrites::prepare(
+                    &def, &[], &graph, &retarget,
+                ).unwrap());
+            }
+            for (value, expected) in [
+                (SerializedParamValue::Enum { value: 4 }, 4.0),
+                (SerializedParamValue::Bool { value: true }, 1.0),
+                (SerializedParamValue::Bool { value: false }, 0.0),
+                (SerializedParamValue::Int { value: 3 }, 3.0),
+                (SerializedParamValue::Float { value: 0.75 }, 0.75),
+            ] {
+                def.nodes[0].params.insert("scale".into(), value);
+                bound.apply_inner_overrides(&mut graph, &node_map, Some(&def));
+                assert_eq!(scale_of(&graph, fused), ParamValue::Float(expected),
+                    "prepared={prepared}: live uniforms must match compiler storage");
+            }
+        }
     }
 
     /// A binding whose target node is `feedback` and whose declared default is

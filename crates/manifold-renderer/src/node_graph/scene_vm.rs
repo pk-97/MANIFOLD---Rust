@@ -179,8 +179,14 @@ pub struct SkinVm {
 /// clippy `large_enum_variant` reason as [`LightRow`]/[`OrbitCameraRow`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneObjectKnownRow {
+    /// A virtual parent for the material draws of one imported static model.
+    pub is_group: bool,
+    /// Children follow their parent in `SceneVm.objects`; indices still refer
+    /// to the physical render slots used by graph editing commands.
+    pub parent_group_id: Option<u32>,
     pub index: usize,
-    /// The `node.scene_object`'s own doc id — the address
+    /// Stable selection identity: the group id for a virtual parent, otherwise
+    /// the `node.scene_object`'s own doc id — the address
     /// `RenameSceneObjectCommand`/the eye-toggle write take, and the same
     /// value `group_node_id` resolved to pre-D12 when an object happened to
     /// be grouped.
@@ -225,6 +231,18 @@ pub struct SceneObjectKnownRow {
     /// wired into `emissive_map` or `base_color_map`. `None` when neither
     /// map has a layer_source producer.
     pub skin: Option<SkinVm>,
+    /// Standard physics discovered on this object. The body is inside the
+    /// object group for imported models and at root for hand-built objects.
+    pub physics: Option<PhysicsVm>,
+    pub physics_imported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysicsVm {
+    pub body_node_id: u32,
+    pub body_scope_path: Vec<u32>,
+    pub enabled: bool,
+    pub imported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -557,7 +575,7 @@ impl SceneVm {
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
-        let object_count = objects.len();
+        let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
 
@@ -621,8 +639,12 @@ impl SceneVm {
 }
 
 fn light_casts_shadows(level: &Level, light: &SceneLightVm) -> bool {
-    let SceneLightVm::Known(row) = light else { return false };
-    let Some(node) = level.node(row.node_doc_id) else { return false };
+    let SceneLightVm::Known(row) = light else {
+        return false;
+    };
+    let Some(node) = level.node(row.node_doc_id) else {
+        return false;
+    };
     param_f32(node, "cast_shadows", 0.0) > 0.5
 }
 
@@ -649,10 +671,11 @@ fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
 /// `Custom`, never errors).
 fn find_scene_object_in_group<'a>(
     group: &'a manifold_core::effect_graph_def::GroupDef,
+    output_port: &str,
 ) -> Option<(&'a EffectGraphNode, Level<'a>)> {
     let inner = Level { nodes: &group.nodes, wires: &group.wires };
-    let out_node = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
-    let (producer_id, _) = inner.producer(out_node.id, "object")?;
+    let (producer_id, _) = inner.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+        .find_map(|out| inner.producer(out.id, output_port))?;
     let node = inner.node(producer_id)?;
     (node.type_id == SCENE_OBJECT_TYPE_ID).then_some((node, inner))
 }
@@ -731,6 +754,7 @@ fn assign_shared_material_counts(objects: &mut [SceneObjectVm]) {
             complete = false;
             continue;
         };
+        if row.is_group { continue; }
         let MaterialVm::Known(material) = &row.material else {
             complete = false;
             continue;
@@ -769,25 +793,28 @@ fn trace_objects(
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
     let mut out = Vec::with_capacity(objects);
+    let mut seen_groups = HashSet::new();
     for k in 0..objects {
         let port = format!("object_{k}");
-        let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
-            Some((producer_id, _)) => match level.node(producer_id) {
+        let (mut row, source_vertex_count) = match level.producer(scene_node.id, &port) {
+            Some((producer_id, output_port)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
                     trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set)
                 }
                 Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
-                    match producer_node.group.as_deref().and_then(find_scene_object_in_group) {
-                        Some((inner_node, inner_level)) => {
-                            trace_scene_object(
-                                &inner_level,
-                                vec![producer_id],
-                                inner_node,
-                                Some(producer_id),
-                                k,
-                                layer_id_set,
-                            )
-                        }
+                    match producer_node
+                        .group
+                        .as_deref()
+                        .and_then(|group| find_scene_object_in_group(group, output_port))
+                    {
+                        Some((inner_node, inner_level)) => trace_scene_object(
+                            &inner_level,
+                            vec![producer_id],
+                            inner_node,
+                            Some(producer_id),
+                            k,
+                            layer_id_set,
+                        ),
                         None => (SceneObjectVm::Custom { index: k }, None),
                     }
                 }
@@ -799,8 +826,50 @@ fn trace_objects(
             Some(v) => vertex_count += v as u64,
             None => vertex_count_exact = false,
         }
+        if let SceneObjectVm::Known(child) = &mut row
+            && let Some(group_id) = child.group_node_id
+            && let Some(group_node) = level.node(group_id)
+            && let Some(group) = group_node.group.as_ref()
+        {
+            let inner = Level { nodes: &group.nodes, wires: &group.wires };
+            if let Some((parent_source, _)) = inner.producer(child.object_node_id, "parent_transform") {
+                if seen_groups.insert(group_id) {
+                    let mut parent = child.clone();
+                    parent.is_group = true;
+                    parent.object_node_id = group_id;
+                    parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
+                    parent.visible_addr.param_id = "parent_visible".into();
+                    parent.visible_value = inner.node(child.object_node_id)
+                        .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
+                    parent.visible_driven = inner.producer(child.object_node_id, "parent_visible").is_some();
+                    let authored = inner.node(parent_source)
+                        .filter(|node| node.type_id == "node.transform_3d")
+                        .map(|node| node.id)
+                        .or_else(|| group_body_id(&inner).and_then(|body| inner.producer(body, "transform").map(|(id, _)| id)));
+                    parent.transform = authored.map(|id| trace_transform(&inner, vec![group_id], id));
+                    parent.material = MaterialVm::None;
+                    parent.skin = None;
+                    parent.transform_chain.clear();
+                    parent.modifier_chain.clear();
+                    out.push(SceneObjectVm::Known(parent));
+                }
+                child.parent_group_id = Some(group_id);
+                child.physics = None;
+                child.physics_imported = false;
+            }
+        }
         out.push(row);
     }
+    // A duplicated child may occupy a later render slot, after another group.
+    // Keep the outliner in parent/children order without changing physical slots.
+    let group_indices: HashMap<_, _> = out.iter().filter_map(|row| match row {
+        SceneObjectVm::Known(row) if row.is_group => Some((row.object_node_id, row.index)),
+        _ => None,
+    }).collect();
+    out.sort_by_key(|row| match row {
+        SceneObjectVm::Known(row) => (row.parent_group_id.and_then(|id| group_indices.get(&id).copied()).unwrap_or(row.index), row.parent_group_id.is_some(), row.index),
+        SceneObjectVm::Custom { index } => (*index, false, *index),
+    });
     assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)
 }
@@ -857,6 +926,12 @@ fn walk_transform_chain(
             transform_vm = Some(trace_transform(&current_level, sp, n.id));
             break;
         }
+        if n.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID && port == "pose" {
+            cursor = group_body_id(&current_level)
+                .and_then(|id| current_level.producer(id, "transform"));
+            parseable = false;
+            continue;
+        }
         if n.type_id == "node.physics_world" {
             // A pose is paired with one description input. Follow that body's
             // authored transform for editing; the live simulated pose is not a
@@ -891,6 +966,69 @@ fn walk_transform_chain(
 pub fn physics_body_doc_id(def: &EffectGraphDef, object_id: u32) -> Option<u32> {
     let level = Level { nodes: &def.nodes, wires: &def.wires };
     physics_body_in_level(&level, object_id)
+}
+
+fn physics_vm(
+    level: &Level<'_>,
+    scope_path: &[u32],
+    object_id: u32,
+    group_node_id: Option<u32>,
+) -> Option<PhysicsVm> {
+    let (body_id, body_scope, imported) = if group_node_id.is_some() {
+        let body_id = group_body_id(level)?;
+        (
+            body_id,
+            scope_path.to_vec(),
+            mesh_source_is_gltf(level, object_id),
+        )
+    } else {
+        let (world_id, pose_port) = level.producer(object_id, "transform")?;
+        let world = level.node(world_id)?;
+        if world.type_id != "node.physics_world" {
+            return None;
+        }
+        let slot = pose_port.strip_prefix("pose_")?;
+        let (body_id, _) = level.producer(world_id, &format!("body_{slot}"))?;
+        let body = level.node(body_id)?;
+        if body.type_id != "node.rigid_body" {
+            return None;
+        }
+        (
+            body_id,
+            scope_path.to_vec(),
+            mesh_source_is_gltf(level, object_id),
+        )
+    };
+    Some(PhysicsVm {
+        body_node_id: body_id,
+        body_scope_path: body_scope,
+        enabled: level
+            .node(body_id)
+            .is_none_or(|node| param_bool(node, "enabled", true)),
+        imported,
+    })
+}
+
+fn param_bool(node: &EffectGraphNode, name: &str, default: bool) -> bool {
+    match node.params.get(name) {
+        Some(SerializedParamValue::Bool { value }) => *value,
+        _ => default,
+    }
+}
+
+fn group_body_id(level: &Level<'_>) -> Option<u32> {
+    level.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).find_map(|output| {
+        let (body, _) = level.producer(output.id, "body")?;
+        (level.node(body)?.type_id == "node.rigid_body").then_some(body)
+    })
+}
+
+fn mesh_source_is_gltf(level: &Level<'_>, object_id: u32) -> bool {
+    // Eligibility matches the command: directly rendered rigid scan geometry.
+    level
+        .producer(object_id, "vertices")
+        .and_then(|(id, _)| level.node(id))
+        .is_some_and(|n| n.type_id == "node.gltf_mesh_source")
 }
 
 fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
@@ -973,6 +1111,8 @@ fn trace_scene_object(
                     }
                 })
         });
+    let physics_imported = mesh_source_is_gltf(level, object_node_id);
+    let physics = physics_vm(level, &object_scope_path, object_node_id, group_node_id);
 
     // Modifier chain (D6, re-anchored per D12): walk backward from the
     // scene_object's OWN `vertices` input instead of a group output's
@@ -1025,6 +1165,8 @@ fn trace_scene_object(
     chain.reverse(); // wire order: source → … → scene_object.
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
+        is_group: false,
+        parent_group_id: None,
         index: k,
         object_node_id,
         group_node_id,
@@ -1039,6 +1181,8 @@ fn trace_scene_object(
         modifier_chain: chain,
         modifier_chain_parseable: parseable,
         skin,
+        physics,
+        physics_imported,
     }));
     (row, source_vertex_count)
 }
@@ -1176,7 +1320,9 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
         if guard > 8 {
             break;
         }
-        let Some(node) = level.node(node_id) else { return CameraVm::None };
+        let Some(node) = level.node(node_id) else {
+            return CameraVm::None;
+        };
         if node.type_id == CAMERA_LENS_TYPE_ID {
             lens_node_doc_id = Some(node.id);
             match level.producer(node.id, "camera") {
@@ -1184,27 +1330,41 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
                     node_id = next;
                     continue;
                 }
-                None => return CameraVm::Custom { node_doc_id: node.id, lens: trace_lens(level, node.id) },
+                None => {
+                    return CameraVm::Custom {
+                        node_doc_id: node.id,
+                        lens: trace_lens(level, node.id),
+                    };
+                }
             }
         }
         break;
     }
-    let Some(node) = level.node(node_id) else { return CameraVm::None };
+    let Some(node) = level.node(node_id) else {
+        return CameraVm::None;
+    };
     let lens = lens_node_doc_id.and_then(|id| trace_lens(level, id));
     match node.type_id.as_str() {
-        t if t == ORBIT_CAMERA_TYPE_ID => {
-            CameraVm::Orbit(Box::new(OrbitCameraRow { node_doc_id: node.id, lens }))
-        }
-        t if t == FREE_CAMERA_TYPE_ID => {
-            CameraVm::Free(Box::new(FreeCameraRow { node_doc_id: node.id, lens }))
-        }
-        t if t == LOOK_AT_CAMERA_TYPE_ID => {
-            CameraVm::LookAt(Box::new(LookAtCameraRow { node_doc_id: node.id, lens }))
-        }
-        t if t == LOOP_CAMERA_TYPE_ID => {
-            CameraVm::Loop(Box::new(LoopCameraRow { node_doc_id: node.id, lens }))
-        }
-        _ => CameraVm::Custom { node_doc_id: node.id, lens },
+        t if t == ORBIT_CAMERA_TYPE_ID => CameraVm::Orbit(Box::new(OrbitCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        t if t == FREE_CAMERA_TYPE_ID => CameraVm::Free(Box::new(FreeCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        t if t == LOOK_AT_CAMERA_TYPE_ID => CameraVm::LookAt(Box::new(LookAtCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        t if t == LOOP_CAMERA_TYPE_ID => CameraVm::Loop(Box::new(LoopCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        _ => CameraVm::Custom {
+            node_doc_id: node.id,
+            lens,
+        },
     }
 }
 
@@ -1212,7 +1372,9 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
     let Some((node_id, _)) = level.producer(scene_node.id, "envmap") else {
         return EnvironmentVm::None;
     };
-    let Some(node) = level.node(node_id) else { return EnvironmentVm::None };
+    let Some(node) = level.node(node_id) else {
+        return EnvironmentVm::None;
+    };
 
     if node.type_id == SWITCH_TEXTURE_TYPE_ID {
         // Importer shape: in_0 = bake_environment, in_1 = exposure(hdri_source).
@@ -1256,7 +1418,9 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
     let Some((node_id, _)) = level.producer(scene_node.id, "atmosphere") else {
         return AtmosphereVm::None;
     };
-    let Some(node) = level.node(node_id) else { return AtmosphereVm::None };
+    let Some(node) = level.node(node_id) else {
+        return AtmosphereVm::None;
+    };
     if node.type_id != ATMOSPHERE_TYPE_ID {
         // Some other producer wired into `atmosphere` — D3 has no "custom
         // atmosphere row" concept distinct from None; treat as unwired-shape
@@ -1655,11 +1819,15 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.objects.len(), 2);
         match &vm.objects[0] {
-            SceneObjectVm::Known(row) if row.group_node_id == Some(2) => assert_eq!(row.name, "Grouped"),
+            SceneObjectVm::Known(row) if row.group_node_id == Some(2) => {
+                assert_eq!(row.name, "Grouped")
+            }
             other => panic!("expected grouped Known object at index 0, got {other:?}"),
         }
         match &vm.objects[1] {
-            SceneObjectVm::Known(row) if row.group_node_id.is_none() => assert_eq!(row.name, "Bare"),
+            SceneObjectVm::Known(row) if row.group_node_id.is_none() => {
+                assert_eq!(row.name, "Bare")
+            }
             other => panic!("expected ungrouped Known object at index 1, got {other:?}"),
         }
     }
