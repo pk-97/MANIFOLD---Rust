@@ -449,7 +449,11 @@ Making sampling reproducible exposed a mesh sign-classification dependency on ra
 
 Final checkpoint validation passes 130 renderer fluid/cache tests, all 17 production coupling tests, four compound-proxy tests, the mesh/seed/boundary regressions and five source-identity tests. Focused physics/fluids/renderer clippy passes. These are CPU numerical and persistence checks; sustained rendered coupling acceptance and the app Bake workflow remain open.
 
-**Still required:** project transport/tempo mapping, collected asset references, and input identity/range validation when selecting a cache. Existing arbitrary-scene Record/Playback guards remain until that contract is complete. The journal and paired codec are infrastructure, not a completed app Bake workflow. Track remaining work in `BUG-vglg.17`.
+**Collected assets checkpoint:** physics take/cache directories now use the existing file-loader inventory and `Media/Physics`; fluid role-source meshes use `Media/Meshes`. Folder destinations are reserved atomically, keeping same-named sources separate. V1/V2 serialization makes owned in-project string references relative on a snapshot, preserving absolute live paths and shared definitions. Copied projects resolve their own assets even while the original project remains available. Modifier-local/host bindings, empty-layer defaults, source calibration and missing paths are covered by the 100 passing IO library tests. All three renderer file-loader registry checks and focused core/IO/renderer clippy pass. This extends collection, not the app's Bake controls.
+
+**Still required:** project transport/tempo mapping and input identity/range validation when selecting a cache. Existing arbitrary-scene Record/Playback guards remain until that contract is complete. The journal and paired codec are infrastructure, not a completed app Bake workflow. Track remaining work in `BUG-vglg.17`.
+
+**Timing/asset seam audit, 2026-09-27:** `PresetRuntime::render`/`run` already pass the host's typed beat/second pair in `FrameTime`; `FluidRuntime::observe_coupled_scene_with_field` derives simulation time from its accepted transport and Simulation Speed. Record that association at the existing observation/handoff boundary. Do not infer beats from a fixed BPM or introduce another clock or modulation evaluator. Preserve speed-zero spans and the take's nonzero project origin; finalization must commit a held tail even when no native tick advances. Beat-range authoring uses the existing `TempoMap`/`TempoMapConverter` and recorded tempo provenance, with explicit incompatibility after a relevant timing edit. `manifold-io::collect::collect_asset_paths` remains the sole asset inventory; cache/take directories use the existing file-loader table, modifier bindings, folder copying and `PathResolver`.
 
 - **Entry/read-back:** §5/§6; `CacheWriter`, `CacheReader`, current asset serialization and offline analyzer inputs. Pin new manifest/take structs using existing asset references and camelCase conventions.
 - **Deliver:** timestamped input-take writer/reader, content/dependency hashes, new cache manifest, legacy readers, partial-range metadata and explicit missing-input errors. No UI bake job yet.
@@ -480,7 +484,7 @@ Coverage: shared API P1; first app use P2; general engine geometry P3; scene rol
 4. Fixed physics time and captured input, independent of output FPS; native stability controls stay internal.
 5. Show the first editable fluid in the app at P2, before advanced draft optimisation.
 6. Reuse existing collision proxies and cooking; visible scans keep their detail.
-7. Shared forces, rigid-to-fluid collision and two-way pressure/viscous feedback are included. P8b has verified native pressure and joint viscosity foundations; production coupling remains unfinished. A substantial solver rewrite triggers the scope discussion Peter requested.
+7. Shared forces, rigid-to-fluid collision and two-way pressure/viscous feedback are included. P8b's native exchange and authored shared-worker scene path are verified locally; sustained rendered acceptance remains unfinished. A substantial solver rewrite triggers the scope discussion Peter requested.
 8. Quality changes can change detailed motion and require restart/rebake.
 
 ## 10. Deferred, with revival triggers

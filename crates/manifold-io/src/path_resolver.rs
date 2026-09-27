@@ -1,4 +1,4 @@
-use crate::collect::{collect_asset_paths, has_calibrated_scene_asset, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
+use crate::collect::{collect_asset_paths, re_point_scene_modifier_asset, re_point_string_param, AssetTarget};
 use manifold_core::file_loader::NodeFileLoad;
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
@@ -84,11 +84,12 @@ impl PathResolver {
                         &mut result,
                     );
                 }
-                AssetTarget::StringParam { layer_id, key } => {
+                AssetTarget::StringParam { layer_id, key, load } => {
                     Self::resolve_string_param(
                         project,
                         &layer_id,
                         &key,
+                        load,
                         &asset.path,
                         &project_dir,
                         &search_dirs,
@@ -344,6 +345,7 @@ impl PathResolver {
         project: &mut Project,
         layer_id: &LayerId,
         key: &str,
+        load: NodeFileLoad,
         path: &Path,
         project_dir: &str,
         search_dirs: &HashSet<String>,
@@ -354,49 +356,30 @@ impl PathResolver {
             return;
         }
 
-        if path.exists() {
+        let path_is_valid = match load {
+            NodeFileLoad::File(_) => path.is_file(),
+            NodeFileLoad::Folder(_) => path.is_dir(),
+        };
+        if path.is_absolute() && path_is_valid {
             result.already_valid_count += 1;
             return;
         }
 
-        let resolved = Self::try_resolve(&path_str, None, -1, project_dir, search_dirs);
+        let resolved = match load {
+            NodeFileLoad::File(_) => Self::try_resolve(&path_str, Some(&path_str), -1, project_dir, search_dirs),
+            NodeFileLoad::Folder(_) => {
+                Self::try_resolve_directory(&path_str, Some(&path_str), project_dir, search_dirs)
+            }
+        };
         let Some(resolved_path) = resolved else {
             result.unresolved_count += 1;
             result.unresolved.push(path_str);
             return;
         };
 
-        if has_calibrated_scene_asset(project, layer_id, key) {
-            if re_point_string_param(project, layer_id, key, &path_str, &resolved_path) {
-                result.resolved_count += 1;
-            } else {
-                result.unresolved_count += 1;
-                result.unresolved.push(path_str);
-            }
-            return;
-        }
-        let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
-            return;
-        };
-        let mut written = 0;
-        for clip in &mut layer.clips {
-            let Some(params) = clip.string_params.as_mut() else {
-                continue;
-            };
-            let Some(current) = params.get_mut(key) else {
-                continue;
-            };
-            if *current == path_str {
-                *current = resolved_path.clone();
-                written += 1;
-            }
-        }
-
-        if written > 0 {
+        if re_point_string_param(project, layer_id, key, &path_str, &resolved_path) {
             result.resolved_count += 1;
         } else {
-            // The enumerated value had no per-clip override home to write back
-            // into (it was the preset-def default) — nothing to re-point.
             result.unresolved_count += 1;
             result.unresolved.push(path_str);
         }

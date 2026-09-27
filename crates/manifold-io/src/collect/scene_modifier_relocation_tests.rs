@@ -156,7 +156,20 @@ fn scene_modifier_source_relocation_collect_all_save_reload_preserves_calibratio
     let loaded_graph = loaded_layer
         .generator_graph()
         .expect("reloaded source graph");
-    assert_eq!(frame_snapshot(loaded_graph), moved_frame);
+    let loaded_frame = frame_snapshot(loaded_graph);
+    assert_eq!(loaded_frame.0, moved_frame.0);
+    assert_eq!(loaded_frame.1, moved_frame.1);
+    assert_eq!(loaded_frame.2, moved_frame.2);
+    assert_eq!(loaded_frame.3, moved_frame.3);
+    // Portable serialization stores a relative source; loading may canonicalize
+    // its absolute spelling (e.g. /var -> /private/var). Calibration is intact
+    // and its source hash must match the resolved definition at that spelling.
+    let loaded_source = loaded_graph.nodes.iter()
+        .find(|node| node.node_id == NodeId::new(SOURCE_NODE)).unwrap();
+    assert_eq!(loaded_frame.4,
+        manifold_core::scene_source_identity::scene_source_definition_hash(loaded_graph, loaded_source).unwrap());
+    let loaded_path = &loaded_layer.clips[0].string_params.as_ref().unwrap()[SOURCE_KEY];
+    assert_eq!(std::fs::canonicalize(loaded_path).unwrap(), std::fs::canonicalize(expected).unwrap());
     let _ = std::fs::remove_dir_all(root);
 }
 

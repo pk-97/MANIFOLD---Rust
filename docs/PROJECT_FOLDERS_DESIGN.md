@@ -47,7 +47,7 @@ no database.** Detection is structural: `is_project_folder(dir)` = `dir` contain
 new identity or addressing system — the folder IS the project.
 
 **D2 — Media lives outside the archive, in `<Project>/Media/` subfolders by family**
-(`Media/Video/`, `Media/Audio/`, `Media/Meshes/`, `Media/HDRIs/`).
+(`Media/Video/`, `Media/Audio/`, `Media/Meshes/`, `Media/HDRIs/`, `Media/Images/`, `Media/Physics/`).
 Rejected: media as zip entries inside the archive — the archive is rewritten on every save (dedup →
 journal → rename, `save_v2_archive` at crates/manifold-io/src/archive.rs), and pushing GBs
 through that path makes every save pay media cost. Rejected:
@@ -102,6 +102,8 @@ already proves the list rots on arrival.
 
 **D5a — Def-default-only path params materialize a per-clip override on re-link/collect (decided 2026-09-02, k3 (lead), from the P2 lane's write-back-home gap).** The lane found it mid-P2: when a flagged path param's value lives only in the preset-def default (no per-clip override), `resolve_all`/collect has no `string_params` entry to write into, so a re-link silently has no home. The rule: when re-linking or collecting such a param, the write-back **materializes** a per-clip `string_params` entry with the resolved path — never writes the preset def's `default_value` itself (defs are shared across clips and presets; mutating them would silently move other clips' media). Materialized overrides stay canonical: same precedence rules, no new home.
 
+Local extension, 2026-09-27: a layer with no clips instead receives an owned graph snapshot with the relocated default; the shared preset definition remains unchanged. On V1/V2 save, `saver::portable_project_json` uses the same inventory and relocation helpers to make owned in-project string paths relative on a serialization snapshot. Live paths remain absolute. Loading resolves those paths against the opened project's directory, including folder-valued host bindings. `physics_cache_empty_layer_collects_an_owned_default`, `physics_cache_collects_save_reload_and_preserves_take_files` and `physics_cache_modifier_local_and_host_bindings_collect_and_reload` verify collection and reopening a copied project while the original still exists; the calibrated-source relocation test verifies preserved calibration with a refreshed resolved-path hash.
+
 **D6 — Collect All and Save is copy-only, then re-point, then save.** For each external
 `AssetRef` outside the project folder: copy (never move, never delete the source) into the
 right `Media/` family folder, dedup identical sources by content hash (SHA-256 full), then
@@ -109,6 +111,8 @@ re-point the field to the relative form, then run the normal save path. Runs off
 thread with a progress dialog; on failure mid-way, copied files stay and paths that already
 re-pointed stay re-pointed — every intermediate state is loadable, so there is no
 half-broken-project state by construction.
+
+Directory copies deduplicate shared sources by canonical source path. Each distinct source reserves a fresh destination atomically, adding a suffix when its basename already exists; directories are never merged by basename. `physics_cache_same_basename_folders_get_distinct_destinations` verifies preservation of both sources and a pre-existing destination.
 
 **D7 — The breadcrumb rides along for free.** `breadcrumb_path_for` (breadcrumb.rs:149)
 appends to the project path, so inside a project folder the breadcrumb is already inside.
@@ -220,7 +224,8 @@ types load files — today `node.gltf_mesh_source`, `node.gltf_skinned_mesh_sour
 `node.gltf_morph_deltas_source`, `node.gltf_morph_weights`,
 `node.gltf_skeleton_pose`, `node.gltf_animation_source`, `node.gltf_texture_source`
 (GLB → Mesh), `node.hdri_source` (→ Hdri), `node.image_folder` (folder → Images,
-new family). (`node.skin_mesh` is the pure per-vertex GPU skinning kernel — no
+new family), `node.rigid_body` / `node.fluid_role_source` (file → Mesh), and
+`node.fluid_surface` (take/cache folder → Physics). (`node.skin_mesh` is the pure per-vertex GPU skinning kernel — no
 file IO; the GLB it deforms is loaded by `node.gltf_skinned_mesh_source`
 `node.gltf_skeleton_pose`.) The
 `file_path`/`is_file_path` schema field stays for serde compat but collection no longer
@@ -229,7 +234,7 @@ depends on it. Also in P5: `TimelineClip.image_path` joins the inventory with a 
 folder-valued params copy recursively through the existing video-folder arm (BUG-3i1p
 (folder params uncollectable)).
 Enforcement, so the class stays closed: a renderer test asserts every primitive declaring
-a path/folder string param has an entry in the core table (a new file-loading primitive
+a path/folder/cache_path string param has an entry in the core table (a new file-loading primitive
 without an entry is a red test, not a silent skip); an io test source-scans
 `manifold-core` model files for `pub …path…: String` fields and asserts each is
 inventory-covered. Gates: `cargo nextest run -p manifold-io -p manifold-core -p
