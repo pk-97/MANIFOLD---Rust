@@ -103,7 +103,8 @@ crate::primitive! {
         domain: Transform optional, emitter: Transform optional, obstacle: Transform optional, initial_volume: Transform optional,
         resolution: ScalarF32 optional, domain_size: ScalarF32 optional, fill_height: ScalarF32 optional,
         viscosity: ScalarF32 optional, surface_tension: ScalarF32 optional,
-        gravity: ScalarF32 optional, emission: ScalarF32 optional, inflow_speed: ScalarF32 optional,
+        gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
+        emission: ScalarF32 optional, inflow_speed: ScalarF32 optional,
         speed: ScalarF32 optional, reset: ScalarF32 optional, surface_subdivisions: ScalarF32 optional,
         liquid_density: ScalarF32 optional,
         surface_particle_scale: ScalarF32 optional, surface_smoothing: ScalarF32 optional,
@@ -131,7 +132,9 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liquid_density"), label: "Liquid Density", ty: ParamType::Float, default: ParamValue::Float(1000.0), range: Some((1.0, 5000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("viscosity"), label: "Viscosity", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("surface_tension"), label: "Surface Tension", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("emission"), label: "Pour", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &["Off", "On"] },
         ParamDef { name: Cow::Borrowed("inflow_speed"), label: "Flow Speed", ty: ParamType::Float, default: ParamValue::Float(1.5), range: Some((0.0, 5.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("speed"), label: "Simulation Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
@@ -466,7 +469,11 @@ impl Primitive for FluidSurface {
             emitter: emitter.unwrap_or(defaults.emitter),
             obstacle: obstacle.unwrap_or(defaults.obstacle),
             obstacle_enabled: obstacle.is_some(),
-            gravity: ctx.scalar_or_param("gravity", -9.81),
+            gravity: [
+                ctx.scalar_or_param("gravity_x", 0.0),
+                ctx.scalar_or_param("gravity", -9.81),
+                ctx.scalar_or_param("gravity_z", 0.0),
+            ],
             emission: emitter.is_some() && ctx.scalar_or_param("emission", 1.0) > 0.5,
             inflow_speed: ctx.scalar_or_param("inflow_speed", 1.5),
         };
@@ -671,8 +678,25 @@ mod tests {
         transport: f64,
         errors: &mut Vec<String>,
     ) {
-        let backend = MockBackend::new();
-        let inputs = NodeInputs::new(&[], &backend, &[]);
+        run_mock_with_scalars(fluid, params, &[], transport, errors);
+    }
+
+    fn run_mock_with_scalars(
+        fluid: &mut FluidSurface,
+        params: &ParamValues,
+        scalar_inputs: &[(&'static str, f32)],
+        transport: f64,
+        errors: &mut Vec<String>,
+    ) {
+        use crate::node_graph::{Backend, PortType, ResourceId, ScalarType};
+
+        let mut backend = MockBackend::new();
+        let bindings: Vec<_> = scalar_inputs.iter().enumerate().map(|(index, &(name, value))| {
+            let slot = backend.acquire(ResourceId(index as u32), PortType::Scalar(ScalarType::F32), None, (0, 0));
+            backend.set_scalar(slot, ParamValue::Float(value));
+            (name, slot)
+        }).collect();
+        let inputs = NodeInputs::new(&bindings, &backend, &[]);
         let mut scalar = Vec::new();
         let mut camera = Vec::new();
         let mut light = Vec::new();
@@ -702,6 +726,32 @@ mod tests {
         let mut ctx =
             EffectNodeContext::new(time, params, inputs, outputs, None).with_errors(errors);
         Primitive::run(fluid, &mut ctx);
+    }
+
+    #[test]
+    fn fluid_gravity_axes_accept_graph_wires_and_reject_nonfinite_values() {
+        let _offline = PhysicsStepScope::for_render(true);
+        for name in ["gravity_x", "gravity", "gravity_z"] {
+            let mut params = coupled_params();
+            params.insert(Cow::Borrowed(name), ParamValue::Float(f32::NAN));
+            let mut errors = Vec::new();
+            let mut fluid = FluidSurface::new();
+            run_mock(&mut fluid, &params, 0.0, &mut errors);
+            assert!(errors.iter().any(|error| error.contains("gravity")), "{name}: {errors:?}");
+
+            errors.clear();
+            let mut fluid = FluidSurface::new();
+            run_mock_with_scalars(&mut fluid, &params, &[(name, 2.0)], 0.0, &mut errors);
+            assert!(errors.is_empty(), "wired {name} must override its local parameter: {errors:?}");
+            assert_eq!(fluid.runtime.domain_snapshot().state, FluidDomainState::Ready);
+
+            errors.clear();
+            params.insert(Cow::Borrowed(name), ParamValue::Float(0.0));
+            let mut fluid = FluidSurface::new();
+            run_mock_with_scalars(&mut fluid, &params, &[(name, f32::INFINITY)], 0.0, &mut errors);
+            assert!(errors.iter().any(|error| error.contains("gravity")), "wired {name}: {errors:?}");
+            assert_eq!(Primitive::fluid_domain_snapshot(&fluid).unwrap().state, FluidDomainState::Failed);
+        }
     }
 
     fn coupled_params() -> ParamValues {
@@ -925,7 +975,7 @@ mod tests {
             ..FluidSettings::default()
         };
         let controls = FluidControls {
-            gravity: 0.0,
+            gravity: [0.0; 3],
             emission: false,
             obstacle_enabled: false,
             ..FluidControls::default()

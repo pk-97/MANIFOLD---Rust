@@ -42,7 +42,7 @@ fn fixture() -> (FluidSettings, FluidControls, RigidSceneInputs) {
         ..FluidSettings::default()
     };
     let controls = FluidControls {
-        gravity: 0.0,
+        gravity: [0.0; 3],
         emission: false,
         obstacle_enabled: false,
         ..FluidControls::default()

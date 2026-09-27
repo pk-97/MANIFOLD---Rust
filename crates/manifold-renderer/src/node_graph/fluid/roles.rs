@@ -358,7 +358,7 @@ mod tests {
         let controls = FluidControls {
             emission: false,
             obstacle_enabled: false,
-            gravity: 0.0,
+            gravity: [0.0; 3],
             ..FluidControls::default()
         };
         let mut source = role(FluidRoleKind::InitialFill);
@@ -460,7 +460,7 @@ mod tests {
             let controls = FluidControls {
                 emission: false,
                 obstacle_enabled: false,
-                gravity: 0.0,
+                gravity: [0.0; 3],
                 ..FluidControls::default()
             };
             let scene_roles = [Some(collider), Some(fill)];

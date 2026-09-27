@@ -94,7 +94,8 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
         .filter(|pd| type_id != "node.fluid_surface" || matches!(pd.name.as_ref(),
-            "domain_size" | "fill_height" | "viscosity" | "surface_tension" | "gravity"
+            "domain_size" | "fill_height" | "liquid_density" | "viscosity" | "surface_tension"
+                | "gravity_x" | "gravity" | "gravity_z"
                 | "emission" | "inflow_speed" | "speed" | "reset" | "surface_subdivisions"
                 | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"
                 | "closed_neg_x" | "closed_pos_x" | "closed_neg_y" | "closed_pos_y"
@@ -660,8 +661,8 @@ mod tests {
     #[test]
     fn scene_physics_fluid_metadata_exposes_creative_controls_and_trigger() {
         let metadata = metadata_for_node_type("node.fluid_surface");
-        for name in ["domain_size", "fill_height", "viscosity", "surface_tension",
-            "gravity", "emission", "inflow_speed", "speed", "surface_subdivisions",
+        for name in ["domain_size", "fill_height", "liquid_density", "viscosity", "surface_tension",
+            "gravity_x", "gravity", "gravity_z", "emission", "inflow_speed", "speed", "surface_subdivisions",
             "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations",
             "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
         {

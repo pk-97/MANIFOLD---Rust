@@ -1880,6 +1880,23 @@ mod tests {
             Some(&reloaded_def), &row.fluid_node_ids,
         );
         let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
+        for (param, label, default) in [
+            ("gravity_x", "Gravity X", 0.0),
+            ("gravity", "Gravity Y", -9.81),
+            ("gravity_z", "Gravity Z", 0.0),
+            ("liquid_density", "Liquid Density", 1000.0),
+        ] {
+            let binding = metadata.bindings.iter().find(|binding| matches!(
+                &binding.target,
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                    if name == param && node_id.as_str().starts_with("fluid_surface_")
+            )).expect("fluid physical control survives reload");
+            let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
+            assert_eq!(spec.name, label);
+            assert!(reloaded_sections.contains(spec.section.as_ref().unwrap()),
+                "physical control appears in the existing fluid parameter inspector");
+            assert_eq!(reloaded.timeline.layers[0].gen_params().unwrap().get_base_param(&binding.id), default);
+        }
         for (param, expected_label) in [("velocity_y", "Source"), ("rot_y", "Source Transform")] {
             let binding = metadata.bindings.iter().find(|binding| matches!(
                 &binding.target,

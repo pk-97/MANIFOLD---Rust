@@ -16,7 +16,7 @@ fn empty_settings() -> FluidSettings {
 
 fn controls() -> FluidControls {
     FluidControls {
-        gravity: 0.0,
+        gravity: [0.0; 3],
         emission: false,
         obstacle_enabled: false,
         ..FluidControls::default()

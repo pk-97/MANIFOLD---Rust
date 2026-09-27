@@ -161,7 +161,7 @@ pub struct FluidControls {
     pub emitter: Transform,
     pub obstacle: Transform,
     pub obstacle_enabled: bool,
-    pub gravity: f32,
+    pub gravity: [f32; 3],
     pub emission: bool,
     pub inflow_speed: f32,
 }
@@ -180,7 +180,7 @@ impl Default for FluidControls {
                 ..Transform::default()
             },
             obstacle_enabled: true,
-            gravity: -9.81,
+            gravity: [0.0, -9.81, 0.0],
             emission: true,
             inflow_speed: 1.5,
         }
@@ -206,7 +206,10 @@ impl FluidControls {
                 );
             }
         }
-        if !self.gravity.is_finite() || !self.inflow_speed.is_finite() || self.inflow_speed < 0.0 {
+        if self.gravity.iter().any(|value| !value.is_finite())
+            || !self.inflow_speed.is_finite()
+            || self.inflow_speed < 0.0
+        {
             return Err(
                 "Water: gravity and inflow speed must be finite; inflow speed cannot be negative"
                     .into(),
@@ -839,7 +842,10 @@ impl FluidRuntime {
             } else {
                 previous.obstacle_enabled
             },
-            gravity: previous.gravity + alpha * (next.gravity - previous.gravity),
+            gravity: std::array::from_fn(|axis| {
+                previous.gravity[axis]
+                    + alpha * (next.gravity[axis] - previous.gravity[axis])
+            }),
             inflow_speed: previous.inflow_speed
                 + alpha * (next.inflow_speed - previous.inflow_speed),
             emission: if alpha >= 1.0 {
@@ -1143,7 +1149,11 @@ mod tests {
     #[test]
     fn fluid_shared_field_worker_matches_gravity_without_restarting() {
         const TICKS: u64 = 8;
-        fn run(gravity: f32, field: Option<FieldValue>) -> [f32; 3] {
+        fn run(
+            gravity: [f32; 3],
+            field: Option<FieldValue>,
+            stalled: bool,
+        ) -> [f32; 3] {
             let settings = FluidSettings {
                 // At 8³ this seed's reconstructed surface reaches every native
                 // domain wall. Leave air around it so surface motion measures
@@ -1177,18 +1187,23 @@ mod tests {
                 .unwrap();
             runtime.advance(true).unwrap();
             let epoch = runtime.epoch;
-            // One retained interval is drained by the same worker used by live preview.
-            runtime
-                .observe_scene_with_field(
-                    settings,
-                    controls,
-                    &[],
-                    field,
-                    Seconds(TICKS as f64 * TICK),
-                    1.0,
-                    0.0,
-                )
-                .unwrap();
+            // Compare regular drains with the same history retained across a display stall.
+            for tick in 1..=TICKS {
+                runtime
+                    .observe_scene_with_field(
+                        settings,
+                        controls,
+                        &[],
+                        field.clone(),
+                        Seconds(tick as f64 * TICK),
+                        1.0,
+                        0.0,
+                    )
+                    .unwrap();
+                if !stalled {
+                    runtime.advance(true).unwrap();
+                }
+            }
             runtime.advance(true).unwrap();
             assert_eq!(runtime.epoch, epoch);
             assert_eq!(runtime.completed_tick, TICKS);
@@ -1202,11 +1217,21 @@ mod tests {
                     / runtime.vertices.len() as f32
             })
         }
-        let resting = run(0.0, None);
-        let gravity = run(-6.0, None);
-        let field = run(0.0, Some(FieldValue::uniform([0.0, -6.0, 0.0]).unwrap()));
+        let resting = run([0.0; 3], None, false);
+        let gravity = run([6.0, 0.0, -4.0], None, false);
+        let gravity_stalled = run([6.0, 0.0, -4.0], None, true);
+        let field = run(
+            [0.0; 3],
+            Some(FieldValue::uniform([6.0, 0.0, -4.0]).unwrap()),
+            false,
+        );
+        let field_stalled = run(
+            [0.0; 3],
+            Some(FieldValue::uniform([6.0, 0.0, -4.0]).unwrap()),
+            true,
+        );
         assert!(
-            resting[1] - field[1] > 0.01,
+            gravity[0] - resting[0] > 0.01 && resting[2] - gravity[2] > 0.01,
             "field must move the native fluid: resting={resting:?}, gravity={gravity:?}, field={field:?}"
         );
         for axis in 0..3 {
@@ -1214,7 +1239,18 @@ mod tests {
                 (gravity[axis] - field[axis]).abs() < 0.005,
                 "gravity {gravity:?} differs from equivalent field {field:?}"
             );
+            assert!((gravity[axis] - gravity_stalled[axis]).abs() < 0.005);
+            assert!((field[axis] - field_stalled[axis]).abs() < 0.005);
         }
+    }
+
+    #[test]
+    fn fluid_controls_reject_nonfinite_gravity_component() {
+        let mut controls = FluidControls::default();
+        controls.gravity[0] = f32::NAN;
+        assert!(controls.validate().is_err());
+        controls.gravity = [0.0, f32::NEG_INFINITY, 0.0];
+        assert!(controls.validate().is_err());
     }
 
     #[test]
@@ -1477,7 +1513,7 @@ mod tests {
             let seconds = sample as f64 * TICK;
             let mut next = initial;
             next.obstacle.pos[0] += (seconds * 4.0).sin() as f32 * 0.3;
-            next.gravity += (seconds * 2.0).cos() as f32;
+            next.gravity[1] += (seconds * 2.0).cos() as f32;
             controls.push((seconds, next));
             for runtime in [&mut offline, &mut preview] {
                 runtime
@@ -2046,30 +2082,35 @@ mod tests {
         runtime
             .observe(settings, initial, Seconds(0.0), 1.0, 0.0)
             .unwrap();
+        let epoch = runtime.epoch;
         let mut authored = initial;
-        authored.gravity = 0.0;
+        authored.gravity = [2.0, 0.0, 4.0];
         authored.obstacle.pos[0] = 1.0;
         runtime
             .observe(settings, authored, Seconds(1.0), 1.0, 0.0)
             .unwrap();
-        authored.gravity = 10.0;
+        authored.gravity = [-2.0, 10.0, -4.0];
         authored.obstacle.pos[0] = 2.0;
         runtime
             .observe(settings, authored, Seconds(1.0), 1.0, 0.0)
             .unwrap();
+        assert_eq!(runtime.epoch, epoch);
 
         assert_eq!(runtime.history.len(), 3);
         assert_eq!(
             FluidRuntime::controls_at(runtime.history.iter(), 0.5).gravity,
-            -4.905
+            [1.0, -4.905, 2.0]
         );
         assert_eq!(
             FluidRuntime::controls_at(runtime.history.iter(), 1.0).gravity,
-            10.0
+            [-2.0, 10.0, -4.0]
         );
         let samples: Vec<_> = runtime.history.iter().cloned().collect();
-        assert_eq!(FluidRuntime::step_at(&samples, 59).next.gravity, 0.0);
-        assert_eq!(FluidRuntime::step_at(&samples, 60).current.gravity, 10.0);
+        assert_eq!(FluidRuntime::step_at(&samples, 59).next.gravity, [2.0, 0.0, 4.0]);
+        assert_eq!(
+            FluidRuntime::step_at(&samples, 60).current.gravity,
+            [-2.0, 10.0, -4.0]
+        );
         assert_eq!(
             FluidRuntime::step_at(&samples, 59).next.obstacle.pos[0],
             1.0
@@ -2190,7 +2231,7 @@ mod tests {
             ..FluidSettings::default()
         };
         let controls = FluidControls {
-            gravity: 0.0,
+            gravity: [0.0; 3],
             emission: false,
             inflow_speed: 0.0,
             ..FluidControls::default()
@@ -2272,7 +2313,7 @@ mod tests {
             let controls = FluidControls {
                 emission: false,
                 obstacle_enabled: false,
-                gravity: 0.0,
+                gravity: [0.0; 3],
                 ..FluidControls::default()
             };
             runtime

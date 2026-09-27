@@ -114,7 +114,7 @@ impl NativeSimulation {
     ) -> Result<PreparedTick<'request>, String> {
         let step = FluidRuntime::step_at(&request.history, tick);
         native
-            .set_gravity([0.0, step.current.gravity, 0.0])
+            .set_gravity(step.current.gravity)
             .map_err(|e| e.to_string())?;
         native
             .set_emitter(
