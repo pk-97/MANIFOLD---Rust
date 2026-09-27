@@ -20,7 +20,7 @@ impl ScenePanel {
         let selection = self
             .selection
             .get(&vm.layer_id)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| Self::default_selection(vm));
         let (index, is_light) = match selection {
             SceneSelection::Object(id) => (
@@ -52,12 +52,12 @@ impl ScenePanel {
         let current = self
             .selection
             .get(&vm.layer_id)
-            .copied()
+            .cloned()
             .unwrap_or_else(|| Self::default_selection(vm));
         let visible: Vec<_> = self
             .outliner_row_ids
             .iter()
-            .map(|(_, selection)| *selection)
+            .map(|(_, selection)| selection.clone())
             .filter(|selection| !matches!(selection, SceneSelection::OutlinerFold(_)))
             .collect();
         if visible.is_empty() {
@@ -69,7 +69,7 @@ impl ScenePanel {
             .unwrap_or(0);
         let next = (index as i32 + delta).clamp(0, visible.len() as i32 - 1) as usize;
         let layer = vm.layer_id.clone();
-        self.set_selection(layer.clone(), visible[next]);
+        self.set_selection(layer.clone(), visible[next].clone());
         Some(PanelAction::Root(RootAction::SceneSetupSelectionChanged(
             layer,
         )))
@@ -113,9 +113,19 @@ impl ScenePanel {
     }
 
     pub fn frame_selection_action(&self) -> Option<PanelAction> {
+        let vm = self.state.as_live()?;
         let item = self.selected_scene_item()?;
-        (!item.is_light).then_some(PanelAction::Project(
-            ProjectAction::SceneSetupFrameSelected(item.layer_id, item.scene, item.index as usize),
-        ))
+        if item.is_light {
+            return None;
+        }
+        let object_node_id = vm.objects.iter().find_map(|object| match object {
+            ObjectRowVm::Known(row) if row.index == item.index as usize => Some(row.object_node_id),
+            _ => None,
+        })?;
+        Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(
+            item.layer_id,
+            item.scene,
+            object_node_id,
+        )))
     }
 }

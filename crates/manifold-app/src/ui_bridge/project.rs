@@ -1716,8 +1716,8 @@ mod tests {
         let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         // A tuned value must survive off/on; the toggle never removes its body.
-        apply_scene_param_write(&mut project, &layer_id, original.body_scope_path.clone(),
-            original.body_node_id, "friction", 0.73).unwrap();
+        apply_scene_param_write(&project, &layer_id, original.body_scope_path.clone(),
+            original.body_node_id, "friction", 0.73).unwrap().execute(&mut project);
         let before = effective_def(&project, &layer_id);
         let friction = |project: &Project| {
             effective_scene_param_value(project, &layer_id, original.body_node_id, "friction")
@@ -2047,14 +2047,14 @@ mod tests {
         assert_eq!(redone_body_id, body_id);
 
         apply_scene_param_write(
-            &mut project,
+            &project,
             &layer_id,
             vec![group_id],
             body_id,
             "friction",
             0.73,
         )
-        .expect("Physics friction is exposed");
+        .expect("Physics friction is exposed").execute(&mut project);
         assert_eq!(
             effective_scene_param_value(&project, &layer_id, body_id, "friction"),
             0.73
@@ -2299,7 +2299,7 @@ mod tests {
         let velocity_binding = metadata.bindings.iter().find(|binding| matches!(&binding.target,
             BindingTarget::Node { node_id, param } if node_id == &role.node_id && param == "velocity_y"
         )).unwrap();
-        apply_scene_param_write(&mut tuned, &layer_id, vec![group_id.unwrap()], role.id, "velocity_y", 2.5).unwrap();
+        apply_scene_param_write(&tuned, &layer_id, vec![group_id.unwrap()], role.id, "velocity_y", 2.5).unwrap().execute(&mut tuned);
         let tuned_reload: Project = serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
         assert_eq!(tuned_reload.timeline.layers[0].gen_params().unwrap().get_base_param(&velocity_binding.id), 2.5,
             "edited role values must survive save/reload");
@@ -2671,7 +2671,6 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        apply_queued_scene_edit(&content_rx, &mut project);
         assert!(
             result.structural_change,
             "removing an object is a structural graph edit"
@@ -2763,10 +2762,10 @@ mod tests {
                 if row.index == source_index as usize => row.transform.as_ref(),
             _ => None,
         }).unwrap();
-        apply_scene_param_write(&mut project, &layer_id, source_transform.pos_addr.1.scope_path.clone(),
-            source_transform.node_doc_id, "pos_y", 2.25).unwrap();
-        apply_scene_param_write(&mut project, &layer_id, source_transform.pos_addr.0.scope_path.clone(),
-            source_transform.node_doc_id, "pos_x", 1.25).unwrap();
+        apply_scene_param_write(&project, &layer_id, source_transform.pos_addr.1.scope_path.clone(),
+            source_transform.node_doc_id, "pos_y", 2.25).unwrap().execute(&mut project);
+        apply_scene_param_write(&project, &layer_id, source_transform.pos_addr.0.scope_path.clone(),
+            source_transform.node_doc_id, "pos_x", 1.25).unwrap().execute(&mut project);
         // Legacy manifests without saved base values must undo byte-for-byte.
         project.graph_target_owner_mut(&manifold_core::GraphTarget::Generator(layer_id.clone())).unwrap().base_tracked = false;
         let before_duplicate = serde_json::to_value(&project).unwrap();
@@ -2799,7 +2798,7 @@ mod tests {
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
             .expect("Scene scene VM after duplicate");
-        let transform_id = vm
+        let (transform_id, duplicate_name) = vm
             .objects
             .iter()
             .find_map(|object| match object {
@@ -2808,7 +2807,7 @@ mod tests {
                 {
                     row.transform
                         .as_ref()
-                        .map(|transform| transform.node_doc_id)
+                        .map(|transform| (transform.node_doc_id, row.name.clone()))
                 }
                 _ => None,
             })
@@ -2822,11 +2821,12 @@ mod tests {
         ).expect("duplicate has its own transform binding");
         let section = def.preset_metadata.as_ref().unwrap().params.iter()
             .find(|param| param.id == binding_id).unwrap().section.as_deref();
-        assert_eq!(section, Some(format!("Object {} 2 — Transform", before + 1).as_str()));
+        assert_ne!(duplicate_name, format!("Object {}", before + 1));
+        assert_eq!(section, Some(format!("{duplicate_name} — Transform").as_str()));
         assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_y"), 2.25,
             "the duplicate keeps the source's authored control values");
-        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.75,
-            "the duplicate offset is applied to the authored position");
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.25,
+            "the shared scene clipboard duplicates the authored position in place");
         command.undo(&mut project);
         assert_eq!(serde_json::to_value(&project).unwrap(), before_duplicate);
         command.execute(&mut project);

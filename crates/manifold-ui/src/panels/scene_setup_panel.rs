@@ -4173,6 +4173,7 @@ mod tests {
         panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
         let object = panel.selected_scene_item().unwrap();
         assert!(!object.is_light);
+        assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, 99, 40)))));
         assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 42, _)))));
         let light_node = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Light(60)).unwrap().0;
         let (consumed, actions) = panel.handle_event(&UIEvent::RightClick {
