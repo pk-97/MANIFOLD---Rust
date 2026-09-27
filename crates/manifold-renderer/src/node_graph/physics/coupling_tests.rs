@@ -243,7 +243,6 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
                 .flat_map(move |y| [-0.225, 0.225].into_iter().map(move |z| [x, y, z]))
         })
         .collect();
-    let mesh = manifold_physics::cook_hull_mesh(&vertices).unwrap();
     let mut bodies = bodies();
     bodies[0] = Some(RigidBody {
         transform: Transform {
@@ -263,6 +262,8 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
         .unwrap();
     let handle = simulation.handles[0].unwrap();
     let world = simulation.world.as_ref().unwrap();
+    let meshes = world.hull_meshes(handle).unwrap();
+    assert_eq!(meshes.len(), 1);
     let mut fluid = FluidWorld::new(Config {
         cells: [16; 3],
         cell_size: 0.15,
@@ -287,7 +288,9 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
         .unwrap();
     let mut pose = world.pose(handle).unwrap();
     pose.position = std::array::from_fn(|axis| pose.position[axis] - origin[axis]);
-    let collider = fluid.add_mesh(&mesh, MeshRole::Collider, pose).unwrap();
+    let collider = fluid
+        .add_mesh(&meshes[0], MeshRole::Collider, pose)
+        .unwrap();
     fluid
         .add_fluid_box(
             Bounds {

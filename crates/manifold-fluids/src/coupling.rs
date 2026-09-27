@@ -94,8 +94,10 @@ unsafe extern "C" {
 
 impl FluidWorld {
     /// Prepare two-way coupling once during world construction. Each collider
-    /// represents one rigid body; an existing compound proxy may be supplied as
-    /// one triangle mesh. Rebuild the world when this topology changes.
+    /// represents one rigid body with one collider mesh. Several overlapping
+    /// hulls must retain their union geometry and share one body's response;
+    /// this interface does not yet expose that compound binding. Rebuild the
+    /// world when this topology changes.
     ///
     /// Density is kg/m³. The owner must use `begin_frame` and exchange body state
     /// and reactions at every substep; `step` is unavailable for coupled worlds.
