@@ -38,6 +38,7 @@ SOFTWARE.
 #include "interpolation.h"
 
 #include "stopwatch.h"
+#include "rigidpressurecoupling.h"
 
 /********************************************************************************
     PressureSolver
@@ -53,7 +54,13 @@ bool PressureSolver::solve(PressureSolverParameters params) {
 
     _hasPressureSolution = false;
     _initialize(params);
-    _conditionSolidVelocityField();
+    if (_rigidCoupling) {
+        _rigidCoupling->prepare(_keymap, _isize, _jsize, _ksize, _deltaTime, _dx);
+    } else {
+        _conditionSolidVelocityField();
+    }
+    // Coupled mode must not silently zero velocities in closed pockets: their
+    // body mass term resolves the constraint, or the solve reports failure.
     _initializeSurfaceTensionClusterData();
 
     std::vector<double> rhs(_matSize, 0);
@@ -71,6 +78,7 @@ bool PressureSolver::solve(PressureSolverParameters params) {
         _solverIterations = 0;
         _solverError = 0.0f;
         _solverStatus = "Pressure Solver Iterations: 0\nEstimated Error: 0.0";
+        if (_rigidCoupling) { _rigidCoupling->captureSolution(*_pressureGrid); }
         _hasPressureSolution = true;
         return true;
     }
@@ -78,18 +86,22 @@ bool PressureSolver::solve(PressureSolverParameters params) {
     std::vector<double> soln(_matSize, 0);
     for (size_t i = 0; i < soln.size(); i++) {
         GridIndex g = _pressureCells[i];
-        float pressure = _pressureGrid->get(g);
+        // The pinned PCG uses r=rhs. Coupled solves therefore use the same
+        // zero initial guess as FluidSimulation, even with a reused grid.
+        float pressure = _rigidCoupling ? 0.0f : _pressureGrid->get(g);
         soln[i] = pressure;
     }
 
     SparseMatrixd matrix(_matSize, 7);
     _calculateMatrixCoefficients(matrix);
+    if (_rigidCoupling) { _rigidCoupling->addMatrixDiagonal(matrix); }
 
     bool success = _solveLinearSystem(matrix, rhs, soln);
     if (!success) {
         return false;
     }
 
+    if (_rigidCoupling) { _rigidCoupling->captureSolution(*_pressureGrid); }
     _hasPressureSolution = true;
     return true;
 }
@@ -170,6 +182,7 @@ void PressureSolver::_initialize(PressureSolverParameters params) {
     _weightGrid = params.weightGrid;
     _pressureGrid = params.pressureGrid;
     _densityGrid = params.densityGrid;
+    _rigidCoupling = params.rigidCoupling;
 
     _isSurfaceTensionEnabled = params.isSurfaceTensionEnabled;
     _surfaceTensionConstant = params.surfaceTensionConstant;
@@ -920,7 +933,14 @@ bool PressureSolver::_solveLinearSystem(SparseMatrixd &matrix, std::vector<doubl
         // PCG Solve
         PCGSolver<double> solver;
         solver.setSolverParameters(_pressureSolveTolerance, _maxCGIterations);
-        success = solver.solve(matrix, rhs, soln, estimatedError, numIterations);
+        if (_rigidCoupling) {
+            success = solver.solveWithAdditionalMatrix(matrix, rhs, soln, estimatedError, numIterations,
+                [this](const std::vector<double> &x, std::vector<double> &y) {
+                    _rigidCoupling->addRemainingMatrixProduct(x, y);
+                });
+        } else {
+            success = solver.solve(matrix, rhs, soln, estimatedError, numIterations);
+        }
     }
 
     _pressureGrid->fill(0.0f);

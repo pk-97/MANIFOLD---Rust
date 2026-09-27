@@ -12,6 +12,32 @@ struct Probe {
     first_body_energy_ratio: f64,
     first_pressure_residual: f64,
     max_body_energy_ratio: f64,
+    max_total_energy_ratio: f64,
+    max_coupling_relative_mismatch: f64,
+    max_volume_residual: f64,
+}
+
+fn assert_probe_finite(result: &Probe) {
+    assert!(
+        result.impulse.iter().all(|value| value.is_finite()),
+        "{result:?}"
+    );
+    assert!(
+        result.moment.iter().all(|value| value.is_finite()),
+        "{result:?}"
+    );
+    assert!(result.max_fluid_speed.is_finite(), "{result:?}");
+    assert!(result.pressure_residual.is_finite(), "{result:?}");
+    assert!(result.added_mass.is_finite(), "{result:?}");
+    assert!(result.first_body_energy_ratio.is_finite(), "{result:?}");
+    assert!(result.first_pressure_residual.is_finite(), "{result:?}");
+    assert!(result.max_body_energy_ratio.is_finite(), "{result:?}");
+    assert!(result.max_total_energy_ratio.is_finite(), "{result:?}");
+    assert!(
+        result.max_coupling_relative_mismatch.is_finite(),
+        "{result:?}"
+    );
+    assert!(result.max_volume_residual.is_finite(), "{result:?}");
 }
 
 unsafe extern "C" {
@@ -23,6 +49,17 @@ unsafe extern "C" {
         body_density_ratio: f64,
         result: *mut Probe,
     ) -> i32;
+    fn manifold_fluids_coupling_pressure_probe_mode(
+        resolution: u32,
+        dt: f64,
+        density: f64,
+        exchanges: u32,
+        body_density_ratio: f64,
+        mode: u32,
+        result: *mut Probe,
+    ) -> i32;
+    fn manifold_fluids_coupling_operator_probe() -> i32;
+    fn manifold_fluids_coupling_closed_pocket_probe() -> i32;
 }
 
 fn probe(resolution: u32, dt: f64, density: f64, exchanges: u32, ratio: f64) -> Probe {
@@ -39,10 +76,55 @@ fn probe(resolution: u32, dt: f64, density: f64, exchanges: u32, ratio: f64) -> 
         )
     };
     super::super::native_result(status, "pressure-coupling feasibility").unwrap();
+    assert_probe_finite(&result);
     println!(
         "r={resolution} dt={dt} rho={density} exchanges={exchanges} ratio={ratio}: {result:?}"
     );
     result
+}
+
+fn probe_mode(
+    resolution: u32,
+    dt: f64,
+    density: f64,
+    exchanges: u32,
+    ratio: f64,
+    mode: u32,
+) -> Probe {
+    let mut result = Probe::default();
+    let status = unsafe {
+        manifold_fluids_coupling_pressure_probe_mode(
+            resolution,
+            dt,
+            density,
+            exchanges,
+            ratio,
+            mode,
+            &mut result,
+        )
+    };
+    super::super::native_result(status, "mass-aware pressure-coupling feasibility").unwrap();
+    assert_probe_finite(&result);
+    println!(
+        "mode={mode} r={resolution} dt={dt:.6} ratio={ratio}: first_body_energy={:.6}, max_total_energy={:.6}, volume_residual={:.3e}, reaction_mismatch={:.3e}",
+        result.first_body_energy_ratio,
+        result.max_total_energy_ratio,
+        result.max_volume_residual,
+        result.max_coupling_relative_mismatch
+    );
+    result
+}
+
+#[test]
+fn coupling_operator_probe_matches_dense_reference() {
+    let status = unsafe { manifold_fluids_coupling_operator_probe() };
+    super::super::native_result(status, "pressure-coupling operator algebra").unwrap();
+}
+
+#[test]
+fn coupling_closed_pocket_resolves_body_constraint_and_rejects_fixed_compression() {
+    let status = unsafe { manifold_fluids_coupling_closed_pocket_probe() };
+    super::super::native_result(status, "closed-pocket pressure constraint").unwrap();
 }
 
 #[test]
@@ -113,4 +195,63 @@ fn coupling_partitioned_light_body_rejects_energy_growth() {
     // universally incorrect reaction sign. It is not a general stability proof.
     let heavy = probe(4, 1.0 / 60.0, 1000.0, 8, 10.0);
     assert!(heavy.max_body_energy_ratio <= 1.01, "{heavy:?}");
+}
+
+#[test]
+fn coupling_mass_aware_exchange_does_not_add_energy() {
+    for mode in [1, 2] {
+        for ratio in [0.1, 1.0, 10.0] {
+            let mut coarse: Option<Probe> = None;
+            for (resolution, dt) in [(4, 1.0 / 60.0), (4, 1.0 / 120.0), (8, 1.0 / 120.0)] {
+                let result = probe_mode(resolution, dt, 1000.0, 8, ratio, mode);
+                assert!(result.max_total_energy_ratio <= 1.001, "{result:?}");
+                assert!(result.max_coupling_relative_mismatch < 1e-4, "{result:?}");
+                assert!(result.max_volume_residual < 1e-5, "{result:?}");
+                assert!(result.first_pressure_residual < 1e-6, "{result:?}");
+                if resolution == 4 {
+                    if let Some(reference) = &coarse {
+                        // A frozen-geometry projection has the same impulse
+                        // when dt halves; pressure itself scales as 1/dt.
+                        let (mut error, mut norm) = (0.0, 0.0);
+                        for (actual, expected) in result
+                            .impulse
+                            .iter()
+                            .chain(&result.moment)
+                            .zip(reference.impulse.iter().chain(&reference.moment))
+                        {
+                            error += (actual - expected).powi(2);
+                            norm += expected.powi(2);
+                        }
+                        assert!(error < norm.max(1e-24) * 1e-8, "{result:?}");
+                        assert!(
+                            (result.first_body_energy_ratio - reference.first_body_energy_ratio)
+                                .abs()
+                                < 1e-4
+                        );
+                    } else {
+                        coarse = Some(result);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn coupling_fixed_body_preserves_pressure_reaction() {
+    for (resolution, tolerance) in [(4, 0.05), (8, 0.025)] {
+        let explicit = probe(resolution, 1.0 / 60.0, 1000.0, 0, 1.0);
+        let fixed = probe_mode(resolution, 1.0 / 60.0, 1000.0, 0, 1.0, 3);
+        for axis in 0..3 {
+            assert!(
+                (fixed.impulse[axis] - explicit.impulse[axis]).abs() < tolerance,
+                "{fixed:?}"
+            );
+            assert!(
+                (fixed.moment[axis] - explicit.moment[axis]).abs() < tolerance,
+                "{fixed:?}"
+            );
+        }
+        assert!(fixed.max_coupling_relative_mismatch < 1e-4, "{fixed:?}");
+    }
 }

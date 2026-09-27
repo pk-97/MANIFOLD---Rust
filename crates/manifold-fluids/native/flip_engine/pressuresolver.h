@@ -45,6 +45,7 @@ class MACVelocityField;
 struct ValidVelocityComponentGrid;
 class ParticleLevelSet;
 class MeshLevelSet;
+class RigidPressureCoupling;
 
 struct WeightGrid {
     Array3d<float> center;
@@ -110,6 +111,7 @@ struct PressureSolverParameters {
     WeightGrid *weightGrid;
     Array3d<float> *pressureGrid;
     Array3d<float> *densityGrid;
+    RigidPressureCoupling *rigidCoupling = nullptr;
 
     bool isSurfaceTensionEnabled = false;
     double surfaceTensionConstant;
@@ -150,6 +152,7 @@ private:
     };
     SolidBoundaryWeights _solidBoundaryWeights(int i, int j, int k);
     bool _hasPressureSolution = false;
+    RigidPressureCoupling *_rigidCoupling = nullptr;
 
     inline int _GridToVectorIndex(GridIndex g) {
         return _keymap.find(g);

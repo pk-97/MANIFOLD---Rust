@@ -12,8 +12,17 @@ struct ManifoldFluidsCouplingProbe {
     double first_body_energy_ratio;
     double first_pressure_residual;
     double max_body_energy_ratio;
+    double max_total_energy_ratio;
+    double max_coupling_relative_mismatch;
+    double max_volume_residual;
 };
 
 void run_coupling_pressure_probe(uint32_t cells_per_meter, double dt, double density,
                                 uint32_t exchanges, double body_density_ratio,
                                 ManifoldFluidsCouplingProbe &result);
+
+void run_coupling_pressure_probe_mode(uint32_t cells_per_meter, double dt, double density,
+                                      uint32_t exchanges, double body_density_ratio,
+                                      uint32_t mode, ManifoldFluidsCouplingProbe &result);
+
+void run_coupling_closed_pocket_probe();

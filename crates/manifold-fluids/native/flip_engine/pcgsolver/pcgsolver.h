@@ -267,6 +267,18 @@ struct PCGSolver {
 
     bool solve(const SparseMatrix<T> &matrix, const std::vector<T> &rhs, 
                std::vector<T> &result, T &residualOut, int &iterationsOut) {
+        return solveWithAdditionalMatrix(matrix, rhs, result, residualOut, iterationsOut,
+            [](const std::vector<T> &, std::vector<T> &) {});
+    }
+
+    // MANIFOLD: keep the existing PCG and MIC preconditioner while adding
+    // matrix-free rigid-body coupling. The sparse matrix includes its diagonal
+    // for preconditioning; the callback supplies the remaining product. The
+    // complete operator must be positive semidefinite. No second solver.
+    template <typename AddProduct>
+    bool solveWithAdditionalMatrix(const SparseMatrix<T> &matrix, const std::vector<T> &rhs,
+                                  std::vector<T> &result, T &residualOut, int &iterationsOut,
+                                  AddProduct addProduct) {
 
         unsigned int n = matrix.n;
         if (m.size() != n) { 
@@ -299,6 +311,7 @@ struct PCGSolver {
         int iteration;
         for (iteration = 0; iteration < maxIterations; iteration++){
             multiply(fixedMatrix, s, z);
+            addProduct(s, z);
             double alpha = rho / BLAS::dot(s, z);
             BLAS::addScaled(alpha, s, result);
             BLAS::addScaled(-alpha, z, r);
