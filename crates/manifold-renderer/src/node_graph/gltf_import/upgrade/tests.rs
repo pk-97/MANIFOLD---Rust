@@ -430,3 +430,177 @@ fn custom_material_and_manual_transform_are_not_marked_completed() {
     );
     std::fs::remove_file(path).ok();
 }
+
+fn calibrated_legacy_fixture() -> (PathBuf, EffectGraphDef) {
+    use crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
+    use manifold_core::{NodeId, SceneNodeRef, SceneTargetSelection};
+
+    let path = write_synthetic_multimaterial_glb(2);
+    let (mut graph, _) = super::super::assemble_import_graph(&path).unwrap();
+    graph.version = 3;
+    visit_group_nodes(&mut graph.nodes, &mut |node| {
+        if node.type_id == "node.gltf_mesh_source" {
+            node.params.remove("vertex_colors");
+        }
+    });
+    let scene = SceneNodeRef {
+        scope: Vec::new(),
+        node: graph
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.render_scene")
+            .unwrap()
+            .node_id
+            .clone(),
+    };
+    let recipe = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/SurfacePeel.json"
+    )))
+    .unwrap();
+    for id in ["peel_a", "peel_b"] {
+        let instance = prepare_new_scene_modifier(
+            &graph,
+            &recipe,
+            NodeId::new(id),
+            scene.clone(),
+            SceneTargetSelection::AllObjects,
+        )
+        .unwrap();
+        assert_eq!(instance.mesh_frames.len(), 2);
+        assert!(!instance.mesh_frames[0].source.scope.is_empty());
+        graph.scene_modifiers.push(instance);
+        graph = manifold_core::scene_modifier_edit::reconcile_scene_modifier_parameters(
+            &graph,
+            &NodeId::new(id),
+        )
+        .unwrap()
+        .graph;
+    }
+    // Object motion after authoring must never recapture calibration.
+    find_node_mut(&mut graph.nodes, "node.transform_3d")
+        .unwrap()
+        .params
+        .insert("pos_x".into(), SerializedParamValue::Float { value: 42.0 });
+    (path, graph)
+}
+
+#[test]
+fn calibrated_material_upgrade_preserves_modifiers_and_survives_reload() {
+    use crate::node_graph::{
+        PrimitiveRegistry, scene_modifier_expand::validate_modifier_mesh_frames,
+    };
+    for varying in [false, true] {
+        let (path, mut graph) = calibrated_legacy_fixture();
+        let saved_modifiers = graph.scene_modifiers.clone();
+        let mut summary = gltf_load::gltf_import_summary(&path).unwrap();
+        for material in &mut summary.materials {
+            material.vertex_color_varies = varying;
+        }
+        let mut cache = MaterialUpgradeCache::default();
+        cache.summaries.insert(path.clone(), Ok(summary));
+        let result = upgrade_material_graph(&mut graph, &mut cache);
+        assert!(result.changed);
+        assert!(result.notices.is_empty(), "{:?}", result.notices);
+        for (modifier, saved) in graph.scene_modifiers.iter().zip(&saved_modifiers) {
+            validate_modifier_mesh_frames(&graph, modifier).unwrap();
+            let mut restored = modifier.clone();
+            for (frame, old) in restored.mesh_frames.iter_mut().zip(&saved.mesh_frames) {
+                assert_ne!(frame.source_definition_hash, old.source_definition_hash);
+                frame
+                    .source_definition_hash
+                    .clone_from(&old.source_definition_hash);
+            }
+            assert_eq!(&restored, saved, "only source hashes may change");
+        }
+        assert_eq!(
+            find_node_mut(&mut graph.nodes, "node.gltf_mesh_source")
+                .unwrap()
+                .params["vertex_colors"],
+            SerializedParamValue::Bool { value: varying }
+        );
+        let encoded = serde_json::to_string(&graph).unwrap();
+        let mut reloaded: EffectGraphDef = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            upgrade_material_graph(&mut reloaded, &mut cache),
+            Default::default()
+        );
+        assert_eq!(serde_json::to_string(&reloaded).unwrap(), encoded);
+        crate::preset_runtime::PresetRuntime::from_def(
+            reloaded,
+            &PrimitiveRegistry::with_builtin(),
+            None,
+        )
+        .expect("calibrated graph builds after reload");
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn calibrated_material_upgrade_refuses_stale_sources_without_partial_edits() {
+    for change_geometry in [false, true] {
+        let (path, mut graph) = calibrated_legacy_fixture();
+        if change_geometry {
+            find_node_mut(&mut graph.nodes, "node.gltf_mesh_source")
+                .unwrap()
+                .params
+                .insert(
+                    "translate_x".into(),
+                    SerializedParamValue::Float { value: 1.0 },
+                );
+        } else {
+            graph.scene_modifiers[1].mesh_frames[1].source_definition_hash = "stale".into();
+        }
+        let before = serde_json::to_string(&graph).unwrap();
+        let result = upgrade_material_graph(&mut graph, &mut MaterialUpgradeCache::default());
+        assert!(!result.changed);
+        assert!(result.binding_updates.is_empty());
+        assert!(
+            result
+                .notices
+                .iter()
+                .any(|notice| notice.contains("mesh source changed"))
+        );
+        assert_eq!(serde_json::to_string(&graph).unwrap(), before);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn project_upgrade_preserves_calibrated_inline_and_embedded_graphs() {
+    use crate::node_graph::scene_modifier_expand::validate_modifier_mesh_frames;
+    use manifold_core::{
+        layer::Layer,
+        preset_def::PresetKind,
+        project::{EmbeddedOrigin, EmbeddedPreset, Project},
+    };
+    let (path, graph) = calibrated_legacy_fixture();
+    let id = graph.preset_metadata.as_ref().unwrap().id.clone();
+    let mut layer = Layer::new_generator("Calibrated".into(), id, 0);
+    layer.gen_params_mut().unwrap().graph = Some(graph.clone());
+    let mut project = Project::default();
+    project.timeline.layers.push(layer);
+    project.embedded_presets.push(EmbeddedPreset {
+        kind: PresetKind::Generator,
+        def: graph,
+        origin: EmbeddedOrigin::Saved,
+    });
+    let result = super::project::upgrade_project_materials(&mut project);
+    assert!(result.changed_graphs >= 2);
+    assert!(result.notices.is_empty(), "{:?}", result.notices);
+    let mut reloaded: Project =
+        serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+    for graph in [
+        &reloaded.embedded_presets[0].def,
+        reloaded.timeline.layers[0].generator_graph().unwrap(),
+    ] {
+        for modifier in &graph.scene_modifiers {
+            validate_modifier_mesh_frames(graph, modifier).unwrap();
+        }
+    }
+    assert_eq!(
+        super::project::upgrade_project_materials(&mut reloaded).changed_graphs,
+        0
+    );
+    std::fs::remove_file(path).unwrap();
+}
