@@ -28,6 +28,15 @@ use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 
 use super::gltf_load::{self, GltfInterp, Mat4};
 
+pub(crate) type LoadedAnimSet = super::source_asset::LoadedAsset<GltfAnimSet>;
+
+impl From<GltfAnimSet> for LoadedAnimSet {
+    fn from(set: GltfAnimSet) -> Self {
+        let identity = super::gltf_anim_identity::identity(&set);
+        Self::new(set, identity)
+    }
+}
+
 /// One node's static bind-pose local TRS (`node.transform().decomposed()`),
 /// indexed by glTF node index across the WHOLE scene (not just skin
 /// joints) — the fallback [`Channel`] sampling uses for any node a clip
@@ -232,13 +241,13 @@ pub struct GltfAnimSet {
 /// lookup. A still-resident payload must not hide same-path replacement or
 /// missing dependencies when a node prepares its source again. File IO stays
 /// on the loader thread; running nodes retain their immutable loaded snapshot.
-fn load_anim_set(path: &Path) -> Result<Arc<GltfAnimSet>, String> {
+fn load_anim_set(path: &Path) -> Result<Arc<LoadedAnimSet>, String> {
     let snapshot = gltf_load::parse_buffer_snapshot(path)?;
     if let Some(set) = cached(&snapshot.identity) {
         return Ok(set);
     }
     let identity = snapshot.identity;
-    Ok(insert_cache(identity, Arc::new(decode_anim_set(snapshot))))
+    Ok(insert_cache(identity, Arc::new(decode_anim_set(snapshot).into())))
 }
 
 /// Parse the exact snapshot that produced the cache key, without reopening
@@ -310,15 +319,15 @@ fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
 /// Reuse the existing approved cache and lock. Keys cover primary and
 /// resolved buffer contents, and Weak entries never own animation payloads.
 /// Only loader threads touch the map; no file IO or decoding holds its lock.
-static ANIM_CACHE: LazyLock<Mutex<HashMap<[u8; 32], Weak<GltfAnimSet>>>> =
+static ANIM_CACHE: LazyLock<Mutex<HashMap<[u8; 32], Weak<LoadedAnimSet>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn cached(identity: &[u8; 32]) -> Option<Arc<GltfAnimSet>> {
+fn cached(identity: &[u8; 32]) -> Option<Arc<LoadedAnimSet>> {
     let cache = ANIM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.get(identity).and_then(Weak::upgrade)
 }
 
-fn insert_cache(identity: [u8; 32], set: Arc<GltfAnimSet>) -> Arc<GltfAnimSet> {
+fn insert_cache(identity: [u8; 32], set: Arc<LoadedAnimSet>) -> Arc<LoadedAnimSet> {
     let mut cache = ANIM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     // Concurrent loads may decode the same snapshot. Publish one shared Arc
     // even when both missed the first lookup; an older load cannot overwrite
@@ -334,7 +343,7 @@ fn insert_cache(identity: [u8; 32], set: Arc<GltfAnimSet>) -> Arc<GltfAnimSet> {
 /// Begin the existing key-change load/poll lifecycle. Every new request
 /// validates source bytes on its background thread, including warm cache hits.
 /// Nodes keep the resulting Arc, so ordinary frame sampling does no IO.
-pub(crate) fn spawn_load(path: &Path) -> mpsc::Receiver<Result<Arc<GltfAnimSet>, String>> {
+pub(crate) fn spawn_load(path: &Path) -> mpsc::Receiver<Result<Arc<LoadedAnimSet>, String>> {
     let path_buf = path.to_path_buf();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -380,12 +389,12 @@ mod tests {
     #[test]
     fn anim_cache_drops_when_last_arc_drops() {
         let identity = [0xA5; 32];
-        let set = Arc::new(GltfAnimSet {
+        let set = Arc::new(LoadedAnimSet::from(GltfAnimSet {
             clips: Vec::new(),
             skins: Vec::new(),
             node_parents: Vec::new(),
             node_bind_trs: Vec::new(),
-        });
+        }));
         let set = insert_cache(identity, set);
         assert!(cached(&identity).is_some(), "cache hit while the Arc is alive");
         drop(set);

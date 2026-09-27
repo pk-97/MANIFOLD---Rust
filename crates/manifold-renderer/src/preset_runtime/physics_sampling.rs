@@ -284,6 +284,7 @@ impl PresetRuntime {
     /// catch-up drains native ticks in bounded input batches without publishing
     /// intermediate graph outputs. Preview continues to retain its time debt.
     pub(super) fn sample_physics_history(&mut self, current: FrameTime) {
+        self.observe_physics_source_assets();
         let (Some(inputs), Some(steps)) = (
             self.physics_input_snapshot.as_mut(),
             self.physics_sample_steps.as_ref(),

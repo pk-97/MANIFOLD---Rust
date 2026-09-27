@@ -33,6 +33,12 @@ impl PresetRuntime {
         }
     }
 
+    pub(super) fn observe_physics_source_assets(&mut self) {
+        for slot in &mut self.effect_nodes {
+            slot.physics_sources.observe_assets(&mut self.graph);
+        }
+    }
+
     /// Called by the existing generator/impulse host before observing a frame.
     /// Only authored configuration is hashed; serializers stream into SHA256
     /// without allocating a per-frame JSON buffer or cloning runtime state.

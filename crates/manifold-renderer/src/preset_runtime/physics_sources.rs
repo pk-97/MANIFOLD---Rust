@@ -29,6 +29,8 @@ pub(super) struct PhysicsSourceGraph {
     /// Resolved destinations of relevant host string bindings. Values are
     /// observed after the existing binding policy has applied overrides.
     pub(super) string_targets: Vec<(NodeId, String)>,
+    /// Relevant file loaders from the existing central asset inventory.
+    pub(super) asset_nodes: Vec<NodeId>,
 }
 
 /// Build the stable source identity for every authored fluid domain.
@@ -131,6 +133,17 @@ pub(super) fn prepare(
             digest: digest_source(&graph, &selected, pair, &events, canonical)?,
             control_ids,
             string_targets: relevant_string_targets(&graph, &selected),
+            asset_nodes: selected
+                .iter()
+                .filter_map(|id| {
+                    use manifold_core::file_loader::{AssetFamily, NodeFileLoad, file_loader_kind};
+                    let node = graph.nodes.get(id)?;
+                    match file_loader_kind(&node.type_id) {
+                        None | Some(NodeFileLoad::Folder(AssetFamily::Physics)) => None,
+                        Some(_) => Some(node.node_id.clone()),
+                    }
+                })
+                .collect(),
         });
     }
     sources.sort_by(|left, right| left.fluid.as_str().cmp(right.fluid.as_str()));

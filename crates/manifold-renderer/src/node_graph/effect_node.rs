@@ -1145,6 +1145,15 @@ pub trait EffectNode: Send {
     /// Authored dependency identity, prepared before evaluating live controls.
     fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
 
+    /// Fingerprint of the currently loaded external input. Implementations
+    /// must compare the requested selection and perform no IO or hashing here.
+    fn source_asset_identity(
+        &self,
+        _params: &super::ParamValues,
+    ) -> super::source_asset::SourceAssetIdentity<'_> {
+        super::source_asset::SourceAssetIdentity::Unsupported
+    }
+
     /// Resolve the rigid participant before its paired liquid step. This must
     /// not construct or advance a second native world, or publish outputs.
     fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {

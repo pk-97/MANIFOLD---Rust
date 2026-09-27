@@ -22,6 +22,7 @@ use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics_mesh::MeshSelection;
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::source_asset::{mesh_identity, LoadedAsset, SourceAssetIdentity};
 
 /// `fit` enum labels (MESH_DEFORM_AND_CURVE_GEOMETRY_DESIGN.md D7). Index 0
 /// (`none`) is the default and a strict no-op — every scan arrives at
@@ -289,7 +290,7 @@ crate::primitive! {
         staging_len_bytes: u64 = 0,
         // Background loader channel. `Some` means a parse is in flight;
         // we don't spawn another until it returns.
-        pending_load: Option<mpsc::Receiver<Result<Vec<MeshVertex>, String>>> = None,
+        pending_load: Option<mpsc::Receiver<Result<LoadedAsset<Vec<MeshVertex>>, String>>> = None,
         // Whether `staging` currently reflects the latest parsed geometry.
         uploaded: bool = false,
         // Content availability, distinct from `uploaded` (staging is CPU-
@@ -319,10 +320,85 @@ crate::primitive! {
         trace_pending_logged: bool = false,
         trace_pending_destination: (usize, u64) = (0, 0),
         published_source: Option<MeshSource> = None,
+        source_identity: Option<[u8; 32]> = None,
+        load_error: Option<String> = None,
+        source_published: bool = false,
     },
 }
 
 impl Primitive for GltfMeshSource {
+    fn source_asset_identity(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> SourceAssetIdentity<'_> {
+        let requested_path = match params.get("path") {
+            Some(ParamValue::String(path)) => path.as_str(),
+            _ => "",
+        };
+        if requested_path.is_empty() {
+            return SourceAssetIdentity::Failed("No source asset selected");
+        }
+
+        let requested_mesh_index = match params.get("mesh_index") {
+            Some(ParamValue::Float(value)) => value.round() as i32,
+            _ => -1,
+        };
+        let requested_primitive_index = match params.get("primitive_index") {
+            Some(ParamValue::Float(value)) => value.round() as i32,
+            _ => -1,
+        };
+        let requested_material_index = match params.get("material_index") {
+            Some(ParamValue::Float(value)) => value.round() as i32,
+            _ => -1,
+        };
+        let requested_fit = match params.get("fit") {
+            Some(ParamValue::Enum(value)) => (*value).min((GLTF_FIT_MODES.len() - 1) as u32),
+            Some(ParamValue::Float(value)) => {
+                value.round().clamp(0.0, (GLTF_FIT_MODES.len() - 1) as f32) as u32
+            }
+            _ => 0,
+        };
+        let requested_recenter = matches!(params.get("recenter"), Some(ParamValue::Bool(true)));
+        let requested_vertex_colors =
+            matches!(params.get("vertex_colors"), Some(ParamValue::Bool(true)));
+        // Match run's param_f32 policy, including malformed-type defaults.
+        let float_param = |name: &str, default: f32| match params.get(name) {
+            Some(ParamValue::Float(value)) => *value,
+            _ => default,
+        };
+        let requested_translate_x = float_param("translate_x", 0.0);
+        let requested_translate_y = float_param("translate_y", 0.0);
+        let requested_translate_z = float_param("translate_z", 0.0);
+        let requested_fragment_count = float_param("fragment_count", 1.0).round().clamp(1.0, 64.0) as u32;
+        let requested_fragment_index = float_param("fragment_index", 0.0).round().max(0.0) as u32;
+
+        let requested_key_matches = self.last_key.0.as_str() == requested_path
+            && self.last_key.1 == requested_mesh_index
+            && self.last_key.2 == requested_primitive_index
+            && self.last_key.3 == requested_material_index
+            && self.last_key.4 == requested_fit
+            && self.last_key.5 == requested_recenter
+            && self.last_key.6 == requested_vertex_colors
+            && self.last_key.7 == requested_translate_x
+            && self.last_key.8 == requested_translate_y
+            && self.last_key.9 == requested_translate_z
+            && self.last_key.10 == requested_fragment_count
+            && self.last_key.11 == requested_fragment_index;
+        if !requested_key_matches {
+            return SourceAssetIdentity::Pending;
+        }
+        if let Some(error) = self.load_error.as_deref() {
+            return SourceAssetIdentity::Failed(error);
+        }
+        if self.pending_load.is_some() || !self.source_published {
+            return SourceAssetIdentity::Pending;
+        }
+        match self.source_identity {
+            Some(identity) => SourceAssetIdentity::Ready(identity),
+            None => SourceAssetIdentity::Pending,
+        }
+    }
+
     fn warmup_pending(&self) -> bool {
         // Parsing can finish one frame before the staged mesh is published.
         // Keep pre-roll alive until the next run acknowledges its GPU copy.
@@ -402,6 +478,9 @@ impl Primitive for GltfMeshSource {
             self.published = false;
             self.copy_in_flight = false;
             self.published_source = None;
+            self.source_identity = None;
+            self.load_error = None;
+            self.source_published = false;
             if !path.is_empty() {
                 // material_index takes precedence: when set, it selects
                 // every primitive of that material across the scene
@@ -435,10 +514,22 @@ impl Primitive for GltfMeshSource {
                         .map(|verts| apply_vertex_color_compat(verts, vertex_colors))
                         .map(|verts| apply_mesh_fit(verts, fit_unit_box, recenter))
                         .map(|verts| apply_translate(verts, translate))
-                        .and_then(|verts| crate::node_graph::physics_mesh::select_fragment(verts, fragment_count, fragment_index));
+                        .and_then(|verts| {
+                            crate::node_graph::physics_mesh::select_fragment(
+                                verts,
+                                fragment_count,
+                                fragment_index,
+                            )
+                        })
+                        .map(|verts| {
+                            let identity = mesh_identity(&verts);
+                            LoadedAsset::new(verts, identity)
+                        });
                     let _ = tx.send(result);
                 });
                 self.pending_load = Some(rx);
+            } else {
+                self.load_error = Some("No source asset selected".to_owned());
             }
         }
 
@@ -446,7 +537,7 @@ impl Primitive for GltfMeshSource {
         if self.pending_load.is_some() {
             let rx = self.pending_load.take().unwrap();
             match rx.try_recv() {
-                Ok(Ok(verts)) => {
+                Ok(Ok(loaded)) => {
                     if key != self.last_key {
                         // Params changed while this parse was in flight —
                         // the result answers a stale request. Drop it; the
@@ -459,10 +550,11 @@ impl Primitive for GltfMeshSource {
                         if source_trace_enabled() {
                             log::info!(
                                 "[RT-SOURCE] load-complete frame={} path={} actual_vertices={} content_version={}",
-                                ctx.time.frame_count, self.last_key.0, verts.len(), self.content_version.wrapping_add(1)
+                                ctx.time.frame_count, self.last_key.0, loaded.len(), self.content_version.wrapping_add(1)
                             );
                         }
-                        self.cached_verts = verts;
+                        self.source_identity = Some(loaded.identity());
+                        self.cached_verts = loaded.into_value();
                         self.uploaded = false;
                         self.content_version = self.content_version.wrapping_add(1);
                         self.published_source = Some(MeshSource::Gltf {
@@ -486,6 +578,9 @@ impl Primitive for GltfMeshSource {
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_mesh_source: {e}");
+                    if key == self.last_key {
+                        self.load_error = Some(e.clone());
+                    }
                     if source_trace_enabled() {
                         log::warn!("[RT-SOURCE] load-failed frame={} path={} error={e}", ctx.time.frame_count, self.last_key.0);
                     }
@@ -496,6 +591,9 @@ impl Primitive for GltfMeshSource {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     log::error!("node.gltf_mesh_source: background load channel disconnected");
+                    if key == self.last_key {
+                        self.load_error = Some("Background loader disconnected".to_owned());
+                    }
                     if source_trace_enabled() {
                         log::warn!("[RT-SOURCE] load-failed frame={} path={} error=channel-disconnected", ctx.time.frame_count, self.last_key.0);
                     }
@@ -525,6 +623,7 @@ impl Primitive for GltfMeshSource {
             };
             self.cached_verts = Vec::new();
             ctx.outputs.set_mesh_source("source", source);
+            self.source_published = true;
             return;
         };
 
@@ -657,6 +756,7 @@ impl Primitive for GltfMeshSource {
             ctx.mark_outputs_pending();
         } else if let Some(source) = &self.published_source {
             ctx.outputs.set_mesh_source("source", source.clone());
+            self.source_published = true;
         }
     }
 }
@@ -769,6 +869,88 @@ mod tests {
         params
     }
 
+    fn source_key(
+        path: &str,
+        mesh_index: i32,
+    ) -> (String, i32, i32, i32, u32, bool, bool, f32, f32, f32, u32, u32) {
+        (
+            path.to_owned(),
+            mesh_index,
+            -1,
+            -1,
+            0,
+            true,
+            false,
+            0.0,
+            0.0,
+            0.0,
+            1,
+            0,
+        )
+    }
+
+    #[test]
+    fn source_asset_identity_reports_current_published_fingerprint() {
+        let path = "/tmp/current-mesh.glb";
+        let params = cpu_params(path, -1.0);
+        let mut primitive = GltfMeshSource::new();
+        primitive.last_key = source_key(path, -1);
+        primitive.source_identity = Some([7; 32]);
+        primitive.published = true;
+        primitive.source_published = true;
+
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &params),
+            SourceAssetIdentity::Ready([7; 32])
+        );
+
+        let mut changed_path = params.clone();
+        changed_path.insert(Cow::Borrowed("path"), ParamValue::String("/tmp/other.glb".to_owned().into()));
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &changed_path),
+            SourceAssetIdentity::Pending
+        );
+
+        let mut changed_selector = params.clone();
+        changed_selector.insert(Cow::Borrowed("mesh_index"), ParamValue::Float(2.0));
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &changed_selector),
+            SourceAssetIdentity::Pending
+        );
+    }
+
+    #[test]
+    fn source_asset_identity_reports_pending_and_failed_states() {
+        let path = "/tmp/pending-mesh.glb";
+        let params = cpu_params(path, -1.0);
+        let mut primitive = GltfMeshSource::new();
+        primitive.last_key = source_key(path, -1);
+        primitive.source_identity = Some([9; 32]);
+        primitive.published = true;
+        primitive.source_published = true;
+
+        let (_tx, rx) = mpsc::channel::<Result<LoadedAsset<Vec<MeshVertex>>, String>>();
+        primitive.pending_load = Some(rx);
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &params),
+            SourceAssetIdentity::Pending
+        );
+
+        primitive.pending_load = None;
+        primitive.published = false;
+        primitive.load_error = Some("decode failed".to_owned());
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &params),
+            SourceAssetIdentity::Failed("decode failed")
+        );
+
+        let empty_params = cpu_params("", -1.0);
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &empty_params),
+            SourceAssetIdentity::Failed("No source asset selected")
+        );
+    }
+
     fn run_cpu_only_once(
         primitive: &mut GltfMeshSource,
         backend: &mut MockBackend,
@@ -858,6 +1040,15 @@ mod tests {
         assert_eq!(loaded_selection.mesh, -1);
         assert_eq!(loaded_selection.collider_parts, 32);
         assert_eq!(primitive.cached_verts.capacity(), 0);
+        let SourceAssetIdentity::Ready(identity_a) = Primitive::source_asset_identity(&primitive, &params_a) else {
+            panic!("published CPU source must expose its loaded identity");
+        };
+
+        // The next source load must fingerprint its own decoded buffer, even
+        // when an older mesh snapshot is still resident in this node.
+        let changed_positions = [[0.0_f32, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&changed_positions)).unwrap();
+        assert_eq!(Primitive::source_asset_identity(&primitive, &params_a), SourceAssetIdentity::Ready(identity_a));
 
         let params_b = cpu_params(&path_b, 0.0);
         // Control an in-flight parse explicitly, so pending/stale behaviour
@@ -865,9 +1056,17 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         primitive.pending_load = Some(rx);
         assert!(run_cpu_only_once(&mut primitive, &mut backend, source_slot, &params_b));
-        tx.send(Ok(Vec::new())).unwrap();
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &params_b),
+            SourceAssetIdentity::Pending
+        );
+        tx.send(Ok(LoadedAsset::new(Vec::new(), [0; 32]))).unwrap();
         assert!(run_cpu_only_once(&mut primitive, &mut backend, source_slot, &params_b),
             "a completed stale parse must not publish the old descriptor as ready");
+        assert_eq!(
+            Primitive::source_asset_identity(&primitive, &params_b),
+            SourceAssetIdentity::Pending
+        );
 
         let mut source_b = None;
         for _ in 0..200 {
@@ -890,6 +1089,10 @@ mod tests {
         assert_eq!(loaded_selection.mesh, 0);
         assert_eq!(loaded_selection.collider_parts, 32);
         assert_eq!(primitive.cached_verts.capacity(), 0);
+        let SourceAssetIdentity::Ready(identity_b) = Primitive::source_asset_identity(&primitive, &params_b) else {
+            panic!("replacement CPU source must publish its own loaded identity");
+        };
+        assert_ne!(identity_b, identity_a);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -2,11 +2,14 @@
 use super::physics_source_state::PhysicsSourceState;
 use super::physics_sources::PhysicsSourceGraph;
 use crate::node_graph::{
-    EffectNode, EffectNodeContext, EffectNodeType, Graph, NodeInput, NodeOutput, ParamDef,
-    ParamValue,
+    EffectNode, EffectNodeContext, EffectNodeType, Graph, NodeInput, NodeInstanceId, NodeOutput,
+    ParamDef, ParamValue,
 };
 use manifold_core::{NodeId, PresetTypeId, effects::PresetInstance};
 use std::cell::RefCell;
+
+#[path = "physics_source_asset_tests.rs"]
+mod assets;
 
 type Identity = Result<[u8; 32], String>;
 thread_local! {
@@ -141,6 +144,7 @@ fn source() -> Result<Vec<PhysicsSourceGraph>, String> {
         digest: [7; 32],
         control_ids: Vec::new(),
         string_targets: Vec::new(),
+        asset_nodes: Vec::new(),
     }])
 }
 

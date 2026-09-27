@@ -177,6 +177,79 @@ fn digest(def: &EffectGraphDef) -> [u8; 32] {
 }
 
 #[test]
+fn asset_inventory_follows_fluid_and_coupled_ancestry_without_cache_or_appearance() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut def = coupled_graph(false);
+    def.nodes.extend([
+        node(7, "geometry", "node.gltf_mesh_source"),
+        node(8, "animation", "node.gltf_animation_source"),
+        node(9, "appearance", "node.gltf_texture_source"),
+        node(10, "role", "node.fluid_role_source"),
+    ]);
+    def.wires.extend([
+        wire(7, "source", 5, "source"),
+        wire(8, "translation_y", 2, "gravity"),
+        wire(10, "role", 2, "role_0"),
+    ]);
+    let assets = |def: &EffectGraphDef| {
+        prepare(def, def, &[], &registry)
+            .unwrap()
+            .remove(0)
+            .asset_nodes
+    };
+    let expected: Vec<_> = ["animation", "body", "geometry", "role"]
+        .into_iter()
+        .map(NodeId::new)
+        .collect();
+    assert_eq!(assets(&def), expected);
+    def.nodes.reverse();
+    def.wires.reverse();
+    assert_eq!(assets(&def), expected, "authored order is immaterial");
+}
+
+#[test]
+fn asset_inventory_includes_event_only_ancestry() {
+    let (owner, mut prepared) = prepared_uniform_force();
+    let route = &prepared.impulse_routes[0];
+    let field_output = prepared
+        .def
+        .nodes
+        .iter()
+        .find(|node| node.node_id == route.field_node)
+        .unwrap()
+        .id;
+    let field = prepared
+        .def
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == field_output && wire.to_port == "field")
+        .unwrap()
+        .from_node;
+    let next_id = prepared.def.nodes.iter().map(|node| node.id).max().unwrap() + 1;
+    prepared.def.nodes.push(node(
+        next_id,
+        "event_animation",
+        "node.gltf_animation_source",
+    ));
+    prepared
+        .def
+        .wires
+        .push(wire(next_id, "translation_y", field, "strength"));
+    let sources = prepare(
+        &prepared.def,
+        &owner,
+        &prepared.impulse_routes,
+        &PrimitiveRegistry::with_builtin(),
+    )
+    .unwrap();
+    assert!(
+        sources[0]
+            .asset_nodes
+            .contains(&NodeId::new("event_animation"))
+    );
+}
+
+#[test]
 fn physics_inputs_change_identity_but_layout_and_unrelated_nodes_do_not() {
     let base = graph();
     let original = digest(&base);

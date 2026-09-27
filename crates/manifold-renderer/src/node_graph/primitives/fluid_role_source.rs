@@ -283,6 +283,14 @@ crate::primitive! {
 }
 
 impl Primitive for FluidRoleSource {
+    fn source_asset_identity(
+        &self,
+        _: &crate::node_graph::ParamValues,
+    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        // Native take preflight compares the complete accepted role mesh.
+        crate::node_graph::source_asset::SourceAssetIdentity::PreparedGeometry
+    }
+
     fn warmup_pending(&self) -> bool {
         self.source_pending || self.pending_geometry.is_some()
     }

@@ -13,6 +13,8 @@ fn main() {
             "src/node_graph/physics.rs",
             "src/node_graph/physics",
             "src/node_graph/physics_events.rs",
+            "src/node_graph/source_asset.rs",
+            "src/node_graph/gltf_anim_identity.rs",
             "src/node_graph/transform.rs",
             "src/preset_runtime/physics_sampling.rs",
             "src/preset_runtime/physics_sources.rs",

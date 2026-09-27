@@ -197,6 +197,15 @@ ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials
  },
 }
 impl Primitive for RigidBodyNode {
+    fn source_asset_identity(
+        &self,
+        _: &crate::node_graph::ParamValues,
+    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        // The paired take compares the installed native hulls, including all
+        // compound members, before publishing any cached frame.
+        crate::node_graph::source_asset::SourceAssetIdentity::PreparedGeometry
+    }
+
     fn warmup_pending(&self) -> bool {
         self.source_pending || self.pending_collider.is_some()
     }

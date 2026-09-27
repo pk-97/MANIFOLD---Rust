@@ -94,7 +94,7 @@ fn keyframe_buffer(keyframe: f32) -> Vec<u8> {
     bytes
 }
 
-fn load(path: &Path) -> Result<Arc<GltfAnimSet>, String> {
+fn load(path: &Path) -> Result<Arc<LoadedAnimSet>, String> {
     spawn_load(path)
         .recv_timeout(Duration::from_secs(10))
         .expect("background glTF animation load did not finish within 10 seconds")
@@ -108,6 +108,7 @@ fn translation_value(set: &GltfAnimSet) -> f32 {
 fn changed_external_and_primary_content_are_observed_while_old_arc_stays_immutable() {
     let fixture = Fixture::new(1.0, 2.0);
     let first = load(&fixture.model).expect("initial synthetic glTF should load");
+    let first_identity = first.identity();
     assert_eq!(translation_value(&first), 2.0);
     assert_eq!(first.node_bind_trs[0].translation[0], 1.0);
 
@@ -120,12 +121,15 @@ fn changed_external_and_primary_content_are_observed_while_old_arc_stays_immutab
         "resident old payload must be immutable"
     );
     assert_eq!(translation_value(&changed_buffer), 7.0);
+    assert_ne!(changed_buffer.identity(), first_identity);
 
     fixture.set_model_bind_pose(9.0);
     let changed_primary = load(&fixture.model).expect("changed primary glTF should load");
     assert!(!Arc::ptr_eq(&changed_buffer, &changed_primary));
     assert_eq!(first.node_bind_trs[0].translation[0], 1.0);
     assert_eq!(changed_primary.node_bind_trs[0].translation[0], 9.0);
+    assert_ne!(changed_primary.identity(), changed_buffer.identity());
+    assert_eq!(first.identity(), first_identity);
 
     std::fs::remove_file(&fixture.buffer).expect("remove external keyframe buffer");
     assert!(
@@ -162,6 +166,28 @@ fn identical_content_reuses_arc_across_paths_and_restoring_bytes_reuses_original
     let restored = load(&fixture.model).expect("restored original content should load");
     assert!(Arc::ptr_eq(&original, &restored));
     assert_eq!(translation_value(&restored), 4.0);
+    assert_eq!(restored.identity(), original.identity());
+}
+
+#[test]
+fn parsed_identity_survives_collection_uri_and_json_layout_changes() {
+    let fixture = Fixture::new(37.0, 41.0);
+    let original = load(&fixture.model).unwrap();
+    let collected_model = fixture.clone_at(fixture.root.join("collected"));
+    let collected_dir = collected_model.parent().unwrap();
+    std::fs::rename(
+        collected_dir.join("keyframes.bin"),
+        collected_dir.join("buffer_0.bin"),
+    )
+    .unwrap();
+    let mut document: serde_json::Value = serde_json::from_slice(&fixture.model_bytes).unwrap();
+    document["buffers"][0]["uri"] = "buffer_0.bin".into();
+    document["nodes"][0]["name"] = "Collected object".into();
+    std::fs::write(&collected_model, serde_json::to_vec(&document).unwrap()).unwrap();
+    let collected = load(&collected_model).unwrap();
+    assert!(!Arc::ptr_eq(&original, &collected), "raw cache keys differ");
+    assert_eq!(original.identity(), collected.identity());
+    assert_eq!(translation_value(&collected), 41.0);
 }
 
 #[test]

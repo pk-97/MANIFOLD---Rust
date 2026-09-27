@@ -8,6 +8,9 @@ mod string_bindings {
     include!("physics_string_binding_tests.rs");
 }
 
+#[path = "physics_asset_take_tests.rs"]
+mod assets;
+
 thread_local! {
     static FLUID_TIME: Cell<Option<f32>> = const { Cell::new(None) };
 }

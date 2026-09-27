@@ -7,6 +7,7 @@
 //! slot's node map whenever identities are installed.
 
 use super::{EffectGraphDef, PrimitiveRegistry, physics_source_controls, physics_sources};
+use crate::node_graph::source_asset::SourceAssetIdentity;
 use crate::node_graph::{Graph, NodeInstanceId, ParamValue};
 use manifold_core::NodeId;
 use manifold_core::effects::PresetInstance;
@@ -34,13 +35,31 @@ struct InstalledSource {
     controls: Option<Result<[u8; 32], String>>,
     /// Runtime nodes corresponding to the source's stable string targets.
     string_nodes: Vec<NodeInstanceId>,
-    published: Option<Result<[u8; 32], String>>,
+    missing_strings: Vec<String>,
+    asset_nodes: Vec<NodeInstanceId>,
+    published: Option<PublishedIdentity>,
+}
+
+enum PublishedIdentity {
+    Ready([u8; 32]),
+    Failed {
+        asset: Option<NodeId>,
+        message: String,
+    },
+}
+
+struct SourceError<'a> {
+    asset: Option<&'a NodeId>,
+    message: &'a str,
 }
 
 impl InstalledSource {
-    fn identity(&self, graph: &Graph) -> Result<[u8; 32], String> {
+    fn identity<'a>(&'a self, graph: &'a Graph) -> Result<[u8; 32], SourceError<'a>> {
         let base = if let Some(controls) = &self.controls {
-            let controls = controls.as_ref().map_err(Clone::clone)?;
+            let controls = controls.as_ref().map_err(|message| SourceError {
+                asset: None,
+                message,
+            })?;
             let mut hash = Sha256::new();
             hash.update(b"manifold.physics.graph-and-controls.v1");
             hash.update(self.source.digest);
@@ -49,40 +68,107 @@ impl InstalledSource {
         } else {
             self.source.digest
         };
-        if self.source.string_targets.is_empty() {
+        let base = if self.source.string_targets.is_empty() {
+            base
+        } else {
+            let mut hash = Sha256::new();
+            hash.update(b"manifold.physics.source-strings.v1");
+            hash.update(base);
+            hash.update((self.string_nodes.len() as u64).to_be_bytes());
+            for (((id, param), node), missing) in self
+                .source
+                .string_targets
+                .iter()
+                .zip(&self.string_nodes)
+                .zip(&self.missing_strings)
+            {
+                let Some(ParamValue::String(value)) = graph
+                    .get_node(*node)
+                    .and_then(|node| node.params.get(param.as_str()))
+                else {
+                    return Err(SourceError {
+                        asset: None,
+                        message: missing,
+                    });
+                };
+                for value in [id.as_str(), param.as_str(), value.as_str()] {
+                    hash.update((value.len() as u64).to_be_bytes());
+                    hash.update(value.as_bytes());
+                }
+            }
+            hash.finalize().into()
+        };
+        if self.source.asset_nodes.is_empty() {
             return Ok(base);
         }
         let mut hash = Sha256::new();
-        hash.update(b"manifold.physics.source-strings.v1");
+        hash.update(b"manifold.physics.loaded-assets.v1");
         hash.update(base);
-        hash.update((self.string_nodes.len() as u64).to_be_bytes());
-        for ((id, param), node) in self.source.string_targets.iter().zip(&self.string_nodes) {
-            let Some(ParamValue::String(value)) = graph
-                .get_node(*node)
-                .and_then(|node| node.params.get(param.as_str()))
-            else {
-                return Err(format!(
-                    "Physics take: string input '{id}.{param}' is unavailable"
-                ));
+        hash.update((self.asset_nodes.len() as u64).to_be_bytes());
+        for (id, instance) in self.source.asset_nodes.iter().zip(&self.asset_nodes) {
+            let node = graph.get_node(*instance).expect("prepared source exists");
+            hash.update((id.as_str().len() as u64).to_be_bytes());
+            hash.update(id.as_str().as_bytes());
+            let message = match node.node.source_asset_identity(&node.params) {
+                SourceAssetIdentity::Ready(identity) => {
+                    hash.update([0]);
+                    hash.update(identity);
+                    continue;
+                }
+                SourceAssetIdentity::PreparedGeometry => {
+                    hash.update([1]);
+                    continue;
+                }
+                SourceAssetIdentity::Pending => "Source asset is still loading",
+                SourceAssetIdentity::Failed(message) => message,
+                SourceAssetIdentity::Unsupported => {
+                    "This source cannot yet validate recorded takes"
+                }
             };
-            for value in [id.as_str(), param.as_str(), value.as_str()] {
-                hash.update((value.len() as u64).to_be_bytes());
-                hash.update(value.as_bytes());
-            }
+            return Err(SourceError {
+                asset: Some(id),
+                message,
+            });
         }
         Ok(hash.finalize().into())
     }
 
     fn publish(&mut self, graph: &mut Graph, force: bool) {
         let identity = self.identity(graph);
-        if force || self.published.as_ref() != Some(&identity) {
-            self.published = Some(identity.clone());
-            graph
-                .get_node_mut(self.node)
-                .expect("prepared fluid exists")
-                .node
-                .set_physics_source_identity(identity);
+        let unchanged = match (&identity, &self.published) {
+            (Ok(current), Some(PublishedIdentity::Ready(prior))) => current == prior,
+            (Err(current), Some(PublishedIdentity::Failed { asset, message })) => {
+                current.asset == asset.as_ref() && current.message == message
+            }
+            _ => false,
+        };
+        if !force && unchanged {
+            return;
         }
+        // Pending/error observations borrow their message. Allocate only when
+        // the published state changes, not on every loading/error frame.
+        let (published, identity) = match identity {
+            Ok(identity) => (PublishedIdentity::Ready(identity), Ok(identity)),
+            Err(error) => {
+                let detail = match error.asset {
+                    Some(id) => format!("Physics take: asset '{id}': {}", error.message),
+                    None => error.message.to_owned(),
+                };
+                (
+                    PublishedIdentity::Failed {
+                        asset: error.asset.cloned(),
+                        message: error.message.to_owned(),
+                    },
+                    Err(detail),
+                )
+            }
+        };
+        self.published = Some(published);
+        graph
+            .get_node_mut(self.node)
+            .expect("prepared fluid exists")
+            .node
+            .set_physics_source_identity(identity);
     }
 }
 
@@ -164,6 +250,17 @@ impl PhysicsSourceState {
         };
         for source in sources {
             if !source.string_nodes.is_empty() {
+                source.publish(graph, false);
+            }
+        }
+    }
+
+    pub(super) fn observe_assets(&mut self, graph: &mut Graph) {
+        let Ok(sources) = &mut self.sources else {
+            return;
+        };
+        for source in sources {
+            if !source.asset_nodes.is_empty() {
                 source.publish(graph, false);
             }
         }
@@ -271,6 +368,13 @@ impl PhysicsSourceState {
                 });
             resolved.push(InstalledSource {
                 node,
+                missing_strings: source.string_targets.iter().map(|(id, param)| format!("Physics take: string input '{id}.{param}' is unavailable")).collect(),
+                asset_nodes: source.asset_nodes.iter().map(|id| {
+                    let local = prefixed_node_id(prefix, id);
+                    node_map.iter().find_map(|(candidate, instance)| {
+                        (candidate == &local && graph.get_node(*instance).is_some()).then_some(*instance)
+                    }).ok_or_else(|| format!("Physics take: asset source '{id}' is absent from the installed graph"))
+                }).collect::<Result<Vec<_>, _>>()?,
                 string_nodes: source.string_targets.iter().map(|(id, _)| {
                     let local = prefixed_node_id(prefix, id);
                     node_map.iter().find_map(|(candidate, instance)| {
