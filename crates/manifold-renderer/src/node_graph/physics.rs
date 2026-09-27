@@ -981,58 +981,10 @@ impl RigidSimulation {
                 let solver_substeps = 4;
                 for microstep in 1..=microsteps {
                     let target_time = self.physics_time + microstep_time * microstep as f64;
-                    let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
-                    for (i, body) in bodies.iter().enumerate() {
-                        let Some(body) = body else { continue };
-                        if (body.fragment_parent.is_some() && !self.fragment_active[i])
-                            || self.fragment_parent_released[i]
-                        {
-                            continue;
-                        }
-                        if body.enabled && body.kind == 2 {
-                            targets[i] = Some(
-                                self.interpolated_body(i, target_time, body.clone())
-                                    .unwrap_or_else(|| body.clone()),
-                            );
-                        }
-                    }
-                    let copy_target = prototype
-                        .as_ref()
-                        .filter(|prototype| prototype.enabled && prototype.kind == 2)
-                        .map(|prototype| {
-                            self.interpolated_prototype(target_time, prototype.clone())
-                                .unwrap_or_else(|| prototype.clone())
-                        });
-                    let world = self.world.as_mut().expect("world constructed above");
-                    for (i, target) in targets.into_iter().enumerate() {
-                        let Some(target) = target else { continue };
-                        let Some(handle) = self.handles[i] else {
-                            continue;
-                        };
-                        world
-                            .set_animated_target(handle, target.config(), Seconds(microstep_time))
-                            .map_err(|e| e.to_string())?;
-                    }
-                    if let Some(prototype) = copy_target {
-                        for index in 0..self.active_copy_count {
-                            let Some(handle) = self.copy_handles[index] else {
-                                continue;
-                            };
-                            let target = copy_transform_for_layout(
-                                prototype.clone(),
-                                prototype.transform.pos,
-                                index,
-                                self.active_copy_count,
-                                self.latched_copy_columns,
-                                self.latched_copy_spacing,
-                                self.latched_copy_layout,
-                            );
-                            world
-                                .set_animated_target(handle, target.config(), Seconds(microstep_time))
-                                .map_err(|e| e.to_string())?;
-                        }
-                    }
-                    self.apply_sampled_fields(
+                    self.prepare_substep(
+                        &bodies,
+                        prototype.as_ref(),
+                        Seconds(target_time),
                         Seconds(microstep_time),
                         &sampled_field,
                         targeted_indices,
@@ -1548,6 +1500,71 @@ impl RigidSimulation {
             self.copy_bullet_enabled[..self.active_copy_count].fill(false);
         }
         Ok(if fast_count >= 2 { fast_steps } else { 1 })
+    }
+
+    /// Queue this interval's authored motion and existing continuous fields.
+    /// The native step consumes forces; a coupled owner can use this same
+    /// preparation before each accepted fluid/rigid subdivision.
+    fn prepare_substep(
+        &mut self,
+        bodies: &[Option<RigidBody>; MAX_BODIES],
+        prototype: Option<&RigidBody>,
+        target_time: Seconds,
+        dt: Seconds,
+        global: &crate::node_graph::vector_field::ContinuousField<'_>,
+        indices: Option<(usize, usize, f32)>,
+    ) -> Result<(), String> {
+        let mut targets: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
+        for (i, body) in bodies.iter().enumerate() {
+            let Some(body) = body else { continue };
+            if (body.fragment_parent.is_some() && !self.fragment_active[i])
+                || self.fragment_parent_released[i]
+            {
+                continue;
+            }
+            if body.enabled && body.kind == 2 {
+                targets[i] = Some(
+                    self.interpolated_body(i, target_time.0, body.clone())
+                        .unwrap_or_else(|| body.clone()),
+                );
+            }
+        }
+        let copy_target = prototype
+            .filter(|prototype| prototype.enabled && prototype.kind == 2)
+            .map(|prototype| {
+                self.interpolated_prototype(target_time.0, prototype.clone())
+                    .unwrap_or_else(|| prototype.clone())
+            });
+        let world = self.world.as_mut().expect("world constructed above");
+        for (i, target) in targets.into_iter().enumerate() {
+            let Some(target) = target else { continue };
+            let Some(handle) = self.handles[i] else {
+                continue;
+            };
+            world
+                .set_animated_target(handle, target.config(), dt)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(prototype) = copy_target {
+            for index in 0..self.active_copy_count {
+                let Some(handle) = self.copy_handles[index] else {
+                    continue;
+                };
+                let target = copy_transform_for_layout(
+                    prototype.clone(),
+                    prototype.transform.pos,
+                    index,
+                    self.active_copy_count,
+                    self.latched_copy_columns,
+                    self.latched_copy_spacing,
+                    self.latched_copy_layout,
+                );
+                world
+                    .set_animated_target(handle, target.config(), dt)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        self.apply_sampled_fields(dt, global, indices)
     }
 
     fn apply_sampled_fields(
