@@ -66,6 +66,9 @@ pub trait TimelineInputHost {
 
     /// Duplicate selected cards without replacing the clipboard.
     fn handle_effect_duplicate(&mut self) -> bool { false }
+    fn navigate_scene_selection(&mut self, _delta: i32, _reorder: bool) -> bool { false }
+    fn rename_scene_selection(&mut self) -> bool { false }
+    fn frame_scene_selection(&mut self) -> bool { false }
 
     /// Delete selected effects. Returns true if handled.
     fn handle_effect_delete(&mut self) -> bool;

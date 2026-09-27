@@ -1519,7 +1519,7 @@ mod tests {
     fn card_visible_for_material_hides_everything() {
         assert!(!card_visible_for("node.pbr_material", "color_r"));
         assert!(!card_visible_for("node.pbr_material", "roughness"));
-        assert!(!card_visible_for("node.phong_material", "color_r"));
+        assert!(!card_visible_for("node.cel_material", "color_r"));
     }
 
     /// Stamping a transform node exposes `pos_x` (card-visible) and

@@ -1,6 +1,6 @@
 //! `Material` — port-data type carried on [`PortType::Material`](crate::node_graph::ports::PortType::Material) wires.
 //!
-//! One material source primitive (`node.{unlit,phong,pbr,cel}_material`) emits
+//! One material source primitive (`node.{unlit,pbr,cel}_material`) emits
 //! a fully-populated struct each frame; downstream consumers — the bundled 3D
 //! mesh renderers ([`render_3d_mesh`](crate::node_graph::primitives::render_3d_mesh),
 //! [`render_instanced_3d_mesh`](crate::node_graph::primitives::render_instanced_3d_mesh))
@@ -17,7 +17,7 @@
 //! The kind discriminator [`MaterialKind`] is the dispatch axis: the renderer
 //! holds an `AHashMap<MaterialKind, GpuRenderPipeline>` and gets-or-compiles
 //! the matching pipeline lazily. Fields not relevant to the wired kind are
-//! inert (e.g. `metallic` is unread when `kind = Phong`); material atoms only
+//! inert (e.g. `metallic` is unread when `kind = Unlit`); material atoms only
 //! expose their kind's outer-card params, so users never see the superset.
 //!
 //! Emission is stored premultiplied with intensity (`rgb × intensity`) — same
@@ -124,14 +124,14 @@ impl Default for Subsurface {
 /// kind ships with: (a) a new variant here, (b) a new material atom primitive
 /// that emits it, (c) a new arm in each renderer's per-kind pipeline cache
 /// and `conditional_requirements` list, (d) a new fragment shader.
+///
+/// The GPU material-table ABI reserves numeric tag 1; its explicit mapping
+/// keeps PBR at 2 and Cel at 3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialKind {
     /// Flat colour passthrough. No lighting math. The renderer does NOT
     /// require a `light` input when this kind is wired.
     Unlit,
-    /// Classic Lambert diffuse + Blinn-Phong specular. Cheap baseline.
-    /// The renderer requires a `light` input.
-    Phong,
     /// Cook-Torrance microfacet specular (D_GGX × G_Smith × F_Schlick) +
     /// IBL reflection. The workhorse for realistic surfaces. The renderer
     /// requires a `light` input AND an `envmap` texture.
@@ -170,9 +170,7 @@ pub enum AlphaMode {
 ///
 /// Trivially copyable, including fixed-size texture metadata. The struct is
 /// the superset of every kind's params; fields not relevant to the wired
-/// `kind` are inert on the renderer side (e.g. the PBR pipeline ignores
-/// `specular_color` / `specular_power`; the Phong pipeline ignores
-/// `metallic` / `roughness`). Each atom only exposes its kind's outer-card
+/// `kind` are inert on the renderer side. Each atom only exposes its kind's outer-card
 /// params, so the inert-field shape is implementation detail.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material {
@@ -190,7 +188,7 @@ pub struct Material {
     pub emission: [f32; 4],
     /// Lambert ambient floor in `[0, 1]`. Unread by `Unlit` (no lighting
     /// math). Unread by `Cel` (which uses `band_low` as its shadow band
-    /// instead). For Phong / PBR, mixed in via
+    /// instead). For PBR, mixed in via
     /// `lit = lambert * (1 - ambient) + ambient`.
     pub ambient: f32,
 
@@ -206,12 +204,6 @@ pub struct Material {
     pub clearcoat_normal_scale: f32,
     /// glTF `occlusionTexture.strength` (default `1.0`).
     pub occlusion_strength: f32,
-
-    // ---- Phong-specific. Inert when `kind != Phong`. ----
-    /// Linear-space specular tint. `a` reserved (currently `1.0`).
-    pub specular_color: [f32; 4],
-    /// Blinn-Phong exponent. `1` = very soft, `256` = pinpoint.
-    pub specular_power: f32,
 
     // ---- Cel-specific. Inert when `kind != Cel`. ----
     /// Number of quantization bands `[2, 16]`.
@@ -383,8 +375,6 @@ impl Material {
             normal_scale: 1.0,
             clearcoat_normal_scale: 1.0,
             occlusion_strength: 1.0,
-            specular_color: [1.0, 1.0, 1.0, 1.0],
-            specular_power: 32.0,
             cel_bands: 4,
             band_low: 0.08,
             band_high: 1.0,
@@ -434,31 +424,6 @@ impl Material {
         let mut m = Self::default_unlit_white();
         m.kind = MaterialKind::Unlit;
         m.base_color = color_rgba;
-        m.emission = premultiply_emission(emission_rgb, emission_intensity);
-        m
-    }
-
-    /// Build a Phong material from the standard outer-card surface.
-    #[allow(clippy::too_many_arguments)]
-    pub fn phong(
-        color_rgba: [f32; 4],
-        ambient: f32,
-        specular_color_rgb: [f32; 3],
-        specular_power: f32,
-        emission_rgb: [f32; 3],
-        emission_intensity: f32,
-    ) -> Self {
-        let mut m = Self::default_unlit_white();
-        m.kind = MaterialKind::Phong;
-        m.base_color = color_rgba;
-        m.ambient = ambient;
-        m.specular_color = [
-            specular_color_rgb[0],
-            specular_color_rgb[1],
-            specular_color_rgb[2],
-            1.0,
-        ];
-        m.specular_power = specular_power;
         m.emission = premultiply_emission(emission_rgb, emission_intensity);
         m
     }
@@ -514,7 +479,7 @@ impl Material {
     pub fn requires_light(&self) -> bool {
         match self.kind {
             MaterialKind::Unlit => false,
-            MaterialKind::Phong | MaterialKind::Pbr | MaterialKind::Cel => true,
+            MaterialKind::Pbr | MaterialKind::Cel => true,
         }
     }
 
@@ -566,22 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn phong_constructor_populates_specular_fields() {
-        let m = Material::phong(
-            [0.8, 0.85, 0.9, 1.0],
-            0.15,
-            [1.0, 0.9, 0.8],
-            64.0,
-            [0.0, 0.0, 0.0],
-            0.0,
-        );
-        assert_eq!(m.kind, MaterialKind::Phong);
-        assert_eq!(m.ambient, 0.15);
-        assert_eq!(m.specular_color, [1.0, 0.9, 0.8, 1.0]);
-        assert_eq!(m.specular_power, 64.0);
-    }
-
-    #[test]
     fn pbr_constructor_clamps_roughness_floor() {
         // Roughness exactly zero is a numerical landmine in the GGX
         // denominator — clamp to a safe floor at constructor time so
@@ -613,20 +562,6 @@ mod tests {
     }
 
     #[test]
-    fn phong_requires_light_but_not_envmap() {
-        let m = Material::phong(
-            [0.5, 0.5, 0.5, 1.0],
-            0.15,
-            [1.0, 1.0, 1.0],
-            32.0,
-            [0.0; 3],
-            0.0,
-        );
-        assert!(m.requires_light());
-        assert!(!m.requires_envmap());
-    }
-
-    #[test]
     fn cel_requires_light_but_not_envmap() {
         let m = Material::cel([0.4, 0.6, 0.3, 1.0], 4, 0.08, 1.0, [0.0; 3], 0.0);
         assert!(m.requires_light());
@@ -645,7 +580,6 @@ mod tests {
         let materials = [
             Material::default_unlit_white(),
             Material::unlit([1.0; 4], [0.0; 3], 0.0),
-            Material::phong([1.0; 4], 0.1, [1.0; 3], 32.0, [0.0; 3], 0.0),
             Material::pbr([1.0; 4], 0.1, 0.0, 0.5, [0.0; 3], 0.0),
             Material::cel([1.0; 4], 4, 0.1, 1.0, [0.0; 3], 0.0),
         ];

@@ -49,10 +49,6 @@ struct GBufferUniforms {
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
     ConditionalRequirement {
-        on_material_kind: MaterialKind::Phong,
-        required_inputs: &["light"],
-    },
-    ConditionalRequirement {
         on_material_kind: MaterialKind::Pbr,
         required_inputs: &["light", "envmap"],
     },
@@ -517,8 +513,8 @@ mod tests {
         let rules = node.conditional_requirements();
         assert_eq!(
             rules.len(),
-            3,
-            "expected Phong/Pbr/Cel rules, got {rules:?}"
+            2,
+            "expected Pbr/Cel rules, got {rules:?}"
         );
         let by_kind = |k: MaterialKind| {
             rules
@@ -526,7 +522,6 @@ mod tests {
                 .find(|r| r.on_material_kind == k)
                 .unwrap_or_else(|| panic!("missing rule for {k:?}"))
         };
-        assert_eq!(by_kind(MaterialKind::Phong).required_inputs, &["light"]);
         assert_eq!(
             by_kind(MaterialKind::Pbr).required_inputs,
             &["light", "envmap"]

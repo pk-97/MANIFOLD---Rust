@@ -335,7 +335,7 @@ mod tests {
     /// one when the def cache rebuilds.
     ///
     /// This test asserts the end-to-end path on a bundled scene generator
-    /// (SceneStarter, whose raw JSON already carries the stamped metadata from
+    /// (Scene, whose raw JSON already carries the stamped metadata from
     /// authoring time — the migration is idempotent) and separately proves the
     /// migration itself on a synthetic pre-stamp shape (a lone render_scene
     /// node with no preset_metadata). Together they prove the cache path works
@@ -344,14 +344,14 @@ mod tests {
     /// `rebuild_def_cache` pipeline as stock JSON.
     #[test]
     fn bundled_preset_def_carries_migrated_scene_bindings() {
-        let id = PresetTypeId::new("SceneStarter");
+        let id = PresetTypeId::new("Scene");
 
         // Migrated cache carries the stamped bindings.
-        let migrated = bundled_preset_def(&id).expect("SceneStarter must be a bundled generator");
+        let migrated = bundled_preset_def(&id).expect("Scene must be a bundled generator");
         let meta = migrated
             .preset_metadata
             .as_ref()
-            .expect("SceneStarter def cache entry must have preset_metadata");
+            .expect("Scene def cache entry must have preset_metadata");
         let binding_names: Vec<&str> = meta
             .bindings
             .iter()
@@ -364,13 +364,13 @@ mod tests {
             .collect();
         assert!(
             binding_names.contains(&"rt_denoise_feed"),
-            "bundled_preset_def(SceneStarter) must carry rt_denoise_feed binding; \
+            "bundled_preset_def(Scene) must carry rt_denoise_feed binding; \
              migrate_scene_exposures stamps it at cache-build time. \
              Got: {binding_names:?}"
         );
         assert!(
             binding_names.contains(&"rt_enabled"),
-            "bundled_preset_def(SceneStarter) must carry rt_enabled binding; \
+            "bundled_preset_def(Scene) must carry rt_enabled binding; \
              Got: {binding_names:?}"
         );
 

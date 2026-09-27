@@ -9,6 +9,10 @@ pub(crate) enum EditSelection {
         ids: Vec<EffectId>,
     },
     Layer(LayerId),
+    Light {
+        layer_id: LayerId,
+        light_id: u32,
+    },
     Object {
         layer_id: LayerId,
         object_id: u32,
@@ -23,6 +27,7 @@ pub(crate) enum SelectAfterEdit {
     },
     NewLayer,
     NewObject(LayerId),
+    NewLight(LayerId),
 }
 
 pub(crate) enum PendingSelection {
@@ -31,6 +36,10 @@ pub(crate) enum PendingSelection {
         ids: Vec<EffectId>,
     },
     Layer(Vec<LayerId>),
+    Light {
+        layer_id: LayerId,
+        previous: Vec<u32>,
+    },
     Object {
         layer_id: LayerId,
         previous: Vec<u32>,
@@ -59,6 +68,26 @@ fn object_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
         .unwrap_or_default()
 }
 
+fn light_ids(project: &Project, layer: &LayerId) -> Vec<u32> {
+    crate::graph_target::resolve(
+        project,
+        &manifold_core::GraphTarget::Generator(layer.clone()),
+    )
+    .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def)
+    .map(|vm| {
+        vm.lights
+            .into_iter()
+            .filter_map(|light| match light {
+                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(row) => {
+                    Some(row.node_doc_id)
+                }
+                _ => None,
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 impl SelectAfterEdit {
     pub(crate) fn capture(self, project: &Project) -> PendingSelection {
         match self {
@@ -71,6 +100,10 @@ impl SelectAfterEdit {
                     .map(|layer| layer.layer_id.clone())
                     .collect(),
             ),
+            Self::NewLight(layer_id) => {
+                let previous = light_ids(project, &layer_id);
+                PendingSelection::Light { layer_id, previous }
+            }
             Self::NewObject(layer_id) => {
                 let previous = object_ids(project, &layer_id);
                 PendingSelection::Object { layer_id, previous }
@@ -97,6 +130,10 @@ impl PendingSelection {
                 .iter()
                 .find(|layer| !previous.contains(&layer.layer_id))
                 .map(|layer| EditSelection::Layer(layer.layer_id.clone())),
+            Self::Light { layer_id, previous } => light_ids(project, &layer_id)
+                .into_iter()
+                .find(|id| !previous.contains(id))
+                .map(|light_id| EditSelection::Light { layer_id, light_id }),
             Self::Object { layer_id, previous } => object_ids(project, &layer_id)
                 .into_iter()
                 .find(|id| !previous.contains(id))
@@ -164,6 +201,15 @@ pub(crate) fn apply_update(
             selection.pin_scope(InspectorTab::Layer);
             *active_layer = Some(id.clone());
             ui.pending_layer_reveal = Some(id.clone());
+        }
+        EditSelection::Light { layer_id, light_id } => {
+            if !light_ids(project, layer_id).contains(light_id) {
+                return false;
+            }
+            ui.scene_setup_panel.set_selection(
+                layer_id.clone(),
+                manifold_ui::panels::scene_setup_panel::SceneSelection::Light(*light_id),
+            );
         }
         EditSelection::Object {
             layer_id,

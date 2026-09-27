@@ -112,9 +112,9 @@ fn luma(rgb: [f32; 3]) -> f32 {
 /// axis-aligned to world X/Z -- `generate_grid_mesh_body.wgsl`), viewed
 /// nearly top-down by `node.orbit_camera` (tilt close to vertical so
 /// `dot(world_normal, V) > 0` for every plausible tilted normal below --
-/// no `fs_phong` N-flip). `node.light` defaults to a Sun at
+/// no cel-shader N-flip). `node.light` defaults to a Sun at
 /// `pos=(0,30,0) aim=(0,0,0)` -- rays travel straight down, so
-/// `l_dir = -dir` (the "toward light" direction `fs_phong` reads) is
+/// `l_dir = -dir` (the "toward light" direction the cel shader reads) is
 /// exactly `(0,1,0)`, world-space UP. `cast_shadows` is forced off so
 /// `shadow_factor` never runs (this scene has no caster fixture).
 struct GridScene {
@@ -152,16 +152,15 @@ fn grid_camera_light_scene() -> GridScene {
     GridScene { nodes, wires }
 }
 
-fn phong_material_node(color: [f32; 3], ambient: f32, specular: f32) -> String {
+fn cel_material_node(color: [f32; 3], _ambient: f32, _specular: f32) -> String {
     format!(
-        "{{\"id\":4,\"typeId\":\"node.phong_material\",\"nodeId\":\"mat\",\"params\":{{\
+        "{{\"id\":4,\"typeId\":\"node.cel_material\",\"nodeId\":\"mat\",\"params\":{{\
             \"color_r\":{{\"type\":\"Float\",\"value\":{}}},\
             \"color_g\":{{\"type\":\"Float\",\"value\":{}}},\
             \"color_b\":{{\"type\":\"Float\",\"value\":{}}},\
-            \"ambient\":{{\"type\":\"Float\",\"value\":{ambient}}},\
-            \"specular_color_r\":{{\"type\":\"Float\",\"value\":{specular}}},\
-            \"specular_color_g\":{{\"type\":\"Float\",\"value\":{specular}}},\
-            \"specular_color_b\":{{\"type\":\"Float\",\"value\":{specular}}}}}}},",
+            \"cel_bands\":{{\"type\":\"Int\",\"value\":16}},\
+            \"band_low\":{{\"type\":\"Float\",\"value\":0.0}},\
+            \"band_high\":{{\"type\":\"Float\",\"value\":1.0}}}}}},",
         color[0], color[1], color[2]
     )
 }
@@ -196,7 +195,7 @@ fn assemble(name: &str, extra_nodes: &str, extra_wires: &str, objects: u32, ligh
 /// The vertex normal `N_vertex = (0,1,0)` is the frame's third column, so
 /// `world_N.y = tangent_normal.z` EXACTLY, independent of any T/B sign
 /// ambiguity. With a Sun light straight overhead (`L = (0,1,0)`) and
-/// Phong's specular/ambient zeroed out, `lit = albedo * n_dot_l =
+/// Cel's shadow band is zeroed out, `lit = albedo * n_dot_l =
 /// albedo * world_N.y = albedo * tangent_normal.z` -- a ratio-based,
 /// camera/light-magnitude-independent, exactly computed prediction.
 #[test]
@@ -207,7 +206,7 @@ fn normal_map_tilts_the_lit_value_by_the_cotangent_frames_predicted_amount() {
     let normal_rgb = [0.5, 0.8, 0.9, 1.0];
 
     let grid = grid_camera_light_scene();
-    let material = phong_material_node([0.7, 0.7, 0.7], 0.0, 0.0);
+    let material = cel_material_node([0.7, 0.7, 0.7], 0.0, 0.0);
 
     let unwired_extra_nodes = format!("{}{}", grid.nodes, material);
     let unwired_json = assemble("NormalMapUnwired", &unwired_extra_nodes, &grid.wires, 1, 1);
@@ -255,7 +254,7 @@ fn normal_map_tilts_the_lit_value_by_the_cotangent_frames_predicted_amount() {
 #[test]
 fn unwired_normal_map_reproduces_the_pre_fp2_lambert_formula_exactly() {
     let grid = grid_camera_light_scene();
-    let material = phong_material_node([0.7, 0.5, 0.3], 0.0, 0.0);
+    let material = cel_material_node([0.7, 0.5, 0.3], 0.0, 0.0);
     let extra_nodes = format!("{}{}", grid.nodes, material);
     let json = assemble("UnwiredLambert", &extra_nodes, &grid.wires, 1, 1);
 

@@ -652,7 +652,7 @@ pub trait Primitive: PrimitiveSpec {
 
     /// Mirror of
     /// [`EffectNode::emitted_material_kind`](crate::node_graph::effect_node::EffectNode::emitted_material_kind).
-    /// Material atoms (`node.{unlit,phong,pbr,cel}_material`) override
+    /// Material atoms (`node.{unlit,pbr,cel}_material`) override
     /// to return their fixed kind. Default `None` — most primitives
     /// don't emit a Material at all.
     fn emitted_material_kind(&self) -> Option<crate::node_graph::material::MaterialKind> {

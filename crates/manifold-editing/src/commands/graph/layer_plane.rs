@@ -2,7 +2,7 @@
 //! (BUG-4gba): one undoable composite edit that (1) bumps
 //! `render_scene`'s `objects` count by one, (2) builds a new group named
 //! "Layer Plane N" containing a `node.plane_mesh` (width/height from the
-//! caller) + a Mask/cutout `node.unlit_material` + a `node.transform_3d` + a
+//! caller) + a Mask/cutout `node.pbr_material` + a `node.transform_3d` + a
 //! `node.scene_object`, wired to a `system.group_output` boundary exposing
 //! the object, (3) wires the group's `object` output to the new `object_k`
 //! port on `render_scene`. Undo restores the pre-edit
@@ -188,17 +188,14 @@ impl Command for AddSceneLayerPlaneCommand {
                         Some(format!("plane_{k}")),
                         plane_params,
                     );
-                    // unlit_material alpha_mode is an ENUM: 0=Opaque, 1=Mask,
-                    // 2=Blend (transcribed from `unlit_material.rs`'s
-                    // `ALPHA_MODES` — the primitive's own defaults are Opaque,
-                    // so the cutout is stamped explicitly here; a skinned
-                    // transparent-black backing must not block the sheet's
-                    // alpha once the layer has one).
+                    // Baked Look keeps layer imagery flat while exposing the
+                    // same PBR feature workflow as every other scene object.
                     let mat_node = scene_build_node(
                         mat_id,
-                        "node.unlit_material",
+                        "node.pbr_material",
                         Some(format!("mat_{k}")),
                         BTreeMap::from([
+                            ("baked_look".to_string(), SerializedParamValue::Bool { value: true }),
                             (
                                 "alpha_mode".to_string(),
                                 SerializedParamValue::Enum { value: 1 }, // Mask
@@ -322,7 +319,7 @@ impl Command for AddSceneLayerPlaneCommand {
                     &mut meta.bindings,
                     mat_id,
                     &mat_node_id,
-                    "node.unlit_material",
+                    "node.pbr_material",
                     &format!("{handle} — Material"),
                     &self.material_metadata,
                     &mat_node_params,
@@ -505,7 +502,7 @@ mod tests {
         let mat = body
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.unlit_material")
+            .find(|n| n.type_id == "node.pbr_material")
             .expect("material node");
         assert_eq!(
             mat.params.get("alpha_mode"),
@@ -732,7 +729,7 @@ mod tests {
             let mat_node = body
                 .nodes
                 .iter()
-                .find(|n| n.type_id == "node.unlit_material")
+                .find(|n| n.type_id == "node.pbr_material")
                 .unwrap();
             let transform_node = body
                 .nodes

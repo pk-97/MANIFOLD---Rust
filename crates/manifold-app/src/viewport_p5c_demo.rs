@@ -58,7 +58,7 @@ fn scene_json() -> String {
             "tilt":{"type":"Float","value":0.6},
             "distance":{"type":"Float","value":10.0},
             "fov_y":{"type":"Float","value":0.8}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.pbr_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":0.8},
             "color_g":{"type":"Float","value":0.8},
             "color_b":{"type":"Float","value":0.9},
@@ -79,6 +79,10 @@ fn scene_json() -> String {
         {"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{
             "objects":{"type":"Int","value":1},
             "lights":{"type":"Int","value":1}}},
+        {"id":7,"typeId":"node.bake_environment","nodeId":"environment","params":{
+            "width":{"type":"Int","value":16},
+            "height":{"type":"Int","value":8},
+            "intensity":{"type":"Float","value":0.0}}},
         {"id":99,"typeId":"system.final_output","nodeId":"out"}
     ],"wires":[
         {"fromNode":1,"fromPort":"vertices","toNode":2,"toPort":"in"},
@@ -86,6 +90,7 @@ fn scene_json() -> String {
         {"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"},
         {"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"},
         {"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"},
+        {"fromNode":7,"fromPort":"envmap","toNode":20,"toPort":"envmap"},
         {"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}
     ]}"#
         .to_string()

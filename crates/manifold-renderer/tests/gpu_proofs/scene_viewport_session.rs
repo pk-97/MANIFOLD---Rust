@@ -47,11 +47,11 @@ fn scene_json() -> String {
             "tilt":{"type":"Float","value":0.6},
             "distance":{"type":"Float","value":10.0},
             "fov_y":{"type":"Float","value":0.8}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":0.8},
             "color_g":{"type":"Float","value":0.8},
             "color_b":{"type":"Float","value":0.9},
-            "ambient":{"type":"Float","value":0.1}}},
+            "band_low":{"type":"Float","value":0.1}}},
         {"id":5,"typeId":"node.light","nodeId":"sun","params":{
             "mode":{"type":"Enum","value":0},
             "pos_x":{"type":"Float","value":4.0},

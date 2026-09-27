@@ -66,11 +66,11 @@ const GROUND_AND_CAMERA_NODES: &str = r#"
             "tilt":{"type":"Float","value":0.95},
             "distance":{"type":"Float","value":10.0},
             "fov_y":{"type":"Float","value":0.8}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"ground_mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.05}}},
+            "band_low":{"type":"Float","value":0.05}}},
         {"id":40,"typeId":"node.scene_object","nodeId":"obj0","params":{
             "visible":{"type":"Float","value":1.0}}}"#;
 
@@ -132,11 +132,11 @@ fn scene_json(rt_enabled: bool, occluder_cast_shadows: f32, rt_reflections: bool
             "src_rows":{{"type":"Int","value":10}}}}}},
         {{"id":7,"typeId":"node.transform_3d","nodeId":"occ_xform","params":{{
             "pos_y":{{"type":"Float","value":1.5}}}}}},
-        {{"id":8,"typeId":"node.phong_material","nodeId":"occ_mat","params":{{
+        {{"id":8,"typeId":"node.cel_material","nodeId":"occ_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":0.0}},
             "color_b":{{"type":"Float","value":0.0}},
-            "ambient":{{"type":"Float","value":0.05}}}}}},
+            "band_low":{{"type":"Float","value":0.05}}}}}},
         {{"id":41,"typeId":"node.scene_object","nodeId":"obj1","params":{{
             "visible":{{"type":"Float","value":1.0}},
             "cast_shadows":{{"type":"Float","value":{occluder_cast_shadows}}}}}}},

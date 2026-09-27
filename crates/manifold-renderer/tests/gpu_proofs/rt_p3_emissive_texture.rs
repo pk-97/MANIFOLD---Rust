@@ -156,11 +156,11 @@ fn scene_json(
             "tilt":{{"type":"Float","value":{TILT}}},
             "distance":{{"type":"Float","value":{DISTANCE}}},
             "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"ground_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.05}}}}}},
+            "band_low":{{"type":"Float","value":0.05}}}}}},
         {{"id":8,"typeId":"node.pbr_material","nodeId":"emitter_mat","params":{{
             "color_r":{{"type":"Float","value":0.02}},
             "color_g":{{"type":"Float","value":0.02}},

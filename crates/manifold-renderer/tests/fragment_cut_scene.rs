@@ -255,6 +255,7 @@ fn legacy_cut_preparation_is_idempotent_and_keeps_inner_controls_live() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/scene-modifiers/surface_peel_applied_v2.json");
     let mut owner: EffectGraphDef = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    manifold_core::phong_migration::migrate_phong_to_pbr(&mut owner);
     let registry = PrimitiveRegistry::with_builtin();
     let prepared = prepare_scene_modifiers(&owner, &registry).unwrap();
     assert!(

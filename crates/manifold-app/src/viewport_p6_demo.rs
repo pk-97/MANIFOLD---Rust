@@ -36,7 +36,7 @@ use manifold_renderer::preset_context::PresetContext;
 /// A `node.scene_object`-shaped scene (SCENE_OBJECT_AND_PANEL_V2_DESIGN
 /// D1/D12 — the shape `scene_vm::SceneVm::from_def` requires to resolve
 /// `Known` objects at all): one cube, one `node.transform_3d` feeding its
-/// `transform` port (id 10, so a test can target `pos_x` directly), a phong
+/// `transform` port (id 10, so a test can target `pos_x` directly), a PBR
 /// material, one light, wired to a SHOW `orbit_camera` the viewport
 /// overrides (D9). `wire_pos_x` optionally wires a constant into the
 /// transform's `pos_x` port — the P6 "locked axis" fixture.
@@ -58,12 +58,16 @@ fn scene_json(wire_pos_x: bool) -> String {
             "pos_z":{{"type":"Float","value":0.0}}}}}},
         {{"id":30,"typeId":"node.value","nodeId":"pos_x_const","params":{{
             "value":{{"type":"Float","value":0.0}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+        {{"id":4,"typeId":"node.pbr_material","nodeId":"mat","params":{{
             "color_r":{{"type":"Float","value":0.85}},
             "color_g":{{"type":"Float","value":0.3}},
             "color_b":{{"type":"Float","value":0.3}},
             "ambient":{{"type":"Float","value":0.15}}}}}},
         {{"id":6,"typeId":"node.scene_object","nodeId":"obj"}},
+        {{"id":7,"typeId":"node.bake_environment","nodeId":"environment","params":{{
+            "width":{{"type":"Int","value":16}},
+            "height":{{"type":"Int","value":8}},
+            "intensity":{{"type":"Float","value":0.0}}}}}},
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"show_cam","params":{{
             "orbit":{{"type":"Float","value":0.6}},
             "tilt":{{"type":"Float","value":0.5}},
@@ -91,6 +95,7 @@ fn scene_json(wire_pos_x: bool) -> String {
         {{"fromNode":10,"fromPort":"transform","toNode":6,"toPort":"transform"}},
         {{"fromNode":4,"fromPort":"out","toNode":6,"toPort":"material"}},
         {{"fromNode":6,"fromPort":"object","toNode":20,"toPort":"object_0"}},
+        {{"fromNode":7,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
         {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
         {{"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"}},
         {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}{extra_wire}

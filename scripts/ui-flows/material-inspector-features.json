@@ -481,5 +481,224 @@
       }
     }
   },
+  "Snapshot",
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      },
+      "check": {
+        "TextEquals": "On"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_weight.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.50"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      },
+      "check": {
+        "TextEquals": "Off"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_weight.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.50"
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "material.feature.remove.10_subsurface_feature_mode"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "material.feature.remove.10_subsurface_feature_mode"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      },
+      "check": {
+        "TextEquals": "Off"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_feature_mode.value"
+        }
+      },
+      "check": {
+        "TextEquals": "On"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.10_subsurface_weight.value"
+        }
+      },
+      "check": {
+        "TextEquals": "0.50"
+      }
+    }
+  },
   "Snapshot"
 ]

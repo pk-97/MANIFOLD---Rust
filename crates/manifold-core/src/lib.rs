@@ -30,6 +30,7 @@ pub mod params;
 pub mod percussion_analysis;
 pub mod percussion_binding;
 pub mod percussion_settings;
+pub mod phong_migration;
 pub mod preset_def;
 pub mod preset_definition_registry;
 pub mod preset_type_id;

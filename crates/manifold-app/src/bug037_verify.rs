@@ -23,14 +23,9 @@
 //! call `ContentThread::tick_frame` makes every frame) against a headless
 //! `ContentThread` (reusing `journey_proof`'s construction, which already
 //! solves the GPU-device-pointer-rebind hazard), with a layer running the
-//! bundled `BlossomField` generator preset — the richest already-shipping
-//! preset that wires `node.gltf_mesh_source` -> `node.render_scene` (as
-//! object 1, textured via `node.gltf_texture_source` -> `base_color_map_1`)
-//! against a REAL tracked fixture
-//! (`tests/fixtures/gltf/apricot_blossom_cluster_lod.glb`, referenced by the
-//! preset's own bundled `modelPath` default — no path patching needed, the
-//! preset's hardcoded absolute path is the main checkout's copy, which
-//! exists on this machine).
+//! a graph assembled through the GLB importer from the tracked textured
+//! `tests/fixtures/gltf/hostile/two_material_pbr.glb` fixture. No retired
+//! demo preset or machine-specific asset path is required.
 //!
 //! With `MANIFOLD_RENDER_TRACE=1` set, any frame over 20ms prints a
 //! `[RENDER_TRACE] ... generators=<ms> ...` breakdown to stderr — this test
@@ -40,7 +35,7 @@
 //!
 //! ```text
 //! MANIFOLD_RENDER_TRACE=1 cargo test -p manifold-app --features journey-proofs \
-//!   --features gpu-proofs bug037_blossom_field_first_render_drives_120_frames -- --nocapture
+//!   --features gpu-proofs bug037_imported_scene_first_render_drives_120_frames -- --nocapture
 //! ```
 #![cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 
@@ -68,32 +63,38 @@ const CLIP_BEATS: f64 = 64.0;
 /// afterward, without paying for a long GPU-heavy run.
 const FRAMES: u64 = 120;
 
-fn blossom_field_generator_layer(index: i32) -> Layer {
-    let mut layer = Layer::new("Blossom Field".to_string(), LayerType::Generator, index);
-    let pid = PresetTypeId::from_string("BlossomField".to_string());
+fn imported_scene_generator_layer(index: i32) -> Layer {
+    let mut layer = Layer::new("Imported Scene".to_string(), LayerType::Generator, index);
+    let pid = PresetTypeId::from_string("Scene".to_string());
     layer.change_generator_type(pid);
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/hostile/two_material_pbr.glb");
+    let (graph, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&fixture)
+        .expect("tracked textured GLB imports");
+    layer.gen_params_or_init().graph = Some(graph);
+    layer.gen_params_or_init().refresh_manifest_from_graph();
     layer
         .clips
         .push(TimelineClip::new_generator(Beats(0.0), Beats(CLIP_BEATS)));
     layer
 }
 
-fn blossom_field_project() -> Project {
+fn imported_scene_project() -> Project {
     let mut project = Project::default();
     project.settings.bpm = Bpm(BPM);
-    project.timeline.layers.push(blossom_field_generator_layer(0));
+    project.timeline.layers.push(imported_scene_generator_layer(0));
     project
 }
 
-/// Runs `FRAMES` real content-thread ticks with the `BlossomField` glTF scene
+/// Runs `FRAMES` real content-thread ticks with the imported glTF scene
 /// layer active from frame 0 — the layer's FIRST rendered frame is frame 0
 /// itself. Not a pass/fail assertion (frame timing isn't a correctness
 /// property `cfg(test)` can check reliably across machines) — run with
 /// `MANIFOLD_RENDER_TRACE=1 -- --nocapture` and read the `[RENDER_TRACE]`
 /// lines for `generators=` spikes on the early frames.
 #[test]
-fn bug037_blossom_field_first_render_drives_120_frames() {
-    let project = blossom_field_project();
+fn bug037_imported_scene_first_render_drives_120_frames() {
+    let project = imported_scene_project();
 
     let mut ct = headless_content_thread(project, W, H);
 

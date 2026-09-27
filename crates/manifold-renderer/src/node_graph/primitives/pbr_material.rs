@@ -1145,6 +1145,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("subsurface_anisotropy"), label: "Subsurface Anisotropy", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-0.95, 0.95)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("subsurface_mode"), label: "Subsurface Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Diffusion", "Random Walk"] },
         ParamDef { name: Cow::Borrowed("subsurface_samples"), label: "Subsurface Samples", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("subsurface_feature_mode"), label: "Subsurface Feature", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["Follow Values", "Off", "On", "Removed"] },
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
@@ -1188,6 +1189,7 @@ impl Primitive for PbrMaterial {
         let sheen_mode = feature_mode("sheen_mode");
         let anisotropy_mode = feature_mode("anisotropy_mode");
         let translucency_mode = feature_mode("translucency_mode");
+        let subsurface_feature_mode = feature_mode("subsurface_feature_mode");
 
         let color_r = ctx.scalar_or_param("color_r", 0.8);
         let color_g = ctx.scalar_or_param("color_g", 0.8);
@@ -1271,7 +1273,7 @@ impl Primitive for PbrMaterial {
                 fallback
             }
         };
-        let subsurface_weight =
+        let mut subsurface_weight =
             finite_clamped("subsurface_weight", subsurface_defaults.weight, 0.0, 1.0);
         let subsurface_radius = [
             finite_clamped(
@@ -1346,6 +1348,9 @@ impl Primitive for PbrMaterial {
         }
         if translucency_mode == 1 {
             translucency = 0.0;
+        }
+        if subsurface_feature_mode == 1 {
+            subsurface_weight = 0.0;
         }
         // One folded per-map UV affine per family (G-P4); identity defaults
         // are exactly inert. The map families are a fixed set, so the lookup
@@ -1955,6 +1960,35 @@ mod tests {
             run_material(invalid, None).subsurface,
             Subsurface::default()
         );
+    }
+
+    #[test]
+    fn subsurface_feature_mode_gates_weight_but_preserves_transport_mode() {
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("subsurface_weight"), ParamValue::Float(0.75));
+        params.insert(Cow::Borrowed("subsurface_mode"), ParamValue::Enum(1));
+
+        let follow = run_material(params.clone(), None).subsurface;
+        assert_eq!(follow.weight, 0.75);
+        assert_eq!(follow.mode, SubsurfaceMode::RandomWalk);
+
+        let mut off = params.clone();
+        off.insert(
+            Cow::Borrowed("subsurface_feature_mode"),
+            ParamValue::Enum(1),
+        );
+        let off = run_material(off, None).subsurface;
+        assert_eq!(off.weight, 0.0);
+        assert_eq!(off.mode, SubsurfaceMode::RandomWalk);
+
+        let mut removed = params;
+        removed.insert(
+            Cow::Borrowed("subsurface_feature_mode"),
+            ParamValue::Enum(3),
+        );
+        let removed = run_material(removed, None).subsurface;
+        assert_eq!(removed.weight, 0.0);
+        assert_eq!(removed.mode, SubsurfaceMode::RandomWalk);
     }
 
     #[test]

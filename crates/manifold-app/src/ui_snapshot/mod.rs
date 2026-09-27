@@ -678,7 +678,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
             RENDER_SCENE_NODE_ID,
             OBJECTS_BEFORE,
             (900.0, 200.0),
-            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
             manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
             manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
             (*view.canonical_def).clone(),
@@ -762,7 +762,7 @@ fn run_gltf_editor_add_scene_gesture(want_dump: bool, add_object: bool) {
 }
 
 /// Build the D6 proof fixture: a group ("Leaf", handle `leaf_group`)
-/// containing `node.phong_material` (handle `leaf_mat`) with Metallic/
+/// containing `node.pbr_material` (handle `leaf_mat`) with Metallic/
 /// Roughness params, both exposed on the card. Mirrors
 /// `manifold-ui/src/graph_canvas/tests.rs`'s `grouped_snapshot_with_exposed_
 /// param` shape one level up (two params, named after the demo's actual
@@ -797,8 +797,8 @@ fn group_demo_snapshot() -> manifold_ui::graph_view::GraphSnapshot {
         id: 1,
         node_id: manifold_core::NodeId::new("leaf_mat"),
         node_handle: Some("leaf_mat".to_string()),
-        type_id: "node.phong_material".to_string(),
-        title: "Phong Material".to_string(),
+        type_id: "node.pbr_material".to_string(),
+        title: "PBR Material".to_string(),
         inputs: vec![],
         outputs: vec![port("out")],
         parameters: vec![

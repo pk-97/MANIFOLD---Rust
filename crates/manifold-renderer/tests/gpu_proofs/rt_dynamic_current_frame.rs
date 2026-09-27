@@ -150,11 +150,11 @@ pub(super) fn scene_json() -> &'static str {
         {"id":2,"typeId":"node.make_triangles","nodeId":"triangles","params":{
             "src_cols":{"type":"Int","value":2},
             "src_rows":{"type":"Int","value":2}}},
-        {"id":3,"typeId":"node.phong_material","nodeId":"material","params":{
+        {"id":3,"typeId":"node.cel_material","nodeId":"material","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.05}}},
+            "band_low":{"type":"Float","value":0.05}}},
         {"id":4,"typeId":"node.scene_object","nodeId":"object"},
         {"id":5,"typeId":"node.orbit_camera","nodeId":"camera","params":{
             "orbit":{"type":"Float","value":0.7},

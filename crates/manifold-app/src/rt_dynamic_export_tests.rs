@@ -47,7 +47,7 @@ const RT_SCENE_JSON: &str = r#"{"version":3,"name":"RtDynamicExport","presetMeta
 "cell_size":{"type":"Float","value":0.1},"scale":{"type":"Float","value":1.0}},
 "exposedParams":["cell_size"]},
 {"id":9,"typeId":"node.remap_mesh_cut","nodeId":"remap"},
-{"id":4,"typeId":"node.phong_material","nodeId":"material","params":{
+{"id":4,"typeId":"node.pbr_material","nodeId":"material","params":{
 "color_r":{"type":"Float","value":1.0},"color_g":{"type":"Float","value":1.0},
 "color_b":{"type":"Float","value":1.0},"ambient":{"type":"Float","value":0.05}}},
 {"id":5,"typeId":"node.scene_object","nodeId":"object"},

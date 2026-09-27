@@ -468,7 +468,7 @@ fn blend_object_fully_behind_opaque_contributes_nothing() {
     );
 }
 
-/// Ground fixture shared by `blend_material_casts_no_shadow`: a big Phong
+/// Ground fixture shared by `blend_material_casts_no_shadow`: a big Cel
 /// plane (so `shadow_factor` actually runs — Unlit skips lighting math
 /// entirely, which would make the test vacuous) + one sun whose
 /// `cast_shadows` is the caller's choice. Fully self-closed fragment,
@@ -496,11 +496,11 @@ fn ground_and_sun_nodes(cast_shadows: bool) -> String {
             "\"aim_y\":{{\"type\":\"Float\",\"value\":0.0}},",
             "\"aim_z\":{{\"type\":\"Float\",\"value\":0.0}},",
             "\"cast_shadows\":{{\"type\":\"Float\",\"value\":{cast_v}}}}}}},",
-            "{{\"id\":6,\"typeId\":\"node.phong_material\",\"nodeId\":\"ground_mat\",\"params\":{{",
+            "{{\"id\":6,\"typeId\":\"node.cel_material\",\"nodeId\":\"ground_mat\",\"params\":{{",
             "\"color_r\":{{\"type\":\"Float\",\"value\":1.0}},",
             "\"color_g\":{{\"type\":\"Float\",\"value\":1.0}},",
             "\"color_b\":{{\"type\":\"Float\",\"value\":1.0}},",
-            "\"ambient\":{{\"type\":\"Float\",\"value\":0.05}}}}}},",
+            "\"band_low\":{{\"type\":\"Float\",\"value\":0.05}}}}}},",
         ),
         cast_v = cast_v,
     )

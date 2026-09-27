@@ -118,10 +118,7 @@ pub(crate) enum ObjectModifierAction {
 
 type ObjectModifierLevel<'a> = (Vec<u32>, &'a [EffectGraphNode], &'a [EffectGraphWire]);
 
-fn owner_level(
-    graph: &EffectGraphDef,
-    owner_id: u32,
-) -> Result<ObjectModifierLevel<'_>, String> {
+fn owner_level(graph: &EffectGraphDef, owner_id: u32) -> Result<ObjectModifierLevel<'_>, String> {
     let owner = graph
         .nodes
         .iter()
@@ -347,7 +344,9 @@ fn transfer_node_metadata(
         .bindings
         .iter()
         .filter_map(|binding| {
-            let BindingTarget::Node { node_id, param } = &binding.target else { return None };
+            let BindingTarget::Node { node_id, param } = &binding.target else {
+                return None;
+            };
             (node_id == destination_node_id).then(|| {
                 let section = destination_metadata
                     .params
@@ -361,10 +360,15 @@ fn transfer_node_metadata(
     let source_sections_by_binding: HashMap<String, Option<String>> = selected_bindings
         .iter()
         .filter_map(|binding| {
-            let BindingTarget::Node { param, .. } = &binding.target else { return None };
+            let BindingTarget::Node { param, .. } = &binding.target else {
+                return None;
+            };
             Some((
                 binding.id.clone(),
-                destination_sections_by_target.get(param).cloned().unwrap_or(None),
+                destination_sections_by_target
+                    .get(param)
+                    .cloned()
+                    .unwrap_or(None),
             ))
         })
         .collect();
@@ -728,11 +732,10 @@ mod tests {
 
     fn fixture() -> (Project, LayerId, Vec<u32>) {
         let mut project = Project::default();
-        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("SceneStarter"), 0);
-        let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("SceneStarter"))
-                .expect("SceneStarter resolves")
-                .clone();
+        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene resolves")
+            .clone();
         let layer_id = layer.layer_id.clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
@@ -909,15 +912,15 @@ mod tests {
     fn paste_supports_another_object_and_layer_from_a_cut_snapshot() {
         let (mut project, source_layer, owners) = fixture();
         let source_owner = owners[0];
-        let destination_owner = owners[1];
+
         let source_doc_id = insert_modifier(&mut project, &source_layer, source_owner);
         let clipboard =
             ObjectModifierClipboard::capture(&project, &source_layer, source_owner, source_doc_id)
                 .unwrap();
         let mut destination =
-            Layer::new_generator("Other layer".into(), PresetTypeId::new("SceneStarter"), 1);
+            Layer::new_generator("Other layer".into(), PresetTypeId::new("Scene"), 1);
         destination.gen_params_or_init().graph = Some(
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("SceneStarter"))
+            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
                 .unwrap()
                 .clone(),
         );
@@ -926,6 +929,40 @@ mod tests {
             .refresh_manifest_from_graph();
         let destination_layer = destination.layer_id.clone();
         project.timeline.layers.push(destination);
+        let destination_graph = crate::graph_target::resolve(
+            &project,
+            &GraphTarget::Generator(destination_layer.clone()),
+        )
+        .unwrap();
+        let scene = destination_graph
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.render_scene")
+            .unwrap()
+            .id;
+        let mut add = crate::scene_item_transfer::build_action(
+            &project,
+            crate::scene_item_transfer::SceneItemAction::Duplicate {
+                layer: destination_layer.clone(),
+                scene,
+                kind: crate::scene_item_transfer::SceneItemKind::Object,
+                index: 0,
+            },
+        )
+        .unwrap();
+        add.execute(&mut project);
+        assert!(add.was_applied());
+        let destination_graph = crate::graph_target::resolve(
+            &project,
+            &GraphTarget::Generator(destination_layer.clone()),
+        )
+        .unwrap();
+        let destination_owner = destination_graph
+            .nodes
+            .iter()
+            .rfind(|node| node.type_id == GROUP_TYPE_ID)
+            .unwrap()
+            .id;
         // Model Cut removing the source card after capture. The clipboard must
         // retain its authored graph and host snapshots independently.
         let source_host = project
@@ -962,9 +999,11 @@ mod tests {
             &mut project,
         );
         assert!(editing.take_rejection().is_none());
-        let destination_graph =
-            crate::graph_target::resolve(&project, &GraphTarget::Generator(destination_layer.clone()))
-                .unwrap();
+        let destination_graph = crate::graph_target::resolve(
+            &project,
+            &GraphTarget::Generator(destination_layer.clone()),
+        )
+        .unwrap();
         let (_, nodes, _) = owner_level(destination_graph, destination_owner).unwrap();
         let copied = nodes
             .iter()
@@ -986,7 +1025,10 @@ mod tests {
             .and_then(|node| node.handle.clone())
             .expect("destination object name");
         let expected_section = format!("{destination_name} — Twist_mesh");
-        assert_eq!(copied_spec.section.as_deref(), Some(expected_section.as_str()));
+        assert_eq!(
+            copied_spec.section.as_deref(),
+            Some(expected_section.as_str())
+        );
     }
 
     #[test]

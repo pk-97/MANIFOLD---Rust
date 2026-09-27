@@ -11,7 +11,7 @@
 //! `render_mode` input at all** — the zero-cost contract, same as fog.
 //!
 //! Inert-member precedent: [`Material`](crate::node_graph::material::Material)
-//! ("metallic is unread when kind = Phong"). One struct serves all modes;
+//! ("metallic is unread when kind = Unlit"). One struct serves all modes;
 //! per-mode params that don't apply are simply unread.
 
 /// Scene-wide render mode: 0 = Rendered, 1 = Solid, 2 = Wireframe,

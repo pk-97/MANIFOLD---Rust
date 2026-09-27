@@ -54,16 +54,16 @@ fn scene_json(occluder_visible: f32) -> String {
             "tilt":{{"type":"Float","value":0.95}},
             "distance":{{"type":"Float","value":10.0}},
             "fov_y":{{"type":"Float","value":0.8}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"ground_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.05}}}}}},
-        {{"id":8,"typeId":"node.phong_material","nodeId":"occ_mat","params":{{
+            "band_low":{{"type":"Float","value":0.05}}}}}},
+        {{"id":8,"typeId":"node.cel_material","nodeId":"occ_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":0.0}},
             "color_b":{{"type":"Float","value":0.0}},
-            "ambient":{{"type":"Float","value":0.05}}}}}},
+            "band_low":{{"type":"Float","value":0.05}}}}}},
         {{"id":30,"typeId":"node.light","nodeId":"sun","params":{{
             "mode":{{"type":"Enum","value":0}},
             "pos_x":{{"type":"Float","value":3.0}},
@@ -109,11 +109,13 @@ fn glass_scene_json(alpha_mode: u32, transmission: f32, sheen: f32, translucency
     let material = nodes.iter_mut().find(|n| n["id"] == 8).unwrap();
     material["typeId"] = json!("node.pbr_material");
     let params = material["params"].as_object_mut().unwrap();
+    params.remove("band_low");
     params.insert(
         "alpha_mode".into(),
         json!({"type":"Enum","value":alpha_mode}),
     );
     for (name, value) in [
+        ("ambient", 0.05),
         ("transmission", transmission),
         ("color_a", 1.0),
         ("roughness", 0.3),

@@ -44,11 +44,11 @@ fn fog_scene_json(fog: Option<(f32, f32, f32, f32)>) -> String {
             "tilt":{"type":"Float","value":0.12},
             "distance":{"type":"Float","value":15.0},
             "fov_y":{"type":"Float","value":1.0}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.1}}},
+            "band_low":{"type":"Float","value":0.1}}},
         {"id":30,"typeId":"node.light","nodeId":"sun","params":{
             "mode":{"type":"Enum","value":0},
             "pos_x":{"type":"Float","value":0.0},
@@ -115,11 +115,11 @@ fn shaft_scene_json(shaft_intensity: f32) -> String {
             "tilt":{"type":"Float","value":0.12},
             "distance":{"type":"Float","value":15.0},
             "fov_y":{"type":"Float","value":1.0}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.1}}},
+            "band_low":{"type":"Float","value":0.1}}},
         {"id":30,"typeId":"node.light","nodeId":"sun","params":{
             "mode":{"type":"Enum","value":0},
             "pos_x":{"type":"Float","value":0.0},
@@ -206,11 +206,11 @@ fn shaft_and_fog_scene_json(fog_density: f32, shaft_intensity: f32) -> String {
             "tilt":{"type":"Float","value":0.12},
             "distance":{"type":"Float","value":15.0},
             "fov_y":{"type":"Float","value":1.0}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.1}}},
+            "band_low":{"type":"Float","value":0.1}}},
         {"id":30,"typeId":"node.light","nodeId":"sun","params":{
             "mode":{"type":"Enum","value":0},
             "pos_x":{"type":"Float","value":0.0},
@@ -353,11 +353,11 @@ fn point_light_shaft_scene_json(
             "tilt":{{"type":"Float","value":0.12}},
             "distance":{{"type":"Float","value":15.0}},
             "fov_y":{{"type":"Float","value":1.0}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.1}}}}}},
+            "band_low":{{"type":"Float","value":0.1}}}}}},
         {{"id":30,"typeId":"node.light","nodeId":"point","params":{{
             "mode":{{"type":"Enum","value":1}},
             "pos_x":{{"type":"Float","value":6.0}},
@@ -578,11 +578,11 @@ fn fog_scene_json_with_lens(lens_ev: Option<f32>) -> String {
             "tilt":{"type":"Float","value":0.12},
             "distance":{"type":"Float","value":15.0},
             "fov_y":{"type":"Float","value":1.0}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.1}}},
+            "band_low":{"type":"Float","value":0.1}}},
         {"id":30,"typeId":"node.light","nodeId":"sun","params":{
             "mode":{"type":"Enum","value":0},
             "pos_x":{"type":"Float","value":0.0},
@@ -686,11 +686,11 @@ fn night_garden_scene_json(shaft_quality: u32) -> String {
             "scale_x":{{"type":"Float","value":0.8}},
             "scale_y":{{"type":"Float","value":7.0}},
             "scale_z":{{"type":"Float","value":0.8}}}}}},
-        {{"id":5,"typeId":"node.phong_material","nodeId":"pillar_mat","params":{{
+        {{"id":5,"typeId":"node.cel_material","nodeId":"pillar_mat","params":{{
             "color_r":{{"type":"Float","value":0.05}},
             "color_g":{{"type":"Float","value":0.05}},
             "color_b":{{"type":"Float","value":0.06}},
-            "ambient":{{"type":"Float","value":0.02}}}}}},
+            "band_low":{{"type":"Float","value":0.02}}}}}},
         {{"id":6,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
             "orbit":{{"type":"Float","value":0.15}},
             "tilt":{{"type":"Float","value":0.06}},
@@ -902,7 +902,7 @@ fn beam_color_tracks_light_color_modulation() {
                 "scale_x":{{"type":"Float","value":1.0}},
                 "scale_y":{{"type":"Float","value":1.0}},
                 "scale_z":{{"type":"Float","value":1.0}}}}}},
-            {{"id":5,"typeId":"node.phong_material","nodeId":"mat"}},
+            {{"id":5,"typeId":"node.cel_material","nodeId":"mat"}},
             {{"id":6,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
                 "orbit":{{"type":"Float","value":0.0}},
                 "tilt":{{"type":"Float","value":0.0}},

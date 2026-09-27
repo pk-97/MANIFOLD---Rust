@@ -8,6 +8,10 @@ impl AppInputHost<'_> {
     pub(super) fn edit_object_cards(&mut self, action: CardEditAction) -> bool {
         if !self.ui_root.object_cards_have_focus { return false; }
         let selected = self.ui_root.scene_setup_panel.selected_object_modifier();
+        if (matches!(action, CardEditAction::Paste) && self.ui_root.scene_item_clipboard.is_some())
+            || (selected.is_none() && !(matches!(action, CardEditAction::Paste) && self.ui_root.object_modifier_clipboard.is_some())) {
+            return self.edit_scene_items(action);
+        }
         if matches!(action, CardEditAction::Copy | CardEditAction::Cut) {
             let Some(address) = selected.as_ref() else { return true; };
             match ObjectModifierClipboard::capture(
@@ -16,6 +20,7 @@ impl AppInputHost<'_> {
             ) {
                 Ok(clipboard) => {
                     self.ui_root.object_modifier_clipboard = Some(clipboard);
+                    self.ui_root.scene_item_clipboard = None;
                     self.ui_root.effect_clipboard.clear();
                     self.ui_root.scene_modifier_clipboard = None;
                 }

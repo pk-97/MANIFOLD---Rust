@@ -256,13 +256,12 @@ pub enum ProjectAction {
     SceneSetupAddLight(LayerId, u32, u32),
     /// BUG-hlw8 "+ Plane" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches `AddSceneLayerPlaneCommand` — the layer-plane
-    /// gesture: a plane mesh + unlit material + transform + an empty
-    /// `node.layer_source` wired to `base_color_map` so the panel's Skin row
-    /// can pick a source layer.
+    /// gesture: a plane mesh + PBR Baked Look material + transform.
+    /// The Skin row adds its source on demand.
     SceneSetupAddLayerPlane(LayerId, u32, u32),
     /// P5 properties-header "Duplicate" button (Object selection):
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
-    /// existing `DuplicateSceneObjectCommand` (D11).
+    /// shared content-owned scene item transfer.
     SceneSetupDuplicateObject(LayerId, u32, u32),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
     /// Opens a native file dialog (the app's existing open-file plumbing,
@@ -892,6 +891,10 @@ pub enum RootAction {
     /// Payload: the layer whose selection moved (the panel key) — the
     /// selection itself stays panel-internal (D7 of SCENE_SETUP_PANEL).
     SceneSetupSelectionChanged(LayerId),
+    SceneItemRightClicked,
+    SceneItemMove(i32),
+    SceneItemRename,
+    SceneItemFrame,
     /// D7 "Open Graph Editor" empty-state action for a generator layer with
     /// no `render_scene` — reuses the existing open-editor action.
     SceneSetupOpenGraphEditor(LayerId),

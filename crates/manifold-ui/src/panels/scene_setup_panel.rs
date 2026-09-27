@@ -20,6 +20,9 @@
 //! shared-lock wrapper types appear anywhere in this file (section 4 negative gate).
 
 mod camera;
+#[path = "scene_setup_panel/keyboard.rs"]
+mod keyboard;
+pub use keyboard::SceneItemAddress;
 #[cfg(test)]
 mod trim_tests;
 #[cfg(test)]
@@ -322,7 +325,7 @@ pub struct TransformRowVm {
 }
 
 /// The Objects section's material quick-knob row (D3/D4): base color always,
-/// metallic/roughness only for `pbr_material` (phong/unlit/cel don't have
+/// metallic/roughness only for `pbr_material` (unlit/cel don't have
 /// that param — "the atom's own params otherwise"). C-P1b: `ModulatedRow`,
 /// same promotion as [`TransformRowVm`].
 #[derive(Clone, Debug, PartialEq)]
@@ -1502,6 +1505,7 @@ impl ScenePanel {
     /// alone doesn't trigger one (it has no `PanelAction` dispatch loop to
     /// push through, unlike `handle_event`'s click arm).
     pub fn set_selection(&mut self, layer_id: LayerId, sel: SceneSelection) {
+        self.selected_object_modifier = None;
         self.selection.insert(layer_id, sel);
         self.reveal_properties = true;
     }
@@ -1514,6 +1518,7 @@ impl ScenePanel {
         };
         if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
         let SceneSetupState::Live(vm) = &self.state else { return false; };
+        self.selected_object_modifier = None;
         self.selection.insert(vm.layer_id.clone(), *selection);
         true
     }
@@ -2316,6 +2321,9 @@ impl ScenePanel {
             return (false, Vec::new());
         }
         match event {
+            UIEvent::RightClick { node_id: Some(node_id), .. } if self.select_outliner_node(*node_id) => {
+                (true, vec![PanelAction::Root(RootAction::SceneItemRightClicked)])
+            }
             UIEvent::Click { node_id, .. } => {
                 if *node_id == self.close_id {
                     // BUG-224: this used to call `self.close()` directly —
@@ -2352,6 +2360,7 @@ impl ScenePanel {
                     }
                     // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
+                        self.selected_object_modifier = None;
                         self.selection.insert(vm.layer_id.clone(), *sel);
                         return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
                     }
@@ -3496,6 +3505,29 @@ mod tests {
         assert!(panel.select_outliner_node(*node));
         assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), 201)));
         assert!(panel.selected_object_modifier().is_none());
+    }
+
+    #[test]
+    fn keyboard_and_context_actions_follow_selected_object_or_light() {
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+        let object = panel.selected_scene_item().unwrap();
+        assert!(!object.is_light);
+        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 42, _)))));
+        let light_node = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Light(60)).unwrap().0;
+        let (consumed, actions) = panel.handle_event(&UIEvent::RightClick {
+            node_id: Some(light_node), pos: Vec2::new(0.0, 0.0), modifiers: Modifiers::NONE,
+        }, &mut tree);
+        assert!(consumed);
+        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneItemRightClicked)]));
+        assert!(panel.selected_scene_item().unwrap().is_light);
+        assert!(matches!(panel.remove_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupRemoveLight(_, 99, 0)))));
+        assert!(panel.frame_selection_action().is_none());
+        panel.navigate_selection(-1).unwrap();
+        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::World));
     }
 
     /// D7: clicking an outliner row changes the UI-local selection, and the

@@ -649,6 +649,16 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
+                ContentCommand::SceneItem(action) => {
+                    let selection = action.selection_request();
+                    match crate::scene_item_transfer::build_action(&data.project, action) {
+                        Ok(command) => match selection {
+                            Some(request) => ContentCommand::ExecuteSelecting(command, request),
+                            None => ContentCommand::ExecuteOnContent(command),
+                        },
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
                 other => other,
             };
             match cmd {
@@ -1152,6 +1162,37 @@ impl Runner {
     /// any host, `save()` diverted to the temp dir.
     fn apply_panel_actions(&mut self, ui: &mut UIRoot, data: &mut SceneData, actions: &[PanelAction]) {
         for action in actions {
+            if let PanelAction::Params(manifold_ui::ParamsAction::EditCards(edit)) = action {
+                // Use the live input host: treating this app-intercepted action
+                // as a bridge no-op loses clipboard state while reporting success.
+                let mut rebuild = false;
+                let mut close_output = false;
+                let mut export = false;
+                let mut project_io = crate::project_io::ProjectIOService::new(&self.user_prefs);
+                let mut host = crate::input_host::AppInputHost {
+                    project: &mut data.project,
+                    content_tx: &self.content_tx,
+                    content_state: &self.content_state,
+                    ui_root: ui,
+                    selection: &mut data.selection,
+                    active_layer: &mut self.active_layer,
+                    needs_rebuild: &mut rebuild,
+                    needs_structural_sync: &mut self.needs_structural_sync,
+                    scroll_dirty: &mut self.scroll_dirty,
+                    current_project_path: &None,
+                    has_output_window: false,
+                    pending_close_output: &mut close_output,
+                    pending_export: &mut export,
+                    project_io: &mut project_io,
+                    #[cfg(target_os = "macos")]
+                    internal_clipboard_change_count: &mut None,
+                };
+                host.edit_cards(*edit);
+                self.needs_structural_sync |= rebuild;
+                let pending = std::mem::take(&mut ui.pending_keyboard_actions);
+                self.apply_panel_actions(ui, data, &pending);
+                continue;
+            }
             // The live app intercepts generator string dropdowns in
             // `app_render.rs` before they reach the bridge. The headless
             // runner owns that action loop, so mirror the audio-send branch
