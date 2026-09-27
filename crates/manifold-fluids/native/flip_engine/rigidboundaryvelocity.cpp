@@ -562,6 +562,65 @@ size_t RigidBoundaryVelocityMap::faceContributionCount(int axis,
     return _faceSizes[faceSlot(axis, face)];
 }
 
+double RigidBoundaryVelocityMap::faceVelocityChange(
+    int axis, GridIndex face, const std::vector<Dofs> &changes) const {
+    requireFinished();
+    if (!validFace(axis, face)) {
+        throw std::invalid_argument("invalid rigid boundary face");
+    }
+    if (changes.size() != _preparedBodyCount ||
+        motions.size() != _preparedBodyCount) {
+        throw std::invalid_argument("rigid velocity body count does not match");
+    }
+    for (const Dofs &change : changes) {
+        if (!finiteDofs(change)) {
+            throw std::invalid_argument("nonfinite rigid velocity change");
+        }
+    }
+
+    const size_t slot = faceSlot(axis, face);
+    const size_t start = _faceStart[slot];
+    const size_t count = _faceSizes[slot];
+    if (start > _entryCount || count > _entryCount - start ||
+        start > _entries.size() || count > _entries.size() - start) {
+        throw std::runtime_error("invalid rigid boundary face span");
+    }
+    double result = 0.0;
+    for (size_t index = start; index < start + count; ++index) {
+        const Entry &entry = _entries[index];
+        if (entry.body >= _preparedBodyCount || !finiteDofs(entry.basis)) {
+            throw std::runtime_error("invalid rigid boundary face contribution");
+        }
+        for (int dof = 0; dof < 6; ++dof) {
+            const double term = entry.basis[dof] * changes[entry.body][dof];
+            if (!std::isfinite(term)) {
+                throw std::runtime_error("nonfinite rigid boundary face term");
+            }
+            result += term;
+            if (!std::isfinite(result)) {
+                throw std::runtime_error("nonfinite rigid boundary face change");
+            }
+        }
+    }
+    return result;
+}
+
+void RigidBoundaryVelocityMap::requireCompatible(int ni, int nj, int nk,
+                                                  double dx,
+                                                  size_t bodies) const {
+    requireFinished();
+    if (ni != _ni || nj != _nj || nk != _nk ||
+        bodies != _preparedBodyCount || motions.size() != _preparedBodyCount) {
+        throw std::invalid_argument("rigid boundary dimensions or body count do not match");
+    }
+    if (!std::isfinite(dx) || dx <= 0.0 ||
+        !std::isfinite(_dx) || _dx <= 0.0 ||
+        std::abs(dx - _dx) >
+            2.0 * std::numeric_limits<float>::epsilon() * std::abs(_dx)) {
+        throw std::invalid_argument("rigid boundary cell size does not match");
+    }
+}
+
 void RigidBoundaryVelocityMap::invalidateCoupling(
     RigidPressureCoupling &coupling) noexcept {
     coupling.invalidate();

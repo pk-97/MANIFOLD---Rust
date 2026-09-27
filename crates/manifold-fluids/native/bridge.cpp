@@ -3,6 +3,7 @@
 #include "coupling_operator_probe.h"
 #include "coupling_boundary_probe.h"
 #include "coupling_viscosity_probe.h"
+#include "coupling_viscosity_operator_probe.h"
 
 #include <cmath>
 #include <cstring>
@@ -622,6 +623,20 @@ extern "C" int manifold_fluids_coupling_viscous_feedback_probe(ManifoldViscousFe
     return guarded([&] {
         if (result == nullptr) { throw std::invalid_argument("null viscous feedback probe result"); }
         run_viscous_feedback_probe(*result);
+    });
+}
+
+extern "C" int manifold_fluids_coupling_joint_viscosity_probe(ManifoldCoupledViscosityProbe *result) {
+    return guarded([&] {
+        if (result == nullptr) { throw std::invalid_argument("null coupled viscosity probe result"); }
+        run_coupled_viscosity_probe(*result);
+    });
+}
+
+extern "C" int manifold_fluids_coupling_viscosity_operator_probe(ManifoldRigidViscosityProbe *result) {
+    return guarded([&] {
+        if (result == nullptr) { throw std::invalid_argument("null viscosity operator probe result"); }
+        run_rigid_viscosity_operator_probe(*result);
     });
 }
 

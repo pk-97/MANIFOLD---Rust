@@ -126,6 +126,53 @@ double velocity_error(MACVelocityField &a, MACVelocityField &b) {
     return error;
 }
 
+void check_boundary_accessors(RigidBoundaryVelocityMap &map,
+                             MACVelocityField &base) {
+    std::vector<Dofs> changes(2);
+    changes[0] = {0.31, -0.27, 0.19, 0.11, -0.07, 0.23};
+    changes[1] = {-0.22, 0.36, -0.14, -0.18, 0.29, 0.05};
+    MACVelocityField changed = base;
+    map.addVelocityChange(changed, changes);
+
+    for (int axis = 0; axis < 3; ++axis) {
+        Array3d<float> &baseComponent = component(base, axis);
+        Array3d<float> &changedComponent = component(changed, axis);
+        for (int k = 0; k < baseComponent.depth; ++k) {
+            for (int j = 0; j < baseComponent.height; ++j) {
+                for (int i = 0; i < baseComponent.width; ++i) {
+                    const GridIndex face(i, j, k);
+                    size_t visited = 0;
+                    double visitorDelta = 0.0;
+                    map.forEachFaceContribution(
+                        axis, face, [&](size_t body, const Dofs &basis) {
+                            require(body < changes.size(),
+                                    "visitor returned an invalid boundary body");
+                            for (int dof = 0; dof < 6; ++dof) {
+                                const double term = basis[dof] * changes[body][dof];
+                                require(std::isfinite(term),
+                                        "visitor returned a nonfinite boundary basis");
+                                visitorDelta += term;
+                                require(std::isfinite(visitorDelta),
+                                        "visitor accumulated a nonfinite boundary change");
+                            }
+                            ++visited;
+                        });
+                    require(visited == map.faceContributionCount(axis, face),
+                            "boundary visitor count differs from face helper");
+                    const double helperDelta =
+                        map.faceVelocityChange(axis, face, changes);
+                    require(std::abs(visitorDelta - helperDelta) < 1e-12,
+                            "boundary visitor basis differs from face helper");
+                    const double applied =
+                        double(changedComponent.get(face)) - baseComponent.get(face);
+                    require(std::abs(applied - helperDelta) < 2e-5,
+                            "face helper differs from whole-field velocity update");
+                }
+            }
+        }
+    }
+}
+
 double pressure_work(WeightGrid &weights, Array3d<float> &liquid, Array3d<float> &pressure,
                      MACVelocityField &reference, MACVelocityField &base, double dt) {
     double work = 0.0;
@@ -273,6 +320,38 @@ void run_rigid_boundary_probe(ManifoldRigidBoundaryProbe &result) {
     require(result.max_velocity_error < 2e-5, "mapped velocity differs from native mesh interpolation");
     require(result.max_transpose_error < 3e-5, "rigid pressure impulse fails native virtual-work transpose");
 
+    map.requireCompatible(N, N, N, DX, 2);
+    check_boundary_accessors(map, tracked_field);
+    std::vector<Dofs> one_body(1);
+    rejects([&] { map.requireCompatible(N + 1, N, N, DX, 2); },
+            "wrong rigid boundary grid accepted");
+    rejects([&] { map.requireCompatible(N, N, N, DX + 1e-3, 2); },
+            "wrong rigid boundary cell size accepted");
+    rejects([&] { map.requireCompatible(N, N, N, DX, 1); },
+            "wrong rigid boundary body count accepted");
+    rejects([&] { map.faceVelocityChange(0, GridIndex(0, 0, 0), one_body); },
+            "wrong face helper body count accepted");
+    rejects([&] {
+        map.forEachFaceContribution(3, GridIndex(0, 0, 0),
+                                    [](size_t, const Dofs &) {});
+    }, "invalid boundary visitor axis accepted");
+    rejects([&] {
+        map.forEachFaceContribution(0, GridIndex(-1, 0, 0),
+                                    [](size_t, const Dofs &) {});
+    }, "invalid boundary visitor face accepted");
+    rejects([&] { map.faceVelocityChange(3, GridIndex(0, 0, 0), one_body); },
+            "invalid face helper axis accepted");
+    std::vector<Dofs> nonfinite_changes(2);
+    nonfinite_changes[0][0] = std::numeric_limits<double>::quiet_NaN();
+    rejects([&] {
+        map.faceVelocityChange(0, GridIndex(0, 0, 0), nonfinite_changes);
+    }, "nonfinite face helper correction accepted");
+    map.requireCompatible(N, N, N, DX, 2);
+    RigidBoundaryVelocityMap prefinished;
+    prefinished.prepare(N, N, N, DX, 2, capacity);
+    rejects([&] { prefinished.requireCompatible(N, N, N, DX, 2); },
+            "pre-Finished boundary map accepted");
+
     std::vector<Dofs> invalid(2);
     invalid[1][4] = std::numeric_limits<double>::quiet_NaN();
     MACVelocityField unchanged = tracked_field;
@@ -317,6 +396,15 @@ void run_rigid_boundary_probe(ManifoldRigidBoundaryProbe &result) {
             "parallel capture lost rigid boundary contributions");
 
     map.beginCapture();
+    rejects([&] { map.requireCompatible(N, N, N, DX, 2); },
+            "stale rigid boundary compatibility accepted");
+    rejects([&] {
+        map.forEachFaceContribution(0, GridIndex(0, 0, 0),
+                                    [](size_t, const Dofs &) {});
+    }, "stale rigid boundary visitor accepted");
+    rejects([&] {
+        map.faceVelocityChange(0, GridIndex(0, 0, 0), rotation);
+    }, "stale rigid boundary face helper accepted");
     MeshLevelSet next(N,N,N,DX);
     rejects([&] { next.calculateUnion(fractured); }, "stale cached rigid boundary accepted");
     rejects([&] { fractured.normalizeVelocityGrid(&map); }, "stale rigid capture normalized");

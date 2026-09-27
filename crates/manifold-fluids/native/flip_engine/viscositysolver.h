@@ -33,6 +33,8 @@ SOFTWARE.
 class MACVelocityField;
 class ParticleLevelSet;
 class MeshLevelSet;
+class RigidViscosityCoupling;
+class RigidBoundaryVelocityMap;
 
 struct ViscositySolverParameters {
     float cellwidth;
@@ -43,6 +45,12 @@ struct ViscositySolverParameters {
     MeshLevelSet *solidSDF;
     Array3d<float> *viscosity;
     ViscousBoundaryReaction *boundaryReaction = nullptr;
+    RigidViscosityCoupling *rigidCoupling = nullptr;
+    const RigidBoundaryVelocityMap *rigidBoundaryMap = nullptr;
+    // Derivative of the already-constrained solid face value with respect to
+    // native mesh velocity (one for full solid, friction for mixed faces).
+    // Null means one everywhere; the production constraint adapter supplies it.
+    MACVelocityField *rigidBoundaryScale = nullptr;
     // kg/m^3. The native viscosity field is kinematic viscosity in m^2/s.
     double reactionDensity = 1.0;
     double errorTolerance = 1e-4;
@@ -237,10 +245,11 @@ private:
     bool _solveLinearSystem(SparseMatrixf &matrix, std::vector<float> &rhs, 
                             std::vector<float> &soln);
     bool _validateReactionInputs();
-    bool _captureBoundaryReaction(const std::vector<float> &soln, double density);
+    bool _visitBoundaryTerms(const std::vector<float> *soln, double density);
     bool _captureReactionTerm(const GridIndex *faces, const int *axes,
                               const int *signs, int count, float weight,
-                              const std::vector<float> &soln, double density);
+                              const std::vector<float> *soln, double density);
+    double _rigidFaceScale(int axis, GridIndex g) const;
     bool _getReactionFaceValue(int axis, GridIndex g,
                                const std::vector<float> &soln,
                                double *value);
@@ -256,6 +265,9 @@ private:
     MeshLevelSet *_solidSDF;
     Array3d<float> *_viscosity;
     ViscousBoundaryReaction *_boundaryReaction = nullptr;
+    RigidViscosityCoupling *_rigidCoupling = nullptr;
+    const RigidBoundaryVelocityMap *_rigidBoundaryMap = nullptr;
+    MACVelocityField *_rigidBoundaryScale = nullptr;
 
     FaceStateGrid _state;
     ViscosityVolumeGrid _volumes;

@@ -24,3 +24,13 @@ struct ManifoldViscousFeedbackProbe {
 };
 
 void run_viscous_feedback_probe(ManifoldViscousFeedbackProbe &result);
+
+struct ManifoldCoupledViscosityProbe {
+    double max_energy_ratio;
+    double max_response_error;
+    double max_transpose_error;
+    double fixed_velocity_error;
+    uint32_t cases;
+};
+
+void run_coupled_viscosity_probe(ManifoldCoupledViscosityProbe &result);

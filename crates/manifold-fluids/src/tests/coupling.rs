@@ -1,4 +1,4 @@
-//! Native pressure, boundary attribution and prescribed viscous stress gates.
+//! Native pressure, boundary attribution and joint viscous stress gates.
 //! No Box3D world, advection or production two-way scheduling is exercised here.
 
 #[repr(C)]
@@ -49,6 +49,26 @@ struct ViscousFeedbackProbe {
     energy_ratios: [f64; 8],
 }
 
+#[repr(C)]
+#[derive(Debug, Default)]
+struct CoupledViscosityProbe {
+    max_energy_ratio: f64,
+    max_response_error: f64,
+    max_transpose_error: f64,
+    fixed_velocity_error: f64,
+    cases: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct ViscosityOperatorProbe {
+    max_solution_error: f64,
+    max_response_error: f64,
+    max_symmetry_error: f64,
+    max_diagonal_error: f64,
+    max_energy_ratio: f64,
+}
+
 fn assert_probe_finite(result: &Probe) {
     assert!(
         result.impulse.iter().all(|value| value.is_finite()),
@@ -95,6 +115,36 @@ unsafe extern "C" {
     fn manifold_fluids_coupling_boundary_probe(result: *mut BoundaryProbe) -> i32;
     fn manifold_fluids_coupling_viscosity_probe(result: *mut ViscousProbe) -> i32;
     fn manifold_fluids_coupling_viscous_feedback_probe(result: *mut ViscousFeedbackProbe) -> i32;
+    fn manifold_fluids_coupling_joint_viscosity_probe(result: *mut CoupledViscosityProbe) -> i32;
+    fn manifold_fluids_coupling_viscosity_operator_probe(
+        result: *mut ViscosityOperatorProbe,
+    ) -> i32;
+}
+
+#[test]
+fn coupling_joint_viscosity_dissipates_energy_and_matches_body_reactions() {
+    let mut result = CoupledViscosityProbe::default();
+    let status = unsafe { manifold_fluids_coupling_joint_viscosity_probe(&mut result) };
+    println!("{result:?}");
+    super::super::native_result(status, "joint viscosity native scene").unwrap();
+    assert_eq!(result.cases, 25);
+    assert!(result.max_energy_ratio.is_finite() && result.max_energy_ratio <= 1.001);
+    assert!(result.max_response_error.is_finite() && result.max_response_error < 1e-4);
+    assert!(result.max_transpose_error.is_finite() && result.max_transpose_error < 1e-4);
+    assert!(result.fixed_velocity_error.is_finite() && result.fixed_velocity_error < 2e-6);
+}
+
+#[test]
+fn coupling_viscosity_operator_matches_independent_physical_mass_oracle() {
+    let mut result = ViscosityOperatorProbe::default();
+    let status = unsafe { manifold_fluids_coupling_viscosity_operator_probe(&mut result) };
+    println!("{result:?}");
+    super::super::native_result(status, "joint viscosity operator").unwrap();
+    assert!(result.max_solution_error.is_finite() && result.max_solution_error < 5e-5);
+    assert!(result.max_response_error.is_finite() && result.max_response_error < 5e-5);
+    assert!(result.max_symmetry_error.is_finite() && result.max_symmetry_error < 5e-6);
+    assert!(result.max_diagonal_error.is_finite() && result.max_diagonal_error < 5e-6);
+    assert!(result.max_energy_ratio.is_finite() && result.max_energy_ratio <= 1.00001);
 }
 
 #[test]

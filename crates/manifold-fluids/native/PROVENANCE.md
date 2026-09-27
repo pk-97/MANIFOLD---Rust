@@ -12,8 +12,9 @@ Except for the local changes documented below, these files are copied byte-for-b
 - `mixbox/mixbox_stub.cpp`
 - `versionutils.cpp.in` (instantiated by `build.rs` into `OUT_DIR`)
 
-`bridge.cpp`, `bridge.h`, `coupling_probe.*`, `coupling_operator_probe.*` and
-`coupling_boundary_probe.*` and `coupling_viscosity_probe.*` are
+`bridge.cpp`, `bridge.h`, `coupling_probe.*`, `coupling_operator_probe.*`,
+`coupling_boundary_probe.*`, `coupling_viscosity_probe.*` and
+`coupling_viscosity_operator_probe.*` are
 MANIFOLD-owned code. The bridge compiles with
 `WITH_MIXBOX=0`, so no external Mixbox runtime or download is required.
 The native mutex serializes all engine operations because upstream thread and
@@ -53,6 +54,14 @@ Local changes:
   and invalidates rejected captures. Fresh `ViscosityVolumeGrid` dimensions are
   initialized to zero, fixing an observed out-of-bounds access when a new solver
   reused stack storage from a previous solver of the same dimensions.
+- The new MANIFOLD-owned `flip_engine/rigidviscositycoupling.h` adds normalized
+  body velocity changes to the existing viscosity PCG. Sparse native strain
+  terms provide the fluid/body cross terms, body mass/inertia response and exact
+  body preconditioner diagonal. The fluid matrix and iterative solver remain
+  upstream code. The optional viscosity path consumes the accepted boundary
+  derivative, including an optional constraint/friction scale, and exposes both
+  solved body changes and measured impulses. Failed coupled solves invalidate
+  both outputs and never use the ordinary solver's loose iteration-limit fallback.
 - `flip_engine/gridutils.h` exposes an optional owner-thread observer after
   each existing extrapolation layer, preserving the native stencil and scalar
   implementation for both mapped and ordinary callers.
@@ -62,8 +71,10 @@ energy, closed-pocket constraints and the boundary map's interpolation/transpose
 against native mesh velocities. Prescribed viscous boundaries are checked for
 linear/angular momentum balance, dissipation, rigid-motion invariance, density
 scaling and failure atomicity. A separate frozen-geometry energy test rejects
-delayed viscous feedback for light bodies/high viscosity. It does not qualify
-that candidate for production. `FluidSimulation` does not yet enable production
-two-way coupling. Enabling the boundary map, viscous feedback and Box3D timing
-remain integration requirements in
+delayed viscous feedback for light bodies/high viscosity. The joint alternative
+passes an independent two-body physical-mass oracle and 25 frozen-geometry
+native cases covering translation/rotation, light/heavy bodies and constrained
+boundary derivatives. These do not establish moving-mesh or free-surface
+coupling. `FluidSimulation` does not yet enable production two-way coupling.
+Connecting these operators, physical density and Box3D timing remains required in
 [`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).

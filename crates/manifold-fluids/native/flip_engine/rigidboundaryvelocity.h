@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include "grid3d.h"
@@ -53,6 +54,33 @@ public:
 
     size_t entryCount() const;
     size_t faceContributionCount(int axis, GridIndex face) const;
+
+    template<class Visitor>
+    void forEachFaceContribution(int axis, GridIndex face, Visitor visit) const {
+        requireFinished();
+        if (!validFace(axis, face)) {
+            throw std::invalid_argument("invalid rigid boundary face");
+        }
+        const size_t slot = faceSlot(axis, face);
+        const size_t start = _faceStart[slot];
+        const size_t count = _faceSizes[slot];
+        if (start > _entryCount || count > _entryCount - start ||
+            start > _entries.size() || count > _entries.size() - start) {
+            throw std::runtime_error("invalid rigid boundary face span");
+        }
+        for (size_t index = start; index < start + count; ++index) {
+            const Entry &entry = _entries[index];
+            if (entry.body >= _preparedBodyCount) {
+                throw std::runtime_error("invalid rigid boundary face body");
+            }
+            visit(entry.body, entry.basis);
+        }
+    }
+
+    double faceVelocityChange(int axis, GridIndex face,
+                              const std::vector<Dofs> &changes) const;
+    void requireCompatible(int ni, int nj, int nk, double dx,
+                           size_t bodies) const;
 
 private:
     struct Entry {

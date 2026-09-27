@@ -4,6 +4,8 @@
 #include "flip_engine/particlelevelset.h"
 #include "flip_engine/viscositysolver.h"
 #include "flip_engine/viscousboundaryreaction.h"
+#include "flip_engine/rigidboundaryvelocity.h"
+#include "flip_engine/rigidviscositycoupling.h"
 #include "flip_engine/threadutils.h"
 
 #include <algorithm>
@@ -365,4 +367,208 @@ void run_viscous_feedback_probe(ManifoldViscousFeedbackProbe &result) {
                 "viscous feedback candidate produced invalid measurements");
         ++index;
     }
+}
+
+namespace {
+using Dofs = RigidPressureCoupling::Dofs;
+const Point inner_center = {1.47,1.56,1.40};
+const Point inner_size = {0.76,0.88,0.64};
+
+bool inner_face(const Point &p) {
+    return p[0]>.75 && p[0]<2.25 && p[1]>.75 && p[1]<2.25 && p[2]>.75 && p[2]<2.25;
+}
+
+void prepare_inner_body(Scene &scene, RigidBoundaryVelocityMap &map,
+                        const Dofs &velocity, MACVelocityField *scale) {
+    map.prepare(N,N,N,DX,1,3*(N+1)*N*N);
+    map.motions={{inner_center,velocity}};
+    map.beginCapture();
+    VelocityDataGrid data(N,N,N);
+    each_face([&](int axis,GridIndex g,const Point &p) {
+        double value=0.0;
+        if (!scene.is_fluid(axis,g) && inner_face(p)) {
+            value=map.sampleAndRecord(axis,g,0,1.0,p);
+            (axis==0 ? data.weightU : axis==1 ? data.weightV : data.weightW).set(g,1.0f);
+            component(data.field,axis).set(g,value);
+            if (scale != nullptr) { value*=component(*scale,axis).get(g); }
+        }
+        component(scene.velocity,axis).set(g,value);
+    });
+    map.normalize(data);
+    map.finish();
+}
+
+Point cuboid_inertia(double mass) {
+    return {mass*(inner_size[1]*inner_size[1]+inner_size[2]*inner_size[2])/12,
+            mass*(inner_size[0]*inner_size[0]+inner_size[2]*inner_size[2])/12,
+            mass*(inner_size[0]*inner_size[0]+inner_size[1]*inner_size[1])/12};
+}
+
+void prepare_viscous_coupling(RigidViscosityCoupling &coupling,double mass,bool fixed=false) {
+    coupling.reserve(1,3*N*N*N,6*N*N*N,24*N*N*N);
+    RigidViscosityCoupling::Body body;
+    if (!fixed) {
+        body.inverseMass=1.0/mass;
+        const Point inertia=cuboid_inertia(mass);
+        for (int axis=0;axis<3;++axis) { body.inverseInertia[axis][axis]=1.0/inertia[axis]; }
+    }
+    coupling.bodies={body};
+}
+
+double body_energy(const Dofs &q,double mass) {
+    const Point inertia=cuboid_inertia(mass);
+    double energy=0.0;
+    for (int axis=0;axis<3;++axis) {
+        energy+=0.5*(mass*q[axis]*q[axis]+inertia[axis]*q[axis+3]*q[axis+3]);
+    }
+    return energy;
+}
+
+void measure_coupled(Scene &scene,RigidBoundaryVelocityMap &map,
+                     RigidViscosityCoupling &coupling,ViscousBoundaryReaction &reaction,
+                     const Dofs &initial,double mass,MACVelocityField *scale,
+                     ManifoldCoupledViscosityProbe &result) {
+    const Dofs &impulse=coupling.impulses()[0];
+    const Dofs &change=coupling.velocityChanges()[0];
+    const Dofs response=coupling.bodies[0].response(impulse);
+    Dofs final=initial,transposed{};
+    double fluidEnergy=0.0;
+    each_face([&](int axis,GridIndex g,const Point &) {
+        if (scene.solved(axis,g)) {
+            const double v=component(scene.velocity,axis).get(g);
+            fluidEnergy+=0.5*1000*DX*DX*DX*v*v;
+        }
+        const double derivative=scale==nullptr ? 1.0 : component(*scale,axis).get(g);
+        const double faceImpulse=derivative*reaction.impulse(axis,g);
+        map.forEachFaceContribution(axis,g,[&](size_t body,const Dofs &basis) {
+            require(body==0,"unexpected coupled viscosity probe body");
+            for (int dof=0;dof<6;++dof) { transposed[dof]+=basis[dof]*faceImpulse; }
+        });
+    });
+    for (int dof=0;dof<6;++dof) {
+        require(std::isfinite(impulse[dof]) && std::isfinite(change[dof])
+                && std::isfinite(response[dof]) && std::isfinite(transposed[dof]),
+                "nonfinite coupled viscosity reaction");
+        final[dof]+=change[dof];
+        result.max_response_error=std::max(result.max_response_error,
+            std::abs(change[dof]-response[dof])/std::max({1.0,std::abs(change[dof]),std::abs(response[dof])}));
+        result.max_transpose_error=std::max(result.max_transpose_error,
+            std::abs(impulse[dof]-transposed[dof])/std::max({1.0,std::abs(impulse[dof]),std::abs(transposed[dof])}));
+    }
+    const double ratio=(fluidEnergy+body_energy(final,mass))/body_energy(initial,mass);
+    require(std::isfinite(ratio) && ratio>=0.0,"invalid coupled viscosity energy");
+    result.max_energy_ratio=std::max(result.max_energy_ratio,ratio);
+    ++result.cases;
+}
+} // namespace
+
+void run_coupled_viscosity_probe(ManifoldCoupledViscosityProbe &result) {
+    struct ThreadLimit {
+        int previous=ThreadUtils::getMaxThreadCount();
+        ThreadLimit() { ThreadUtils::setMaxThreadCount(2); }
+        ~ThreadLimit() { ThreadUtils::setMaxThreadCount(previous); }
+    } threads;
+    result={};
+    RigidBoundaryVelocityMap map;
+    RigidViscosityCoupling coupling;
+    ViscousBoundaryReaction reaction;
+    require(reaction.prepare(N,N,N,DX),"coupled viscosity reaction preparation failed");
+    // Frozen geometry: the same light-body cases rejected by explicit feedback,
+    // plus heavy bodies and rotation. All six body DOFs are free. The tank is
+    // stationary, so viscosity must not add total fluid + body kinetic energy.
+    for (bool rotation : {false,true}) for (double ratio : {0.1,1.0,10.0}) {
+        for (double nu : {1.0,10.0}) for (double dt : {DT,DT/2}) {
+            Scene scene(nu,false,false,false);
+            const Dofs initial=rotation ? Dofs{0,0,0,0.4,-0.7,1.0} : Dofs{1,0,0,0,0,0};
+            const double mass=1000*ratio*inner_size[0]*inner_size[1]*inner_size[2];
+            prepare_inner_body(scene,map,initial,nullptr);
+            prepare_viscous_coupling(coupling,mass);
+            ViscositySolver solver;
+            auto params=scene.params(dt,1000,&reaction);
+            params.rigidCoupling=&coupling; params.rigidBoundaryMap=&map;
+            require(solver.applyViscosityToVelocityField(params),"joint native viscosity solve failed");
+            require(coupling.hasSolution() && reaction.hasSolution(),"missing coupled viscosity output");
+            measure_coupled(scene,map,coupling,reaction,initial,mass,nullptr,result);
+        }
+    }
+
+    // A spatially varying derivative exercises the existing constrained-field
+    // chain rule: solid value = scale * S*q, reaction = S^T*scale*faceImpulse.
+    Scene scaled(10,false,false,true);
+    MACVelocityField scale(N,N,N,DX);
+    each_face([&](int axis,GridIndex g,const Point &) {
+        component(scale,axis).set(g,0.2+0.1*((g.i+2*g.j+g.k+axis)%7));
+    });
+    const Dofs initial={0.7,-0.4,0.2,0.4,-0.7,1.0};
+    const double mass=100*inner_size[0]*inner_size[1]*inner_size[2];
+    prepare_inner_body(scaled,map,initial,&scale);
+    prepare_viscous_coupling(coupling,mass);
+    ViscositySolver solver;
+    auto params=scaled.params(DT,1000,&reaction);
+    params.rigidCoupling=&coupling; params.rigidBoundaryMap=&map; params.rigidBoundaryScale=&scale;
+    require(solver.applyViscosityToVelocityField(params),"scaled joint viscosity solve failed");
+    measure_coupled(scaled,map,coupling,reaction,initial,mass,&scale,result);
+
+    const Dofs scaledImpulse=coupling.impulses()[0];
+    Scene noFaceOutput(10,false,false,true);
+    prepare_inner_body(noFaceOutput,map,initial,&scale);
+    params=noFaceOutput.params(DT,1000,nullptr);
+    params.rigidCoupling=&coupling; params.rigidBoundaryMap=&map; params.rigidBoundaryScale=&scale;
+    require(solver.applyViscosityToVelocityField(params),"coupled viscosity without face output failed");
+    require(difference(scaled.velocity,noFaceOutput.velocity)<1e-7,
+            "optional face reaction changed joint viscosity solve");
+    for (int dof=0;dof<6;++dof) {
+        require(coupling.impulses()[0][dof]==scaledImpulse[dof],
+                "optional face reaction changed body impulse");
+    }
+
+    require(result.max_energy_ratio<=1.001,"coupled viscosity added passive kinetic energy");
+    require(result.max_response_error<1e-4,"coupled viscosity body response differs from reaction");
+    require(result.max_transpose_error<1e-4,"coupled viscosity reaction differs from boundary transpose");
+
+    Scene fixed(1,false,false,false);
+    prepare_inner_body(fixed,map,initial,nullptr);
+    Scene baseline(1,false,false,false);
+    baseline.velocity=fixed.velocity;
+    prepare_viscous_coupling(coupling,mass,true);
+    params=fixed.params(DT,1000,&reaction);
+    params.rigidCoupling=&coupling; params.rigidBoundaryMap=&map;
+    ViscositySolver ordinary;
+    require(solver.applyViscosityToVelocityField(params)
+            && ordinary.applyViscosityToVelocityField(baseline.params(DT,1000,nullptr)),
+            "fixed-body viscosity baseline failed");
+    result.fixed_velocity_error=difference(fixed.velocity,baseline.velocity);
+    require(result.fixed_velocity_error<2e-6,"fixed mobility changed native viscosity solution");
+    double reactionMagnitude=0.0;
+    for (int dof=0;dof<6;++dof) {
+        require(coupling.velocityChanges()[0][dof]==0.0,"fixed body gained viscosity velocity");
+        reactionMagnitude+=std::abs(coupling.impulses()[0][dof]);
+    }
+    require(reactionMagnitude>1.0,"moving fixed boundary has no measured reaction");
+
+    // Rejected requests never change fluid state or retain accepted reactions.
+    const MACVelocityField before=fixed.velocity;
+    auto unchanged=before;
+    params.maxIterations=0;
+    require(!solver.applyViscosityToVelocityField(params),"exhausted joint solve accepted native loose fallback");
+    require(same_bits(fixed.velocity,unchanged) && !coupling.hasSolution() && !reaction.hasSolution(),
+            "failed joint viscosity solve leaked state");
+    params.maxIterations=900;
+    RigidBoundaryVelocityMap wrongMap;
+    wrongMap.prepare(N,N,N,DX,1,0); wrongMap.motions={{inner_center,initial}};
+    params.rigidBoundaryMap=&wrongMap;
+    rejects([&] { solver.applyViscosityToVelocityField(params); },"unfinished viscosity map accepted");
+    require(same_bits(fixed.velocity,unchanged) && !coupling.hasSolution() && !reaction.hasSolution(),
+            "bad viscosity map leaked state");
+    params.rigidBoundaryMap=&map;
+    MACVelocityField badScale(N+1,N,N,DX);
+    params.rigidBoundaryScale=&badScale;
+    rejects([&] { solver.applyViscosityToVelocityField(params); },"wrong viscosity derivative grid accepted");
+    params.rigidBoundaryScale=nullptr;
+    prepare_viscous_coupling(coupling,mass);
+    fixed.liquid.getPhiGrid()->fill(1.0f);
+    require(solver.applyViscosityToVelocityField(params),"empty coupled viscosity solve failed");
+    require(coupling.hasSolution() && reaction.hasSolution() && same_bits(fixed.velocity,unchanged),
+            "empty coupled viscosity capture lost state");
+    for (double value : coupling.impulses()[0]) { require(value==0.0,"dry viscosity reaction is nonzero"); }
 }

@@ -40,6 +40,8 @@ SOFTWARE.
 #include "particlelevelset.h"
 #include "meshlevelset.h"
 #include "interpolation.h"
+#include "rigidviscositycoupling.h"
+#include "rigidboundaryvelocity.h"
 
 #include <cmath>
 #include <limits>
@@ -54,16 +56,39 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
     ViscousBoundaryReaction *boundaryReaction = params.boundaryReaction;
     struct ReactionCaptureGuard {
         ViscousBoundaryReaction *reaction;
+        RigidViscosityCoupling *coupling;
         bool committed = false;
         ~ReactionCaptureGuard() {
             if (reaction != nullptr && !committed) {
                 reaction->invalidate();
             }
+            if (coupling != nullptr && !committed) { coupling->invalidate(); }
         }
-    } reactionGuard{boundaryReaction};
+    } reactionGuard{boundaryReaction,params.rigidCoupling};
 
     _initialize(params);
     _boundaryReaction = boundaryReaction;
+    _rigidCoupling = params.rigidCoupling;
+    _rigidBoundaryMap = params.rigidBoundaryMap;
+    _rigidBoundaryScale = params.rigidBoundaryScale;
+    if (_rigidCoupling != nullptr) {
+        _solverStatus = "***Coupled viscosity solve incomplete";
+        _rigidCoupling->invalidate();
+        if (_rigidBoundaryMap == nullptr || !std::isfinite(params.reactionDensity)
+            || params.reactionDensity <= 0.0) {
+            throw std::invalid_argument("coupled viscosity requires a boundary map and physical density");
+        }
+        _rigidBoundaryMap->requireCompatible(_isize,_jsize,_ksize,_dx,_rigidCoupling->bodies.size());
+        if (_rigidBoundaryScale != nullptr) {
+            int ni,nj,nk;
+            _rigidBoundaryScale->getGridDimensions(&ni,&nj,&nk);
+            if (ni!=_isize || nj!=_jsize || nk!=_ksize) {
+                throw std::invalid_argument("viscosity boundary derivative dimensions do not match");
+            }
+        }
+    } else if (_rigidBoundaryMap != nullptr || _rigidBoundaryScale != nullptr) {
+        throw std::invalid_argument("viscosity boundary derivative supplied without body coupling");
+    }
     if (boundaryReaction != nullptr &&
         !boundaryReaction->beginCapture(_isize, _jsize, _ksize, _dx, params.reactionDensity)) {
         _solverStatus = "***Viscosity boundary reaction FAILED: invalid capture parameters";
@@ -72,14 +97,22 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
 
     _computeFaceStateGrid();
     _computeVolumeGrid();
-    if (boundaryReaction != nullptr && !_validateReactionInputs()) {
-        boundaryReaction->invalidate();
+    if ((boundaryReaction != nullptr || _rigidCoupling != nullptr) && !_validateReactionInputs()) {
         _solverStatus = "***Viscosity boundary reaction FAILED: invalid native inputs";
         return false;
     }
     _computeMatrixIndexTable();
 
     int matsize = _matrixIndex.matrixSize;
+    if (_rigidCoupling != nullptr) {
+        const double cellMass=params.reactionDensity*static_cast<double>(_dx)*_dx*_dx;
+        _rigidCoupling->beginCapture(matsize,cellMass);
+        if (!_visitBoundaryTerms(nullptr,params.reactionDensity)) {
+            _solverStatus = "***Coupled viscosity FAILED: boundary stencil extraction";
+            return false;
+        }
+        _rigidCoupling->finishCapture();
+    }
     if (matsize == 0) {
         // Nothing to solve
         _solverIterations = 0;
@@ -90,15 +123,18 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
             _solverStatus = "***Viscosity boundary reaction FAILED: output validation";
             return false;
         }
+        if (_rigidCoupling != nullptr) { _rigidCoupling->captureEmptySolution(); }
         reactionGuard.committed = true;
         return true;
     }
 
-    SparseMatrixf matrix(matsize, 15);
-    std::vector<float> rhs(matsize, 0);
-    std::vector<float> soln(matsize, 0);
+    const size_t systemSize=_rigidCoupling != nullptr ? _rigidCoupling->systemSize() : matsize;
+    SparseMatrixf matrix(systemSize, 15);
+    std::vector<float> rhs(systemSize, 0);
+    std::vector<float> soln(systemSize, 0);
 
     _initializeLinearSystem(matrix, rhs);
+    if (_rigidCoupling != nullptr) { _rigidCoupling->addMatrixDiagonalAndRhs(matrix,rhs); }
 
     bool success = _solveLinearSystem(matrix, rhs, soln);
     if (!success) {
@@ -108,8 +144,9 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
         return false;
     }
 
+    if (_rigidCoupling != nullptr) { _rigidCoupling->captureSolution(soln); }
     if (boundaryReaction != nullptr &&
-        !_captureBoundaryReaction(soln, params.reactionDensity)) {
+        (!_visitBoundaryTerms(&soln, params.reactionDensity) || !boundaryReaction->finish())) {
         boundaryReaction->invalidate();
         _solverStatus = "***Viscosity boundary reaction FAILED: stencil extraction";
         return false;
@@ -881,7 +918,12 @@ bool ViscositySolver::_solveLinearSystem(SparseMatrixf &matrix, std::vector<floa
 
     float estimatedError;
     int numIterations;
-    bool success = solver.solve(matrix, rhs, soln, estimatedError, numIterations);
+    bool success = _rigidCoupling != nullptr
+        ? solver.solveWithAdditionalMatrix(matrix,rhs,soln,estimatedError,numIterations,
+            [&](const std::vector<float> &x,std::vector<float> &y) {
+                _rigidCoupling->addRemainingMatrixProduct(x,y);
+            })
+        : solver.solve(matrix, rhs, soln, estimatedError, numIterations);
     _solverIterations = numIterations;
     _solverError = (float)estimatedError;
 
@@ -891,7 +933,7 @@ bool ViscositySolver::_solveLinearSystem(SparseMatrixf &matrix, std::vector<floa
         ss << "Viscosity Solver Iterations: " << numIterations <<
               "\nEstimated Error: " << estimatedError;
         retval = true;
-    } else if (numIterations == _maxSolverIterations && estimatedError < _acceptableTolerace) {
+    } else if (_rigidCoupling == nullptr && numIterations == _maxSolverIterations && estimatedError < _acceptableTolerace) {
         ss << "Viscosity Solver Iterations: " << numIterations <<
               "\nEstimated Error: " << estimatedError;
         retval = true;
@@ -969,15 +1011,37 @@ bool ViscositySolver::_getReactionFaceValue(int axis, GridIndex g,
         } else {
             *value = _velocityField->W(g);
         }
+        if (_rigidCoupling != nullptr) {
+            // Accepted changes were validated once during solution capture.
+            // Visit only this face's contributors, avoiding an all-body scan
+            // for every face in the viscous stress stencil.
+            const auto &changes=_rigidCoupling->velocityChanges();
+            double correction=0.0;
+            _rigidBoundaryMap->forEachFaceContribution(axis,g,
+                [&](size_t body,const RigidPressureCoupling::Dofs &basis) {
+                    for (int dof=0;dof<6;++dof) { correction+=basis[dof]*changes[body][dof]; }
+                });
+            *value += _rigidFaceScale(axis,g)*correction;
+        }
     } else {
         return false;
     }
     return std::isfinite(*value);
 }
 
+double ViscositySolver::_rigidFaceScale(int axis,GridIndex g) const {
+    if (_rigidBoundaryScale == nullptr) { return 1.0; }
+    const double scale=axis==0 ? _rigidBoundaryScale->U(g)
+        : axis==1 ? _rigidBoundaryScale->V(g) : _rigidBoundaryScale->W(g);
+    if (!std::isfinite(scale) || scale<0.0 || scale>1.0) {
+        throw std::invalid_argument("viscosity boundary derivative must be between zero and one");
+    }
+    return scale;
+}
+
 bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *axes,
                                            const int *signs, int count, float weight,
-                                           const std::vector<float> &soln, double density) {
+                                           const std::vector<float> *soln, double density) {
     if (!std::isfinite(weight)) {
         return false;
     }
@@ -986,6 +1050,9 @@ bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *ax
     }
 
     bool hasActiveFluid = false;
+    std::array<int,4> fluidRows{{-1,-1,-1,-1}};
+    std::array<double,4> fluidCoefficients{};
+    std::array<FaceState,4> states{};
     for (int n = 0; n < count; n++) {
         int matrixIndex = -1;
         FaceState state;
@@ -1001,18 +1068,45 @@ bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *ax
         } else {
             return false;
         }
+        states[n]=state;
         if (state == FaceState::fluid && matrixIndex >= 0) {
             hasActiveFluid = true;
+            fluidRows[n]=matrixIndex;
+            fluidCoefficients[n]=signs[n];
         }
     }
     if (!hasActiveFluid) {
         return true;
     }
 
+    if (soln == nullptr) {
+        double prescribed=0.0;
+        for (int n=0;n<count;++n) {
+            if (states[n] == FaceState::solid) {
+                const double value=axes[n]==0 ? _velocityField->U(faces[n])
+                    : axes[n]==1 ? _velocityField->V(faces[n]) : _velocityField->W(faces[n]);
+                prescribed+=signs[n]*value;
+            } else if (fluidRows[n]<0) { return false; }
+        }
+        _rigidCoupling->beginTerm(weight,prescribed,fluidRows,fluidCoefficients);
+        for (int n=0;n<count;++n) {
+            if (states[n] != FaceState::solid) { continue; }
+            const double scale=signs[n]*_rigidFaceScale(axes[n],faces[n]);
+            _rigidBoundaryMap->forEachFaceContribution(axes[n],faces[n],
+                [&](size_t body,const RigidPressureCoupling::Dofs &basis) {
+                    auto derivative=basis;
+                    for (double &value : derivative) { value*=scale; }
+                    _rigidCoupling->addBody(body,derivative);
+                });
+        }
+        _rigidCoupling->endTerm();
+        return true;
+    }
+
     double values[4] = {0.0, 0.0, 0.0, 0.0};
     double strain = 0.0;
     for (int n = 0; n < count; n++) {
-        if (!_getReactionFaceValue(axes[n], faces[n], soln, &values[n])) {
+        if (!_getReactionFaceValue(axes[n], faces[n], *soln, &values[n])) {
             return false;
         }
         strain += static_cast<double>(signs[n]) * values[n];
@@ -1044,8 +1138,8 @@ bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *ax
     return true;
 }
 
-bool ViscositySolver::_captureBoundaryReaction(const std::vector<float> &soln, double density) {
-    if (_boundaryReaction == nullptr || !std::isfinite(density) || density <= 0.0) {
+bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double density) {
+    if ((soln != nullptr && _boundaryReaction == nullptr) || !std::isfinite(density) || density <= 0.0) {
         return false;
     }
 
@@ -1128,7 +1222,7 @@ bool ViscositySolver::_captureBoundaryReaction(const std::vector<float> &soln, d
             }
         }
     }
-    return _boundaryReaction->finish();
+    return true;
 }
 
 void ViscositySolver::_applySolutionToVelocityField(std::vector<float> &soln) {
