@@ -8,9 +8,20 @@ namespace {
 constexpr int N = 5;
 using Dense = std::array<std::array<double, N>, N>;
 using Vector = std::array<double, N>;
+using SmallDense = std::array<std::array<double, 2>, 2>;
+using SmallVector = std::array<double, 2>;
 
 void require(bool condition, const char *message) {
     if (!condition) { throw std::runtime_error(message); }
+}
+
+double sparse_value(const SparseMatrixd &matrix, int row, int column) {
+    const auto target = static_cast<unsigned int>(column);
+    for (size_t index = 0; index < matrix.index[row].size(); ++index) {
+        if (matrix.index[row][index] == target) { return matrix.value[row][index]; }
+        if (matrix.index[row][index] > target) { return 0.0; }
+    }
+    return 0.0;
 }
 
 // Deliberately independent, tiny test oracle. Production still uses native PCG.
@@ -43,6 +54,95 @@ void rejects(Function function, const char *message) {
     bool rejected = false;
     try { function(); } catch (const std::invalid_argument &) { rejected = true; }
     require(rejected, message);
+}
+
+void solve_small_coupled_system(const SmallDense &matrix, const SmallVector &rhs,
+                                SmallVector expected, const char *message) {
+    SparseMatrixd sparse(2, 3);
+    for (int row = 0; row < 2; ++row) {
+        for (int column = 0; column < 2; ++column) {
+            sparse.set(row, column, matrix[row][column]);
+        }
+    }
+    std::vector<double> input(rhs.begin(), rhs.end());
+    std::vector<double> solution(2, 0.0);
+    PCGSolver<double> solver;
+    solver.setSolverParameters(1e-12, 100);
+    double residual = 0.0;
+    int iterations = 0;
+    require(solver.solveWithAdditionalMatrix(
+                sparse, input, solution, residual, iterations,
+                [](const std::vector<double> &, std::vector<double> &) {}),
+            message);
+    require(std::isfinite(residual) && iterations >= 0, "coupled PCG returned invalid diagnostics");
+
+    double rhsScale = 0.0;
+    double directResidual = 0.0;
+    for (int row = 0; row < 2; ++row) {
+        require(std::isfinite(solution[row]), "coupled PCG returned a nonfinite solution");
+        require(std::abs(solution[row] - expected[row]) < 1e-8,
+                "coupled PCG differs from the known small-system solution");
+        rhsScale = std::max(rhsScale, std::abs(rhs[row]));
+        double value = -rhs[row];
+        for (int column = 0; column < 2; ++column) {
+            value += matrix[row][column] * solution[column];
+        }
+        directResidual = std::max(directResidual, std::abs(value));
+    }
+    require(rhsScale > 0.0 && directResidual / rhsScale < 1e-12,
+            "coupled PCG direct residual exceeds the small-system oracle tolerance");
+}
+
+void run_coupled_pcg_boundary_regressions() {
+    const double smallDiagonal = 1.98682e-10;
+    const double smallOffDiagonal = -1e-10;
+    const SmallDense cutCell = {{{0.006, smallOffDiagonal},
+                                 {smallOffDiagonal, smallDiagonal}}};
+    const SmallVector cutCellRhs = {
+        0.006 * 2.0 + smallOffDiagonal * -3.0,
+        smallOffDiagonal * 2.0 + smallDiagonal * -3.0,
+    };
+    solve_small_coupled_system(cutCell, cutCellRhs, {2.0, -3.0},
+                               "coupled PCG rejected the small positive cut-cell diagonal");
+
+    const SmallDense base = {{{4.0, -1.0}, {-1.0, 3.0}}};
+    const SmallVector expected = {1.25, -0.75};
+    const SmallVector baseRhs = {
+        4.0 * expected[0] - expected[1],
+        -expected[0] + 3.0 * expected[1],
+    };
+    for (double scale : {1e-12, 1.0, 1e12}) {
+        SmallDense scaled = base;
+        SmallVector rhs = baseRhs;
+        for (int row = 0; row < 2; ++row) {
+            for (int column = 0; column < 2; ++column) {
+                scaled[row][column] *= scale;
+            }
+            rhs[row] *= scale;
+        }
+        solve_small_coupled_system(scaled, rhs, expected,
+                                   "coupled PCG solution changed under uniform scaling");
+    }
+
+    // An incompatible null-space component must fail before division by zero
+    // can turn the next body product into NaN. No partial result is accepted.
+    SparseMatrixd singular(2, 2);
+    singular.set(0, 0, 1.0);
+    singular.set(0, 1, -1.0);
+    singular.set(1, 0, -1.0);
+    singular.set(1, 1, 1.0);
+    std::vector<double> rhs = {1.0, 1.0}, solution(2, 0.0);
+    PCGSolver<double> solver;
+    solver.setSolverParameters(1e-12, 100);
+    double residual = 0.0;
+    int iterations = 0;
+    require(!solver.solveWithAdditionalMatrix(
+                singular, rhs, solution, residual, iterations,
+                [](const std::vector<double> &, std::vector<double> &) {}),
+            "coupled PCG accepted incompatible singular constraints");
+    for (double value : solution) {
+        require(std::isfinite(value), "PCG breakdown produced a nonfinite iterate");
+    }
 }
 } // namespace
 
@@ -116,7 +216,7 @@ void run_coupling_operator_probe() {
     const Vector expected = dense_solve(full, rhs);
     coupling.addMatrixDiagonal(fluid);
     for (int row = 0; row < N; ++row) {
-        require(std::abs(fluid(row, row) - 3.0 - additional[row][row]) < 1e-12,
+        require(std::abs(sparse_value(fluid, row, row) - 3.0 - additional[row][row]) < 1e-12,
                 "coupled preconditioner diagonal differs from dense oracle");
     }
     std::vector<double> input(rhs.begin(), rhs.end()), solution(N, 0.0);
@@ -164,4 +264,6 @@ void run_coupling_operator_probe() {
     RigidPressureCoupling unprepared;
     unprepared.bodies.push_back(first);
     rejects([&] { unprepared.prepare(keymap, 8, 3, 3, dt, dx); }, "unprepared coupling storage accepted");
+
+    run_coupled_pcg_boundary_regressions();
 }

@@ -3,6 +3,7 @@ use crate::{Bounds, Config, LiquidOptions, Seconds, TimeStepOptions};
 use manifold_physics::{BodyConfig, PhysicsWorld, TriangleMesh};
 
 mod boundaries;
+mod gravity;
 
 const DT: Seconds = Seconds(1.0 / 60.0);
 
@@ -229,6 +230,9 @@ fn production_coupling_requires_fresh_states_and_rejects_stale_reactions() {
     let mut asymmetric = state;
     asymmetric.dynamics.inverse_inertia[0][2] += 0.001;
     assert!(frame.set_rigid_bodies(&[asymmetric]).is_err());
+    let mut invalid_acceleration = state;
+    invalid_acceleration.dynamics.external_linear_acceleration[2] = f32::NAN;
+    assert!(frame.set_rigid_bodies(&[invalid_acceleration]).is_err());
     frame.set_rigid_bodies(&[state]).unwrap();
     let dt = frame.next_substep().unwrap().unwrap();
     frame.advance(dt).unwrap();

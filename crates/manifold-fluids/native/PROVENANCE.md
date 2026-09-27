@@ -47,7 +47,11 @@ Local changes:
   mass/inertia contribution to the existing pressure operator, including its
   exact diagonal for preconditioning. `flip_engine/pcgsolver/pcgsolver.h` adds
   an optional matrix-product callback; ordinary callers keep the original
-  solver path. No replacement iterative solver is introduced.
+  solver path. Coupled MIC keeps every positive diagonal: the upstream absolute
+  1e-9 cutoff discarded a valid 1.99e-10 cut-cell coefficient in a moving-body
+  pressure solve, making its preconditioner singular. PCG also rejects invalid
+  curvature or recurrence scalars before producing nonfinite iterates.
+  No replacement iterative solver is introduced.
 - The new MANIFOLD-owned `flip_engine/rigidboundaryvelocity.{h,cpp}` retains
   sparse body-velocity derivatives through native mesh sampling, weighted
   unions, normalization and extrapolation. It supplies the pressure transpose
@@ -84,8 +88,12 @@ Local changes:
   constant physical density and successful stages before exposing reactions.
   Viscosity uses the qualified 1e-9 tolerance; pressure scales surface tension
   with density to preserve the existing kinematic control. Coupled boundaries
-  rebuild their derivative each substep and contribute instantaneous rigid
-  speed to CFL even when legacy obstacle adaptivity is disabled. The native
+  rebuild their derivative each substep. Boundary velocity includes queued
+  external acceleration over the accepted substep; CFL bounds both initial and
+  predicted speeds even when legacy obstacle adaptivity is disabled. The owner
+  applies only the fluid reaction, then Box3D integrates its queued forces once.
+  This prediction excludes damping, gyroscopic torque and contact response.
+  The native
   bridge prepares bindings and retained buffers once and validates whole body
   batches before updating geometry. It symmetrizes only f32-sized rounding
   differences in exported inertia (within eight float epsilon times the tensor
@@ -108,7 +116,10 @@ Box3D advances its pose after accepting the reaction. Empty/disabled recipients,
 prescribed density scaling, invalid inputs, stale reactions and abandonment
 are covered, along with two-body exchange order, preparation/retry and CFL
 bounds for prescribed proxies crossing the domain with every vertex outside.
-These short exchanges do not establish sustained energy bounds,
-floating equilibrium or final moving-contact alignment. App worker ownership,
+A one-second neutral-body test additionally covers gravity prediction at 60/120 Hz:
+vertical drift is 0.02171/0.02275 m on a dx 0.05 m grid, with once-only native
+force/impulse response error below 7.9e-9. A same-grid old-velocity control drifts
+0.04908 m. This does not establish sustained energy bounds,
+surface floating or final moving-contact alignment. App worker ownership,
 authored density and production memory/performance qualification remain required in
 [`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).

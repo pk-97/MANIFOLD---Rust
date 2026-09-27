@@ -8,6 +8,9 @@ use crate::{FluidError, FluidFrame, FluidWorld, MeshHandle, MeshRole, native_res
 
 /// A collision pose and dynamics snapshot in the fluid simulation's coordinate
 /// frame, in metres and seconds. The centre of mass must match this pose.
+/// Queued external acceleration predicts the boundary velocity at each native
+/// substep. The rigid backend remains responsible for integrating those forces
+/// exactly once when it advances after accepting the fluid reaction.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RigidBodyState {
     pub pose: BodyPose,
@@ -54,6 +57,8 @@ struct NativeRigidBodyInput {
     center: [f32; 3],
     linear_velocity: [f32; 3],
     angular_velocity: [f32; 3],
+    external_linear_acceleration: [f32; 3],
+    external_angular_acceleration: [f32; 3],
     inverse_mass: f32,
     inverse_inertia: [f32; 9],
     enabled: u32,
@@ -156,6 +161,16 @@ impl FluidFrame<'_> {
             input.linear_velocity = body.dynamics.linear_velocity;
             input.angular_velocity = body.dynamics.angular_velocity;
             let responds = body.dynamics.enabled && body.dynamics.kind == BodyKind::Dynamic;
+            input.external_linear_acceleration = if responds {
+                body.dynamics.external_linear_acceleration
+            } else {
+                [0.0; 3]
+            };
+            input.external_angular_acceleration = if responds {
+                body.dynamics.external_angular_acceleration
+            } else {
+                [0.0; 3]
+            };
             input.inverse_mass = if responds {
                 body.dynamics.inverse_mass
             } else {

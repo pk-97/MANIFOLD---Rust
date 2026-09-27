@@ -551,9 +551,15 @@ RigidFluidCoupling::Body read_rigid_body(const ManifoldFluidsRigidBodyInput &inp
     body.motion.center = read_rigid_vector(input.center, "rigid body center");
     const auto linear = read_rigid_vector(input.linear_velocity, "rigid body linear velocity");
     const auto angular = read_rigid_vector(input.angular_velocity, "rigid body angular velocity");
+    const auto linear_acceleration = read_rigid_vector(
+        input.external_linear_acceleration, "rigid external linear acceleration");
+    const auto angular_acceleration = read_rigid_vector(
+        input.external_angular_acceleration, "rigid external angular acceleration");
     for (size_t axis = 0; axis < 3; ++axis) {
         body.motion.velocity[axis] = linear[axis];
         body.motion.velocity[axis + 3] = angular[axis];
+        body.externalAcceleration[axis] = linear_acceleration[axis];
+        body.externalAcceleration[axis + 3] = angular_acceleration[axis];
     }
     body.mobility.inverseMass = input.inverse_mass;
     if (!std::isfinite(body.mobility.inverseMass) || body.mobility.inverseMass < 0.0) {

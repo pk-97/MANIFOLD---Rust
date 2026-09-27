@@ -10895,7 +10895,7 @@ void FluidSimulation::_outputSimulationData() {
 void FluidSimulation::_stepFluid(double dt) {
     srand(_currentFrame + _currentFrameTimeStepNumber);
     if (_rigidCoupling) {
-        _rigidCoupling->beginSubstep();
+        _rigidCoupling->beginSubstep(dt);
     }
     if (!_isSkippedFrame || _rigidCoupling) {
         if (_rigidCoupling) {
@@ -11046,7 +11046,7 @@ double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
             for (size_t vidx = 0; vidx < m.vertices.size(); vidx++) {
                 // A large proxy can cross the liquid domain while every
                 // vertex lies outside it. Its boundary speed still matters.
-                maxu = fmax(_rigidCoupling->pointSpeed(body, m.vertices[vidx]), maxu);
+                maxu = fmax(_rigidCoupling->pointSpeed(body, m.vertices[vidx], dt), maxu);
             }
             continue;
         }

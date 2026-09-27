@@ -627,6 +627,12 @@ B3_API float b3Body_GetInverseMass( b3BodyId bodyId );
 /// Get the inverse rotational inertia of the body in world space, usually in 1/kg*m^2
 B3_API b3Matrix3 b3Body_GetWorldInverseRotationalInertia( b3BodyId bodyId );
 
+/// Get current external linear and angular accelerations without mutating the body.
+/// Linear acceleration combines queued force and world gravity. Angular acceleration
+/// maps queued torque through world inverse inertia. Fixed, kinematic, and disabled
+/// bodies return zero for both outputs.
+B3_API void b3Body_GetExternalAccelerations( b3BodyId bodyId, b3Vec3* linear, b3Vec3* angular );
+
 /// Get the center of mass position of the body in local space
 B3_API b3Vec3 b3Body_GetLocalCenterOfMass( b3BodyId bodyId );
 

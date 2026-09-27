@@ -69,7 +69,8 @@ template<class T>
 void factorModifiedIncompleteColesky0(const SparseMatrix<T> &matrix, 
                                       SparseColumnLowerFactor<T> &factor,
                                       T modificationParameter = 0.97, 
-                                      T minDiagonalRatio = 0.25) {
+                                      T minDiagonalRatio = 0.25,
+                                      bool preservePositiveDiagonals = false) {
 
     // first copy lower triangle of matrix into factor (Note: assuming A is symmetric of course!)
     factor.resize(matrix.n);
@@ -100,7 +101,13 @@ void factorModifiedIncompleteColesky0(const SparseMatrix<T> &matrix,
                 // a variable viscosity grid is used as an input to the viscosity solver.
                 // In future development, finding the root cause of the issue would be ideal
                 // so that this workaround is not needed.
-                if (value < eps) {
+                // Physical-density coupled pressure can have valid cut-cell
+                // diagonals below the upstream absolute cutoff. Dropping one
+                // makes the preconditioner singular while its equation stays
+                // in A, so PCG cannot remove that residual. Keep every positive
+                // diagonal on this path; the native pivot-ratio safeguard below
+                // still applies. Preserve the upstream default for other solves.
+                if (value < (preservePositiveDiagonals ? T(0) : eps)) {
                     value = 0;
                 }
                 // END WORKAROUND
@@ -268,7 +275,7 @@ struct PCGSolver {
     bool solve(const SparseMatrix<T> &matrix, const std::vector<T> &rhs, 
                std::vector<T> &result, T &residualOut, int &iterationsOut) {
         return solveWithAdditionalMatrix(matrix, rhs, result, residualOut, iterationsOut,
-            [](const std::vector<T> &, std::vector<T> &) {});
+            [](const std::vector<T> &, std::vector<T> &) {}, false);
     }
 
     // MANIFOLD: keep the existing PCG and MIC preconditioner while adding
@@ -278,7 +285,7 @@ struct PCGSolver {
     template <typename AddProduct>
     bool solveWithAdditionalMatrix(const SparseMatrix<T> &matrix, const std::vector<T> &rhs,
                                   std::vector<T> &result, T &residualOut, int &iterationsOut,
-                                  AddProduct addProduct) {
+                                  AddProduct addProduct, bool preservePositiveDiagonals = true) {
 
         unsigned int n = matrix.n;
         if (m.size() != n) { 
@@ -297,10 +304,10 @@ struct PCGSolver {
         }
         double tol = toleranceFactor * residualOut;
 
-        formPreconditioner(matrix);
+        formPreconditioner(matrix, preservePositiveDiagonals);
         applyPreconditioner(r, z);
         double rho = BLAS::dot(z, r);
-        if (rho == 0 || rho != rho) {
+        if (!std::isfinite(rho) || rho <= 0) {
             iterationsOut = 0;
             return false;
         }
@@ -312,7 +319,16 @@ struct PCGSolver {
         for (iteration = 0; iteration < maxIterations; iteration++){
             multiply(fixedMatrix, s, z);
             addProduct(s, z);
-            double alpha = rho / BLAS::dot(s, z);
+            const double curvature = BLAS::dot(s, z);
+            if (!std::isfinite(curvature) || curvature <= 0) {
+                iterationsOut = iteration;
+                return false;
+            }
+            double alpha = rho / curvature;
+            if (!std::isfinite(alpha)) {
+                iterationsOut = iteration;
+                return false;
+            }
             BLAS::addScaled(alpha, s, result);
             BLAS::addScaled(-alpha, z, r);
 
@@ -325,6 +341,10 @@ struct PCGSolver {
             applyPreconditioner(r, z);
             double rhoNew = BLAS::dot(z, r);
             double beta = rhoNew / rho;
+            if (!std::isfinite(rhoNew) || rhoNew <= 0 || !std::isfinite(beta)) {
+                iterationsOut = iteration;
+                return false;
+            }
             BLAS::addScaled(beta, s, z); 
             s.swap(z); // s=beta*s+z
             rho = rhoNew;
@@ -348,8 +368,9 @@ protected:
     T modifiedIncompleteCholeskyParameter;
     T minDiagonalRatio;
 
-    void formPreconditioner(const SparseMatrix<T> &matrix) {
-        factorModifiedIncompleteColesky0(matrix, icfactor);
+    void formPreconditioner(const SparseMatrix<T> &matrix, bool preservePositiveDiagonals) {
+        factorModifiedIncompleteColesky0(matrix, icfactor, T(0.97), T(0.25),
+                                        preservePositiveDiagonals);
     }
 
     void applyPreconditioner(const std::vector<T> &x, std::vector<T> &result) {

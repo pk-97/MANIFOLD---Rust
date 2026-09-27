@@ -161,6 +161,8 @@ mod ffi {
             type_out: *mut i32,
             enabled_out: *mut i32,
             awake_out: *mut i32,
+            external_linear_out: *mut f32,
+            external_angular_out: *mut f32,
         ) -> i32;
         pub fn manifold_box3d_body_preflight_impulse(
             world: u32,
@@ -276,6 +278,14 @@ pub struct BodyDynamics {
     pub inverse_mass: f32,
     /// World-space inverse inertia in row-major order.
     pub inverse_inertia: [[f32; 3]; 3],
+    /// External linear acceleration in world units per second squared from
+    /// queued forces and world gravity. This excludes damping, gyroscopic
+    /// torque, and contact impulses.
+    pub external_linear_acceleration: [f32; 3],
+    /// External angular acceleration in radians per second squared from
+    /// queued torque and world inverse inertia. This excludes damping,
+    /// gyroscopic torque, and contact impulses.
+    pub external_angular_acceleration: [f32; 3],
 }
 
 /// A world-space impulse applied at a body's center of mass.
@@ -951,6 +961,8 @@ impl PhysicsWorld {
         let mut body_type = 0;
         let mut enabled = 0;
         let mut awake = 0;
+        let mut external_linear_acceleration = [0.0; 3];
+        let mut external_angular_acceleration = [0.0; 3];
         let _lock = native_lock();
         let result = unsafe {
             ffi::manifold_box3d_body_dynamics(
@@ -963,6 +975,8 @@ impl PhysicsWorld {
                 &mut body_type,
                 &mut enabled,
                 &mut awake,
+                external_linear_acceleration.as_mut_ptr(),
+                external_angular_acceleration.as_mut_ptr(),
             )
         };
         if result != 0 {
@@ -980,6 +994,8 @@ impl PhysicsWorld {
             .chain(angular_velocity.iter())
             .chain(std::iter::once(&inverse_mass))
             .chain(inverse_inertia_values.iter())
+            .chain(external_linear_acceleration.iter())
+            .chain(external_angular_acceleration.iter())
             .all(|value| value.is_finite())
         {
             return Err(PhysicsError::NativeFailure);
@@ -1015,6 +1031,16 @@ impl PhysicsWorld {
             } else {
                 [[0.0; 3]; 3]
             },
+            external_linear_acceleration: if effective {
+                external_linear_acceleration
+            } else {
+                [0.0; 3]
+            },
+            external_angular_acceleration: if effective {
+                external_angular_acceleration
+            } else {
+                [0.0; 3]
+            },
         })
     }
 
@@ -1043,6 +1069,8 @@ impl PhysicsWorld {
                 let mut body_type = 0;
                 let mut enabled = 0;
                 let mut awake = 0;
+                let mut external_linear_acceleration = [0.0; 3];
+                let mut external_angular_acceleration = [0.0; 3];
                 let dynamics_result = unsafe {
                     ffi::manifold_box3d_body_dynamics(
                         native,
@@ -1054,6 +1082,8 @@ impl PhysicsWorld {
                         &mut body_type,
                         &mut enabled,
                         &mut awake,
+                        external_linear_acceleration.as_mut_ptr(),
+                        external_angular_acceleration.as_mut_ptr(),
                     )
                 };
                 if dynamics_result != 0 {

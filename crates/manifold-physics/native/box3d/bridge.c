@@ -705,10 +705,13 @@ int manifold_box3d_body_dynamics(
 	float* inverse_inertia_out,
 	int* type_out,
 	int* enabled_out,
-	int* awake_out )
+	int* awake_out,
+	float* external_linear_out,
+	float* external_angular_out )
 {
 	if ( center_out == NULL || linear_out == NULL || angular_out == NULL || inverse_mass_out == NULL ||
-		inverse_inertia_out == NULL || type_out == NULL || enabled_out == NULL || awake_out == NULL )
+		inverse_inertia_out == NULL || type_out == NULL || enabled_out == NULL || awake_out == NULL ||
+		external_linear_out == NULL || external_angular_out == NULL )
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
@@ -752,6 +755,21 @@ int manifold_box3d_body_dynamics(
 	}
 	*enabled_out = b3Body_IsEnabled( body_id ) ? 1 : 0;
 	*awake_out = b3Body_IsAwake( body_id ) ? 1 : 0;
+	b3Vec3 external_linear;
+	b3Vec3 external_angular;
+	b3Body_GetExternalAccelerations( body_id, &external_linear, &external_angular );
+	external_linear_out[0] = external_linear.x;
+	external_linear_out[1] = external_linear.y;
+	external_linear_out[2] = external_linear.z;
+	external_angular_out[0] = external_angular.x;
+	external_angular_out[1] = external_angular.y;
+	external_angular_out[2] = external_angular.z;
+	if ( !isfinite( external_linear.x ) || !isfinite( external_linear.y ) ||
+		!isfinite( external_linear.z ) || !isfinite( external_angular.x ) ||
+		!isfinite( external_angular.y ) || !isfinite( external_angular.z ) )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
 	return BOX3D_BRIDGE_OK;
 }
 

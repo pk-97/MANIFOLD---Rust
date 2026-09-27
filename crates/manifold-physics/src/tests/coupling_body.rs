@@ -442,3 +442,176 @@ fn coupling_body_rejects_invalid_batches_atomically_and_reuses_scratch() {
     assert_eq!(world.impulse_scratch.capacity(), repeated_capacity);
     assert_eq!(world.impulse_scratch.capacity(), capacity);
 }
+
+#[test]
+fn coupling_external_acceleration_predicts_contact_free_linear_step() {
+    let gravity = [0.0, -9.8, 0.0];
+    let dt = Seconds(1.0 / 120.0);
+    let mut world = PhysicsWorld::new(gravity).unwrap();
+    let body = world
+        .add_hull(
+            &cube(0.5),
+            BodyConfig {
+                position: [0.0, 10.0, 0.0],
+                mass: 2.0,
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let field = UniformField::new([2.0, 0.5, -1.0]).unwrap();
+    world
+        .apply_fields(
+            &[body],
+            &[FieldInput {
+                field: &field,
+                acceleration: 1.0,
+                delta_velocity: 0.0,
+            }],
+            dt,
+        )
+        .unwrap();
+
+    let before = world.dynamics(body).unwrap();
+    let expected = [2.0, -9.3, -1.0];
+    for (actual, expected) in before
+        .external_linear_acceleration
+        .into_iter()
+        .zip(expected)
+    {
+        assert!((actual - expected).abs() < 2.0e-6, "{actual} vs {expected}");
+    }
+    let before_pose = world.pose(body).unwrap();
+    let before_awake = before.awake;
+    let repeated = world.dynamics(body).unwrap();
+    assert_eq!(
+        repeated.external_linear_acceleration,
+        before.external_linear_acceleration
+    );
+    assert_eq!(repeated.external_angular_acceleration, [0.0; 3]);
+    assert_eq!(world.pose(body).unwrap(), before_pose);
+    assert_eq!(repeated.awake, before_awake);
+
+    let before_velocity = before.linear_velocity;
+    world.step(dt, 1).unwrap();
+    let after = world.dynamics(body).unwrap();
+    let dt = dt.0 as f32;
+    for (axis, (after_velocity, before_velocity)) in after
+        .linear_velocity
+        .iter()
+        .zip(before_velocity)
+        .enumerate()
+    {
+        let delta = after_velocity - before_velocity;
+        assert!((delta - before.external_linear_acceleration[axis] * dt).abs() < 2.0e-6);
+    }
+    assert_eq!(after.external_linear_acceleration, gravity);
+}
+
+#[test]
+fn coupling_external_acceleration_tracks_force_after_mass_update() {
+    let dt = Seconds(1.0 / 60.0);
+    let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+    let body = world
+        .add_hull(
+            &cube(0.5),
+            BodyConfig {
+                position: [0.0, 10.0, 0.0],
+                mass: 2.0,
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let field = UniformField::new([3.0, 0.0, 0.0]).unwrap();
+    world
+        .apply_fields(
+            &[body],
+            &[FieldInput {
+                field: &field,
+                acceleration: 1.0,
+                delta_velocity: 0.0,
+            }],
+            dt,
+        )
+        .unwrap();
+    assert_eq!(
+        world.dynamics(body).unwrap().external_linear_acceleration,
+        [3.0, 0.0, 0.0]
+    );
+    world
+        .update_body(
+            body,
+            BodyConfig {
+                position: [0.0, 10.0, 0.0],
+                mass: 6.0,
+                ..BodyConfig::default()
+            },
+            false,
+        )
+        .unwrap();
+    let dynamics = world.dynamics(body).unwrap();
+    assert!((dynamics.external_linear_acceleration[0] - 1.0).abs() < 2.0e-6);
+    world.step(dt, 1).unwrap();
+    assert_eq!(
+        world.dynamics(body).unwrap().external_linear_acceleration,
+        [0.0; 3]
+    );
+}
+
+#[test]
+fn coupling_external_acceleration_zero_for_constrained_kinds() {
+    let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();
+    let fixed = world
+        .add_hull(
+            &cube(0.5),
+            BodyConfig {
+                kind: BodyKind::Fixed,
+                mass: 0.0,
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let animated = world
+        .add_hull(
+            &cube(0.5),
+            BodyConfig {
+                kind: BodyKind::Animated,
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let disabled = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+    world.set_enabled(disabled, false).unwrap();
+    let field = UniformField::new([4.0, 0.0, 0.0]).unwrap();
+    world
+        .apply_fields(
+            &[fixed, animated, disabled],
+            &[FieldInput {
+                field: &field,
+                acceleration: 1.0,
+                delta_velocity: 0.0,
+            }],
+            Seconds(1.0 / 60.0),
+        )
+        .unwrap();
+    for body in [fixed, animated, disabled] {
+        let dynamics = world.dynamics(body).unwrap();
+        assert_eq!(dynamics.external_linear_acceleration, [0.0; 3]);
+        assert_eq!(dynamics.external_angular_acceleration, [0.0; 3]);
+    }
+}
+
+#[test]
+fn coupling_external_acceleration_rejects_foreign_and_stale_handles() {
+    let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+    let body = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+    let mut foreign_world = PhysicsWorld::new([0.0; 3]).unwrap();
+    let foreign = foreign_world
+        .add_hull(&cube(0.5), BodyConfig::default())
+        .unwrap();
+    assert!(world.dynamics(foreign).is_err());
+    let stale = BodyHandle {
+        provenance: body.provenance,
+        index: body.index.saturating_add(1),
+    };
+    assert!(world.dynamics(stale).is_err());
+}

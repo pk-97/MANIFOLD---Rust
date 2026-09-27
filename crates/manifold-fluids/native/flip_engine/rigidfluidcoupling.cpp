@@ -73,8 +73,9 @@ double RigidFluidCoupling::physicalDensity() const {
     return density;
 }
 
-double RigidFluidCoupling::pointSpeed(size_t body, vmath::vec3 point) const {
-    if (_stage == Stage::Unprepared || bodies.size() != _bodyCount || body >= _bodyCount) {
+double RigidFluidCoupling::pointSpeed(size_t body, vmath::vec3 point, double dt) const {
+    if (_stage == Stage::Unprepared || bodies.size() != _bodyCount || body >= _bodyCount
+        || !std::isfinite(dt) || dt < 0.0) {
         throw std::invalid_argument("invalid coupled boundary body index");
     }
     const auto &motion = bodies[body].motion;
@@ -85,16 +86,26 @@ double RigidFluidCoupling::pointSpeed(size_t body, vmath::vec3 point) const {
     const double vx = q[0] + q[4] * rz - q[5] * ry;
     const double vy = q[1] + q[5] * rx - q[3] * rz;
     const double vz = q[2] + q[3] * ry - q[4] * rx;
-    const double speed = std::hypot(vx, vy, vz);
-    if (!nativeFloat(speed)) {
+    const auto &a = bodies[body].externalAcceleration;
+    const double ax = a[0] + a[4] * rz - a[5] * ry;
+    const double ay = a[1] + a[5] * rx - a[3] * rz;
+    const double az = a[2] + a[3] * ry - a[4] * rx;
+    // Velocity is affine in time for this external-force prediction. Its norm
+    // is bounded by the endpoint norms over the entire proposed interval.
+    const double initialSpeed = std::hypot(vx, vy, vz);
+    const double predictedSpeed = std::hypot(vx + dt * ax, vy + dt * ay, vz + dt * az);
+    if (!nativeFloat(initialSpeed) || !nativeFloat(predictedSpeed)) {
         throw std::invalid_argument("coupled boundary speed is not representable");
     }
-    return speed;
+    return std::max(initialSpeed, predictedSpeed);
 }
 
-void RigidFluidCoupling::beginSubstep() {
+void RigidFluidCoupling::beginSubstep(double dt) {
     try {
         requireCompatible(_ni, _nj, _nk, _dx);
+        if (!std::isfinite(dt) || dt <= 0.0) {
+            throw std::invalid_argument("invalid coupled substep duration");
+        }
         if (_stage == Stage::Capturing || _stage == Stage::Boundary) {
             throw std::logic_error("coupled fluid substep is already active");
         }
@@ -109,6 +120,14 @@ void RigidFluidCoupling::beginSubstep() {
             _pressure.bodies[body] = bodies[body].mobility;
             _viscosity.bodies[body] = bodies[body].mobility;
             _boundary.motions[body] = bodies[body].motion;
+            for (size_t dof = 0; dof < 6; ++dof) {
+                const double acceleration = bodies[body].externalAcceleration[dof];
+                const double predicted = bodies[body].motion.velocity[dof] + dt * acceleration;
+                if (!std::isfinite(acceleration) || !nativeFloat(predicted)) {
+                    throw std::invalid_argument("coupled external-force prediction is not representable");
+                }
+                _boundary.motions[body].velocity[dof] = predicted;
+            }
             _impulses[body].fill(0.0);
             _changes[body].fill(0.0);
         }
@@ -201,7 +220,7 @@ void RigidFluidCoupling::applyStage(MACVelocityField &solidVelocity,
         for (size_t dof = 0; dof < 6; ++dof) {
             const double impulse = _impulses[body][dof] + impulses[body][dof];
             const double change = _changes[body][dof] + changes[body][dof];
-            const double velocity = bodies[body].motion.velocity[dof] + change;
+            const double velocity = _boundary.motions[body].velocity[dof] + change;
             if (!nativeFloat(impulse) || !nativeFloat(change) || !nativeFloat(velocity)
                 || !std::isfinite(expected[dof]) || !std::isfinite(changes[body][dof])) {
                 throw std::runtime_error("coupled fluid reaction is not representable");

@@ -331,3 +331,30 @@ fn production_coupling_boundary_cfl_counts_prescribed_speed_outside_domain_verti
         "offered {offered:?} exceeds rigid speed limit {limit}"
     );
 }
+
+#[test]
+fn production_coupling_boundary_cfl_counts_pending_external_acceleration() {
+    let (mut fluid, rigid, body, collider) = body_fixture();
+    // Native obstacle CFL applies while liquid is present or being generated.
+    fluid
+        .add_fluid_box(
+            Bounds {
+                min: [0.5; 3],
+                max: [1.5; 3],
+            },
+            [0.0; 3],
+        )
+        .unwrap();
+    fluid.prepare_rigid_coupling(&[collider], 1000.0).unwrap();
+    let mut input = state(&rigid, body);
+    input.dynamics.external_linear_acceleration = [6000.0, 0.0, 0.0];
+    assert_eq!(input.dynamics.linear_velocity, [0.0; 3]);
+    let mut frame = fluid.begin_frame(DT).unwrap();
+    frame.set_rigid_bodies(&[input]).unwrap();
+    let offered = frame.next_substep().unwrap().unwrap();
+    let limit = 0.25 / (6000.0 * DT.0);
+    assert!(
+        offered.0 <= limit * (1.0 + 1e-6),
+        "offered {offered:?} exceeds predicted boundary speed limit {limit}"
+    );
+}

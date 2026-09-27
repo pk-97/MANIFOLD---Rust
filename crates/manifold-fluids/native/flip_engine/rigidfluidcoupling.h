@@ -20,6 +20,7 @@ public:
     struct Body {
         RigidPressureCoupling::Body mobility;
         RigidBoundaryVelocityMap::BodyMotion motion;
+        Dofs externalAcceleration{};
     };
     struct Storage {
         size_t boundaryEntries = 0;
@@ -35,12 +36,12 @@ public:
 
     void prepare(int ni, int nj, int nk, double dx, size_t bodyCount, Storage storage);
     void requireCompatible(int ni, int nj, int nk, double dx) const;
-    double pointSpeed(size_t body, vmath::vec3 point) const;
+    double pointSpeed(size_t body, vmath::vec3 point, double dt) const;
     double physicalDensity() const;
     RigidBoundaryVelocityMap &boundaryMap() { return _boundary; }
     MACVelocityField &boundaryScale() { return _boundaryScale; }
 
-    void beginSubstep();
+    void beginSubstep(double dt);
     void finishBoundary();
     void configureViscosity(ViscositySolverParameters &params);
     void finishViscosity(MACVelocityField &solidVelocity);

@@ -27,6 +27,8 @@ typedef struct ManifoldFluidsRigidBodyInput {
     float center[3];
     float linear_velocity[3];
     float angular_velocity[3];
+    float external_linear_acceleration[3];
+    float external_angular_acceleration[3];
     float inverse_mass;
     float inverse_inertia[9];
     uint32_t enabled;
