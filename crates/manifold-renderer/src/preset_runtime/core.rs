@@ -82,8 +82,6 @@ pub struct PresetRuntime {
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
     pub(super) last_physics_frame_time: Option<FrameTime>,
     pub(super) physics_project_tempo: Option<crate::preset_context::ProjectTempo>,
-    pub(super) physics_source_graphs: Result<Vec<super::physics_source_runtime::InstalledSource>, String>,
-    pub(super) physics_source_has_instance: bool,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -230,6 +228,7 @@ pub(super) enum PresetIo {
 }
 
 pub(super) struct EffectSlot {
+    pub(super) physics_sources: super::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -770,6 +769,7 @@ impl PresetRuntime {
                             &prefix,
                         );
                         effect_nodes.push(EffectSlot {
+                            physics_sources: Default::default(),
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
                             legacy_index: *legacy_index,
@@ -1132,6 +1132,7 @@ impl PresetRuntime {
                 "",
             );
             effect_nodes.push(EffectSlot {
+                physics_sources: Default::default(),
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
                 legacy_index: *legacy_index,
@@ -1323,8 +1324,6 @@ impl PresetRuntime {
             physics_input_snapshot,
             last_physics_frame_time: None,
             physics_project_tempo: None,
-            physics_source_graphs: Ok(Vec::new()),
-            physics_source_has_instance: false,
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,
@@ -1363,9 +1362,11 @@ impl PresetRuntime {
         // same one-shot the generator path does at construction (a no-op when
         // no effect in the chain declares any).
         runtime.apply_string_defaults();
+        runtime.initialize_chain_physics_sources(effects, primitives);
         if let Some(prior) = prior {
             runtime.harvest_state_from(prior);
         }
+        runtime.install_physics_source_identities();
         Some(runtime)
     }
 
@@ -1687,6 +1688,7 @@ impl PresetRuntime {
             // so bound params keep their live value and only the unbound
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
+                slot.refresh_chain_physics_source(&mut self.graph, fx, None);
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
                 // `node_map`/`fused_retarget` namespace for a segment member
@@ -1748,6 +1750,7 @@ impl PresetRuntime {
                 slot.bound.cache.clear_tail(n_static);
             }
             slot.bound.apply(&mut self.graph, &fx.params);
+            slot.physics_sources.set_instance(&mut self.graph, Some(fx));
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),
             // so the chain doesn't rebuild on a drag; these writes keep the

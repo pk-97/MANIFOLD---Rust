@@ -608,6 +608,7 @@ impl PresetRuntime {
         // rehydrate — its host rebuilds on structure change); the live ones are
         // `bound`, `node_map`, `generator_input_node`, and the preview maps.
         let segment = EffectSlot {
+            physics_sources: Default::default(),
             effect_id: EffectId::default(),
             effect_type: type_id.clone(),
             legacy_index: 0,
@@ -641,8 +642,6 @@ impl PresetRuntime {
             physics_input_snapshot,
             last_physics_frame_time: None,
             physics_project_tempo: None,
-            physics_source_graphs: Ok(Vec::new()),
-            physics_source_has_instance: false,
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,

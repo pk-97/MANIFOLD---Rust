@@ -642,7 +642,7 @@ fn low_spp_static_reconstruction_reduces_temporal_variance_and_preserves_energy(
     assert!(low.dispatched && reference.dispatched);
     let low_frames = frame_means(&low);
     let reference_frames = frame_means(&reference);
-    assert!(low_frames.len() >= 4 && reference_frames.len() >= 1);
+    assert!(low_frames.len() >= 4 && !reference_frames.is_empty());
     let early = temporal_luma_variance(&low_frames[..2]);
     let late = temporal_luma_variance(&low_frames[low_frames.len() / 2..]);
     assert!(

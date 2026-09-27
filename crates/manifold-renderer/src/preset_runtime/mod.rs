@@ -98,6 +98,10 @@ mod physics_carry;
 mod physics_sources;
 mod physics_source_runtime;
 mod physics_source_controls;
+mod physics_source_state;
+mod physics_source_chain;
+#[cfg(test)]
+mod physics_source_state_tests;
 mod convert_heal;
 mod math_view;
 mod math_view_events;
