@@ -27,6 +27,8 @@ const MATERIAL_TYPE_ID: &str = "node.pbr_material";
 const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
 const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 
+mod world_controls;
+
 type GraphSnapshot = EffectGraphDef;
 
 /// Append one grouped liquid surface to an existing root render scene.
@@ -41,6 +43,7 @@ pub struct AddSceneFluidCommand {
     fluid_metadata: Vec<SceneParamMetadata>,
     source_metadata: Vec<SceneParamMetadata>,
     role_metadata: Vec<SceneParamMetadata>,
+    world_metadata: Vec<SceneParamMetadata>,
     material_metadata: Vec<SceneParamMetadata>,
     object_metadata: Vec<SceneParamMetadata>,
     catalog_default: EffectGraphDef,
@@ -69,6 +72,7 @@ impl AddSceneFluidCommand {
             fluid_metadata,
             source_metadata,
             role_metadata: Vec::new(),
+            world_metadata: Vec::new(),
             material_metadata,
             object_metadata,
             catalog_default,
@@ -84,6 +88,11 @@ impl AddSceneFluidCommand {
 
     pub fn with_role_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
         self.role_metadata = metadata;
+        self
+    }
+
+    pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+        self.world_metadata = metadata;
         self
     }
 
@@ -130,7 +139,7 @@ impl AddSceneFluidCommand {
         self.fluid_metadata
             .iter()
             .filter(|metadata| {
-                !matches!(
+                !world_controls::is_shared_fluid_control(&metadata.name) && !matches!(
                     metadata.name.as_str(),
                     "domain_size" | "emission" | "inflow_speed"
                 )
@@ -520,6 +529,7 @@ impl Command for AddSceneFluidCommand {
                 &self.object_metadata,
                 &BTreeMap::new(),
             );
+            world_controls::share_world_controls(def, group_id, fluid_id, &self.world_metadata)?;
             Ok(())
         })(&mut candidate);
 

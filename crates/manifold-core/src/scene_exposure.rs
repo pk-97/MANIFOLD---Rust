@@ -397,14 +397,16 @@ pub fn scene_scaled_range(type_id: &str, param: &str, radius: f32) -> Option<(f3
     }
 }
 
-/// `(doc_id, node_id, type_id, section, params)` for one vocab-matched node,
-/// collected by `collect_vocab_nodes` and consumed by `migrate_scene_exposures`.
+/// `(doc_id, node_id, type_id, section, params, wired_inputs)` for one
+/// vocab-matched node, collected by collect_vocab_nodes and consumed by
+/// migrate_scene_exposures.
 type VocabNodeEntry = (
     u32,
     NodeId,
     String,
     String,
     BTreeMap<String, SerializedParamValue>,
+    std::collections::BTreeSet<String>,
 );
 
 /// Walk every node in `def` — INCLUDING every `node.group`'s inner body,
@@ -432,7 +434,13 @@ where
     F: FnMut(&EffectGraphNode) -> String,
 {
     let mut found: Vec<VocabNodeEntry> = Vec::new();
-    collect_vocab_nodes(&def.nodes, vocabulary, &mut section_name, &mut found);
+    collect_vocab_nodes(
+        &def.nodes,
+        &def.wires,
+        vocabulary,
+        &mut section_name,
+        &mut found,
+    );
     if found.is_empty() {
         return false;
     }
@@ -442,8 +450,19 @@ where
         .get_or_insert_with(empty_scene_preset_metadata);
 
     let mut changed = false;
-    for (node_doc_id, node_id, type_id, section, node_params) in &found {
+    for (node_doc_id, node_id, type_id, section, node_params, wired_inputs) in &found {
         let metadata = provider.metadata_for_type(type_id);
+        let fresh_metadata: Vec<_> = metadata
+            .into_iter()
+            .filter(|entry| {
+                !wired_inputs.contains(&entry.name)
+                    || meta.bindings.iter().any(|binding| matches!(
+                        &binding.target,
+                        BindingTarget::Node { node_id: target, param }
+                            if target == node_id && param == &entry.name
+                    ))
+            })
+            .collect();
         if stamp_scene_node_exposures_into(
             &mut meta.params,
             &mut meta.bindings,
@@ -451,7 +470,7 @@ where
             node_id,
             type_id,
             section,
-            &metadata,
+            &fresh_metadata,
             node_params,
         ) {
             changed = true;
@@ -463,7 +482,7 @@ where
     // stamped value (BUG-303). The idempotence guard above skips them forever
     // because a binding already targets `(node_id, param)` — re-seed those in
     // place whenever the node still has a stamped value that disagrees.
-    for (_, node_id, type_id, _, node_params) in &found {
+    for (_, node_id, type_id, _, node_params, _) in &found {
         let metadata = provider.metadata_for_type(type_id);
         for meta_entry in &metadata {
             let Some(stamped) = node_params.get(&meta_entry.name) else {
@@ -512,7 +531,7 @@ where
     // — so it applies to every auto exposure the vocab node has, whether or
     // not its value diverges from the manifest default. Idempotent: a
     // second run re-derives the same flag and writes nothing.
-    for (_, node_id, type_id, _, _) in &found {
+    for (_, node_id, type_id, _, _, _) in &found {
         let metadata = provider.metadata_for_type(type_id);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter().find(|b| {
@@ -549,7 +568,7 @@ where
     // not-user-added predicate is the guard that keeps a hand-authored
     // exposure on the same node authored. Idempotent: a second run
     // re-derives `true` and writes nothing.
-    for (_, node_id, type_id, _, _) in &found {
+    for (_, node_id, type_id, _, _, _) in &found {
         let metadata = provider.metadata_for_type(type_id);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter_mut().find(|b| {
@@ -673,6 +692,7 @@ where
 /// borrow of `def.preset_metadata`.
 fn collect_vocab_nodes<F>(
     nodes: &[EffectGraphNode],
+    wires: &[crate::effect_graph_def::EffectGraphWire],
     vocabulary: &[&str],
     section_name: &mut F,
     out: &mut Vec<VocabNodeEntry>,
@@ -688,10 +708,15 @@ fn collect_vocab_nodes<F>(
                 node.type_id.clone(),
                 section,
                 node.params.clone(),
+                wires
+                    .iter()
+                    .filter(|wire| wire.to_node == node.id)
+                    .map(|wire| wire.to_port.clone())
+                    .collect(),
             ));
         }
         if let Some(body) = node.group.as_deref() {
-            collect_vocab_nodes(&body.nodes, vocabulary, section_name, out);
+            collect_vocab_nodes(&body.nodes, &body.wires, vocabulary, section_name, out);
         }
     }
 }
@@ -1139,6 +1164,174 @@ mod tests {
             &vocab,
             |_n| "Object 1 — Transform".to_string(),
             &TestProvider
+        ));
+        assert_eq!(def, after_first, "second run is idempotent");
+    }
+
+    #[test]
+    fn migration_skips_wired_fallbacks_and_scopes_group_wires_locally() {
+        use crate::effect_graph_def::{EffectGraphWire, GroupDef, GroupInterface};
+
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.light" {
+                    vec![float_meta("intensity", "Intensity")]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let mut driven = make_node(7, "node.light");
+        driven.node_id = NodeId::new("driven");
+        driven.params.insert(
+            "intensity".to_string(),
+            SerializedParamValue::Float { value: 0.8 },
+        );
+        let mut source = make_node(8, "node.value");
+        source.node_id = NodeId::new("source");
+        let mut fresh_driven = make_node(11, "node.light");
+        fresh_driven.node_id = NodeId::new("fresh_driven");
+
+        let mut unwired = make_node(9, "node.light");
+        unwired.node_id = NodeId::new("unwired");
+        let mut outer = make_node(1, "node.light");
+        outer.node_id = NodeId::new("outer");
+
+        let mut inner = make_node(1, "node.light");
+        inner.node_id = NodeId::new("inner");
+        let mut inner_source = make_node(2, "node.value");
+        inner_source.node_id = NodeId::new("inner_source");
+        let mut group = make_node(10, "node.group");
+        group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: Vec::new(),
+            },
+            nodes: vec![inner, inner_source],
+            wires: vec![EffectGraphWire {
+                from_node: 2,
+                from_port: "value".to_string(),
+                to_node: 1,
+                to_port: "intensity".to_string(),
+            }],
+            tint: None,
+        }));
+
+        let existing_spec = float_spec_default("driven_intensity", "Driven", "Light");
+        let existing_binding = BindingDef {
+            id: "driven_intensity".to_string(),
+            label: "Driven".to_string(),
+            default_value: 0.25,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("driven"),
+                param: "intensity".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: true,
+            scale: 2.0,
+            offset: -0.5,
+            default_mirrors_node_param: false,
+        };
+        let expected_existing = existing_binding.clone();
+
+        let mut def = EffectGraphDef {
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![existing_spec],
+                bindings: vec![existing_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            scene_modifiers: Vec::new(),
+            nodes: vec![driven, source, fresh_driven, unwired, outer, group],
+            wires: vec![
+                EffectGraphWire {
+                    from_node: 8,
+                    from_port: "value".to_string(),
+                    to_node: 7,
+                    to_port: "intensity".to_string(),
+                },
+                EffectGraphWire {
+                    from_node: 8,
+                    from_port: "value".to_string(),
+                    to_node: 11,
+                    to_port: "intensity".to_string(),
+                },
+            ],
+        };
+        let vocabulary = ["node.light"];
+
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &vocabulary,
+            |_node| "Light".to_string(),
+            &TestProvider,
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(
+            meta.bindings
+                .iter()
+                .filter(|binding| matches!(
+                    &binding.target,
+                    BindingTarget::Node { node_id, param }
+                        if node_id == &NodeId::new("driven") && param == "intensity"
+                ))
+                .count(),
+            1,
+            "wired fallback does not create a duplicate auto exposure"
+        );
+        assert_eq!(
+            meta.bindings
+                .iter()
+                .find(|binding| binding.id == expected_existing.id)
+                .unwrap(),
+            &expected_existing,
+            "existing explicit binding remains intact"
+        );
+        assert!(
+            !meta.bindings.iter().any(|binding| matches!(
+                &binding.target,
+                BindingTarget::Node { node_id, param }
+                    if node_id == &NodeId::new("fresh_driven") && param == "intensity"
+            )),
+            "wired fallback without an existing binding gets no new exposure"
+        );
+        assert!(
+            meta.bindings.iter().any(|binding| matches!(
+                &binding.target,
+                BindingTarget::Node { node_id, param }
+                    if node_id == &NodeId::new("unwired") && param == "intensity"
+            )),
+            "unwired fallback still receives an auto exposure"
+        );
+        assert!(
+            meta.bindings.iter().any(|binding| matches!(
+                &binding.target,
+                BindingTarget::Node { node_id, param }
+                    if node_id == &NodeId::new("outer") && param == "intensity"
+            )),
+            "root-scope node with the same numeric id is stamped"
+        );
+        assert!(
+            !meta.bindings.iter().any(|binding| matches!(
+                &binding.target,
+                BindingTarget::Node { node_id, param }
+                    if node_id == &NodeId::new("inner") && param == "intensity"
+            )),
+            "inner wired fallback uses its own group-scope wires"
+        );
+
+        let after_first = def.clone();
+        assert!(!migrate_scene_exposures(
+            &mut def,
+            &vocabulary,
+            |_node| "Light".to_string(),
+            &TestProvider,
         ));
         assert_eq!(def, after_first, "second run is idempotent");
     }

@@ -5311,6 +5311,18 @@ impl Command for DuplicateSceneObjectCommand {
                 if source_node.type_id == GROUP_TYPE_ID && scope.is_empty() {
                     cloned_group_id = Some(clone_id);
                 }
+                if source_node.type_id == GROUP_TYPE_ID {
+                    // Group inputs are shared upstream signals, such as World
+                    // controls. Keep them connected to the copied boundary.
+                    let incoming: Vec<_> = wires.iter()
+                        .filter(|wire| wire.to_node == source_id)
+                        .map(|wire| EffectGraphWire {
+                            to_node: clone_id,
+                            ..wire.clone()
+                        })
+                        .collect();
+                    wires.extend(incoming);
+                }
                 nodes.push(clone);
                 for (part, _) in source_outputs.iter().enumerate() {
                     wires.push(scene_build_wire(

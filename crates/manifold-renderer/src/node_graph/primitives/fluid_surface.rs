@@ -478,8 +478,20 @@ impl Primitive for FluidSurface {
             inflow_speed: ctx.scalar_or_param("inflow_speed", 1.5),
         };
         let authored_only = crate::node_graph::physics::authored_sample_only();
+        let fluid_speed = ctx.scalar_or_param("speed", 1.0);
         let fluid_reset = ctx.scalar_or_param("reset", 0.0);
         let (transport, speed, rigid_reset_edge) = if let Some(observation) = coupled_observation {
+            if !fluid_speed.is_finite() || fluid_speed != observation.speed {
+                Self::report_failure(
+                    &mut self.domain_failure,
+                    ctx,
+                    format!(
+                        "Fluid coupling: liquid and rigid bodies require the same Simulation Speed and shared World control (liquid {fluid_speed}, rigid {})",
+                        observation.speed
+                    ),
+                );
+                return;
+            }
             if (observation.transport.0 - ctx.time.seconds.0).abs() > 1e-9 {
                 Self::report_failure(
                     &mut self.domain_failure,
@@ -500,7 +512,7 @@ impl Primitive for FluidSurface {
             }
             (observation.transport, observation.speed, reset_changed)
         } else {
-            (ctx.time.seconds, ctx.scalar_or_param("speed", 1.0), false)
+            (ctx.time.seconds, fluid_speed, false)
         };
         if rigid_reset_edge && !authored_only {
             self.runtime.request_reset();
@@ -791,7 +803,74 @@ mod tests {
             RigidImpulseTargets::default(),
             None,
         );
-        run_mock(&mut fluid, &params, 1.0 / 60.0, &mut errors);
+        run_mock_with_scalars(
+            &mut fluid,
+            &params,
+            &[("speed", 2.0)],
+            1.0 / 60.0,
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+    }
+
+    #[test]
+    fn coupled_fluid_rejects_speed_mismatch_until_shared_speed_recovers() {
+        let _offline = PhysicsStepScope::for_render(true);
+        let mut fluid = FluidSurface::new();
+        let params = coupled_params();
+        let mut errors = Vec::new();
+        let first = coupled_observation(0.0, 1.0, 0.0);
+        Primitive::set_coupled_physics(&mut fluid, true);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&first),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 1.0)], 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let initial_time = fluid.runtime.simulation_time();
+        let initial_epoch = fluid.runtime.domain_snapshot().epoch;
+
+        let second = coupled_observation(1.0 / 60.0, 2.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&second),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 1.0)], 1.0 / 60.0, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("same Simulation Speed")),
+            "{errors:?}"
+        );
+        assert_eq!(fluid.runtime.simulation_time(), initial_time);
+        assert_eq!(fluid.runtime.domain_snapshot().epoch, initial_epoch);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+
+        errors.clear();
+        run_mock_with_scalars(
+            &mut fluid,
+            &params,
+            &[("speed", f32::NAN)],
+            1.0 / 60.0,
+            &mut errors,
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("same Simulation Speed")),
+            "{errors:?}"
+        );
+        assert_eq!(fluid.runtime.simulation_time(), initial_time);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+
+        errors.clear();
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 1.0 / 60.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
         assert!(Primitive::coupled_rigid_frame(&fluid).is_some());

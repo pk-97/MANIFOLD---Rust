@@ -112,6 +112,17 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
         scene_param_meta("enabled", "Enabled"),
         scene_param_meta("velocity_y", "Velocity Y"),
     ])
+    .with_world_metadata(world_metadata())
+}
+
+fn world_metadata() -> Vec<manifold_core::scene_exposure::SceneParamMetadata> {
+    [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0), ("speed", 1.0), ("reset", 0.0)]
+        .into_iter().map(|(name, value)| {
+            let mut metadata = scene_param_meta(name, name);
+            metadata.default_value = SerializedParamValue::Float { value };
+            metadata.is_trigger = name == "reset";
+            metadata
+        }).collect()
 }
 
 fn graph<'a>(
@@ -146,13 +157,14 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
         .find(|node| node.handle.as_deref() == Some("Fluid 1 Graph"))
         .unwrap();
     let body = group.group.as_deref().unwrap();
-    assert_eq!(body.nodes.len(), 7);
+    assert_eq!(body.nodes.len(), 8);
     for type_id in [
         "node.fluid_surface",
         "node.transform_3d",
         "node.fluid_role_source",
         "node.pbr_material",
         "node.scene_object",
+        "system.group_input",
         "system.group_output",
     ] {
         assert!(body.nodes.iter().any(|node| node.type_id == type_id));
@@ -269,6 +281,137 @@ fn scene_physics_two_fluids_get_independent_ids_and_sections() {
         .collect();
     assert!(sections.contains(&"Fluid 1 - Simulation"));
     assert!(sections.contains(&"Fluid 2 - Material"));
+    assert_eq!(result.nodes.iter().filter(|node| node.type_id == "node.physics_world").count(), 1);
+    assert_eq!(result.nodes.iter().filter(|node| node.type_id == "node.value").count(), 5,
+        "additional liquid domains reuse the existing World sources");
+}
+
+#[test]
+fn scene_physics_duplicate_fluid_keeps_shared_world_controls() {
+    use crate::commands::graph::DuplicateSceneObjectCommand;
+
+    let baseline = render_scene_graph(0, false);
+    let (mut project, target) = project_with_graph(baseline.clone());
+    let mut add = command(target.clone(), baseline.clone());
+    add.execute(&mut project);
+    assert!(add.was_applied());
+    let before = graph(&project, &target).clone();
+    let original = before.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
+    let incoming: Vec<_> = before.wires.iter().filter(|wire| wire.to_node == original.id).cloned().collect();
+    assert_eq!(incoming.len(), 5);
+
+    let mut duplicate = DuplicateSceneObjectCommand::new(target.clone(), vec![], 10, 0, baseline);
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "{:?}", duplicate.rejection_reason());
+    let after = graph(&project, &target).clone();
+    let copied = after.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID && node.id != original.id).unwrap();
+    for source in incoming {
+        assert!(after.wires.contains(&source), "original keeps its source");
+        assert!(after.wires.contains(&manifold_core::effect_graph_def::EffectGraphWire {
+            to_node: copied.id, ..source
+        }), "copy keeps the same World signal");
+    }
+    assert_eq!(after.nodes.iter().filter(|node| node.type_id == "node.value").count(), 5);
+    let reloaded: manifold_core::project::Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+    assert_eq!(graph(&reloaded, &target), &after);
+    assert!(manifold_core::flatten::flatten_groups(&after).is_ok());
+    duplicate.undo(&mut project);
+    assert_eq!(graph(&project, &target), &before);
+    duplicate.execute(&mut project);
+    assert_eq!(graph(&project, &target), &after);
+}
+
+#[test]
+fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
+    use manifold_core::effect_graph_def::BindingTarget;
+    use manifold_core::scene_exposure::stamp_scene_node_exposures;
+
+    let mut def = render_scene_graph(0, false);
+    let mut world = node(30, "world", "node.physics_world");
+    world.params.insert("speed".into(), SerializedParamValue::Float { value: 1.75 });
+    world.exposed_params.insert("speed".into());
+    def.nodes.push(world);
+    def.nodes.push(node(31, "authored_driver", "node.value"));
+    def.wires.push(wire(31, "out", 30, "gravity_x"));
+    stamp_scene_node_exposures(&mut def, 30, "World", &world_metadata());
+    let original_metadata = def.preset_metadata.clone().unwrap();
+    let (mut project, target) = project_with_graph(def.clone());
+    project.graph_target_owner_mut(&target).unwrap().refresh_manifest_from_graph();
+    assert!(project.graph_target_owner_mut(&target).unwrap().set_base_param("30_speed", 2.0));
+    let mut before_speed = project.graph_target_owner(&target).unwrap().params.get("30_speed").unwrap().clone();
+    // Manifest refresh clears this frame-local gesture latch, not authored state.
+    before_speed.touched = false;
+    let audio = vec![manifold_core::audio_mod::ParameterAudioMod::new(
+        "30_speed".into(), manifold_core::id::AudioSendId::new("scene-audio"),
+        manifold_core::audio_mod::AudioFeature::default(),
+    )];
+    project.graph_target_owner_mut(&target).unwrap().audio_mods = Some(audio.clone());
+    let mut cmd = command(target.clone(), def.clone());
+    cmd.execute(&mut project);
+    assert!(cmd.was_applied(), "{:?}", cmd.rejection_reason());
+    let result = graph(&project, &target);
+    let group_node = result.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
+    let group = group_node.group.as_deref().unwrap();
+    let input = group.nodes.iter().find(|node| node.type_id == "system.group_input").unwrap();
+    let fluid = group.nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
+    let metadata = result.preset_metadata.as_ref().unwrap();
+    for (world_param, fluid_param) in [("gravity_x", "gravity_x"), ("gravity_y", "gravity"),
+        ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
+    {
+        let world_wire = result.wires.iter().find(|wire| wire.to_node == 30 && wire.to_port == world_param).unwrap();
+        let fluid_wire = result.wires.iter().find(|wire| wire.to_node == group_node.id && wire.to_port == world_param).unwrap();
+        assert_eq!((world_wire.from_node, &world_wire.from_port), (fluid_wire.from_node, &fluid_wire.from_port));
+        assert!(group.wires.iter().any(|wire| wire.from_node == input.id && wire.from_port == world_param
+            && wire.to_node == fluid.id && wire.to_port == fluid_param));
+        let id = format!("30_{world_param}");
+        let before = original_metadata.bindings.iter().find(|binding| binding.id == id).unwrap();
+        let after = metadata.bindings.iter().find(|binding| binding.id == id).unwrap();
+        let mut expected = before.clone();
+        if world_param == "gravity_x" {
+            assert_eq!(world_wire.from_node, 31, "existing graph modulation stays authoritative");
+        } else {
+            let source = result.nodes.iter().find(|node| node.id == world_wire.from_node).unwrap();
+            expected.target = BindingTarget::Node { node_id: source.node_id.clone(), param: "value".into() };
+            if world_param == "speed" {
+                assert!(source.exposed_params.contains("value"));
+                assert_eq!(source.params["value"], SerializedParamValue::Float { value: 1.75 });
+            }
+        }
+        assert_eq!(after, &expected, "binding identity and conversion must survive lifting");
+        assert_eq!(metadata.params.iter().find(|spec| spec.id == id), original_metadata.params.iter().find(|spec| spec.id == id));
+    }
+    assert_eq!(project.graph_target_owner(&target).unwrap().params.get("30_speed"), Some(&before_speed));
+    assert_eq!(project.graph_target_owner(&target).unwrap().audio_mods.as_ref(), Some(&audio));
+    let after = result.clone();
+    let reloaded: manifold_core::project::Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+    assert_eq!(graph(&reloaded, &target), &after);
+    assert_eq!(reloaded.graph_target_owner(&target).unwrap().get_base_param("30_speed"), 2.0);
+    assert_eq!(reloaded.graph_target_owner(&target).unwrap().audio_mods.as_ref(), Some(&audio));
+    cmd.undo(&mut project);
+    assert_eq!(graph(&project, &target), &def);
+    cmd.execute(&mut project);
+    assert_eq!(graph(&project, &target), &after);
+}
+
+#[test]
+fn scene_physics_add_fluid_rejects_ambiguous_world_controls_atomically() {
+    for duplicate_world in [false, true] {
+        let mut def = render_scene_graph(0, false);
+        def.nodes.push(node(30, "world", "node.physics_world"));
+        if duplicate_world {
+            def.nodes.push(node(31, "second_world", "node.physics_world"));
+        } else {
+            def.nodes.push(node(31, "driver", "node.value"));
+            def.wires.push(wire(31, "out", 30, "speed"));
+            def.wires.push(wire(31, "out", 30, "speed"));
+        }
+        let (mut project, target) = project_with_graph(def.clone());
+        let before = serde_json::to_value(&project).unwrap();
+        let mut cmd = command(target, def);
+        cmd.execute(&mut project);
+        assert!(!cmd.was_applied());
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    }
 }
 
 #[test]

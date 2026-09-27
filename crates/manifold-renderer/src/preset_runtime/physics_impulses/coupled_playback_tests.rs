@@ -2,6 +2,165 @@
 use super::*;
 use crate::node_graph::fluid::CoupledRigidFrame;
 use crate::node_graph::physics::{PhysicsStepScope, RigidImpulseTargets};
+use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+use manifold_core::params::{Param, ParamManifest};
+use manifold_core::types::LayerType;
+use manifold_core::{GraphTarget, NodeId, PresetTypeId};
+
+fn authored_shared_world_fixture() -> EffectGraphDef {
+    use manifold_editing::command::Command;
+    use manifold_editing::commands::graph::AddSceneFluidCommand;
+
+    let baseline = fixture();
+    let mut project = manifold_core::project::Project::default();
+    let preset = PresetTypeId::new("SharedWorldPlayback");
+    let layer_index =
+        project
+            .timeline
+            .add_layer("Shared World Playback", LayerType::Generator, preset);
+    project.timeline.layers[layer_index]
+        .gen_params_or_init()
+        .graph = Some(baseline.clone());
+    let target = GraphTarget::Generator(project.timeline.layers[layer_index].layer_id.clone());
+    let render_id = baseline
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.render_scene")
+        .expect("fixture render scene")
+        .id;
+    let mut add = AddSceneFluidCommand::new(
+        target.clone(),
+        render_id,
+        crate::node_graph::scene_exposure::metadata_for_node_type("node.fluid_surface"),
+        crate::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
+        crate::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
+        crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+        baseline,
+    )
+    .with_role_metadata(crate::node_graph::scene_exposure::metadata_for_node_type(
+        "node.fluid_role_source",
+    ))
+    .with_world_metadata(crate::node_graph::scene_exposure::metadata_for_node_type(
+        "node.physics_world",
+    ));
+    add.execute(&mut project);
+    assert!(
+        add.was_applied(),
+        "add fluid rejected: {:?}",
+        add.rejection_reason()
+    );
+    project
+        .graph_for_target(&target, None)
+        .expect("authored graph after add fluid")
+        .clone()
+}
+
+fn generated_fluid_id(def: &EffectGraphDef) -> NodeId {
+    def.nodes
+        .iter()
+        .find_map(|node| {
+            node.group.as_deref()?.nodes.iter().find_map(|child| {
+                (child.type_id == "node.fluid_surface").then(|| child.node_id.clone())
+            })
+        })
+        .expect("generated fluid node")
+}
+
+fn shared_control_id(def: &EffectGraphDef, name: &str) -> String {
+    let suffix = format!("_{name}");
+    def.preset_metadata
+        .as_ref()
+        .expect("shared metadata")
+        .bindings
+        .iter()
+        .find(|binding| binding.id.ends_with(&suffix))
+        .map(|binding| binding.id.clone())
+        .unwrap_or_else(|| panic!("missing shared binding {name}"))
+}
+
+fn shared_control_ids(def: &EffectGraphDef) -> [String; 5] {
+    [
+        shared_control_id(def, "gravity_x"),
+        shared_control_id(def, "gravity_y"),
+        shared_control_id(def, "gravity_z"),
+        shared_control_id(def, "speed"),
+        shared_control_id(def, "reset"),
+    ]
+}
+
+fn manifest_for(def: &EffectGraphDef) -> ParamManifest {
+    ParamManifest::from_params(
+        def.preset_metadata
+            .as_ref()
+            .expect("shared metadata")
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
+    )
+}
+
+fn set_control(manifest: &mut ParamManifest, id: &str, value: f32) {
+    manifest
+        .get_mut(id)
+        .unwrap_or_else(|| panic!("missing control {id}"))
+        .value = value;
+}
+
+fn assert_saved_shared_routes(def: &EffectGraphDef, ids: &[String; 5]) {
+    let metadata = def.preset_metadata.as_ref().expect("shared metadata");
+    for id in ids {
+        let routes = metadata
+            .bindings
+            .iter()
+            .filter(|binding| binding.id == *id)
+            .collect::<Vec<_>>();
+        assert_eq!(routes.len(), 1, "shared id {id} must remain one route");
+        assert!(matches!(
+            &routes[0].target,
+            BindingTarget::Node { param, .. } if param == "value"
+        ));
+    }
+}
+
+#[track_caller]
+fn paired_frame_for(runtime: &PresetRuntime, fluid_id: &NodeId) -> CoupledRigidFrame {
+    let fluid = runtime
+        .graph
+        .instance_by_node_id(fluid_id)
+        .expect("generated fluid runtime node");
+    let node = runtime.graph.get_node(fluid).expect("generated fluid node");
+    assert!(
+        node.node.coupled_rigid_frame().is_some(),
+        "completed paired native frame: {:?}; {:?}",
+        node.node.fluid_domain_snapshot(),
+        runtime.scene_viewport_errors()
+    );
+    node.node.coupled_rigid_frame().unwrap().clone()
+}
+
+fn execute_authored_frame(runtime: &mut PresetRuntime, seconds: f64) {
+    // Add Fluid prepares source geometry asynchronously. Observe readiness at
+    // the same timestamp instead of assuming a fixed number of warmup frames.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        runtime.execute_frame(time(seconds));
+        assert!(
+            runtime.scene_viewport_errors().is_empty(),
+            "{:?}",
+            runtime.scene_viewport_errors()
+        );
+        if !runtime.warmup_pending() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "authored source preparation timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
 
 fn coupled_fixture() -> EffectGraphDef {
     let mut def = fixture();
@@ -201,4 +360,106 @@ fn coupled_graph_merges_shared_impulses_and_preserves_single_material_selections
         ]
     );
     assert_visible_pair(&runtime, &paired_frame(&runtime));
+}
+
+#[test]
+fn authored_add_fluid_shared_controls_play_back_after_reload() {
+    let authored = authored_shared_world_fixture();
+    let fluid_id = generated_fluid_id(&authored);
+    let ids = shared_control_ids(&authored);
+    assert_saved_shared_routes(&authored, &ids);
+
+    let saved = serde_json::to_string(&authored).expect("save authored graph");
+    let restored: EffectGraphDef = serde_json::from_str(&saved).expect("reload authored graph");
+    assert_saved_shared_routes(&restored, &ids);
+
+    let mut runtime = runtime(&restored);
+    let mut manifest = manifest_for(&restored);
+    runtime.apply_param_values(&manifest);
+    let _offline = PhysicsStepScope::for_render(true);
+    execute_authored_frame(&mut runtime, 0.0);
+    let initial = paired_frame_for(&runtime, &fluid_id);
+
+    // The shared source value reaches both the root World and the coupled
+    // liquid through their ordinary graph routes.
+    set_control(&mut manifest, &ids[0], 3.0);
+    set_control(&mut manifest, &ids[1], 0.0);
+    set_control(&mut manifest, &ids[2], -4.0);
+    set_control(&mut manifest, &ids[3], 2.0);
+    runtime.apply_param_values(&manifest);
+    let BindingTarget::Node {
+        node_id: speed_source,
+        param: speed_param,
+    } = &restored
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| binding.id == ids[3])
+        .unwrap()
+        .target
+    else {
+        panic!("shared speed source");
+    };
+    let speed_source = runtime.graph.instance_by_node_id(speed_source).unwrap();
+    assert_eq!(
+        runtime
+            .graph
+            .get_node(speed_source)
+            .unwrap()
+            .params
+            .get(speed_param.as_str()),
+        Some(&ParamValue::Float(2.0)),
+        "shared speed binding must reach its authored source"
+    );
+    // Observe the edit at its actual boundary. Historical sampling correctly
+    // retains the previous speed until this observation, including offline.
+    execute_authored_frame(&mut runtime, 0.0);
+    execute_authored_frame(&mut runtime, DT);
+    assert_eq!(
+        runtime
+            .graph
+            .get_node(speed_source)
+            .unwrap()
+            .params
+            .get(speed_param.as_str()),
+        Some(&ParamValue::Float(2.0)),
+        "frame execution must retain the shared speed binding"
+    );
+    let fast = paired_frame_for(&runtime, &fluid_id);
+    assert_eq!(fast.stamp.tick, 2);
+    assert_eq!(fast.stamp.epoch, initial.stamp.epoch);
+    assert!(fast.poses[0].pos[0] > initial.poses[0].pos[0]);
+    assert!(
+        fast.poses[0].pos[2] < initial.poses[0].pos[2],
+        "shared Z gravity moves the real body; the fixture field only drives X"
+    );
+    assert_visible_pair(&runtime, &fast);
+
+    set_control(&mut manifest, &ids[3], 0.0);
+    runtime.apply_param_values(&manifest);
+    execute_authored_frame(&mut runtime, DT);
+    execute_authored_frame(&mut runtime, 3.0 * DT);
+    let held = paired_frame_for(&runtime, &fluid_id);
+    assert_eq!(
+        held.stamp, fast.stamp,
+        "shared zero speed holds both participants"
+    );
+    assert_eq!(held.poses, fast.poses);
+
+    set_control(&mut manifest, &ids[3], 1.0);
+    set_control(&mut manifest, &ids[4], 1.0);
+    runtime.apply_param_values(&manifest);
+    execute_authored_frame(&mut runtime, 3.0 * DT);
+    let reset = paired_frame_for(&runtime, &fluid_id);
+    assert_eq!(reset.stamp.epoch, fast.stamp.epoch + 1);
+    assert_eq!(reset.stamp.tick, 0);
+    assert_eq!(reset.poses[0].pos, initial.poses[0].pos);
+    assert_visible_pair(&runtime, &reset);
+
+    execute_authored_frame(&mut runtime, 4.0 * DT);
+    let held_reset = paired_frame_for(&runtime, &fluid_id);
+    assert_eq!(held_reset.stamp.epoch, reset.stamp.epoch);
+    assert!(held_reset.stamp.tick > reset.stamp.tick);
 }

@@ -825,7 +825,8 @@ mod tests {
             metadata_for_node_type("node.scene_object"),
             default,
         )
-        .with_role_metadata(metadata_for_node_type("node.fluid_role_source"));
+        .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
+        .with_world_metadata(metadata_for_node_type("node.physics_world"));
         command.execute(&mut project);
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
         let scene =

@@ -628,7 +628,8 @@ pub(super) fn dispatch_project(
                     metadata_for_node_type("node.scene_object"),
                     default,
                 )
-                .with_role_metadata(metadata_for_node_type("node.fluid_role_source"));
+                .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
+                .with_world_metadata(metadata_for_node_type("node.physics_world"));
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
                     Box::new(command),
                     crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
@@ -1880,22 +1881,49 @@ mod tests {
             Some(&reloaded_def), &row.fluid_node_ids,
         );
         let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
+        let world_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&reloaded_def),
+            &manifold_renderer::node_graph::scene_vm::physics_world_doc_ids(&reloaded_def).collect::<Vec<_>>(),
+        );
+        let world = reloaded_def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
         for (param, label, default) in [
             ("gravity_x", "Gravity X", 0.0),
             ("gravity", "Gravity Y", -9.81),
             ("gravity_z", "Gravity Z", 0.0),
             ("liquid_density", "Liquid Density", 1000.0),
         ] {
-            let binding = metadata.bindings.iter().find(|binding| matches!(
-                &binding.target,
-                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
-                    if name == param && node_id.as_str().starts_with("fluid_surface_")
-            )).expect("fluid physical control survives reload");
+            let binding = if param == "liquid_density" {
+                metadata.bindings.iter().find(|binding| matches!(
+                    &binding.target,
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                        if name == param && node_id.as_str().starts_with("fluid_surface_")
+                ))
+            } else {
+                let world_param = if param == "gravity" { "gravity_y" } else { param };
+                metadata.bindings.iter().find(|binding| binding.id == format!("{}_{}", world.id, world_param))
+            }.expect("physical control survives reload");
             let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
             assert_eq!(spec.name, label);
-            assert!(reloaded_sections.contains(spec.section.as_ref().unwrap()),
-                "physical control appears in the existing fluid parameter inspector");
+            let inspector_sections = if param == "liquid_density" { &reloaded_sections } else { &world_sections };
+            assert!(inspector_sections.contains(spec.section.as_ref().unwrap()),
+                "density belongs to Fluid; shared gravity belongs to World");
+            if param != "liquid_density" {
+                assert!(!reloaded_sections.contains(spec.section.as_ref().unwrap()),
+                    "shared controls must not appear as independent liquid controls");
+            }
             assert_eq!(reloaded.timeline.layers[0].gen_params().unwrap().get_base_param(&binding.id), default);
+        }
+        let shared_ids: Vec<_> = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset"]
+            .into_iter().map(|param| format!("{}_{}", world.id, param)).collect();
+        let mut migrated = reloaded_def.clone();
+        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated);
+        let once = migrated.clone();
+        assert!(!manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated));
+        assert_eq!(migrated, once);
+        for id in &shared_ids {
+            let before = metadata.params.iter().find(|spec| &spec.id == id).unwrap();
+            let after = migrated.preset_metadata.as_ref().unwrap().params.iter().find(|spec| &spec.id == id).unwrap();
+            assert_eq!(before, after, "reload must preserve shared World control metadata");
         }
         for (param, expected_label) in [("velocity_y", "Source"), ("rot_y", "Source Transform")] {
             let binding = metadata.bindings.iter().find(|binding| matches!(
@@ -1925,9 +1953,11 @@ mod tests {
         let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut insertions = Vec::new();
+        // Author a source mesh before creating the physics World. Objects added
+        // to an existing World use the ordinary rigid-body insertion path.
         for action in [
-            ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
             ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
+            ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
         ] {
             dispatch_project(&action, &mut project, &tx, &state, &mut ui,
                 &mut selection, &mut active, &mut prefs);

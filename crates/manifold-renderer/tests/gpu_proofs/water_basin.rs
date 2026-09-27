@@ -475,7 +475,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
         metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
-        baseline.clone());
+        baseline.clone()).with_world_metadata(metadata_for_node_type("node.physics_world"));
     add.execute(&mut project);
     assert!(add.was_applied(), "{:?}", add.rejection_reason());
     let saved = serde_json::to_string(&project).unwrap();
@@ -678,7 +678,8 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     project.timeline.layers.push(layer);
     let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
         metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
-        metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"), baseline.clone());
+        metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"), baseline.clone())
+        .with_world_metadata(metadata_for_node_type("node.physics_world"));
     add_fluid.execute(&mut project);
     assert!(add_fluid.was_applied());
     let mut add_object = AddSceneObjectCommand::new(target_graph.clone(), vec![], render_id, 0,
