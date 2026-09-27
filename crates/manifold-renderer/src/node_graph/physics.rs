@@ -12,10 +12,12 @@ use crate::generators::platonic_geometry::platonic_points;
 
 mod targeted_fields;
 mod impulses;
+mod worker;
 #[cfg(test)]
 mod coupling_tests;
 
 pub use impulses::{ResolvedRigidImpulse, RigidImpulseTargets};
+pub use worker::RigidSceneInputs;
 use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 
 thread_local! {
@@ -128,6 +130,19 @@ pub const MAX_COPIES: usize = 4_000;
 pub(crate) const AUTHORED_HISTORY_CAPACITY: usize = 256;
 const IMPULSE_CAPACITY: usize = 256;
 const FIXED_TICK: Seconds = Seconds(1.0 / 60.0);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum AdvancementPolicy {
+    #[default]
+    Preview,
+    Worker { max_ticks: usize },
+}
+
+impl AdvancementPolicy {
+    fn is_worker(self) -> bool {
+        matches!(self, Self::Worker { .. })
+    }
+}
 pub const BODY_PORTS: [&str; MAX_BODIES] = [
     "body_0", "body_1", "body_2", "body_3", "body_4", "body_5", "body_6", "body_7", "body_8",
     "body_9", "body_10", "body_11", "body_12", "body_13", "body_14", "body_15", "body_16",
@@ -376,6 +391,8 @@ pub struct RigidSimulation {
     impulse_failure: Option<String>,
     impulse_overflow_latched: bool,
     accepted_observation: Option<(f64, f64)>,
+    worker_epoch: Option<u64>,
+    advancement_policy: AdvancementPolicy,
 }
 
 impl Default for RigidSimulation {
@@ -419,6 +436,8 @@ impl Default for RigidSimulation {
             impulse_failure: None,
             impulse_overflow_latched: false,
             accepted_observation: None,
+            worker_epoch: None,
+            advancement_policy: AdvancementPolicy::Preview,
         }
     }
 }
@@ -700,7 +719,7 @@ impl RigidSimulation {
                 return Err("Physics: impulse history is full; restart the simulation or bake the scene".into());
             }
         }
-        if SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get) {
+        if SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get) && !self.advancement_policy.is_worker() {
             // A topology edit or seek rebuilds at the next full graph frame;
             // old trajectories cannot safely be spliced into a new world.
             if self.world.is_none() || topology_changed || copy_topology_changed || reset {
@@ -727,12 +746,21 @@ impl RigidSimulation {
             }
         }
         let next_impulse_epoch = if rebuild {
-            Some(
+            Some(if self.world.is_none() {
+                if let Some(epoch) = self.worker_epoch {
+                    epoch
+                } else {
+                    self.impulse_epoch
+                        .unwrap_or(0)
+                        .checked_add(1)
+                        .ok_or("Physics: impulse epoch exhausted")?
+                }
+            } else {
                 self.impulse_epoch
                     .unwrap_or(0)
                     .checked_add(1)
-                    .ok_or("Physics: impulse epoch exhausted")?,
-            )
+                    .ok_or("Physics: impulse epoch exhausted")?
+            })
         } else {
             None
         };
@@ -890,10 +918,10 @@ impl RigidSimulation {
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
         let preview_budget = PREVIEW_STEP_BUDGET.with(std::cell::Cell::get);
-        let steps = if speed == 0.0 && preview_budget.is_some() {
-            0
-        } else {
-            due_steps
+        let steps = match self.advancement_policy {
+            AdvancementPolicy::Worker { max_ticks } => due_steps.min(max_ticks),
+            AdvancementPolicy::Preview if speed == 0.0 && preview_budget.is_some() => 0,
+            AdvancementPolicy::Preview => due_steps,
         };
         {
             let world = self.world.as_mut().expect("world constructed above");
@@ -1063,7 +1091,9 @@ impl RigidSimulation {
                 return Err(error);
             }
             // A native tick cannot be preempted. Yield before starting another.
-            if preview_budget.is_some_and(|budget| physics_start.elapsed() >= budget) {
+            if matches!(self.advancement_policy, AdvancementPolicy::Preview)
+                && preview_budget.is_some_and(|budget| physics_start.elapsed() >= budget)
+            {
                 break;
             }
         }

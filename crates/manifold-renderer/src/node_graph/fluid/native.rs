@@ -7,8 +7,8 @@ use manifold_physics::FieldInput;
 use crate::generators::mesh_common::MeshVertex;
 
 use super::impulses::ImpulseSum;
-use super::roles;
 use super::{FluidRuntime, Reply, Request, cancelled_reply};
+use super::{coupled, roles};
 use crate::node_graph::fluid_cache::{CacheMode, CacheReader, CacheWriter};
 
 struct PreparedTick<'request> {
@@ -44,12 +44,14 @@ pub(super) struct NativeSimulation {
     writer: Option<CacheWriter>,
     playback: Option<CacheReader>,
     cache_epoch: Option<u64>,
+    coupled: Option<coupled::Native>,
 }
 
 impl NativeSimulation {
     fn prepare_world(
         &mut self,
         request: &Request,
+        coupled: Option<&coupled::Request>,
         domain: super::FluidDomainLayout,
     ) -> Result<(), String> {
         if self
@@ -63,6 +65,7 @@ impl NativeSimulation {
         // Dropping/rebuilding an old world can take time too; keep it off the
         // content thread along with all native work.
         self.world = None;
+        self.coupled = None;
         let mut new =
             FluidWorld::new(domain.config(request.settings)).map_err(|e| e.to_string())?;
         new.set_liquid_options(request.settings.liquid)
@@ -90,6 +93,14 @@ impl NativeSimulation {
                 .map_err(|e| e.to_string())?;
         }
         self.native_roles = roles::NativeRoles::prepare(&mut new, &request.role_setup, domain)?;
+        if let Some(coupled) = coupled {
+            self.coupled = Some(coupled::Native::prepare(
+                &mut new,
+                &coupled.setup,
+                request.epoch,
+                domain,
+            )?);
+        }
         self.world = Some((request.epoch, new));
         Ok(())
     }
@@ -219,6 +230,7 @@ impl NativeSimulation {
         if cancel_epoch.load(Ordering::Acquire) != request.epoch {
             return cancelled_reply(request);
         }
+        let mut coupled_request = request.coupled.take();
         let mut stats = FrameStats::default();
         let mut pose = request.initial.obstacle;
         let mut setup_error = None;
@@ -227,6 +239,7 @@ impl NativeSimulation {
         if self.cache_epoch != Some(request.epoch) {
             self.writer = None;
             self.world = None;
+            self.coupled = None;
             self.playback = None;
             self.cache_epoch = Some(request.epoch);
             if setup_error.is_none() {
@@ -248,6 +261,7 @@ impl NativeSimulation {
             }
         }
         if cancel_epoch.load(Ordering::Acquire) != request.epoch {
+            request.coupled = coupled_request;
             return cancelled_reply(request);
         }
         let result = (|| -> Result<(), String> {
@@ -271,7 +285,13 @@ impl NativeSimulation {
                 return Ok(());
             }
             let domain = request.settings.domain_layout()?;
-            self.prepare_world(&request, domain)?;
+            self.prepare_world(&request, coupled_request.as_ref(), domain)?;
+            if let (Some(native), Some(coupled)) = (&self.coupled, &mut coupled_request) {
+                native.prepare_output(&mut coupled.output);
+                if request.count == 0 {
+                    native.capture_initial(&mut coupled.output)?;
+                }
+            }
             request.recycle.clear();
             request
                 .recycle_whitewater
@@ -290,13 +310,26 @@ impl NativeSimulation {
                     let native = &mut self.world.as_mut().expect("world initialized").1;
                     let prepared =
                         Self::prepare_tick(&self.native_roles, native, &request, domain, tick)?;
-                    let tick_stats =
+                    let tick_stats = if let (Some(rigid), Some(coupled)) =
+                        (&mut self.coupled, &mut coupled_request)
+                    {
+                        rigid.step(
+                            native,
+                            coupled,
+                            manifold_physics::TickStamp {
+                                epoch: request.epoch,
+                                tick,
+                            },
+                            &prepared.fields(),
+                        )?
+                    } else {
                         if prepared.field.is_empty() && prepared.impulse.events.is_empty() {
                             native.step(Seconds(super::TICK))
                         } else {
                             native.step_with_fields(Seconds(super::TICK), &prepared.fields())
                         }
-                        .map_err(|e| e.to_string())?;
+                        .map_err(|e| e.to_string())?
+                    };
                     (tick_stats, prepared.next_obstacle)
                 };
                 stats = tick_stats;
@@ -319,6 +352,7 @@ impl NativeSimulation {
             obstacle: pose,
             stats,
             error: result.err(),
+            coupled: coupled_request,
         }
     }
 }

@@ -23,12 +23,14 @@ use super::transform::Transform;
 use super::vector_field::ContinuousField;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
+mod coupled;
 mod domain;
 mod impulses;
 mod native;
 mod roles;
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;
+pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub use domain::FluidDomainLayout;
 
 pub const TICK: f64 = 1.0 / 60.0;
@@ -312,6 +314,7 @@ struct Request {
     recycle_whitewater: WhitewaterFrame,
     cache_mode: CacheMode,
     cache_path: Arc<PathBuf>,
+    coupled: Option<coupled::Request>,
 }
 
 struct Reply {
@@ -327,6 +330,7 @@ struct Reply {
     obstacle: Transform,
     stats: FrameStats,
     error: Option<String>,
+    coupled: Option<coupled::Request>,
 }
 
 fn cancelled_reply(request: Request) -> Reply {
@@ -342,6 +346,7 @@ fn cancelled_reply(request: Request) -> Reply {
         obstacle: request.initial.obstacle,
         stats: FrameStats::default(),
         error: None,
+        coupled: request.coupled,
     }
 }
 
@@ -409,6 +414,7 @@ pub struct FluidRuntime {
     pub stats: FrameStats,
     cache_mode: CacheMode,
     cache_path: Arc<PathBuf>,
+    coupled: Option<coupled::Runtime>,
 }
 
 impl Default for FluidRuntime {
@@ -445,6 +451,7 @@ impl Default for FluidRuntime {
             stats: FrameStats::default(),
             cache_mode: CacheMode::Live,
             cache_path: Arc::new(PathBuf::new()),
+            coupled: None,
         }
     }
 }
@@ -480,6 +487,9 @@ impl FluidRuntime {
         self.last_transport = None;
         self.history.clear();
         self.role_history.clear();
+        if let Some(coupled) = &mut self.coupled {
+            coupled.clear();
+        }
         self.target_time = 0.0;
         self.completed_tick = 0;
         self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
@@ -503,6 +513,12 @@ impl FluidRuntime {
 
     pub fn simulation_time(&self) -> f64 {
         self.completed_tick as f64 * TICK
+    }
+
+    /// Read the rigid poses belonging to the currently accepted liquid mesh.
+    /// Graph hosts must latch this pair before evaluating participant outputs.
+    pub fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
+        self.coupled.as_ref()?.accepted.as_ref()
     }
     pub fn lag_seconds(&self) -> f64 {
         (self.target_time - self.simulation_time()).max(0.0)
@@ -582,7 +598,50 @@ impl FluidRuntime {
         speed: f32,
         reset: f32,
     ) -> Result<(), String> {
+        self.observe_coupled_scene_with_field(
+            settings,
+            controls,
+            scene_roles,
+            acceleration_field,
+            None,
+            transport,
+            speed,
+            reset,
+        )
+    }
+
+    /// Feed a connected rigid/liquid scene to the same exclusive native worker.
+    /// Both sets of controls use this runtime's transport mapping and epoch.
+    /// Ordinary standalone fluids pass `None` for the rigid participant.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_coupled_scene_with_field(
+        &mut self,
+        settings: FluidSettings,
+        controls: FluidControls,
+        scene_roles: &[Option<FluidRole>],
+        acceleration_field: Option<FieldValue>,
+        rigid: Option<CoupledRigidInputs<'_>>,
+        transport: Seconds,
+        speed: f32,
+        reset: f32,
+    ) -> Result<(), String> {
         self.accepted_observation = None;
+        if let Some(rigid) = rigid {
+            rigid.validate()?;
+            if self.cache_mode != CacheMode::Live {
+                return Err("Coupled physics requires Live mode until paired poses and its input take are recorded in the cache manifest".into());
+            }
+        }
+        let coupling_changed = match (&self.coupled, rigid) {
+            (Some(current), Some(inputs)) => !current.matches(inputs),
+            (None, None) => false,
+            _ => true,
+        };
+        if super::physics::authored_sample_only() && coupling_changed {
+            // Structural membership changes are accepted only by the current
+            // full graph evaluation, never spliced into historical playback.
+            return Ok(());
+        }
         let authored_only_settings_withheld = super::physics::authored_sample_only()
             && self.settings.is_some()
             && self.settings != Some(settings);
@@ -621,6 +680,7 @@ impl FluidRuntime {
         let role_topology_changed = !self.role_setup.matches(scene_roles);
         if self.settings != Some(settings)
             || role_topology_changed
+            || coupling_changed
             || reset_edge
             || self
                 .last_transport
@@ -629,6 +689,11 @@ impl FluidRuntime {
             self.clear();
             self.settings = Some(settings);
             self.obstacle = controls.obstacle;
+            match (self.coupled.as_mut(), rigid) {
+                (Some(current), Some(inputs)) => current.reseed(inputs),
+                (None, Some(inputs)) => self.coupled = Some(coupled::Runtime::new(inputs)),
+                (_, None) => self.coupled = None,
+            }
         }
         if role_topology_changed {
             self.role_setup = Arc::new(roles::Setup::new(scene_roles));
@@ -658,6 +723,11 @@ impl FluidRuntime {
         }) && self
             .role_history
             .latest_matches(&self.role_setup, scene_roles)
+            && match (&self.coupled, rigid) {
+                (Some(current), Some(inputs)) => current.latest_matches(inputs),
+                (None, None) => true,
+                _ => false,
+            }
         {
             // A held transport with unchanged controls needs no extra endpoint,
             // even when history is full and the worker is still catching up.
@@ -690,6 +760,13 @@ impl FluidRuntime {
             scene_roles,
             matches!(write, HistoryWrite::Replaced),
         );
+        let completed = Seconds(self.simulation_time());
+        if let (Some(current), Some(inputs)) = (&mut self.coupled, rigid)
+            && let Err(error) = current.observe(inputs, Seconds(target_time), completed)
+        {
+            self.failure = Some(error.clone());
+            return Err(error);
+        }
         if !authored_only_settings_withheld {
             self.accepted_observation = Some((transport.0, self.target_time));
         }
@@ -708,6 +785,9 @@ impl FluidRuntime {
             .prune_before(manifold_physics::Seconds(retain_from))
             .map_err(|error| format!("Water preview history could not be pruned: {error}"))?;
         self.role_history.pop_front(removed);
+        if let Some(coupled) = &mut self.coupled {
+            coupled.prune(Seconds(retain_from))?;
+        }
         Ok(())
     }
 
@@ -776,8 +856,30 @@ impl FluidRuntime {
         }
     }
 
-    fn accept(&mut self, reply: Reply) -> Result<(), String> {
+    fn accept(&mut self, mut reply: Reply) -> Result<(), String> {
         self.busy = false;
+        let mut publish = reply.epoch == self.epoch && reply.error.is_none();
+        if publish {
+            match (&self.coupled, &reply.coupled) {
+                (Some(_), Some(coupled))
+                    if coupled.output.stamp == (manifold_physics::TickStamp {
+                        epoch: reply.epoch,
+                        tick: reply.tick,
+                    }) => {}
+                (None, None) => {}
+                _ => {
+                    reply.error = Some("Fluid coupling: worker returned an unmatched rigid/liquid frame".into());
+                    publish = false;
+                }
+            }
+        }
+        if let Some(current) = &mut self.coupled {
+            if let Some(coupled) = reply.coupled {
+                current.accept(coupled, publish);
+            } else if reply.epoch == self.epoch {
+                current.recover_missing_request();
+            }
+        }
         self.accept_impulse_batch(reply.epoch, reply.started_tick, reply.impulses);
         self.spare_role_history = Some(reply.role_history);
         if reply.epoch != self.epoch {
@@ -898,6 +1000,7 @@ impl FluidRuntime {
                     .expect("one recycled whitewater frame per request"),
                 cache_mode: self.cache_mode,
                 cache_path: self.cache_path.clone(),
+                coupled: self.coupled.as_mut().map(coupled::Runtime::request),
             };
             let worker = self.worker.as_ref().expect("worker exists");
             if let Err(error) = worker.requests.send(request) {
@@ -907,6 +1010,9 @@ impl FluidRuntime {
                 self.spare_history = Some(request.history);
                 self.spare_impulses = Some(request.impulses);
                 self.spare_role_history = Some(request.role_history);
+                if let (Some(current), Some(coupled)) = (&mut self.coupled, request.coupled) {
+                    current.accept(coupled, false);
+                }
                 let message = "Water worker disconnected".to_owned();
                 self.failure = Some(message.clone());
                 return Err(message);
@@ -1121,6 +1227,7 @@ mod tests {
             let init = request_receiver.recv().unwrap();
             reply_sender
                 .send(Reply {
+                    coupled: None,
                     started_tick: 0,
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                     epoch: init.epoch,
@@ -1155,6 +1262,7 @@ mod tests {
                         counts.push(request.count);
                         reply_sender
                             .send(Reply {
+                                coupled: None,
                                 started_tick: 0,
                                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                                 epoch: request.epoch,
@@ -1202,6 +1310,7 @@ mod tests {
         let init = request_receiver.recv().unwrap();
         reply_sender
             .send(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: init.epoch,
@@ -1230,6 +1339,7 @@ mod tests {
         assert_eq!(hitch.count, 17);
         reply_sender
             .send(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: hitch.epoch,
@@ -1288,6 +1398,7 @@ mod tests {
             .unwrap();
         runtime
             .accept(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: runtime.epoch,
@@ -1310,6 +1421,7 @@ mod tests {
         runtime.clear();
         runtime
             .accept(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: old_epoch,
@@ -1724,6 +1836,7 @@ mod tests {
         runtime.spare_history = None;
         runtime
             .accept(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: old,
@@ -1768,6 +1881,7 @@ mod tests {
         let epoch = runtime.epoch;
         runtime
             .accept(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: epoch.wrapping_add(1),
@@ -1789,6 +1903,7 @@ mod tests {
 
         runtime
             .accept(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch,
@@ -1818,6 +1933,7 @@ mod tests {
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
         runtime
             .accept(Reply {
+                coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch,
@@ -1854,6 +1970,7 @@ mod tests {
         assert!(
             runtime
                 .accept(Reply {
+                    coupled: None,
                     started_tick: 0,
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                     epoch,
