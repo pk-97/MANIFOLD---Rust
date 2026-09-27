@@ -599,20 +599,69 @@ fn advance_audio_hops(
     }
     for (layer_index, layer) in project.timeline.layers.iter_mut().enumerate() {
         let layer_id = layer.layer_id.clone();
-        let clip_edge = clip_edge_layers.contains(&(layer_index as i32));
+        let clip_count = clip_edge_layers.iter().filter(|&&index| index == layer_index as i32).count();
+        let clip_edge = clip_count != 0;
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
                 advance_instance_audio_hops(
                     fx, sends, snapshot, Some(&layer_id), clip_edge, pulses, evaluation_time,
                 );
+                fire_parameter_clip_edges(fx, &layer_id, clip_count, pulses);
             }
         }
         if let Some(gp) = layer.gen_params_mut() {
             advance_instance_audio_hops(
                 gp, sends, snapshot, Some(&layer_id), clip_edge, pulses, evaluation_time,
             );
+            fire_parameter_clip_edges(gp, &layer_id, clip_count, pulses);
         }
     }
+}
+
+/// The existing scheduler owns clip edges. Fire parameters consume every edge
+/// it retained, independently of audio delivery or whether a hop completed.
+/// A clip event has no audio stamp: assigning the last hop would retime it.
+fn fire_parameter_clip_edges(
+    fx: &mut PresetInstance,
+    layer: &manifold_core::LayerId,
+    count: usize,
+    pulses: &mut impl TriggerPulseSink,
+) -> bool {
+    if !fx.enabled || count == 0 {
+        return false;
+    }
+    let mut wrote = false;
+    for m in fx.audio_mods.iter_mut().flatten().filter(|m| {
+        m.enabled && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_clip_edge()
+    }) {
+        let Some(param) = fx.params.get_mut(m.param_id.as_ref()) else { continue };
+        if !param.spec.is_trigger || param.spec.is_trigger_gate {
+            continue;
+        }
+        for _ in 0..count {
+            fire_parameter(&fx.id, m, Some(layer), None, pulses);
+        }
+        param.value = param.base + m.fire_count as f32;
+        wrote = true;
+    }
+    wrote
+}
+
+fn fire_parameter(
+    owner: &manifold_core::EffectId,
+    modulation: &mut manifold_core::audio_mod::ParameterAudioMod,
+    layer: Option<&manifold_core::LayerId>,
+    audio_stamp: Option<AudioHopStamp>,
+    pulses: &mut impl TriggerPulseSink,
+) {
+    modulation.fire_count = modulation.fire_count.wrapping_add(1);
+    pulses.push_event(TriggerPulse {
+        kind: TriggerPulseKind::Parameter,
+        layer_id: layer.cloned(),
+        owner_id: owner.clone(),
+        param_key: fire_meter_key_for_param("", modulation.param_id.as_ref()),
+        audio_stamp,
+    });
 }
 
 fn advance_instance_audio_hops(
@@ -635,6 +684,16 @@ fn advance_instance_audio_hops(
         m.audio_observations.begin(m.audio_hop_cursor.epoch());
         if !fx.enabled || !m.enabled {
             m.audio_observations.begin(0);
+            continue;
+        }
+        if params.get(m.param_id.as_ref()).is_some_and(|param| {
+            param.spec.is_trigger && !param.spec.is_trigger_gate
+                && !m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_transient()
+        }) {
+            // Clip-only Fire has no audio dependency. A stopped/missing source
+            // must not invalidate its control capture or retain an old signal.
+            m.audio_observations.begin(0);
+            reset_audio_conditioning(m);
             continue;
         }
         let source_changed = m.audio_hop_source.as_ref() != Some(&m.source);
@@ -814,15 +873,10 @@ fn process_audio_sample(
 
     m.audio_held_meter = action_conditioned;
     if info.is_trigger {
-        if m.trigger_edge.advance(conditioned, 0.5) {
-            m.fire_count = m.fire_count.wrapping_add(1);
-            pulses.push_event(TriggerPulse {
-                kind: TriggerPulseKind::Parameter,
-                layer_id: layer_id.cloned(),
-                owner_id: owner_id.clone(),
-                param_key: fire_meter_key_for_param("", m.param_id.as_ref()),
-                audio_stamp,
-            });
+        if m.trigger_edge.advance(conditioned, 0.5)
+            && m.trigger_mode.unwrap_or(TriggerFireMode::Transient).wants_transient()
+        {
+            fire_parameter(owner_id, m, layer_id, audio_stamp, pulses);
         }
         return Some(info.base + m.fire_count as f32);
     }
@@ -960,14 +1014,7 @@ pub fn evaluate_all_audio_mods(
         return apply_retained_audio_mods(project, fire_meters);
     }
     clear_audio_observations(project);
-    if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
-        return false;
-    }
-
     let sends = &project.audio_setup.sends;
-    if snapshot.sends.is_empty() {
-        return false;
-    }
 
     let mut any = false;
 
@@ -978,7 +1025,8 @@ pub fn evaluate_all_audio_mods(
     }
     for (layer_index, layer) in project.timeline.layers.iter_mut().enumerate() {
         let layer_id = layer.layer_id.clone();
-        let clip_edge = clip_edge_layers.contains(&(layer_index as i32));
+        let clip_count = clip_edge_layers.iter().filter(|&&index| index == layer_index as i32).count();
+        let clip_edge = clip_count != 0;
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
                 if evaluate_instance_audio_mods(
@@ -993,21 +1041,21 @@ pub fn evaluate_all_audio_mods(
                 ) {
                     any = true;
                 }
+                any |= fire_parameter_clip_edges(fx, &layer_id, clip_count, pulses);
             }
         }
-        if let Some(gp) = layer.gen_params_mut()
-            && evaluate_instance_audio_mods(
+        if let Some(gp) = layer.gen_params_mut() {
+            any |= evaluate_instance_audio_mods(
                 gp,
                 sends,
                 snapshot,
                 dt,
-                Some(layer_id),
+                Some(layer_id.clone()),
                 clip_edge,
                 pulses,
                 fire_meters,
-            )
-        {
-            any = true;
+            );
+            any |= fire_parameter_clip_edges(gp, &layer_id, clip_count, pulses);
         }
     }
 
@@ -1200,6 +1248,18 @@ mod tests {
 
     const TEST_FX: PresetTypeId = PresetTypeId::new("TestEnvFx");
     const TEST_GEN: PresetTypeId = PresetTypeId::new("TestEnvGen");
+
+    inventory::submit! {
+        EffectMetadata {
+            id: PresetTypeId::new("TestFireFx"),
+            display_name: "Test Fire Fx",
+            category: "Test",
+            available: true,
+            osc_prefix: "testFireFx",
+            legacy_discriminant: None,
+            params: &[ParamSpec::trigger("amount", "Fire", "")],
+        }
+    }
 
     inventory::submit! {
         EffectMetadata {
@@ -1708,6 +1768,132 @@ mod tests {
         evaluate_modulation(project, Beats::ZERO, Seconds::ZERO, dt, snapshot,
             &mut Vec::new(), &mut pulses, clip, &mut meters);
         (pulses, meters)
+    }
+
+    #[test]
+    fn fire_parameter_modes_keep_audio_and_every_clip_edge_separate() {
+        for (mode, audio_count, clip_count) in [
+            (None, 2, 0),
+            (Some(TriggerFireMode::Transient), 2, 0),
+            (Some(TriggerFireMode::ClipEdge), 0, 2),
+            (Some(TriggerFireMode::Both), 2, 2),
+        ] {
+            let (mut project, send_id) = project_with_audio_send();
+            attach_full_range_low_mod(&mut project, &send_id);
+            let layer_id = project.timeline.layers[0].layer_id.clone();
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            fx.params.get_mut("amount").unwrap().spec.is_trigger = true;
+            fx.params.get_mut("amount").unwrap().base = 17.0;
+            fx.audio_mods_mut()[0].trigger_mode = mode;
+            let owner_id = fx.id.clone();
+            let snapshot = low_hop_batch(&[0.0, 1.0, 0.0, 1.0], 7, 0);
+            let (pulses, _) = retained_tick(&mut project, &snapshot, Seconds(0.1), &[0, 1, 0]);
+            assert_eq!(pulses.len(), audio_count + clip_count, "{mode:?}");
+            assert_eq!(pulses.iter().filter(|pulse| pulse.audio_stamp.is_some()).count(), audio_count);
+            assert_eq!(pulses.iter().filter(|pulse| pulse.audio_stamp.is_none()).count(), clip_count);
+            for pulse in &pulses {
+                assert_eq!(pulse.kind, TriggerPulseKind::Parameter);
+                assert_eq!(pulse.owner_id, owner_id);
+                assert_eq!(pulse.layer_id.as_ref(), Some(&layer_id));
+            }
+            let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+            assert_eq!(fx.params.get("amount").unwrap().value, 17.0 + pulses.len() as f32);
+            assert!(retained_tick(&mut project, &snapshot, Seconds(0.1), &[]).0.is_empty());
+        }
+    }
+
+    #[test]
+    fn fire_parameter_clip_mode_survives_missing_empty_and_faulted_audio() {
+        for input in 0..4 {
+            let (mut project, send_id) = project_with_audio_send();
+            attach_full_range_low_mod(&mut project, &send_id);
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            fx.params.get_mut("amount").unwrap().spec.is_trigger = true;
+            fx.audio_mods_mut()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+            let snapshot = match input {
+                0 => AudioFeatureSnapshot::default(),
+                1 => empty_hop_snapshot(7),
+                2 => {
+                    let mut snapshot = empty_hop_snapshot(7);
+                    snapshot.hop_batches[0].invalidate(
+                        manifold_core::audio_features::AudioHopError::CapacityExceeded,
+                    );
+                    snapshot
+                }
+                _ => {
+                    project.audio_setup.sends.clear();
+                    snapshot_low_hop(1.0, 7, 512)
+                }
+            };
+            let (pulses, _) = retained_tick(&mut project, &snapshot, Seconds(0.1), &[0]);
+            assert_eq!(pulses.len(), 1, "input {input}");
+            assert_eq!(pulses[0].audio_stamp, None);
+            assert!(audio_control_capture_error(&project).is_none());
+            let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+            assert_eq!(fx.params.get("amount").unwrap().value, 1.0);
+            assert!(fx.audio_mods.as_ref().unwrap()[0].audio_observations.hops().is_empty());
+        }
+    }
+
+    #[test]
+    fn fire_parameter_clip_mode_respects_disabled_instances_and_mods() {
+        for disable_instance in [false, true] {
+            let (mut project, send_id) = project_with_audio_send();
+            attach_full_range_low_mod(&mut project, &send_id);
+            let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+            fx.params.get_mut("amount").unwrap().spec.is_trigger = true;
+            fx.audio_mods_mut()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+            if disable_instance { fx.enabled = false; } else { fx.audio_mods_mut()[0].enabled = false; }
+            assert!(retained_tick(&mut project, &empty_hop_snapshot(7), Seconds(0.1), &[0]).0.is_empty());
+        }
+    }
+
+    #[test]
+    fn fire_parameter_clip_mode_covers_generators_and_effects_without_master_broadcast() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        let effect = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+        effect.params.get_mut("amount").unwrap().spec.is_trigger = true;
+        effect.audio_mods_mut()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+        let mut master = effect.clone();
+        master.id = manifold_core::EffectId::new("master");
+        project.settings.master_effects.push(master);
+        let mut layer = generator_layer();
+        let generator = layer.gen_params_mut().unwrap();
+        generator.params.get_mut("speed").unwrap().spec.is_trigger = true;
+        let mut audio = ParameterAudioMod::new(
+            "speed".into(), send_id,
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
+        );
+        audio.trigger_mode = Some(TriggerFireMode::ClipEdge);
+        generator.audio_mods_mut().push(audio);
+        let owner = generator.id.clone();
+        project.timeline.layers.push(layer);
+        let (pulses, _) = retained_tick(&mut project, &empty_hop_snapshot(7), Seconds(0.1), &[0, 1, 1]);
+        assert_eq!(pulses.len(), 3);
+        assert_eq!(pulses.iter().filter(|pulse| pulse.owner_id == owner).count(), 2);
+        assert!(pulses.iter().all(|pulse| pulse.layer_id.is_some()));
+        assert_eq!(project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0].fire_count, 0);
+    }
+
+    #[test]
+    fn fire_parameter_clip_mode_round_trip_fires_only_on_new_launches() {
+        let (mut project, send_id) = project_with_audio_send();
+        // Reload restores registered stock specs. Use a real Fire definition,
+        // rather than temporarily changing the kind of a continuous parameter.
+        project.timeline.layers[0].effects = Some(vec![create_default(&PresetTypeId::new("TestFireFx"))]);
+        attach_full_range_low_mod(&mut project, &send_id);
+        let fx = &mut project.timeline.layers[0].effects.as_mut().unwrap()[0];
+        fx.params.get_mut("amount").unwrap().spec.is_trigger = true;
+        fx.params.get_mut("amount").unwrap().base = 17.0;
+        fx.audio_mods_mut()[0].trigger_mode = Some(TriggerFireMode::ClipEdge);
+        fx.audio_mods_mut()[0].source.send_id = AudioSendId::default();
+        project.audio_setup.sends.clear();
+        assert_eq!(retained_tick(&mut project, &empty_hop_snapshot(7), Seconds(0.1), &[0]).0.len(), 1);
+        let mut reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert!(retained_tick(&mut reloaded, &snapshot_low_hop(1.0, 8, 512), Seconds(0.1), &[]).0.is_empty());
+        assert_eq!(retained_tick(&mut reloaded, &empty_hop_snapshot(8), Seconds(0.1), &[0, 0]).0.len(), 2);
+        assert_eq!(reloaded.timeline.layers[0].effects.as_ref().unwrap()[0].params.get("amount").unwrap().value, 19.0);
     }
 
     #[test]

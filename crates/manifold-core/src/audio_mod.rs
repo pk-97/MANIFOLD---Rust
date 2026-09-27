@@ -265,6 +265,7 @@ impl From<AudioFeatureRepr> for AudioFeature {
 #[serde(rename_all = "camelCase")]
 pub struct AudioModSource {
     /// Named send in the project's `AudioSetup`. Stable across relabel/re-route.
+    /// An empty ID is unassigned; a clip-only Fire binding needs no audio send.
     pub send_id: AudioSendId,
     /// Which feature of that send to read.
     #[serde(default)]

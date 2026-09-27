@@ -110,17 +110,35 @@ pub(crate) fn dispatch_modulation(action: &ModulationAction, ctx: &mut super::su
                         !old,
                     ))
                 } else {
-                    // Arm: assign the project's first audio send. No sends → inert
-                    // (the audio button stays a no-op until the Audio Setup defines one).
-                    let Some(send_id) = ctx.project.audio_setup.sends.first().map(|s| s.id.clone())
-                    else {
+                    let send_id = ctx.project.audio_setup.sends.first().map(|s| s.id.clone());
+                    let clip_only = send_id.is_none()
+                        && ctx.project.preset_instance(&target).is_some_and(|instance| {
+                            instance.params.get(param_id.as_ref()).is_some_and(|param| {
+                                param.spec.is_trigger && !param.spec.is_trigger_gate
+                            })
+                        })
+                        && match target.host_target() {
+                            Some(manifold_core::GraphTarget::Generator(_)) => true,
+                            Some(manifold_core::GraphTarget::Effect(id)) =>
+                                ctx.project.timeline.layers.iter().any(|layer| {
+                                    layer.effects.iter().flatten().any(|fx| &fx.id == id)
+                                }),
+                            _ => false,
+                        };
+                    // A layer-owned Fire can start with Clip timing without
+                    // creating an audio send. The existing empty ID represents
+                    // an unassigned source; Audio/Both needs a selected send.
+                    if send_id.is_none() && !clip_only {
                         return DispatchResult::structural();
-                    };
-                    let m = manifold_core::audio_mod::ParameterAudioMod::new(
+                    }
+                    let mut m = manifold_core::audio_mod::ParameterAudioMod::new(
                         param_id.clone(),
-                        send_id,
+                        send_id.unwrap_or_default(),
                         manifold_core::AudioFeature::default(),
                     );
+                    if clip_only {
+                        m.trigger_mode = Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge);
+                    }
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
             boxed.execute(ctx.project);

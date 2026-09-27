@@ -516,7 +516,8 @@ fn param_surface(
         let Some(pi) = row_index_of.get(am.param_id.as_ref()).copied() else {
             continue;
         };
-        rows[pi].audio = audio_row_state(am);
+        let is_fire = rows[pi].spec.is_trigger && !rows[pi].spec.is_trigger_gate;
+        rows[pi].audio = audio_row_state(am, is_fire);
     }
 
     // String params are sourced from the registry def. Graph-backed audio-send

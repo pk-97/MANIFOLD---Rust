@@ -3149,6 +3149,47 @@ mod scene_card_convergence_tests {
             // ── AudioModToggle ────────────────────────────────────────
 
             #[test]
+            fn audio_mod_fire_without_send_arms_clip_mode_layer() {
+                let s = trigger_scopes("Bloom");
+                assert!(s.project.audio_setup.sends.is_empty());
+                let pid = s.pid.clone();
+                let target = s.layer_target.clone();
+                scope_atomic(
+                    "audio_mod_fire_clip_without_send",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::Modulation(ModulationAction::AudioModToggle(
+                        manifold_ui::GraphParamTarget::Effect(0), pid.clone(),
+                    )),
+                    move |project| {
+                        project.preset_instance(&target)
+                            .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
+                            .map(|m| (m.trigger_mode, m.source.send_id.is_empty(), m.enabled))
+                    },
+                    None,
+                    Some((Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge), true, true)),
+                );
+            }
+
+            #[test]
+            fn audio_mod_fire_without_send_does_not_invent_master_clip_timing() {
+                let s = trigger_scopes("Bloom");
+                let pid = s.pid.clone();
+                let target = s.master_target.clone();
+                scope_inert(
+                    "master_fire_requires_audio_source",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::Modulation(ModulationAction::AudioModToggle(
+                        manifold_ui::GraphParamTarget::Effect(0), pid.clone(),
+                    )),
+                    move |project| project.preset_instance(&target)
+                        .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
+                        .map(|m| m.enabled),
+                );
+            }
+
+            #[test]
             fn audio_mod_toggle_master() {
                 let mut s = two_scopes("Bloom");
                 with_send(&mut s.project);
