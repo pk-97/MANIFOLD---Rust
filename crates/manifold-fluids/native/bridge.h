@@ -69,6 +69,11 @@ int manifold_fluids_world_set_obstacle(void *world, const float *previous_min,
                                        const float *next_max);
 int manifold_fluids_world_clear_obstacle(void *world);
 int manifold_fluids_world_step(void *world, double dt, ManifoldFluidsFrameStats *stats_out);
+int manifold_fluids_world_begin_frame(void *world, double dt);
+int manifold_fluids_world_next_substep(void *world, double *dt_out);
+int manifold_fluids_world_advance_substep(void *world, double dt);
+int manifold_fluids_world_finish_frame(void *world, ManifoldFluidsFrameStats *stats_out);
+void manifold_fluids_world_abort_frame(void *world);
 int manifold_fluids_world_marker_motion(void *world, float *position_out, float *velocity_out);
 int manifold_fluids_world_surface(void *world, const uint8_t **data_out, size_t *len_out);
 int manifold_fluids_world_whitewater_count(void *world, size_t *count_out);

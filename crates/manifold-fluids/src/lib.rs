@@ -15,6 +15,8 @@ use std::marker::PhantomData;
 
 mod mesh;
 pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
+mod frame;
+pub use frame::FluidFrame;
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 
@@ -233,7 +235,8 @@ pub struct FrameStats {
     pub particles: u32,
     pub triangles: u32,
     pub substeps: u32,
-    /// Upstream total update time, including surface meshing.
+    /// Total elapsed update time, including surface meshing. An owner-driven
+    /// frame also includes time the owner spends between substep calls.
     pub simulation_ms: f64,
     pub meshing_ms: f64,
 }
@@ -274,6 +277,18 @@ struct NativeFrameStats {
     substeps: u32,
     simulation_ms: f64,
     meshing_ms: f64,
+}
+
+impl From<NativeFrameStats> for FrameStats {
+    fn from(stats: NativeFrameStats) -> Self {
+        Self {
+            particles: stats.particles,
+            triangles: stats.triangles,
+            substeps: stats.substeps,
+            simulation_ms: stats.simulation_ms,
+            meshing_ms: stats.meshing_ms,
+        }
+    }
 }
 
 unsafe extern "C" {
@@ -631,11 +646,11 @@ impl FluidWorld {
         self.step_with_fields(dt, &[])
     }
 
-    pub fn step_with_fields(
+    fn prepare_step_fields(
         &mut self,
         dt: Seconds,
         fields: &[FieldInput<'_>],
-    ) -> Result<FrameStats, FluidError> {
+    ) -> Result<(), FluidError> {
         if !(dt.0.is_finite() && dt.0 > 0.0 && dt.0 <= 1.0 / 30.0) {
             return Err(FluidError::input(
                 "dt must be finite and in (0, 1/30] seconds",
@@ -726,16 +741,19 @@ impl FluidWorld {
             };
             native_result(ok, "clearing force fields")?;
         }
+        Ok(())
+    }
+
+    pub fn step_with_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<FrameStats, FluidError> {
+        self.prepare_step_fields(dt, fields)?;
         let mut native_stats = NativeFrameStats::default();
         let ok = unsafe { manifold_fluids_world_step(self.native, dt.0, &mut native_stats) };
         native_result(ok, "stepping the fluid world")?;
-        Ok(FrameStats {
-            particles: native_stats.particles,
-            triangles: native_stats.triangles,
-            substeps: native_stats.substeps,
-            simulation_ms: native_stats.simulation_ms,
-            meshing_ms: native_stats.meshing_ms,
-        })
+        Ok(native_stats.into())
     }
 
     pub fn surface(&mut self, output: &mut Vec<SurfaceVertex>) -> Result<(), FluidError> {

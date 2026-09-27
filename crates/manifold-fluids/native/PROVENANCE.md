@@ -25,6 +25,17 @@ source file also retains its original license header.
 
 Local changes:
 
+- `flip_engine/fluidsimulation.{h,cpp}` exposes begin/offer/advance/finish
+  operations around the existing native frame loop. Owner-driven frames may
+  consume smaller substeps, preserve the exact interval and reject budget
+  exhaustion instead of forcing a step beyond the stability bound. Abandoned
+  or failed sessions require a rebuilt world; outstanding native threads join
+  before destruction. The bridge rejects snapshots from those sessions.
+- Native output generation and output-only attribute refresh now run at the
+  final substep. A translating-liquid probe reproduced a 0.0901 m difference
+  between the first-substep mesh centre and completed particle centre; final
+  output reduces it to 0.0190 m, within the 0.045 m reconstruction tolerance.
+  This establishes liquid output timing, not moving-body contact alignment.
 - `flip_engine/levelsetsolver.cpp` initializes the
   `LevelSetSolver::reinitializeUpwind` ping-pong scratch grid with
   `Array3d<float> tempSDF(inputSDF)`, preserving untouched stencil neighbors.

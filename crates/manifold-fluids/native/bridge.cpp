@@ -445,6 +445,7 @@ NativeWorld::~NativeWorld() {
     if (!simulation) {
         return;
     }
+    simulation->abortUpdate();
     for (auto &entry : mesh_roles) {
         NativeMeshRole &role = entry.second;
         if (role.role == 2 && role.obstacle) {
@@ -1118,6 +1119,53 @@ extern "C" int manifold_fluids_world_step(void *world, double dt,
     });
 }
 
+extern "C" int manifold_fluids_world_begin_frame(void *world, double dt) {
+    return guarded([&] {
+        if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
+        static_cast<NativeWorld *>(world)->simulation->beginUpdate(dt);
+    });
+}
+
+extern "C" int manifold_fluids_world_next_substep(void *world, double *dt_out) {
+    return guarded([&] {
+        if (world == nullptr || dt_out == nullptr) {
+            throw std::invalid_argument("substep pointers must be non-null");
+        }
+        *dt_out = static_cast<NativeWorld *>(world)->simulation->nextUpdateTimeStep();
+    });
+}
+
+extern "C" int manifold_fluids_world_advance_substep(void *world, double dt) {
+    return guarded([&] {
+        if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
+        static_cast<NativeWorld *>(world)->simulation->advanceUpdate(dt);
+    });
+}
+
+extern "C" int manifold_fluids_world_finish_frame(void *world, ManifoldFluidsFrameStats *stats_out) {
+    return guarded([&] {
+        if (world == nullptr || stats_out == nullptr) {
+            throw std::invalid_argument("frame output pointers must be non-null");
+        }
+        auto &simulation = *static_cast<NativeWorld *>(world)->simulation;
+        simulation.finishUpdate();
+        write_stats(simulation.getFrameStatsData(), stats_out);
+    });
+}
+
+extern "C" void manifold_fluids_world_abort_frame(void *world) {
+    std::lock_guard<std::mutex> lock(NATIVE_MUTEX);
+    if (world != nullptr) { static_cast<NativeWorld *>(world)->simulation->abortUpdate(); }
+}
+
+namespace {
+void require_accepted_frame(NativeWorld &world) {
+    if (world.simulation->isUpdateInProgress() || world.simulation->isUpdateFailed()) {
+        throw std::runtime_error("fluid frame is incomplete or failed; no snapshot is available");
+    }
+}
+} // namespace
+
 extern "C" int manifold_fluids_world_marker_motion(void *world, float *position_out,
                                                      float *velocity_out) {
     return guarded([&] {
@@ -1125,6 +1173,7 @@ extern "C" int manifold_fluids_world_marker_motion(void *world, float *position_
             throw std::invalid_argument("marker motion output pointers must be non-null");
         }
         auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
         const size_t count = native->simulation->getNumMarkerParticles();
         if (count == 0) {
             throw std::invalid_argument("FLIP Fluids has no marker particles");
@@ -1167,6 +1216,7 @@ extern "C" int manifold_fluids_world_surface(void *world, const uint8_t **data_o
             throw std::invalid_argument("surface output pointers must be non-null");
         }
         auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
         std::vector<char> *data = native->simulation->getSurfaceData();
         if (data == nullptr || data->empty()) {
             native->empty_surface.clear();
@@ -1185,6 +1235,7 @@ extern "C" int manifold_fluids_world_whitewater_count(void *world, size_t *count
             throw std::invalid_argument("whitewater output pointers must be non-null");
         }
         auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
         *count_out = native->whitewater_enabled ? native->simulation->getNumDiffuseParticles() : 0;
     });
 }
@@ -1197,6 +1248,7 @@ extern "C" int manifold_fluids_world_whitewater(void *world,
             throw std::invalid_argument("whitewater output pointers must be non-null");
         }
         auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
         refresh_whitewater(*native);
         const size_t count = native->whitewater_positions.size();
         *count_out = count;

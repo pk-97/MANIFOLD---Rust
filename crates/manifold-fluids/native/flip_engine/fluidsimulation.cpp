@@ -27,6 +27,7 @@ SOFTWARE.
 #include <cstring>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
 
 #include "threadutils.h"
 #include "stopwatch.h"
@@ -54,6 +55,7 @@ FluidSimulation::FluidSimulation(int isize, int jsize, int ksize, double dx) :
 }
 
 FluidSimulation::~FluidSimulation() {
+    _joinNativeThreadsNoexcept();
 }
 
 /*******************************************************************************
@@ -7968,11 +7970,11 @@ void FluidSimulation::_updateMarkerParticleVelocityBasedAttributes() {
                                         _isSurfaceVorticityAttributeEnabled ||
                                         _isFluidParticleVorticityAttributeEnabled;
 
-    if (_currentFrameTimeStepNumber == 0 && _isSurfaceVelocityAttributeAgainstObstaclesEnabled && isVelocityGridUpdateRelevant) {
+    if (_isLastFrameTimeStep && _isSurfaceVelocityAttributeAgainstObstaclesEnabled && isVelocityGridUpdateRelevant) {
         _updateMarkerParticleVelocityAttributeGrid();
     }
 
-    if (_currentFrameTimeStepNumber == 0 && 
+    if (_isLastFrameTimeStep &&
         (_isSurfaceVorticityAttributeEnabled || _isFluidParticleVorticityAttributeEnabled)) {
         _updateMarkerParticleVorticityAttributeGrid();
     }
@@ -7983,26 +7985,20 @@ void FluidSimulation::_updateMarkerParticleAgeAttribute(double dt) {
         return;
     }
 
-    if (_currentFrameTimeStepNumber == 0 && _isSurfaceAgeAttributeEnabled) {
-        // Only needed for the surface attribute
-        _updateMarkerParticleAgeAttributeGrid(_ageAttributeGrid, _ageAttributeValidGrid);
-    }
-
     std::vector<float> *ages;
     _markerParticles.getAttributeValues("AGE", ages);
     for (size_t i = 0; i < ages->size(); i++) {
         ages->at(i) += dt;
+    }
+
+    if (_isLastFrameTimeStep && _isSurfaceAgeAttributeEnabled) {
+        _updateMarkerParticleAgeAttributeGrid(_ageAttributeGrid, _ageAttributeValidGrid);
     }
 }
 
 void FluidSimulation::_updateMarkerParticleLifetimeAttribute(double dt) {
     if (!_isSurfaceLifetimeAttributeEnabled && !_isFluidParticleLifetimeAttributeEnabled) {
         return;
-    }
-
-    if (_currentFrameTimeStepNumber == 0 && _isSurfaceLifetimeAttributeEnabled) {
-        // Only needed for the lifetime attribute
-        _updateMarkerParticleLifetimeAttributeGrid(_lifetimeAttributeGrid, _lifetimeAttributeValidGrid);
     }
 
     std::vector<float> *lifetimes;
@@ -8012,6 +8008,10 @@ void FluidSimulation::_updateMarkerParticleLifetimeAttribute(double dt) {
         nextLifetime = std::max(nextLifetime, _surfaceLifetimeAttributeDeathTime);
         lifetimes->at(i) = nextLifetime;
     }
+
+    if (_isLastFrameTimeStep && _isSurfaceLifetimeAttributeEnabled) {
+        _updateMarkerParticleLifetimeAttributeGrid(_lifetimeAttributeGrid, _lifetimeAttributeValidGrid);
+    }
 }
 
 void FluidSimulation::_updateMarkerParticleWhitewaterProximityAttribute() {
@@ -8020,7 +8020,7 @@ void FluidSimulation::_updateMarkerParticleWhitewaterProximityAttribute() {
         return;
     }
 
-    if (_currentFrameTimeStepNumber == 0) {
+    if (_isLastFrameTimeStep) {
         _updateMarkerParticleWhitewaterProximityAttributeGrid(_whitewaterProximityAttributeGrid, _whitewaterProximityAttributeValidGrid);
     }
 }
@@ -8030,7 +8030,7 @@ void FluidSimulation::_updateMarkerParticleViscosityAttribute() {
         return;
     }
 
-    if (_currentFrameTimeStepNumber == 0) {
+    if (_isLastFrameTimeStep) {
         _updateMarkerParticleViscosityAttributeGrid(_viscosityAttributeGrid, _viscosityAttributeValidGrid);
     }
 }
@@ -8040,7 +8040,7 @@ void FluidSimulation::_updateMarkerParticleDensityAttribute() {
         return;
     }
 
-    if (_currentFrameTimeStepNumber == 0) {
+    if (_isLastFrameTimeStep) {
         _updateMarkerParticleDensityAttributeGrid(_densityAttributeGrid, _densityAttributeValidGrid);
     }
 }
@@ -8050,7 +8050,9 @@ void FluidSimulation::_updateMarkerParticleColorAttribute(double dt) {
         return;
     }
 
-    if (_currentFrameTimeStepNumber == 0 && _isSurfaceSourceColorAttributeEnabled) {
+    _updateMarkerParticleColorAttributeMixing(dt);
+
+    if (_isLastFrameTimeStep && _isSurfaceSourceColorAttributeEnabled) {
         // Only needed for the surface attribute
         _updateMarkerParticleColorAttributeGrid(_colorAttributeGridR, 
                                                 _colorAttributeGridG, 
@@ -8058,7 +8060,6 @@ void FluidSimulation::_updateMarkerParticleColorAttribute(double dt) {
                                                 _colorAttributeValidGrid);
     }
 
-    _updateMarkerParticleColorAttributeMixing(dt);
 }
 
 void FluidSimulation::_updateMarkerParticleUVWAttribute(double dt) {
@@ -8066,7 +8067,7 @@ void FluidSimulation::_updateMarkerParticleUVWAttribute(double dt) {
         return;
     }
 
-    if (_currentFrameTimeStepNumber == 0 && _isSurfaceSourceUVWAttributeEnabled) {
+    if (_isLastFrameTimeStep && _isSurfaceSourceUVWAttributeEnabled) {
         // Only needed for the surface attribute
         _updateMarkerParticleUVWAttributeGrid(_uvwAttributeGridU, 
                                                 _uvwAttributeGridV, 
@@ -8076,7 +8077,7 @@ void FluidSimulation::_updateMarkerParticleUVWAttribute(double dt) {
 }
 
 void FluidSimulation::_updateMarkerParticleUIDAttribute() {
-    if (!_isFluidParticleUIDAttributeEnabled || _currentFrameTimeStepNumber != 0) {
+    if (!_isFluidParticleUIDAttributeEnabled || !_isLastFrameTimeStep) {
         return;
     }
 
@@ -10806,7 +10807,7 @@ void FluidSimulation::_outputSimulationLogFile() {
 }
 
 void FluidSimulation::_outputSimulationData() {
-    if (_currentFrameTimeStepNumber == 0) {
+    if (_isLastFrameTimeStep) {
         _logfile.logString(_logfile.getTime() + " BEGIN       Generate Output Data");
 
         StopWatch t;
@@ -11164,35 +11165,66 @@ void FluidSimulation::_logGreeting() {
     _logfile.separator();
 }
 
-void FluidSimulation::update(double dt) {
+void FluidSimulation::_joinNativeThreadsNoexcept() noexcept {
+    const std::thread::id owner = std::this_thread::get_id();
+    auto join = [owner](std::thread &thread) {
+        if (thread.joinable() && thread.get_id() != owner) {
+            thread.join();
+        }
+    };
+
+    join(_updateObstacleObjectsThread);
+    join(_updateLiquidLevelSetThread);
+    join(_advectVelocityFieldThread);
+    join(_fluidCurvatureThread);
+    join(_mesherThread);
+    _isCalculateFluidCurvatureGridThreadRunning = false;
+}
+
+void FluidSimulation::_beginUpdate(double dt, bool externallyStepped) {
     if (!_isSimulationInitialized) {
-        std::string msg = "Error: FluidSimulation must be initialized before update.\n";
-        throw std::runtime_error(msg);
+        throw std::runtime_error("Error: FluidSimulation must be initialized before update.\n");
+    }
+    if (_isUpdateInProgress) {
+        throw std::runtime_error("Error: FluidSimulation update is already in progress.\n");
+    }
+    if (_isUpdateFailed) {
+        throw std::runtime_error("Error: FluidSimulation update session has failed; rebuild the simulation.\n");
     }
 
-    if (dt < 0.0) {
+    if (externallyStepped) {
+        if (!std::isfinite(dt) || dt <= 0.0) {
+            std::string msg = "Error: externally stepped delta time must be finite and greater than 0.\n";
+            msg += "delta time: " + _toString(dt) + "\n";
+            throw std::domain_error(msg);
+        }
+    } else if (dt < 0.0) {
         std::string msg = "Error: delta time must be greater than or equal to 0.\n";
         msg += "delta time: " + _toString(dt) + "\n";
         throw std::domain_error(msg);
     }
 
     _timingData = TimingData();
-
-    StopWatch frameTimer;
-    frameTimer.start();
+    _frameTimer.reset();
+    _frameTimer.start();
 
     double epsdt = 1e-6;
-    _isZeroLengthDeltaTime = dt < epsdt;
-    dt = std::max(dt, epsdt);
+    _isZeroLengthDeltaTime = !externallyStepped && dt < epsdt;
+    if (!externallyStepped) {
+        dt = std::max(dt, epsdt);
+    }
 
     _isCurrentFrameFinished = false;
+    _isUpdateInProgress = true;
+    _isExternallySteppedUpdate = externallyStepped;
+    _hasOfferedUpdateTimeStep = false;
+    _offeredUpdateTimeStep = 0.0;
 
     _currentFrameDeltaTime = dt;
     _currentFrameDeltaTimeRemaining = dt;
     _currentFrameTimeStepNumber = 0;
     bool isDebuggingEnabled = _isFluidParticleDebugOutputEnabled || _isInternalObstacleMeshOutputEnabled || _isForceFieldDebugOutputEnabled;
     _isSkippedFrame = _isZeroLengthDeltaTime && _outputData.isInitialized && !isDebuggingEnabled;
-    double substepTime = _currentFrameDeltaTime / (double)_minFrameTimeSteps;
 
     // Initialize status of solvers
     // Status values will be updated after pressure/viscosity solve
@@ -11203,31 +11235,85 @@ void FluidSimulation::update(double dt) {
     _viscositySolverIterations = 0;
     _viscositySolverError = 0.0f;
 
-    size_t totalFluidParticlesProcessed = 0;
-    double totalFluidParticlesProcessedTime = 0.0f;
+    _totalFluidParticlesProcessed = 0;
+    _totalFluidParticlesProcessedTime = 0.0;
+}
 
-    double eps = 1e-9;
-    do {
+void FluidSimulation::beginUpdate(double dt) {
+    _beginUpdate(dt, true);
+}
+
+double FluidSimulation::nextUpdateTimeStep() {
+    if (!_isUpdateInProgress) {
+        throw std::runtime_error("Error: FluidSimulation update is not in progress.\n");
+    }
+    if (_isUpdateFailed) {
+        throw std::runtime_error("Error: FluidSimulation update session has failed; rebuild the simulation.\n");
+    }
+    if (_hasOfferedUpdateTimeStep) {
+        return _offeredUpdateTimeStep;
+    }
+
+    const double eps = _isExternallySteppedUpdate ? 0.0 : 1e-9;
+    if (_currentFrameTimeStepNumber > 0 && _currentFrameDeltaTimeRemaining <= eps) {
+        return 0.0;
+    }
+
+    if (_isExternallySteppedUpdate &&
+            _currentFrameTimeStepNumber >= _maxFrameTimeSteps &&
+            _currentFrameDeltaTimeRemaining > eps) {
+        throw std::runtime_error("Error: externally stepped update exceeded the maximum frame substep count before exhausting the frame interval.\n");
+    }
+
+    double substepTime = _currentFrameDeltaTime / (double)_minFrameTimeSteps;
+    double timeStep = fmin(_calculateNextTimeStep(_currentFrameDeltaTime),
+                           _currentFrameDeltaTimeRemaining);
+    double timeCompleted = _currentFrameDeltaTime - _currentFrameDeltaTimeRemaining;
+    double stepLimit = (_currentFrameTimeStepNumber + 1) * substepTime;
+    if (timeCompleted + timeStep > stepLimit) {
+        timeStep = fmin(substepTime, _currentFrameDeltaTimeRemaining);
+    }
+
+    if (!_isExternallySteppedUpdate && _currentFrameTimeStepNumber == _maxFrameTimeSteps - 1) {
+        timeStep = _currentFrameDeltaTimeRemaining;
+    }
+
+    if (!std::isfinite(timeStep) || timeStep <= 0.0) {
+        throw std::runtime_error("Error: FluidSimulation could not produce a finite positive frame substep.\n");
+    }
+
+    _offeredUpdateTimeStep = timeStep;
+    _hasOfferedUpdateTimeStep = true;
+    return _offeredUpdateTimeStep;
+}
+
+void FluidSimulation::advanceUpdate(double dt) {
+    if (!_isUpdateInProgress) {
+        throw std::runtime_error("Error: FluidSimulation update is not in progress.\n");
+    }
+    if (_isUpdateFailed) {
+        throw std::runtime_error("Error: FluidSimulation update session has failed; rebuild the simulation.\n");
+    }
+    if (!_hasOfferedUpdateTimeStep) {
+        throw std::runtime_error("Error: advanceUpdate requires a timestep offered by nextUpdateTimeStep.\n");
+    }
+    const double eps = _isExternallySteppedUpdate ? 0.0 : 1e-9;
+    if (_currentFrameTimeStepNumber > 0 && _currentFrameDeltaTimeRemaining <= eps) {
+        throw std::runtime_error("Error: FluidSimulation frame is already complete.\n");
+    }
+    if (!std::isfinite(dt) || dt <= 0.0 || dt > _offeredUpdateTimeStep) {
+        throw std::domain_error("Error: advanceUpdate timestep must be finite, positive, and no larger than the offered timestep.\n");
+    }
+
+    try {
+        _currentFrameTimeStep = dt;
+        _currentFrameDeltaTimeRemaining -= dt;
+        _isLastFrameTimeStep = _currentFrameDeltaTimeRemaining <= eps;
+
         StopWatch stepTimer;
         stepTimer.start();
 
-        _currentFrameTimeStep = fmin(_calculateNextTimeStep(dt), 
-                                     _currentFrameDeltaTimeRemaining);
-
-        double timeCompleted = _currentFrameDeltaTime - _currentFrameDeltaTimeRemaining;
-        double stepLimit = (_currentFrameTimeStepNumber + 1) * substepTime;
-        if (timeCompleted + _currentFrameTimeStep > stepLimit) {
-            _currentFrameTimeStep = fmin(substepTime, _currentFrameDeltaTimeRemaining);
-        }
-
-        if (_currentFrameTimeStepNumber == _maxFrameTimeSteps - 1) {
-            _currentFrameTimeStep = _currentFrameDeltaTimeRemaining;
-        }
-
-        _currentFrameDeltaTimeRemaining -= _currentFrameTimeStep;
-        _isLastFrameTimeStep = fabs(_currentFrameDeltaTimeRemaining) < eps;
-
-        double frameProgress = 100 * (1.0 - _currentFrameDeltaTimeRemaining/dt);
+        double frameProgress = 100 * (1.0 - _currentFrameDeltaTimeRemaining / _currentFrameDeltaTime);
         int numFrames = _timelineFrameEnd - _timelineFrameStart + 1;
         std::ostringstream ss;
 
@@ -11243,58 +11329,134 @@ void FluidSimulation::update(double dt) {
         _logfile.newline();
 
         _stepFluid(_currentFrameTimeStep);
-        _currentNumFluidCells = _getNumFluidCells();
 
+        if (_isExternallySteppedUpdate && (!_pressureSolverSuccess || !_viscositySolverSuccess)) {
+            throw std::runtime_error("Error: externally stepped update encountered a failed pressure or viscosity solve.\n");
+        }
+
+        _currentNumFluidCells = _getNumFluidCells();
         _logStepInfo();
 
         stepTimer.stop();
         _logfile.log("Step Update Time:   ", stepTimer.getTime(), 3);
         _logfile.newline();
 
-        totalFluidParticlesProcessed += _markerParticles.size();
-        totalFluidParticlesProcessedTime += stepTimer.getTime();
+        _totalFluidParticlesProcessed += _markerParticles.size();
+        _totalFluidParticlesProcessedTime += stepTimer.getTime();
 
         _currentFrameTimeStepNumber++;
-    } while (_currentFrameDeltaTimeRemaining > eps);
+        _hasOfferedUpdateTimeStep = false;
+        _offeredUpdateTimeStep = 0.0;
+    } catch (...) {
+        _isUpdateInProgress = false;
+        _isUpdateFailed = true;
+        _hasOfferedUpdateTimeStep = false;
+        _isCurrentFrameFinished = false;
+        _joinNativeThreadsNoexcept();
+        throw;
+    }
+}
 
-    frameTimer.stop();
-    _timingData.frameTime = frameTimer.getTime();
-    _totalSimulationTime += frameTimer.getTime();
-
-    if (totalFluidParticlesProcessed == 0 || totalFluidParticlesProcessedTime < 1e-9) {
-        _currentPerformanceScore = -1;
-    } else {
-        _currentPerformanceScore = (int)(((double)totalFluidParticlesProcessed / totalFluidParticlesProcessedTime) / 1000.0);
+void FluidSimulation::finishUpdate() {
+    if (!_isUpdateInProgress) {
+        throw std::runtime_error("Error: FluidSimulation update is not in progress.\n");
+    }
+    const double eps = _isExternallySteppedUpdate ? 0.0 : 1e-9;
+    if (_currentFrameTimeStepNumber < 1 || _currentFrameDeltaTimeRemaining > eps) {
+        throw std::runtime_error("Error: finishUpdate requires at least one completed substep and no remaining frame time.\n");
     }
 
-    _updateTimingData();
-    _logFrameInfo();
+    try {
+        _currentFrameDeltaTimeRemaining = 0.0;
+        _isLastFrameTimeStep = true;
+        _frameTimer.stop();
+        _timingData.frameTime = _frameTimer.getTime();
+        _totalSimulationTime += _frameTimer.getTime();
 
-    _outputData.frameData.frame = _currentFrame;
-    _outputData.frameData.substeps = _currentFrameTimeStepNumber;
-    _outputData.frameData.deltaTime = dt;
-    _outputData.frameData.timing.total = frameTimer.getTime();
-    _outputData.frameData.fluidParticles = (int)_markerParticles.size();
-    _outputData.frameData.diffuseParticles = (int)(_diffuseMaterial.getDiffuseParticles()->size());
-    _outputData.frameData.performanceScore = _currentPerformanceScore;
-    
-    _outputData.frameData.pressureSolverEnabled = 1;
-    _outputData.frameData.pressureSolverSuccess = (int)_pressureSolverSuccess;
-    _outputData.frameData.pressureSolverError = (double)_pressureSolverError;
-    _outputData.frameData.pressureSolverIterations = _pressureSolverIterations;
-    _outputData.frameData.pressureSolverMaxIterations = getPressureSolverMaxIterations();
+        if (_totalFluidParticlesProcessed == 0 || _totalFluidParticlesProcessedTime < 1e-9) {
+            _currentPerformanceScore = -1;
+        } else {
+            _currentPerformanceScore = (int)(((double)_totalFluidParticlesProcessed / _totalFluidParticlesProcessedTime) / 1000.0);
+        }
 
-    _outputData.frameData.viscositySolverEnabled = (int)_isViscosityEnabled;
-    _outputData.frameData.viscositySolverSuccess = (int)_viscositySolverSuccess;
-    _outputData.frameData.viscositySolverError = (double)_viscositySolverError;
-    _outputData.frameData.viscositySolverIterations = _viscositySolverIterations;
-    _outputData.frameData.viscositySolverMaxIterations = getViscositySolverMaxIterations();
+        _updateTimingData();
+        _logFrameInfo();
 
-    _outputData.isInitialized = true;
+        _outputData.frameData.frame = _currentFrame;
+        _outputData.frameData.substeps = _currentFrameTimeStepNumber;
+        _outputData.frameData.deltaTime = _currentFrameDeltaTime;
+        _outputData.frameData.timing.total = _frameTimer.getTime();
+        _outputData.frameData.fluidParticles = (int)_markerParticles.size();
+        _outputData.frameData.diffuseParticles = (int)(_diffuseMaterial.getDiffuseParticles()->size());
+        _outputData.frameData.performanceScore = _currentPerformanceScore;
 
-    _outputSimulationLogFile();
+        _outputData.frameData.pressureSolverEnabled = 1;
+        _outputData.frameData.pressureSolverSuccess = (int)_pressureSolverSuccess;
+        _outputData.frameData.pressureSolverError = (double)_pressureSolverError;
+        _outputData.frameData.pressureSolverIterations = _pressureSolverIterations;
+        _outputData.frameData.pressureSolverMaxIterations = getPressureSolverMaxIterations();
 
-    _currentFrame++;
+        _outputData.frameData.viscositySolverEnabled = (int)_isViscosityEnabled;
+        _outputData.frameData.viscositySolverSuccess = (int)_viscositySolverSuccess;
+        _outputData.frameData.viscositySolverError = (double)_viscositySolverError;
+        _outputData.frameData.viscositySolverIterations = _viscositySolverIterations;
+        _outputData.frameData.viscositySolverMaxIterations = getViscositySolverMaxIterations();
 
-    _isCurrentFrameFinished = true;
+        _outputData.isInitialized = true;
+        _outputSimulationLogFile();
+        _currentFrame++;
+        _isCurrentFrameFinished = true;
+        _isUpdateInProgress = false;
+        _isExternallySteppedUpdate = false;
+        _hasOfferedUpdateTimeStep = false;
+        _offeredUpdateTimeStep = 0.0;
+    } catch (...) {
+        _isUpdateInProgress = false;
+        _isUpdateFailed = true;
+        _hasOfferedUpdateTimeStep = false;
+        _isCurrentFrameFinished = false;
+        _joinNativeThreadsNoexcept();
+        throw;
+    }
+}
+
+void FluidSimulation::abortUpdate() noexcept {
+    if (!_isUpdateInProgress) {
+        return;
+    }
+
+    _isUpdateInProgress = false;
+    _isUpdateFailed = true;
+    _isExternallySteppedUpdate = false;
+    _hasOfferedUpdateTimeStep = false;
+    _offeredUpdateTimeStep = 0.0;
+    _isCurrentFrameFinished = false;
+    _joinNativeThreadsNoexcept();
+}
+
+bool FluidSimulation::isUpdateInProgress() const {
+    return _isUpdateInProgress;
+}
+
+bool FluidSimulation::isUpdateFailed() const {
+    return _isUpdateFailed;
+}
+
+void FluidSimulation::update(double dt) {
+    _beginUpdate(dt, false);
+    try {
+        while (_currentFrameTimeStepNumber == 0 || _currentFrameDeltaTimeRemaining > 1e-9) {
+            double timeStep = nextUpdateTimeStep();
+            if (timeStep == 0.0) {
+                break;
+            }
+            advanceUpdate(timeStep);
+        }
+        finishUpdate();
+    } catch (...) {
+        if (_isUpdateInProgress) {
+            abortUpdate();
+        }
+        throw;
+    }
 }

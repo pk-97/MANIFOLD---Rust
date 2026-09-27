@@ -50,6 +50,7 @@ SOFTWARE.
 #include "markerparticle.h"
 #include "viscositysolver.h"
 #include "spatialpointgrid.h"
+#include "stopwatch.h"
 
 class AABB;
 class MeshFluidSource;
@@ -266,6 +267,17 @@ public:
         Advance the fluid simulation for a single frame time of dt seconds.
     */
     void update(double dt);
+
+    /*
+        Advance a frame through individually owned native substeps.
+    */
+    void beginUpdate(double dt);
+    double nextUpdateTimeStep();
+    void advanceUpdate(double dt);
+    void finishUpdate();
+    void abortUpdate() noexcept;
+    bool isUpdateInProgress() const;
+    bool isUpdateFailed() const;
 
     /*
         Set Blend filepath string for logging.
@@ -1839,6 +1851,8 @@ private:
     bool _isFluidOrWhitewaterInSimulation();
     bool _isFluidInSimulation();
     void _stepFluid(double dt);
+    void _beginUpdate(double dt, bool externallyStepped);
+    void _joinNativeThreadsNoexcept() noexcept;
 
     /*
         Update Solid Material
@@ -2233,6 +2247,14 @@ private:
     bool _isLastFrameTimeStep = false;
     bool _isZeroLengthDeltaTime = false;
     bool _isSkippedFrame = false;
+    bool _isUpdateInProgress = false;
+    bool _isUpdateFailed = false;
+    bool _isExternallySteppedUpdate = false;
+    bool _hasOfferedUpdateTimeStep = false;
+    double _offeredUpdateTimeStep = 0.0;
+    StopWatch _frameTimer;
+    size_t _totalFluidParticlesProcessed = 0;
+    double _totalFluidParticlesProcessedTime = 0.0;
     int _minFrameTimeSteps = 1;
     int _maxFrameTimeSteps = 6;
     double _totalSimulationTime = 0;
