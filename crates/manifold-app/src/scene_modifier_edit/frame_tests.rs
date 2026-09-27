@@ -230,17 +230,18 @@ fn restore_source(project: &mut Project, layer_id: &LayerId, old: &str) {
 }
 
 #[test]
-fn all_objects_add_object_captures_only_new_frame_and_round_trips() {
+fn all_objects_duplicate_group_captures_each_new_frame_and_round_trips() {
     let (mut project, layer_id) = project_with_mushroom();
     let mut service = EditingService::new();
     let modifier = apply_peel(&mut project, &layer_id, &mut service);
     let before_frames = frames(&project, &layer_id, &modifier);
+    assert_eq!(before_frames.len(), 3, "mushroom has three material meshes");
     let before_graph = serde_json::to_value(&project).expect("project serializes");
 
     duplicate_imported_object(&mut project, &layer_id, &mut service);
     assert!(service.take_rejection().is_none());
     let after_frames = frames(&project, &layer_id, &modifier);
-    assert_eq!(after_frames.len(), before_frames.len() + 1);
+    assert_eq!(after_frames.len(), before_frames.len() * 2);
     for old in &before_frames {
         assert!(
             after_frames
@@ -259,10 +260,12 @@ fn all_objects_add_object_captures_only_new_frame_and_round_trips() {
 }
 
 #[test]
-fn all_objects_remove_prunes_one_frame_and_undo_restores_it() {
+fn all_objects_remove_group_prunes_only_its_frames_and_undo_restores_them() {
     let (mut project, layer_id) = project_with_mushroom();
     let mut service = EditingService::new();
     let modifier = apply_peel(&mut project, &layer_id, &mut service);
+    let original_frames = frames(&project, &layer_id, &modifier);
+    assert_eq!(original_frames.len(), 3, "mushroom has three material meshes");
     duplicate_imported_object(&mut project, &layer_id, &mut service);
     assert!(service.take_rejection().is_none());
     let added_graph = serde_json::to_value(&project).unwrap();
@@ -272,7 +275,8 @@ fn all_objects_remove_prunes_one_frame_and_undo_restores_it() {
     remove_object(&mut project, &layer_id, &mut service, index - 1);
     assert!(service.take_rejection().is_none());
     let removed_frames = frames(&project, &layer_id, &modifier);
-    assert_eq!(removed_frames.len() + 1, added_frames.len());
+    assert_eq!(removed_frames, original_frames);
+    assert_eq!(removed_frames.len() * 2, added_frames.len());
     assert!(
         added_frames
             .iter()

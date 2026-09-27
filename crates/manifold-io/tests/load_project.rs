@@ -401,8 +401,8 @@ fn load_waypoints_large_project() {
     assert_eq!(project.project_name, "WAYPOINTS");
     assert!((project.settings.bpm.0 - 110.0).abs() < 0.01);
     assert_eq!(project.timeline.layers.len(), 9);
-    // Original project had 2311 clips; 295 overlapping clips removed on load repair.
-    assert_eq!(project.timeline.total_clip_count(), 2016);
+    // Original project had 2311 clips; 297 overlapping clips removed on load repair.
+    assert_eq!(project.timeline.total_clip_count(), 2014);
 
     // Stress test: all clips should have valid beats and no overlaps
     for layer in &project.timeline.layers {

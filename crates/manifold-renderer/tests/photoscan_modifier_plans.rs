@@ -195,20 +195,32 @@ fn photoscan_v2_file_migration_preserves_source_nodes_and_bindings() {
 }
 
 #[test]
-fn photoscan_explicit_selection_keeps_only_selected_source_frames() {
+fn photoscan_explicit_selection_keeps_compound_material_frames() {
     let host = imported_host();
     let objects = common::scene_objects(&host);
     assert!(objects.len() >= 2, "mushroom import has multiple objects");
+    let selected = objects
+        .iter()
+        .find(|object| {
+            find_scoped_node(&host.nodes, &object.scope, &object.node)
+                .is_some_and(|node| node.type_id == "node.scene_object")
+        })
+        .expect("mushroom import has a material mesh child");
     let instance = prepare_new_scene_modifier(
         &host,
         &common::stock_recipe("SurfacePeel"),
         NodeId::new("photoscan-selected"),
         scene_ref(&host),
         SceneTargetSelection::Explicit {
-            objects: vec![objects[0].clone()],
+            objects: vec![selected.clone()],
         },
     )
     .expect("explicit photoscan selection prepares");
-    assert_eq!(instance.mesh_frames.len(), 1);
-    assert_eq!(instance.mesh_frames[0].target, objects[0]);
+    // The imported mushroom is one authored object with three material draws.
+    // Selecting a part keeps their shared deformation frame together.
+    assert_eq!(instance.mesh_frames.len(), 3);
+    assert_eq!(
+        instance.mesh_frames.iter().map(|frame| frame.target.clone()).collect::<BTreeSet<_>>(),
+        objects.into_iter().collect::<BTreeSet<_>>()
+    );
 }

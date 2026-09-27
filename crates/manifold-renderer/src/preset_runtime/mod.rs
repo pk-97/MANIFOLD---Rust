@@ -16,36 +16,9 @@
 //! toggle, group crossing the 1.0 wet/dry boundary) rebuild from scratch.
 //! Resolution changes replace resources transactionally and reset simulation state.
 //!
-//! ## Build-time wiring
-//!
-//! Linear sequence:
-//!
-//! ```text
-//! Source ──▶ eff_1 ──▶ eff_2 ──▶ … ──▶ eff_n ──▶ FinalOutput
-//! ```
-//!
-//! Wet/dry group with `wet_dry < 1.0` (spans effects `e_i..e_j`):
-//!
-//! ```text
-//! pre_group ─┬─▶ e_i ──▶ … ──▶ e_j ──▶ Mix.b
-//!            └────────────────────────▶ Mix.a
-//! Mix.out (= lerp(dry, wet, wet_dry)) ─▶ next_node
-//! ```
-//!
-//! ## Per-frame cost
-//!
-//! - 1 `copy_texture_to_texture` (upstream input → source slot)
-//! - 1 `apply_bindings` call per effect (unified static + user tail)
-//! - K `set_param` calls (one per Mix node, refreshing `amount`)
-//! - 1 `execute_frame_with_gpu` covering N + K + 2 step iterations
-//!   (Source + N effects + K Mix nodes + FinalOutput)
-//! - 1 `texture_2d` lookup for the chain output
-//!
-//! The single `copy_texture_to_texture` is the only residual overhead
-//! relative to the legacy chain's direct-from-input first-effect
-//! dispatch: the backend's slot API takes owned `RenderTarget`s, not
-//! borrowed `&GpuTexture`s, so the upstream input is materialised
-//! into the source slot once per chain invocation.
+//! Each chain owns one compiled graph, execution plan, Metal backend, and
+//! executor. Primitive state stays in the graph's boxed nodes; live parameter
+//! changes apply in place, while topology or resolution changes rebuild it.
 
 use ahash::AHashMap;
 use manifold_core::PresetTypeId;
@@ -84,6 +57,7 @@ pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
 mod build;
+mod device;
 pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};
 
@@ -120,6 +94,7 @@ use core::assert_manifest_gate;
 use core::GRAPH_FORMAT;
 
 mod instrumentation;
+mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};

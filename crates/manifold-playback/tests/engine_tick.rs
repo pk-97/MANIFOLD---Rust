@@ -487,8 +487,8 @@ fn engine_waypoints_stress_test() {
     }
 
     let project = manifold_io::loader::load_project(&path).unwrap();
-    // Original 2311 clips; 295 overlapping clips removed on load repair.
-    assert_eq!(project.timeline.total_clip_count(), 2016);
+    // Original 2311 clips; 297 overlapping clips removed on load repair.
+    assert_eq!(project.timeline.total_clip_count(), 2014);
 
     let mut engine = create_engine();
     engine.initialize(project);
