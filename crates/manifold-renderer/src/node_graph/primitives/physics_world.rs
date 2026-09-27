@@ -3,7 +3,8 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
-    BODY_PORTS, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidSimulation,
+    BODY_PORTS, MAX_BODIES, MAX_COPIES, POSE_PORTS, ResolvedRigidImpulse, RigidSceneInputs,
+    RigidSceneObservation, RigidSimulation,
 };
 use crate::node_graph::physics_events::{
     map_rigid_receipt, ImpulseTarget, ResolvedNodeImpulse,
@@ -366,7 +367,7 @@ ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamTy
  extra_fields: {
      simulation: RigidSimulation = RigidSimulation::default(),
      upload: InstanceUploadState = InstanceUploadState::default(),
-     targeted_acceleration_fields: Vec<Option<FieldValue>> = vec![None; TARGETED_ACCELERATION_PORTS.len()],
+     rigid_scene_observation: Option<RigidSceneObservation> = None,
  },
 }
 impl PhysicsWorldNode {
@@ -388,7 +389,10 @@ impl Primitive for PhysicsWorldNode {
 
     fn clear_state(&mut self) {
         self.simulation = RigidSimulation::default();
-        self.targeted_acceleration_fields.fill(None);
+        self.rigid_scene_observation = None;
+    }
+    fn rigid_scene_observation(&self) -> Option<&RigidSceneObservation> {
+        self.rigid_scene_observation.as_ref()
     }
     fn physics_impulse_epoch(&self) -> Option<u64> {
         self.simulation.impulse_epoch()
@@ -427,7 +431,10 @@ impl Primitive for PhysicsWorldNode {
         }
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.rigid_scene_observation = None;
         let mut bodies = std::array::from_fn(|_| None);
+        let mut targeted_fields: [Option<FieldValue>; MAX_BODIES + 1] =
+            std::array::from_fn(|_| None);
         let mut body_inputs_pending = false;
         for (i, port) in BODY_PORTS.iter().enumerate() {
             if let Some(slot) = ctx.inputs.slot(port) {
@@ -446,7 +453,6 @@ impl Primitive for PhysicsWorldNode {
                 !ctx.inputs.slot_content_ready(slot) || acceleration_field.is_none();
         }
         for (index, port) in TARGETED_ACCELERATION_PORTS.iter().enumerate() {
-            self.targeted_acceleration_fields[index] = None;
             let matching_body_wired = if index < BODY_PORTS.len() {
                 ctx.inputs.slot(BODY_PORTS[index]).is_some()
             } else {
@@ -470,7 +476,7 @@ impl Primitive for PhysicsWorldNode {
                 body_inputs_pending = true;
                 continue;
             };
-            self.targeted_acceleration_fields[index] = Some(field);
+            targeted_fields[index] = Some(field);
         }
         if body_inputs_pending {
             self.simulation.hold_pending(ctx.time.seconds);
@@ -488,20 +494,45 @@ impl Primitive for PhysicsWorldNode {
         let copy_spacing = ctx.scalar_or_param("copy_spacing", 1.25);
         let copy_columns = ctx.scalar_or_param("copy_columns", 16.0);
         let copy_layout = read_copy_layout(ctx);
-        let result = self.simulation.advance_with_targeted_fields(
-            bodies.clone(),
+        let inputs = RigidSceneInputs {
+            bodies,
             prototype,
             copy_count,
             copy_spacing,
             copy_columns,
-            copy_layout,
+            layout: copy_layout,
             gravity,
+            acceleration_field,
+            targeted_fields,
+        };
+        let body_count = inputs.bodies.iter().flatten().count();
+        let result = self.simulation.advance_with_targeted_fields(
+            inputs.bodies.clone(),
+            inputs.prototype.clone(),
+            inputs.copy_count,
+            inputs.copy_spacing,
+            inputs.copy_columns,
+            inputs.layout,
+            inputs.gravity,
             ctx.time.seconds,
             speed,
             reset,
-            acceleration_field,
-            &self.targeted_acceleration_fields,
+            inputs.acceleration_field.clone(),
+            &inputs.targeted_fields,
         );
+        if result.is_ok()
+            && self
+                .simulation
+                .impulse_stamp(ctx.time.seconds, 0)
+                .is_ok()
+        {
+            self.rigid_scene_observation = Some(RigidSceneObservation {
+                inputs,
+                transport: ctx.time.seconds,
+                speed,
+                reset,
+            });
+        }
         if crate::node_graph::physics::authored_sample_only() {
             if let Err(error) = result {
                 ctx.error(error);
@@ -514,7 +545,7 @@ impl Primitive for PhysicsWorldNode {
         } else {
             crate::node_graph::physics_metrics::record_frame(
                 self.simulation.physics_ms,
-                (bodies.iter().flatten().count() + self.simulation.active_copy_count) as u32,
+                (body_count + self.simulation.active_copy_count) as u32,
                 self.simulation.pending_time.0 as f32,
             );
             ctx.outputs
@@ -557,6 +588,7 @@ impl Primitive for PhysicsWorldNode {
             )
         };
         if let Err(error) = result {
+            self.rigid_scene_observation = None;
             ctx.error(error.to_string());
         }
     }
@@ -565,19 +597,180 @@ impl Primitive for PhysicsWorldNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::backend::{Backend, MockBackend};
+    use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
+    use crate::node_graph::effect_node::{EffectNode, FrameTime, ParamValues};
+    use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::physics::{RigidBody, RigidImpulseTargets};
+    use crate::node_graph::physics::PhysicsAuthoredSampleScope;
     use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
-    use crate::node_graph::ports::PortType;
+    use crate::node_graph::ports::{PortType, ScalarType};
     use crate::node_graph::primitive::PrimitiveSpec;
-    use manifold_core::Seconds;
+    use manifold_core::{Beats, Seconds};
     use manifold_physics::input::EventStamp;
+    use std::borrow::Cow;
+
+    #[derive(Clone, Copy)]
+    enum MockFieldState {
+        Complete,
+        MissingTarget,
+        PendingGlobal,
+    }
+
+    fn acquire_mock_wire(
+        backend: &mut MockBackend,
+        wire_slots: &mut Vec<(&'static str, Slot)>,
+        next_resource: &mut u32,
+        port: &'static str,
+        ty: PortType,
+    ) -> Slot {
+        let slot = backend.acquire(ResourceId(*next_resource), ty, None, (0, 0));
+        *next_resource += 1;
+        wire_slots.push((port, slot));
+        slot
+    }
+
+    fn evaluate_mock_world(
+        node: &mut PhysicsWorldNode,
+        transport: f64,
+        body_shape: u32,
+        field_state: MockFieldState,
+        invalid_speed: bool,
+    ) -> Option<RigidSceneObservation> {
+        let mut backend = MockBackend::new();
+        let mut wire_slots: Vec<(&'static str, Slot)> = Vec::new();
+        let mut pending = Vec::new();
+        let mut next_resource = 0;
+        let mut body = RigidBody { shape: body_shape, ..RigidBody::default() };
+        body.transform.pos = [0.0, 8.0, 0.0];
+        let body_slot = acquire_mock_wire(
+            &mut backend,
+            &mut wire_slots,
+            &mut next_resource,
+            "body_0",
+            PortType::RigidBody,
+        );
+        backend.set_rigid_body(body_slot, body.clone());
+        let mut prototype = body.clone();
+        prototype.transform.pos = [4.0, 8.0, 0.0];
+        let prototype_slot = acquire_mock_wire(
+            &mut backend,
+            &mut wire_slots,
+            &mut next_resource,
+            "copies",
+            PortType::RigidBody,
+        );
+        backend.set_rigid_body(prototype_slot, prototype);
+
+        let scalar_ty = PortType::Scalar(ScalarType::F32);
+        for (port, value) in [
+            ("gravity_x", 0.0),
+            ("gravity_y", 0.0),
+            ("gravity_z", 0.0),
+            ("speed", if invalid_speed { f32::NAN } else { 1.0 }),
+            ("reset", 0.0),
+            ("copy_count", 2.0),
+            ("copy_spacing", 2.0),
+            ("copy_columns", 2.0),
+            ("copy_layout", 1.0),
+        ] {
+            let slot = acquire_mock_wire(
+                &mut backend,
+                &mut wire_slots,
+                &mut next_resource,
+                port,
+                scalar_ty,
+            );
+            backend.set_scalar(slot, ParamValue::Float(value));
+        }
+
+        let global_slot = acquire_mock_wire(
+            &mut backend,
+            &mut wire_slots,
+            &mut next_resource,
+            "acceleration_field",
+            PortType::VectorField,
+        );
+        let target_slot = acquire_mock_wire(
+            &mut backend,
+            &mut wire_slots,
+            &mut next_resource,
+            "body_acceleration_0",
+            PortType::VectorField,
+        );
+        let copy_target_slot = acquire_mock_wire(
+            &mut backend,
+            &mut wire_slots,
+            &mut next_resource,
+            "copies_acceleration",
+            PortType::VectorField,
+        );
+        let global = FieldValue::uniform([1.0, 0.0, 0.0]).expect("finite global field");
+        let target = FieldValue::uniform([2.0, 0.0, 0.0]).expect("finite target field");
+        let copy_target = FieldValue::uniform([0.5, 0.0, 0.0]).expect("finite copy field");
+        backend.set_vector_field(global_slot, global);
+        if !matches!(field_state, MockFieldState::MissingTarget) {
+            backend.set_vector_field(target_slot, target);
+        }
+        backend.set_vector_field(copy_target_slot, copy_target);
+        if matches!(field_state, MockFieldState::PendingGlobal) {
+            pending.resize(backend.slot_count() as usize, false);
+            pending[global_slot.0 as usize] = true;
+        }
+
+        let mut params = ParamValues::default();
+        for (name, value) in [
+            ("gravity_x", ParamValue::Float(0.0)),
+            ("gravity_y", ParamValue::Float(0.0)),
+            ("gravity_z", ParamValue::Float(0.0)),
+            ("speed", ParamValue::Float(1.0)),
+            ("reset", ParamValue::Float(0.0)),
+            ("copy_count", ParamValue::Float(2.0)),
+            ("copy_spacing", ParamValue::Float(2.0)),
+            ("copy_columns", ParamValue::Float(2.0)),
+            ("copy_layout", ParamValue::Enum(0)),
+        ] {
+            params.insert(Cow::Borrowed(name), value);
+        }
+
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        let inputs = NodeInputs::new(&wire_slots, &backend, &[]).with_pending(&pending);
+        let outputs = NodeOutputs::new(
+            &[],
+            &backend,
+            &mut scalar_scratch,
+            &mut camera_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+            &mut render_mode_scratch,
+            &mut object_scratch,
+        );
+        let time = FrameTime {
+            beats: Beats(transport),
+            seconds: Seconds(transport),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+        let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+        let graph_node: &mut dyn EffectNode = node;
+        graph_node.evaluate(&mut ctx);
+        graph_node.rigid_scene_observation().cloned()
+    }
 
     #[test]
     fn targeted_acceleration_ports_pair_with_all_body_slots_and_copies() {
-        let node = PhysicsWorldNode::new();
         assert_eq!(TARGETED_ACCELERATION_PORTS.len(), BODY_PORTS.len() + 1);
         assert_eq!(
-            node.targeted_acceleration_fields.len(),
+            RigidSceneInputs::default().targeted_fields.len(),
             TARGETED_ACCELERATION_PORTS.len()
         );
         for port in TARGETED_ACCELERATION_PORTS {
@@ -591,16 +784,150 @@ mod tests {
     }
 
     #[test]
-    fn clear_state_drops_retained_targeted_fields() {
+    fn clear_state_drops_retained_rigid_scene_observation() {
         let mut node = PhysicsWorldNode::new();
-        node.targeted_acceleration_fields[0] =
-            Some(FieldValue::uniform([1.0, 2.0, 3.0]).expect("finite test field"));
-        node.clear_state();
-        assert!(
-            node.targeted_acceleration_fields
-                .iter()
-                .all(Option::is_none)
-        );
+        node.rigid_scene_observation = Some(RigidSceneObservation {
+            inputs: RigidSceneInputs {
+                targeted_fields: std::array::from_fn(|index| {
+                    (index == 0)
+                        .then(|| FieldValue::uniform([1.0, 2.0, 3.0]).expect("finite test field"))
+                }),
+                ..RigidSceneInputs::default()
+            },
+            transport: Seconds::ZERO,
+            speed: 1.0,
+            reset: 0.0,
+        });
+        EffectNode::clear_state(&mut node);
+        assert!(node.rigid_scene_observation.is_none());
+    }
+
+    #[test]
+    fn effect_node_observation_captures_fields_controls_and_single_native_force() {
+        let mut node = PhysicsWorldNode::new();
+        let first = evaluate_mock_world(
+            &mut node,
+            0.0,
+            1,
+            MockFieldState::Complete,
+            false,
+        )
+        .expect("initial complete rigid observation");
+        let second = evaluate_mock_world(
+            &mut node,
+            1.0 / 60.0,
+            1,
+            MockFieldState::Complete,
+            false,
+        )
+        .expect("fixed tick complete rigid observation");
+
+        assert_eq!(first.inputs.bodies[0].as_ref().unwrap().shape, 1);
+        assert_eq!(first.inputs.prototype.as_ref().unwrap().shape, 1);
+        assert_eq!(first.inputs.copy_count, 2.0);
+        assert_eq!(first.inputs.copy_spacing, 2.0);
+        assert_eq!(first.inputs.copy_columns, 2.0);
+        assert_eq!(first.inputs.layout, 1.0, "wired layout shadows the enum parameter");
+        assert_eq!(first.inputs.gravity, [0.0; 3]);
+        assert_eq!(first.inputs.acceleration_field, Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()));
+        assert_eq!(first.inputs.targeted_fields[0], Some(FieldValue::uniform([2.0, 0.0, 0.0]).unwrap()));
+        assert_eq!(first.inputs.targeted_fields[MAX_BODIES], Some(FieldValue::uniform([0.5, 0.0, 0.0]).unwrap()));
+        assert_eq!(second.transport, Seconds(1.0 / 60.0));
+        assert_eq!(second.speed, 1.0);
+        assert_eq!(second.reset, 0.0);
+
+        let mut expected = RigidSimulation::default();
+        for (observation, now) in [(&first, Seconds::ZERO), (&second, Seconds(1.0 / 60.0))] {
+            expected
+                .advance_with_targeted_fields(
+                    observation.inputs.bodies.clone(),
+                    observation.inputs.prototype.clone(),
+                    observation.inputs.copy_count,
+                    observation.inputs.copy_spacing,
+                    observation.inputs.copy_columns,
+                    observation.inputs.layout,
+                    observation.inputs.gravity,
+                    now,
+                    observation.speed,
+                    observation.reset,
+                    observation.inputs.acceleration_field.clone(),
+                    &observation.inputs.targeted_fields,
+                )
+                .expect("ordinary rigid advancement baseline");
+        }
+        let position = node.simulation.poses[0].pos[0];
+        assert!(position > 0.0, "captured acceleration must move the native body");
+        assert_eq!(node.simulation.poses[0], expected.poses[0]);
+        let handle = node
+            .simulation
+            .native_handles()
+            .0[0]
+            .expect("native dynamic body handle");
+        let actual_velocity = node
+            .simulation
+            .native_world()
+            .expect("native world")
+            .linear_velocity(handle)
+            .expect("native velocity");
+        let expected_handle = expected
+            .native_handles()
+            .0[0]
+            .expect("baseline dynamic body handle");
+        let expected_velocity = expected
+            .native_world()
+            .expect("baseline native world")
+            .linear_velocity(expected_handle)
+            .expect("baseline velocity");
+        assert_eq!(actual_velocity, expected_velocity, "captured force should be applied once");
+    }
+
+    #[test]
+    fn effect_node_observation_clears_for_unavailable_or_invalid_inputs() {
+        for (field_state, invalid_speed) in [
+            (MockFieldState::MissingTarget, false),
+            (MockFieldState::PendingGlobal, false),
+            (MockFieldState::Complete, true),
+        ] {
+            let mut node = PhysicsWorldNode::new();
+            assert!(evaluate_mock_world(
+                &mut node,
+                0.0,
+                1,
+                MockFieldState::Complete,
+                false,
+            )
+            .is_some());
+            assert!(evaluate_mock_world(
+                &mut node,
+                1.0 / 60.0,
+                1,
+                field_state,
+                invalid_speed,
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn authored_withheld_topology_sample_does_not_publish_observation() {
+        let mut node = PhysicsWorldNode::new();
+        assert!(evaluate_mock_world(
+            &mut node,
+            0.0,
+            1,
+            MockFieldState::Complete,
+            false,
+        )
+        .is_some());
+        let _scope = PhysicsAuthoredSampleScope::new();
+        assert!(evaluate_mock_world(
+            &mut node,
+            0.0,
+            2,
+            MockFieldState::Complete,
+            false,
+        )
+        .is_none());
     }
 
     #[test]

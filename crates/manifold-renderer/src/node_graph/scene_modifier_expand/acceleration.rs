@@ -240,12 +240,27 @@ pub(crate) fn impulse_recipients(
     )>,
     SceneModifierExpandError,
 > {
+    let index = FlatSceneIndex::build(owner)?;
+    impulse_recipients_with_index(&index, scene, selection, registry)
+}
+
+pub(super) fn impulse_recipients_with_index(
+    index: &FlatSceneIndex,
+    scene: &SceneNodeRef,
+    selection: &SceneTargetSelection,
+    registry: &PrimitiveRegistry,
+) -> Result<
+    Vec<(
+        manifold_core::NodeId,
+        crate::node_graph::physics_events::ImpulseTarget,
+    )>,
+    SceneModifierExpandError,
+> {
     use crate::node_graph::physics::RigidImpulseTargets;
     use crate::node_graph::physics_events::ImpulseTarget;
-    let index = FlatSceneIndex::build(owner)?;
     let mut worlds = std::collections::BTreeMap::new();
-    for object in selected(&index, selection, scene, registry)? {
-        let Some(recipient) = resolve(&index, &object, registry)? else {
+    for object in selected(index, selection, scene, registry)? {
+        let Some(recipient) = resolve(index, &object, registry)? else {
             continue;
         };
         let node = index.node(&recipient.node)?;

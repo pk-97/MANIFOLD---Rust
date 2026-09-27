@@ -391,6 +391,11 @@ pub trait Primitive: PrimitiveSpec {
         None
     }
 
+    /// Resolved rigid inputs from the latest successful graph evaluation.
+    fn rigid_scene_observation(&self) -> Option<&crate::node_graph::physics::RigidSceneObservation> {
+        None
+    }
+
     /// Mirror of the native impulse admission hooks on [`EffectNode`].
     fn physics_impulse_epoch(&self) -> Option<u64> {
         None
@@ -768,6 +773,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         &self,
     ) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
         Primitive::fluid_domain_snapshot(self)
+    }
+    fn rigid_scene_observation(&self) -> Option<&crate::node_graph::physics::RigidSceneObservation> {
+        Primitive::rigid_scene_observation(self)
     }
     fn physics_impulse_epoch(&self) -> Option<u64> {
         Primitive::physics_impulse_epoch(self)

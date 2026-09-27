@@ -42,6 +42,16 @@ impl Default for RigidSceneInputs {
     }
 }
 
+/// One resolved graph observation. The normal rigid node and a coupled scene
+/// consume the same authored body, field and playback values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RigidSceneObservation {
+    pub inputs: RigidSceneInputs,
+    pub transport: Seconds,
+    pub speed: f32,
+    pub reset: f32,
+}
+
 impl RigidSceneInputs {
     /// Compare the parts that require native geometry to be rebuilt.
     ///

@@ -17,7 +17,7 @@ mod worker;
 mod coupling_tests;
 
 pub use impulses::{ResolvedRigidImpulse, RigidImpulseTargets};
-pub use worker::RigidSceneInputs;
+pub use worker::{RigidSceneInputs, RigidSceneObservation};
 use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 
 thread_local! {

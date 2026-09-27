@@ -5,6 +5,8 @@
 
 mod acceleration;
 pub(crate) use acceleration::impulse_recipients;
+mod coupling;
+pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
 mod bindings;
 mod buffer_budget;
 mod event_state;

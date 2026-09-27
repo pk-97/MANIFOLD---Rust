@@ -1129,6 +1129,12 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Resolved rigid inputs from the latest successful graph evaluation.
+    /// Pending or invalid inputs must clear the previous observation.
+    fn rigid_scene_observation(&self) -> Option<&crate::node_graph::physics::RigidSceneObservation> {
+        None
+    }
+
     /// Epoch of native impulse inputs accepted by this node, if any.
     fn physics_impulse_epoch(&self) -> Option<u64> {
         None
