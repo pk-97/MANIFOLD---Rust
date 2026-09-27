@@ -375,18 +375,25 @@ fn eight_lights_render_past_the_old_cap_of_four() {
 #[test]
 fn zero_lights_render_without_validation_error() {
     // D4: no light ports wired. render_scene must still bind the one zeroed
-    // storage entry so Metal never sees a null slot. Bump the shadow band so
-    // the plane is visible (proving the draw ran, not just that it
+    // storage entry so Metal never sees a null slot. Give the Cel surface
+    // emission so the plane is visible (proving the lit draw ran, not just that it
     // didn't crash). A GPU validation error would panic in the executor's
     // commit_and_wait; reaching the asserts means binding 8 stayed valid.
-    let json = scene_json(&[]).replace(
-        r#""band_low":{"type":"Float","value":0.02}"#,
-        r#""band_low":{"type":"Float","value":0.4}"#,
-    );
-    let (bytes, w, h) = render_scene_readback(&json);
+    let mut scene: serde_json::Value = serde_json::from_str(&scene_json(&[])).unwrap();
+    let material = scene["nodes"].as_array_mut().unwrap().iter_mut()
+        .find(|node| node["id"] == 4).unwrap();
+    for (name, value) in [
+        ("emission_r", 0.4),
+        ("emission_g", 0.4),
+        ("emission_b", 0.4),
+        ("emission_intensity", 1.0),
+    ] {
+        material["params"][name] = serde_json::json!({"type":"Float", "value":value});
+    }
+    let (bytes, w, h) = render_scene_readback(&scene.to_string());
     write_png(&bytes, w, h, "/tmp/render_scene_0_lights.png");
     let (_sr, _sg, _sb, peak) = channel_sums(&bytes);
-    assert!(peak > 0.1, "zero-light ambient plane should still render (peak {peak})");
+    assert!(peak > 0.1, "zero-light emissive plane should still render (peak {peak})");
 }
 
 #[test]

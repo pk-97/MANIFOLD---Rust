@@ -500,7 +500,7 @@ fn ground_and_sun_nodes(cast_shadows: bool) -> String {
             "\"color_r\":{{\"type\":\"Float\",\"value\":1.0}},",
             "\"color_g\":{{\"type\":\"Float\",\"value\":1.0}},",
             "\"color_b\":{{\"type\":\"Float\",\"value\":1.0}},",
-            "\"ambient\":{{\"type\":\"Float\",\"value\":0.05}}}}}},",
+            "\"band_low\":{{\"type\":\"Float\",\"value\":0.05}}}}}},",
         ),
         cast_v = cast_v,
     )

@@ -109,11 +109,13 @@ fn glass_scene_json(alpha_mode: u32, transmission: f32, sheen: f32, translucency
     let material = nodes.iter_mut().find(|n| n["id"] == 8).unwrap();
     material["typeId"] = json!("node.pbr_material");
     let params = material["params"].as_object_mut().unwrap();
+    params.remove("band_low");
     params.insert(
         "alpha_mode".into(),
         json!({"type":"Enum","value":alpha_mode}),
     );
     for (name, value) in [
+        ("ambient", 0.05),
         ("transmission", transmission),
         ("color_a", 1.0),
         ("roughness", 0.3),

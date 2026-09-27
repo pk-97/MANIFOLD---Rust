@@ -100,9 +100,21 @@ fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
     sum / ta.len() as f64
 }
 
-fn scene_starter_def() -> EffectGraphDef {
+fn scene_probe_def() -> EffectGraphDef {
     let json = include_str!("../../assets/generator-presets/Scene.json");
-    serde_json::from_str(json).expect("Scene.json must parse")
+    let mut def: EffectGraphDef = serde_json::from_str(json).expect("Scene.json must parse");
+    // Frame an asymmetric object closely: the starter's small symmetric cube
+    // barely changes silhouette on a quarter-turn. Disable environment light
+    // so the Sun mutation measures direct illumination without IBL masking it.
+    let camera = def.nodes.iter_mut().find(|node| node.id == 1).unwrap();
+    camera.params.insert("distance".into(), SerializedParamValue::Float { value: 3.0 });
+    let environment = def.nodes.iter_mut().find(|node| node.id == 3).unwrap();
+    environment.params.insert("intensity".into(), SerializedParamValue::Float { value: 0.0 });
+    let group = def.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    let transform = group.nodes.iter_mut().find(|node| node.id == 13).unwrap();
+    transform.params.insert("scale_x".into(), SerializedParamValue::Float { value: 1.8 });
+    transform.params.insert("scale_z".into(), SerializedParamValue::Float { value: 0.65 });
+    def
 }
 
 /// BUG-237, Light half: node 4 (the "Sun" light, `mode: 0`) at its default
@@ -112,7 +124,7 @@ fn scene_starter_def() -> EffectGraphDef {
 /// `EffectGraphDef` structure.
 #[test]
 fn sun_intensity_commit_visibly_changes_the_render() {
-    let baseline = scene_starter_def();
+    let baseline = scene_probe_def();
     let mut bright = baseline.clone();
     let light = bright.nodes.iter_mut().find(|n| n.id == 4).expect("Scene node 4 must be the Sun light");
     assert_eq!(light.type_id, "node.light", "node 4 must be a light");
@@ -141,7 +153,7 @@ fn sun_intensity_commit_visibly_changes_the_render() {
 /// quarter-turn around the scene, framing a visibly different view.
 #[test]
 fn camera_orbit_commit_visibly_changes_the_framing() {
-    let baseline = scene_starter_def();
+    let baseline = scene_probe_def();
     let mut orbited = baseline.clone();
     let cam = orbited.nodes.iter_mut().find(|n| n.id == 1).expect("Scene node 1 must be the orbit camera");
     assert_eq!(cam.type_id, "node.orbit_camera", "node 1 must be the orbit camera");
