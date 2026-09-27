@@ -22,7 +22,11 @@ pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidR
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 /// Bump when local numerical changes alter recorded-take replay semantics.
-pub const NUMERICS_REVISION: u32 = 1;
+pub const NUMERICS_REVISION: u32 = 2;
+/// Identity of the compiled native solver and Rust adapter sources.
+pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_FLUIDS_SOURCE_IDENTITY");
+/// Existing projects use a stable seed without requiring an authored control.
+pub const DEFAULT_SEED: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
@@ -307,6 +311,7 @@ unsafe extern "C" {
         cell_size: f64,
         surface_subdivisions: u32,
         apic: i32,
+        seed: u64,
         world_out: *mut *mut std::ffi::c_void,
     ) -> i32;
     fn manifold_fluids_world_destroy(world: *mut std::ffi::c_void);
@@ -477,6 +482,13 @@ unsafe impl Send for FluidWorld {}
 
 impl FluidWorld {
     pub fn new(config: Config) -> Result<Self, FluidError> {
+        Self::new_seeded(config, DEFAULT_SEED)
+    }
+
+    /// Create a world with a recorded seed before any native initialization.
+    /// Equal seeds repeat stochastic choices for the same solver and inputs;
+    /// changing spatial resolution can still change motion and particle counts.
+    pub fn new_seeded(config: Config, seed: u64) -> Result<Self, FluidError> {
         validate_config(config)?;
         let mesh_state = mesh::MeshState::new()?;
         let mut native = std::ptr::null_mut();
@@ -488,6 +500,7 @@ impl FluidWorld {
                 config.cell_size,
                 config.surface_subdivisions,
                 i32::from(config.apic),
+                seed,
                 &mut native,
             )
         };
@@ -1056,6 +1069,9 @@ fn normalize_normal(normal: [f32; 3]) -> [f32; 3] {
         [0.0, 0.0, 0.0]
     }
 }
+
+#[cfg(test)]
+mod seeded_tests;
 
 #[cfg(test)]
 mod tests {

@@ -17,7 +17,7 @@ use super::{
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 const HEADER: &str = "take-header.zst";
 const PROGRESS: &str = "take-progress.zst";
@@ -208,6 +208,7 @@ struct Header {
     version: u32,
     upstream_revision: String,
     numerics_revision: u32,
+    solver_identity: Hash,
     fixed_tick: f64,
     epoch: u64,
     settings: FluidSettings,
@@ -257,6 +258,7 @@ impl Writer {
             version: VERSION,
             upstream_revision: manifold_fluids::UPSTREAM_REVISION.into(),
             numerics_revision: manifold_fluids::NUMERICS_REVISION,
+            solver_identity: super::identity::solver_identity(),
             fixed_tick: TICK,
             epoch: request.epoch,
             settings: request.settings,
@@ -372,6 +374,7 @@ impl Reader {
             || header.epoch == 0
             || header.upstream_revision != manifold_fluids::UPSTREAM_REVISION
             || header.numerics_revision != manifold_fluids::NUMERICS_REVISION
+            || header.solver_identity != super::identity::solver_identity()
             || header.fixed_tick.to_bits() != TICK.to_bits()
             || progress.header_hash != header_hash
         {

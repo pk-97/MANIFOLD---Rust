@@ -18,7 +18,8 @@ const LEGACY_LIQUID_FORMAT_VERSION: u32 = 4;
 const LEGACY_TIME_STEPS_FORMAT_VERSION: u32 = 5;
 const MESH_VERTEX_FORMAT_VERSION: u32 = 6;
 const DOMAIN_FORMAT_VERSION: u32 = 7;
-const FORMAT_VERSION: u32 = 8;
+const PAIRED_FORMAT_VERSION: u32 = 8;
+const FORMAT_VERSION: u32 = 9;
 const LEGACY_MESH_VERTEX_SIZE: usize = 64;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
@@ -248,7 +249,9 @@ fn write_header(writer: &mut impl Write, settings: FluidSettings) -> io::Result<
     write_u32(writer, FORMAT_VERSION)?;
     writer.write_all(manifold_fluids::UPSTREAM_REVISION.as_bytes())?;
     write_f64(writer, TICK)?;
-    write_settings(writer, settings)
+    writer.write_all(&super::fluid::identity::solver_identity())?;
+    write_settings(writer, settings)?;
+    write_u64(writer, settings.seed)
 }
 
 fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<u32> {
@@ -265,6 +268,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             | LEGACY_TIME_STEPS_FORMAT_VERSION
             | MESH_VERTEX_FORMAT_VERSION
             | DOMAIN_FORMAT_VERSION
+            | PAIRED_FORMAT_VERSION
             | FORMAT_VERSION
     ) {
         return Err(io::Error::new(
@@ -286,11 +290,22 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             "fixed tick does not match 60 Hz",
         ));
     }
+    if version >= FORMAT_VERSION {
+        let mut identity = [0; 32];
+        reader.read_exact(&mut identity)?;
+        if identity != super::fluid::identity::solver_identity() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "physics solver or adapter sources do not match",
+            ));
+        }
+    }
     if read_settings(
         reader,
         version >= LEGACY_LIQUID_FORMAT_VERSION,
         version >= LEGACY_TIME_STEPS_FORMAT_VERSION,
         version >= DOMAIN_FORMAT_VERSION,
+        version >= FORMAT_VERSION,
     )? != settings
     {
         return Err(io::Error::new(
@@ -336,6 +351,7 @@ fn read_settings(
     includes_liquid: bool,
     includes_time_steps: bool,
     includes_domain: bool,
+    includes_seed: bool,
 ) -> io::Result<FluidSettings> {
     let settings = FluidSettings {
         resolution: read_u32(reader)?,
@@ -402,6 +418,11 @@ fn read_settings(
             ]
         } else {
             [true; 6]
+        },
+        seed: if includes_seed {
+            read_u64(reader)?
+        } else {
+            manifold_fluids::DEFAULT_SEED
         },
     };
     Ok(settings)
@@ -483,7 +504,7 @@ fn read_frame(
             "invalid frame metadata or particle count",
         ));
     }
-    let paired = if format_version >= FORMAT_VERSION {
+    let paired = if format_version >= PAIRED_FORMAT_VERSION {
         if read_bool(reader)? {
             read_rigid_frame(reader, tick, rigid)?;
             true
@@ -1023,13 +1044,14 @@ mod tests {
     }
 
     #[test]
-    fn cache_v7_rejects_each_settings_mismatch() {
+    fn cache_settings_identity_rejects_each_physical_change() {
         let root = std::env::temp_dir().join(format!(
             "manifold-fluid-cache-liquid-mismatch-{}",
             std::process::id()
         ));
         let directory = Arc::new(root.join("frames"));
         let settings = FluidSettings {
+            seed: 0x3141_5926_5358_9793,
             domain: Some(Transform {
                 pos: [0.25, 0.5, -0.25],
                 scale: [4.0, 3.0, 5.0],
@@ -1050,6 +1072,10 @@ mod tests {
         };
         let _writer = CacheWriter::create(directory.clone(), settings).unwrap();
         assert!(CacheReader::open(directory.clone(), settings).is_ok());
+
+        let mut changed_seed = settings;
+        changed_seed.seed ^= 1 << 40;
+        assert!(CacheReader::open(directory.clone(), changed_seed).is_err());
 
         let mut changed_viscosity = settings;
         changed_viscosity.liquid.viscosity = 0.5;
@@ -1282,6 +1308,88 @@ mod tests {
             .read_paired_into(17, &mut vertices, &mut whitewater, None)
             .unwrap();
         assert!(!paired);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v8_preserves_paired_frames_and_rejects_nondefault_seed() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v8-legacy-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.join("frames"));
+        fs::create_dir_all(directory.as_ref()).unwrap();
+        let settings = FluidSettings::default();
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(MAGIC);
+        write_u32(&mut manifest, PAIRED_FORMAT_VERSION).unwrap();
+        manifest.extend_from_slice(manifold_fluids::UPSTREAM_REVISION.as_bytes());
+        write_f64(&mut manifest, TICK).unwrap();
+        write_settings(&mut manifest, settings).unwrap();
+        fs::write(directory.join(MANIFEST), manifest).unwrap();
+        let (vertices, whitewater, obstacle, stats) = frame();
+        let mut rigid = CoupledRigidFrame {
+            stamp: manifold_physics::TickStamp { epoch: 9, tick: 19 },
+            ..Default::default()
+        };
+        rigid.poses[0].pos = [2.0, 3.0, 4.0];
+        let mut payload = Vec::new();
+        write_frame(
+            &mut payload,
+            19,
+            &vertices,
+            &whitewater,
+            obstacle,
+            stats,
+            Some(&rigid),
+        )
+        .unwrap();
+        fs::write(
+            frame_path(&directory, 19),
+            zstd::stream::encode_all(payload.as_slice(), 1).unwrap(),
+        )
+        .unwrap();
+        let reader = CacheReader::open(Arc::clone(&directory), settings).unwrap();
+        let mut decoded_rigid = CoupledRigidFrame::default();
+        let (_, _, paired) = reader
+            .read_paired_into(
+                19,
+                &mut Vec::new(),
+                &mut WhitewaterFrame::default(),
+                Some(&mut decoded_rigid),
+            )
+            .unwrap();
+        assert!(paired);
+        assert_eq!(decoded_rigid.stamp, rigid.stamp);
+        assert_eq!(decoded_rigid.poses[0].pos, rigid.poses[0].pos);
+        let changed = FluidSettings {
+            seed: 1,
+            ..settings
+        };
+        assert!(CacheReader::open(directory, changed).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_rejects_changed_solver_sources() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-source-identity-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.join("frames"));
+        let settings = FluidSettings::default();
+        let _writer = CacheWriter::create(Arc::clone(&directory), settings).unwrap();
+        let path = directory.join(MANIFEST);
+        let mut bytes = fs::read(&path).unwrap();
+        let identity_offset = MAGIC.len() + 4 + manifold_fluids::UPSTREAM_REVISION.len() + 8;
+        bytes[identity_offset] ^= 1;
+        fs::write(path, bytes).unwrap();
+        assert!(
+            CacheReader::open(directory, settings)
+                .err()
+                .unwrap()
+                .contains("sources do not match")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

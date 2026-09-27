@@ -148,6 +148,7 @@ pub(in crate::node_graph::fluid) fn request() -> Request {
 fn fluid_take_replays_native_coupling_roles_fields_and_events() {
     let directory = Directory::new();
     let mut input = request();
+    input.settings.seed = 0x3141_5926_5358_9793;
     input.cache_mode = CacheMode::Record;
     input.cache_path = Arc::clone(&directory.0);
     let expected =
@@ -156,6 +157,8 @@ fn fluid_take_replays_native_coupling_roles_fields_and_events() {
     assert_eq!(expected.tick, 6);
     assert!(expected.stats.particles > 0);
     assert!(!expected.vertices.is_empty());
+    let reader = Reader::open(Arc::clone(&directory.0)).unwrap();
+    assert_eq!(reader.header.settings.seed, 0x3141_5926_5358_9793);
     let mut replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
     assert_eq!(replay.recorded_tick(), 6);
     assert_eq!(replay.recording_failure(), None);
@@ -378,6 +381,29 @@ fn fluid_take_setup_failure_and_incompatible_solver_are_explicit() {
             .err()
             .unwrap()
             .contains("incompatible")
+    );
+}
+
+#[test]
+fn fluid_take_rejects_changed_sources_with_an_intact_header_chain() {
+    let directory = Directory::new();
+    let mut input = request();
+    input.count = 0;
+    let _writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    let path = directory.0.join(HEADER);
+    let (mut header, _): (Header, _) = read_record(&path).unwrap();
+    header.solver_identity[0] ^= 1;
+    fs::remove_file(&path).unwrap();
+    let hash = write_new(&path, &header).unwrap();
+    let (mut progress, _): (Progress, _) = read_record(&directory.0.join(PROGRESS)).unwrap();
+    progress.header_hash = hash;
+    progress.last_batch_hash = hash;
+    publish_progress(&directory.0, &progress).unwrap();
+    assert!(
+        FluidTakeReplay::open(directory.0.as_ref())
+            .err()
+            .unwrap()
+            .contains("incompatible solver")
     );
 }
 

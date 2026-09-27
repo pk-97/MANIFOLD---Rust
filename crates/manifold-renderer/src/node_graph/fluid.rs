@@ -26,6 +26,7 @@ use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 
 mod coupled;
 mod domain;
+pub(super) mod identity;
 mod impulses;
 mod native;
 mod roles;
@@ -58,6 +59,7 @@ pub struct FluidDomainSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FluidSettings {
+    pub seed: u64,
     pub resolution: u32,
     pub domain_size: f32,
     /// Explicit axis-aligned scene-space domain. Scale is full XYZ size.
@@ -79,6 +81,7 @@ pub struct FluidSettings {
 impl Default for FluidSettings {
     fn default() -> Self {
         Self {
+            seed: manifold_fluids::DEFAULT_SEED,
             resolution: 24,
             domain_size: 4.0,
             domain: None,

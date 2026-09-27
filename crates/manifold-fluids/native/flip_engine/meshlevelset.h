@@ -295,22 +295,17 @@ private:
     float _sampleFaceVelocity(GridIndex face, int axis, float weight, bool isStatic);
     void _validateRigidCapture() const;
     float _getCellWeight(int i, int j, int k);
+    float _getFaceWeight(float a, float b, float c, float d);
     float _pointToTriangleDistance(vmath::vec3 x0, vmath::vec3 x1, 
                                      vmath::vec3 x2, 
                                      vmath::vec3 x3);
     vmath::vec3 _pointToTriangleVelocity(vmath::vec3 x0, int triangleIdx,
                                        vmath::vec3 *samplePosition = nullptr);
-    bool _getBarycentricCoordinates(
-              double x0, double y0, 
-              double x1, double y1, double x2, double y2, double x3, double y3,
-              double *a, double *b, double *c);
     float _pointToSegmentDistance(vmath::vec3 x0, vmath::vec3 x1, vmath::vec3 x2);
     vmath::vec3 _pointToSegmentVelocity(vmath::vec3 x0, 
                                         vmath::vec3 x1, vmath::vec3 x2, 
                                         vmath::vec3 v1, vmath::vec3 v2, float *distance,
                                         vmath::vec3 *samplePosition = nullptr);
-    int _orientation(double x1, double y1, double x2, double y2, double *twiceSignedArea);
-
     void _trilinearInterpolateSolidGridPointsThread(int startidx, int endidx, vmath::vec3 offset, double dx, 
                                                     Array3d<bool> *grid);
 

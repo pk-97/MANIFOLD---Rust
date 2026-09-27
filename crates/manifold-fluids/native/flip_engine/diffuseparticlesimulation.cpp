@@ -48,6 +48,10 @@ DiffuseParticleSimulation::DiffuseParticleSimulation() {
 DiffuseParticleSimulation::~DiffuseParticleSimulation() {
 }
 
+void DiffuseParticleSimulation::setRandomSeed(uint64_t seed) {
+    _randomSeed.seed(static_cast<uint32_t>(seed));
+}
+
 void DiffuseParticleSimulation::update(DiffuseParticleSimulationParameters params) {
     _isize = params.isize;
     _jsize = params.jsize;
@@ -1851,8 +1855,8 @@ void DiffuseParticleSimulation::
         _shuffleDiffuseParticleEmitters(std::vector<DiffuseParticleEmitter> &emitters) {
 
     DiffuseParticleEmitter em;
-    for (int i = (int)emitters.size() - 2; i >= 0; i--) {
-        int j = (rand() % (int)(i - 0 + 1));
+    for (int i = static_cast<int>(emitters.size()) - 2; i >= 0; --i) {
+        int j = static_cast<int>(_randomUnit() * static_cast<double>(i + 1));
         em = emitters[i];
         emitters[i] = emitters[j];
         emitters[j] = em;
@@ -1946,9 +1950,9 @@ void DiffuseParticleSimulation::_emitDiffuseParticles(DiffuseParticleEmitter &em
     vmath::vec3 v(0.0, 0.0, 0.0); // velocities will computed in bulk later
     GridIndex g;
     for (int i = 0; i < n; i++) {
-        float Xr = (float)(rand()) / (float)RAND_MAX;
-        float Xt = (float)(rand()) / (float)RAND_MAX;
-        float Xh = (float)(rand()) / (float)RAND_MAX;
+        float Xr = static_cast<float>(_randomUnit());
+        float Xt = static_cast<float>(_randomUnit());
+        float Xh = static_cast<float>(_randomUnit());
 
         float r = emitterRadius * sqrt(Xr);
         float theta = Xt * twopi;

@@ -88,6 +88,9 @@ core-text = "20"
 core-graphics = "0.23"
 core-foundation = "0.9"
 
+[build-dependencies]
+sha2 = "0.10"
+
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
 # Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant

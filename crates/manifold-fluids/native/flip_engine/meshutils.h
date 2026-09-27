@@ -47,15 +47,12 @@ namespace MeshUtils {
         vmath::vec3 origin, std::vector<int> &indices, TriangleMesh &m,
         std::vector<double> &collisions);
 
-    double _randomDouble(double min, double max);
-
     void _getCollisionGridZ(
         TriangleMesh &m, double dx, Array3d<std::vector<float> > &zcollisions);
 
     void _getCollisionGridZThread(
         int startidx, int endidx, 
         double dx, 
-        vmath::vec3 jitter,
         TriangleMesh *m, 
         Array3d<std::vector<int> > *ztrigrid,
         Array3d<std::vector<float> > *zcollisions);

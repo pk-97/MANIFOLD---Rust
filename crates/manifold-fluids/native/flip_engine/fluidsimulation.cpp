@@ -46,6 +46,21 @@ SOFTWARE.
 #include "attributetogridtransfer.h"
 #include "mixbox/mixbox.h"
 
+namespace {
+
+uint64_t splitmix64(uint64_t value) {
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+}
+
+uint32_t streamSeed(uint64_t seed, uint64_t stream) {
+    return static_cast<uint32_t>(splitmix64(seed ^ stream));
+}
+
+}
+
 
 FluidSimulation::FluidSimulation() {
 }
@@ -57,6 +72,13 @@ FluidSimulation::FluidSimulation(int isize, int jsize, int ksize, double dx) :
 
 FluidSimulation::~FluidSimulation() {
     _joinNativeThreadsNoexcept();
+}
+
+void FluidSimulation::setRandomSeed(uint64_t seed) {
+    if (_isSimulationInitialized) {
+        throw std::logic_error("Random seed must be set before simulation initialization");
+    }
+    _randomSeedValue = seed;
 }
 
 /*******************************************************************************
@@ -4500,11 +4522,10 @@ void FluidSimulation::_initializeParticleRadii() {
 }
 
 void FluidSimulation::_initializeRandomGenerator() {
-    _randomSeed = std::mt19937(_randomDevice());
-    _random = std::uniform_real_distribution<>(0, 1); 
-
-    _fluidParticleRandomSeed = std::mt19937(_fluidParticleRandomDevice());
-    _fluidParticleRandomID = std::uniform_int_distribution<>(0, _fluidParticleIDLimit - 1); 
+    _randomSeed.seed(streamSeed(_randomSeedValue, 0x464c554944ULL));
+    _fluidParticleRandomSeed.seed(streamSeed(_randomSeedValue, 0x5041525449434c45ULL));
+    _sourceIDRandomSeed.seed(streamSeed(_randomSeedValue, 0x534f555243454944ULL));
+    _diffuseMaterial.setRandomSeed(splitmix64(_randomSeedValue ^ 0x44494646555345ULL));
 }
 
 void FluidSimulation::_initializeSimulation() {
@@ -7664,9 +7685,10 @@ void FluidSimulation::_updateMarkerParticleSourceIDAttributeGrid(ParticleSystem 
         indices[i] = i;
     }
 
-    std::random_device rd;
-    std::mt19937 g(rd());
-    std::shuffle(indices.begin(), indices.end(), g);
+    for (size_t i = indices.size(); i > 1; --i) {
+        size_t j = static_cast<size_t>(_randomUnit(_sourceIDRandomSeed) * i);
+        std::swap(indices[i - 1], indices[j]);
+    }
     
     std::vector<vmath::vec3> positionsRandom(indices.size());
     std::vector<int> sourceidsRandom(indices.size());
@@ -10905,7 +10927,6 @@ void FluidSimulation::_outputSimulationData() {
 ********************************************************************************/
 
 void FluidSimulation::_stepFluid(double dt) {
-    srand(_currentFrame + _currentFrameTimeStepNumber);
     if (_rigidCoupling) {
         _rigidCoupling->beginSubstep(dt);
     }

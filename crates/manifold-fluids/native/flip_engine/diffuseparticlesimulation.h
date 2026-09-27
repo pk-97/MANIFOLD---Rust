@@ -30,6 +30,9 @@ SOFTWARE.
     #include <thread>
 #endif
 
+#include <cstdint>
+#include <random>
+
 #include "vmath.h"
 #include "fragmentedvector.h"
 #include "array3d.h"
@@ -83,6 +86,8 @@ class DiffuseParticleSimulation
 public:
     DiffuseParticleSimulation();
     ~DiffuseParticleSimulation();
+
+    void setRandomSeed(uint64_t seed);
 
     void update(DiffuseParticleSimulationParameters params);
 
@@ -427,7 +432,12 @@ private:
     }
 
     inline double _randomDouble(double min, double max) {
-        return min + ((double)rand() / (double)RAND_MAX) * (max - min);
+        return min + _randomUnit() * (max - min);
+    }
+
+    inline double _randomUnit() {
+        return static_cast<double>(_randomSeed()) /
+               (static_cast<double>(std::mt19937::max()) + 1.0);
     }
 
     int _isize = 0;
@@ -539,4 +549,5 @@ private:
 
     int _currentDiffuseParticleID = 0;
     int _diffuseParticleIDLimit = 256;
+    std::mt19937 _randomSeed{0};
 };

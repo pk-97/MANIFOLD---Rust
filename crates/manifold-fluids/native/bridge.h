@@ -43,7 +43,7 @@ typedef struct ManifoldFluidsRigidReaction {
 
 int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
                                  double cell_size, uint32_t surface_subdivisions,
-                                 int apic, void **world_out);
+                                 int apic, uint64_t seed, void **world_out);
 void manifold_fluids_world_destroy(void *world);
 int manifold_fluids_world_add_fluid_box(void *world, const float *min, const float *max,
                                         const float *velocity);

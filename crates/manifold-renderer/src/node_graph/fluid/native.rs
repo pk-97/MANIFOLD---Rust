@@ -67,8 +67,8 @@ impl NativeSimulation {
         // content thread along with all native work.
         self.world = None;
         self.coupled = None;
-        let mut new =
-            FluidWorld::new(domain.config(request.settings)).map_err(|e| e.to_string())?;
+        let mut new = FluidWorld::new_seeded(domain.config(request.settings), request.settings.seed)
+            .map_err(|e| e.to_string())?;
         new.set_liquid_options(request.settings.liquid)
             .map_err(|e| e.to_string())?;
         new.set_time_step_options(request.settings.time_steps)

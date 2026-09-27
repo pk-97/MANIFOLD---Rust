@@ -401,11 +401,12 @@ void update_role_mesh(NativeMeshRole &role, const MeshPose &previous,
 
 struct NativeWorld {
     NativeWorld(uint32_t isize, uint32_t jsize, uint32_t ksize, double cell_size,
-                uint32_t surface_subdivisions, bool apic)
+                uint32_t surface_subdivisions, bool apic, uint64_t seed)
         : simulation(std::make_unique<FluidSimulation>(static_cast<int>(isize),
                                                         static_cast<int>(jsize),
                                                         static_cast<int>(ksize), cell_size)),
           isize(isize), jsize(jsize), ksize(ksize), cell_size(cell_size) {
+        simulation->setRandomSeed(seed);
         simulation->setMaxThreadCount(4);
         simulation->disableConsoleOutput();
         simulation->disableDiffuseMaterialOutput();
@@ -759,14 +760,14 @@ extern "C" int manifold_fluids_coupling_viscosity_operator_probe(ManifoldRigidVi
 
 extern "C" int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
                                                double cell_size, uint32_t surface_subdivisions,
-                                               int apic, void **world_out) {
+                                               int apic, uint64_t seed, void **world_out) {
     return guarded([&] {
         if (world_out == nullptr) {
             throw std::invalid_argument("world output pointer must be non-null");
         }
         *world_out = nullptr;
         auto world = std::make_unique<NativeWorld>(isize, jsize, ksize, cell_size,
-                                                   surface_subdivisions, apic != 0);
+                                                   surface_subdivisions, apic != 0, seed);
         *world_out = world.release();
     });
 }

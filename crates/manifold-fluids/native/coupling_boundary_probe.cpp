@@ -4,6 +4,7 @@
 #include "flip_engine/pressuresolver.h"
 #include "flip_engine/threadutils.h"
 #include "flip_engine/gridutils.h"
+#include "flip_engine/collision.h"
 
 #include <limits>
 
@@ -18,6 +19,61 @@ const std::array<Point, 2> centers = {{{1.72, 1.94, 1.97}, {2.29, 2.05, 2.12}}};
 
 void require(bool condition, const char *message) {
     if (!condition) { throw std::runtime_error(message); }
+}
+
+void verify_projected_mesh_edges() {
+    const std::array<vmath::vec3, 5> points = {{{0,0,2}, {1,0,5}, {1,1,3}, {0,1,0}, {0.5f,0.5f,2.5f}}};
+    const std::vector<std::vector<Triangle>> meshes = {
+        {Triangle(0,1,2), Triangle(0,2,3)},
+        {Triangle(0,1,3), Triangle(1,2,3)},
+        {Triangle(0,1,4), Triangle(1,2,4), Triangle(2,3,4), Triangle(3,0,4)},
+    };
+    for (const auto &triangles : meshes) {
+        for (bool reverse : {false, true}) {
+            // Include the shared diagonal, fan vertex, and ordinary interiors.
+            for (double x : {0.25, 0.5, 0.75}) for (double y : {0.25, 0.5, 0.75}) {
+                int hits = 0;
+                for (const auto &triangle : triangles) {
+                    const auto p = points[triangle.tri[0]];
+                    const auto q = points[triangle.tri[reverse ? 2 : 1]];
+                    const auto r = points[triangle.tri[reverse ? 1 : 2]];
+                    double a, b, c;
+                    if (Collision::getBarycentricCoordinates2D(x, y, p.x, p.y, q.x, q.y, r.x, r.y, &a, &b, &c)) {
+                        ++hits;
+                        const double height = a * p.z + b * q.z + c * r.z;
+                        require(std::abs(height - (2 + 3*x - 2*y)) < 1e-12, "mesh ray must preserve plane height");
+                    }
+                }
+                require(hits == 1, "shared mesh edges/vertices must count exactly one ray crossing");
+            }
+        }
+    }
+    double a, b, c;
+    require(!Collision::getBarycentricCoordinates2D(0, 0, 0, 0, 1, 0, 2, 0, &a, &b, &c),
+            "degenerate projected triangle must not divide by zero");
+}
+
+void verify_face_complement() {
+    // Solid and its complement must partition every face, including a plane
+    // exactly coincident with a grid face and float-sized surface perturbations.
+    constexpr double dx = 0.25;
+    MeshLevelSet solid(4, 4, 4, dx), complement(4, 4, 4, dx);
+    for (int axis = 0; axis < 3; ++axis) {
+        for (double shift : {-0.125, -1e-7, 0.0, 1e-7, 0.125}) {
+            for (int k = 0; k <= 4; ++k) for (int j = 0; j <= 4; ++j) for (int i = 0; i <= 4; ++i) {
+                const int coordinate = axis == 0 ? i : axis == 1 ? j : k;
+                const float phi = static_cast<float>((coordinate - 1) * dx - shift);
+                solid.set(i, j, k, phi);
+                complement.set(i, j, k, -phi);
+            }
+            const std::array<float, 3> a = {solid.getFaceWeightU(1,1,1), solid.getFaceWeightV(1,1,1), solid.getFaceWeightW(1,1,1)};
+            const std::array<float, 3> b = {complement.getFaceWeightU(1,1,1), complement.getFaceWeightV(1,1,1), complement.getFaceWeightW(1,1,1)};
+            for (int component = 0; component < 3; ++component) {
+                require(a[component] >= 0 && a[component] <= 1, "solid face fraction must be bounded");
+                require(std::abs(a[component] + b[component] - 1) < 1e-6, "solid/complement face fractions must sum to one");
+            }
+        }
+    }
 }
 
 template<class F> void rejects(F function, const char *message) {
@@ -251,6 +307,8 @@ void small_map_probes() {
 } // namespace
 
 void run_rigid_boundary_probe(ManifoldRigidBoundaryProbe &result) {
+    verify_projected_mesh_edges();
+    verify_face_complement();
     struct ThreadLimit {
         int previous = ThreadUtils::getMaxThreadCount();
         ThreadLimit() { ThreadUtils::setMaxThreadCount(2); }

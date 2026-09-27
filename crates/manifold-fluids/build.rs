@@ -1,11 +1,20 @@
 use std::env;
 use std::path::PathBuf;
 
+#[path = "../../scripts/native_source_identity.rs"]
+mod native_source_identity;
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let native_dir = manifest_dir.join("native");
     let engine_dir = native_dir.join("flip_engine");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("out dir"));
+    native_source_identity::emit_source_identity(
+        &manifest_dir,
+        &["native", "src"],
+        "MANIFOLD_FLUIDS_SOURCE_IDENTITY",
+    )
+    .expect("compute manifold-fluids source identity");
 
     let generated_version = out_dir.join("versionutils.cpp");
     let version_template = std::fs::read_to_string(engine_dir.join("versionutils.cpp.in"))

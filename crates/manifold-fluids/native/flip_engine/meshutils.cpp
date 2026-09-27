@@ -78,22 +78,21 @@ void _getTriangleCollisionsZ(
         vmath::vec3 origin, std::vector<int> &indices, TriangleMesh &m,
         std::vector<float> &collisions) {
 
-    vmath::vec3 dir(0.0, 0.0, 1.0);
-    vmath::vec3 v1, v2, v3, coll;
+    vmath::vec3 v1, v2, v3;
     Triangle t;
     for (unsigned int i = 0; i < indices.size(); i++) {
         t = m.triangles[indices[i]];
         v1 = m.vertices[t.tri[0]];
         v2 = m.vertices[t.tri[1]];
         v3 = m.vertices[t.tri[2]];
-        if (Collision::lineIntersectsTriangle(origin, dir, v1, v2, v3, &coll)) {
-            collisions.push_back(coll.z);
+        double a, b, c;
+        if (Collision::getBarycentricCoordinates2D(
+                origin.x, origin.y,
+                v1.x, v1.y, v2.x, v2.y, v3.x, v3.y,
+                &a, &b, &c)) {
+            collisions.push_back(static_cast<float>(a * v1.z + b * v2.z + c * v3.z));
         }
     }
-}
-
-double _randomDouble(double min, double max) {
-    return min + ((double)rand() / (double)RAND_MAX) * (max - min);
 }
 
 void _getCollisionGridZ(TriangleMesh &m, double dx, Array3d<std::vector<float> > &zcollisions, 
@@ -101,17 +100,6 @@ void _getCollisionGridZ(TriangleMesh &m, double dx, Array3d<std::vector<float> >
 
     Array3d<std::vector<int> > ztrigrid(zcollisions.width, zcollisions.height, 1);
     _getTriangleGridZ(m, dx, ztrigrid);
-
-    /* Triangles that align perfectly with grid cell centers may produce 
-       imperfect collision results due to an edge case where a line-mesh 
-       intersection can report two collisions when striking an edge that is 
-       shared by two triangles. To reduce the chance of this occurring, a random
-       jitter will be added to the position of the grid cell centers. 
-    */
-    double jit = 0.001 * dx;
-    vmath::vec3 jitter(_randomDouble(jit, -jit), 
-                       _randomDouble(jit, -jit), 
-                       _randomDouble(jit, -jit));
 
     size_t gridsize = ztrigrid.width * ztrigrid.height;
     size_t numCPU = ThreadUtils::getMaxThreadCount();
@@ -124,7 +112,7 @@ void _getCollisionGridZ(TriangleMesh &m, double dx, Array3d<std::vector<float> >
     for (int i = 0; i < numthreads; i++) {
         threads[i] = std::thread(&_getCollisionGridZThread,
                                  intervals[i], intervals[i + 1], 
-                                 dx, jitter, &m, &ztrigrid, &zcollisions);
+                                 dx, &m, &ztrigrid, &zcollisions);
     }
 
     for (int i = 0; i < numthreads; i++) {
@@ -135,7 +123,6 @@ void _getCollisionGridZ(TriangleMesh &m, double dx, Array3d<std::vector<float> >
 
 void _getCollisionGridZThread(int startidx, int endidx, 
                               double dx, 
-                              vmath::vec3 jitter,
                               TriangleMesh *m, 
                               Array3d<std::vector<int> > *ztrigrid,
                               Array3d<std::vector<float> > *zcollisions) {
@@ -153,7 +140,7 @@ void _getCollisionGridZThread(int startidx, int endidx,
 
         zvals = zcollisions->getPointer(g.i, g.j, 0);
         zvals->reserve(tris->size());
-        vmath::vec3 gp = Grid3d::GridIndexToCellCenter(g.i, g.j, -1, dx) + jitter;
+        vmath::vec3 gp = Grid3d::GridIndexToCellCenter(g.i, g.j, -1, dx);
         _getTriangleCollisionsZ(gp, *tris, *m, *zvals);
     }
 }

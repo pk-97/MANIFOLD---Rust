@@ -25,6 +25,20 @@ source file also retains its original license header.
 
 Local changes:
 
+- Native worlds accept a 64-bit seed before initialization. Marker sampling,
+  particle IDs, source-ID ordering and diffuse emission use independent owned
+  RNG streams; frame stepping no longer reseeds process-global `rand` state.
+  Seed zero is the compatibility default for projects without a Seed control.
+- Mesh sign sampling reuses the engine's robust projected barycentric predicate,
+  moved from unused `MeshLevelSet` helpers into `Collision`. Symbolic edge
+  ownership counts shared triangle edges and vertices once, with explicit
+  rejection of degenerate projections. This replaces randomly offset mesh rays;
+  geometry classification no longer depends on random state or call order.
+  Faces coincident with the solid interface use the symmetric half coverage
+  within eight float epsilon times the local coordinate extent. Solid and
+  complement then partition the face consistently, avoiding a half-cell
+  pressure-force bias from tiny signed-distance errors. The free-surface
+  hydrostatic fixture measures 0.90% error at dx 0.05 m (limit 2.5%).
 - Initial AABB fluid fills now reject candidate particles outside the authored
   box, including after jitter. The upstream inclusive cell range seeded an
   extra upper layer: a four-cell-per-axis fixture emitted 1,000 particles

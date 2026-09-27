@@ -120,6 +120,7 @@ crate::primitive! {
         meshing_ms: ScalarF32, particle_count: ScalarF32, vertex_count: ScalarF32,
     },
     params: [
+        ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(24.0), range: Some((8.0, 96.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Closed −X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -396,7 +397,17 @@ impl Primitive for FluidSurface {
                 return;
             }
         };
+        let seed = ctx.param_f32("seed", 0.0);
+        if !seed.is_finite() || !(0.0..=16_777_215.0).contains(&seed) || seed.fract() != 0.0 {
+            Self::report_failure(
+                &mut self.domain_failure,
+                ctx,
+                "Water: seed must be an integer between 0 and 16777215".into(),
+            );
+            return;
+        }
         let settings = FluidSettings {
+            seed: seed as u64,
             resolution: ctx.scalar_or_param("resolution", 24.0).round() as u32,
             domain_size: ctx.scalar_or_param("domain_size", 4.0),
             domain: ctx.inputs.transform("domain"),
@@ -772,6 +783,56 @@ mod tests {
         params.insert(Cow::Borrowed("fill_height"), ParamValue::Float(0.0));
         params.insert(Cow::Borrowed("gravity"), ParamValue::Float(0.0));
         params
+    }
+
+    #[test]
+    fn fluid_seed_is_saved_and_restarts_the_simulation() {
+        let _offline = PhysicsStepScope::for_render(true);
+        let mut fluid = FluidSurface::new();
+        let mut params = coupled_params();
+        let mut errors = Vec::new();
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let original_epoch = fluid.runtime.domain_snapshot().epoch;
+        params.insert(Cow::Borrowed("seed"), ParamValue::Float(16_777_215.0));
+        use crate::node_graph::persistence::SerializedParamValue;
+        let authored: std::collections::BTreeMap<String, SerializedParamValue> = params
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone().into()))
+            .collect();
+        let saved = serde_json::to_vec(&authored).unwrap();
+        let restored: std::collections::BTreeMap<String, SerializedParamValue> =
+            serde_json::from_slice(&saved).unwrap();
+        let restored: ParamValues = restored
+            .into_iter()
+            .map(|(key, value)| (Cow::Owned(key), value.into()))
+            .collect();
+        run_mock(&mut fluid, &restored, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let new_epoch = fluid.runtime.domain_snapshot().epoch;
+        assert_ne!(new_epoch, original_epoch);
+        run_mock(&mut fluid, &restored, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(fluid.runtime.domain_snapshot().epoch, new_epoch);
+    }
+
+    #[test]
+    fn fluid_seed_rejects_fractional_nonfinite_and_out_of_range_values() {
+        for value in [-1.0, 0.5, 16_777_216.0, f32::NAN, f32::INFINITY] {
+            let mut params = coupled_params();
+            params.insert(Cow::Borrowed("seed"), ParamValue::Float(value));
+            let mut fluid = FluidSurface::new();
+            let mut errors = Vec::new();
+            run_mock(&mut fluid, &params, 0.0, &mut errors);
+            assert!(
+                errors.iter().any(|error| error.contains("seed must be an integer")),
+                "{value}: {errors:?}"
+            );
+            assert_eq!(
+                Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+                FluidDomainState::Failed
+            );
+        }
     }
 
     #[test]

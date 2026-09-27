@@ -33,6 +33,7 @@ SOFTWARE.
 #include <vector>
 #include <random>
 #include <cstring>
+#include <cstdint>
 
 #include "vmath.h"
 #include "array3d.h"
@@ -230,6 +231,8 @@ class FluidSimulation
 {
 public:
     FluidSimulation();
+
+    void setRandomSeed(uint64_t seed);
 
     /*
         Constructs a FluidSimulation object with grid dimensions
@@ -2198,7 +2201,12 @@ private:
     }
 
     inline double _randomDouble(double min, double max) {
-        return min + _random(_randomSeed) * (max - min);
+        return min + _randomUnit(_randomSeed) * (max - min);
+    }
+
+    static double _randomUnit(std::mt19937 &generator) {
+        return static_cast<double>(generator()) /
+               (static_cast<double>(std::mt19937::max()) + 1.0);
     }
 
     int _getFluidParticleOutputIDLimit() {
@@ -2206,7 +2214,8 @@ private:
     }
 
     inline uint16_t _generateRandomFluidParticleID() {
-        return (uint16_t)_fluidParticleRandomID(_fluidParticleRandomSeed);
+        return static_cast<uint16_t>(_randomUnit(_fluidParticleRandomSeed) *
+                                     static_cast<double>(_fluidParticleIDLimit));
     }
 
     inline int _generateFluidParticleUID() {
@@ -2354,9 +2363,8 @@ private:
     int _fluidParticleBoundaryWidth = 1;        // In # of voxels
 
     int _fluidParticleIDLimit = 65536;    // max uint16_t (2^16 = 65536)
-    std::random_device _fluidParticleRandomDevice;
     std::mt19937 _fluidParticleRandomSeed;
-    std::uniform_int_distribution<> _fluidParticleRandomID;
+    std::mt19937 _sourceIDRandomSeed;
 
     int _currentFluidParticleUID = 1;
     std::vector<UIDAttributeStatus> _uidStatusFramePrevious;
@@ -2563,8 +2571,7 @@ private:
     bool _openBoundaryZPos = false;
     int _openBoundaryWidth = 2;    // In # of voxels
 
-    std::random_device _randomDevice;
+    uint64_t _randomSeedValue = 0;
     std::mt19937 _randomSeed;
-    std::uniform_real_distribution<> _random;
 
 };

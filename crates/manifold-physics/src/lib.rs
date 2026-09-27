@@ -6,6 +6,9 @@
 //! non-`Sync` marker so it may move between threads but cannot be shared there.
 
 pub use manifold_foundation::Seconds;
+/// Identity of the compiled native solver and Rust adapter sources.
+pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_PHYSICS_SOURCE_IDENTITY");
+
 pub mod input;
 pub mod interaction;
 pub mod stepping;

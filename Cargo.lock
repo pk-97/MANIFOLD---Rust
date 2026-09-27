@@ -2351,6 +2351,7 @@ dependencies = [
  "manifold-foundation",
  "manifold-physics",
  "serde",
+ "sha2",
 ]
 
 [[package]]
@@ -2441,6 +2442,7 @@ dependencies = [
  "manifold-foundation",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

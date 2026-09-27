@@ -68,6 +68,11 @@ namespace Collision {
     extern bool lineIntersectsTriangle(vmath::vec3 p, vmath::vec3 dir,
                                               vmath::vec3 v0, vmath::vec3 v1, vmath::vec3 v2, vmath::vec3 *collision);
 
+    extern bool getBarycentricCoordinates2D(
+        double x0, double y0,
+        double x1, double y1, double x2, double y2, double x3, double y3,
+        double *a, double *b, double *c);
+
     extern bool rayIntersectsPlane(vmath::vec3 p0, vmath::vec3 dir,
                                    vmath::vec3 planePoint, vmath::vec3 planeNormal);
 

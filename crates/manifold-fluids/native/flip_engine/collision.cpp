@@ -26,6 +26,29 @@ SOFTWARE.
 
 #include "aabb.h"
 
+namespace {
+
+int orientation2D(double x1, double y1, double x2, double y2,
+                  double *twiceSignedArea) {
+    *twiceSignedArea = y1 * x2 - x1 * y2;
+    if (*twiceSignedArea > 0) {
+        return 1;
+    } else if (*twiceSignedArea < 0) {
+        return -1;
+    } else if (y2 > y1) {
+        return 1;
+    } else if (y2 < y1) {
+        return -1;
+    } else if (x1 > x2) {
+        return 1;
+    } else if (x1 < x2) {
+        return -1;
+    }
+    return 0;
+}
+
+}
+
 // method adapted from:
 // http://www.lighthouse3d.com/tutorials/maths/ray-triangle-intersection/
 bool Collision::rayIntersectsTriangle(vmath::vec3 p, vmath::vec3 dir,
@@ -113,6 +136,55 @@ bool Collision::lineIntersectsTriangle(vmath::vec3 p, vmath::vec3 dir,
     *collision = p + (float)t*dir;
     *iu = u;
     *iv = v;
+
+    return true;
+}
+
+// Robust test of (x0,y0) in the triangle (x1,y1)-(x2,y2)-(x3,y3).
+// If true is returned, the barycentric coordinates are set in a,b,c.
+bool Collision::getBarycentricCoordinates2D(
+        double x0, double y0,
+        double x1, double y1, double x2, double y2, double x3, double y3,
+        double *a, double *b, double *c) {
+    double projectedArea = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+    if (projectedArea == 0.0) {
+        return false;
+    }
+
+    x1 -= x0;
+    x2 -= x0;
+    x3 -= x0;
+    y1 -= y0;
+    y2 -= y0;
+    y3 -= y0;
+
+    double oa;
+    int signa = orientation2D(x2, y2, x3, y3, &oa);
+    if (signa == 0) {
+        return false;
+    }
+
+    double ob;
+    int signb = orientation2D(x3, y3, x1, y1, &ob);
+    if (signb != signa) {
+        return false;
+    }
+
+    double oc;
+    int signc = orientation2D(x1, y1, x2, y2, &oc);
+    if (signc != signa) {
+        return false;
+    }
+
+    double sum = oa + ob + oc;
+    if (sum == 0.0) {
+        return false;
+    }
+    double invsum = 1.0 / sum;
+
+    *a = oa * invsum;
+    *b = ob * invsum;
+    *c = oc * invsum;
 
     return true;
 }

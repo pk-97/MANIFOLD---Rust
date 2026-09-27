@@ -31,6 +31,7 @@ SOFTWARE.
 #include "meshobject.h"
 #include "rigidboundaryvelocity.h"
 #include "gridutils.h"
+#include <limits>
 
 MeshLevelSet::MeshLevelSet() {
 }
@@ -368,7 +369,7 @@ float MeshLevelSet::getCellWeight(GridIndex g) {
 
 float MeshLevelSet::getFaceWeightU(int i, int j, int k) {
     FLUIDSIM_ASSERT(Grid3d::isGridIndexInRange(i, j, k, _isize + 1, _jsize, _ksize));
-    return LevelsetUtils::fractionInside(_phi(i, j, k), 
+    return _getFaceWeight(_phi(i, j, k),
                                          _phi(i, j + 1, k),
                                          _phi(i, j, k + 1), 
                                          _phi(i, j + 1, k + 1));
@@ -380,7 +381,7 @@ float MeshLevelSet::getFaceWeightU(GridIndex g) {
 
 float MeshLevelSet::getFaceWeightV(int i, int j, int k) {
     FLUIDSIM_ASSERT(Grid3d::isGridIndexInRange(i, j, k, _isize, _jsize + 1, _ksize));
-    return LevelsetUtils::fractionInside(_phi(i, j, k),
+    return _getFaceWeight(_phi(i, j, k),
                                          _phi(i, j, k + 1),
                                          _phi(i + 1, j, k),
                                          _phi(i + 1, j, k + 1));
@@ -392,7 +393,7 @@ float MeshLevelSet::getFaceWeightV(GridIndex g) {
 
 float MeshLevelSet::getFaceWeightW(int i, int j, int k) {
     FLUIDSIM_ASSERT(Grid3d::isGridIndexInRange(i, j, k, _isize, _jsize, _ksize + 1));
-    return LevelsetUtils::fractionInside(_phi(i, j, k),
+    return _getFaceWeight(_phi(i, j, k),
                                          _phi(i, j + 1, k),
                                          _phi(i + 1, j, k),
                                          _phi(i + 1, j + 1, k));
@@ -1498,6 +1499,20 @@ void MeshLevelSet::_computeVelocityGridsSingleThreaded() {
     _computeVelocityGridThread(0, _isize * _jsize * (_ksize + 1), isStatic, 2);
 }
 
+float MeshLevelSet::_getFaceWeight(float a, float b, float c, float d) {
+    // A face coincident with the interface has no preferred inside/outside
+    // side. Use the symmetric limit instead of amplifying float-sized sign
+    // noise into a fully open/closed face and a half-cell pressure-force bias.
+    const double extent = _dx * std::max({_isize, _jsize, _ksize}) +
+        std::max({std::abs(_positionOffset.x), std::abs(_positionOffset.y), std::abs(_positionOffset.z)});
+    const double tolerance = 8 * std::numeric_limits<float>::epsilon() * extent;
+    if (std::abs(a) <= tolerance && std::abs(b) <= tolerance &&
+        std::abs(c) <= tolerance && std::abs(d) <= tolerance) {
+        return 0.5f;
+    }
+    return LevelsetUtils::fractionInside(a, b, c, d);
+}
+
 float MeshLevelSet::_getCellWeight(int i, int j, int k) {
     float phi000 = _phi(i, j, k);
     float phi001 = _phi(i, j, k + 1);
@@ -1657,48 +1672,6 @@ vmath::vec3 MeshLevelSet::_pointToTriangleVelocity(vmath::vec3 x0, int triangleI
     }
 }
 
-// robust test of (x0,y0) in the triangle (x1,y1)-(x2,y2)-(x3,y3)
-// if true is returned, the barycentric coordinates are set in a,b,c.
-bool MeshLevelSet::_getBarycentricCoordinates(
-            double x0, double y0, 
-            double x1, double y1, double x2, double y2, double x3, double y3,
-            double *a, double *b, double *c) {
-    x1 -= x0; 
-    x2 -= x0; 
-    x3 -= x0;
-    y1 -= y0; 
-    y2 -= y0; 
-    y3 -= y0;
-
-    double oa;
-    int signa = _orientation(x2, y2, x3, y3, &oa);
-    if (signa == 0) {
-        return false;
-    }
-
-    double ob;
-    int signb = _orientation(x3, y3, x1, y1, &ob);
-    if(signb != signa) {
-        return false;
-    }
-
-    double oc;
-    int signc = _orientation(x1, y1, x2, y2, &oc);
-    if(signc != signa) {
-        return false;
-    }
-
-    double sum = oa + ob + oc;
-    FLUIDSIM_ASSERT(sum != 0); // if the SOS signs match and are nonkero, there's no way all of a, b, and c are zero.
-    double invsum = 1.0 / sum;
-
-    *a = oa * invsum;
-    *b = ob * invsum;
-    *c = oc * invsum;
-
-    return true;
-}
-
 // find distance x0 is from segment x1-x2
 float MeshLevelSet::_pointToSegmentDistance(vmath::vec3 x0, vmath::vec3 x1, vmath::vec3 x2) {
     vmath::vec3 dx = x2 - x1;
@@ -1734,28 +1707,6 @@ vmath::vec3 MeshLevelSet::_pointToSegmentVelocity(vmath::vec3 x0,
     vmath::vec3 velocity = s12 * v1 + (1 - s12) * v2;
 
     return velocity;
-}
-
-// calculate twice signed area of triangle (0,0)-(x1,y1)-(x2,y2)
-// return an SOS-determined sign (-1, +1, or 0 only if it's a truly degenerate triangle)
-int MeshLevelSet::_orientation(double x1, double y1, double x2, double y2, 
-                              double *twiceSignedArea) {
-    *twiceSignedArea = y1 * x2 - x1 * y2;
-    if(*twiceSignedArea > 0) {
-        return 1;
-    } else if (*twiceSignedArea < 0) {
-        return -1;
-    } else if (y2 > y1) {
-        return 1;
-    } else if (y2 < y1) {
-        return -1;
-    } else if (x1 > x2) {
-        return 1;
-    } else if (x1 < x2) {
-        return -1; 
-    } else { 
-        return 0; // only true when x1==x2 and y1==y2
-    }
 }
 
 void MeshLevelSet::_normalizeVelocityGridThread(int startidx, int endidx, 
