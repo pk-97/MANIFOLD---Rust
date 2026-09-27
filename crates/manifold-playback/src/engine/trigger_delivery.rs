@@ -154,6 +154,15 @@ impl TriggerDeliveryQueue {
         kind
     }
 
+    /// The producer could not retain a complete interval. Keep the earlier
+    /// accepted prefix and expose the same failure as delivery-queue overflow.
+    pub(super) fn reject_input_overflow(&mut self) -> TriggerDeliveryError {
+        if let Some(failure) = self.failure {
+            return failure.kind;
+        }
+        self.latch(TriggerDeliveryError::CapacityOverflow)
+    }
+
     pub(crate) fn failure(&self) -> Option<TriggerDeliveryFailure> {
         self.failure
     }
@@ -179,6 +188,7 @@ mod tests {
 
     fn pulse(sequence: u64) -> TriggerPulse {
         TriggerPulse {
+            kind: crate::modulation::TriggerPulseKind::Gate,
             layer_id: Some(LayerId::new(format!("layer-{sequence}"))),
             owner_id: EffectId::new(format!("effect-{sequence}")),
             param_key: sequence,

@@ -1,15 +1,15 @@
-//! Validate retained gate identities against the current authored project.
+//! Validate retained trigger identities against the current authored project.
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashMap;
 use manifold_core::audio_trigger::fire_meter_key_for_param;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::{EffectId, LayerId};
-use manifold_playback::modulation::TriggerPulse;
+use manifold_playback::modulation::{TriggerPulse, TriggerPulseKind};
 
 struct Owner {
     layer: Option<LayerId>,
-    gates: AHashSet<u64>,
+    parameters: AHashMap<u64, TriggerPulseKind>,
     seen: bool,
     ambiguous: bool,
 }
@@ -56,7 +56,7 @@ impl TriggerTargets {
                 instance.id.clone(),
                 Owner {
                     layer: layer.cloned(),
-                    gates: AHashSet::with_capacity(instance.params.len()),
+                    parameters: AHashMap::with_capacity(instance.params.len()),
                     seen: false,
                     ambiguous: false,
                 },
@@ -73,15 +73,18 @@ impl TriggerTargets {
         if owner.layer.as_ref() != layer {
             owner.layer = layer.cloned();
         }
-        owner.gates.clear();
-        for param in instance
-            .params
-            .iter()
-            .filter(|param| param.spec.is_trigger_gate)
-        {
+        owner.parameters.clear();
+        for param in instance.params.iter() {
+            let kind = if param.spec.is_trigger_gate {
+                TriggerPulseKind::Gate
+            } else if param.spec.is_trigger {
+                TriggerPulseKind::Parameter
+            } else {
+                continue;
+            };
             owner
-                .gates
-                .insert(fire_meter_key_for_param("", &param.spec.id));
+                .parameters
+                .insert(fire_meter_key_for_param("", &param.spec.id), kind);
         }
         owner.seen = true;
     }
@@ -90,7 +93,7 @@ impl TriggerTargets {
         self.owners.get(&pulse.owner_id).is_some_and(|owner| {
             !owner.ambiguous
                 && owner.layer == pulse.layer_id
-                && owner.gates.contains(&pulse.param_key)
+                && owner.parameters.get(&pulse.param_key) == Some(&pulse.kind)
         })
     }
 }
@@ -111,6 +114,7 @@ mod tests {
             ..ParamSpecDef::default()
         }));
         let pulse = TriggerPulse {
+            kind: manifold_playback::modulation::TriggerPulseKind::Gate,
             layer_id: None,
             owner_id: instance.id.clone(),
             param_key: fire_meter_key_for_param("", "gate"),
@@ -118,6 +122,29 @@ mod tests {
         };
         project.settings.master_effects.push(instance);
         (project, pulse)
+    }
+
+    #[test]
+    fn trigger_delivery_parameter_kind_must_match_the_authored_parameter() {
+        let (mut project, mut pulse) = fixture();
+        project.settings.master_effects[0].params.push(Param::bundled(ParamSpecDef {
+            id: "fire".into(), is_trigger: true, ..Default::default()
+        }));
+        let mut targets = TriggerTargets::default();
+        targets.refresh(Some(&project), 1, 1);
+        let gate = pulse.clone();
+        pulse.param_key = fire_meter_key_for_param("", "fire");
+        pulse.kind = TriggerPulseKind::Parameter;
+        assert!(targets.accepts(&pulse));
+        assert!(targets.accepts(&gate));
+        pulse.kind = TriggerPulseKind::Gate;
+        assert!(!targets.accepts(&pulse));
+        pulse.kind = TriggerPulseKind::Parameter;
+        project.settings.master_effects[0].params.get_mut("fire").unwrap().spec.is_trigger_gate = true;
+        targets.refresh(Some(&project), 2, 1);
+        assert!(!targets.accepts(&pulse), "old event cannot become a different trigger kind");
+        pulse.kind = TriggerPulseKind::Gate;
+        assert!(targets.accepts(&pulse));
     }
 
     #[test]
@@ -205,7 +232,7 @@ mod tests {
             .owners
             .get(&pulse.owner_id)
             .unwrap()
-            .gates
+            .parameters
             .capacity();
         targets.refresh(Some(&project), 2, 1);
         assert_eq!(
@@ -213,7 +240,7 @@ mod tests {
                 .owners
                 .get(&pulse.owner_id)
                 .unwrap()
-                .gates
+                .parameters
                 .capacity(),
             gates_capacity
         );

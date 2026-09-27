@@ -216,7 +216,7 @@ pub struct PlaybackEngine {
     /// `evaluate_modulation` call. Captured pulses move into
     /// `trigger_delivery` immediately after evaluation and remain there until
     /// the renderer consumes them.
-    modulation_trigger_scratch: Vec<crate::modulation::TriggerPulse>,
+    modulation_trigger_scratch: crate::modulation::TriggerPulseBuffer,
     trigger_delivery: TriggerDeliveryQueue,
     /// PARAM_STEP_ACTIONS D5: last clip identity started on each layer
     /// (`timeline.layers` index → `ClipId`), the engine-side mirror of what
@@ -352,7 +352,7 @@ impl PlaybackEngine {
             sync_start_scratch: Vec::with_capacity(4),
             sync_heal_scratch: Vec::with_capacity(2),
             modulation_timing_scratch: Vec::with_capacity(64),
-            modulation_trigger_scratch: Vec::with_capacity(
+            modulation_trigger_scratch: crate::modulation::TriggerPulseBuffer::with_capacity(
                 trigger_delivery::DEFAULT_TRIGGER_DELIVERY_CAPACITY,
             ),
             trigger_delivery: TriggerDeliveryQueue::new(),
@@ -906,12 +906,16 @@ impl PlaybackEngine {
         let _ = self.trigger_delivery.reset();
     }
 
-    fn capture_trigger_pulses(&mut self, pulses: &mut Vec<crate::modulation::TriggerPulse>) {
+    fn capture_trigger_pulses(&mut self, pulses: &mut crate::modulation::TriggerPulseBuffer) {
         let was_failed = self.trigger_delivery.failure().is_some();
-        if let Err(error) = self
-            .trigger_delivery
-            .append_batch(pulses, self.current_time, Beats(self.current_beat))
-        {
+        let result = if pulses.overflowed() {
+            Err(self.trigger_delivery.reject_input_overflow())
+        } else {
+            self.trigger_delivery.append_batch(
+                pulses.pulses_mut(), self.current_time, Beats(self.current_beat),
+            )
+        };
+        if let Err(error) = result {
             if !was_failed && let Some(log_error) = &self.log_error {
                 log_error(&format!("[PlaybackEngine] trigger delivery stopped: {error}"));
             }
@@ -3369,6 +3373,68 @@ mod tests {
             engine.with_trigger_pulses(|pulses, _, _| pulses.len()),
             Some(0)
         );
+    }
+
+    #[test]
+    fn trigger_delivery_retains_named_parameter_fires_without_gate_conversion() {
+        let mut project = trigger_delivery_project();
+        let effect = &mut project.settings.master_effects[0];
+        let owner = effect.id.clone();
+        let spec = &mut effect.params.get_mut("fire").unwrap().spec;
+        spec.is_trigger_gate = false;
+        spec.is_trigger = true;
+        spec.is_toggle = false;
+        spec.max = 16_777_216.0;
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(project);
+        for (transient, sample) in [(0.99, 512), (0.0, 1024), (0.99, 1536)] {
+            *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(transient, sample);
+            trigger_delivery_tick(&mut engine);
+        }
+        engine.with_trigger_pulses(|pulses, _, _| {
+            assert_eq!(pulses.len(), 2);
+            for (pulse, sample) in pulses.iter().zip([512, 1536]) {
+                assert_eq!(pulse.pulse.kind, crate::modulation::TriggerPulseKind::Parameter);
+                assert_eq!(pulse.pulse.owner_id, owner);
+                assert_eq!(pulse.pulse.layer_id, None);
+                assert_eq!(pulse.pulse.audio_stamp.unwrap().end_sample, sample);
+            }
+        }).unwrap();
+        trigger_delivery_tick(&mut engine);
+        assert_eq!(engine.with_trigger_pulses(|pulses, _, _| pulses.len()), Some(0));
+    }
+
+    #[test]
+    fn trigger_delivery_producer_overflow_preserves_prior_queue_and_blocks_partial_input() {
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.initialize(trigger_delivery_project());
+        engine.modulation_trigger_scratch = crate::modulation::TriggerPulseBuffer::with_capacity(1);
+        *engine.audio_snapshot_mut() = trigger_delivery_retained_snapshot(0.99, 512);
+        trigger_delivery_tick(&mut engine);
+        let accepted = engine.trigger_delivery.as_slice().to_vec();
+        assert_eq!(accepted.len(), 1);
+        let capacity = engine.modulation_trigger_scratch.capacity();
+
+        let mut snapshot = trigger_delivery_audio_snapshot(0.99);
+        let mut batch = AudioHopBatch::with_capacity(4);
+        batch.begin(23);
+        for (transient, sample) in [(0.0, 1024), (0.99, 1536), (0.0, 2048), (0.99, 2560)] {
+            let hop = trigger_delivery_retained_snapshot(transient, sample).hop_batches[0].hops()[0];
+            batch.push(hop).unwrap();
+        }
+        snapshot.hop_batches.push(batch);
+        *engine.audio_snapshot_mut() = snapshot;
+        trigger_delivery_tick(&mut engine);
+
+        let failure = engine.trigger_delivery_failure().unwrap();
+        assert_eq!(failure.kind, trigger_delivery::TriggerDeliveryError::CapacityOverflow);
+        assert_eq!(engine.trigger_delivery.as_slice(), accepted);
+        assert_eq!(engine.modulation_trigger_scratch.capacity(), capacity);
+        assert!(engine.modulation_trigger_scratch.is_empty());
+        assert_eq!(engine.with_trigger_pulses(|_, _, _| panic!("partial input consumed")), None::<()>);
+        engine.stop();
+        assert!(engine.trigger_delivery_failure().is_none());
+        assert_eq!(engine.modulation_trigger_scratch.capacity(), capacity);
     }
 
     #[test]

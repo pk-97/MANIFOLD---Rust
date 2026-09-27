@@ -1963,6 +1963,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if !targets.accepts(pulse) {
                 continue;
             }
+            // Named Fire parameters keep their existing parameter-counter
+            // behavior. Their retained events are for explicit target delivery,
+            // never the compatibility gate broadcast below.
+            if pulse.kind != manifold_playback::modulation::TriggerPulseKind::Gate {
+                continue;
+            }
             match &pulse.layer_id {
                 Some(layer_id) => {
                     if let Some(gr) = gen_renderer.as_deref_mut() {
@@ -4193,13 +4199,19 @@ mod trigger_delivery_tests {
                 id: "gate".into(), is_trigger_gate: true, ..Default::default()
             }
         ));
+        instance.params.push(manifold_core::params::Param::bundled(
+            manifold_core::effect_graph_def::ParamSpecDef {
+                id: "fire".into(), is_trigger: true, ..Default::default()
+            }
+        ));
         let owner_id = instance.id.clone();
         project.settings.master_effects.push(instance);
         let mut targets = super::trigger_targets::TriggerTargets::default();
         targets.refresh(Some(&project), 1, 3);
-        let pulses: Vec<_> = [0.25, 0.125, 0.25].into_iter().enumerate().map(|(index, time)| {
+        let mut pulses: Vec<_> = [0.25, 0.125, 0.25].into_iter().enumerate().map(|(index, time)| {
             CapturedTriggerPulse {
                 pulse: TriggerPulse {
+                    kind: manifold_playback::modulation::TriggerPulseKind::Gate,
                     layer_id: None,
                     owner_id: owner_id.clone(),
                     param_key: manifold_core::audio_trigger::fire_meter_key_for_param("", "gate"),
@@ -4217,6 +4229,11 @@ mod trigger_delivery_tests {
                 accepted_beat: Beats(2.0),
             }
         }).collect();
+        let mut parameter_event = pulses[0].clone();
+        parameter_event.pulse.kind = manifold_playback::modulation::TriggerPulseKind::Parameter;
+        parameter_event.pulse.param_key = manifold_core::audio_trigger::fire_meter_key_for_param("", "fire");
+        assert!(targets.accepts(&parameter_event.pulse));
+        pulses.insert(1, parameter_event);
         let mut count = 10;
         super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
         assert_eq!(count, 13);
