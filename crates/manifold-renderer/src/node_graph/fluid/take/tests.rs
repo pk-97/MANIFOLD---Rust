@@ -477,6 +477,70 @@ fn clock_point(beat: f64, transport: f64, simulation: f64) -> TakeTime {
     }
 }
 
+fn indexed_clock_take() -> (Directory, Vec<TakeTime>) {
+    let directory = Directory::new();
+    let points = vec![
+        clock_point(-2.0, -2.0, 0.0),
+        clock_point(-1.0, -1.0, TICK),
+        clock_point(0.0, 0.0, TICK),
+        clock_point(2.0, 1.0, 3.0 * TICK),
+    ];
+    let mut input = request();
+    input.timing.points = points[..2].to_vec();
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    writer.append(&input, 1, 1, None).unwrap();
+    input.start_tick = 1;
+    input.timing.points = points[1..3].to_vec();
+    writer.append(&input, 0, 1, None).unwrap();
+    input.timing.points = points[2..].to_vec();
+    writer.append(&input, 2, 3, None).unwrap();
+    (directory, points)
+}
+
+#[test]
+fn fluid_take_indexed_clock_supports_random_lookup_holds_and_cached_records() {
+    let (directory, points) = indexed_clock_take();
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let mut clock = replay.into_playback_clock().unwrap();
+
+    assert_eq!(
+        clock.simulation_time_at(points[0].transport).unwrap(),
+        points[0].simulation
+    );
+    assert_eq!(
+        clock.simulation_time_at(points[2].transport).unwrap(),
+        points[2].simulation
+    );
+    assert!((clock.simulation_time_at(Seconds(-1.5)).unwrap().0 - 0.5 * TICK).abs() < 1e-12);
+    assert!((clock.simulation_time_at(Seconds(0.5)).unwrap().0 - 2.0 * TICK).abs() < 1e-12);
+
+    let selected = batch_path(&directory.0, 2);
+    fs::remove_file(&selected).unwrap();
+    assert!((clock.simulation_time_at(Seconds(0.75)).unwrap().0 - 2.5 * TICK).abs() < 1e-12);
+    assert!(clock.simulation_time_at(Seconds(-2.01)).is_err());
+    assert!(clock.simulation_time_at(Seconds(2.0)).is_err());
+    assert!(clock.simulation_time_at(Seconds(f64::NAN)).is_err());
+}
+
+#[test]
+fn fluid_take_indexed_clock_rejects_a_modified_selected_record() {
+    let (directory, _) = indexed_clock_take();
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let mut clock = replay.into_playback_clock().unwrap();
+    let path = batch_path(&directory.0, 2);
+    let (mut batch, _): (Batch, _) = read_record(&path).unwrap();
+    batch.clock[1].simulation.0 += TICK;
+    fs::remove_file(&path).unwrap();
+    write_new(&path, &batch).unwrap();
+
+    assert!(
+        clock
+            .simulation_time_at(Seconds(0.5))
+            .unwrap_err()
+            .contains("changed")
+    );
+}
+
 #[test]
 fn fluid_take_project_clock_maps_origin_speed_holds_and_tempo() {
     let directory = Directory::new();
@@ -548,6 +612,10 @@ fn fluid_take_project_clock_clips_failed_native_prefix() {
             .simulation_time_at_beat(manifold_core::Beats(11.0))
             .is_err()
     );
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let mut clock = replay.into_playback_clock().unwrap();
+    assert!((clock.simulation_time_at(range.end.transport).unwrap().0 - 2.0 * TICK).abs() < 1e-12);
+    assert!(clock.simulation_time_at(Seconds(2.5)).is_err());
 }
 
 #[test]
@@ -579,6 +647,8 @@ fn fluid_take_project_clock_rejects_gaps_invalid_points_and_untimed_lookup() {
     writer.append(&input, 6, 6, None).unwrap();
     let replay = FluidTakeReplay::open(untimed.0.as_ref()).unwrap();
     assert_eq!(replay.project_range(), None);
+    assert!(replay.into_playback_clock().is_none());
+    let replay = FluidTakeReplay::open(untimed.0.as_ref()).unwrap();
     assert!(
         replay
             .simulation_time_at(Seconds(0.0))

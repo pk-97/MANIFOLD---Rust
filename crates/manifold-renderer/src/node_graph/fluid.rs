@@ -12,7 +12,8 @@ use manifold_fluids::{
 };
 use manifold_physics::FieldValue;
 use manifold_physics::input::{
-    AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span, input_span_before,
+    AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span,
+    input_span_before,
 };
 
 use super::fluid_cache::CacheMode;
@@ -29,17 +30,20 @@ mod domain;
 pub(super) mod identity;
 mod impulses;
 mod native;
+#[cfg(test)]
+mod playback_tests;
 mod roles;
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub use domain::FluidDomainLayout;
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;
+pub(super) use take::PlaybackClock;
 pub use take::{FluidTakeFrame, FluidTakeIdentity, FluidTakeReplay, TakeRange, TakeTime};
 
 pub const TICK: f64 = 1.0 / 60.0;
 
-fn simulation_tick(time: f64) -> u64 {
+pub(super) fn simulation_tick(time: f64) -> u64 {
     (time / TICK + 1e-8).floor() as u64
 }
 const HISTORY_CAPACITY: usize = 8192;
@@ -316,6 +320,26 @@ impl WhitewaterFrame {
     }
 }
 
+/// The project address is distinct from the native tick returned by playback.
+/// Untimed legacy caches keep their historical seconds-times-speed address.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlaybackAddress {
+    transport: Seconds,
+    legacy_tick: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PlaybackRequest {
+    address: PlaybackAddress,
+    published_tick: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct PlaybackCompletion {
+    address: PlaybackAddress,
+    unchanged: bool,
+}
+
 struct Request {
     epoch: u64,
     settings: FluidSettings,
@@ -332,6 +356,7 @@ struct Request {
     cache_path: Arc<PathBuf>,
     coupled: Option<coupled::Request>,
     timing: take::TimingHandoff,
+    playback: Option<PlaybackRequest>,
 }
 
 struct Reply {
@@ -349,6 +374,7 @@ struct Reply {
     error: Option<String>,
     coupled: Option<coupled::Request>,
     timing: take::TimingHandoff,
+    playback: Option<PlaybackCompletion>,
 }
 
 fn cancelled_reply(request: Request) -> Reply {
@@ -366,6 +392,10 @@ fn cancelled_reply(request: Request) -> Reply {
         error: None,
         coupled: request.coupled,
         timing: request.timing,
+        playback: request.playback.map(|request| PlaybackCompletion {
+            address: request.address,
+            unchanged: false,
+        }),
     }
 }
 
@@ -433,6 +463,7 @@ pub struct FluidRuntime {
     spare_role_history: Option<Vec<roles::Controls>>,
     failure: Option<String>,
     accepted_observation: Option<(f64, f64)>,
+    completed_playback: Option<PlaybackAddress>,
     pub vertices: Vec<MeshVertex>,
     pub whitewater: WhitewaterFrame,
     pub version: u64,
@@ -472,6 +503,7 @@ impl Default for FluidRuntime {
             spare_role_history: Some(Vec::new()),
             failure: None,
             accepted_observation: None,
+            completed_playback: None,
             vertices: Vec::new(),
             whitewater: WhitewaterFrame::default(),
             version: 0,
@@ -520,6 +552,7 @@ impl FluidRuntime {
         self.reset_requested = false;
         self.settings = None;
         self.accepted_observation = None;
+        self.completed_playback = None;
         self.last_transport = None;
         self.history.clear();
         self.timing.clear();
@@ -531,7 +564,8 @@ impl FluidRuntime {
         self.completed_tick = 0;
         self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
         if self.epoch > 1 {
-            self.impulses.reset(self.epoch, Seconds::ZERO)
+            self.impulses
+                .reset(self.epoch, Seconds::ZERO)
                 .expect("fluid reset uses a strictly newer epoch");
         }
         self.applied_impulses.clear();
@@ -558,6 +592,14 @@ impl FluidRuntime {
         self.coupled.as_ref()?.accepted.as_ref()
     }
     pub fn lag_seconds(&self) -> f64 {
+        if self.cache_mode == CacheMode::Playback {
+            // A take can start anywhere in the project and retain speed-zero
+            // spans. Its simulation tick is not a project-time progress clock.
+            return match (self.last_transport, self.completed_playback) {
+                (Some(target), Some(completed)) => (target - completed.transport.0).max(0.0),
+                _ => 0.0,
+            };
+        }
         (self.target_time - self.simulation_time()).max(0.0)
     }
     pub fn warmup_pending(&self) -> bool {
@@ -764,9 +806,10 @@ impl FluidRuntime {
             || coupling_changed
             || self.reset_requested
             || reset_edge
-            || self
-                .last_transport
-                .is_some_and(|previous| transport.0 < previous - 1e-9)
+            || (self.cache_mode != CacheMode::Playback
+                && self
+                    .last_transport
+                    .is_some_and(|previous| transport.0 < previous - 1e-9))
         {
             self.clear();
             self.settings = Some(settings);
@@ -792,8 +835,8 @@ impl FluidRuntime {
             self.target_time
         };
         if self.cache_mode == CacheMode::Playback {
-            // Playback addresses cached ticks directly, including speed edits
-            // that move its target backward. No solver consumes these controls.
+            // The worker resolves timed takes from project transport. Retain
+            // the absolute speed-scaled address only for untimed legacy caches.
             self.history.clear();
             self.role_history.clear();
         }
@@ -908,8 +951,7 @@ impl FluidRuntime {
                 previous.obstacle_enabled
             },
             gravity: std::array::from_fn(|axis| {
-                previous.gravity[axis]
-                    + alpha * (next.gravity[axis] - previous.gravity[axis])
+                previous.gravity[axis] + alpha * (next.gravity[axis] - previous.gravity[axis])
             }),
             inflow_speed: previous.inflow_speed
                 + alpha * (next.inflow_speed - previous.inflow_speed),
@@ -943,7 +985,8 @@ impl FluidRuntime {
 
     fn accept(&mut self, mut reply: Reply) -> Result<(), String> {
         self.busy = false;
-        let has_output = !reply.timing.metadata_only;
+        let has_output = !reply.timing.metadata_only
+            && !reply.playback.is_some_and(|completed| completed.unchanged);
         if let Err(error) = self.timing.recycle(
             std::mem::take(&mut reply.timing),
             reply.epoch == self.epoch && reply.error.is_none(),
@@ -954,10 +997,11 @@ impl FluidRuntime {
         if publish {
             match (&self.coupled, &reply.coupled) {
                 (Some(_), Some(coupled))
-                    if coupled.output.stamp == (manifold_physics::TickStamp {
-                        epoch: reply.epoch,
-                        tick: reply.tick,
-                    }) => {}
+                    if coupled.output.stamp
+                        == (manifold_physics::TickStamp {
+                            epoch: reply.epoch,
+                            tick: reply.tick,
+                        }) => {}
                 (None, None) => {}
                 _ => {
                     reply.error = Some(
@@ -988,6 +1032,9 @@ impl FluidRuntime {
             self.spare_history = Some(reply.history);
             self.failure = Some(error.clone());
             return Err(error);
+        }
+        if let Some(completed) = reply.playback {
+            self.completed_playback = Some(completed.address);
         }
         if !has_output {
             self.spare = Some(reply.vertices);
@@ -1042,10 +1089,14 @@ impl FluidRuntime {
                 }
             }
             let target_tick = simulation_tick(self.target_time);
+            let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
+                transport: Seconds(self.last_transport.expect("observed transport")),
+                legacy_tick: target_tick,
+            });
             let due = target_tick.saturating_sub(self.completed_tick);
             if self.initialized
                 && (if self.cache_mode == CacheMode::Playback {
-                    target_tick == self.completed_tick
+                    playback == self.completed_playback
                 } else {
                     due == 0 && !(self.cache_mode == CacheMode::Record && self.timing.pending())
                 })
@@ -1104,6 +1155,10 @@ impl FluidRuntime {
                 timing: self.timing.snapshot(
                     self.initialized && self.cache_mode == CacheMode::Record && count == 0,
                 ),
+                playback: playback.map(|address| PlaybackRequest {
+                    address,
+                    published_tick: self.initialized.then_some(self.completed_tick),
+                }),
             };
             let worker = self.worker.as_ref().expect("worker exists");
             if let Err(error) = worker.requests.send(request) {
@@ -1358,6 +1413,7 @@ mod tests {
             reply_sender
                 .send(Reply {
                     timing: Default::default(),
+                    playback: None,
                     coupled: None,
                     started_tick: 0,
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1394,6 +1450,7 @@ mod tests {
                         reply_sender
                             .send(Reply {
                                 timing: Default::default(),
+                                playback: None,
                                 coupled: None,
                                 started_tick: 0,
                                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1443,6 +1500,7 @@ mod tests {
         reply_sender
             .send(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1473,6 +1531,7 @@ mod tests {
         reply_sender
             .send(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1533,6 +1592,7 @@ mod tests {
         runtime
             .accept(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1557,6 +1617,7 @@ mod tests {
         runtime
             .accept(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1723,7 +1784,7 @@ mod tests {
     }
 
     #[test]
-    fn fluid_playback_uses_absolute_transport_and_supports_backward_seek() {
+    fn fluid_playback_keeps_legacy_address_and_reuses_worker_for_backward_seek() {
         let mut runtime = FluidRuntime::default();
         runtime
             .set_cache(CacheMode::Playback, "/tmp/fluid-playback-test")
@@ -1738,7 +1799,7 @@ mod tests {
         runtime
             .observe(settings, controls, Seconds(1.0), 2.0, 0.0)
             .unwrap();
-        assert_ne!(runtime.epoch, epoch);
+        assert_eq!(runtime.epoch, epoch);
         assert!((runtime.target_time - 2.0).abs() < 1e-9);
         // A speed edit changes the absolute cache address without seeking the
         // transport. It must not be rejected as backward authored input.
@@ -1973,6 +2034,7 @@ mod tests {
         runtime
             .accept(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -2019,6 +2081,7 @@ mod tests {
         runtime
             .accept(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -2042,6 +2105,7 @@ mod tests {
         runtime
             .accept(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -2073,6 +2137,7 @@ mod tests {
         runtime
             .accept(Reply {
                 timing: Default::default(),
+                playback: None,
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -2111,6 +2176,7 @@ mod tests {
             runtime
                 .accept(Reply {
                     timing: Default::default(),
+                    playback: None,
                     coupled: None,
                     started_tick: 0,
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -2197,7 +2263,10 @@ mod tests {
             [-2.0, 10.0, -4.0]
         );
         let samples: Vec<_> = runtime.history.iter().cloned().collect();
-        assert_eq!(FluidRuntime::step_at(&samples, 59).next.gravity, [2.0, 0.0, 4.0]);
+        assert_eq!(
+            FluidRuntime::step_at(&samples, 59).next.gravity,
+            [2.0, 0.0, 4.0]
+        );
         assert_eq!(
             FluidRuntime::step_at(&samples, 60).current.gravity,
             [-2.0, 10.0, -4.0]

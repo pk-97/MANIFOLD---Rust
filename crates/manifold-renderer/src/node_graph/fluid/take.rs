@@ -17,7 +17,10 @@ use super::{
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 
+mod playback;
 mod timing;
+use playback::ClockIndexEntry;
+pub(crate) use playback::PlaybackClock;
 pub(super) use timing::{Capture, TimingHandoff};
 pub use timing::{TakeRange, TakeTime};
 
@@ -97,6 +100,16 @@ impl FluidTakeReplay {
     /// holds. Seconds-only legacy callers have no project timing provenance.
     pub fn project_range(&self) -> Option<TakeRange> {
         self.reader.clock_range
+    }
+
+    pub(crate) fn into_playback_clock(self) -> Option<PlaybackClock> {
+        let Reader {
+            directory,
+            clock_range,
+            clock_index,
+            ..
+        } = self.reader;
+        clock_range.map(|range| PlaybackClock::new(directory, range, clock_index))
     }
 
     /// Resolve a requested project boundary on the owning offline worker.
@@ -221,6 +234,7 @@ impl FluidTakeReplay {
             cache_path: Arc::clone(&pending.cache_path),
             coupled,
             timing: TimingHandoff::default(),
+            playback: None,
         };
         let reply = self.native.process(request, &AtomicU64::new(EPOCH));
         if let Some(error) = &reply.error {
@@ -443,6 +457,7 @@ pub(super) struct Reader {
     previous_hash: Hash,
     next_record: u64,
     clock_range: Option<TakeRange>,
+    clock_index: Vec<ClockIndexEntry>,
 }
 
 impl Reader {
@@ -497,6 +512,7 @@ impl Reader {
                 completed_time = end.simulation.0;
             }
         }
+        let mut clock_index = Vec::new();
         for record in 0..progress.records {
             let (batch, hash): (Batch, Hash) = read_record(&batch_path(&directory, record))?;
             let end = batch
@@ -512,6 +528,16 @@ impl Reader {
                 return Err("Physics take: invalid committed input chain".into());
             }
             let next_clock_end = validate_clock(&batch.clock, clock_end)?;
+            if let Some(last) = batch.clock.last().copied() {
+                if clock_index.len() >= playback::MAX_CLOCK_INDEX_ENTRIES {
+                    return Err("Physics take: project clock index exceeds 1048576 records".into());
+                }
+                clock_index.push(ClockIndexEntry {
+                    record,
+                    digest: hash,
+                    last_transport: last.transport,
+                });
+            }
             for &point in &batch.clock {
                 if let Some(range) = &mut clock_range {
                     if point.simulation.0 <= completed_time {
@@ -547,6 +573,7 @@ impl Reader {
             previous_hash: header_hash,
             next_record: 0,
             clock_range,
+            clock_index,
         })
     }
 
@@ -757,6 +784,7 @@ impl Reader {
                 cache_path: Arc::new(PathBuf::new()),
                 coupled,
                 timing: TimingHandoff::default(),
+                playback: None,
             }));
         }
     }

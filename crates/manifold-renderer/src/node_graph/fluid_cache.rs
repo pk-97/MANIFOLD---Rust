@@ -5,7 +5,10 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::fluid::{CoupledRigidFrame, FluidSettings, FluidTakeIdentity, FluidTakeReplay, TICK};
+use super::fluid::{
+    CoupledRigidFrame, FluidSettings, FluidTakeIdentity, FluidTakeReplay, PlaybackClock, TICK,
+    simulation_tick,
+};
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::fluid::WhitewaterFrame;
@@ -201,6 +204,7 @@ pub(crate) struct CacheReader {
     directory: Arc<PathBuf>,
     format_version: u32,
     take_identity: Option<FluidTakeIdentity>,
+    project_clock: Option<PlaybackClock>,
     max_vertices: usize,
     max_whitewater: usize,
 }
@@ -215,8 +219,8 @@ impl CacheReader {
         let mut reader = BufReader::new(manifest);
         let (format_version, binding) = read_manifest(&mut reader, settings)
             .map_err(|error| format!("Water cache playback rejected manifest: {error}"))?;
-        let take_identity = match binding {
-            CacheManifestBinding::Unbound => None,
+        let (take_identity, project_clock) = match binding {
+            CacheManifestBinding::Unbound => (None, None),
             CacheManifestBinding::Pending => {
                 return Err("Water cache playback rejected pending take prefix".into());
             }
@@ -235,16 +239,34 @@ impl CacheReader {
                             .into(),
                     );
                 }
-                Some(identity)
+                (Some(identity), replay.into_playback_clock())
             }
         };
         Ok(Self {
             directory,
             format_version,
             take_identity,
+            project_clock,
             max_vertices: settings.max_vertices,
             max_whitewater: settings.whitewater.max_particles as usize,
         })
+    }
+
+    /// Resolve only on the worker. Timed takes retain their recorded speed
+    /// changes and holds; legacy caches explicitly keep absolute tick lookup.
+    pub(crate) fn playback_tick(
+        &mut self,
+        project_time: Option<manifold_core::Seconds>,
+        legacy_tick: u64,
+    ) -> Result<u64, String> {
+        if let Some(clock) = &mut self.project_clock {
+            let project_time = project_time
+                .ok_or("Water cache playback requires the recorded project-time address")?;
+            let simulation = clock.simulation_time_at(project_time)?;
+            Ok(simulation_tick(simulation.0))
+        } else {
+            Ok(legacy_tick)
+        }
     }
 
     pub(crate) fn read_into(

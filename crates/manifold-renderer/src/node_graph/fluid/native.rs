@@ -260,6 +260,8 @@ impl NativeSimulation {
         let mut pose = request.initial.obstacle;
         let mut setup_error = None;
         let mut completed_count = 0usize;
+        let mut playback_tick = None;
+        let mut playback_unchanged = false;
         let mut recorded_count = 0usize;
         let mut started_tick = request.start_tick;
         if self.cache_epoch != Some(request.epoch) {
@@ -311,9 +313,24 @@ impl NativeSimulation {
             if request.cache_mode == CacheMode::Playback {
                 request.recycle.clear();
                 request.recycle_whitewater.clear();
-                if request.count > 0 || coupled_request.is_some() {
-                    let cache = self.playback.as_ref().expect("playback initialized");
-                    let tick = request.start_tick + request.count as u64;
+                let cache = self.playback.as_mut().expect("playback initialized");
+                let tick = cache.playback_tick(
+                    request.playback.map(|playback| playback.address.transport),
+                    request
+                        .playback
+                        .map_or(request.start_tick + request.count as u64, |playback| {
+                            playback.address.legacy_tick
+                        }),
+                )?;
+                playback_tick = Some(tick);
+                if request
+                    .playback
+                    .is_some_and(|playback| playback.published_tick == Some(tick))
+                {
+                    playback_unchanged = true;
+                    return Ok(());
+                }
+                if tick > 0 || coupled_request.is_some() {
                     if let Some(coupled) = &mut coupled_request {
                         let paired;
                         (pose, stats, paired) = cache.read_paired_into(
@@ -449,7 +466,7 @@ impl NativeSimulation {
         }
         Reply {
             epoch: request.epoch,
-            tick: request.start_tick + completed_count as u64,
+            tick: playback_tick.unwrap_or(request.start_tick + completed_count as u64),
             started_tick,
             impulses: request.impulses,
             history: request.history,
@@ -461,6 +478,10 @@ impl NativeSimulation {
             error,
             coupled: request.coupled,
             timing: request.timing,
+            playback: request.playback.map(|playback| super::PlaybackCompletion {
+                address: playback.address,
+                unchanged: playback_unchanged,
+            }),
         }
     }
 
@@ -487,16 +508,38 @@ impl NativeSimulation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::fluid::{take, take::tests::request};
+    use crate::node_graph::fluid::{TICK, take, take::tests::request};
     use std::sync::Arc;
 
     #[test]
     fn fluid_take_paired_cache_replays_initial_and_completed_poses_without_native_worlds() {
+        paired_playback(false);
+    }
+
+    #[test]
+    fn fluid_take_paired_cache_uses_project_time_without_native_worlds() {
+        paired_playback(true);
+    }
+
+    fn paired_playback(timed: bool) {
         let directory = Arc::new(std::env::temp_dir().join(format!(
-            "manifold-paired-native-cache-{}",
+            "manifold-paired-native-cache-{timed}-{}",
             std::process::id()
         )));
         let mut input = request();
+        if timed {
+            input.timing.points = [
+                (5.0, 0.0),
+                (5.0 + 3.0 * TICK, 6.0 * TICK),
+                (7.0, 6.0 * TICK),
+            ]
+            .map(|(transport, simulation)| take::TakeTime {
+                beat: manifold_core::Beats(2.0 * transport),
+                transport: manifold_core::Seconds(transport),
+                simulation: manifold_core::Seconds(simulation),
+            })
+            .to_vec();
+        }
         input.cache_mode = CacheMode::Record;
         input.cache_path = Arc::clone(&directory);
         let expected = NativeSimulation::default().process(input, &AtomicU64::new(1));
@@ -509,6 +552,19 @@ mod tests {
             input.impulses.clear();
             input.cache_mode = CacheMode::Playback;
             input.cache_path = Arc::clone(&directory);
+            if timed {
+                input.playback = Some(super::super::PlaybackRequest {
+                    address: super::super::PlaybackAddress {
+                        transport: manifold_core::Seconds(if tick == 6 {
+                            7.0
+                        } else {
+                            5.0 + tick as f64 * TICK / 2.0
+                        }),
+                        legacy_tick: 1000 + tick as u64,
+                    },
+                    published_tick: None,
+                });
+            }
             let actual = playback.process(input, &AtomicU64::new(23));
             assert_eq!(actual.error, None);
             assert_eq!(actual.tick, tick as u64);
