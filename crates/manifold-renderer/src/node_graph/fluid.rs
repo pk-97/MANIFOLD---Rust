@@ -341,6 +341,7 @@ struct PlaybackCompletion {
 }
 
 struct Request {
+    project_tempo: Option<crate::preset_context::ProjectTempo>,
     epoch: u64,
     settings: FluidSettings,
     initial: FluidControls,
@@ -439,6 +440,8 @@ impl Drop for Worker {
 }
 
 pub struct FluidRuntime {
+    project_tempo: Option<crate::preset_context::ProjectTempo>,
+    recording_project_timing: Option<bool>,
     worker: Option<Worker>,
     settings: Option<FluidSettings>,
     history: InputHistory<Sample>,
@@ -478,6 +481,8 @@ pub struct FluidRuntime {
 impl Default for FluidRuntime {
     fn default() -> Self {
         Self {
+            project_tempo: None,
+            recording_project_timing: None,
             worker: None,
             settings: None,
             history: InputHistory::with_capacity(HISTORY_CAPACITY)
@@ -524,6 +529,26 @@ impl Drop for FluidRuntime {
 }
 
 impl FluidRuntime {
+    pub(crate) fn set_project_tempo(
+        &mut self,
+        tempo: Option<&crate::preset_context::ProjectTempo>,
+    ) {
+        let unchanged = match (self.project_tempo.as_ref(), tempo) {
+            (Some(current), Some(next)) => current.shares_mapping(next),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        self.project_tempo = tempo.cloned();
+        if self.cache_mode == CacheMode::Playback {
+            // Cancel replies validated against the previous project. Reopen
+            // the same committed cache on its worker with the new tempo view.
+            self.clear();
+        }
+    }
+
     /// Select a worker cache. The path is copied only when the mode or path
     /// changes; ordinary frame evaluation therefore does not churn path
     /// allocations. Record and playback never fall back to live simulation.
@@ -556,6 +581,7 @@ impl FluidRuntime {
         self.last_transport = None;
         self.history.clear();
         self.timing.clear();
+        self.recording_project_timing = None;
         self.role_history.clear();
         if let Some(coupled) = &mut self.coupled {
             coupled.clear();
@@ -717,6 +743,16 @@ impl FluidRuntime {
         if self.cache_mode == CacheMode::Record
             && let Some((transport, simulation)) = self.accepted_observation
         {
+            let project_timing = self.project_tempo.is_some();
+            if self
+                .recording_project_timing
+                .is_some_and(|prior| prior != project_timing)
+            {
+                let error = "Physics take: project timing provenance changed during recording; restart the take".to_owned();
+                self.failure = Some(error.clone());
+                return Err(error);
+            }
+            self.recording_project_timing = Some(project_timing);
             let result = self.timing.record(take::TakeTime {
                 beat: frame.beats,
                 transport: Seconds(transport),
@@ -1131,6 +1167,7 @@ impl FluidRuntime {
                 .expect("one recycled role history per request");
             self.role_history.snapshot(&mut role_history);
             let request = Request {
+                project_tempo: self.project_tempo.clone(),
                 epoch: self.epoch,
                 settings,
                 initial,

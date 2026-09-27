@@ -197,6 +197,10 @@ impl FluidSurface {
 }
 
 impl Primitive for FluidSurface {
+    fn set_physics_project_tempo(&mut self, tempo: Option<&crate::preset_context::ProjectTempo>) {
+        self.runtime.set_project_tempo(tempo);
+    }
+
     fn clear_state(&mut self) {
         self.runtime.clear();
         self.role_pending = false;

@@ -12,6 +12,14 @@ impl Fixture {
     }
 
     fn new_at(timed: bool, origin: f64) -> Self {
+        Self::with_project_tempo(timed, origin, None)
+    }
+
+    fn with_project_tempo(
+        timed: bool,
+        origin: f64,
+        project_tempo: Option<crate::preset_context::ProjectTempo>,
+    ) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let directory = Arc::new(std::env::temp_dir().join(format!(
             "manifold-fluid-project-playback-{}-{}",
@@ -24,6 +32,7 @@ impl Fixture {
         };
         let initial = FluidControls::default();
         let request = Request {
+            project_tempo,
             epoch: 1,
             settings,
             initial,
@@ -247,4 +256,164 @@ fn fluid_playback_old_reply_does_not_acknowledge_a_newer_seek() {
     assert_eq!(runtime.completed_tick, 1);
     assert_eq!(runtime.lag_seconds(), 0.0);
     assert!(receive.try_recv().is_err());
+}
+
+#[test]
+fn fluid_playback_revalidates_current_project_tempo_and_rejects_unproven_timing() {
+    use crate::preset_context::ProjectTempo;
+    use manifold_core::{Bpm, tempo::TempoMap};
+    let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(120.0));
+    let fixture = Fixture::with_project_tempo(true, 40.0, Some(tempo.clone()));
+    let mut runtime = fixture.runtime();
+    runtime.set_project_tempo(Some(&tempo));
+    fixture.observe(&mut runtime, 41.0, 1.0);
+    runtime.advance(true).unwrap();
+    assert_eq!(runtime.completed_tick, 4);
+    let epoch = runtime.epoch;
+    runtime.set_project_tempo(Some(&tempo));
+    assert_eq!(
+        runtime.epoch, epoch,
+        "unchanged tempo must reuse the verified reader"
+    );
+    let changed = ProjectTempo::new(&TempoMap::default(), Bpm(60.0));
+    runtime.set_project_tempo(Some(&changed));
+    assert!(runtime.epoch > epoch);
+    fixture.observe(&mut runtime, 41.0, 1.0);
+    assert!(
+        runtime
+            .advance(true)
+            .unwrap_err()
+            .to_lowercase()
+            .contains("tempo")
+    );
+    assert!(runtime.vertices.is_empty());
+    assert!(!runtime.initialized);
+
+    let unproven = Fixture::new(true);
+    let mut runtime = unproven.runtime();
+    runtime.set_project_tempo(Some(&tempo));
+    unproven.observe(&mut runtime, 41.0, 1.0);
+    assert!(
+        runtime.advance(true).is_err(),
+        "a timed take alone is not authoritative project tempo"
+    );
+}
+
+#[test]
+fn fluid_playback_tempo_edit_cancels_an_already_completed_old_reply() {
+    use crate::preset_context::ProjectTempo;
+    use manifold_core::{Bpm, tempo::TempoMap};
+    let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(120.0));
+    let fixture = Fixture::with_project_tempo(true, 40.0, Some(tempo.clone()));
+    let mut runtime = fixture.runtime();
+    runtime.set_project_tempo(Some(&tempo));
+    let (requests, receive) = mpsc::sync_channel(1);
+    let (send, replies) = mpsc::sync_channel(1);
+    runtime.worker = Some(Worker {
+        requests,
+        replies,
+        cancel_epoch: Arc::clone(&runtime.cancel_epoch),
+    });
+    let mut native = NativeSimulation::default();
+    fixture.observe(&mut runtime, 41.0, 1.0);
+    runtime.advance(false).unwrap();
+    let old_reply = native.process(receive.try_recv().unwrap(), &runtime.cancel_epoch);
+    assert!(old_reply.error.is_none());
+    let changed = ProjectTempo::new(&TempoMap::default(), Bpm(60.0));
+    runtime.set_project_tempo(Some(&changed));
+    fixture.observe(&mut runtime, 41.0, 1.0);
+    send.send(old_reply).unwrap();
+    runtime.advance(false).unwrap();
+    assert!(
+        !runtime.initialized,
+        "old validated geometry must not cross the tempo edit"
+    );
+    assert!(runtime.vertices.is_empty());
+    let new_request = receive.try_recv().unwrap();
+    let reply = native.process(new_request, &runtime.cancel_epoch);
+    assert!(reply.error.is_some());
+    send.send(reply).unwrap();
+    assert!(runtime.advance(true).is_err());
+}
+
+#[test]
+fn fluid_project_tempo_edits_preserve_live_owner_and_ignore_display_bpm_for_a_map() {
+    use crate::preset_context::ProjectTempo;
+    use manifold_core::{Bpm, tempo::TempoMap, types::TempoPointSource};
+    let mut map = TempoMap::default();
+    map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.001);
+    map.ensure_sorted();
+    let tempo = ProjectTempo::new(&map, Bpm(120.0));
+    let display_change = ProjectTempo::new(&map, Bpm(137.0));
+    let mut runtime = FluidRuntime::default();
+    runtime.set_project_tempo(Some(&tempo));
+    runtime
+        .observe(
+            FluidSettings::default(),
+            FluidControls::default(),
+            Seconds::ZERO,
+            1.0,
+            0.0,
+        )
+        .unwrap();
+    let epoch = runtime.epoch;
+    runtime.set_project_tempo(Some(&ProjectTempo::new(&TempoMap::default(), Bpm(60.0))));
+    assert_eq!(
+        runtime.epoch, epoch,
+        "tempo edits do not reset live physics"
+    );
+    let fixture = Fixture::with_project_tempo(true, 40.0, Some(tempo.clone()));
+    let mut playback = fixture.runtime();
+    playback.set_project_tempo(Some(&tempo));
+    fixture.observe(&mut playback, 41.0, 1.0);
+    playback.advance(true).unwrap();
+    let epoch = playback.epoch;
+    playback.set_project_tempo(Some(&display_change));
+    assert_eq!(
+        playback.epoch, epoch,
+        "display BPM cannot invalidate a populated tempo map"
+    );
+    assert!(playback.initialized);
+}
+
+#[test]
+fn fluid_recording_rejects_losing_project_clock_provenance_mid_take() {
+    use crate::preset_context::ProjectTempo;
+    use manifold_core::{Bpm, tempo::TempoMap};
+    let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(120.0));
+    let mut runtime = FluidRuntime::default();
+    runtime.set_project_tempo(Some(&tempo));
+    // Observation alone performs no filesystem or native work.
+    runtime
+        .set_cache(CacheMode::Record, "unused-clock-provenance-test")
+        .unwrap();
+    let observe = |runtime: &mut FluidRuntime, seconds: f64| {
+        runtime.observe_coupled_frame(
+            FluidSettings::default(),
+            FluidControls::default(),
+            &[],
+            None,
+            None,
+            super::super::FrameTime {
+                seconds: Seconds(seconds),
+                beats: Beats(seconds * 2.0),
+                delta: Seconds::ZERO,
+                frame_count: 0,
+            },
+            1.0,
+            0.0,
+        )
+    };
+    observe(&mut runtime, 0.0).unwrap();
+    runtime.set_project_tempo(None);
+    assert!(
+        observe(&mut runtime, TICK)
+            .unwrap_err()
+            .contains("provenance changed")
+    );
+    assert!(runtime.failure.is_some());
+    runtime.clear();
+    observe(&mut runtime, 0.0).unwrap();
+    assert!(runtime.failure.is_none());
+    assert_eq!(runtime.recording_project_timing, Some(false));
 }

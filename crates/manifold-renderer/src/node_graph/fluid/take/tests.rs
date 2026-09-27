@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::Seconds;
+use manifold_core::tempo::{TempoMap, TempoMapConverter};
 use manifold_physics::{FieldValue, TickStamp, input::EventStamp};
 
 use super::*;
@@ -10,6 +11,7 @@ use crate::node_graph::physics::{
     ColliderGeometry, RigidBody, RigidImpulseTargets, RigidSceneInputs,
 };
 use crate::node_graph::physics_events::ImpulseTarget;
+use crate::preset_context::ProjectTempo;
 
 struct Directory(Arc<PathBuf>);
 impl Directory {
@@ -477,6 +479,42 @@ fn clock_point(beat: f64, transport: f64, simulation: f64) -> TakeTime {
     }
 }
 
+fn project_tempo(points: &[(f64, f32)], fallback_bpm: f32) -> ProjectTempo {
+    let points = points
+        .iter()
+        .map(|(beat, bpm)| serde_json::json!({ "beat": beat, "bpm": bpm }))
+        .collect::<Vec<_>>();
+    let map: TempoMap = serde_json::from_value(serde_json::json!({ "points": points })).unwrap();
+    ProjectTempo::new(&map, manifold_core::Bpm(fallback_bpm))
+}
+
+fn tempo_clock(tempo: &ProjectTempo, transports: &[f64]) -> Vec<TakeTime> {
+    transports
+        .iter()
+        .enumerate()
+        .map(|(index, transport)| {
+            let beat = TempoMapConverter::seconds_to_beat_immut(
+                tempo.map(),
+                Seconds(*transport),
+                tempo.fallback_bpm(),
+            );
+            clock_point(beat.0, *transport, index as f64 * TICK)
+        })
+        .collect()
+}
+
+fn tempo_take(tempo: &ProjectTempo, points: Vec<TakeTime>, completed: usize) -> Directory {
+    let directory = Directory::new();
+    let mut input = request();
+    input.project_tempo = Some(tempo.clone());
+    input.timing.points = points;
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    writer
+        .append(&input, completed, completed as u64, None)
+        .unwrap();
+    directory
+}
+
 fn indexed_clock_take() -> (Directory, Vec<TakeTime>) {
     let directory = Directory::new();
     let points = vec![
@@ -854,4 +892,138 @@ fn fluid_take_cache_reader_keeps_its_committed_range_as_recording_advances() {
         bytemuck::cast_slice::<_, u8>(&mesh),
         bytemuck::cast_slice::<_, u8>(&seventh.vertices)
     );
+}
+
+#[test]
+fn fluid_take_project_tempo_accepts_stepped_fractional_negative_and_long_positions() {
+    let tempo = project_tempo(&[(0.0, 120.0), (3.5, 91.25)], 137.37);
+    let points = tempo_clock(&tempo, &[-100.25, -1.5, 0.125, 1.75, 1_000_000.5]);
+    let directory = tempo_take(&tempo, points, 4);
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    replay.validate_project_tempo(&tempo).unwrap();
+}
+
+#[test]
+fn fluid_take_project_tempo_accepts_empty_map_fallback() {
+    let tempo = project_tempo(&[], 137.37);
+    let points = tempo_clock(&tempo, &[-123.25, 0.0, 0.75, 1_000_000.0]);
+    let directory = tempo_take(&tempo, points, 3);
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    replay.validate_project_tempo(&tempo).unwrap();
+}
+
+#[test]
+fn fluid_take_project_tempo_validates_origin_only_ranges_without_native_work() {
+    let tempo = project_tempo(&[(0.0, 120.0)], 120.0);
+    let directory = tempo_take(&tempo, vec![clock_point(0.0, 0.0, 0.0)], 0);
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    replay.validate_project_tempo(&tempo).unwrap();
+}
+
+#[test]
+fn fluid_take_project_tempo_rejects_changed_map_and_between_sample_pulse() {
+    let recorded = project_tempo(&[], 120.0);
+    let changed = project_tempo(&[(1.0, 60.0)], 120.0);
+    let points = tempo_clock(&recorded, &[0.0, 2.0]);
+    let directory = tempo_take(&recorded, points, 1);
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    assert!(replay.validate_project_tempo(&changed).is_err());
+
+    let pulse = project_tempo(
+        &[(0.0, 120.0), (1.0, 60.0), (1.5, 180.0), (3.0, 120.0)],
+        120.0,
+    );
+    assert_eq!(
+        tempo_clock(&recorded, &[0.0, 2.0]),
+        tempo_clock(&pulse, &[0.0, 2.0]),
+        "endpoint-only validation would accept this changed map"
+    );
+    assert!(replay.validate_project_tempo(&pulse).is_err());
+
+    let points = tempo_clock(&pulse, &[0.0, 0.5, 1.0, 1.5, 2.0]);
+    let directory = tempo_take(&pulse, points, 4);
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    replay.validate_project_tempo(&pulse).unwrap();
+    assert!(
+        replay.validate_project_tempo(&recorded).is_err(),
+        "removing tempo changes must also invalidate the take"
+    );
+}
+
+#[test]
+fn fluid_take_project_tempo_ignores_future_changes_and_clips_failed_prefix() {
+    let recorded = project_tempo(&[], 120.0);
+    let future = project_tempo(&[(0.0, 120.0), (4.0, 60.0)], 120.0);
+    let mut input = request();
+    input.project_tempo = Some(recorded.clone());
+    input.timing.points = vec![
+        clock_point(0.0, 0.0, 0.0),
+        clock_point(2.0, 1.0, 4.0 * TICK),
+        clock_point(20.0, 10.0, 10.0 * TICK),
+    ];
+    let directory = Directory::new();
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    writer
+        .append(&input, 2, 3, Some("native fixture failure"))
+        .unwrap();
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    replay.validate_project_tempo(&future).unwrap();
+}
+
+#[test]
+fn fluid_take_project_tempo_requires_v4_provenance_but_retains_v3_decode() {
+    let directory = Directory::new();
+    let mut input = request();
+    input.timing.points = vec![clock_point(0.0, 0.0, 0.0)];
+    let _writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    let header_path = directory.0.join(HEADER);
+    let (mut header, _): (Header, _) = read_record(&header_path).unwrap();
+    header.version = LEGACY_VERSION;
+    header.project_timing = false;
+    let mut legacy = serde_json::to_value(&header).unwrap();
+    legacy.as_object_mut().unwrap().remove("projectTiming");
+    fs::remove_file(&header_path).unwrap();
+    let header_hash = write_new(&header_path, &legacy).unwrap();
+    let progress_path = directory.0.join(PROGRESS);
+    let (mut progress, _): (Progress, _) = read_record(&progress_path).unwrap();
+    progress.header_hash = header_hash;
+    progress.last_batch_hash = header_hash;
+    publish_progress(&directory.0, &progress).unwrap();
+
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    assert!(
+        replay
+            .validate_project_tempo(&project_tempo(&[], 120.0))
+            .is_err()
+    );
+}
+
+#[test]
+fn fluid_take_writer_rejects_project_tempo_presence_changes() {
+    let directory = Directory::new();
+    let mut input = request();
+    input.project_tempo = Some(project_tempo(&[], 120.0));
+    assert!(matches!(
+        Writer::create(Arc::clone(&directory.0), &input),
+        Err(error) if error.contains("requires a clock origin")
+    ));
+    input.project_tempo = None;
+    input.timing.points = vec![clock_point(0.0, 0.0, 0.0)];
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    input.project_tempo = Some(project_tempo(&[], 120.0));
+    assert!(writer.append(&input, 0, 0, None).is_err());
+}
+
+#[test]
+fn fluid_take_project_tempo_rejects_corruption_after_opening() {
+    let tempo = project_tempo(&[], 120.0);
+    let points = tempo_clock(&tempo, &[0.0, 1.0]);
+    let directory = tempo_take(&tempo, points, 1);
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let path = batch_path(&directory.0, 0);
+    let (mut batch, _): (Batch, _) = read_record(&path).unwrap();
+    batch.clock[1].beat.0 += 0.5;
+    fs::remove_file(&path).unwrap();
+    write_new(&path, &batch).unwrap();
+    assert!(replay.validate_project_tempo(&tempo).is_err());
 }

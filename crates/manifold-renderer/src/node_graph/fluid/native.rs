@@ -293,7 +293,11 @@ impl NativeSimulation {
                         }
                     }
                     CacheMode::Playback => {
-                        match CacheReader::open(request.cache_path.clone(), request.settings) {
+                        match CacheReader::open_for_project(
+                            request.cache_path.clone(),
+                            request.settings,
+                            request.project_tempo.as_ref(),
+                        ) {
                             Ok(reader) => self.playback = Some(reader),
                             Err(error) => setup_error = Some(error),
                         }

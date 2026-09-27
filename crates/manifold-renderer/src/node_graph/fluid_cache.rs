@@ -210,7 +210,16 @@ pub(crate) struct CacheReader {
 }
 
 impl CacheReader {
+    #[cfg(test)]
     pub(crate) fn open(directory: Arc<PathBuf>, settings: FluidSettings) -> Result<Self, String> {
+        Self::open_for_project(directory, settings, None)
+    }
+
+    pub(crate) fn open_for_project(
+        directory: Arc<PathBuf>,
+        settings: FluidSettings,
+        project_tempo: Option<&crate::preset_context::ProjectTempo>,
+    ) -> Result<Self, String> {
         if directory.as_os_str().is_empty() {
             return Err("Water cache playback path is empty".into());
         }
@@ -238,6 +247,9 @@ impl CacheReader {
                         "Water cache playback take identity does not match its committed take"
                             .into(),
                     );
+                }
+                if let Some(tempo) = project_tempo {
+                    replay.validate_project_tempo(tempo)?;
                 }
                 (Some(identity), replay.into_playback_clock())
             }

@@ -217,15 +217,19 @@ impl PresetRuntime {
     /// Synthetic warmup and standalone graphs explicitly supply `None`.
     pub fn set_project_tempo(&mut self, tempo: Option<&ProjectTempo>) {
         let unchanged = match (self.physics_project_tempo.as_ref(), tempo) {
-            (Some(current), Some(next)) => {
-                current.map().shares_points(next.map())
-                    && current.fallback_bpm() == next.fallback_bpm()
-            }
+            (Some(current), Some(next)) => current.shares_mapping(next),
             (None, None) => true,
             _ => false,
         };
         if !unchanged {
             self.physics_project_tempo = tempo.cloned();
+        }
+        // Newly rebuilt native nodes need the snapshot even when the host's
+        // map did not change. The node dirty-checks its retained source.
+        if self.physics_sample_steps.is_some() {
+            for instance in self.graph.nodes_mut() {
+                instance.node.set_physics_project_tempo(tempo);
+            }
         }
         for view in &mut self.math_views {
             for variant in &mut view.variants {

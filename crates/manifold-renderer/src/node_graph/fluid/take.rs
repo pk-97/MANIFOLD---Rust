@@ -18,13 +18,15 @@ use super::{
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 
 mod playback;
+mod tempo;
 mod timing;
 use playback::ClockIndexEntry;
 pub(crate) use playback::PlaybackClock;
 pub(super) use timing::{Capture, TimingHandoff};
 pub use timing::{TakeRange, TakeTime};
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
+const LEGACY_VERSION: u32 = 3;
 const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 const HEADER: &str = "take-header.zst";
 const PROGRESS: &str = "take-progress.zst";
@@ -94,6 +96,16 @@ impl FluidTakeReplay {
 
     pub fn recording_failure(&self) -> Option<&str> {
         self.reader.progress.failed.as_deref()
+    }
+
+    /// Verify that the recorded project clock still agrees with the current
+    /// project tempo. This scan is owned-worker work: it re-reads the
+    /// authenticated clock records and never runs on a render thread.
+    pub(crate) fn validate_project_tempo(
+        &self,
+        project_tempo: &crate::preset_context::ProjectTempo,
+    ) -> Result<(), String> {
+        tempo::validate_project_tempo(&self.reader, project_tempo)
     }
 
     /// Project range backed by completed native ticks, including recorded
@@ -211,6 +223,7 @@ impl FluidTakeReplay {
             }
         });
         let request = Request {
+            project_tempo: None,
             epoch: EPOCH,
             settings: pending.settings,
             initial: pending.initial,
@@ -265,6 +278,8 @@ impl FluidTakeReplay {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Header {
     version: u32,
+    #[serde(default)]
+    project_timing: bool,
     upstream_revision: String,
     numerics_revision: u32,
     solver_identity: Hash,
@@ -318,6 +333,7 @@ struct Batch {
 pub(super) struct Writer {
     directory: Arc<PathBuf>,
     progress: Progress,
+    project_timing: bool,
 }
 
 impl Writer {
@@ -331,8 +347,13 @@ impl Writer {
                 "Physics take: recording must start at an initialized epoch boundary".into(),
             );
         }
+        let project_timing = request.project_tempo.is_some();
+        if project_timing && request.timing.points.is_empty() {
+            return Err("Physics take: project tempo provenance requires a clock origin".into());
+        }
         let header = Header {
             version: VERSION,
+            project_timing,
             upstream_revision: manifold_fluids::UPSTREAM_REVISION.into(),
             numerics_revision: manifold_fluids::NUMERICS_REVISION,
             solver_identity: super::identity::solver_identity(),
@@ -366,6 +387,7 @@ impl Writer {
         Ok(Self {
             directory,
             progress,
+            project_timing,
         })
     }
 
@@ -379,6 +401,9 @@ impl Writer {
         started_tick: u64,
         failure: Option<&str>,
     ) -> Result<(), String> {
+        if request.project_tempo.is_some() != self.project_timing {
+            return Err("Physics take: project tempo provenance changed during recording".into());
+        }
         if request.count == 0 && request.timing.points.is_empty() {
             if let Some(failure) = failure {
                 self.progress.failed = Some(failure.to_owned());
@@ -464,7 +489,7 @@ impl Reader {
     pub fn open(directory: Arc<PathBuf>) -> Result<Self, String> {
         let (header, header_hash): (Header, Hash) = read_record(&directory.join(HEADER))?;
         let (progress, _): (Progress, Hash) = read_record(&directory.join(PROGRESS))?;
-        if header.version != VERSION
+        if !matches!(header.version, LEGACY_VERSION | VERSION)
             || header.epoch == 0
             || header.upstream_revision != manifold_fluids::UPSTREAM_REVISION
             || header.numerics_revision != manifold_fluids::NUMERICS_REVISION
@@ -784,6 +809,7 @@ impl Reader {
                 cache_path: Arc::new(PathBuf::new()),
                 coupled,
                 timing: TimingHandoff::default(),
+                project_tempo: None,
                 playback: None,
             }));
         }

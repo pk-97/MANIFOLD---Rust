@@ -48,8 +48,7 @@ impl EffectNode for FluidTimeObserver {
     }
 }
 
-#[test]
-fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
+fn runtime() -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.fluid_time", || {
         Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
@@ -72,7 +71,12 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
             {"fromNode":2,"fromPort":"out","toNode":3,"toPort":"in"}
         ]
     });
-    let mut runtime = PresetRuntime::from_json_str(&def.to_string(), &registry).unwrap();
+    PresetRuntime::from_json_str(&def.to_string(), &registry).unwrap()
+}
+
+#[test]
+fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
+    let mut runtime = runtime();
     // 36 seconds generates over 8192 authored endpoints. An empty domain keeps
     // this a bounded scheduling proof; liquid motion is covered separately.
     let time = |seconds: f64| FrameTime {
@@ -118,4 +122,53 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
         .executor
         .execute_frame(&mut runtime.graph, &runtime.plan, time(36.0));
     assert_eq!(FLUID_TIME.get(), Some(36.0));
+}
+
+#[test]
+fn fluid_graph_recording_receives_authoritative_project_tempo_and_exact_breakpoints() {
+    use manifold_core::{Bpm, tempo::TempoMap, types::TempoPointSource};
+    let directory =
+        std::env::temp_dir().join(format!("manifold-fluid-tempo-graph-{}", std::process::id()));
+    let mut runtime = runtime();
+    let fluid = runtime
+        .graph
+        .instance_by_node_id(&NodeId::new("fluid"))
+        .unwrap();
+    runtime
+        .graph
+        .set_param(fluid, "cache_mode", ParamValue::Enum(1))
+        .unwrap();
+    runtime
+        .graph
+        .set_param(
+            fluid,
+            "cache_path",
+            ParamValue::String(directory.to_str().unwrap().to_owned().into()),
+        )
+        .unwrap();
+    let mut map = TempoMap::default();
+    map.add_or_replace_point(Beats::ZERO, Bpm(120.0), TempoPointSource::Manual, 0.00001);
+    map.add_or_replace_point(Beats(0.03), Bpm(60.0), TempoPointSource::Manual, 0.00001);
+    let tempo = ProjectTempo::new(&map, Bpm(120.0));
+    runtime.set_project_tempo(Some(&tempo));
+    for seconds in [0.0, 0.1] {
+        runtime.execute_frame(FrameTime {
+            seconds: Seconds(seconds),
+            beats: TempoMapConverter::seconds_to_beat_immut(
+                tempo.map(),
+                Seconds(seconds),
+                tempo.fallback_bpm(),
+            ),
+            delta: Seconds(seconds),
+            frame_count: 0,
+        });
+    }
+    let take = crate::node_graph::fluid::FluidTakeReplay::open(&directory).unwrap();
+    assert_eq!(take.recorded_tick(), 6);
+    take.validate_project_tempo(&tempo).unwrap();
+    let changed = ProjectTempo::new(&TempoMap::default(), Bpm(120.0));
+    assert!(take.validate_project_tempo(&changed).is_err());
+    drop(take);
+    drop(runtime);
+    std::fs::remove_dir_all(directory).unwrap();
 }
