@@ -1,5 +1,6 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
+use crate::preset_context::ProjectTempo;
 use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
@@ -47,6 +48,7 @@ pub struct CompositorFrame<'a> {
     pub time: f64,
     pub beat: f64,
     pub dt: f32,
+    pub project_tempo: Option<&'a ProjectTempo>,
     pub frame_count: u64,
     pub compositor_dirty: bool,
     pub clips: &'a [CompositeClipDescriptor<'a>],

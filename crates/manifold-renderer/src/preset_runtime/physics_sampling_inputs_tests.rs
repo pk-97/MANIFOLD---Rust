@@ -1,6 +1,7 @@
 use super::*;
-use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
+use manifold_core::{tempo::TempoMap, types::TempoPointSource, units::Bpm};
 use std::{borrow::Cow, cell::RefCell};
 
 #[derive(Debug)]
@@ -103,7 +104,16 @@ fn runtime() -> PresetRuntime {
 fn frame(runtime: &mut PresetRuntime, seconds: f64, value: f32, triggers: f32) -> Vec<Observation> {
     let time = FrameTime {
         seconds: Seconds(seconds),
-        beats: Beats(seconds * 2.0),
+        beats: runtime
+            .physics_project_tempo
+            .as_ref()
+            .map_or(Beats(seconds * 2.0), |tempo| {
+                TempoMapConverter::seconds_to_beat_immut(
+                    tempo.map(),
+                    Seconds(seconds),
+                    tempo.fallback_bpm(),
+                )
+            }),
         delta: Seconds(
             runtime
                 .last_physics_frame_time
@@ -176,11 +186,169 @@ fn physics_history_survives_compatible_generator_rebuild() {
     let mut rebuilt = runtime();
     rebuilt.carry_generator_state_from(&mut prior);
     let observations = frame(&mut rebuilt, 1.0 / 30.0, 9.0, 3.0);
-    assert_eq!(observations.len(), 10, "rebuild lost the open input interval");
+    assert_eq!(
+        observations.len(),
+        10,
+        "rebuild lost the open input interval"
+    );
     let (current, historical) = observations.split_last().unwrap();
-    assert!(historical.iter().all(|sample| sample.values[0] == 1.0 && sample.values[3] == 0.0));
+    assert!(
+        historical
+            .iter()
+            .all(|sample| sample.values[0] == 1.0 && sample.values[3] == 0.0)
+    );
     assert_eq!(current.values[0], 9.0);
     assert_eq!(current.values[3], 3.0);
+}
+
+fn tempo(points: &[(f64, f32)]) -> ProjectTempo {
+    let mut map = TempoMap::default();
+    for &(beat, bpm) in points {
+        map.add_or_replace_point(Beats(beat), Bpm(bpm), TempoPointSource::Manual, 0.00001);
+    }
+    ProjectTempo::new(&map, Bpm(120.0))
+}
+
+fn assert_tempo_samples(observations: &[Observation], tempo: &ProjectTempo) {
+    for sample in observations {
+        let expected = TempoMapConverter::seconds_to_beat_immut(
+            tempo.map(),
+            sample.time.seconds,
+            tempo.fallback_bpm(),
+        );
+        assert_eq!(sample.time.beats, expected);
+        assert_eq!(sample.values[2], expected.0 as f32);
+    }
+}
+
+#[test]
+fn physics_history_samples_exact_tempo_boundaries_between_display_frames() {
+    let tempo = tempo(&[(0.0, 120.0), (0.03, 174.23), (0.05, 61.17)]);
+    let boundaries: Vec<_> = tempo.map().points()[1..]
+        .iter()
+        .map(|point| {
+            TempoMapConverter::beat_to_seconds_immut(tempo.map(), point.beat, tempo.fallback_bpm())
+        })
+        .collect();
+    let mut runtime = runtime();
+    runtime.set_project_tempo(Some(&tempo));
+    frame(&mut runtime, -1.0 / 60.0, 1.0, 0.0);
+    let samples = frame(&mut runtime, 1.0 / 30.0, 9.0, 3.0);
+    assert_tempo_samples(&samples, &tempo);
+    for boundary in boundaries {
+        assert!(
+            samples.iter().any(|sample| sample.time.seconds == boundary),
+            "missing tempo boundary at {boundary:?}"
+        );
+    }
+    assert_eq!(samples.last().unwrap().time.seconds, Seconds(1.0 / 30.0));
+    assert_eq!(samples.last().unwrap().values[0], 9.0);
+}
+
+#[test]
+fn physics_history_keeps_old_tempo_until_the_edit_observation() {
+    let old = tempo(&[(0.0, 120.0)]);
+    let edited = tempo(&[(0.0, 60.0)]);
+    let mut runtime = runtime();
+    runtime.set_project_tempo(Some(&old));
+    frame(&mut runtime, 0.0, 1.0, 0.0);
+    runtime.set_project_tempo(Some(&edited));
+    let samples = frame(&mut runtime, 0.1, 9.0, 3.0);
+    let (current, historical) = samples.split_last().unwrap();
+    assert_tempo_samples(historical, &old);
+    assert_eq!(historical.last().unwrap().time.beats, Beats(0.2));
+    assert_eq!(current.time.beats, Beats(0.1));
+    assert_tempo_samples(&frame(&mut runtime, 0.2, 10.0, 4.0), &edited);
+}
+
+#[test]
+fn compatible_rebuild_keeps_held_tempo_and_synthetic_context_can_clear_it() {
+    let old = tempo(&[(0.0, 60.0)]);
+    let edited = tempo(&[(0.0, 90.0)]);
+    let mut prior = runtime();
+    prior.set_project_tempo(Some(&old));
+    frame(&mut prior, 0.0, 1.0, 0.0);
+    let mut rebuilt = runtime();
+    rebuilt.carry_generator_state_from(&mut prior);
+    rebuilt.set_project_tempo(Some(&edited));
+    let samples = frame(&mut rebuilt, 0.1, 9.0, 3.0);
+    assert_tempo_samples(&samples[..samples.len() - 1], &old);
+    assert!((samples.last().unwrap().time.beats.0 - 0.15).abs() < 1e-12);
+    rebuilt.set_project_tempo(None);
+    assert!(rebuilt.physics_project_tempo.is_none());
+    frame(&mut rebuilt, 0.1, 9.0, 3.0);
+    let synthetic = frame(&mut rebuilt, 0.2, 9.0, 3.0);
+    for sample in synthetic {
+        assert!((sample.time.beats.0 - sample.time.seconds.0 * 2.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn source_observation_uses_project_tempo_and_closes_history_once() {
+    let tempo = tempo(&[(0.0, 120.0), (0.03, 60.0)]);
+    let mut runtime = runtime();
+    runtime.set_project_tempo(Some(&tempo));
+    frame(&mut runtime, 0.0, 1.0, 0.0);
+    let source = FrameTime {
+        seconds: Seconds(0.02),
+        beats: TempoMapConverter::seconds_to_beat_immut(
+            tempo.map(),
+            Seconds(0.02),
+            tempo.fallback_bpm(),
+        ),
+        delta: Seconds(0.02),
+        frame_count: 1,
+    };
+    runtime.observe_physics_at_source(source).unwrap();
+    let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
+    assert_tempo_samples(&samples, &tempo);
+    assert_eq!(samples.last().unwrap().time.seconds, source.seconds);
+    assert!(samples.iter().all(|sample| !sample.draining));
+    let _preview = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    let next = frame(&mut runtime, 1.0 / 30.0, 9.0, 1.0);
+    assert_tempo_samples(&next, &tempo);
+    assert!(
+        next.iter()
+            .all(|sample| sample.time.seconds > source.seconds)
+    );
+}
+
+#[test]
+fn unchanged_tempo_preserves_external_beat_authority_at_the_closing_observation() {
+    let tempo = ProjectTempo::new(&TempoMap::default(), Bpm(137.37));
+    let beat = Beats(1_000_000.25);
+    let seconds = TempoMapConverter::beat_to_seconds_immut(tempo.map(), beat, tempo.fallback_bpm());
+    assert_ne!(
+        TempoMapConverter::seconds_to_beat_immut(tempo.map(), seconds, tempo.fallback_bpm()),
+        beat,
+        "fixture needs a beat-to-seconds roundtrip with rounding"
+    );
+    let future_map: TempoMap = serde_json::from_value(serde_json::json!({
+        "points": [{"beat": 2_000_000.0, "bpm": 137.37}]
+    }))
+    .unwrap();
+    let future_tempo = ProjectTempo::new(&future_map, Bpm(120.0));
+    let source = FrameTime {
+        beats: beat,
+        seconds,
+        delta: Seconds(1.0 / 30.0),
+        frame_count: 1,
+    };
+    for current_tempo in [&tempo, &future_tempo] {
+        let mut runtime = runtime();
+        runtime.set_project_tempo(Some(&tempo));
+        frame(&mut runtime, seconds.0 - 1.0 / 30.0, 1.0, 0.0);
+        runtime.set_project_tempo(Some(current_tempo));
+        runtime.observe_physics_at_source(source).unwrap();
+        let samples = OBSERVATIONS.with_borrow_mut(std::mem::take);
+        let closing = &samples[samples.len() - 2];
+        assert_eq!(closing.time.seconds, source.seconds);
+        assert_eq!(
+            closing.time.beats, source.beats,
+            "roundtrip drift must not produce a second clock stamp at the same second"
+        );
+        assert_eq!(samples.last().unwrap().time.beats, source.beats);
+    }
 }
 
 #[test]
@@ -215,11 +383,17 @@ fn offline_history_drain_keeps_old_controls_and_bounds_input_batches() {
     frame(&mut runtime, 0.0, 1.0, 0.0);
     let observations = frame(&mut runtime, 3.0, 9.0, 3.0);
     let (current, historical) = observations.split_last().unwrap();
-    assert!(!current.draining, "drain scope must not escape into the full frame");
+    assert!(
+        !current.draining,
+        "drain scope must not escape into the full frame"
+    );
     assert_eq!(current.values[0], 9.0);
     assert_eq!(current.values[3], 3.0);
     assert_eq!(historical[0].time.seconds, Seconds::ZERO);
-    assert!(historical[0].draining, "drain the retained preview prefix first");
+    assert!(
+        historical[0].draining,
+        "drain the retained preview prefix first"
+    );
     let mut batch = 0;
     for sample in &historical[1..] {
         assert_eq!(sample.values[0], 1.0);
@@ -230,7 +404,10 @@ fn offline_history_drain_keeps_old_controls_and_bounds_input_batches() {
             batch = 0;
         }
     }
-    assert_eq!(batch, 0, "close and drain the old interval before applying edits");
+    assert_eq!(
+        batch, 0,
+        "close and drain the old interval before applying edits"
+    );
     assert!(historical.len() > crate::node_graph::physics::AUTHORED_HISTORY_CAPACITY);
 }
 

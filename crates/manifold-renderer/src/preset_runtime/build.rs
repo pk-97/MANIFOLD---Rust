@@ -640,6 +640,7 @@ impl PresetRuntime {
             physics_sample_steps,
             physics_input_snapshot,
             last_physics_frame_time: None,
+            physics_project_tempo: None,
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,

@@ -14,6 +14,9 @@ fn main() {
             "src/node_graph/physics",
             "src/node_graph/physics_events.rs",
             "src/node_graph/transform.rs",
+            "src/preset_runtime/physics_sampling.rs",
+            "src/preset_context.rs",
+            "../manifold-core/src/tempo.rs",
         ],
         "MANIFOLD_PHYSICS_INTEGRATION_IDENTITY",
     )

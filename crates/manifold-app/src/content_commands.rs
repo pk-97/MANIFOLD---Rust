@@ -1156,13 +1156,22 @@ impl ContentThread {
                             && before + 1.0 > before)
                 });
                 if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
-                    let (renderers, project) = self.engine.split_renderer_project_mut();
-                    let result = if let Some(layer) = project.and_then(|project|
+                    let (renderers, mut project) = self.engine.split_renderer_project_mut();
+                    if let Some(project) = project.as_mut() {
+                        project.tempo_map.ensure_sorted();
+                    }
+                    let result = if let Some(layer) = project.as_deref().and_then(|project|
                         project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)) {
                         if GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref()) {
+                            let project_tempo = project
+                                .as_deref()
+                                .map(|project| manifold_renderer::preset_context::ProjectTempo::new(
+                                    &project.tempo_map,
+                                    project.settings.bpm,
+                                ));
                             renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>())
                                 .ok_or_else(|| "Impulse: scene renderer is unavailable".to_string())
-                                .and_then(|renderer| renderer.fire_scene_impulse(layer, param_id.as_ref(), source))
+                                .and_then(|renderer| renderer.fire_scene_impulse(layer, param_id.as_ref(), source, project_tempo.as_ref()))
                         } else { Ok(false) }
                     } else { Ok(false) };
                     if let Err(message) = result { self.report_graph_edit_rejection(message); }

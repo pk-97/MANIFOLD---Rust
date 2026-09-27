@@ -1,3 +1,31 @@
+use manifold_core::tempo::TempoMap;
+use manifold_core::units::Bpm;
+
+/// Immutable, frame-local view of the project tempo used by preset runtimes.
+/// The map shares its point storage with the project until either copy is
+/// mutated, so constructing this view is cheap on the unchanged frame path.
+#[derive(Clone)]
+pub struct ProjectTempo {
+    map: TempoMap,
+    fallback_bpm: Bpm,
+}
+
+impl ProjectTempo {
+    pub fn new(map: &TempoMap, fallback_bpm: Bpm) -> Self {
+        let mut map = map.clone();
+        map.ensure_sorted();
+        Self { map, fallback_bpm }
+    }
+
+    pub(crate) fn map(&self) -> &TempoMap {
+        &self.map
+    }
+
+    pub(crate) fn fallback_bpm(&self) -> Bpm {
+        self.fallback_bpm
+    }
+}
+
 /// Maximum generator parameters per type.
 /// FluidSim3D has 26 params (the most of any generator).
 /// Set to 32 for alignment and future headroom.

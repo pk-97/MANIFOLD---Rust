@@ -83,6 +83,7 @@ impl PresetRuntime {
             inputs.carry_from(old_inputs, &steps);
         }
         self.last_physics_frame_time = prior.last_physics_frame_time;
+        self.physics_project_tempo.clone_from(&prior.physics_project_tempo);
 
         // Setup and event wires are intentionally outside historical sampling.
         // Retain their last available CPU values under the new resource IDs so

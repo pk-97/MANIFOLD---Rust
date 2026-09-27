@@ -81,6 +81,7 @@ pub struct PresetRuntime {
     pub(super) physics_sample_steps: Option<Vec<bool>>,
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
     pub(super) last_physics_frame_time: Option<FrameTime>,
+    pub(super) physics_project_tempo: Option<crate::preset_context::ProjectTempo>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -1319,6 +1320,7 @@ impl PresetRuntime {
             physics_sample_steps,
             physics_input_snapshot,
             last_physics_frame_time: None,
+            physics_project_tempo: None,
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,

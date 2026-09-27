@@ -180,6 +180,7 @@ impl AppPresentation {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count,
             compositor_dirty: true,
             clips: std::slice::from_ref(&clip),

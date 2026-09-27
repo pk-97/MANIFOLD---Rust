@@ -1,5 +1,6 @@
 //! Content-owned manual event delivery into live generator physics.
 use super::*;
+use crate::preset_context::ProjectTempo;
 
 impl GeneratorRenderer {
     pub fn has_scene_impulse(layer: &Layer, param: &str) -> bool {
@@ -40,6 +41,7 @@ impl GeneratorRenderer {
         layer: &Layer,
         param: &str,
         source: crate::node_graph::FrameTime,
+        project_tempo: Option<&ProjectTempo>,
     ) -> Result<bool, String> {
         if !Self::has_scene_impulse(layer, param) {
             return Ok(false);
@@ -74,6 +76,7 @@ impl GeneratorRenderer {
             state.applied_param_version = version;
         }
         state.generator.apply_param_values(&params.params);
+        state.generator.set_project_tempo(project_tempo);
         state
             .generator
             .fire_scene_impulse(param, source, &mut self.next_physics_event)

@@ -1,7 +1,7 @@
 use crate::generators::registry::GeneratorRegistry;
 use crate::preset_runtime::PresetRuntime;
 use crate::gpu_encoder::GpuEncoder;
-use crate::preset_context::PresetContext;
+use crate::preset_context::{PresetContext, ProjectTempo};
 use crate::render_target::RenderTarget;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
@@ -769,6 +769,7 @@ impl GeneratorRenderer {
         // their sim state simply pauses — safe because the occluder gate lets
         // them resume before they can be seen again. Empty = render everything.
         render_skip: &[i32],
+        project_tempo: Option<&ProjectTempo>,
     ) {
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
@@ -1063,6 +1064,7 @@ impl GeneratorRenderer {
                 layer_state
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
+                layer_state.generator.set_project_tempo(project_tempo);
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -1432,6 +1434,7 @@ impl GeneratorRenderer {
         let t = self.thumb_gens.get_mut(clip_id)?;
         t.ready = false;
         t.runtime.set_string_params(string_params);
+        t.runtime.set_project_tempo(None);
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
         for _ in 0..frames {
             let frame_count = t.frame_count;
@@ -1729,6 +1732,7 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.set_string_params(Some(&ls.merged_string_params));
                     ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
+                    ls.generator.set_project_tempo(None);
                     let ctx = PresetContext {
                         time: frame as f64 * DT,
                         beat: 0.0,
@@ -2475,7 +2479,7 @@ mod warmup_tests {
             let mut native_enc = device.create_encoder("warmup_test");
             let mut gpu = GpuEncoder::new(&mut native_enc, &device);
             let time = f as f64 * DT as f64;
-            renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[]);
+            renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[], None);
             native_enc.commit_and_wait_completed();
             renderer.uniform_arena.flush(&device);
         }

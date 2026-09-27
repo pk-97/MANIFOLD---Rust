@@ -11,6 +11,7 @@ use manifold_core::{ClipId, EffectId, LayerId, NodeId};
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
 use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_renderer::preset_context::ProjectTempo;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
@@ -2201,11 +2202,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         });
 
         // Split borrow: get renderers + project from engine simultaneously.
-        let (renderers, project) = engine.split_renderer_project();
+        let (renderers, project) = engine.split_renderer_project_mut();
+        let project = project.map(|project| {
+            project.tempo_map.ensure_sorted();
+            &*project
+        });
         self.sdr_curve = project.and_then(|p| {
             p.settings.tonemap_enabled.then_some(p.settings.tonemap_curve)
         });
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
+        let project_tempo = project
+            .map(|p| ProjectTempo::new(&p.tempo_map, p.settings.bpm));
 
         // ── Generators (separate CB, committed first) ─────────────────
         // Generators must commit before the compositor because the parallel
@@ -2358,6 +2365,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             layers,
                             data_version,
                             &self.render_skip_scratch,
+                            project_tempo.as_ref(),
                         );
                         break;
                     }
@@ -2629,6 +2637,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             time: time_f64,
             beat: beat_f64,
             dt: dt as f32,
+            project_tempo: project_tempo.as_ref(),
             frame_count,
             compositor_dirty: tick_result.compositor_dirty,
             clips: &clip_descs,

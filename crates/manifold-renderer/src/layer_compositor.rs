@@ -1028,6 +1028,7 @@ impl LayerCompositor {
                     false,
                     crate::node_graph::RtQuality::default(),
                     &self.layer_skin_registry,
+                    None,
                 );
                 // §5.4: pending geometry is incomplete preparation — the
                 // wrapper's status gates quiescence below.
@@ -1257,6 +1258,7 @@ impl LayerCompositor {
                     false,
                     crate::node_graph::RtQuality::default(),
                     layer_sources,
+                    None,
                 );
                 // §5.4: pending geometry is incomplete preparation — the
                 // wrapper's status gates quiescence below.
@@ -1771,6 +1773,7 @@ impl LayerCompositor {
         profiling: bool,
         rt_quality: crate::node_graph::RtQuality,
         layer_sources: &crate::layer_skin::LayerSkinRegistry,
+        project_tempo: Option<&crate::preset_context::ProjectTempo>,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -1784,6 +1787,7 @@ impl LayerCompositor {
             profiling,
             rt_quality,
             layer_sources,
+            project_tempo,
         )
     }
 
@@ -1811,6 +1815,7 @@ impl LayerCompositor {
         scene_viewport_error: &mut Option<
             crate::node_graph::scene_viewport::SceneViewportHostError,
         >,
+        project_tempo: Option<&crate::preset_context::ProjectTempo>,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain_with_scene_viewport(
             effect_chain,
@@ -1826,6 +1831,7 @@ impl LayerCompositor {
             layer_sources,
             scene_viewport,
             scene_viewport_error,
+            project_tempo,
         )
     }
 
@@ -2129,6 +2135,7 @@ impl LayerCompositor {
                             .as_ref()
                             .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
                         &mut scene_viewport_error,
+                        frame.project_tempo,
                     )
                 } else {
                     None
@@ -2470,6 +2477,7 @@ impl LayerCompositor {
                                 self.profiling_enabled,
                                 self.rt_quality,
                                 &self.layer_skin_registry,
+                                frame.project_tempo,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -2708,6 +2716,7 @@ impl LayerCompositor {
                         .as_ref()
                         .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
                     &mut scene_viewport_error,
+                    frame.project_tempo,
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -3267,6 +3276,7 @@ impl Compositor for LayerCompositor {
                     .as_ref()
                     .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
                 &mut scene_viewport_error,
+                frame.project_tempo,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -3341,6 +3351,7 @@ impl Compositor for LayerCompositor {
                 self.profiling_enabled,
                 self.rt_quality,
                 &self.layer_skin_registry,
+                frame.project_tempo,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,
@@ -3771,6 +3782,7 @@ mod chain_pool_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 0,
             compositor_dirty: true,
             clips: &[],
@@ -4121,6 +4133,7 @@ mod chain_pool_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 0,
             compositor_dirty: true,
             clips: std::slice::from_ref(&clip),
@@ -4363,6 +4376,7 @@ mod muted_clip_output_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 1,
             compositor_dirty: true,
             clips,
@@ -4558,6 +4572,7 @@ mod led_composite_pixel_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 1,
             compositor_dirty: true,
             clips: &clips,
@@ -5049,6 +5064,7 @@ mod scene_linear_presentation_gpu_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 1,
             compositor_dirty: true,
             clips: std::slice::from_ref(&clip),
