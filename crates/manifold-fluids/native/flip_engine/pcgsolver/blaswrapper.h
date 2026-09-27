@@ -125,21 +125,25 @@ inline T absMax(std::vector<T> &x) {
 // saxpy (y=alpha*x+y) =======================================================
 
 template<class T>
-void addScaledThread(int startidx, int endidx, float alpha, std::vector<T> *x, std::vector<T> *y) {
+void addScaledThread(int startidx, int endidx, T alpha, std::vector<T> *x, std::vector<T> *y) {
     for (int i = startidx; i < endidx; i++) {
         (*y)[i] += alpha * x->at(i);
     }
 }
 
 template<class T>
-inline void addScaled(float alpha, std::vector<T> &x, std::vector<T> &y) { 
+inline void addScaled(double alpha, std::vector<T> &x, std::vector<T> &y) {
     //cblas_daxpy((int)x.size(), alpha, &x[0], 1, &y[0], 1); 
+
+    // Match the vector precision. Narrowing a double PCG step to float here
+    // loses conjugacy even when its matrix, iterates and residuals are double.
+    const T scale = static_cast<T>(alpha);
 
     int numCPU = ThreadUtils::getMaxThreadCount();
     int numthreads = (int)fmin(numCPU, std::ceil((float)x.size() / (float)ELEMENTS_PER_THREAD));
     if (numthreads == 1) {
         for (size_t i = 0; i < x.size(); i++) {
-            y[i] += alpha * x[i];
+            y[i] += scale * x[i];
         }
         return;
     }
@@ -148,7 +152,7 @@ inline void addScaled(float alpha, std::vector<T> &x, std::vector<T> &y) {
     std::vector<int> intervals = ThreadUtils::splitRangeIntoIntervals(0, x.size(), numthreads);
     for (int i = 0; i < numthreads; i++) {
         threads[i] = std::thread(&addScaledThread<T>,
-                                 intervals[i], intervals[i + 1], alpha, &x, &y);
+                                 intervals[i], intervals[i + 1], scale, &x, &y);
     }
 
     for (int i = 0; i < numthreads; i++) {

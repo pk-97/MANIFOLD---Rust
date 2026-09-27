@@ -6372,7 +6372,7 @@ void FluidSimulation::_applyViscosityToVelocityField(double dt) {
     _viscositySolverStatus = _viscositySolver.getSolverStatus();
 
     if (_rigidCoupling && !success) {
-        throw std::runtime_error("Error: coupled viscosity solve failed.\n");
+        throw std::runtime_error("Error: coupled viscosity solve failed.\n" + _viscositySolverStatus);
     }
     if (_rigidCoupling) {
         _rigidCoupling->finishViscosity(_solidSDF.getVelocityDataGrid()->field);

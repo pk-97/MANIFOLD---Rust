@@ -338,3 +338,153 @@ fn owner_reaction_application_failure_latches_filled_frame_without_mutating_velo
             .is_err()
     );
 }
+
+#[test]
+fn owner_compound_interleaved_bindings_apply_once_per_body_and_reuse_storage() {
+    let narrow: Vec<_> = cuboid()
+        .vertices
+        .iter()
+        .map(|p| [p[0] * 0.48, p[1], p[2]])
+        .collect();
+    let mut rigid = PhysicsWorld::new([0.0; 3]).unwrap();
+    let single = rigid
+        .add_hull(
+            &narrow,
+            BodyConfig {
+                position: [ORIGIN[0] + 0.65, ORIGIN[1] + 1.05, ORIGIN[2] + 1.2],
+                mass: 60.0,
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let parts: Vec<Vec<_>> = [-0.15, 0.15]
+        .iter()
+        .map(|x| narrow.iter().map(|p| [p[0] + x, p[1], p[2]]).collect())
+        .collect();
+    let compound = rigid
+        .add_hulls(
+            &parts,
+            BodyConfig {
+                position: [ORIGIN[0] + 1.65, ORIGIN[1] + 1.05, ORIGIN[2] + 1.2],
+                mass: 120.0,
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let mut fluid = FluidWorld::new(Config {
+        cells: [16; 3],
+        cell_size: 0.15,
+        surface_subdivisions: 0,
+        apic: false,
+    })
+    .unwrap();
+    fluid.set_gravity([0.0; 3]).unwrap();
+    fluid
+        .set_time_step_options(TimeStepOptions {
+            min_substeps: 2,
+            max_substeps: 32,
+            cfl: 1,
+            adaptive_obstacles: false,
+        })
+        .unwrap();
+    fluid
+        .set_liquid_options(LiquidOptions {
+            viscosity: 1.0,
+            surface_tension: 0.0,
+        })
+        .unwrap();
+    let mut handles = Vec::new();
+    for body in [single, compound] {
+        let mut pose = rigid.pose(body).unwrap();
+        for (axis, offset) in ORIGIN.into_iter().enumerate() {
+            pose.position[axis] -= offset;
+        }
+        for mesh in rigid.hull_meshes(body).unwrap() {
+            handles.push(fluid.add_mesh(&mesh, MeshRole::Collider, pose).unwrap());
+        }
+    }
+    fluid
+        .add_fluid_box(
+            Bounds {
+                min: [0.45; 3],
+                max: [1.95, 1.65, 1.95],
+            },
+            [0.0; 3],
+        )
+        .unwrap();
+    fluid.step(DT).unwrap();
+    let mut coupling = RigidFluidCoupling::prepare(
+        &mut fluid,
+        &rigid,
+        &[
+            (handles[1], compound),
+            (handles[0], single),
+            (handles[2], compound),
+        ],
+        ORIGIN,
+        1000.0,
+    )
+    .unwrap();
+    assert_eq!(coupling.bodies, [compound, single]);
+    assert_eq!(coupling.states.len(), 2);
+    assert_eq!(coupling.colliders.len(), 3);
+    rigid
+        .set_velocity(single, [0.5, 0.0, 0.0], [0.0; 3])
+        .unwrap();
+    rigid
+        .set_velocity(compound, [0.0, 0.0, -0.4], [0.0; 3])
+        .unwrap();
+    let pointers = (coupling.states.as_ptr(), coupling.impulses.as_ptr());
+    let capacities = (coupling.states.capacity(), coupling.impulses.capacity());
+    let mut total_reaction = 0.0_f32;
+    for _ in 0..2 {
+        let mut frame = coupling.begin_frame(&mut fluid, DT, &[]).unwrap();
+        let mut remaining = DT.0;
+        while remaining > 0.0 {
+            let duration = frame.next_substep(&rigid, Seconds(remaining)).unwrap();
+            let before = [compound, single].map(|body| rigid.dynamics(body).unwrap());
+            frame.exchange(&mut rigid, duration).unwrap();
+            assert_eq!(frame.coupling.impulses.len(), 2);
+            for ((impulse, before), body) in frame
+                .coupling
+                .impulses
+                .iter()
+                .zip(before)
+                .zip([compound, single])
+            {
+                assert_eq!(impulse.body, body);
+                let after = rigid.dynamics(body).unwrap();
+                total_reaction += impulse
+                    .linear
+                    .iter()
+                    .chain(&impulse.angular)
+                    .map(|v| v.abs())
+                    .sum::<f32>();
+                for axis in 0..3 {
+                    let expected_v =
+                        before.linear_velocity[axis] + before.inverse_mass * impulse.linear[axis];
+                    let expected_w = before.angular_velocity[axis]
+                        + before.inverse_inertia[axis]
+                            .iter()
+                            .zip(impulse.angular)
+                            .map(|(m, j)| m * j)
+                            .sum::<f32>();
+                    assert!((after.linear_velocity[axis] - expected_v).abs() < 5e-5);
+                    assert!((after.angular_velocity[axis] - expected_w).abs() < 5e-5);
+                }
+            }
+            rigid.step(duration, 4).unwrap();
+            remaining -= duration.0;
+        }
+        frame.finish().unwrap();
+    }
+    assert!(total_reaction > 1e-3);
+    assert_eq!(
+        (coupling.states.as_ptr(), coupling.impulses.as_ptr()),
+        pointers
+    );
+    assert_eq!(
+        (coupling.states.capacity(), coupling.impulses.capacity()),
+        capacities
+    );
+}

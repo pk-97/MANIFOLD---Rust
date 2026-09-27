@@ -262,13 +262,14 @@ public:
         return checkedSystemSize(_fluidRows, bodies.size());
     }
 
-    void addMatrixDiagonalAndRhs(SparseMatrixf &matrix, std::vector<float> &rhs) const {
+    template <typename T>
+    void addMatrixDiagonalAndRhs(SparseMatrix<T> &matrix, std::vector<T> &rhs) const {
         requireReady("addMatrixDiagonalAndRhs");
         const size_t size = systemSize();
         if (matrix.n != size || rhs.size() != size) {
             throw std::invalid_argument("rigid viscosity matrix or RHS dimensions do not match");
         }
-        for (float value : rhs) {
+        for (T value : rhs) {
             if (!std::isfinite(value)) {
                 throw std::invalid_argument("nonfinite rigid viscosity RHS");
             }
@@ -277,7 +278,7 @@ public:
             if (row >= matrix.value.size() || matrix.index[row].size() != matrix.value[row].size()) {
                 throw std::invalid_argument("malformed rigid viscosity sparse matrix");
             }
-            for (float value : matrix.value[row]) {
+            for (T value : matrix.value[row]) {
                 if (!std::isfinite(value)) {
                     throw std::invalid_argument("nonfinite rigid viscosity sparse matrix value");
                 }
@@ -287,27 +288,28 @@ public:
             const size_t base = _fluidRows + body * 6;
             for (size_t dof = 0; dof < 6; ++dof) {
                 if (!matrix.index[base + dof].empty() || !matrix.value[base + dof].empty()
-                    || rhs[base + dof] != 0.0f) {
+                    || rhs[base + dof] != T(0)) {
                     throw std::logic_error("rigid viscosity matrix body rows are already installed");
                 }
-                requireFloat(1.0 + _extraDiag[body][dof],
+                requireScalar<T>(1.0 + _extraDiag[body][dof],
                              "rigid viscosity body diagonal");
-                requireFloat(_bodyRhs[body][dof], "rigid viscosity body RHS");
+                requireScalar<T>(_bodyRhs[body][dof], "rigid viscosity body RHS");
             }
         }
         for (size_t body = 0; body < bodies.size(); ++body) {
             const size_t base = _fluidRows + body * 6;
             for (size_t dof = 0; dof < 6; ++dof) {
                 matrix.add(static_cast<int>(base + dof), static_cast<int>(base + dof),
-                           static_cast<float>(1.0 + _extraDiag[body][dof]));
-                rhs[base + dof] = static_cast<float>(_bodyRhs[body][dof]);
+                           static_cast<T>(1.0 + _extraDiag[body][dof]));
+                rhs[base + dof] = static_cast<T>(_bodyRhs[body][dof]);
             }
         }
         _matrixInstalled = true;
     }
 
-    void addRemainingMatrixProduct(const std::vector<float> &x,
-                                   std::vector<float> &y) {
+    template <typename T>
+    void addRemainingMatrixProduct(const std::vector<T> &x,
+                                   std::vector<T> &y) {
         try {
             requireReady("addRemainingMatrixProduct");
             if (!_matrixInstalled) {
@@ -374,10 +376,10 @@ public:
                 }
             }
             for (size_t index = 0; index < size; ++index) {
-                requireFloat(_productScratch[index], "rigid viscosity matrix product");
+                requireScalar<T>(_productScratch[index], "rigid viscosity matrix product");
             }
             for (size_t index = 0; index < size; ++index) {
-                y[index] = static_cast<float>(_productScratch[index]);
+                y[index] = static_cast<T>(_productScratch[index]);
             }
         } catch (...) {
             invalidate();
@@ -385,17 +387,19 @@ public:
         }
     }
 
-    void captureSolution(const std::vector<float> &x) {
+    template <typename T>
+    void captureSolution(const std::vector<T> &x) {
         try {
             requireReady("captureSolution");
             const size_t size = systemSize();
             if (x.size() != size) {
                 throw std::invalid_argument("rigid viscosity solution dimensions do not match");
             }
-            for (float value : x) {
+            for (T value : x) {
                 if (!std::isfinite(value)) {
                     throw std::invalid_argument("nonfinite rigid viscosity solution");
                 }
+                requireFloat(static_cast<double>(value), "rigid viscosity solution is outside native range");
             }
             for (auto &value : _candidateImpulses) { value.fill(0.0); }
             for (const auto &term : _terms) {
@@ -550,10 +554,15 @@ private:
         return result;
     }
 
-    static void requireFloat(double value, const char *what) {
-        if (!std::isfinite(value) || !std::isfinite(static_cast<float>(value))) {
+    template <typename T>
+    static void requireScalar(double value, const char *what) {
+        if (!std::isfinite(value) || !std::isfinite(static_cast<T>(value))) {
             throw std::invalid_argument(what);
         }
+    }
+
+    static void requireFloat(double value, const char *what) {
+        requireScalar<float>(value, what);
     }
 
     static void buildMobility(const Body &body, double cellMass, Mobility &mobility) {

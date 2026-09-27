@@ -119,6 +119,56 @@ fn production_coupling_boundary_prepare_rejects_invalid_inputs_and_allows_retry(
     }
 }
 
+#[test]
+fn production_coupling_boundary_invalid_native_body_mapping_leaves_topology_retryable() {
+    // Exercise the C boundary's validation independently of the safe grouped
+    // API, which constructs a complete, in-range mapping by definition.
+    for (indices, collider_count, body_count) in [
+        (Some([0, 2]), 2, 2),
+        (Some([0, 0]), 2, 2),
+        (Some([0, 1]), 2, 3),
+        (Some([0, 1]), 0, 0),
+        (None, 2, 2),
+    ] {
+        let (mut fluid, rigid, body, collider) = body_fixture();
+        let extra = fluid
+            .add_mesh(&proxy(), MeshRole::Collider, rigid.pose(body).unwrap())
+            .unwrap();
+        let slots = [collider, extra].map(|handle| {
+            fluid
+                .mesh_state
+                .validate_handle(handle, Some(MeshRole::Collider))
+                .unwrap() as u32
+        });
+        let index_ptr = indices
+            .as_ref()
+            .map_or(std::ptr::null(), |indices| indices.as_ptr());
+        let result = unsafe {
+            manifold_fluids_world_prepare_rigid_coupling(
+                fluid.native,
+                slots.as_ptr(),
+                index_ptr,
+                collider_count,
+                body_count,
+                1000.0,
+            )
+        };
+        assert_eq!(result, 0);
+        // Both colliders must remain editable after rejected preparation.
+        fluid.set_mesh_enabled(extra, false).unwrap();
+        fluid.set_mesh_enabled(extra, true).unwrap();
+        fluid
+            .prepare_rigid_coupling_groups(&[&[collider, extra]], 1000.0)
+            .unwrap();
+        let mut frame = fluid.begin_frame(DT).unwrap();
+        frame.set_rigid_bodies(&[state(&rigid, body)]).unwrap();
+        let dt = frame.next_substep().unwrap().unwrap();
+        frame.advance(dt).unwrap();
+        assert_eq!(frame.rigid_reactions().unwrap().len(), 1);
+        frame.finish().unwrap();
+    }
+}
+
 fn coupled_pair_fixture() -> (FluidWorld, PhysicsWorld, [BodyHandle; 2], [MeshHandle; 2]) {
     let mesh = proxy();
     let mut rigid = PhysicsWorld::new([0.0; 3]).unwrap();

@@ -3,6 +3,7 @@ use crate::{Bounds, Config, LiquidOptions, Seconds, TimeStepOptions};
 use manifold_physics::{BodyConfig, PhysicsWorld, TriangleMesh};
 
 mod boundaries;
+mod compound;
 mod gravity;
 mod viscous_motion;
 

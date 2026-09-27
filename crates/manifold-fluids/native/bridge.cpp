@@ -456,6 +456,7 @@ struct NativeWorld {
     bool obstacle_added = false;
     std::unordered_map<uint32_t, NativeMeshRole> mesh_roles;
     std::vector<uint32_t> rigid_bound_slots;
+    std::vector<uint32_t> rigid_bound_body_indices;
     std::vector<RigidFluidCoupling::Body> rigid_input_bodies;
     std::vector<MeshPose> rigid_parsed_poses;
     bool rigid_input_ready = false;
@@ -893,13 +894,19 @@ extern "C" int manifold_fluids_world_add_fluid_mesh(
 }
 
 extern "C" int manifold_fluids_world_prepare_rigid_coupling(
-    void *world, const uint32_t *slots, size_t count, double density) {
+    void *world, const uint32_t *slots, const uint32_t *body_indices,
+    size_t collider_count, size_t body_count, double density) {
     return guarded([&] {
         if (world == nullptr) {
             throw std::invalid_argument("world pointer must be non-null");
         }
-        if (slots == nullptr || count == 0) {
-            throw std::invalid_argument("rigid coupling requires at least one collider slot");
+        if (slots == nullptr || body_indices == nullptr || collider_count == 0 || body_count == 0) {
+            throw std::invalid_argument(
+                "rigid coupling requires non-empty collider and body arrays");
+        }
+        if (body_count > collider_count) {
+            throw std::invalid_argument(
+                "rigid coupling body count must not exceed collider count");
         }
         auto *native = static_cast<NativeWorld *>(world);
         if (native->rigid_coupling) {
@@ -910,10 +917,13 @@ extern "C" int manifold_fluids_world_prepare_rigid_coupling(
         }
 
         std::vector<uint32_t> bound_slots;
-        bound_slots.reserve(count);
+        bound_slots.reserve(collider_count);
+        std::vector<uint32_t> bound_body_indices;
+        bound_body_indices.reserve(collider_count);
         std::unordered_set<uint32_t> seen;
-        seen.reserve(count);
-        for (size_t index = 0; index < count; ++index) {
+        seen.reserve(collider_count);
+        std::vector<bool> seen_body_indices(body_count, false);
+        for (size_t index = 0; index < collider_count; ++index) {
             const uint32_t slot = slots[index];
             if (!seen.insert(slot).second) {
                 throw std::invalid_argument("rigid coupling collider slots must be unique");
@@ -924,7 +934,17 @@ extern "C" int manifold_fluids_world_prepare_rigid_coupling(
                 throw std::invalid_argument(
                     "rigid coupling slots must name existing collider meshes");
             }
+            const uint32_t body_index = body_indices[index];
+            if (body_index >= body_count) {
+                throw std::invalid_argument("rigid coupling body index is out of range");
+            }
             bound_slots.push_back(slot);
+            bound_body_indices.push_back(body_index);
+            seen_body_indices[body_index] = true;
+        }
+        if (std::find(seen_body_indices.begin(), seen_body_indices.end(), false) !=
+            seen_body_indices.end()) {
+            throw std::invalid_argument("rigid coupling body indices must not be missing");
         }
         if (!std::isfinite(density) || density <= 0.0 ||
             static_cast<float>(density) <= 0.0f) {
@@ -950,7 +970,8 @@ extern "C" int manifold_fluids_world_prepare_rigid_coupling(
             checked_add(u, v, "rigid coupling face storage overflow"), w,
             "rigid coupling face storage overflow");
         const size_t boundary_entries = checked_product(
-            checked_product(2, face_count, "rigid coupling boundary storage overflow"), count,
+            checked_product(2, face_count, "rigid coupling boundary storage overflow"),
+            collider_count,
             "rigid coupling boundary storage overflow");
         const size_t pressure_entries = checked_product(
             2, boundary_entries, "rigid coupling pressure storage overflow");
@@ -965,20 +986,20 @@ extern "C" int manifold_fluids_world_prepare_rigid_coupling(
         candidate->density = density;
         candidate->physicalDensity();
         candidate->prepare(static_cast<int>(native->isize), static_cast<int>(native->jsize),
-                           static_cast<int>(native->ksize), native->cell_size, count,
+                           static_cast<int>(native->ksize), native->cell_size, body_count,
                            RigidFluidCoupling::Storage{boundary_entries, pressure_entries,
                                                        viscosity_terms, viscosity_body_entries});
-        std::vector<RigidFluidCoupling::Body> input_bodies(count);
-        std::vector<MeshPose> parsed_poses(count);
+        std::vector<RigidFluidCoupling::Body> input_bodies(body_count);
+        std::vector<MeshPose> parsed_poses(body_count);
 
         size_t bound_count = 0;
         try {
-            for (; bound_count < count; ++bound_count) {
+            for (; bound_count < collider_count; ++bound_count) {
                 auto iterator = native->mesh_roles.find(bound_slots[bound_count]);
                 // Retain upload preflight geometry storage before stepping.
                 iterator->second.next_mesh = iterator->second.current_mesh;
                 iterator->second.obstacle->setRigidBoundarySource(
-                    candidate->boundaryMap(), bound_count);
+                    candidate->boundaryMap(), bound_body_indices[bound_count]);
             }
             native->simulation->setRigidCoupling(candidate.get());
         } catch (...) {
@@ -993,6 +1014,7 @@ extern "C" int manifold_fluids_world_prepare_rigid_coupling(
 
         native->rigid_coupling = std::move(candidate);
         native->rigid_bound_slots = std::move(bound_slots);
+        native->rigid_bound_body_indices = std::move(bound_body_indices);
         native->rigid_input_bodies = std::move(input_bodies);
         native->rigid_parsed_poses = std::move(parsed_poses);
         native->rigid_input_ready = false;
@@ -1012,8 +1034,8 @@ extern "C" int manifold_fluids_world_set_rigid_bodies(
         if (!native->simulation->canSetRigidSubstepInput()) {
             throw std::runtime_error("rigid body state cannot be uploaded at this simulation stage");
         }
-        if (count != native->rigid_bound_slots.size()) {
-            throw std::invalid_argument("rigid body input count does not match prepared collider slots");
+        if (count != native->rigid_input_bodies.size()) {
+            throw std::invalid_argument("rigid body input count does not match prepared bodies");
         }
 
         native->rigid_coupling->invalidate();
@@ -1024,26 +1046,36 @@ extern "C" int manifold_fluids_world_set_rigid_bodies(
             }
             const MeshPose pose = read_pose(inputs[index].pose);
             const auto body = read_rigid_body(inputs[index]);
+            native->rigid_parsed_poses[index] = pose;
+            native->rigid_input_bodies[index] = body;
+        }
+
+        for (size_t index = 0; index < native->rigid_bound_slots.size(); ++index) {
             auto iterator = native->mesh_roles.find(native->rigid_bound_slots[index]);
             if (iterator == native->mesh_roles.end() || iterator->second.role != 2 ||
                 !iterator->second.obstacle) {
                 throw std::runtime_error("prepared rigid collider slot no longer exists");
             }
-            transform_mesh_into(iterator->second.mesh, pose, iterator->second.next_mesh);
-            native->rigid_parsed_poses[index] = pose;
-            native->rigid_input_bodies[index] = body;
+            const size_t body_index = native->rigid_bound_body_indices[index];
+            transform_mesh_into(
+                iterator->second.mesh,
+                native->rigid_parsed_poses[body_index],
+                iterator->second.next_mesh);
         }
 
-        for (size_t index = 0; index < count; ++index) {
+        for (size_t index = 0; index < native->rigid_bound_slots.size(); ++index) {
             auto iterator = native->mesh_roles.find(native->rigid_bound_slots[index]);
             NativeMeshRole &role = iterator->second;
-            const MeshPose &pose = native->rigid_parsed_poses[index];
+            const size_t body_index = native->rigid_bound_body_indices[index];
+            const MeshPose &pose = native->rigid_parsed_poses[body_index];
             update_role_mesh(role, pose, pose, pose);
-            if (inputs[index].enabled != 0) {
+            if (inputs[body_index].enabled != 0) {
                 role.obstacle->enable();
             } else {
                 role.obstacle->disable();
             }
+        }
+        for (size_t index = 0; index < count; ++index) {
             native->rigid_coupling->bodies[index] = native->rigid_input_bodies[index];
         }
         native->rigid_input_ready = true;
@@ -1067,14 +1099,14 @@ extern "C" int manifold_fluids_world_rigid_reactions(
         if (native->simulation->isUpdateFailed()) {
             throw std::runtime_error("rigid reactions are unavailable after a failed fluid update");
         }
-        const size_t count = native->rigid_bound_slots.size();
+        const size_t count = native->rigid_input_bodies.size();
         if (capacity < count || (count != 0 && out == nullptr)) {
             throw std::invalid_argument("rigid reaction output capacity is too small");
         }
         const auto &impulses = native->rigid_coupling->impulses();
         const auto &changes = native->rigid_coupling->velocityChanges();
         if (impulses.size() != count || changes.size() != count) {
-            throw std::runtime_error("rigid reaction count does not match prepared collider slots");
+            throw std::runtime_error("rigid reaction count does not match prepared bodies");
         }
         for (size_t index = 0; index < count; ++index) {
             for (size_t dof = 0; dof < 6; ++dof) {

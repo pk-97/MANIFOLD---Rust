@@ -265,34 +265,36 @@ Dense physicalOperator(const OracleCase &test, Vector &rhs) {
     return matrix;
 }
 
-void installFluidMatrix(SparseMatrixf &matrix, std::vector<float> &rhs,
+template <typename T>
+void installFluidMatrix(SparseMatrix<T> &matrix, std::vector<T> &rhs,
                         const OracleCase &test) {
     const std::array<double, FluidRows> fluidMass{{1.1, 0.8, 1.3, 1.6}};
-    matrix = SparseMatrixf(Size, 8);
-    rhs.assign(Size, 0.0f);
+    matrix = SparseMatrix<T>(Size, 8);
+    rhs.assign(Size, T{});
     for (int fluid = 0; fluid < FluidRows; ++fluid) {
-        matrix.set(fluid, fluid, static_cast<float>(fluidMass[fluid]));
-        rhs[fluid] = static_cast<float>(fluidMass[fluid] * test.initialFluid[fluid]);
+        matrix.set(fluid, fluid, static_cast<T>(fluidMass[fluid]));
+        rhs[fluid] = static_cast<T>(fluidMass[fluid] * test.initialFluid[fluid]);
     }
     for (const Term &term : test.terms) {
         for (int rowSlot = 0; rowSlot < 4; ++rowSlot) {
             if (term.rows[rowSlot] < 0) { continue; }
-            rhs[term.rows[rowSlot]] -= static_cast<float>(term.weight * term.coefficients[rowSlot] * term.prescribed);
+            rhs[term.rows[rowSlot]] -= static_cast<T>(term.weight * term.coefficients[rowSlot] * term.prescribed);
             for (int columnSlot = 0; columnSlot < 4; ++columnSlot) {
                 if (term.rows[columnSlot] >= 0) {
                     matrix.add(term.rows[rowSlot], term.rows[columnSlot],
-                               static_cast<float>(term.weight * term.coefficients[rowSlot]
-                                                * term.coefficients[columnSlot]));
+                               static_cast<T>(term.weight * term.coefficients[rowSlot]
+                                               * term.coefficients[columnSlot]));
                 }
             }
         }
     }
 }
 
-std::vector<float> nativeProduct(RigidViscosityCoupling &coupling,
-                                 const SparseMatrixf &matrix,
-                                 const std::vector<float> &x) {
-    std::vector<float> y(Size, 0.0f);
+template <typename T>
+std::vector<T> nativeProduct(RigidViscosityCoupling &coupling,
+                             const SparseMatrix<T> &matrix,
+                             const std::vector<T> &x) {
+    std::vector<T> y(Size, T{});
     for (int row = 0; row < Size; ++row) {
         for (size_t entry = 0; entry < matrix.index[static_cast<size_t>(row)].size(); ++entry) {
             y[static_cast<size_t>(row)] += matrix.value[static_cast<size_t>(row)][entry]
@@ -334,13 +336,14 @@ double energy(const OracleCase &test, const Vector &solution) {
     return value;
 }
 
+template <typename T>
 void checkOperator(ManifoldRigidViscosityProbe &result, OracleCase &test,
-                   SparseMatrixf &matrix) {
+                   SparseMatrix<T> &matrix) {
     Dense reconstructed{};
     for (int column = 0; column < Size; ++column) {
-        std::vector<float> basis(Size, 0.0f);
-        basis[static_cast<size_t>(column)] = 1.0f;
-        const std::vector<float> product = nativeProduct(test.coupling, matrix, basis);
+        std::vector<T> basis(Size, T{});
+        basis[static_cast<size_t>(column)] = static_cast<T>(1);
+        const std::vector<T> product = nativeProduct(test.coupling, matrix, basis);
         for (int row = 0; row < Size; ++row) {
             reconstructed[row][column] = product[static_cast<size_t>(row)];
         }
@@ -367,10 +370,11 @@ void checkOperator(ManifoldRigidViscosityProbe &result, OracleCase &test,
     }
 }
 
+template <typename T>
 void solveAndCheck(ManifoldRigidViscosityProbe &result, OracleCase &test) {
     capture(test);
-    SparseMatrixf matrix;
-    std::vector<float> rhs;
+    SparseMatrix<T> matrix;
+    std::vector<T> rhs;
     installFluidMatrix(matrix, rhs, test);
     test.coupling.addMatrixDiagonalAndRhs(matrix, rhs);
     checkOperator(result, test, matrix);
@@ -378,13 +382,13 @@ void solveAndCheck(ManifoldRigidViscosityProbe &result, OracleCase &test) {
     Vector oracleRhs{};
     const Dense physical = physicalOperator(test, oracleRhs);
     const Vector expected = solveDense(physical, oracleRhs);
-    PCGSolver<float> solver;
-    solver.setSolverParameters(1e-12f, 500);
-    std::vector<float> solution(Size, 0.0f);
-    float residual = 0.0f;
+    PCGSolver<T> solver;
+    solver.setSolverParameters(static_cast<T>(1e-12), 500);
+    std::vector<T> solution(Size, T{});
+    T residual = T{};
     int iterations = 0;
     const bool solved = solver.solveWithAdditionalMatrix(matrix, rhs, solution, residual, iterations,
-        [&](const std::vector<float> &x, std::vector<float> &y) {
+        [&](const std::vector<T> &x, std::vector<T> &y) {
             test.coupling.addRemainingMatrixProduct(x, y);
         });
     require(solved, "rigid viscosity PCG failed physical oracle case");
@@ -532,6 +536,14 @@ void lifecycleChecks() {
     product.coupling.captureSolution(std::vector<float>(Size, 0.0f));
     require(product.coupling.hasSolution(), "prepared rigid viscosity storage was not reusable");
 
+    // Double iterates must still fit the native float velocity field. Reject
+    // narrowing overflow before a previous accepted reaction can be reused.
+    std::vector<double> wideSolution(Size, 0.0);
+    wideSolution[0] = 2.0 * std::numeric_limits<float>::max();
+    rejects([&] { product.coupling.captureSolution(wideSolution); },
+            "double viscosity solution overflowed native velocity storage");
+    require(!product.coupling.hasSolution(), "double overflow retained a stale viscosity reaction");
+
     RigidViscosityCoupling overflow;
     RigidViscosityCoupling::Body fixed;
     overflow.bodies.push_back(fixed);
@@ -569,9 +581,13 @@ void lifecycleChecks() {
 void run_rigid_viscosity_operator_probe(ManifoldRigidViscosityProbe &result) {
     result = {};
     OracleCase moving = makeCase(false);
-    solveAndCheck(result, moving);
+    solveAndCheck<float>(result, moving);
+    moving = makeCase(false);
+    solveAndCheck<double>(result, moving);
     OracleCase fixed = makeCase(true);
-    solveAndCheck(result, fixed);
+    solveAndCheck<float>(result, fixed);
+    fixed = makeCase(true);
+    solveAndCheck<double>(result, fixed);
     lifecycleChecks();
     require(std::isfinite(result.max_solution_error)
         && std::isfinite(result.max_response_error)

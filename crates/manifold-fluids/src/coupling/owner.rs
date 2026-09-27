@@ -6,7 +6,7 @@
 //! of mass are shifted by `origin`, while rotations, velocities, moments and
 //! world-space inverse inertia remain unchanged.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use manifold_physics::{
     BodyHandle, BodyImpulse, BodyPose, FieldInput, PhysicsWorld, Seconds, stepping::SubstepExchange,
@@ -16,18 +16,13 @@ use crate::{FluidError, FluidFrame, FluidWorld, FrameStats, MeshHandle, MeshRole
 
 use super::RigidBodyState;
 
-#[derive(Clone, Copy, Debug)]
-struct Binding {
-    collider: MeshHandle,
-    body: BodyHandle,
-}
-
 /// Owns the fixed fluid collider/body topology and retained exchange storage.
 ///
 /// `prepare` must be repeated if either world's topology is rebuilt. A frame
 /// borrows the coupling and fluid world exclusively until `finish` succeeds.
 pub struct RigidFluidCoupling {
-    bindings: Vec<Binding>,
+    colliders: Vec<MeshHandle>,
+    bodies: Vec<BodyHandle>,
     origin: [f32; 3],
     states: Vec<RigidBodyState>,
     impulses: Vec<BodyImpulse>,
@@ -47,7 +42,10 @@ impl RigidFluidCoupling {
     /// Prepare the retained topology and validate the initial rigid state.
     ///
     /// The fluid world must already contain each collider. Calling this for a
-    /// changed topology requires rebuilding the fluid world and adapter.
+    /// changed topology requires rebuilding the fluid world and adapter. A
+    /// body can own several colliders; its state and reaction are exchanged
+    /// once, in first-occurrence body order. Collider meshes must already use
+    /// their body's local coordinates, as returned by `PhysicsWorld::hull_meshes`.
     pub fn prepare(
         fluid: &mut FluidWorld,
         rigid: &PhysicsWorld,
@@ -73,27 +71,33 @@ impl RigidFluidCoupling {
                 .validate_handle(collider, Some(MeshRole::Collider))?;
         }
 
-        let mut bodies = HashSet::with_capacity(bindings.len());
+        let mut body_indices = HashMap::with_capacity(bindings.len());
+        let mut bodies = Vec::with_capacity(bindings.len());
+        let mut groups: Vec<Vec<MeshHandle>> = Vec::new();
         let mut states = Vec::with_capacity(bindings.len());
-        for &(_, body) in bindings {
-            if !bodies.insert(body) {
-                return Err(FluidError::input(
-                    "rigid fluid coupling bindings must use distinct bodies",
-                ));
-            }
-            states.push(read_state(rigid, body, origin)?);
+        for &(collider, body) in bindings {
+            let index = if let Some(&index) = body_indices.get(&body) {
+                index
+            } else {
+                let index = bodies.len();
+                states.push(read_state(rigid, body, origin)?);
+                bodies.push(body);
+                groups.push(Vec::new());
+                body_indices.insert(body, index);
+                index
+            };
+            groups[index].push(collider);
         }
-
-        fluid.prepare_rigid_coupling(&colliders, density)?;
+        let group_refs: Vec<_> = groups.iter().map(Vec::as_slice).collect();
+        fluid.prepare_rigid_coupling_groups(&group_refs, density)?;
+        let body_count = bodies.len();
 
         Ok(Self {
-            bindings: bindings
-                .iter()
-                .map(|&(collider, body)| Binding { collider, body })
-                .collect(),
+            colliders,
+            bodies,
             origin,
             states,
-            impulses: Vec::with_capacity(bindings.len()),
+            impulses: Vec::with_capacity(body_count),
             last_stats: None,
         })
     }
@@ -107,10 +111,10 @@ impl RigidFluidCoupling {
         fields: &[FieldInput<'_>],
     ) -> Result<CoupledFluidFrame<'coupling, 'fluid>, FluidError> {
         self.last_stats = None;
-        for binding in &self.bindings {
+        for &collider in &self.colliders {
             fluid
                 .mesh_state
-                .validate_handle(binding.collider, Some(MeshRole::Collider))?;
+                .validate_handle(collider, Some(MeshRole::Collider))?;
         }
         let frame = fluid.begin_frame_with_fields(duration, fields)?;
         Ok(CoupledFluidFrame {
@@ -176,8 +180,8 @@ impl SubstepExchange for CoupledFluidFrame<'_, '_> {
             ));
         }
 
-        for (index, binding) in self.coupling.bindings.iter().enumerate() {
-            let current = read_state(rigid, binding.body, self.coupling.origin)?;
+        for (index, &body) in self.coupling.bodies.iter().enumerate() {
+            let current = read_state(rigid, body, self.coupling.origin)?;
             if current != self.coupling.states[index] {
                 return Err(FluidError::input(
                     "rigid body state changed after the coupled substep offer",
@@ -194,13 +198,11 @@ impl SubstepExchange for CoupledFluidFrame<'_, '_> {
         self.coupling.impulses.clear();
         {
             let reactions = self.frame.rigid_reactions()?;
-            if reactions.len() != self.coupling.bindings.len() {
+            if reactions.len() != self.coupling.bodies.len() {
                 return Err(FluidError::native("rigid reaction count changed"));
             }
-            for (binding, reaction) in self.coupling.bindings.iter().zip(reactions) {
-                self.coupling
-                    .impulses
-                    .push(reaction.body_impulse(binding.body)?);
+            for (&body, reaction) in self.coupling.bodies.iter().zip(reactions) {
+                self.coupling.impulses.push(reaction.body_impulse(body)?);
             }
         }
         rigid
@@ -226,8 +228,8 @@ fn refresh_states(
     coupling: &mut RigidFluidCoupling,
     rigid: &PhysicsWorld,
 ) -> Result<(), FluidError> {
-    for (state, binding) in coupling.states.iter_mut().zip(&coupling.bindings) {
-        *state = read_state(rigid, binding.body, coupling.origin)?;
+    for (state, &body) in coupling.states.iter_mut().zip(&coupling.bodies) {
+        *state = read_state(rigid, body, coupling.origin)?;
     }
     Ok(())
 }

@@ -20,7 +20,7 @@ pub struct RigidBodyState {
     pub dynamics: BodyDynamics,
 }
 
-/// The accepted fluid reaction for one prepared collider, in preparation order.
+/// The accepted fluid reaction for one prepared body, in preparation order.
 /// Angular impulse is about the uploaded centre of mass. Solved velocity changes
 /// are retained separately so the owner can verify the backend's response.
 #[repr(C)]
@@ -76,7 +76,9 @@ unsafe extern "C" {
     fn manifold_fluids_world_prepare_rigid_coupling(
         world: *mut c_void,
         slots: *const u32,
-        count: usize,
+        body_indices: *const u32,
+        collider_count: usize,
+        body_count: usize,
         density: f64,
     ) -> i32;
     fn manifold_fluids_world_set_rigid_bodies(
@@ -94,10 +96,9 @@ unsafe extern "C" {
 
 impl FluidWorld {
     /// Prepare two-way coupling once during world construction. Each collider
-    /// represents one rigid body with one collider mesh. Several overlapping
-    /// hulls must retain their union geometry and share one body's response;
-    /// this interface does not yet expose that compound binding. Rebuild the
-    /// world when this topology changes.
+    /// represents one rigid body with one collider mesh. Use
+    /// `prepare_rigid_coupling_groups` for compound proxies. Rebuild the world
+    /// when this topology changes.
     ///
     /// Density is kg/m³. The owner must use `begin_frame` and exchange body state
     /// and reactions at every substep; `step` is unavailable for coupled worlds.
@@ -106,35 +107,64 @@ impl FluidWorld {
         colliders: &[MeshHandle],
         density: f64,
     ) -> Result<(), FluidError> {
+        let groups: Vec<_> = colliders.iter().map(std::slice::from_ref).collect();
+        self.prepare_rigid_coupling_groups(&groups, density)
+    }
+
+    /// Prepare one nonempty collider group per rigid body. Each mesh must be
+    /// in that body's local frame. Meshes retain their union geometry; all
+    /// hulls in a group share the same mass/inertia, pose and reaction. State
+    /// uploads and reaction reads use group order, not flattened mesh order.
+    /// A collider can appear only once across all groups.
+    pub fn prepare_rigid_coupling_groups(
+        &mut self,
+        groups: &[&[MeshHandle]],
+        density: f64,
+    ) -> Result<(), FluidError> {
         if self.rigid_coupling.is_some() {
             return Err(FluidError::input(
                 "rigid coupling is already prepared; rebuild the world",
             ));
         }
-        if colliders.is_empty() || !density.is_finite() || density <= 0.0 {
+        if groups.is_empty()
+            || groups.iter().any(|group| group.is_empty())
+            || !density.is_finite()
+            || density <= 0.0
+        {
             return Err(FluidError::input(
-                "rigid coupling needs colliders and positive finite density",
+                "rigid coupling needs nonempty collider groups and positive finite density",
             ));
         }
-        let slots: Vec<u32> = colliders
+        let count = groups
             .iter()
-            .map(|&handle| {
-                self.mesh_state
-                    .validate_handle(handle, Some(MeshRole::Collider))
-                    .and_then(|slot| {
-                        u32::try_from(slot).map_err(|_| FluidError::input("mesh slot overflow"))
-                    })
-            })
-            .collect::<Result<_, _>>()?;
+            .try_fold(0usize, |count, group| count.checked_add(group.len()))
+            .ok_or_else(|| FluidError::input("rigid collider count overflow"))?;
+        let mut slots = Vec::with_capacity(count);
+        let mut body_indices = Vec::with_capacity(count);
+        for (body, group) in groups.iter().enumerate() {
+            let body =
+                u32::try_from(body).map_err(|_| FluidError::input("rigid body index overflow"))?;
+            for &handle in *group {
+                let slot = self
+                    .mesh_state
+                    .validate_handle(handle, Some(MeshRole::Collider))?;
+                slots.push(
+                    u32::try_from(slot).map_err(|_| FluidError::input("mesh slot overflow"))?,
+                );
+                body_indices.push(body);
+            }
+        }
         let state = RigidCouplingState {
-            inputs: vec![NativeRigidBodyInput::default(); colliders.len()],
-            reactions: vec![RigidReaction::default(); colliders.len()],
+            inputs: vec![NativeRigidBodyInput::default(); groups.len()],
+            reactions: vec![RigidReaction::default(); groups.len()],
         };
         let ok = unsafe {
             manifold_fluids_world_prepare_rigid_coupling(
                 self.native,
                 slots.as_ptr(),
+                body_indices.as_ptr(),
                 slots.len(),
+                groups.len(),
                 density,
             )
         };
@@ -156,7 +186,7 @@ impl FluidFrame<'_> {
             .ok_or_else(|| FluidError::input("rigid fluid coupling is not prepared"))?;
         if bodies.len() != coupling.inputs.len() {
             return Err(FluidError::input(
-                "rigid body count must match prepared colliders",
+                "rigid body count must match prepared collider groups",
             ));
         }
         for (input, body) in coupling.inputs.iter_mut().zip(bodies) {

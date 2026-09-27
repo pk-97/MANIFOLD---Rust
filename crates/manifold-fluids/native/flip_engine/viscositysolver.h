@@ -225,35 +225,49 @@ private:
 
     void _destroyVolumeGrid();
     void _computeMatrixIndexTable();
-    void _initializeLinearSystem(SparseMatrixf &matrix, std::vector<float> &rhs);
-    void _initializeLinearSystemU(SparseMatrixf &matrix, std::vector<float> &rhs);
-    void _initializeLinearSystemV(SparseMatrixf &matrix, std::vector<float> &rhs);
-    void _initializeLinearSystemW(SparseMatrixf &matrix, std::vector<float> &rhs);
+    template <typename T>
+    bool _solveAndApply(double density);
+    template <typename T>
+    void _initializeLinearSystem(SparseMatrix<T> &matrix, std::vector<T> &rhs);
+    template <typename T>
+    void _initializeLinearSystemU(SparseMatrix<T> &matrix, std::vector<T> &rhs);
+    template <typename T>
+    void _initializeLinearSystemV(SparseMatrix<T> &matrix, std::vector<T> &rhs);
+    template <typename T>
+    void _initializeLinearSystemW(SparseMatrix<T> &matrix, std::vector<T> &rhs);
+    template <typename T>
     void _initializeLinearSystemThreadU(int startidx, int endidx,
                                         std::vector<GridIndex> *indices,
-                                        SparseMatrixf *matrix, 
-                                        std::vector<float> *rhs);
+                                        SparseMatrix<T> *matrix,
+                                        std::vector<T> *rhs);
+    template <typename T>
     void _initializeLinearSystemThreadV(int startidx, int endidx,
                                         std::vector<GridIndex> *indices,
-                                        SparseMatrixf *matrix, 
-                                        std::vector<float> *rhs);
+                                        SparseMatrix<T> *matrix,
+                                        std::vector<T> *rhs);
+    template <typename T>
     void _initializeLinearSystemThreadW(int startidx, int endidx,
                                         std::vector<GridIndex> *indices,
-                                        SparseMatrixf *matrix, 
-                                        std::vector<float> *rhs);
+                                        SparseMatrix<T> *matrix,
+                                        std::vector<T> *rhs);
 
-    bool _solveLinearSystem(SparseMatrixf &matrix, std::vector<float> &rhs, 
-                            std::vector<float> &soln);
+    template <typename T>
+    bool _solveLinearSystem(SparseMatrix<T> &matrix, std::vector<T> &rhs,
+                            std::vector<T> &soln);
     bool _validateReactionInputs();
-    bool _visitBoundaryTerms(const std::vector<float> *soln, double density);
+    template <typename T>
+    bool _visitBoundaryTerms(const std::vector<T> *soln, double density);
+    template <typename T>
     bool _captureReactionTerm(const GridIndex *faces, const int *axes,
                               const int *signs, int count, float weight,
-                              const std::vector<float> *soln, double density);
+                              const std::vector<T> *soln, double density);
     double _rigidFaceScale(int axis, GridIndex g) const;
+    template <typename T>
     bool _getReactionFaceValue(int axis, GridIndex g,
-                               const std::vector<float> &soln,
+                               const std::vector<T> &soln,
                                double *value);
-    void _applySolutionToVelocityField(std::vector<float> &soln);
+    template <typename T>
+    void _applySolutionToVelocityField(const std::vector<T> &soln);
 
     int _isize;
     int _jsize;

@@ -56,7 +56,9 @@ int manifold_fluids_world_add_fluid_mesh(void *world, const float *vertices,
                                          size_t triangle_count, const float *pose,
                                          const float *velocity);
 int manifold_fluids_world_prepare_rigid_coupling(void *world, const uint32_t *slots,
-                                                  size_t count, double density);
+                                                  const uint32_t *body_indices,
+                                                  size_t collider_count, size_t body_count,
+                                                  double density);
 int manifold_fluids_world_set_rigid_bodies(void *world,
                                             const ManifoldFluidsRigidBodyInput *inputs,
                                             size_t count);

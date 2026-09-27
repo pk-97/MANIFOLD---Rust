@@ -107,7 +107,7 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
     if (_rigidCoupling != nullptr) {
         const double cellMass=params.reactionDensity*static_cast<double>(_dx)*_dx*_dx;
         _rigidCoupling->beginCapture(matsize,cellMass);
-        if (!_visitBoundaryTerms(nullptr,params.reactionDensity)) {
+        if (!_visitBoundaryTerms<float>(nullptr,params.reactionDensity)) {
             _solverStatus = "***Coupled viscosity FAILED: boundary stencil extraction";
             return false;
         }
@@ -128,39 +128,49 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
         return true;
     }
 
-    const size_t systemSize=_rigidCoupling != nullptr ? _rigidCoupling->systemSize() : matsize;
-    SparseMatrixf matrix(systemSize, 15);
-    std::vector<float> rhs(systemSize, 0);
-    std::vector<float> soln(systemSize, 0);
+    const bool success = _rigidCoupling != nullptr
+        ? _solveAndApply<double>(params.reactionDensity)
+        : _solveAndApply<float>(params.reactionDensity);
+    reactionGuard.committed = success;
+    return success;
+}
+
+std::string ViscositySolver::getSolverStatus() {
+    return _solverStatus;
+}
+
+template <typename T>
+bool ViscositySolver::_solveAndApply(double density) {
+    const size_t systemSize = _rigidCoupling != nullptr
+        ? _rigidCoupling->systemSize() : static_cast<size_t>(_matrixIndex.matrixSize);
+    SparseMatrix<T> matrix(systemSize, 15);
+    std::vector<T> rhs(systemSize, T(0));
+    std::vector<T> soln(systemSize, T(0));
 
     _initializeLinearSystem(matrix, rhs);
-    if (_rigidCoupling != nullptr) { _rigidCoupling->addMatrixDiagonalAndRhs(matrix,rhs); }
+    if (_rigidCoupling != nullptr) {
+        _rigidCoupling->addMatrixDiagonalAndRhs(matrix, rhs);
+    }
 
-    bool success = _solveLinearSystem(matrix, rhs, soln);
-    if (!success) {
-        if (boundaryReaction != nullptr) {
-            boundaryReaction->invalidate();
+    if (!_solveLinearSystem(matrix, rhs, soln)) {
+        if (_boundaryReaction != nullptr) {
+            _boundaryReaction->invalidate();
         }
         return false;
     }
 
-    if (_rigidCoupling != nullptr) { _rigidCoupling->captureSolution(soln); }
-    if (boundaryReaction != nullptr &&
-        (!_visitBoundaryTerms(&soln, params.reactionDensity) || !boundaryReaction->finish())) {
-        boundaryReaction->invalidate();
+    if (_rigidCoupling != nullptr) {
+        _rigidCoupling->captureSolution(soln);
+    }
+    if (_boundaryReaction != nullptr &&
+        (!_visitBoundaryTerms(&soln, density) || !_boundaryReaction->finish())) {
+        _boundaryReaction->invalidate();
         _solverStatus = "***Viscosity boundary reaction FAILED: stencil extraction";
         return false;
     }
 
     _applySolutionToVelocityField(soln);
-
-    reactionGuard.committed = true;
-
     return true;
-}
-
-std::string ViscositySolver::getSolverStatus() {
-    return _solverStatus;
 }
 
 void ViscositySolver::_initialize(ViscositySolverParameters params) {
@@ -553,13 +563,15 @@ void ViscositySolver::_computeMatrixIndexTable() {
     _matrixIndex = MatrixIndexer(_isize, _jsize, _ksize, gridToMatrixIndex);
 }
 
-void ViscositySolver::_initializeLinearSystem(SparseMatrixf &matrix, std::vector<float> &rhs) {
+template <typename T>
+void ViscositySolver::_initializeLinearSystem(SparseMatrix<T> &matrix, std::vector<T> &rhs) {
     _initializeLinearSystemU(matrix, rhs);
     _initializeLinearSystemV(matrix, rhs);
     _initializeLinearSystemW(matrix, rhs);
 }
 
-void ViscositySolver::_initializeLinearSystemU(SparseMatrixf &matrix, std::vector<float> &rhs) {
+template <typename T>
+void ViscositySolver::_initializeLinearSystemU(SparseMatrix<T> &matrix, std::vector<T> &rhs) {
     std::vector<GridIndex> indices;
     for (int k = 1; k < _ksize; k++) {
         for (int j = 1; j < _jsize; j++) {
@@ -576,7 +588,7 @@ void ViscositySolver::_initializeLinearSystemU(SparseMatrixf &matrix, std::vecto
     std::vector<std::thread> threads(numthreads);
     std::vector<int> intervals = ThreadUtils::splitRangeIntoIntervals(0, indices.size(), numthreads);
     for (int i = 0; i < numthreads; i++) {
-        threads[i] = std::thread(&ViscositySolver::_initializeLinearSystemThreadU, this,
+        threads[i] = std::thread(&ViscositySolver::_initializeLinearSystemThreadU<T>, this,
                                  intervals[i], intervals[i + 1], &indices, &matrix, &rhs);
     }
 
@@ -585,7 +597,8 @@ void ViscositySolver::_initializeLinearSystemU(SparseMatrixf &matrix, std::vecto
     }
 }
 
-void ViscositySolver::_initializeLinearSystemV(SparseMatrixf &matrix, std::vector<float> &rhs) {
+template <typename T>
+void ViscositySolver::_initializeLinearSystemV(SparseMatrix<T> &matrix, std::vector<T> &rhs) {
     std::vector<GridIndex> indices;
     for (int k = 1; k < _ksize; k++) {
         for (int j = 1; j < _jsize; j++) {
@@ -602,7 +615,7 @@ void ViscositySolver::_initializeLinearSystemV(SparseMatrixf &matrix, std::vecto
     std::vector<std::thread> threads(numthreads);
     std::vector<int> intervals = ThreadUtils::splitRangeIntoIntervals(0, indices.size(), numthreads);
     for (int i = 0; i < numthreads; i++) {
-        threads[i] = std::thread(&ViscositySolver::_initializeLinearSystemThreadV, this,
+        threads[i] = std::thread(&ViscositySolver::_initializeLinearSystemThreadV<T>, this,
                                  intervals[i], intervals[i + 1], &indices, &matrix, &rhs);
     }
 
@@ -611,7 +624,8 @@ void ViscositySolver::_initializeLinearSystemV(SparseMatrixf &matrix, std::vecto
     }
 }
 
-void ViscositySolver::_initializeLinearSystemW(SparseMatrixf &matrix, std::vector<float> &rhs) {
+template <typename T>
+void ViscositySolver::_initializeLinearSystemW(SparseMatrix<T> &matrix, std::vector<T> &rhs) {
     std::vector<GridIndex> indices;
     for (int k = 1; k < _ksize; k++) {
         for (int j = 1; j < _jsize; j++) {
@@ -628,7 +642,7 @@ void ViscositySolver::_initializeLinearSystemW(SparseMatrixf &matrix, std::vecto
     std::vector<std::thread> threads(numthreads);
     std::vector<int> intervals = ThreadUtils::splitRangeIntoIntervals(0, indices.size(), numthreads);
     for (int i = 0; i < numthreads; i++) {
-        threads[i] = std::thread(&ViscositySolver::_initializeLinearSystemThreadW, this,
+        threads[i] = std::thread(&ViscositySolver::_initializeLinearSystemThreadW<T>, this,
                                  intervals[i], intervals[i + 1], &indices, &matrix, &rhs);
     }
 
@@ -637,10 +651,11 @@ void ViscositySolver::_initializeLinearSystemW(SparseMatrixf &matrix, std::vecto
     }
 }
 
-void ViscositySolver::_initializeLinearSystemThreadU(int startidx, int endidx, 
+template <typename T>
+void ViscositySolver::_initializeLinearSystemThreadU(int startidx, int endidx,
                                                      std::vector<GridIndex> *indices,
-                                                     SparseMatrixf *matrix, 
-                                                     std::vector<float> *rhs) {
+                                                     SparseMatrix<T> *matrix,
+                                                     std::vector<T> *rhs) {
     MatrixIndexer &mj = _matrixIndex;
     FaceState FLUID = FaceState::fluid;
     FaceState SOLID = FaceState::solid;
@@ -688,7 +703,10 @@ void ViscositySolver::_initializeLinearSystemThreadU(int startidx, int endidx,
         float factorFront  = factor * viscFront * volFront;
         float factorBack   = factor * viscBack * volBack;
 
-        float diag = _volumes.U(i, j, k) + factorRight + factorLeft + factorTop + factorBottom + factorFront + factorBack;
+        T diag = static_cast<T>(_volumes.U(i, j, k))
+               + static_cast<T>(factorRight) + static_cast<T>(factorLeft)
+               + static_cast<T>(factorTop) + static_cast<T>(factorBottom)
+               + static_cast<T>(factorFront) + static_cast<T>(factorBack);
         matrix->set(row, row, diag);
         if (_state.U(i + 1, j,     k    ) == FLUID) { matrix->add(row, mj.U(i + 1, j,     k    ), -factorRight ); }
         if (_state.U(i - 1, j,     k    ) == FLUID) { matrix->add(row, mj.U(i - 1, j,     k    ), -factorLeft  ); }
@@ -707,31 +725,33 @@ void ViscositySolver::_initializeLinearSystemThreadU(int startidx, int endidx,
         if (_state.W(i,     j,     k    ) == FLUID) { matrix->add(row, mj.W(i,     j,     k    ),  factorBack  ); }
         if (_state.W(i - 1, j,     k    ) == FLUID) { matrix->add(row, mj.W(i - 1, j,     k    ), -factorBack  ); }
 
-        float rval = _volumes.U(i, j, k) * _velocityField->U(i, j, k);
-        if (_state.U(i + 1, j,     k)     == SOLID) { rval -= -factorRight  * _velocityField->U(i + 1, j,     k    ); }
-        if (_state.U(i - 1, j,     k)     == SOLID) { rval -= -factorLeft   * _velocityField->U(i - 1, j,     k    ); }
-        if (_state.U(i,     j + 1, k)     == SOLID) { rval -= -factorTop    * _velocityField->U(i,     j + 1, k    ); }
-        if (_state.U(i,     j - 1, k)     == SOLID) { rval -= -factorBottom * _velocityField->U(i,     j - 1, k    ); }
-        if (_state.U(i,     j,     k + 1) == SOLID) { rval -= -factorFront  * _velocityField->U(i,     j,     k + 1); }
-        if (_state.U(i,     j,     k - 1) == SOLID) { rval -= -factorBack   * _velocityField->U(i,     j,     k - 1); }
+        T rval = static_cast<T>(_volumes.U(i, j, k))
+               * static_cast<T>(_velocityField->U(i, j, k));
+        if (_state.U(i + 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorRight)  * static_cast<T>(_velocityField->U(i + 1, j,     k    )); }
+        if (_state.U(i - 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorLeft)   * static_cast<T>(_velocityField->U(i - 1, j,     k    )); }
+        if (_state.U(i,     j + 1, k)     == SOLID) { rval -= static_cast<T>(-factorTop)    * static_cast<T>(_velocityField->U(i,     j + 1, k    )); }
+        if (_state.U(i,     j - 1, k)     == SOLID) { rval -= static_cast<T>(-factorBottom) * static_cast<T>(_velocityField->U(i,     j - 1, k    )); }
+        if (_state.U(i,     j,     k + 1) == SOLID) { rval -= static_cast<T>(-factorFront)  * static_cast<T>(_velocityField->U(i,     j,     k + 1)); }
+        if (_state.U(i,     j,     k - 1) == SOLID) { rval -= static_cast<T>(-factorBack)   * static_cast<T>(_velocityField->U(i,     j,     k - 1)); }
 
-        if (_state.V(i,     j + 1, k)     == SOLID) { rval -= -factorTop    * _velocityField->V(i,     j + 1, k    ); }
-        if (_state.V(i - 1, j + 1, k)     == SOLID) { rval -=  factorTop    * _velocityField->V(i - 1, j + 1, k    ); }
-        if (_state.V(i,     j,     k)     == SOLID) { rval -=  factorBottom * _velocityField->V(i,     j,     k    ); }
-        if (_state.V(i - 1, j,     k)     == SOLID) { rval -= -factorBottom * _velocityField->V(i - 1, j,     k    ); }
+        if (_state.V(i,     j + 1, k)     == SOLID) { rval -= static_cast<T>(-factorTop)    * static_cast<T>(_velocityField->V(i,     j + 1, k    )); }
+        if (_state.V(i - 1, j + 1, k)     == SOLID) { rval -= static_cast<T>(factorTop)    * static_cast<T>(_velocityField->V(i - 1, j + 1, k    )); }
+        if (_state.V(i,     j,     k)     == SOLID) { rval -= static_cast<T>(factorBottom) * static_cast<T>(_velocityField->V(i,     j,     k    )); }
+        if (_state.V(i - 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorBottom) * static_cast<T>(_velocityField->V(i - 1, j,     k    )); }
 
-        if (_state.W(i,     j,     k + 1) == SOLID) { rval -= -factorFront  * _velocityField->W(i,     j,     k + 1); } 
-        if (_state.W(i - 1, j,     k + 1) == SOLID) { rval -=  factorFront  * _velocityField->W(i - 1, j,     k + 1); } 
-        if (_state.W(i,     j,     k)     == SOLID) { rval -=  factorBack   * _velocityField->W(i,     j,     k    ); } 
-        if (_state.W(i - 1, j,     k)     == SOLID) { rval -= -factorBack   * _velocityField->W(i - 1, j,     k    ); } 
+        if (_state.W(i,     j,     k + 1) == SOLID) { rval -= static_cast<T>(-factorFront)  * static_cast<T>(_velocityField->W(i,     j,     k + 1)); }
+        if (_state.W(i - 1, j,     k + 1) == SOLID) { rval -= static_cast<T>(factorFront)  * static_cast<T>(_velocityField->W(i - 1, j,     k + 1)); }
+        if (_state.W(i,     j,     k)     == SOLID) { rval -= static_cast<T>(factorBack)   * static_cast<T>(_velocityField->W(i,     j,     k    )); }
+        if (_state.W(i - 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorBack)   * static_cast<T>(_velocityField->W(i - 1, j,     k    )); }
         (*rhs)[row] = rval;
     }
 }
 
-void ViscositySolver::_initializeLinearSystemThreadV(int startidx, int endidx, 
+template <typename T>
+void ViscositySolver::_initializeLinearSystemThreadV(int startidx, int endidx,
                                                      std::vector<GridIndex> *indices,
-                                                     SparseMatrixf *matrix, 
-                                                     std::vector<float> *rhs) {
+                                                     SparseMatrix<T> *matrix,
+                                                     std::vector<T> *rhs) {
     MatrixIndexer &mj = _matrixIndex;
     FaceState FLUID = FaceState::fluid;
     FaceState SOLID = FaceState::solid;
@@ -779,7 +799,10 @@ void ViscositySolver::_initializeLinearSystemThreadV(int startidx, int endidx,
         float factorFront  = factor * viscFront * volFront;
         float factorBack   = factor * viscBack*volBack;
 
-        float diag = _volumes.V(i, j, k) + factorRight + factorLeft + factorTop + factorBottom + factorFront + factorBack;
+        T diag = static_cast<T>(_volumes.V(i, j, k))
+               + static_cast<T>(factorRight) + static_cast<T>(factorLeft)
+               + static_cast<T>(factorTop) + static_cast<T>(factorBottom)
+               + static_cast<T>(factorFront) + static_cast<T>(factorBack);
         matrix->set(row, row, diag);
         if (_state.V(i + 1, j,     k    ) == FLUID) { matrix->add(row, mj.V(i + 1, j,     k    ), -factorRight ); }
         if (_state.V(i - 1, j,     k    ) == FLUID) { matrix->add(row, mj.V(i - 1, j,     k    ), -factorLeft  ); }
@@ -798,31 +821,33 @@ void ViscositySolver::_initializeLinearSystemThreadV(int startidx, int endidx,
         if (_state.W(i,     j,     k    ) == FLUID) { matrix->add(row, mj.W(i,     j,     k    ),  factorBack  ); }
         if (_state.W(i,     j - 1, k    ) == FLUID) { matrix->add(row, mj.W(i,     j - 1, k    ), -factorBack  ); }
 
-        float rval = _volumes.V(i, j, k) * _velocityField->V(i, j, k);
-        if (_state.V(i + 1, j,     k)     == SOLID) { rval -= -factorRight  * _velocityField->V(i + 1, j,     k    ); }
-        if (_state.V(i - 1, j,     k)     == SOLID) { rval -= -factorLeft   * _velocityField->V(i - 1, j,     k    ); }
-        if (_state.V(i,     j + 1, k)     == SOLID) { rval -= -factorTop    * _velocityField->V(i,     j + 1, k    ); }
-        if (_state.V(i ,    j - 1, k)     == SOLID) { rval -= -factorBottom * _velocityField->V(i,     j - 1, k    ); }
-        if (_state.V(i    , j,     k + 1) == SOLID) { rval -= -factorFront  * _velocityField->V(i,     j,     k + 1); }
-        if (_state.V(i,     j,     k - 1) == SOLID) { rval -= -factorBack   * _velocityField->V(i,     j,     k - 1); }
+        T rval = static_cast<T>(_volumes.V(i, j, k))
+               * static_cast<T>(_velocityField->V(i, j, k));
+        if (_state.V(i + 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorRight)  * static_cast<T>(_velocityField->V(i + 1, j,     k    )); }
+        if (_state.V(i - 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorLeft)   * static_cast<T>(_velocityField->V(i - 1, j,     k    )); }
+        if (_state.V(i,     j + 1, k)     == SOLID) { rval -= static_cast<T>(-factorTop)    * static_cast<T>(_velocityField->V(i,     j + 1, k    )); }
+        if (_state.V(i ,    j - 1, k)     == SOLID) { rval -= static_cast<T>(-factorBottom) * static_cast<T>(_velocityField->V(i,     j - 1, k    )); }
+        if (_state.V(i    , j,     k + 1) == SOLID) { rval -= static_cast<T>(-factorFront)  * static_cast<T>(_velocityField->V(i,     j,     k + 1)); }
+        if (_state.V(i,     j,     k - 1) == SOLID) { rval -= static_cast<T>(-factorBack)   * static_cast<T>(_velocityField->V(i,     j,     k - 1)); }
 
-        if (_state.U(i + 1, j,     k)     == SOLID) { rval -= -factorRight  * _velocityField->U(i + 1, j,     k    ); }
-        if (_state.U(i + 1, j - 1, k)     == SOLID) { rval -=  factorRight  * _velocityField->U(i + 1, j - 1, k    ); }
-        if (_state.U(i,     j,     k)     == SOLID) { rval -=  factorLeft   * _velocityField->U(i,     j,     k    ); }
-        if (_state.U(i,     j - 1, k)     == SOLID) { rval -= -factorLeft   * _velocityField->U(i,     j - 1, k    ); }
+        if (_state.U(i + 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorRight)  * static_cast<T>(_velocityField->U(i + 1, j,     k    )); }
+        if (_state.U(i + 1, j - 1, k)     == SOLID) { rval -= static_cast<T>(factorRight)  * static_cast<T>(_velocityField->U(i + 1, j - 1, k    )); }
+        if (_state.U(i,     j,     k)     == SOLID) { rval -= static_cast<T>(factorLeft)   * static_cast<T>(_velocityField->U(i,     j,     k    )); }
+        if (_state.U(i,     j - 1, k)     == SOLID) { rval -= static_cast<T>(-factorLeft)   * static_cast<T>(_velocityField->U(i,     j - 1, k    )); }
 
-        if (_state.W(i,     j,     k + 1) == SOLID) { rval -= -factorFront  * _velocityField->W(i,     j,     k + 1); }
-        if (_state.W(i,     j - 1, k + 1) == SOLID) { rval -=  factorFront  * _velocityField->W(i,     j - 1, k + 1); }
-        if (_state.W(i,     j,     k)     == SOLID) { rval -=  factorBack   * _velocityField->W(i,     j,     k    ); }
-        if (_state.W(i,     j - 1, k)     == SOLID) { rval -= -factorBack   * _velocityField->W(i,     j - 1, k    ); }
+        if (_state.W(i,     j,     k + 1) == SOLID) { rval -= static_cast<T>(-factorFront)  * static_cast<T>(_velocityField->W(i,     j,     k + 1)); }
+        if (_state.W(i,     j - 1, k + 1) == SOLID) { rval -= static_cast<T>(factorFront)  * static_cast<T>(_velocityField->W(i,     j - 1, k + 1)); }
+        if (_state.W(i,     j,     k)     == SOLID) { rval -= static_cast<T>(factorBack)   * static_cast<T>(_velocityField->W(i,     j,     k    )); }
+        if (_state.W(i,     j - 1, k)     == SOLID) { rval -= static_cast<T>(-factorBack)   * static_cast<T>(_velocityField->W(i,     j - 1, k    )); }
         (*rhs)[row] = rval;
     }
 }
 
-void ViscositySolver::_initializeLinearSystemThreadW(int startidx, int endidx, 
+template <typename T>
+void ViscositySolver::_initializeLinearSystemThreadW(int startidx, int endidx,
                                                      std::vector<GridIndex> *indices,
-                                                     SparseMatrixf *matrix, 
-                                                     std::vector<float> *rhs) {
+                                                     SparseMatrix<T> *matrix,
+                                                     std::vector<T> *rhs) {
     MatrixIndexer &mj = _matrixIndex;
     FaceState FLUID = FaceState::fluid;
     FaceState SOLID = FaceState::solid;
@@ -870,7 +895,10 @@ void ViscositySolver::_initializeLinearSystemThreadW(int startidx, int endidx,
         float factorFront  = 2 * factor * viscFront * volFront;
         float factorBack   = 2 * factor * viscBack*volBack;
 
-        float diag = _volumes.W(i, j, k) + factorRight + factorLeft + factorTop + factorBottom + factorFront + factorBack;
+        T diag = static_cast<T>(_volumes.W(i, j, k))
+               + static_cast<T>(factorRight) + static_cast<T>(factorLeft)
+               + static_cast<T>(factorTop) + static_cast<T>(factorBottom)
+               + static_cast<T>(factorFront) + static_cast<T>(factorBack);
         matrix->set(row, row, diag);
         if (_state.W(i + 1, j,     k    ) == FLUID) { matrix->add(row, mj.W(i + 1, j,     k    ), -factorRight ); }
         if (_state.W(i - 1, j,     k    ) == FLUID) { matrix->add(row, mj.W(i - 1, j,     k    ), -factorLeft  ); }
@@ -889,38 +917,40 @@ void ViscositySolver::_initializeLinearSystemThreadW(int startidx, int endidx,
         if (_state.V(i,     j,     k    ) == FLUID) { matrix->add(row, mj.V(i,     j,     k    ),  factorBottom); }
         if (_state.V(i,     j,     k - 1) == FLUID) { matrix->add(row, mj.V(i,     j,     k - 1), -factorBottom); }
 
-        float rval = _volumes.W(i, j, k) * _velocityField->W(i, j, k);
-        if (_state.W(i + 1, j,     k)     == SOLID) { rval -= -factorRight  * _velocityField->W(i + 1, j,     k    ); }
-        if (_state.W(i - 1, j,     k)     == SOLID) { rval -= -factorLeft   * _velocityField->W(i - 1, j,     k    ); }
-        if (_state.W(i,     j + 1, k)     == SOLID) { rval -= -factorTop    * _velocityField->W(i,     j + 1, k    ); }
-        if (_state.W(i,     j - 1, k)     == SOLID) { rval -= -factorBottom * _velocityField->W(i,     j - 1, k    ); }
-        if (_state.W(i,     j,     k + 1) == SOLID) { rval -= -factorFront  * _velocityField->W(i,     j,     k + 1); }
-        if (_state.W(i,     j,     k - 1) == SOLID) { rval -= -factorBack   * _velocityField->W(i,     j,     k - 1); }
+        T rval = static_cast<T>(_volumes.W(i, j, k))
+               * static_cast<T>(_velocityField->W(i, j, k));
+        if (_state.W(i + 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorRight)  * static_cast<T>(_velocityField->W(i + 1, j,     k    )); }
+        if (_state.W(i - 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorLeft)   * static_cast<T>(_velocityField->W(i - 1, j,     k    )); }
+        if (_state.W(i,     j + 1, k)     == SOLID) { rval -= static_cast<T>(-factorTop)    * static_cast<T>(_velocityField->W(i,     j + 1, k    )); }
+        if (_state.W(i,     j - 1, k)     == SOLID) { rval -= static_cast<T>(-factorBottom) * static_cast<T>(_velocityField->W(i,     j - 1, k    )); }
+        if (_state.W(i,     j,     k + 1) == SOLID) { rval -= static_cast<T>(-factorFront)  * static_cast<T>(_velocityField->W(i,     j,     k + 1)); }
+        if (_state.W(i,     j,     k - 1) == SOLID) { rval -= static_cast<T>(-factorBack)   * static_cast<T>(_velocityField->W(i,     j,     k - 1)); }
 
-        if (_state.U(i + 1, j,     k)     == SOLID) { rval -= -factorRight  * _velocityField->U(i + 1, j,     k    ); }
-        if (_state.U(i + 1, j,     k - 1) == SOLID) { rval -=  factorRight  * _velocityField->U(i + 1, j,     k - 1); }
-        if (_state.U(i,     j,     k)     == SOLID) { rval -=  factorLeft   * _velocityField->U(i,     j,     k    ); }
-        if (_state.U(i,     j,     k - 1) == SOLID) { rval -= -factorLeft   * _velocityField->U(i,     j,     k - 1); }
+        if (_state.U(i + 1, j,     k)     == SOLID) { rval -= static_cast<T>(-factorRight)  * static_cast<T>(_velocityField->U(i + 1, j,     k    )); }
+        if (_state.U(i + 1, j,     k - 1) == SOLID) { rval -= static_cast<T>(factorRight)  * static_cast<T>(_velocityField->U(i + 1, j,     k - 1)); }
+        if (_state.U(i,     j,     k)     == SOLID) { rval -= static_cast<T>(factorLeft)   * static_cast<T>(_velocityField->U(i,     j,     k    )); }
+        if (_state.U(i,     j,     k - 1) == SOLID) { rval -= static_cast<T>(-factorLeft)   * static_cast<T>(_velocityField->U(i,     j,     k - 1)); }
 
-        if (_state.V(i,     j + 1, k)     == SOLID) { rval -= -factorTop    * _velocityField->V(i,     j + 1, k    ); }
-        if (_state.V(i,     j + 1, k - 1) == SOLID) { rval -=  factorTop    * _velocityField->V(i,     j + 1, k - 1); }
-        if (_state.V(i,     j,     k)     == SOLID) { rval -=  factorBottom * _velocityField->V(i,     j,     k    ); }
-        if (_state.V(i,     j,     k - 1) == SOLID) { rval -= -factorBottom * _velocityField->V(i,     j,     k - 1); }
+        if (_state.V(i,     j + 1, k)     == SOLID) { rval -= static_cast<T>(-factorTop)    * static_cast<T>(_velocityField->V(i,     j + 1, k    )); }
+        if (_state.V(i,     j + 1, k - 1) == SOLID) { rval -= static_cast<T>(factorTop)    * static_cast<T>(_velocityField->V(i,     j + 1, k - 1)); }
+        if (_state.V(i,     j,     k)     == SOLID) { rval -= static_cast<T>(factorBottom) * static_cast<T>(_velocityField->V(i,     j,     k    )); }
+        if (_state.V(i,     j,     k - 1) == SOLID) { rval -= static_cast<T>(-factorBottom) * static_cast<T>(_velocityField->V(i,     j,     k - 1)); }
         (*rhs)[row] = rval;
     }
 }
 
-bool ViscositySolver::_solveLinearSystem(SparseMatrixf &matrix, std::vector<float> &rhs, 
-                                         std::vector<float> &soln) {
+template <typename T>
+bool ViscositySolver::_solveLinearSystem(SparseMatrix<T> &matrix, std::vector<T> &rhs,
+                                         std::vector<T> &soln) {
 
-    PCGSolver<float> solver;
+    PCGSolver<T> solver;
     solver.setSolverParameters(_solverTolerance, _maxSolverIterations);
 
-    float estimatedError;
+    T estimatedError;
     int numIterations;
     bool success = _rigidCoupling != nullptr
         ? solver.solveWithAdditionalMatrix(matrix,rhs,soln,estimatedError,numIterations,
-            [&](const std::vector<float> &x,std::vector<float> &y) {
+            [&](const std::vector<T> &x,std::vector<T> &y) {
                 _rigidCoupling->addRemainingMatrixProduct(x,y);
             })
         : solver.solve(matrix, rhs, soln, estimatedError, numIterations);
@@ -980,8 +1010,9 @@ bool ViscositySolver::_validateReactionInputs() {
         && finiteNonnegative(_volumes.edgeV) && finiteNonnegative(_volumes.edgeW);
 }
 
+template <typename T>
 bool ViscositySolver::_getReactionFaceValue(int axis, GridIndex g,
-                                             const std::vector<float> &soln,
+                                             const std::vector<T> &soln,
                                              double *value) {
     FaceState state;
     int matrixIndex;
@@ -1039,9 +1070,10 @@ double ViscositySolver::_rigidFaceScale(int axis,GridIndex g) const {
     return scale;
 }
 
+template <typename T>
 bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *axes,
                                            const int *signs, int count, float weight,
-                                           const std::vector<float> *soln, double density) {
+                                           const std::vector<T> *soln, double density) {
     if (!std::isfinite(weight)) {
         return false;
     }
@@ -1138,7 +1170,8 @@ bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *ax
     return true;
 }
 
-bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double density) {
+template <typename T>
+bool ViscositySolver::_visitBoundaryTerms(const std::vector<T> *soln, double density) {
     if ((soln != nullptr && _boundaryReaction == nullptr) || !std::isfinite(density) || density <= 0.0) {
         return false;
     }
@@ -1152,7 +1185,7 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
                 int normalAxes[2] = {0, 0};
                 const int normalSigns[2] = {1, -1};
                 float weight = 2.0f * factor * _viscosity->get(i, j, k) * _volumes.center(i, j, k);
-                if (!_captureReactionTerm(normalFaces, normalAxes, normalSigns, 2,
+                if (!_captureReactionTerm<T>(normalFaces, normalAxes, normalSigns, 2,
                                           weight, soln, density)) {
                     return false;
                 }
@@ -1162,7 +1195,7 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
                 normalAxes[0] = 1;
                 normalAxes[1] = 1;
                 weight = 2.0f * factor * _viscosity->get(i, j, k) * _volumes.center(i, j, k);
-                if (!_captureReactionTerm(normalFaces, normalAxes, normalSigns, 2,
+                if (!_captureReactionTerm<T>(normalFaces, normalAxes, normalSigns, 2,
                                           weight, soln, density)) {
                     return false;
                 }
@@ -1172,7 +1205,7 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
                 normalAxes[0] = 2;
                 normalAxes[1] = 2;
                 weight = 2.0f * factor * _viscosity->get(i, j, k) * _volumes.center(i, j, k);
-                if (!_captureReactionTerm(normalFaces, normalAxes, normalSigns, 2,
+                if (!_captureReactionTerm<T>(normalFaces, normalAxes, normalSigns, 2,
                                           weight, soln, density)) {
                     return false;
                 }
@@ -1187,7 +1220,7 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
                                              _viscosity->get(i, j, k) +
                                              _viscosity->get(i, j - 1, k));
                 weight = factor * viscW * _volumes.edgeW(i, j, k);
-                if (!_captureReactionTerm(shearFaces, shearAxesW, shearSigns, 4,
+                if (!_captureReactionTerm<T>(shearFaces, shearAxesW, shearSigns, 4,
                                           weight, soln, density)) {
                     return false;
                 }
@@ -1200,7 +1233,7 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
                                              _viscosity->get(i, j, k) +
                                              _viscosity->get(i, j, k - 1));
                 weight = factor * viscV * _volumes.edgeV(i, j, k);
-                if (!_captureReactionTerm(shearFaces, shearAxesV, shearSigns, 4,
+                if (!_captureReactionTerm<T>(shearFaces, shearAxesV, shearSigns, 4,
                                           weight, soln, density)) {
                     return false;
                 }
@@ -1215,7 +1248,7 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
                                              _viscosity->get(i, j, k) +
                                              _viscosity->get(i, j, k - 1));
                 weight = factor * viscU * _volumes.edgeU(i, j, k);
-                if (!_captureReactionTerm(shearFaces, shearAxesU, shearSigns, 4,
+                if (!_captureReactionTerm<T>(shearFaces, shearAxesU, shearSigns, 4,
                                           weight, soln, density)) {
                     return false;
                 }
@@ -1225,7 +1258,13 @@ bool ViscositySolver::_visitBoundaryTerms(const std::vector<float> *soln, double
     return true;
 }
 
-void ViscositySolver::_applySolutionToVelocityField(std::vector<float> &soln) {
+template <typename T>
+void ViscositySolver::_applySolutionToVelocityField(const std::vector<T> &soln) {
+    for (T value : soln) {
+        if (!std::isfinite(value) || !std::isfinite(static_cast<float>(value))) {
+            throw std::invalid_argument("viscosity solution is outside native velocity range");
+        }
+    }
     _velocityField->clear();
     for(int k = 0; k < _ksize; k++) {
         for(int j = 0; j < _jsize; j++) {
