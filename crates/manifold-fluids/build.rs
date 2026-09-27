@@ -25,6 +25,14 @@ fn main() {
     println!("cargo:rerun-if-changed={}", engine_dir.display());
     println!(
         "cargo:rerun-if-changed={}",
+        native_dir.join("coupling_probe.cpp").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        native_dir.join("coupling_probe.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
         native_dir.join("bridge.cpp").display()
     );
     println!(
@@ -91,6 +99,7 @@ fn main() {
         .include(&engine_dir)
         .include(&native_dir)
         .file(native_dir.join("bridge.cpp"))
+        .file(native_dir.join("coupling_probe.cpp"))
         .file(engine_dir.join("mixbox/mixbox_stub.cpp"))
         .file(generated_version);
     for source in sources {

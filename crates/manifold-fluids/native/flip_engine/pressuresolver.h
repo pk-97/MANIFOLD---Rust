@@ -131,6 +131,12 @@ public:
 
     void applySolutionToVelocityField();
 
+    // MANIFOLD: transpose the prescribed-solid term of the pressure solve.
+    // Writes impulse (not force) at MAC face positions into caller-owned storage.
+    // Units follow the solver inputs: kg, m, s when density is kg/m^3.
+    // This is a reaction measurement; it does not make the solve two-way.
+    bool computeSolidPressureImpulse(MACVelocityField &impulse);
+
     int getMaxIterations() { return _maxCGIterations; }
     void setMaxIterations(int n) { _maxCGIterations = n; }
 
@@ -138,6 +144,12 @@ public:
     float getError() { return _solverError; } 
 
 private:
+
+    struct SolidBoundaryWeights {
+        double right, left, top, bottom, front, back;
+    };
+    SolidBoundaryWeights _solidBoundaryWeights(int i, int j, int k);
+    bool _hasPressureSolution = false;
 
     inline int _GridToVectorIndex(GridIndex g) {
         return _keymap.find(g);

@@ -51,6 +51,7 @@ PressureSolver::~PressureSolver() {
 
 bool PressureSolver::solve(PressureSolverParameters params) {
 
+    _hasPressureSolution = false;
     _initialize(params);
     _conditionSolidVelocityField();
     _initializeSurfaceTensionClusterData();
@@ -70,6 +71,7 @@ bool PressureSolver::solve(PressureSolverParameters params) {
         _solverIterations = 0;
         _solverError = 0.0f;
         _solverStatus = "Pressure Solver Iterations: 0\nEstimated Error: 0.0";
+        _hasPressureSolution = true;
         return true;
     }
 
@@ -88,6 +90,44 @@ bool PressureSolver::solve(PressureSolverParameters params) {
         return false;
     }
 
+    _hasPressureSolution = true;
+    return true;
+}
+
+PressureSolver::SolidBoundaryWeights PressureSolver::_solidBoundaryWeights(int i, int j, int k) {
+    const double center = _weightGrid->center(i, j, k);
+    return {
+        _weightGrid->U(i + 1, j, k) - center,
+        center - _weightGrid->U(i, j, k),
+        _weightGrid->V(i, j + 1, k) - center,
+        center - _weightGrid->V(i, j, k),
+        _weightGrid->W(i, j, k + 1) - center,
+        center - _weightGrid->W(i, j, k),
+    };
+}
+
+bool PressureSolver::computeSolidPressureImpulse(MACVelocityField &impulse) {
+    impulse.clear();
+    if (!_hasPressureSolution) {
+        return false;
+    }
+    int ni, nj, nk;
+    impulse.getGridDimensions(&ni, &nj, &nk);
+    FLUIDSIM_ASSERT(ni == _isize && nj == _jsize && nk == _ksize);
+    // RHS = -div(u*) + C v_s. The opposite solid impulse is
+    // -dt * cell_volume * C^T p. C includes the 1/dx derivative.
+    const double scale = -_deltaTime * _dx * _dx;
+    for (size_t index = 0; index < _pressureCells.size(); ++index) {
+        const GridIndex g = _pressureCells[index];
+        const auto c = _solidBoundaryWeights(g.i, g.j, g.k);
+        const double p = scale * _pressureGrid->get(g);
+        impulse.addU(g.i + 1, g.j, g.k, p * c.right);
+        impulse.addU(g.i, g.j, g.k, p * c.left);
+        impulse.addV(g.i, g.j + 1, g.k, p * c.top);
+        impulse.addV(g.i, g.j, g.k, p * c.bottom);
+        impulse.addW(g.i, g.j, g.k + 1, p * c.front);
+        impulse.addW(g.i, g.j, g.k, p * c.back);
+    }
     return true;
 }
 
@@ -633,7 +673,6 @@ void PressureSolver::_calculateNegativeDivergenceVectorThread(int startidx,
         int k = g.k;
         int index = _GridToVectorIndex(i, j, k);
 
-        double volCenter = _weightGrid->center(i, j, k);
         double volRight =  _weightGrid->U(i + 1, j,     k    );
         double volLeft =   _weightGrid->U(i,     j,     k    );
         double volTop =    _weightGrid->V(i,     j + 1, k    );
@@ -649,12 +688,13 @@ void PressureSolver::_calculateNegativeDivergenceVectorThread(int startidx,
         divergence += -factor * volFront  * _vFieldFluid->W(i,     j,     k + 1);
         divergence +=  factor * volBack   * _vFieldFluid->W(i,     j,     k    );
 
-        divergence +=  factor * (volRight -  volCenter) * _vFieldSolid->U(i + 1, j,     k    );
-        divergence += -factor * (volLeft -   volCenter) * _vFieldSolid->U(i,     j,     k    );
-        divergence +=  factor * (volTop -    volCenter) * _vFieldSolid->V(i,     j + 1, k    );
-        divergence += -factor * (volBottom - volCenter) * _vFieldSolid->V(i,     j,     k    );
-        divergence +=  factor * (volFront -  volCenter) * _vFieldSolid->W(i,     j,     k + 1);
-        divergence += -factor * (volBack -   volCenter) * _vFieldSolid->W(i,     j,     k    );
+        const auto solid = _solidBoundaryWeights(i, j, k);
+        divergence += factor * solid.right * _vFieldSolid->U(i + 1, j, k);
+        divergence += factor * solid.left * _vFieldSolid->U(i, j, k);
+        divergence += factor * solid.top * _vFieldSolid->V(i, j + 1, k);
+        divergence += factor * solid.bottom * _vFieldSolid->V(i, j, k);
+        divergence += factor * solid.front * _vFieldSolid->W(i, j, k + 1);
+        divergence += factor * solid.back * _vFieldSolid->W(i, j, k);
 
         if (_isSurfaceTensionEnabled) {
             double phiCenter = _liquidSDF->get(i,     j,     k    );

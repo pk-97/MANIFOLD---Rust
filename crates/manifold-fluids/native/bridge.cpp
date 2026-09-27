@@ -1,4 +1,5 @@
 #include "bridge.h"
+#include "coupling_probe.h"
 
 #include <cmath>
 #include <cstring>
@@ -572,6 +573,15 @@ void write_stats(const FluidSimulationFrameStats &native, ManifoldFluidsFrameSta
 }
 
 } // namespace
+
+extern "C" int manifold_fluids_coupling_pressure_probe(
+    uint32_t resolution, double dt, double density, uint32_t exchanges,
+    double body_density_ratio, ManifoldFluidsCouplingProbe *result) {
+    return guarded([&] {
+        if (result == nullptr) { throw std::invalid_argument("null coupling probe result"); }
+        run_coupling_pressure_probe(resolution, dt, density, exchanges, body_density_ratio, *result);
+    });
+}
 
 extern "C" int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
                                                double cell_size, uint32_t surface_subdivisions,
