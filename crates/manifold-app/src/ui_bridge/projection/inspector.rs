@@ -629,8 +629,11 @@ pub fn sync_inspector_data(
                                         object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
                                         object_doc_ids.extend(transform_chain.iter().map(|m| m.node_doc_id));
                                         let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
-                                        let parameter_ids = super::scene::parameter_ids_for_doc_ids(
+                                        let mut parameter_ids = super::scene::parameter_ids_for_doc_ids(
                                             def.as_ref(), &object_doc_ids,
+                                        );
+                                        super::scene::filter_inactive_physics_parameter_ids(
+                                            def.as_ref(), physics.as_ref(), &mut parameter_ids,
                                         );
                                         // P4b: every Known object gets a Skin
                                         // row, even when no `node.layer_source`

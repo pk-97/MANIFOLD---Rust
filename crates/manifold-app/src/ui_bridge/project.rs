@@ -2007,6 +2007,34 @@ mod tests {
                 && wire.to_port == "source"
         }), "Physics body must use the actual cube source");
 
+        super::super::projection::inspector::sync_inspector_data(
+            &mut ui,
+            &project,
+            Some(0),
+            &selection,
+            &[],
+            None,
+        );
+        let mut enabled_tree = manifold_ui::UITree::new();
+        let enabled_rect = manifold_ui::Rect::new(0.0, 0.0, 400.0, 1200.0);
+        let enabled_region = enabled_tree.begin_region(
+            enabled_rect,
+            manifold_ui::ZTier::Base,
+            "scene_setup",
+            manifold_ui::UIFlags::empty(),
+        );
+        let enabled_content_start = enabled_tree.count();
+        ui.scene_setup_panel.build_docked(&mut enabled_tree, enabled_rect);
+        enabled_tree.end_region(enabled_region, enabled_content_start);
+        let enabled_texts: Vec<&str> = enabled_tree
+            .nodes()
+            .iter()
+            .filter_map(|node| node.text.as_deref())
+            .collect();
+        assert!(enabled_texts.contains(&"Mass (kg)"));
+        assert!(!enabled_texts.contains(&"Shape"),
+            "source-driven Physics hides the inactive body Shape control");
+
         // The new enable command itself must undo and redo as one edit before
         // later control edits are introduced.
         enable.undo(&mut project);

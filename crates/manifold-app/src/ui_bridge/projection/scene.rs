@@ -243,6 +243,66 @@ pub(crate) fn parameter_ids_for_doc_ids(
         .collect()
 }
 
+/// Remove only the legacy rigid-body geometry controls that are inactive when
+/// a body is driven by a mesh source. `parameter_ids` is already owned by the
+/// scene row's original projection predicate; this helper only subtracts
+/// bindings that target the exact scoped body node and have no effective
+/// target elsewhere.
+pub(crate) fn filter_inactive_physics_parameter_ids(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    physics: Option<&manifold_renderer::node_graph::scene_vm::PhysicsVm>,
+    parameter_ids: &mut Vec<String>,
+) {
+    use manifold_core::effect_graph_def::BindingTarget;
+
+    let Some(def) = def else { return };
+    let Some(physics) = physics else { return };
+    let mut nodes = def.nodes.as_slice();
+    let mut wires = def.wires.as_slice();
+    for group_id in &physics.body_scope_path {
+        let Some(group) = nodes
+            .iter()
+            .find(|node| node.id == *group_id)
+            .and_then(|node| node.group.as_deref())
+        else {
+            return;
+        };
+        nodes = &group.nodes;
+        wires = &group.wires;
+    }
+    let Some(body) = nodes.iter().find(|node| node.id == physics.body_node_id) else {
+        return;
+    };
+    if !wires.iter().any(|wire| {
+        wire.to_node == physics.body_node_id && wire.to_port == "source"
+    }) {
+        return;
+    }
+    let Some(metadata) = def.preset_metadata.as_ref() else {
+        return;
+    };
+    parameter_ids.retain(|parameter_id| {
+        let mut inactive_body_target = false;
+        let mut effective_elsewhere = false;
+        for binding in metadata
+            .bindings
+            .iter()
+            .filter(|binding| binding.id.as_str() == parameter_id.as_str())
+        {
+            match &binding.target {
+                BindingTarget::Node { node_id, param }
+                    if node_id == &body.node_id
+                        && matches!(param.as_str(), "shape" | "collider_parts") =>
+                {
+                    inactive_body_target = true;
+                }
+                _ => effective_elsewhere = true,
+            }
+        }
+        !inactive_body_target || effective_elsewhere
+    });
+}
+
 fn parameter_owned_by_doc_ids(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     meta: &manifold_core::effect_graph_def::PresetMetadata,
@@ -302,9 +362,11 @@ mod sections_for_doc_ids_tests {
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{
         BindingDef, BindingTarget, EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef,
-        EffectGraphNode, ParamSpecDef, PresetMetadata,
+        EffectGraphNode, EffectGraphWire, GroupDef, GroupInterface, InterfacePortDef,
+        ParamSpecDef, PresetMetadata,
     };
     use manifold_core::effects::ParamConvert;
+    use manifold_renderer::node_graph::scene_vm::PhysicsVm;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// World = envmap (doc id 1) [+ atmosphere, omitted — not needed to
@@ -510,5 +572,160 @@ mod sections_for_doc_ids_tests {
         );
         assert!(parameter_ids_for_doc_ids(Some(&def), &[7]).contains(&"7_pos_x".to_string()));
         assert!(!parameter_ids_for_doc_ids(Some(&def), &[7]).contains(&"7_pos_x_duplicate".to_string()));
+    }
+
+    fn source_driven_physics_fixture(
+        grouped: bool,
+        source_wired: bool,
+    ) -> (EffectGraphDef, PhysicsVm) {
+        let mut def = azalea_like_fixture();
+        let body = serde_json::from_value::<EffectGraphNode>(serde_json::json!({
+            "id": 10, "nodeId": "body", "typeId": "node.rigid_body"
+        })).unwrap();
+        let mesh = serde_json::from_value::<EffectGraphNode>(serde_json::json!({
+            "id": 11, "nodeId": "mesh", "typeId": "node.cube_mesh"
+        })).unwrap();
+        let source_wire = EffectGraphWire {
+            from_node: 11,
+            from_port: "source".to_string(),
+            to_node: 10,
+            to_port: "source".to_string(),
+        };
+        if grouped {
+            let group = EffectGraphNode {
+                id: 40,
+                node_id: NodeId::new("group"),
+                type_id: "group".to_string(),
+                handle: Some("Object".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: Some(Box::new(GroupDef {
+                    tint: None,
+                    interface: GroupInterface {
+                        inputs: Vec::new(),
+                        outputs: vec![InterfacePortDef {
+                            name: "body".to_string(),
+                            port_type: "RigidBody".to_string(),
+                        }],
+                        params: Vec::new(),
+                    },
+                    nodes: vec![body, mesh],
+                    wires: source_wired.then_some(vec![source_wire]).unwrap_or_default(),
+                })),
+            };
+            def.nodes = vec![group];
+            def.wires = Vec::new();
+        } else {
+            def.nodes = vec![body, mesh];
+            def.wires = source_wired.then_some(vec![source_wire]).unwrap_or_default();
+        }
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        metadata.params = [
+            "10_shape",
+            "10_collider_parts",
+            "11_shape",
+            "10_shape_duplicate",
+            "11_shape_duplicate",
+            "10_mixed_shape",
+        ].into_iter().map(|id| ParamSpecDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            section: Some("Physics".to_string()),
+            ..Default::default()
+        }).collect();
+        metadata.bindings = vec![
+            BindingDef {
+                id: "10_shape".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("body"), param: "shape".to_string() },
+                ..binding_defaults()
+            },
+            BindingDef {
+                id: "10_collider_parts".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("body"), param: "collider_parts".to_string() },
+                ..binding_defaults()
+            },
+            BindingDef {
+                id: "11_shape".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("mesh"), param: "shape".to_string() },
+                ..binding_defaults()
+            },
+            BindingDef {
+                id: "10_shape_duplicate".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("body"), param: "shape".to_string() },
+                ..binding_defaults()
+            },
+            BindingDef {
+                id: "11_shape_duplicate".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("mesh"), param: "shape".to_string() },
+                ..binding_defaults()
+            },
+            BindingDef {
+                id: "10_mixed_shape".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("body"), param: "shape".to_string() },
+                ..binding_defaults()
+            },
+            BindingDef {
+                id: "10_mixed_shape".to_string(),
+                target: BindingTarget::Node { node_id: NodeId::new("mesh"), param: "shape".to_string() },
+                ..binding_defaults()
+            },
+        ];
+        let physics = PhysicsVm {
+            body_node_id: 10,
+            body_scope_path: grouped.then_some(vec![40]).unwrap_or_default(),
+            enabled: true,
+            imported: false,
+        };
+        (def, physics)
+    }
+
+    fn binding_defaults() -> BindingDef {
+        BindingDef {
+            id: String::new(),
+            label: String::new(),
+            default_value: 0.0,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("unused"),
+                param: String::new(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        }
+    }
+
+    #[test]
+    fn source_driven_physics_projection_hides_only_inactive_body_geometry_controls() {
+        let expected_ids = [
+            "11_shape",
+            "11_shape_duplicate",
+            "10_mixed_shape",
+        ];
+        for grouped in [false, true] {
+            let (def, physics) = source_driven_physics_fixture(grouped, true);
+            let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[10, 11]);
+            filter_inactive_physics_parameter_ids(Some(&def), Some(&physics), &mut parameter_ids);
+            assert_eq!(parameter_ids, expected_ids);
+
+            let reloaded: EffectGraphDef = serde_json::from_str(
+                &serde_json::to_string(&def).unwrap(),
+            ).unwrap();
+            let mut reloaded_ids = parameter_ids_for_doc_ids(Some(&reloaded), &[10, 11]);
+            filter_inactive_physics_parameter_ids(Some(&reloaded), Some(&physics), &mut reloaded_ids);
+            assert_eq!(reloaded_ids, expected_ids, "reload preserves projection");
+        }
+
+        let (def, physics) = source_driven_physics_fixture(false, false);
+        let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[10, 11]);
+        filter_inactive_physics_parameter_ids(Some(&def), Some(&physics), &mut parameter_ids);
+        assert!(parameter_ids.contains(&"10_shape".to_string()));
+        assert!(parameter_ids.contains(&"10_collider_parts".to_string()));
     }
 }

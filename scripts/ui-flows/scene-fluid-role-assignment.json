@@ -117,6 +117,18 @@
     }
   },
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Shape"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
     "Key": {
       "key": "Z",
       "modifiers": {

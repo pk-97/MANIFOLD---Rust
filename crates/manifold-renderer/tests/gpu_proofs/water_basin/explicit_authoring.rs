@@ -71,7 +71,20 @@ impl EffectNode for Observe {
         &[]
     }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let body = ctx.inputs.rigid_body("body").expect("authored rigid body");
+        let (
+            Some(body),
+            Some(pose),
+            Some(ParamValue::Float(time)),
+            Some(ParamValue::Float(particles)),
+        ) = (
+            ctx.inputs.rigid_body("body"),
+            ctx.inputs.transform("pose"),
+            ctx.inputs.scalar("time"),
+            ctx.inputs.scalar("particles"),
+        ) else {
+            ctx.mark_outputs_pending();
+            return;
+        };
         let collider = body.collider.as_ref().expect("wired source collider");
         assert_eq!(collider.hulls.len(), 1, "cube has one exact hull");
         let min = collider.hulls[0]
@@ -82,14 +95,10 @@ impl EffectNode for Observe {
             .iter()
             .map(|point| point[0])
             .fold(f32::NEG_INFINITY, f32::max);
-        let scalar = |port| match ctx.inputs.scalar(port) {
-            Some(ParamValue::Float(value)) => value,
-            value => panic!("{port}: {value:?}"),
-        };
         SAMPLE.set(Sample {
-            time: scalar("time"),
-            y: ctx.inputs.transform("pose").expect("paired pose").pos[1],
-            particles: scalar("particles"),
+            time,
+            y: pose.pos[1],
+            particles,
             collider_width: max - min,
         });
     }

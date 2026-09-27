@@ -12,6 +12,8 @@ use crate::node_graph::physics::{ColliderGeometry, RigidBody, RigidSceneInputs};
 use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 use crate::node_graph::transform::Transform;
 
+mod vortex;
+
 const ORIGIN: [f32; 3] = [4.0, -3.0, 2.0];
 
 fn fixture() -> (FluidSettings, FluidControls, RigidSceneInputs) {
