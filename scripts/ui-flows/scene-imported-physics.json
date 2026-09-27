@@ -161,7 +161,117 @@
           "text": "Pieces"
         }
       },
-      "check": "Exists"
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "inspector.modifier.enable_toggle"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
     }
   },
   {
@@ -206,10 +316,15 @@
     }
   },
   {
+    "Step": {
+      "frames": 30
+    }
+  },
+  {
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Pieces"
+          "text": "Clip Trigger"
         }
       },
       "check": {
@@ -334,7 +449,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\ud83c\udf0d World"
+          "text": "🌍 World"
         }
       },
       "gesture": {

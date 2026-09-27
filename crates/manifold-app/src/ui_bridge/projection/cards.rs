@@ -939,6 +939,20 @@ fn modifier_enabled_value_for_binding(
             } if modifier_id == &instance.id && param_id == enabled_param
         )
     }) else {
+        let prepared = instance
+            .graph
+            .preset_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.scene_modifier.as_ref())
+            .is_some_and(|recipe| recipe.preparation_params.iter().any(|param| param == enabled_param));
+        if prepared {
+            return instance
+                .graph
+                .preset_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.params.iter().find(|param| param.id == enabled_param))
+                .is_some_and(|param| param.default_value > 0.5);
+        }
         return false;
     };
     let Some(param) = gp.params.get(binding.id.as_str()) else {
@@ -1476,6 +1490,28 @@ mod modifier_audio_projection_tests {
         let surfaces = modifier_surfaces(&gp, &migrated, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
         assert!(surfaces[0].rows.iter().all(|row| row.id.as_ref() != scope_id),
             "legacy Scope must not reappear on the standalone card");
+    }
+
+    #[test]
+    fn prepared_enabled_parameter_projects_from_local_default_without_host_binding() {
+        let recipe = manifold_renderer::node_graph::bundled_preset_def(
+            &manifold_core::PresetTypeId::new("Shatter"),
+        )
+        .unwrap()
+        .clone();
+        let mut instance = manifold_core::scene_modifier_preset::SceneModifierInstanceDef {
+            id: "shatter".into(),
+            scene: SceneNodeRef { scope: vec![], node: "scene".into() },
+            targets: SceneTargetSelection::AllObjects,
+            mesh_frames: Vec::new(),
+            legacy_math_view_carrier: None,
+            graph: Box::new(recipe),
+        };
+        let host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("host"));
+        assert!(modifier_enabled_value_for_binding(&host, &[], &instance, "enabled"));
+        instance.graph.preset_metadata.as_mut().unwrap().params.iter_mut()
+            .find(|param| param.id == "enabled").unwrap().default_value = 0.0;
+        assert!(!modifier_enabled_value_for_binding(&host, &[], &instance, "enabled"));
     }
 }
 
