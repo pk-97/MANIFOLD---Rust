@@ -528,32 +528,23 @@ impl Primitive for FluidSurface {
         if rigid_reset_edge && !authored_only {
             self.runtime.request_reset();
         }
-        let result = if let Some(observation) = coupled_observation {
-            self.runtime.observe_coupled_scene_with_field(
-                settings,
-                controls,
-                &roles,
-                acceleration_field,
-                Some(CoupledRigidInputs {
-                    scene: &observation.inputs,
-                    colliders: self.coupled_colliders,
-                    density: f64::from(liquid_density),
-                }),
-                transport,
-                speed,
-                fluid_reset,
-            )
-        } else {
-            self.runtime.observe_scene_with_field(
-                settings,
-                controls,
-                &roles,
-                acceleration_field,
-                transport,
-                speed,
-                fluid_reset,
-            )
-        };
+        let result = self.runtime.observe_coupled_frame(
+            settings,
+            controls,
+            &roles,
+            acceleration_field,
+            coupled_observation.map(|observation| CoupledRigidInputs {
+                scene: &observation.inputs,
+                colliders: self.coupled_colliders,
+                density: f64::from(liquid_density),
+            }),
+            crate::node_graph::FrameTime {
+                seconds: transport,
+                ..ctx.time
+            },
+            speed,
+            fluid_reset,
+        );
         if let Err(error) = result {
             Self::report_failure(&mut self.domain_failure, ctx, error);
             return;

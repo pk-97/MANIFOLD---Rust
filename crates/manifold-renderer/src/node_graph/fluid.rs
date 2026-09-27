@@ -10,10 +10,10 @@ use manifold_fluids::{
     FrameStats, LiquidOptions, SurfaceOptions, TimeStepOptions, WhitewaterKind, WhitewaterOptions,
     WhitewaterParticle,
 };
+use manifold_physics::FieldValue;
 use manifold_physics::input::{
     AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span, input_span_before,
 };
-use manifold_physics::FieldValue;
 
 use super::fluid_cache::CacheMode;
 #[cfg(test)]
@@ -31,13 +31,17 @@ mod impulses;
 mod native;
 mod roles;
 mod take;
-use impulses::IMPULSE_CAPACITY;
-use native::NativeSimulation;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub use domain::FluidDomainLayout;
-pub use take::{FluidTakeFrame, FluidTakeReplay};
+use impulses::IMPULSE_CAPACITY;
+use native::NativeSimulation;
+pub use take::{FluidTakeFrame, FluidTakeReplay, TakeRange, TakeTime};
 
 pub const TICK: f64 = 1.0 / 60.0;
+
+fn simulation_tick(time: f64) -> u64 {
+    (time / TICK + 1e-8).floor() as u64
+}
 const HISTORY_CAPACITY: usize = 8192;
 const BATCH: usize = 4;
 
@@ -327,6 +331,7 @@ struct Request {
     cache_mode: CacheMode,
     cache_path: Arc<PathBuf>,
     coupled: Option<coupled::Request>,
+    timing: take::TimingHandoff,
 }
 
 struct Reply {
@@ -343,6 +348,7 @@ struct Reply {
     stats: FrameStats,
     error: Option<String>,
     coupled: Option<coupled::Request>,
+    timing: take::TimingHandoff,
 }
 
 fn cancelled_reply(request: Request) -> Reply {
@@ -359,6 +365,7 @@ fn cancelled_reply(request: Request) -> Reply {
         stats: FrameStats::default(),
         error: None,
         coupled: request.coupled,
+        timing: request.timing,
     }
 }
 
@@ -373,14 +380,20 @@ impl Worker {
         let worker_cancel_epoch = Arc::clone(&cancel_epoch);
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let (sender, replies) = mpsc::sync_channel::<Reply>(1);
-        std::thread::Builder::new().name("fluid-reference".into()).spawn(move || {
-            let mut simulation = NativeSimulation::default();
-            while let Ok(request) = receiver.recv() {
-                if sender.send(simulation.process(request, &worker_cancel_epoch)).is_err() {
-                    break;
+        std::thread::Builder::new()
+            .name("fluid-reference".into())
+            .spawn(move || {
+                let mut simulation = NativeSimulation::default();
+                while let Ok(request) = receiver.recv() {
+                    if sender
+                        .send(simulation.process(request, &worker_cancel_epoch))
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
-            }
-        }).map_err(|e| format!("Water worker could not start: {e}"))?;
+            })
+            .map_err(|e| format!("Water worker could not start: {e}"))?;
         Ok(Self {
             requests,
             replies,
@@ -399,6 +412,7 @@ pub struct FluidRuntime {
     worker: Option<Worker>,
     settings: Option<FluidSettings>,
     history: InputHistory<Sample>,
+    timing: take::Capture,
     impulses: EventQueue<ResolvedNodeImpulse>,
     applied_impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     spare_impulses: Option<Vec<AppliedEvent<ResolvedNodeImpulse>>>,
@@ -437,6 +451,7 @@ impl Default for FluidRuntime {
             settings: None,
             history: InputHistory::with_capacity(HISTORY_CAPACITY)
                 .expect("FLIP history capacity must be at least two"),
+            timing: take::Capture::new(HISTORY_CAPACITY),
             impulses: impulses::new_queue(),
             applied_impulses: Vec::with_capacity(IMPULSE_CAPACITY),
             spare_impulses: Some(Vec::with_capacity(IMPULSE_CAPACITY)),
@@ -507,6 +522,7 @@ impl FluidRuntime {
         self.accepted_observation = None;
         self.last_transport = None;
         self.history.clear();
+        self.timing.clear();
         self.role_history.clear();
         if let Some(coupled) = &mut self.coupled {
             coupled.clear();
@@ -629,6 +645,47 @@ impl FluidRuntime {
             speed,
             reset,
         )
+    }
+
+    /// Record the host's existing beat/second pair alongside its accepted
+    /// simulation time. Standalone callers without project timing keep using
+    /// the seconds-only observation API; their takes have no beat-range map.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn observe_coupled_frame(
+        &mut self,
+        settings: FluidSettings,
+        controls: FluidControls,
+        scene_roles: &[Option<FluidRole>],
+        acceleration_field: Option<FieldValue>,
+        rigid: Option<CoupledRigidInputs<'_>>,
+        frame: super::FrameTime,
+        speed: f32,
+        reset: f32,
+    ) -> Result<(), String> {
+        self.observe_coupled_scene_with_field(
+            settings,
+            controls,
+            scene_roles,
+            acceleration_field,
+            rigid,
+            frame.seconds,
+            speed,
+            reset,
+        )?;
+        if self.cache_mode == CacheMode::Record
+            && let Some((transport, simulation)) = self.accepted_observation
+        {
+            let result = self.timing.record(take::TakeTime {
+                beat: frame.beats,
+                transport: Seconds(transport),
+                simulation: Seconds(simulation),
+            });
+            if let Err(error) = &result {
+                self.failure = Some(error.clone());
+            }
+            result?;
+        }
+        Ok(())
     }
 
     /// Feed a connected rigid/liquid scene to the same exclusive native worker.
@@ -886,7 +943,14 @@ impl FluidRuntime {
 
     fn accept(&mut self, mut reply: Reply) -> Result<(), String> {
         self.busy = false;
-        let mut publish = reply.epoch == self.epoch && reply.error.is_none();
+        let has_output = !reply.timing.metadata_only;
+        if let Err(error) = self.timing.recycle(
+            std::mem::take(&mut reply.timing),
+            reply.epoch == self.epoch && reply.error.is_none(),
+        ) {
+            reply.error = Some(error);
+        }
+        let mut publish = has_output && reply.epoch == self.epoch && reply.error.is_none();
         if publish {
             match (&self.coupled, &reply.coupled) {
                 (Some(_), Some(coupled))
@@ -896,7 +960,9 @@ impl FluidRuntime {
                     }) => {}
                 (None, None) => {}
                 _ => {
-                    reply.error = Some("Fluid coupling: worker returned an unmatched rigid/liquid frame".into());
+                    reply.error = Some(
+                        "Fluid coupling: worker returned an unmatched rigid/liquid frame".into(),
+                    );
                     publish = false;
                 }
             }
@@ -922,6 +988,12 @@ impl FluidRuntime {
             self.spare_history = Some(reply.history);
             self.failure = Some(error.clone());
             return Err(error);
+        }
+        if !has_output {
+            self.spare = Some(reply.vertices);
+            self.spare_whitewater = Some(reply.whitewater);
+            self.spare_history = Some(reply.history);
+            return Ok(());
         }
         self.spare = Some(std::mem::replace(&mut self.vertices, reply.vertices));
         self.spare_whitewater = Some(std::mem::replace(&mut self.whitewater, reply.whitewater));
@@ -969,13 +1041,13 @@ impl FluidRuntime {
                     return Ok(());
                 }
             }
-            let target_tick = (self.target_time / TICK + 1e-8).floor() as u64;
+            let target_tick = simulation_tick(self.target_time);
             let due = target_tick.saturating_sub(self.completed_tick);
             if self.initialized
                 && (if self.cache_mode == CacheMode::Playback {
                     target_tick == self.completed_tick
                 } else {
-                    due == 0
+                    due == 0 && !(self.cache_mode == CacheMode::Record && self.timing.pending())
                 })
             {
                 return Ok(());
@@ -1029,6 +1101,9 @@ impl FluidRuntime {
                 cache_mode: self.cache_mode,
                 cache_path: self.cache_path.clone(),
                 coupled: self.coupled.as_mut().map(coupled::Runtime::request),
+                timing: self.timing.snapshot(
+                    self.initialized && self.cache_mode == CacheMode::Record && count == 0,
+                ),
             };
             let worker = self.worker.as_ref().expect("worker exists");
             if let Err(error) = worker.requests.send(request) {
@@ -1038,6 +1113,7 @@ impl FluidRuntime {
                 self.spare_history = Some(request.history);
                 self.spare_impulses = Some(request.impulses);
                 self.spare_role_history = Some(request.role_history);
+                self.timing.recycle(request.timing, false)?;
                 if let (Some(current), Some(coupled)) = (&mut self.coupled, request.coupled) {
                     current.accept(coupled, false);
                 }
@@ -1157,11 +1233,7 @@ mod tests {
     #[test]
     fn fluid_shared_field_worker_matches_gravity_without_restarting() {
         const TICKS: u64 = 8;
-        fn run(
-            gravity: [f32; 3],
-            field: Option<FieldValue>,
-            stalled: bool,
-        ) -> [f32; 3] {
+        fn run(gravity: [f32; 3], field: Option<FieldValue>, stalled: bool) -> [f32; 3] {
             let settings = FluidSettings {
                 // At 8³ this seed's reconstructed surface reaches every native
                 // domain wall. Leave air around it so surface motion measures
@@ -1285,6 +1357,7 @@ mod tests {
             let init = request_receiver.recv().unwrap();
             reply_sender
                 .send(Reply {
+                    timing: Default::default(),
                     coupled: None,
                     started_tick: 0,
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1320,6 +1393,7 @@ mod tests {
                         counts.push(request.count);
                         reply_sender
                             .send(Reply {
+                                timing: Default::default(),
                                 coupled: None,
                                 started_tick: 0,
                                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1368,6 +1442,7 @@ mod tests {
         let init = request_receiver.recv().unwrap();
         reply_sender
             .send(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1397,6 +1472,7 @@ mod tests {
         assert_eq!(hitch.count, 17);
         reply_sender
             .send(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1456,6 +1532,7 @@ mod tests {
             .unwrap();
         runtime
             .accept(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1479,6 +1556,7 @@ mod tests {
         runtime.clear();
         runtime
             .accept(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1894,6 +1972,7 @@ mod tests {
         runtime.spare_history = None;
         runtime
             .accept(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1939,6 +2018,7 @@ mod tests {
         let epoch = runtime.epoch;
         runtime
             .accept(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1961,6 +2041,7 @@ mod tests {
 
         runtime
             .accept(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -1991,6 +2072,7 @@ mod tests {
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
         runtime
             .accept(Reply {
+                timing: Default::default(),
                 coupled: None,
                 started_tick: 0,
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
@@ -2028,6 +2110,7 @@ mod tests {
         assert!(
             runtime
                 .accept(Reply {
+                    timing: Default::default(),
                     coupled: None,
                     started_tick: 0,
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),

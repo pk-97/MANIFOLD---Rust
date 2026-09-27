@@ -468,3 +468,216 @@ fn fluid_take_fixed_slot_arrays_reject_wrong_lengths() {
         }
     }
 }
+
+fn clock_point(beat: f64, transport: f64, simulation: f64) -> TakeTime {
+    TakeTime {
+        beat: manifold_core::Beats(beat),
+        transport: Seconds(transport),
+        simulation: Seconds(simulation),
+    }
+}
+
+#[test]
+fn fluid_take_project_clock_maps_origin_speed_holds_and_tempo() {
+    let directory = Directory::new();
+    let mut input = request();
+    let points = vec![
+        clock_point(-4.0, -2.0, 0.0),
+        clock_point(-3.0, -1.98, TICK),
+        clock_point(-1.0, -1.96, 3.0 * TICK),
+        clock_point(3.0, -0.5, 3.0 * TICK),
+        clock_point(3.0, 0.0, 3.0 * TICK),
+        clock_point(4.0, 0.1, 6.0 * TICK),
+    ];
+    input.timing.points = points.clone();
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    writer.append(&input, 6, 6, None).unwrap();
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    assert_eq!(
+        replay.project_range(),
+        Some(TakeRange {
+            start: points[0],
+            end: points[5]
+        })
+    );
+    for point in &points {
+        let at_seconds = replay.simulation_time_at(point.transport).unwrap();
+        let at_beats = replay.simulation_time_at_beat(point.beat).unwrap();
+        assert!((at_seconds.0 - point.simulation.0).abs() < 1e-12);
+        assert!((at_beats.0 - point.simulation.0).abs() < 1e-12);
+    }
+    assert_eq!(
+        replay.simulation_time_at(Seconds(-0.25)).unwrap(),
+        Seconds(3.0 * TICK)
+    );
+    assert!(
+        (replay
+            .simulation_time_at_beat(manifold_core::Beats(-2.0))
+            .unwrap()
+            .0
+            - 2.0 * TICK)
+            .abs()
+            < 1e-12
+    );
+    for value in [-2.01, 0.11, f64::NAN] {
+        assert!(replay.simulation_time_at(Seconds(value)).is_err());
+    }
+}
+
+#[test]
+fn fluid_take_project_clock_clips_failed_native_prefix() {
+    let directory = Directory::new();
+    let mut input = request();
+    input.timing.points = vec![
+        clock_point(8.0, 2.0, 0.0),
+        clock_point(14.0, 3.0, 6.0 * TICK),
+    ];
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    writer
+        .append(&input, 2, 3, Some("native fixture failure"))
+        .unwrap();
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let range = replay.project_range().unwrap();
+    assert!((range.end.beat.0 - 10.0).abs() < 1e-12);
+    assert!((range.end.transport.0 - (2.0 + 1.0 / 3.0)).abs() < 1e-12);
+    assert!((range.end.simulation.0 - 2.0 * TICK).abs() < 1e-12);
+    assert!((replay.simulation_time_at(range.end.transport).unwrap().0 - 2.0 * TICK).abs() < 1e-12);
+    assert!(replay.simulation_time_at(Seconds(2.5)).is_err());
+    assert!(
+        replay
+            .simulation_time_at_beat(manifold_core::Beats(11.0))
+            .is_err()
+    );
+}
+
+#[test]
+fn fluid_take_project_clock_rejects_gaps_invalid_points_and_untimed_lookup() {
+    let directory = Directory::new();
+    let mut input = request();
+    let origin = clock_point(2.0, 1.0, 0.0);
+    input.timing.points = vec![origin];
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    input.timing.points = vec![clock_point(3.0, 2.0, TICK)];
+    assert!(
+        writer
+            .append(&input, 6, 6, None)
+            .unwrap_err()
+            .contains("anchor")
+    );
+    input.timing.points = vec![origin, clock_point(1.0, 2.0, TICK)];
+    assert!(
+        writer
+            .append(&input, 6, 6, None)
+            .unwrap_err()
+            .contains("beats")
+    );
+    input.timing.points = vec![origin, clock_point(3.0, 2.0, f64::INFINITY)];
+    assert!(writer.append(&input, 6, 6, None).is_err());
+    let untimed = Directory::new();
+    input.timing.points.clear();
+    let mut writer = Writer::create(Arc::clone(&untimed.0), &input).unwrap();
+    writer.append(&input, 6, 6, None).unwrap();
+    let replay = FluidTakeReplay::open(untimed.0.as_ref()).unwrap();
+    assert_eq!(replay.project_range(), None);
+    assert!(
+        replay
+            .simulation_time_at(Seconds(0.0))
+            .unwrap_err()
+            .contains("no project timing")
+    );
+}
+
+#[test]
+fn fluid_take_project_clock_runtime_flushes_holds_without_publishing_frames() {
+    let directory = Directory::new();
+    let settings = FluidSettings {
+        resolution: 12,
+        initial_volume: Some(Transform {
+            pos: [0.0, 0.9, 0.0],
+            scale: [1.6; 3],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let controls = FluidControls {
+        emission: false,
+        ..Default::default()
+    };
+    let mut runtime = FluidRuntime::default();
+    runtime
+        .set_cache(CacheMode::Record, directory.0.to_str().unwrap())
+        .unwrap();
+    let observe = |runtime: &mut FluidRuntime, beats, seconds, speed| {
+        runtime
+            .observe_coupled_frame(
+                settings,
+                controls,
+                &[],
+                None,
+                None,
+                crate::node_graph::FrameTime {
+                    beats: manifold_core::Beats(beats),
+                    seconds: Seconds(seconds),
+                    delta: Seconds(0.0),
+                    frame_count: 0,
+                },
+                speed,
+                0.0,
+            )
+            .unwrap();
+        runtime.advance(true).unwrap();
+    };
+    observe(&mut runtime, -2.0, -1.0, 1.0);
+    observe(&mut runtime, -1.0, -1.0 + 1.25 * TICK, 1.0);
+    assert_eq!(runtime.completed_tick, 1);
+    assert!(!runtime.vertices.is_empty());
+    let version = runtime.version;
+    let stats = runtime.stats;
+    let vertices = bytemuck::cast_slice::<_, u8>(&runtime.vertices).to_vec();
+    for frame in 0..6 {
+        observe(&mut runtime, frame as f64, frame as f64, 0.0);
+        assert_eq!(runtime.completed_tick, 1);
+        assert_eq!(runtime.version, version);
+        assert_eq!(runtime.stats, stats);
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&runtime.vertices), vertices);
+        assert!(!runtime.timing.pending());
+    }
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    assert_eq!(replay.project_range().unwrap().end.transport, Seconds(5.0));
+    assert!((replay.simulation_time_at(Seconds(3.0)).unwrap().0 - 1.25 * TICK).abs() < 1e-12);
+    observe(&mut runtime, 6.0, 5.0 + TICK, 2.0);
+    assert_eq!(runtime.completed_tick, 3);
+    let mut replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let mut ticks = Vec::new();
+    while replay.advance().unwrap() {
+        ticks.push(replay.frame().unwrap().tick);
+    }
+    assert_eq!(ticks, [1, 3]);
+    drop(runtime);
+}
+
+#[test]
+fn fluid_take_project_clock_rejects_timing_changed_after_open() {
+    let directory = Directory::new();
+    let mut input = request();
+    input.timing.points = vec![
+        clock_point(0.0, 0.0, 0.0),
+        clock_point(6.0, 1.0, 6.0 * TICK),
+    ];
+    let mut writer = Writer::create(Arc::clone(&directory.0), &input).unwrap();
+    writer.append(&input, 6, 6, None).unwrap();
+    let replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
+    let path = batch_path(&directory.0, 0);
+    let (mut batch, _): (Batch, _) = read_record(&path).unwrap();
+    batch.clock[1].beat.0 = 7.0;
+    fs::remove_file(&path).unwrap();
+    write_new(&path, &batch).unwrap();
+    // Even a lookup at the unchanged origin must verify the complete chain.
+    assert!(
+        replay
+            .simulation_time_at(Seconds(0.0))
+            .unwrap_err()
+            .contains("timing changed")
+    );
+    assert!(FluidTakeReplay::open(directory.0.as_ref()).is_err());
+}

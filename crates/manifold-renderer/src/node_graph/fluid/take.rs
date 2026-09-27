@@ -17,7 +17,11 @@ use super::{
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 
-const VERSION: u32 = 2;
+mod timing;
+pub(super) use timing::{Capture, TimingHandoff};
+pub use timing::{TakeRange, TakeTime};
+
+const VERSION: u32 = 3;
 const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 const HEADER: &str = "take-header.zst";
 const PROGRESS: &str = "take-progress.zst";
@@ -69,6 +73,28 @@ impl FluidTakeReplay {
 
     pub fn recording_failure(&self) -> Option<&str> {
         self.reader.progress.failed.as_deref()
+    }
+
+    /// Project range backed by completed native ticks, including recorded
+    /// holds. Seconds-only legacy callers have no project timing provenance.
+    pub fn project_range(&self) -> Option<TakeRange> {
+        self.reader.clock_range
+    }
+
+    /// Resolve a requested project boundary on the owning offline worker.
+    /// These bounded-memory scans perform I/O; do not call on a render thread.
+    pub fn simulation_time_at(
+        &self,
+        transport: manifold_core::Seconds,
+    ) -> Result<manifold_core::Seconds, String> {
+        self.reader.resolve_time(transport.0, false)
+    }
+
+    pub fn simulation_time_at_beat(
+        &self,
+        beat: manifold_core::Beats,
+    ) -> Result<manifold_core::Seconds, String> {
+        self.reader.resolve_time(beat.0, true)
     }
 
     pub fn frame(&self) -> Option<FluidTakeFrame<'_>> {
@@ -176,6 +202,7 @@ impl FluidTakeReplay {
             cache_mode: CacheMode::Live,
             cache_path: Arc::clone(&pending.cache_path),
             coupled,
+            timing: TimingHandoff::default(),
         };
         let reply = self.native.process(request, &AtomicU64::new(EPOCH));
         if let Some(error) = &reply.error {
@@ -215,6 +242,7 @@ struct Header {
     initial: FluidControls,
     role_setup: Arc<roles::Setup>,
     coupled_setup: Option<Arc<coupled::Setup>>,
+    clock_origin: Option<TakeTime>,
 }
 
 /// Only a committed prefix is playable. No progress record claims a complete
@@ -226,6 +254,8 @@ struct Progress {
     completed_tick: u64,
     last_batch_hash: Hash,
     failed: Option<String>,
+    records: u64,
+    clock_end: Option<TakeTime>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -240,6 +270,7 @@ struct Batch {
     role_history: Vec<roles::Controls>,
     coupled_history: Option<Vec<coupled::Sample>>,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
+    clock: Vec<TakeTime>,
 }
 
 pub(super) struct Writer {
@@ -268,13 +299,22 @@ impl Writer {
                 .coupled
                 .as_ref()
                 .map(|rigid| Arc::clone(&rigid.setup)),
+            clock_origin: request.timing.points.first().copied(),
         };
+        if let Some(origin) = header.clock_origin {
+            timing::validate_point(origin)?;
+            if origin.simulation.0 != 0.0 {
+                return Err("Physics take: project timing must begin at simulation zero".into());
+            }
+        }
         let header_hash = write_new(&directory.join(HEADER), &header)?;
         let progress = Progress {
             header_hash,
             completed_tick: 0,
             last_batch_hash: header_hash,
             failed: None,
+            records: 0,
+            clock_end: header.clock_origin,
         };
         publish_progress(&directory, &progress)?;
         Ok(Self {
@@ -293,7 +333,7 @@ impl Writer {
         started_tick: u64,
         failure: Option<&str>,
     ) -> Result<(), String> {
-        if request.count == 0 {
+        if request.count == 0 && request.timing.points.is_empty() {
             if let Some(failure) = failure {
                 self.progress.failed = Some(failure.to_owned());
                 publish_progress(&self.directory, &self.progress)?;
@@ -307,6 +347,12 @@ impl Writer {
         {
             return Err("Physics take: nonconsecutive or invalid worker prefix".into());
         }
+        let records = self
+            .progress
+            .records
+            .checked_add(1)
+            .ok_or("Physics take: input record count overflows")?;
+        let clock_end = validate_clock(&request.timing.points, self.progress.clock_end)?;
         let mut coupled_history = request.coupled.as_ref().map(|rigid| rigid.history.clone());
         if let Some(history) = &mut coupled_history {
             for sample in history {
@@ -340,17 +386,16 @@ impl Writer {
                     value: event.value.clone(),
                 })
                 .collect(),
+            clock: request.timing.points.clone(),
         };
-        let hash = write_new(&batch_path(&self.directory, request.start_tick), &batch)?;
+        let hash = write_new(&batch_path(&self.directory, self.progress.records), &batch)?;
         let next = Progress {
             header_hash: self.progress.header_hash,
             completed_tick: request.start_tick + completed as u64,
-            last_batch_hash: if completed > 0 {
-                hash
-            } else {
-                self.progress.last_batch_hash
-            },
+            last_batch_hash: hash,
             failed: failure.map(str::to_owned),
+            records,
+            clock_end,
         };
         publish_progress(&self.directory, &next)?;
         self.progress = next;
@@ -364,6 +409,8 @@ pub(super) struct Reader {
     progress: Progress,
     next_tick: u64,
     previous_hash: Hash,
+    next_record: u64,
+    clock_range: Option<TakeRange>,
 }
 
 impl Reader {
@@ -377,10 +424,17 @@ impl Reader {
             || header.solver_identity != super::identity::solver_identity()
             || header.fixed_tick.to_bits() != TICK.to_bits()
             || progress.header_hash != header_hash
+            || progress.completed_tick > (1_u64 << 53) - 1
         {
             return Err("Physics take: incompatible solver, schema or setup identity".into());
         }
         header.settings.validate()?;
+        if let Some(origin) = header.clock_origin {
+            timing::validate_point(origin)?;
+            if origin.simulation.0 != 0.0 {
+                return Err("Physics take: invalid project clock origin".into());
+            }
+        }
         header.initial.validate()?;
         header.role_setup.validate_recording()?;
         if let Some(rigid) = &header.coupled_setup {
@@ -397,24 +451,60 @@ impl Reader {
         // cannot publish output before a later link reveals the mismatch.
         let mut tick = 0;
         let mut previous_hash = header_hash;
-        while tick < progress.completed_tick {
-            let (batch, hash): (Batch, Hash) = read_record(&batch_path(&directory, tick))?;
+        let mut clock_end = header.clock_origin;
+        let mut clock_range = header
+            .clock_origin
+            .map(|start| TakeRange { start, end: start });
+        let mut completed_time = progress.completed_tick as f64 * TICK;
+        if let Some(end) = progress.clock_end {
+            timing::validate_point(end)?;
+            // The scheduler publishes the last complete fixed tick. Preserve
+            // a held fractional remainder when that tick is already complete;
+            // requiring an exact tick boundary would erase the entire hold.
+            if super::simulation_tick(end.simulation.0) <= progress.completed_tick {
+                completed_time = end.simulation.0;
+            }
+        }
+        for record in 0..progress.records {
+            let (batch, hash): (Batch, Hash) = read_record(&batch_path(&directory, record))?;
             let end = batch
                 .start_tick
                 .checked_add(batch.completed_count as u64)
                 .ok_or("Physics take: tick range overflows")?;
             if batch.start_tick != tick
-                || batch.completed_count == 0
                 || end > progress.completed_tick
+                || batch.started_tick < end
                 || batch.header_hash != header_hash
                 || batch.previous_hash != previous_hash
             {
                 return Err("Physics take: invalid committed input chain".into());
             }
+            let next_clock_end = validate_clock(&batch.clock, clock_end)?;
+            for &point in &batch.clock {
+                if let Some(range) = &mut clock_range {
+                    if point.simulation.0 <= completed_time {
+                        range.end = point;
+                    } else if let Some(previous) = clock_end
+                        && previous.simulation.0 < completed_time
+                    {
+                        range.end = interpolate_time(
+                            previous,
+                            point,
+                            (completed_time - previous.simulation.0)
+                                / (point.simulation.0 - previous.simulation.0),
+                        );
+                    }
+                }
+                clock_end = Some(point);
+            }
+            clock_end = next_clock_end;
             tick = end;
             previous_hash = hash;
         }
-        if previous_hash != progress.last_batch_hash {
+        if tick != progress.completed_tick
+            || previous_hash != progress.last_batch_hash
+            || clock_end != progress.clock_end
+        {
             return Err("Physics take: committed input hash mismatch".into());
         }
         Ok(Self {
@@ -423,11 +513,63 @@ impl Reader {
             progress,
             next_tick: 0,
             previous_hash: header_hash,
+            next_record: 0,
+            clock_range,
         })
     }
 
     pub fn completed_tick(&self) -> u64 {
         self.progress.completed_tick
+    }
+
+    fn resolve_time(&self, value: f64, by_beat: bool) -> Result<manifold_core::Seconds, String> {
+        let range = self
+            .clock_range
+            .ok_or("Physics take: no project timing was recorded")?;
+        let coordinate = |point: TakeTime| {
+            if by_beat {
+                point.beat.0
+            } else {
+                point.transport.0
+            }
+        };
+        if !value.is_finite() || value < coordinate(range.start) || value > coordinate(range.end) {
+            return Err(
+                "Physics take: requested time is outside the completed project range".into(),
+            );
+        }
+        let mut previous = range.start;
+        let mut resolved = (value == coordinate(previous)).then_some(previous.simulation);
+        let mut previous_hash = self.progress.header_hash;
+        for record in 0..self.progress.records {
+            let (batch, hash): (Batch, Hash) = read_record(&batch_path(&self.directory, record))?;
+            if batch.header_hash != self.progress.header_hash
+                || batch.previous_hash != previous_hash
+            {
+                return Err("Physics take: project timing hash chain changed".into());
+            }
+            validate_clock(&batch.clock, Some(previous))?;
+            for point in batch.clock {
+                if resolved.is_none() && coordinate(point) >= value {
+                    let width = coordinate(point) - coordinate(previous);
+                    resolved = Some(if width == 0.0 {
+                        point.simulation
+                    } else {
+                        interpolate_time(previous, point, (value - coordinate(previous)) / width)
+                            .simulation
+                    });
+                }
+                previous = point;
+            }
+            previous_hash = hash;
+        }
+        if previous_hash != self.progress.last_batch_hash
+            || Some(previous) != self.progress.clock_end
+        {
+            return Err("Physics take: committed project timing changed".into());
+        }
+        resolved
+            .ok_or_else(|| "Physics take: recorded project time has no simulation boundary".into())
     }
 
     /// Replay uses the recorded assigned ticks. Only epoch identity is remapped
@@ -436,147 +578,199 @@ impl Reader {
         if epoch == 0 {
             return Err("Physics take: replay epoch must be nonzero".into());
         }
-        if self.next_tick == self.progress.completed_tick {
-            return Ok(None);
-        }
-        let (mut batch, hash): (Batch, Hash) =
-            read_record(&batch_path(&self.directory, self.next_tick))?;
-        let end = batch
-            .start_tick
-            .checked_add(batch.completed_count as u64)
-            .ok_or("Physics take: tick range overflows")?;
-        if batch.header_hash != self.progress.header_hash
-            || batch.previous_hash != self.previous_hash
-            || batch.start_tick != self.next_tick
-            || batch.completed_count == 0
-            || end > self.progress.completed_tick
-            || batch.started_tick < end
-            || end > (1_u64 << 53) - 1
-            || batch.history.is_empty()
-            || batch.history.len() > HISTORY_CAPACITY
-            || batch.role_history.len() != batch.history.len() * self.header.role_setup.len()
-            || batch.impulses.len() > super::impulses::IMPULSE_CAPACITY
-            || (end == self.progress.completed_tick && hash != self.progress.last_batch_hash)
-        {
-            return Err("Physics take: corrupt input prefix or hash chain".into());
-        }
-        let mut previous_time = f64::NEG_INFINITY;
-        for sample in &batch.history {
-            if !sample.time.is_finite() || sample.time < 0.0 || sample.time < previous_time {
-                return Err("Physics take: invalid continuous input order".into());
+        loop {
+            if self.next_record == self.progress.records {
+                return Ok(None);
             }
-            sample.controls.validate()?;
-            previous_time = sample.time;
-        }
-        self.header
-            .role_setup
-            .validate_history(&batch.role_history)?;
-        let coupled = match (&self.header.coupled_setup, batch.coupled_history.take()) {
-            (None, None) => None,
-            (Some(setup), Some(mut history)) => {
-                if history.is_empty() || history.len() > HISTORY_CAPACITY {
-                    return Err("Physics take: invalid rigid input history".into());
+            let (mut batch, hash): (Batch, Hash) =
+                read_record(&batch_path(&self.directory, self.next_record))?;
+            let end = batch
+                .start_tick
+                .checked_add(batch.completed_count as u64)
+                .ok_or("Physics take: tick range overflows")?;
+            if batch.header_hash != self.progress.header_hash
+                || batch.previous_hash != self.previous_hash
+                || batch.start_tick != self.next_tick
+                || end > self.progress.completed_tick
+                || batch.started_tick < end
+                || end > (1_u64 << 53) - 1
+                || batch.history.is_empty()
+                || batch.history.len() > HISTORY_CAPACITY
+                || batch.role_history.len() != batch.history.len() * self.header.role_setup.len()
+                || batch.impulses.len() > super::impulses::IMPULSE_CAPACITY
+                || (self.next_record + 1 == self.progress.records
+                    && hash != self.progress.last_batch_hash)
+            {
+                return Err("Physics take: corrupt input prefix or hash chain".into());
+            }
+            let mut previous_time = f64::NEG_INFINITY;
+            for sample in &batch.history {
+                if !sample.time.is_finite() || sample.time < 0.0 || sample.time < previous_time {
+                    return Err("Physics take: invalid continuous input order".into());
                 }
-                let mut previous = None;
-                for sample in &mut history {
-                    if !sample.time.0.is_finite()
-                        || sample.time.0 < 0.0
-                        || sample.sequence == 0
-                        || previous.is_some_and(|(sequence, time)| {
-                            sample.sequence <= sequence || sample.time.0 < time
-                        })
-                    {
-                        return Err("Physics take: invalid rigid input order".into());
+                sample.controls.validate()?;
+                previous_time = sample.time;
+            }
+            self.header
+                .role_setup
+                .validate_history(&batch.role_history)?;
+            let coupled = match (&self.header.coupled_setup, batch.coupled_history.take()) {
+                (None, None) => None,
+                (Some(setup), Some(mut history)) => {
+                    if history.is_empty() || history.len() > HISTORY_CAPACITY {
+                        return Err("Physics take: invalid rigid input history".into());
                     }
-                    previous = Some((sample.sequence, sample.time.0));
-                    for (body, initial) in sample
-                        .inputs
-                        .bodies
-                        .iter_mut()
-                        .zip(&setup.initial.bodies)
-                        .chain(std::iter::once((
-                            &mut sample.inputs.prototype,
-                            &setup.initial.prototype,
-                        )))
-                    {
-                        match (body, initial) {
-                            (Some(body), Some(initial)) if body.collider.is_none() => {
-                                body.collider = initial.collider.clone()
+                    let mut previous = None;
+                    for sample in &mut history {
+                        if !sample.time.0.is_finite()
+                            || sample.time.0 < 0.0
+                            || sample.sequence == 0
+                            || previous.is_some_and(|(sequence, time)| {
+                                sample.sequence <= sequence || sample.time.0 < time
+                            })
+                        {
+                            return Err("Physics take: invalid rigid input order".into());
+                        }
+                        previous = Some((sample.sequence, sample.time.0));
+                        for (body, initial) in sample
+                            .inputs
+                            .bodies
+                            .iter_mut()
+                            .zip(&setup.initial.bodies)
+                            .chain(std::iter::once((
+                                &mut sample.inputs.prototype,
+                                &setup.initial.prototype,
+                            )))
+                        {
+                            match (body, initial) {
+                                (Some(body), Some(initial)) if body.collider.is_none() => {
+                                    body.collider = initial.collider.clone()
+                                }
+                                (None, None) => {}
+                                _ => {
+                                    return Err(
+                                        "Physics take: rigid geometry layout changed".into()
+                                    );
+                                }
                             }
-                            (None, None) => {}
-                            _ => return Err("Physics take: rigid geometry layout changed".into()),
+                        }
+                        if !setup.initial.same_topology(&sample.inputs) {
+                            return Err(
+                                "Physics take: rigid topology changed within an epoch".into()
+                            );
+                        }
+                        sample.inputs.validate_recording()?;
+                        if sample.inputs.bodies.iter().zip(&setup.initial.bodies).any(
+                            |(body, initial)| {
+                                body.as_ref().and_then(|b| b.fragment_parent)
+                                    != initial.as_ref().and_then(|b| b.fragment_parent)
+                            },
+                        ) {
+                            return Err("Physics take: rigid fragment layout changed".into());
                         }
                     }
-                    if !setup.initial.same_topology(&sample.inputs) {
-                        return Err("Physics take: rigid topology changed within an epoch".into());
-                    }
-                    sample.inputs.validate_recording()?;
-                    if sample.inputs.bodies.iter().zip(&setup.initial.bodies).any(
-                        |(body, initial)| {
-                            body.as_ref().and_then(|b| b.fragment_parent)
-                                != initial.as_ref().and_then(|b| b.fragment_parent)
-                        },
-                    ) {
-                        return Err("Physics take: rigid fragment layout changed".into());
-                    }
+                    Some(coupled::Request {
+                        setup: Arc::clone(setup),
+                        history,
+                        output: Default::default(),
+                    })
                 }
-                Some(coupled::Request {
-                    setup: Arc::clone(setup),
-                    history,
-                    output: Default::default(),
-                })
+                _ => return Err("Physics take: missing or unexpected rigid inputs".into()),
+            };
+            batch.impulses.retain(|event| event.applied.tick < end);
+            let mut previous_event = None;
+            for event in &mut batch.impulses {
+                if event.applied.tick < batch.start_tick
+                    || !event.source.time.0.is_finite()
+                    || !event.lateness.0.is_finite()
+                    || event.lateness.0 < 0.0
+                    || event.source.epoch != event.applied.epoch
+                    || event.source.epoch != self.header.epoch
+                    || previous_event
+                        .is_some_and(|key| (event.applied.tick, event.source.sequence) <= key)
+                {
+                    return Err("Physics take: invalid assigned impulse".into());
+                }
+                if let Some(targets) = event.value.target.rigid_targets() {
+                    let setup = self
+                        .header
+                        .coupled_setup
+                        .as_ref()
+                        .ok_or("Physics take: rigid impulse has no owner")?;
+                    setup.validate_impulse_targets(targets)?;
+                }
+                previous_event = Some((event.applied.tick, event.source.sequence));
+                event.source.epoch = epoch;
+                event.applied.epoch = epoch;
             }
-            _ => return Err("Physics take: missing or unexpected rigid inputs".into()),
-        };
-        batch.impulses.retain(|event| event.applied.tick < end);
-        let mut previous_event = None;
-        for event in &mut batch.impulses {
-            if event.applied.tick < batch.start_tick
-                || !event.source.time.0.is_finite()
-                || !event.lateness.0.is_finite()
-                || event.lateness.0 < 0.0
-                || event.source.epoch != event.applied.epoch
-                || event.source.epoch != self.header.epoch
-                || previous_event
-                    .is_some_and(|key| (event.applied.tick, event.source.sequence) <= key)
-            {
-                return Err("Physics take: invalid assigned impulse".into());
+            self.next_tick = end;
+            self.next_record += 1;
+            self.previous_hash = hash;
+            if batch.completed_count == 0 {
+                continue;
             }
-            if let Some(targets) = event.value.target.rigid_targets() {
-                let setup = self
-                    .header
-                    .coupled_setup
-                    .as_ref()
-                    .ok_or("Physics take: rigid impulse has no owner")?;
-                setup.validate_impulse_targets(targets)?;
-            }
-            previous_event = Some((event.applied.tick, event.source.sequence));
-            event.source.epoch = epoch;
-            event.applied.epoch = epoch;
+            return Ok(Some(Request {
+                epoch,
+                settings: self.header.settings,
+                initial: self.header.initial,
+                start_tick: batch.start_tick,
+                count: batch.completed_count,
+                history: batch.history,
+                impulses: batch.impulses,
+                role_setup: Arc::clone(&self.header.role_setup),
+                role_history: batch.role_history,
+                recycle: Vec::new(),
+                recycle_whitewater: Default::default(),
+                cache_mode: CacheMode::Live,
+                cache_path: Arc::new(PathBuf::new()),
+                coupled,
+                timing: TimingHandoff::default(),
+            }));
         }
-        self.next_tick = end;
-        self.previous_hash = hash;
-        Ok(Some(Request {
-            epoch,
-            settings: self.header.settings,
-            initial: self.header.initial,
-            start_tick: batch.start_tick,
-            count: batch.completed_count,
-            history: batch.history,
-            impulses: batch.impulses,
-            role_setup: Arc::clone(&self.header.role_setup),
-            role_history: batch.role_history,
-            recycle: Vec::new(),
-            recycle_whitewater: Default::default(),
-            cache_mode: CacheMode::Live,
-            cache_path: Arc::new(PathBuf::new()),
-            coupled,
-        }))
     }
 }
 
-fn batch_path(directory: &Path, tick: u64) -> PathBuf {
-    directory.join(format!("take_{tick:012}.zst"))
+fn validate_clock(
+    points: &[TakeTime],
+    previous: Option<TakeTime>,
+) -> Result<Option<TakeTime>, String> {
+    let Some(mut previous) = previous else {
+        return if points.is_empty() {
+            Ok(None)
+        } else {
+            Err("Physics take: timing was added without a project clock origin".into())
+        };
+    };
+    if points.len() > HISTORY_CAPACITY || points.first() != Some(&previous) {
+        return Err("Physics take: project clock history is missing its continuity anchor".into());
+    }
+    for &point in points {
+        timing::validate_step(previous, point)?;
+        previous = point;
+    }
+    Ok(Some(previous))
+}
+
+fn interpolate_time(a: TakeTime, b: TakeTime, fraction: f64) -> TakeTime {
+    if fraction <= 0.0 {
+        return a;
+    }
+    if fraction >= 1.0 {
+        return b;
+    }
+    TakeTime {
+        beat: manifold_core::Beats(a.beat.0 + (b.beat.0 - a.beat.0) * fraction),
+        transport: manifold_core::Seconds(
+            a.transport.0 + (b.transport.0 - a.transport.0) * fraction,
+        ),
+        simulation: manifold_core::Seconds(
+            a.simulation.0 + (b.simulation.0 - a.simulation.0) * fraction,
+        ),
+    }
+}
+
+fn batch_path(directory: &Path, record: u64) -> PathBuf {
+    directory.join(format!("take_{record:012}.zst"))
 }
 
 struct BoundedBytes(Vec<u8>);

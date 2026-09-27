@@ -241,6 +241,21 @@ impl NativeSimulation {
         if cancel_epoch.load(Ordering::Acquire) != request.epoch {
             return cancelled_reply(request);
         }
+        if request.timing.metadata_only {
+            let error = if request.count != 0
+                || request.cache_mode != CacheMode::Record
+                || self.cache_epoch != Some(request.epoch)
+            {
+                Some("Physics take: timing update has no initialized recording owner".into())
+            } else if let Some(writer) = &mut self.take_writer {
+                writer.append(&request, 0, request.start_tick, None).err()
+            } else {
+                Some("Physics take: timing update has no input journal".into())
+            };
+            let mut reply = cancelled_reply(request);
+            reply.error = error;
+            return reply;
+        }
         let mut stats = FrameStats::default();
         let mut pose = request.initial.obstacle;
         let mut setup_error = None;
@@ -442,6 +457,7 @@ impl NativeSimulation {
             stats,
             error,
             coupled: request.coupled,
+            timing: request.timing,
         }
     }
 }
