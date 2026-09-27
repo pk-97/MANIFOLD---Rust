@@ -646,5 +646,6 @@ mod roles;
 pub(super) use roles::{disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles};
 pub use roles::{
     AssignSceneFluidRoleCommand, RemoveSceneFluidRoleCommand, RetargetSceneFluidRoleCommand,
-    SceneFluidRoleAssignment, scene_fluid_role_assignments, scene_fluid_role_eligibility,
+    SceneFluidRoleAssignment, restore_scene_object_fluid_roles, scene_fluid_role_assignments,
+    scene_fluid_role_eligibility,
 };

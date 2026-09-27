@@ -4,6 +4,7 @@ mod object_routes;
 pub(in crate::commands::graph::scene) use object_routes::{
     disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
 };
+pub use object_routes::restore_scene_object_fluid_roles;
 
 use std::collections::HashSet;
 

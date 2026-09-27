@@ -17,13 +17,30 @@ pub(in crate::commands::graph::scene) fn disconnect_scene_object_fluid_roles(
     Ok(())
 }
 
-pub(in crate::commands::graph::scene) fn duplicate_scene_object_fluid_roles(
+/// Restore captured outgoing routes to their original domains atomically.
+pub fn restore_scene_object_fluid_roles(
     def: &mut EffectGraphDef,
-    original_group: u32,
+    assignments: &[SceneFluidRoleAssignment],
     cloned_group: u32,
     node_id_map: &[(NodeId, NodeId)],
 ) -> Result<(), String> {
-    let assignments = scene_fluid_role_assignments(def, original_group)?;
+    let mut candidate = def.clone();
+    restore_scene_object_fluid_roles_in_place(
+        &mut candidate,
+        assignments,
+        cloned_group,
+        node_id_map,
+    )?;
+    *def = candidate;
+    Ok(())
+}
+
+fn restore_scene_object_fluid_roles_in_place(
+    def: &mut EffectGraphDef,
+    assignments: &[SceneFluidRoleAssignment],
+    cloned_group: u32,
+    node_id_map: &[(NodeId, NodeId)],
+) -> Result<(), String> {
     if assignments.is_empty() {
         return Ok(());
     }
@@ -92,6 +109,16 @@ pub(in crate::commands::graph::scene) fn duplicate_scene_object_fluid_roles(
     Ok(())
 }
 
+pub(in crate::commands::graph::scene) fn duplicate_scene_object_fluid_roles(
+    def: &mut EffectGraphDef,
+    original_group: u32,
+    cloned_group: u32,
+    node_id_map: &[(NodeId, NodeId)],
+) -> Result<(), String> {
+    let assignments = scene_fluid_role_assignments(def, original_group)?;
+    restore_scene_object_fluid_roles(def, &assignments, cloned_group, node_id_map)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{body_mut, role_graph};
@@ -155,5 +182,57 @@ mod tests {
                 .all(|port| port.name != "fluid_role_source_50")
         );
         assert!(manifold_core::flatten::flatten_groups(&graph).is_ok());
+    }
+
+    #[test]
+    fn captured_fluid_roles_restore_after_original_group_is_removed() {
+        let mut graph = role_graph(true, true);
+        let assignments = scene_fluid_role_assignments(&graph, 10).unwrap();
+        let group = graph.nodes.iter().find(|node| node.id == 10).unwrap();
+        let mut ids = Vec::new();
+        let cloned = crate::commands::graph::scene::deep_clone_with_fresh_ids(
+            group,
+            &mut 100,
+            &mut HashSet::new(),
+            &mut ids,
+        );
+        let cloned_group = cloned.id;
+        graph.nodes.push(cloned);
+        disconnect_scene_object_fluid_roles(&mut graph, 10).unwrap();
+        graph.nodes.retain(|node| node.id != 10);
+        graph
+            .wires
+            .retain(|wire| wire.from_node != 10 && wire.to_node != 10);
+        graph
+            .wires
+            .push(scene_build_wire(cloned_group, "object", 0, "object_0"));
+        restore_scene_object_fluid_roles(&mut graph, &assignments, cloned_group, &ids).unwrap();
+        let copied = scene_fluid_role_assignments(&graph, cloned_group).unwrap();
+        assert_eq!(copied[0].domains, assignments[0].domains);
+        assert!(manifold_core::flatten::flatten_groups(&graph).is_ok());
+    }
+
+    #[test]
+    fn captured_fluid_roles_reject_missing_destination_atomically() {
+        let mut graph = role_graph(true, true);
+        let mut assignments = scene_fluid_role_assignments(&graph, 10).unwrap();
+        assert_eq!(assignments[0].domains.len(), 2);
+        // The first route succeeds; the second must roll back the entire edit.
+        assignments[0].domains[1].node = NodeId::new("missing_destination");
+        let group = graph.nodes.iter().find(|node| node.id == 10).unwrap();
+        let mut ids = Vec::new();
+        let cloned = crate::commands::graph::scene::deep_clone_with_fresh_ids(
+            group,
+            &mut 100,
+            &mut HashSet::new(),
+            &mut ids,
+        );
+        let cloned_group = cloned.id;
+        graph.nodes.push(cloned);
+        let before = graph.clone();
+        let error =
+            restore_scene_object_fluid_roles(&mut graph, &assignments, cloned_group, &ids).unwrap_err();
+        assert!(error.contains("domain"), "{error}");
+        assert_eq!(graph, before);
     }
 }

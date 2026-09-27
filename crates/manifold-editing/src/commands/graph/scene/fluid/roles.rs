@@ -970,7 +970,7 @@ mod tests;
 mod lifecycle;
 pub use lifecycle::{
     RemoveSceneFluidRoleCommand, RetargetSceneFluidRoleCommand, SceneFluidRoleAssignment,
-    scene_fluid_role_assignments,
+    restore_scene_object_fluid_roles, scene_fluid_role_assignments,
 };
 pub(in crate::commands::graph::scene) use lifecycle::{
     disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,

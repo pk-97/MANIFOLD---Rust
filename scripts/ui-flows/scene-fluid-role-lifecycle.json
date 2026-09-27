@@ -145,7 +145,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 4"
+          "text": "■ Object 3"
         }
       }
     }
@@ -154,7 +154,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 4"
+          "text": "■ Object 3"
         }
       },
       "gesture": {
@@ -168,7 +168,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "scene_setup.fluid_role.47.target"
+          "name": "scene_setup.fluid_role.44.target"
         }
       }
     }
@@ -187,7 +187,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.fluid_role.47.target"
+          "name": "scene_setup.fluid_role.44.target"
         }
       },
       "gesture": {
@@ -226,7 +226,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "scene_setup.fluid_role.47.remove"
+          "name": "scene_setup.fluid_role.44.remove"
         }
       },
       "gesture": {
