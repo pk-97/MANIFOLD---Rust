@@ -875,9 +875,12 @@ mod tests {
             world
                 .set_boundary_collisions([true, closed_positive_x, true, true, true, true])
                 .expect("rectangular boundary flags");
-            let fill = cube_mesh(1.25, 1.75);
+            // The +X outlet removes particles past x=2.125 (domain wall
+            // inset plus its two-cell buffer). Seed beside that outlet while
+            // keeping Y/Z away from the other walls, without excess box cells.
+            let fill = cube_mesh(0.75, 1.25);
             world
-                .add_fluid_mesh(&fill, pose([0.0; 3]), [4.0, 0.0, 0.0])
+                .add_fluid_mesh(&fill, pose([1.0, 0.0, 0.0]), [4.0, 0.0, 0.0])
                 .expect("boundary fill");
             let mut particles = 0;
             for _ in 0..4 {
@@ -892,7 +895,10 @@ mod tests {
         let closed = run(true);
         let open = run(false);
         assert!(closed > 0, "closed rectangular domain lost all particles");
-        assert!(open < closed, "open +X boundary did not remove particles");
+        assert!(
+            open < closed,
+            "open +X boundary did not remove particles: open={open}, closed={closed}"
+        );
     }
 
     #[test]

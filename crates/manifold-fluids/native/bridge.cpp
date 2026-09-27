@@ -1515,6 +1515,41 @@ void require_accepted_frame(NativeWorld &world) {
 }
 } // namespace
 
+// Bounded test diagnostic for an initially flat, stationary tank. Read the
+// pressure level set rather than infer displacement from the authored box or
+// a separately smoothed rendering mesh. Reject columns with multiple surfaces.
+extern "C" int manifold_fluids_world_rest_waterline(void *world, uint32_t i, uint32_t k,
+                                                    double *height_out) {
+    return guarded([&] {
+        if (world == nullptr || height_out == nullptr) {
+            throw std::invalid_argument("waterline diagnostic requires a world and output");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
+        if (i >= native->isize || k >= native->ksize) {
+            throw std::invalid_argument("waterline diagnostic column is outside the grid");
+        }
+        size_t crossings = 0;
+        double height = 0.0;
+        double a = native->simulation->getLiquidSignedDistance(i, 0, k);
+        for (uint32_t j = 1; j < native->jsize; ++j) {
+            const double b = native->simulation->getLiquidSignedDistance(i, j, k);
+            if (!std::isfinite(a) || !std::isfinite(b)) {
+                throw std::runtime_error("waterline diagnostic has nonfinite liquid distance");
+            }
+            if (a < 0.0 && b >= 0.0) {
+                ++crossings;
+                height = (double(j) - 0.5 + a / (a - b)) * native->cell_size;
+            }
+            a = b;
+        }
+        if (crossings != 1) {
+            throw std::invalid_argument("waterline diagnostic requires one wet-to-dry crossing");
+        }
+        *height_out = height;
+    });
+}
+
 extern "C" int manifold_fluids_world_marker_motion(void *world, float *position_out,
                                                      float *velocity_out) {
     return guarded([&] {

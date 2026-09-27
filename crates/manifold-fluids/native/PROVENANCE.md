@@ -25,6 +25,18 @@ source file also retains its original license header.
 
 Local changes:
 
+- Initial AABB fluid fills now reject candidate particles outside the authored
+  box, including after jitter. The upstream inclusive cell range seeded an
+  extra upper layer: a four-cell-per-axis fixture emitted 1,000 particles
+  instead of 512. This changed both fluid volume and the initial waterline.
+  Near-surface jitter classification now uses distance to the box faces, as
+  candidate cell rounding could incorrectly jitter a true surface layer.
+  The native-versus-owner-stepped mesh comparison retains its 2e-6 tolerance.
+- A bounded bridge diagnostic reads a single wet-to-dry crossing in the native
+  pressure-input liquid level set. It is used only by Rust tests, rejects
+  incomplete frames/ambiguous columns and does not infer the waterline from the
+  separately smoothed render mesh. The native getter reports the level set
+  before particle advection, so the fixture uses it only for a stationary tank.
 - `flip_engine/fluidsimulation.{h,cpp}` exposes begin/offer/advance/finish
   operations around the existing native frame loop. Owner-driven frames may
   consume smaller substeps, preserve the exact interval and reject budget
@@ -111,15 +123,17 @@ boundary derivatives. Eight cases use planar free surfaces through or just
 above a moving-velocity boundary. Separate production tests now run the combined
 native frame loop with real Box3D hulls at density ratios 0.1/1/10 and kinematic
 viscosity 0/1 m²/s. Across three frames, immediate Box3D velocity changes match
-the FLIP-solved changes within 1.77e-7 (limit 5e-5). Inputs update each substep;
+the FLIP-solved changes within 2.19e-7 (limit 5e-5). Inputs update each substep;
 Box3D advances its pose after accepting the reaction. Empty/disabled recipients,
 prescribed density scaling, invalid inputs, stale reactions and abandonment
 are covered, along with two-body exchange order, preparation/retry and CFL
 bounds for prescribed proxies crossing the domain with every vertex outside.
 A one-second neutral-body test additionally covers gravity prediction at 60/120 Hz:
-vertical drift is 0.02171/0.02275 m on a dx 0.05 m grid, with once-only native
+vertical drift is 0.02283/0.02235 m on a dx 0.05 m grid, with once-only native
 force/impulse response error below 7.9e-9. A same-grid old-velocity control drifts
-0.04908 m. This does not establish sustained energy bounds,
-surface floating or final moving-contact alignment. App worker ownership,
+0.04876 m. A half-density body initialized at the measured pressure waterline
+also completes one second at both intervals: maximum drift is 0.00320/0.00377 m
+and hydrostatic force error is 1.23% at dx 0.05 m. Neither fixture establishes
+long-term energy bounds, viscous settling or moving-contact/render alignment. App worker ownership,
 authored density and production memory/performance qualification remain required in
 [`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).

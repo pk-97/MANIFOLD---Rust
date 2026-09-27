@@ -101,6 +101,7 @@ int manifold_fluids_world_advance_substep(void *world, double dt);
 int manifold_fluids_world_finish_frame(void *world, ManifoldFluidsFrameStats *stats_out);
 void manifold_fluids_world_abort_frame(void *world);
 int manifold_fluids_world_marker_motion(void *world, float *position_out, float *velocity_out);
+int manifold_fluids_world_rest_waterline(void *world, uint32_t i, uint32_t k, double *height_out);
 int manifold_fluids_world_surface(void *world, const uint8_t **data_out, size_t *len_out);
 int manifold_fluids_world_whitewater_count(void *world, size_t *count_out);
 int manifold_fluids_world_whitewater(void *world, ManifoldFluidsWhitewaterParticle *particles,

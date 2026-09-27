@@ -77,7 +77,7 @@ fn owner_frame_matches_native_step_and_shared_field_preparation() {
         acceleration: 0.8,
         delta_velocity: 0.2,
     }];
-    for _ in 0..3 {
+    for frame_index in 0..3 {
         let expected = regular.step_with_fields(DT, &inputs).unwrap();
         let mut frame = staged.begin_frame_with_fields(DT, &inputs).unwrap();
         let mut elapsed = 0.0;
@@ -106,7 +106,10 @@ fn owner_frame_matches_native_step_and_shared_field_preparation() {
             .chain(amax)
             .zip(bmin.into_iter().chain(bmax))
         {
-            assert!((actual - expected).abs() < 2e-6);
+            assert!(
+                (actual - expected).abs() < 2e-6,
+                "frame={frame_index} bounds {actual} vs {expected}; regular={amin:?}/{amax:?}, staged={bmin:?}/{bmax:?}"
+            );
         }
     }
 }

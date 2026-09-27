@@ -418,6 +418,13 @@ unsafe extern "C" {
         stats_out: *mut NativeFrameStats,
     ) -> i32;
     #[cfg(test)]
+    fn manifold_fluids_world_rest_waterline(
+        world: *mut std::ffi::c_void,
+        i: u32,
+        k: u32,
+        height_out: *mut f64,
+    ) -> i32;
+    #[cfg(test)]
     fn manifold_fluids_world_marker_motion(
         world: *mut std::ffi::c_void,
         position_out: *mut f32,
@@ -1680,6 +1687,31 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn native_initial_box_respects_cell_aligned_volume() {
+        let mut world = super::FluidWorld::new(Config {
+            cells: [12; 3],
+            cell_size: 0.25,
+            surface_subdivisions: 0,
+            apic: false,
+        })
+        .unwrap();
+        world.set_gravity([0.0; 3]).unwrap();
+        world
+            .add_fluid_box(
+                Bounds {
+                    min: [0.75; 3],
+                    max: [1.75; 3],
+                },
+                [0.0; 3],
+            )
+            .unwrap();
+        let stats = world.step(Seconds(1.0 / 60.0)).unwrap();
+        // Four cells on each axis, with the native eight particles per cell.
+        // Including the cell starting at the upper bound emits 1,000 instead.
+        assert_eq!(stats.particles, 4 * 4 * 4 * 8);
     }
 
     #[test]

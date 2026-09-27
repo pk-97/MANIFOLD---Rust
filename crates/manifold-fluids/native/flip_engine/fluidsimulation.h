@@ -1464,6 +1464,10 @@ public:
     */
     MACVelocityField* getVelocityField();
 
+    // MANIFOLD diagnostic: latest pressure-input liquid level set, before
+    // marker advection. Cell-centred samples, not the rendered surface mesh.
+    float getLiquidSignedDistance(int i, int j, int k);
+
     /*
         Retrieve output file data
     */

@@ -3282,6 +3282,10 @@ std::vector<char> FluidSimulation::getDiffuseParticleTypes(int startidx, int end
     return *types;
 }
 
+float FluidSimulation::getLiquidSignedDistance(int i, int j, int k) {
+    return _liquidSDF.get(i, j, k);
+}
+
 MACVelocityField* FluidSimulation::getVelocityField() { 
     return &_MACVelocity; 
 }
@@ -8705,19 +8709,27 @@ void FluidSimulation::_addNewFluidCellsAABB(AABB bbox,
                 GridIndex g(i, j, k);
                 vmath::vec3 c = Grid3d::GridIndexToCellCenter(g, _dx);
 
-                bool isSurfaceParticle = i == g1.i || j == g1.j || k == g1.k || 
-                                         i == g2.i || j == g2.j || k == g2.k;
                 for (unsigned int oidx = 0; oidx < 8; oidx++) {
                     vmath::vec3 p = c + particleOffsets[oidx];
-                    if (maskgrid.isSubCellSet(p)) {
+                    if (!bbox.isPointInside(p) || maskgrid.isSubCellSet(p)) {
                         continue;
                     }
 
-                    if (_isJitterSurfaceMarkerParticlesEnabled || !isSurfaceParticle) {
+                    const double surfaceDistance = std::min({
+                        p.x - p1.x, p2.x - p.x, p.y - p1.y,
+                        p2.y - p.y, p.z - p1.z, p2.z - p.z});
+
+                    // Classify the surface from geometry, as the mesh-source
+                    // path does. Rounded candidate cell bounds may lie outside
+                    // the box and must not turn its true surface into interior.
+                    if (_isJitterSurfaceMarkerParticlesEnabled || surfaceDistance > _dx) {
                         p = _jitterMarkerParticlePosition(p, jitter);
                     }
 
-                    if (_solidSDF.trilinearInterpolate(p) > 0) {
+                    // The inclusive candidate cell range extends beyond an
+                    // AABB's maximum (and may straddle its minimum). Match the
+                    // mesh-source path by testing the authored volume itself.
+                    if (bbox.isPointInside(p) && _solidSDF.trilinearInterpolate(p) > 0) {
                         newParticles.push_back(MarkerParticle(p, velocity));
                         maskgrid.addParticle(p);
                     }
