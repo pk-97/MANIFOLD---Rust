@@ -427,16 +427,20 @@ double body_energy(const Dofs &q,double mass) {
 void measure_coupled(Scene &scene,RigidBoundaryVelocityMap &map,
                      RigidViscosityCoupling &coupling,ViscousBoundaryReaction &reaction,
                      const Dofs &initial,double mass,MACVelocityField *scale,
-                     ManifoldCoupledViscosityProbe &result) {
+                     ManifoldCoupledViscosityProbe &result,
+                     double surface=std::numeric_limits<double>::infinity()) {
     const Dofs &impulse=coupling.impulses()[0];
     const Dofs &change=coupling.velocityChanges()[0];
     const Dofs response=coupling.bodies[0].response(impulse);
     Dofs final=initial,transposed{};
     double fluidEnergy=0.0;
-    each_face([&](int axis,GridIndex g,const Point &) {
+    each_face([&](int axis,GridIndex g,const Point &p) {
         if (scene.solved(axis,g)) {
             const double v=component(scene.velocity,axis).get(g);
-            fluidEnergy+=0.5*1000*DX*DX*DX*v*v;
+            // Independent analytical mass for a horizontal free surface. A
+            // face's staggered control volume is a dx-wide cube centred on p.
+            const double fraction=std::clamp((surface-p[1]+0.5*DX)/DX,0.0,1.0);
+            fluidEnergy+=0.5*1000*DX*DX*DX*fraction*v*v;
         }
         const double derivative=scale==nullptr ? 1.0 : component(*scale,axis).get(g);
         const double faceImpulse=derivative*reaction.impulse(axis,g);
@@ -458,6 +462,10 @@ void measure_coupled(Scene &scene,RigidBoundaryVelocityMap &map,
     const double ratio=(fluidEnergy+body_energy(final,mass))/body_energy(initial,mass);
     require(std::isfinite(ratio) && ratio>=0.0,"invalid coupled viscosity energy");
     result.max_energy_ratio=std::max(result.max_energy_ratio,ratio);
+    if (std::isfinite(surface)) {
+        result.max_free_surface_energy_ratio=std::max(result.max_free_surface_energy_ratio,ratio);
+        ++result.free_surface_cases;
+    }
     ++result.cases;
 }
 } // namespace
@@ -520,6 +528,26 @@ void run_coupled_viscosity_probe(ManifoldCoupledViscosityProbe &result) {
     for (int dof=0;dof<6;++dof) {
         require(coupling.impulses()[0][dof]==scaledImpulse[dof],
                 "optional face reaction changed body impulse");
+    }
+
+    // The surface either cuts the box or lies just above it. Non-grid-aligned
+    // heights exercise fractional face mass and dry stencil neighbours. The
+    // body has simultaneous translation/rotation and one tenth liquid density.
+    for (double surface : {1.63,2.0375}) for (double nu : {1.0,10.0}) {
+        for (double dt : {DT,DT/2}) {
+            Scene partial(nu,false,false,false);
+            for (int k=0;k<N;++k) for (int j=0;j<N;++j) for (int i=0;i<N;++i) {
+                partial.liquid.getPhiGrid()->set(i,j,k,(j+0.5)*DX-surface);
+            }
+            prepare_inner_body(partial,map,initial,nullptr);
+            prepare_viscous_coupling(coupling,mass);
+            params=partial.params(dt,1000,&reaction);
+            params.rigidCoupling=&coupling; params.rigidBoundaryMap=&map;
+            if (!solver.applyViscosityToVelocityField(params)) {
+                throw std::runtime_error("free-surface joint viscosity failed: "+solver.getSolverStatus());
+            }
+            measure_coupled(partial,map,coupling,reaction,initial,mass,nullptr,result,surface);
+        }
     }
 
     require(result.max_energy_ratio<=1.001,"coupled viscosity added passive kinetic energy");

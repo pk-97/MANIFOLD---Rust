@@ -56,7 +56,9 @@ struct CoupledViscosityProbe {
     max_response_error: f64,
     max_transpose_error: f64,
     fixed_velocity_error: f64,
+    max_free_surface_energy_ratio: f64,
     cases: u32,
+    free_surface_cases: u32,
 }
 
 #[repr(C)]
@@ -127,8 +129,13 @@ fn coupling_joint_viscosity_dissipates_energy_and_matches_body_reactions() {
     let status = unsafe { manifold_fluids_coupling_joint_viscosity_probe(&mut result) };
     println!("{result:?}");
     super::super::native_result(status, "joint viscosity native scene").unwrap();
-    assert_eq!(result.cases, 25);
+    assert_eq!(result.cases, 33);
+    assert_eq!(result.free_surface_cases, 8);
     assert!(result.max_energy_ratio.is_finite() && result.max_energy_ratio <= 1.001);
+    assert!(
+        result.max_free_surface_energy_ratio.is_finite()
+            && result.max_free_surface_energy_ratio <= 1.001
+    );
     assert!(result.max_response_error.is_finite() && result.max_response_error < 1e-4);
     assert!(result.max_transpose_error.is_finite() && result.max_transpose_error < 1e-4);
     assert!(result.fixed_velocity_error.is_finite() && result.fixed_velocity_error < 2e-6);

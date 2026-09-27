@@ -30,7 +30,9 @@ struct ManifoldCoupledViscosityProbe {
     double max_response_error;
     double max_transpose_error;
     double fixed_velocity_error;
+    double max_free_surface_energy_ratio;
     uint32_t cases;
+    uint32_t free_surface_cases;
 };
 
 void run_coupled_viscosity_probe(ManifoldCoupledViscosityProbe &result);

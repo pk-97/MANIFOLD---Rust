@@ -72,9 +72,10 @@ against native mesh velocities. Prescribed viscous boundaries are checked for
 linear/angular momentum balance, dissipation, rigid-motion invariance, density
 scaling and failure atomicity. A separate frozen-geometry energy test rejects
 delayed viscous feedback for light bodies/high viscosity. The joint alternative
-passes an independent two-body physical-mass oracle and 25 frozen-geometry
+passes an independent two-body physical-mass oracle and 33 frozen-geometry
 native cases covering translation/rotation, light/heavy bodies and constrained
-boundary derivatives. These do not establish moving-mesh or free-surface
-coupling. `FluidSimulation` does not yet enable production two-way coupling.
+boundary derivatives. Eight cases use planar free surfaces through or just
+above a moving-velocity boundary. These do not establish moving-mesh/advection
+or combined pressure/viscosity stepping. `FluidSimulation` does not yet enable production two-way coupling.
 Connecting these operators, physical density and Box3D timing remains required in
 [`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).
