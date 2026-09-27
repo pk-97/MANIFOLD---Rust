@@ -76,6 +76,7 @@ pub struct PresetRuntime {
     pub plan: ExecutionPlan,
     /// Captured event routes belong to this installed graph, never a rebuild.
     pub(super) impulse_identity: std::sync::Arc<()>,
+    pub(super) scene_impulses: super::scene_impulses::SceneImpulses,
     /// Plan-aligned physics input ancestry, built once with the graph.
     pub(super) physics_sample_steps: Option<Vec<bool>>,
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
@@ -1179,7 +1180,8 @@ impl PresetRuntime {
         }
 
         // Compile and find the resources we need to pin / read.
-        let plan = match compile(&graph) {
+        let plan = match super::physics_sampling::retain_physics_setup_outputs(&mut graph)
+            .and_then(|()| compile(&graph)) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!(
@@ -1318,6 +1320,7 @@ impl PresetRuntime {
             physics_input_snapshot,
             last_physics_frame_time: None,
             impulse_identity: std::sync::Arc::new(()),
+            scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -1858,6 +1861,7 @@ impl PresetRuntime {
             ctx.owner_key,
         );
         self.last_physics_frame_time = Some(frame_time);
+        self.observe_impulse_setup();
 
         // The chain output is in the slot pre-bound to the last
         // effect's output resource.
@@ -2042,6 +2046,7 @@ impl PresetRuntime {
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
         self.last_physics_frame_time = Some(time);
+        self.observe_impulse_setup();
         self.consume_trigger_markers();
     }
 
@@ -2133,6 +2138,7 @@ impl PresetRuntime {
             ctx.owner_key,
         );
         self.last_physics_frame_time = Some(frame_time);
+        self.observe_impulse_setup();
 
         self.render_math_views(gpu, target, ctx, params);
 
@@ -2144,6 +2150,7 @@ impl PresetRuntime {
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
         self.impulse_identity = std::sync::Arc::new(());
+        self.reset_modifier_impulses();
         self.last_physics_frame_time = None;
         for view in &mut self.math_views {
             view.events.clear();

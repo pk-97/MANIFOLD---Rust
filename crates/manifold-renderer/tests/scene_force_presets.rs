@@ -111,6 +111,22 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .find(|param| param.id == "strength")
             .expect("signed strength control");
         assert!(strength.min < 0.0 && strength.max > 0.0);
+        let impulse_strength = metadata
+            .params
+            .iter()
+            .find(|param| param.id == "impulse_strength")
+            .expect("signed impulse strength control");
+        assert_eq!(
+            (impulse_strength.min, impulse_strength.max, impulse_strength.default_value),
+            (-20.0, 20.0, 2.0)
+        );
+        let fire = metadata
+            .params
+            .iter()
+            .find(|param| param.id == "fire")
+            .expect("Fire trigger control");
+        assert!(fire.is_trigger);
+        assert_eq!((fire.min, fire.max, fire.default_value), (0.0, 16777216.0, 0.0));
         let binding_ids: std::collections::BTreeSet<_> = metadata
             .bindings
             .iter()
@@ -121,7 +137,27 @@ fn force_recipes_validate_and_expose_finite_controls() {
             .iter()
             .map(|param| param.id.as_str())
             .collect();
-        assert_eq!(binding_ids, param_ids, "{name} binds every card control");
+        assert!(binding_ids.contains("impulse_strength"));
+        assert!(!binding_ids.contains("fire"));
+        assert_eq!(binding_ids.len() + 1, param_ids.len(), "{name} leaves only Fire unbound");
+        let impulse_binding = metadata
+            .bindings
+            .iter()
+            .find(|binding| binding.id == "impulse_strength")
+            .expect("impulse strength binding");
+        assert_eq!(impulse_binding.label, "Impulse (m/s)");
+        assert!(matches!(
+            &impulse_binding.target,
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                if node_id.as_str() == "force_impulse_strength" && param == "strength"
+        ));
+        let modifier = metadata.scene_modifier.as_ref().expect("scene modifier recipe");
+        assert_eq!(modifier.impulses.len(), 1);
+        let impulse = &modifier.impulses[0];
+        assert_eq!(impulse.param_id, "fire");
+        assert_eq!(impulse.field.scope, vec![NodeId::new("force_source_stage")]);
+        assert_eq!(impulse.field.node.as_str(), "force_impulse_gate");
+        assert_eq!(impulse.port, "out");
     }
 }
 
@@ -158,7 +194,35 @@ fn force_sources_scale_strength_then_enabled_and_apply_additively() {
         ));
         assert!(has_wire(
             source,
+            "force_field",
+            "out",
+            "force_impulse_strength",
+            "field"
+        ));
+        assert!(has_wire(
+            source,
+            "force_impulse_strength",
+            "out",
+            "force_impulse_gate",
+            "field"
+        ));
+        assert!(has_wire(
+            source,
+            "force_enabled",
+            "out",
+            "force_impulse_gate",
+            "strength"
+        ));
+        assert!(has_wire(
+            source,
             "force_gate",
+            "out",
+            "force_source_output",
+            "field"
+        ));
+        assert!(!has_wire(
+            source,
+            "force_impulse_gate",
             "out",
             "force_source_output",
             "field"
@@ -264,6 +328,31 @@ fn force_sources_scale_strength_then_enabled_and_apply_additively() {
             .map(|((a, b), previous)| a + b - previous),
     ) {
         assert!((actual - expected).abs() < 1.0e-6, "two force fields sum");
+    }
+}
+
+#[test]
+fn force_impulses_are_independent_enabled_gated_and_serializable() {
+    let disabled = evaluate_impulse_graph(&["UniformForce"], &[0.0], &[0.0]);
+    assert_eq!(disabled, [0.0, 0.0, 0.0]);
+    let active = evaluate_impulse_graph(&["UniformForce"], &[0.0], &[1.0]);
+    assert_eq!(active, [0.0, 2.0, 0.0]);
+    let continuous_strength_changed = evaluate_impulse_graph(&["UniformForce"], &[-20.0], &[1.0]);
+    assert_eq!(continuous_strength_changed, active);
+
+    for name in ["UniformForce", "RadialForce", "VortexForce"] {
+        let def = recipe(name);
+        let json = serde_json::to_string(&def).expect("force recipe serializes");
+        let round_trip: EffectGraphDef =
+            serde_json::from_str(&json).expect("serialized force recipe parses");
+        let modifier = round_trip
+            .preset_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.scene_modifier.as_ref())
+            .expect("serialized scene modifier recipe");
+        assert_eq!(modifier.impulses.len(), 1);
+        assert_eq!(modifier.impulses[0].param_id, "fire");
+        assert_eq!(modifier.impulses[0].field.node.as_str(), "force_impulse_gate");
     }
 }
 
@@ -388,8 +477,24 @@ fn frame_time() -> FrameTime {
 }
 
 fn evaluate_force_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [f32; 3] {
+    evaluate_force_output(names, strengths, enabled, None)
+}
+
+fn evaluate_impulse_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [f32; 3] {
+    evaluate_force_output(names, strengths, enabled, Some(2.0))
+}
+
+fn evaluate_force_output(
+    names: &[&str],
+    strengths: &[f32],
+    enabled: &[f32],
+    impulse_strength: Option<f32>,
+) -> [f32; 3] {
     assert_eq!(names.len(), strengths.len());
     assert_eq!(names.len(), enabled.len());
+    if impulse_strength.is_some() {
+        assert_eq!(names.len(), 1, "impulse proof uses one source branch");
+    }
     let registry = PrimitiveRegistry::with_builtin();
     let mut host: EffectGraphDef = serde_json::from_str(PHYSICS_SOLIDS).unwrap();
     let scene = host
@@ -428,6 +533,20 @@ fn evaluate_force_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [
                 binding.default_value = value;
             }
         }
+        if let Some(value) = impulse_strength {
+            metadata
+                .params
+                .iter_mut()
+                .find(|param| param.id == "impulse_strength")
+                .unwrap()
+                .default_value = value;
+            metadata
+                .bindings
+                .iter_mut()
+                .find(|binding| binding.id == "impulse_strength")
+                .unwrap()
+                .default_value = value;
+        }
         let instance = prepare_new_scene_modifier(
             &host,
             &recipe,
@@ -446,30 +565,56 @@ fn evaluate_force_graph(names: &[&str], strengths: &[f32], enabled: &[f32]) -> [
         .unwrap();
         host = insert_scene_modifier(&host, index, instance).unwrap().graph;
     }
-    let mut def = prepare_scene_modifiers(&host, &registry).unwrap().def;
-    let world = def
-        .nodes
-        .iter()
-        .find(|node| node.node_id.as_str() == "physics_demo_40")
-        .unwrap()
-        .id;
-    let target = def
-        .wires
-        .iter()
-        .find(|wire| wire.to_node == world && wire.to_port == "body_acceleration_1")
-        .unwrap()
-        .clone();
-    let producer = def
-        .nodes
-        .iter()
-        .find(|node| node.id == target.from_node)
-        .unwrap()
-        .node_id
-        .clone();
+    let prepared = prepare_scene_modifiers(&host, &registry).unwrap();
+    let routes = prepared.routes;
+    let mut def = prepared.def;
+    let (producer, root) = if impulse_strength.is_some() {
+        let route = routes
+            .iter()
+            .find(|route| {
+                route.modifier_id.as_str() == "force-0"
+                    && route.local.node.as_str() == "force_impulse_gate"
+            })
+            .expect("impulse route resolves the source gate");
+        let producer = route
+            .copies
+            .first()
+            .expect("scene impulse has one source copy")
+            .node_id
+            .clone();
+        let root = def
+            .nodes
+            .iter()
+            .find(|node| node.node_id == producer)
+            .expect("prepared impulse producer is present")
+            .id;
+        (producer, root)
+    } else {
+        let world = def
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "physics_demo_40")
+            .unwrap()
+            .id;
+        let target = def
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == world && wire.to_port == "body_acceleration_1")
+            .unwrap()
+            .clone();
+        let producer = def
+            .nodes
+            .iter()
+            .find(|node| node.id == target.from_node)
+            .unwrap()
+            .node_id
+            .clone();
+        (producer, target.from_node)
+    };
     // Execute the actual prepared acceleration ancestry. Removing only its
     // consumers keeps this CPU proof independent of native worlds/GPU meshes.
     let mut keep = std::collections::BTreeSet::new();
-    let mut pending = vec![target.from_node];
+    let mut pending = vec![root];
     while let Some(id) = pending.pop() {
         if keep.insert(id) {
             pending.extend(

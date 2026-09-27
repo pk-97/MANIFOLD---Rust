@@ -1139,9 +1139,34 @@ impl ContentThread {
                 self.commit_automation_recording(true);
             }
             ContentCommand::FireParameter { target, param_id } => {
+                let source = manifold_renderer::node_graph::FrameTime {
+                    seconds: self.engine.current_time(),
+                    beats: self.engine.current_beat(),
+                    delta: Seconds::ZERO,
+                    frame_count: 0,
+                };
+                let before = self.engine.project().and_then(|project| project.preset_instance(&target))
+                    .map(|instance| instance.get_base_param(param_id.as_ref()));
                 self.handle_command(ContentCommand::ExecuteOnContent(Box::new(
-                    manifold_editing::commands::effects::FireGraphParamCommand::new(target, param_id),
+                    manifold_editing::commands::effects::FireGraphParamCommand::new(target.clone(), param_id.clone()),
                 )));
+                let accepted = before.is_some_and(|before| {
+                    self.engine.project().and_then(|project| project.preset_instance(&target))
+                        .is_some_and(|instance| instance.get_base_param(param_id.as_ref()) == before + 1.0
+                            && before + 1.0 > before)
+                });
+                if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
+                    let (renderers, project) = self.engine.split_renderer_project_mut();
+                    let result = if let Some(layer) = project.and_then(|project|
+                        project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)) {
+                        if GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref()) {
+                            renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>())
+                                .ok_or_else(|| "Impulse: scene renderer is unavailable".to_string())
+                                .and_then(|renderer| renderer.fire_scene_impulse(layer, param_id.as_ref(), source))
+                        } else { Ok(false) }
+                    } else { Ok(false) };
+                    if let Err(message) = result { self.report_graph_edit_rejection(message); }
+                }
             }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
                 self.engine.clear_automation_previews();

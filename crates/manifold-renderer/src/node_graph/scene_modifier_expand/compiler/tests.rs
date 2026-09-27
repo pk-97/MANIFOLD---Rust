@@ -22,6 +22,7 @@ pub(super) fn fixture() -> EffectGraphDef {
         singleton: false,
         enabled_param: "enabled".into(),
         preparation_params: vec![],
+        impulses: vec![],
         initializers: vec![],
         calibrations: vec![],
         shatter: None,

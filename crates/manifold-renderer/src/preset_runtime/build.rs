@@ -291,6 +291,7 @@ impl PresetRuntime {
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
         mesh_rules: &crate::node_graph::mesh_change::PreparedMeshRules,
+        impulse_routes: &[crate::node_graph::scene_modifier_expand::SceneModifierImpulseRoute],
     ) -> Result<Self, JsonGeneratorLoadError> {
         if doc.version == 0 || doc.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
             return Err(JsonGeneratorLoadError::Load(
@@ -427,6 +428,15 @@ impl PresetRuntime {
         }
 
         let mut graph = doc.into_graph(registry, mesh_rules)?;
+        for route in impulse_routes {
+            let node = graph.instance_by_node_id(&route.field_node).ok_or_else(||
+                JsonGeneratorLoadError::SceneModifier(
+                    crate::node_graph::scene_modifier_expand::SceneModifierExpandError::MissingTarget {
+                        path: route.field_node.to_string(),
+                        detail: "impulse field is absent from the render graph".into(),
+                    }))?;
+            graph.add_external_output(node, &route.field_port)?;
+        }
 
         // Re-locate the boundary nodes by runtime id now that we have the live
         // graph.
@@ -556,6 +566,7 @@ impl PresetRuntime {
                 }
             }
         }
+        super::physics_sampling::retain_physics_setup_outputs(&mut graph)?;
         let plan = compile(&graph)?;
         // Walk the plan for the FinalOutput step, pull its `in` input resource —
         // that's what the host pre-binds the target texture to.
@@ -630,6 +641,7 @@ impl PresetRuntime {
             physics_input_snapshot,
             last_physics_frame_time: None,
             impulse_identity: std::sync::Arc::new(()),
+            scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),

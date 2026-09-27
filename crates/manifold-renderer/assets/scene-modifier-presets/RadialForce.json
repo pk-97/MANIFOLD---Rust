@@ -57,6 +57,21 @@
         "min": -20.0,
         "max": 20.0,
         "defaultValue": 1.0
+      },
+      {
+        "id": "impulse_strength",
+        "name": "Impulse (m/s)",
+        "min": -20.0,
+        "max": 20.0,
+        "defaultValue": 2.0
+      },
+      {
+        "id": "fire",
+        "name": "Fire",
+        "min": 0.0,
+        "max": 16777216.0,
+        "defaultValue": 0.0,
+        "isTrigger": true
       }
     ],
     "bindings": [
@@ -129,12 +144,32 @@
           "nodeId": "force_strength",
           "param": "strength"
         }
+      },
+      {
+        "id": "impulse_strength",
+        "label": "Impulse (m/s)",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "force_impulse_strength",
+          "param": "strength"
+        }
       }
     ],
     "sceneModifier": {
       "schemaVersion": 1,
       "singleton": false,
       "enabledParam": "enabled",
+      "impulses": [
+        {
+          "paramId": "fire",
+          "field": {
+            "scope": ["force_source_stage"],
+            "node": "force_impulse_gate"
+          },
+          "port": "out"
+        }
+      ],
       "stages": [
         {
           "group": "force_source_stage",
@@ -257,6 +292,30 @@
             }
           },
           {
+            "id": 6,
+            "nodeId": "force_impulse_strength",
+            "typeId": "node.scale_vector_field",
+            "handle": "force_impulse_strength",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
+          },
+          {
+            "id": 7,
+            "nodeId": "force_impulse_gate",
+            "typeId": "node.scale_vector_field",
+            "handle": "force_impulse_gate",
+            "params": {
+              "strength": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
             "id": 5,
             "nodeId": "force_source_output",
             "typeId": "system.group_output",
@@ -280,6 +339,24 @@
             "fromNode": 3,
             "fromPort": "out",
             "toNode": 4,
+            "toPort": "strength"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 6,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "field"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 7,
             "toPort": "strength"
           },
           {

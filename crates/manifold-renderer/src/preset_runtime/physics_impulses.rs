@@ -45,6 +45,12 @@ pub struct CapturedSceneImpulse {
 }
 
 impl PreparedSceneImpulse {
+    pub(super) fn rearm(&mut self, identity: &Arc<()>, captured: &mut CapturedSceneImpulse) {
+        self.identity = identity.clone();
+        captured.identity = identity.clone();
+        captured.clear();
+    }
+
     pub fn new_capture(&self) -> CapturedSceneImpulse {
         CapturedSceneImpulse {
             identity: self.identity.clone(),
@@ -58,6 +64,13 @@ impl PreparedSceneImpulse {
 }
 
 impl CapturedSceneImpulse {
+    pub(super) fn has_stale_epoch(&self, graph: &crate::node_graph::Graph) -> bool {
+        self.source.is_some() && self.recipients.iter().zip(&self.stamps).any(|(recipient, stamp)| {
+            graph.get_node(recipient.instance).and_then(|node| node.node.physics_impulse_epoch())
+                .is_some_and(|epoch| epoch != stamp.epoch)
+        })
+    }
+
     /// Explicit acknowledgement/cancellation by the producer. Never implicit
     /// in a failed capture or delivery. Retains all allocated storage.
     pub fn clear(&mut self) {

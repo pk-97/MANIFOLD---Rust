@@ -21,6 +21,8 @@ use crate::node_graph::scene_viewport::{
 };
 use crate::preset_runtime::ModifierPreviewContext;
 
+mod physics_events;
+
 /// Per-clip active state.
 struct ActiveClip {
     /// Generator renders into this texture at full output resolution.
@@ -160,6 +162,8 @@ struct ThumbGen {
 }
 
 pub struct GeneratorRenderer {
+    next_physics_event: u64,
+    scene_impulse_diagnostics: crate::preset_runtime::SceneImpulseDiagnostics,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -241,6 +245,8 @@ impl GeneratorRenderer {
         registry.prewarm_all(&device);
 
         Self {
+            next_physics_event: 0,
+            scene_impulse_diagnostics: Default::default(),
             device,
             width,
             height,
@@ -1064,6 +1070,15 @@ impl GeneratorRenderer {
                     params,
                 );
                 active.anim_progress = new_progress;
+                // Acknowledge native tick-start receipts every rendered frame;
+                // otherwise completed clicks would fill the bounded event queue.
+                let diagnostics = &mut self.scene_impulse_diagnostics;
+                layer_state.generator.drain_scene_impulses(|_, event| {
+                    diagnostics.started = diagnostics.started.saturating_add(1);
+                    if event.lateness.0 > 0.0 {
+                        diagnostics.late = diagnostics.late.saturating_add(1);
+                    }
+                });
             }
         }
 

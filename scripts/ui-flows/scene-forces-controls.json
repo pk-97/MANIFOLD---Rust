@@ -45,7 +45,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "⚡ Uniform Force"
+          "text": "\u26a1 Uniform Force"
         }
       },
       "gesture": {
@@ -59,7 +59,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Strength (m/s²)"
+          "text": "Strength (m/s\u00b2)"
         }
       },
       "check": "Exists"
@@ -97,7 +97,7 @@
         "Drag": {
           "to": {
             "Query": {
-              "text": "Strength (m/s²)"
+              "text": "Strength (m/s\u00b2)"
             }
           },
           "steps": 8
@@ -165,7 +165,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "✓ All physics objects"
+          "text": "\u2713 All physics objects"
         }
       },
       "check": "Exists"
@@ -189,7 +189,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "⚡ Uniform Force"
+          "text": "\u26a1 Uniform Force"
         }
       },
       "check": "Exists"
@@ -233,6 +233,83 @@
           "modifiers": {}
         }
       }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Impulse (m/s)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"impulse_strength\"].value"
+        }
+      },
+      "check": {
+        "TextEquals": "2.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      },
+      "check": "Exists"
     }
   },
   "Snapshot"

@@ -216,7 +216,7 @@ fn prepare_scene_modifiers_impl(
         if !super::fragment_cuts::contains_fragments(owner) {
             return Ok(PreparedSceneModifierGraph {
                 def: owner.clone(), routes: Vec::new(), event_routes: Vec::new(),
-                binding_sources: Vec::new(),
+                impulse_routes: Vec::new(), binding_sources: Vec::new(),
             });
         }
         let mut def = manifold_core::flatten::flatten_groups(owner).map_err(|error| invalid(
@@ -229,6 +229,7 @@ fn prepare_scene_modifiers_impl(
             def,
             routes: Vec::new(),
             event_routes: Vec::new(),
+            impulse_routes: Vec::new(),
             binding_sources,
         });
     }
@@ -485,10 +486,11 @@ fn prepare_scene_modifiers_impl(
             detail: "expanded graph including Math View exceeds 65536 nodes or 262144 wires".into(),
         });
     }
-    let graph = prepared
+    let mut graph = prepared
         .clone()
         .into_graph(registry, &crate::node_graph::mesh_change::PreparedMeshRules::default())
         .map_err(|error| invalid("expandedGraph", error.to_string()))?;
+    let impulse_routes = super::impulses::prepare(owner, &routes, &mut graph)?;
     validate_binding_leaves(&prepared, &graph)?;
     crate::node_graph::validation::validate(&graph)
         .map_err(|error| invalid("expandedGraph", error.to_string()))?;
@@ -496,6 +498,7 @@ fn prepare_scene_modifiers_impl(
         def: prepared,
         routes,
         event_routes: builder.event_routes,
+        impulse_routes,
         binding_sources,
     })
 }

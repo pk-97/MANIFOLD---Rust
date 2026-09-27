@@ -12,6 +12,30 @@ mod input_tests;
 #[path = "physics_history_drain_tests.rs"]
 mod drain_tests;
 
+fn setup_input(kind: &str, port: &str) -> bool {
+    match kind {
+        "node.rigid_body" => port == "release_count",
+        "node.fluid_surface" => port == "domain",
+        "node.fluid_role_source" => !matches!(port,
+            "transform" | "role" | "enabled" | "velocity_x" | "velocity_y"
+            | "velocity_z" | "inherit_motion" | "friction"),
+        _ => false,
+    }
+}
+
+/// Historical CPU passes hold these full-frame outputs instead of evaluating
+/// their setup/GPU ancestry. Pin them before compilation so the last ordinary
+/// reader cannot return their slots to the pool between observations.
+pub(super) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), GraphError> {
+    let outputs: Vec<_> = graph.nodes().flat_map(|node| {
+        let kind = node.node.type_id().as_str();
+        graph.wires_into(node.id).filter(move |wire| setup_input(kind, wire.to.1))
+            .map(|wire| wire.from)
+    }).collect();
+    for (node, port) in outputs { graph.add_external_output(node, port)?; }
+    Ok(())
+}
+
 /// The last observed external inputs to the stateless physics ancestry. Keys
 /// and storage are prepared with the graph; capturing another frame only
 /// replaces values (String/Table values retain their existing Arc storage).
@@ -105,24 +129,12 @@ pub(super) fn physics_sample_steps(
         if !ancestry.insert(node_id) {
             continue;
         }
-        let is_body = graph.get_node(node_id).is_some_and(|node| node.node.type_id().as_str() == "node.rigid_body");
-        // Release events belong to their delivered frame. Historical pose
-        // sampling holds the last output instead of replaying trigger state.
-        let is_fluid_role = graph.get_node(node_id).is_some_and(|node| {
-            node.node.type_id().as_str() == "node.fluid_role_source"
-        });
-        let is_fluid = graph.get_node(node_id).is_some_and(|node| {
-            node.node.type_id().as_str() == "node.fluid_surface"
-        });
+        let kind = graph.get_node(node_id).expect("physics ancestor exists").node.type_id();
         // A mesh description is setup state: its prepared geometry stays
         // fixed during historical live-control sampling. Do not replay GPU
         // sources or local topology transforms at historical timestamps.
         pending.extend(graph.wires_into(node_id)
-            .filter(|wire| !(is_body && wire.to.1 == "release_count"))
-            .filter(|wire| !(is_fluid && wire.to.1 == "domain"))
-            .filter(|wire| !is_fluid_role || matches!(wire.to.1,
-                "transform" | "role" | "enabled" | "velocity_x" | "velocity_y"
-                | "velocity_z" | "inherit_motion" | "friction"))
+            .filter(|wire| !setup_input(kind.as_str(), wire.to.1))
             .map(|wire| wire.from.0));
     }
     for node_id in &ancestry {

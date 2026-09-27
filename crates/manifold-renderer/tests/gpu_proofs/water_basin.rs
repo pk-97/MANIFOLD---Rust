@@ -556,3 +556,73 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     std::fs::write("/tmp/manifold_assigned_fluid.png",
         manifold_renderer::headless_readback::encode_rgba8_png(&pixels, WIDTH, HEIGHT)).unwrap();
 }
+
+#[test]
+fn scene_physics_modifier_impulse_changes_rendered_liquid() {
+    use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    use manifold_core::{Beats, NodeId, Seconds};
+    use manifold_renderer::node_graph::FrameTime;
+    use manifold_physics::VectorField;
+
+    let mut raw: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
+    let nodes = raw["nodes"].as_array_mut().unwrap();
+    let fluid = nodes.iter_mut().find(|node| node["id"] == 4).unwrap();
+    for (name, value) in [("resolution", 8.0), ("fill_height", 0.0), ("emission", 0.0), ("gravity", 0.0)] {
+        fluid["params"][name] = serde_json::json!({"type":"Float","value":value});
+    }
+    nodes.push(serde_json::json!({"id":500,"nodeId":"seed","typeId":"node.transform_3d","params":{
+        "pos_y":{"type":"Float","value":1.5},
+        "scale_x":{"type":"Float","value":1.5},
+        "scale_y":{"type":"Float","value":1.5},
+        "scale_z":{"type":"Float","value":1.5}
+    }}));
+    let wires = raw["wires"].as_array_mut().unwrap();
+    wires.retain(|wire| wire["toNode"] != 4);
+    wires.push(serde_json::json!({"fromNode":500,"fromPort":"transform","toNode":4,"toPort":"initial_volume"}));
+    let owner: EffectGraphDef = serde_json::from_value(raw).unwrap();
+    let mut recipe: EffectGraphDef = serde_json::from_str(include_str!("../../assets/scene-modifier-presets/UniformForce.json")).unwrap();
+    let metadata = recipe.preset_metadata.as_mut().unwrap();
+    for (id, value) in [("strength", 0.0), ("impulse_strength", 3.0), ("direction_x", 1.0), ("direction_y", 0.0)] {
+        metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;
+        metadata.bindings.iter_mut().find(|binding| binding.id == id).unwrap().default_value = value;
+    }
+    let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        &owner, &recipe, NodeId::new("impulse"), SceneNodeRef { scope: vec![], node: NodeId::new("scene") },
+        SceneTargetSelection::Explicit { objects: vec![SceneNodeRef { scope: vec![], node: NodeId::new("water_object") }] },
+    ).unwrap();
+    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, 0, instance).unwrap().graph;
+    let fire = def.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding|
+        matches!(&binding.target, BindingTarget::SceneModifier { param_id, .. } if param_id == "fire")
+    ).unwrap().id.clone();
+    let saved = serde_json::to_string(&def).unwrap();
+    let harness = harness::shared();
+    let build = || PresetRuntime::from_json_str_with_device(&saved, &PrimitiveRegistry::with_builtin(),
+        Arc::clone(&harness.device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
+    let mut resting = build();
+    let mut hit = build();
+    let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "modifier-impulse-liquid");
+    let _offline = PhysicsStepScope::for_render(true);
+    render_frame(&mut resting, &target, &harness.device, 0);
+    render_frame(&mut hit, &target, &harness.device, 0);
+    // Initial-volume particles enter FLIP on its first native step. Fire
+    // after that step so this proof measures an impulse on existing liquid.
+    render_frame(&mut resting, &target, &harness.device, 1);
+    render_frame(&mut hit, &target, &harness.device, 1);
+    hit.fire_scene_impulse(&fire, FrameTime { seconds: Seconds(1.0 / 60.0), beats: Beats(1.0 / 60.0),
+        delta: Seconds::ZERO, frame_count: 1 }, &mut 0).unwrap();
+    let before = render_frame(&mut resting, &target, &harness.device, 8);
+    std::fs::write("/tmp/scene_impulse_resting.png", readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+    let after = render_frame(&mut hit, &target, &harness.device, 8);
+    std::fs::write("/tmp/scene_impulse_fired.png", readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT)).unwrap();
+    assert_finite_and_nonempty(&after, 8);
+    let mut receipts = 0;
+    hit.drain_scene_impulses(|id, event| {
+        assert_eq!(id.as_str(), "fluid_surface");
+        assert_eq!(event.value.field.sample([0.0; 3]), [3.0, 0.0, 0.0]);
+        receipts += 1;
+    });
+    assert_eq!(receipts, 1);
+    assert!(manifold_renderer::headless_readback::mean_abs_half_diff(&before, &after) > 0.0001,
+        "a fired field must visibly change the liquid");
+}

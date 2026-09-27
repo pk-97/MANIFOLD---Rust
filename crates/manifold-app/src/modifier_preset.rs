@@ -250,6 +250,7 @@ mod tests {
                     singleton: false,
                     enabled_param: "gain".into(),
                     preparation_params: Vec::new(),
+                    impulses: Vec::new(),
                     stages: Vec::new(),
                     shatter: None,
                     initializers: vec![

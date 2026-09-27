@@ -122,6 +122,25 @@ pub(super) fn expand_bindings_with_sources(
             .preset_metadata
             .as_ref()
             .ok_or_else(|| invalid_binding(&binding.id, "modifier instance has no metadata"))?;
+        let is_declared_impulse = local_metadata
+            .scene_modifier
+            .as_ref()
+            .is_some_and(|recipe| recipe.impulses.iter().any(|impulse| impulse.param_id == *param_id));
+        if is_declared_impulse {
+            if binding.convert != ParamConvert::Float
+                || binding.scale != 1.0
+                || binding.offset != 0.0
+            {
+                return Err(invalid_binding(
+                    &binding.id,
+                    "scene-modifier impulse bindings must use identity Float conversion",
+                ));
+            }
+            // Keep the host ParamSpec, but only numeric bindings enter the
+            // flat graph. Event aliases resolve from the canonical owner.
+
+            continue;
+        }
         let local_bindings: Vec<(usize, &BindingDef)> = local_metadata
             .bindings
             .iter()

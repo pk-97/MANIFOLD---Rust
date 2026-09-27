@@ -104,7 +104,7 @@ impl PresetRuntime {
                 let guards = crate::node_graph::scene_modifier_expand::PreparedModifierParameterGuards::prepare(&doc)?;
                 (
                     prepared.def,
-                    Some((doc, prepared.routes, sources, guards, prepared.event_routes)),
+                    Some((doc, prepared.routes, sources, guards, prepared.event_routes, prepared.impulse_routes)),
                 )
             } else {
                 (doc, None)
@@ -131,12 +131,14 @@ impl PresetRuntime {
             Some(view) => (*view.def).clone(),
             None => render_def,
         };
-        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules)?;
+        let impulse_routes = authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
+        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
         runtime.effect_nodes[0].def_content_key = content_key;
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }
-        if let Some((canonical, routes, sources, guards, event_routes)) = authoring {
+        if let Some((canonical, routes, sources, guards, event_routes, impulse_routes)) = authoring {
+            runtime.prepare_modifier_impulses(&canonical, &impulse_routes, registry)?;
             crate::node_graph::scene_modifier_expand::validate_modifier_runtime(
                 &canonical,
                 &runtime.graph,

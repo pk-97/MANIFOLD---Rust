@@ -14,6 +14,8 @@ pub use buffer_budget::{
     admit_candidate_bytes,
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
+pub use impulses::SceneModifierImpulseRoute;
+mod impulses;
 mod compiler;
 pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
