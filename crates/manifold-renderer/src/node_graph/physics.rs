@@ -1047,7 +1047,8 @@ impl RigidSimulation {
                         tick_remaining -= duration.0;
                     }
                 }
-                exchange.finish().map_err(|error| format!("Physics coupling: {error}"))?;
+                exchange.finish(self.world.as_ref().expect("world constructed above"))
+                    .map_err(|error| format!("Physics coupling: {error}"))?;
                 completed += 1;
                 self.physics_time += TICK;
                 self.apply_due_authored_edits()?;

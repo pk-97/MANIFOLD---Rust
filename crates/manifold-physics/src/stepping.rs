@@ -42,7 +42,11 @@ pub trait SubstepExchange {
     /// Do not advance Box3D here: the existing owner does so immediately after.
     fn exchange(&mut self, rigid: &mut PhysicsWorld, duration: Seconds) -> Result<(), Self::Error>;
 
-    fn finish(self) -> Result<(), Self::Error>;
+    /// Complete the participant and capture the paired native rigid state.
+    /// This runs after the final rigid substep and before later authored
+    /// edits or release events can change the world. A failed capture must
+    /// leave both published outputs at their previous accepted tick.
+    fn finish(self, rigid: &PhysicsWorld) -> Result<(), Self::Error>;
 }
 
 /// Rigid-only scenes use the identical tick owner without a second backend.
@@ -68,7 +72,7 @@ impl SubstepExchange for Uncoupled {
         Ok(())
     }
 
-    fn finish(self) -> Result<(), Self::Error> {
+    fn finish(self, _: &PhysicsWorld) -> Result<(), Self::Error> {
         Ok(())
     }
 }

@@ -84,13 +84,108 @@ impl SubstepExchange for ProbeFrame<'_> {
         Ok(())
     }
 
-    fn finish(self) -> Result<(), Self::Error> {
+    fn finish(self, _: &PhysicsWorld) -> Result<(), Self::Error> {
         if self.0.fail_finish {
             return Err("fixture finish failure");
         }
         self.0.finished += 1;
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct CapturePublication {
+    stamp: TickStamp,
+    body_position: [f32; 3],
+    copy_positions: Vec<[f32; 3]>,
+}
+
+struct CaptureCompanion {
+    body: BodyHandle,
+    copies: Vec<BodyHandle>,
+    publications: Vec<CapturePublication>,
+    fail_finish: bool,
+}
+
+struct CaptureFrame<'a> {
+    companion: &'a mut CaptureCompanion,
+    stamp: TickStamp,
+}
+
+impl StepCoupling for CaptureCompanion {
+    type Error = &'static str;
+    type Frame<'a> = CaptureFrame<'a>;
+
+    fn begin_tick(&mut self, stamp: TickStamp, _: Seconds) -> Result<Self::Frame<'_>, Self::Error> {
+        Ok(CaptureFrame {
+            companion: self,
+            stamp,
+        })
+    }
+}
+
+impl SubstepExchange for CaptureFrame<'_> {
+    type Error = &'static str;
+
+    fn next_substep(&mut self, _: &PhysicsWorld, maximum: Seconds) -> Result<Seconds, Self::Error> {
+        Ok(Seconds(maximum.0.min(FIXED_TICK.0 / 4.0)))
+    }
+
+    fn exchange(&mut self, _: &mut PhysicsWorld, _: Seconds) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn finish(self, rigid: &PhysicsWorld) -> Result<(), Self::Error> {
+        if self.companion.fail_finish {
+            return Err("capture finish failure");
+        }
+        let body_position = rigid
+            .pose(self.companion.body)
+            .map_err(|_| "capture body pose read failure")?
+            .position;
+        let copy_positions = self
+            .companion
+            .copies
+            .iter()
+            .map(|&handle| {
+                rigid
+                    .pose(handle)
+                    .map(|pose| pose.position)
+                    .map_err(|_| "capture copy pose read failure")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.companion.publications.push(CapturePublication {
+            stamp: self.stamp,
+            body_position,
+            copy_positions,
+        });
+        Ok(())
+    }
+}
+
+fn advance_capture<C: StepCoupling>(
+    simulation: &mut RigidSimulation,
+    bodies: [Option<RigidBody>; MAX_BODIES],
+    prototype: Option<RigidBody>,
+    time: f64,
+    speed: f32,
+    coupling: &mut C,
+) -> Result<(), String> {
+    simulation.advance_with_coupling(
+        bodies,
+        prototype,
+        2.0,
+        1.25,
+        2.0,
+        0.0,
+        [0.0; 3],
+        Seconds(time),
+        speed,
+        0.0,
+        None,
+        &[],
+        coupling,
+    )
 }
 
 fn fixture() -> (RigidSimulation, Probe) {
@@ -182,6 +277,213 @@ fn scene_physics_coupling_failure_retains_published_pose_and_latches() {
     );
     assert_eq!(probe.steps, steps);
     assert_eq!(simulation.impulse_receipts.len(), 1);
+}
+
+#[test]
+fn scene_physics_coupling_capture_publishes_native_pose_before_deferred_edit() {
+    let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+    let mut bodies = std::array::from_fn(|_| None);
+    let animated = RigidBody {
+        kind: 2,
+        transform: Transform {
+            pos: [-2.0, 0.0, 0.0],
+            ..Transform::default()
+        },
+        ..RigidBody::default()
+    };
+    bodies[0] = Some(animated.clone());
+    let mut prototype = animated.clone();
+
+    let mut simulation = RigidSimulation::default();
+    let mut uncoupled = Uncoupled;
+    advance_capture(
+        &mut simulation,
+        bodies.clone(),
+        Some(prototype.clone()),
+        0.0,
+        1.0,
+        &mut uncoupled,
+    )
+    .unwrap();
+    let body = simulation.handles[0].unwrap();
+    let copies: Vec<_> = simulation.copy_handles[..simulation.active_copy_count]
+        .iter()
+        .copied()
+        .flatten()
+        .collect();
+    let copy_offsets: Vec<_> = copies
+        .iter()
+        .map(|&handle| {
+            simulation
+                .world
+                .as_ref()
+                .unwrap()
+                .pose(handle)
+                .unwrap()
+                .position[0]
+                + 2.0
+        })
+        .collect();
+    assert_eq!(copies.len(), 2);
+    let mut capture = CaptureCompanion {
+        body,
+        copies,
+        publications: Vec::new(),
+        fail_finish: false,
+    };
+
+    bodies[0].as_mut().unwrap().transform.pos[0] = -1.0;
+    prototype.transform.pos[0] = -1.0;
+    advance_capture(
+        &mut simulation,
+        bodies.clone(),
+        Some(prototype.clone()),
+        FIXED_TICK.0 * 2.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap();
+    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(capture.publications[0].stamp.tick, 0);
+    assert_eq!(simulation.pending_time, FIXED_TICK);
+
+    bodies[0].as_mut().unwrap().transform.pos[0] = 5.0;
+    prototype.transform.pos[0] = 5.0;
+    advance_capture(
+        &mut simulation,
+        bodies.clone(),
+        Some(prototype.clone()),
+        FIXED_TICK.0 * 2.0,
+        0.0,
+        &mut capture,
+    )
+    .unwrap();
+    assert_eq!(capture.publications.len(), 1);
+    assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
+    for (pose, offset) in simulation.copy_poses.iter().zip(&copy_offsets) {
+        assert!((pose.pos[0] - (5.0 + offset)).abs() < 1.0e-5);
+    }
+    assert_eq!(simulation.physics_time, FIXED_TICK.0);
+    assert_eq!(simulation.pending_time, FIXED_TICK);
+
+    // The last owed tick samples the left side of the edit boundary. Its
+    // native publication must remain historical even while the preview pose
+    // above shows the authored teleport.
+    advance_capture(
+        &mut simulation,
+        bodies.clone(),
+        Some(prototype.clone()),
+        FIXED_TICK.0 * 2.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap();
+    assert_eq!(capture.publications.len(), 2);
+    assert_eq!(capture.publications[1].stamp.tick, 1);
+    assert!((capture.publications[1].body_position[0] + 1.0).abs() < 1.0e-5);
+    assert_eq!(
+        capture.publications[1].copy_positions.len(),
+        copy_offsets.len()
+    );
+    for (pose, offset) in capture.publications[1]
+        .copy_positions
+        .iter()
+        .zip(&copy_offsets)
+    {
+        assert!((pose[0] - (-1.0 + offset)).abs() < 1.0e-5);
+    }
+    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
+    assert_eq!(simulation.pending_time, Seconds::ZERO);
+
+    // The next accepted tick begins after the deferred edit has been applied,
+    // so both the ordinary body and every animated copy publish the new pose.
+    advance_capture(
+        &mut simulation,
+        bodies,
+        Some(prototype),
+        FIXED_TICK.0 * 3.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap();
+    assert_eq!(capture.publications.len(), 3);
+    assert_eq!(capture.publications[2].stamp.tick, 2);
+    assert!((capture.publications[2].body_position[0] - 5.0).abs() < 1.0e-5);
+    for (captured, expected) in capture.publications[2]
+        .copy_positions
+        .iter()
+        .zip(&simulation.copy_poses[..simulation.active_copy_count])
+    {
+        for (&actual, expected) in captured.iter().zip(expected.pos) {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+    }
+    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 3.0);
+}
+
+#[test]
+fn scene_physics_coupling_capture_failure_does_not_publish() {
+    let mut bodies = std::array::from_fn(|_| None);
+    bodies[0] = Some(RigidBody::default());
+    let mut simulation = RigidSimulation::default();
+    let mut uncoupled = Uncoupled;
+    advance_capture(
+        &mut simulation,
+        bodies.clone(),
+        None,
+        0.0,
+        1.0,
+        &mut uncoupled,
+    )
+    .unwrap();
+    let mut capture = CaptureCompanion {
+        body: simulation.handles[0].unwrap(),
+        copies: Vec::new(),
+        publications: Vec::new(),
+        fail_finish: false,
+    };
+    simulation
+        .world
+        .as_mut()
+        .unwrap()
+        .set_velocity(capture.body, [1.0, 0.0, 0.0], [0.0; 3])
+        .unwrap();
+    advance_capture(
+        &mut simulation,
+        bodies.clone(),
+        None,
+        FIXED_TICK.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap();
+    let published = simulation.poses;
+    let captured = capture.publications[0].body_position;
+    capture.fail_finish = true;
+    let error = advance_capture(
+        &mut simulation,
+        bodies,
+        None,
+        FIXED_TICK.0 * 2.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap_err();
+    assert!(error.contains("capture finish failure"));
+    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(capture.publications[0].body_position, captured);
+    assert_eq!(simulation.poses, published);
+    assert_ne!(
+        simulation
+            .world
+            .as_ref()
+            .unwrap()
+            .pose(capture.body)
+            .unwrap()
+            .position,
+        captured
+    );
+    assert_eq!(simulation.physics_time, FIXED_TICK.0);
 }
 
 #[test]
@@ -351,6 +653,17 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
     assert!((simulation.physics_time - FIXED_TICK.0 * 3.0).abs() < 1e-15);
     let stats = companion.coupling.last_stats().unwrap();
     assert!(stats.particles > 0 && stats.substeps >= 2);
+    let completed: Vec<_> = companion.coupling.completed_bodies().unwrap().collect();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].0, handle);
+    assert_eq!(
+        completed[0].1.pose,
+        simulation.world.as_ref().unwrap().pose(handle).unwrap()
+    );
+    assert_eq!(
+        completed[0].1.dynamics,
+        simulation.world.as_ref().unwrap().dynamics(handle).unwrap()
+    );
     let velocity = simulation
         .world
         .as_ref()

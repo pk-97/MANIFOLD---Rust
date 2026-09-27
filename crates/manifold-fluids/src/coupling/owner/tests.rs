@@ -144,7 +144,7 @@ fn complete_frame(fixture: &mut PreparedFixture) -> usize {
         remaining -= duration.0;
         substeps += 1;
     }
-    frame.finish().unwrap();
+    frame.finish(&fixture.rigid).unwrap();
     substeps
 }
 
@@ -265,12 +265,18 @@ fn owner_rejects_stale_pending_exchange_until_state_is_restored() {
         substeps += 1;
     }
     assert_eq!(substeps, 2);
-    frame.finish().unwrap();
+    frame.finish(&fixture.rigid).unwrap();
 }
 
 #[test]
 fn owner_reuses_scratch_and_invalidates_stats_and_snapshots_at_frame_boundaries() {
     let mut fixture = prepared_fixture(true);
+    assert!(fixture.coupling.completed_bodies().is_none());
+    fixture
+        .rigid
+        .set_velocity(fixture.body, [0.5, 0.0, 0.0], [0.0, 0.4, 0.0])
+        .unwrap();
+    let initial_pose = fixture.rigid.pose(fixture.body).unwrap();
     let states_ptr = fixture.coupling.states.as_ptr();
     let states_capacity = fixture.coupling.states.capacity();
     let impulses_ptr = fixture.coupling.impulses.as_ptr();
@@ -278,12 +284,30 @@ fn owner_reuses_scratch_and_invalidates_stats_and_snapshots_at_frame_boundaries(
 
     assert_eq!(complete_frame(&mut fixture), 2);
     assert!(fixture.coupling.last_stats().is_some());
+    let completed: Vec<_> = fixture
+        .coupling
+        .completed_bodies()
+        .unwrap()
+        .map(|(body, state)| (body, *state))
+        .collect();
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].0, fixture.body);
+    assert_eq!(
+        completed[0].1.pose,
+        fixture.rigid.pose(fixture.body).unwrap()
+    );
+    assert_eq!(
+        completed[0].1.dynamics,
+        fixture.rigid.dynamics(fixture.body).unwrap()
+    );
+    assert_ne!(completed[0].1.pose, initial_pose);
 
     let mut frame = fixture
         .coupling
         .begin_frame(&mut fixture.fluid, DT, &[])
         .unwrap();
     assert!(frame.coupling.last_stats.is_none());
+    assert!(frame.coupling.completed_bodies().is_none());
     let mut remaining = DT.0;
     while remaining > 0.0 {
         let duration = frame
@@ -293,7 +317,7 @@ fn owner_reuses_scratch_and_invalidates_stats_and_snapshots_at_frame_boundaries(
         fixture.rigid.step(duration, 4).unwrap();
         remaining -= duration.0;
     }
-    frame.finish().unwrap();
+    frame.finish(&fixture.rigid).unwrap();
     assert!(fixture.coupling.last_stats().is_some());
     assert_eq!(fixture.coupling.states.as_ptr(), states_ptr);
     assert_eq!(fixture.coupling.states.capacity(), states_capacity);
@@ -307,6 +331,30 @@ fn owner_reuses_scratch_and_invalidates_stats_and_snapshots_at_frame_boundaries(
     drop(frame);
     assert!(fixture.fluid.surface(&mut Vec::new()).is_err());
     assert!(fixture.coupling.last_stats().is_none());
+    assert!(fixture.coupling.completed_bodies().is_none());
+}
+
+#[test]
+fn owner_finish_rejects_foreign_rigid_state_without_publishing_fluid() {
+    let mut fixture = prepared_fixture(false);
+    let foreign = PhysicsWorld::new([0.0; 3]).unwrap();
+    let mut frame = fixture
+        .coupling
+        .begin_frame(&mut fixture.fluid, DT, &[])
+        .unwrap();
+    let mut remaining = DT.0;
+    while remaining > 0.0 {
+        let duration = frame
+            .next_substep(&fixture.rigid, Seconds(remaining))
+            .unwrap();
+        frame.exchange(&mut fixture.rigid, duration).unwrap();
+        fixture.rigid.step(duration, 4).unwrap();
+        remaining -= duration.0;
+    }
+    assert!(frame.finish(&foreign).is_err());
+    assert!(fixture.coupling.last_stats().is_none());
+    assert!(fixture.coupling.completed_bodies().is_none());
+    assert!(fixture.fluid.surface(&mut Vec::new()).is_err());
 }
 
 #[test]
@@ -329,7 +377,7 @@ fn owner_reaction_application_failure_latches_filled_frame_without_mutating_velo
     assert_eq!(after.linear_velocity, before.linear_velocity);
     assert_eq!(after.angular_velocity, before.angular_velocity);
     assert!(frame.next_substep(&fixture.rigid, DT).is_err());
-    assert!(frame.finish().is_err());
+    assert!(frame.finish(&fixture.rigid).is_err());
     assert!(fixture.coupling.last_stats().is_none());
     assert!(
         fixture
@@ -476,7 +524,7 @@ fn owner_compound_interleaved_bindings_apply_once_per_body_and_reuse_storage() {
             rigid.step(duration, 4).unwrap();
             remaining -= duration.0;
         }
-        frame.finish().unwrap();
+        frame.finish(&rigid).unwrap();
     }
     assert!(total_reaction > 1e-3);
     assert_eq!(

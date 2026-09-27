@@ -128,6 +128,17 @@ impl RigidFluidCoupling {
     pub fn last_stats(&self) -> Option<FrameStats> {
         self.last_stats
     }
+
+    /// The paired rigid state captured at the last successfully finished fluid
+    /// frame, in scene/world coordinates and first-occurrence body order.
+    /// Beginning another frame invalidates this view before reusing its input
+    /// storage. A publisher must copy these values with that frame's surface.
+    pub fn completed_bodies(
+        &self,
+    ) -> Option<impl ExactSizeIterator<Item = (BodyHandle, &RigidBodyState)> + '_> {
+        self.last_stats
+            .map(|_| self.bodies.iter().copied().zip(&self.states))
+    }
 }
 
 impl SubstepExchange for CoupledFluidFrame<'_, '_> {
@@ -212,11 +223,17 @@ impl SubstepExchange for CoupledFluidFrame<'_, '_> {
         Ok(())
     }
 
-    fn finish(self) -> Result<(), Self::Error> {
+    fn finish(self, rigid: &PhysicsWorld) -> Result<(), Self::Error> {
         if self.failed {
             return Err(FluidError::native(
                 "coupled frame failed; rebuild both worlds",
             ));
+        }
+        // Read after the owner's final Box3D step, before any later authored
+        // teleport or release. Reuse the upload scratch, now in scene space.
+        // A failed read drops the unpublished fluid guard and invalidates it.
+        for (state, &body) in self.coupling.states.iter_mut().zip(&self.coupling.bodies) {
+            *state = read_state(rigid, body, [0.0; 3])?;
         }
         let stats = self.frame.finish()?;
         self.coupling.last_stats = Some(stats);
