@@ -778,6 +778,7 @@ mod layer_tap_stream_tests {
                 stamp: manifold_core::audio_stream::AudioBlockStamp {
                     first_frame: 0,
                     sample_rate: 48_000,
+                    clock: None,
                     generation: 0,
                 },
                 samples: 1,
@@ -824,6 +825,7 @@ mod layer_tap_stream_tests {
                 stamp: manifold_core::audio_stream::AudioBlockStamp {
                     first_frame: 0,
                     sample_rate: 44_100,
+                    clock: None,
                     generation: 0,
                 },
                 samples: 2,
@@ -836,6 +838,7 @@ mod layer_tap_stream_tests {
                 stamp: manifold_core::audio_stream::AudioBlockStamp {
                     first_frame: 2,
                     sample_rate: 48_000,
+                    clock: None,
                     generation: 1,
                 },
                 samples: 1,

@@ -4207,6 +4207,7 @@ mod trigger_delivery_tests {
                         epoch: 1,
                         end_sample: (index as u64 + 1) * 256,
                         sample_rate: 48_000,
+                        source_time: None,
                         timeline_time: Some(Seconds(time)),
                     }),
                 },

@@ -376,7 +376,7 @@ impl MonoWorkerLoop {
         if self.out.is_empty() {
             self.producer.skip_frames((samples / self.device_channels) as u64);
         } else {
-            self.producer.push_interleaved(&self.out);
+            self.producer.push_interleaved_clocked(&self.out, stamp.clock);
         }
         true
     }
@@ -3117,6 +3117,31 @@ mod tests {
         })));
         assert_eq!(&out[..2], &[0.9, -0.9]);
         assert_eq!(reader.read(&mut out), None);
+    }
+
+    #[test]
+    fn downmix_preserves_clock_anchor_across_partial_source_drains() {
+        use manifold_core::audio_stream::{AudioBlockStamp, AudioClockAnchor};
+        let (mut source, capture) = audio_stream(2, 5000, 8, SR);
+        let (mono, mut reader) = audio_stream(1, 5000, 8, SR);
+        let clock = AudioClockAnchor { instant: std::time::Instant::now(), frame: 0 };
+        let gains = Arc::new(GainBank::new(&[1.0]));
+        let mut worker = MonoWorkerLoop::new(capture, mono, 2, vec![vec![0, 1]], gains);
+        assert_eq!(source.push_interleaved_clocked(&vec![0.5; 10_000], Some(clock)), 10_000);
+        while worker.drain_and_downmix() {}
+        let mut scratch = [0.; 997];
+        let mut next = 0;
+        while let Some(read) = reader.read(&mut scratch) {
+            let AudioStreamRead::Samples { stamp, samples } = read else { panic!("no missing frames"); };
+            assert_eq!(stamp.first_frame, next);
+            assert_eq!(stamp.clock, Some(clock));
+            assert_eq!(stamp.source_time(), AudioBlockStamp {
+                first_frame: next, clock: Some(clock), generation: 0, sample_rate: SR,
+            }.source_time());
+            assert!(scratch[..samples].iter().all(|sample| *sample == 0.5));
+            next += samples as u64;
+        }
+        assert_eq!(next, 5000);
     }
 
     #[test]

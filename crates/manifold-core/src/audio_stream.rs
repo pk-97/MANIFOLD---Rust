@@ -3,21 +3,57 @@
 //! Sample and descriptor rings are published in that order. The reader only
 //! consumes samples described by a published block. Neither end allocates after
 //! construction. Frame positions count source frames, including dropped frames;
-//! they are not transport or hardware timestamps.
+//! optional producer clock anchors map them to monotonic time, independently
+//! of transport time or when a consumer drains the ring.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioClockAnchor {
+    pub instant: Instant,
+    pub frame: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioBlockStamp {
     pub first_frame: u64,
     pub sample_rate: u32,
+    pub clock: Option<AudioClockAnchor>,
     /// Changes when the producer's sample rate changes. A replaced stream has
     /// its own lifetime; its owner supplies the source identity.
     pub generation: u64,
+}
+
+impl AudioBlockStamp {
+    /// Resolve this block's source frame against its optional clock anchor.
+    /// A missing anchor or invalid sample rate has no meaningful source time.
+    pub fn source_time(&self) -> Option<Instant> {
+        let anchor = self.clock?;
+        let rate = u64::from(self.sample_rate);
+        if rate == 0 {
+            return None;
+        }
+
+        let (delta, add) = if self.first_frame >= anchor.frame {
+            (self.first_frame - anchor.frame, true)
+        } else {
+            (anchor.frame - self.first_frame, false)
+        };
+        let seconds = delta / rate;
+        let remainder = delta % rate;
+        let nanos = remainder.checked_mul(1_000_000_000)? / rate;
+        let duration = Duration::from_secs(seconds).checked_add(Duration::from_nanos(nanos))?;
+        if add {
+            anchor.instant.checked_add(duration)
+        } else {
+            anchor.instant.checked_sub(duration)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,9 +146,32 @@ impl AudioStreamProducer {
         }
     }
 
+    /// Current source-frame cursor, including frames dropped for lack of ring capacity.
+    pub fn next_frame(&self) -> u64 {
+        self.next_frame
+    }
+
     /// Publish a whole-frame prefix without blocking. Returns accepted sample
     /// count; all unaccepted source frames still advance the source position.
     pub fn push_interleaved(&mut self, input: &[f32]) -> usize {
+        self.push_interleaved_clocked(input, None)
+    }
+
+    /// Publish samples with a clock anchor for the first submitted source frame.
+    pub fn push_interleaved_at(&mut self, input: &[f32], instant: Option<Instant>) -> usize {
+        let clock = instant.map(|instant| AudioClockAnchor {
+            instant,
+            frame: self.next_frame,
+        });
+        self.push_interleaved_clocked(input, clock)
+    }
+
+    /// Publish samples while preserving an upstream clock anchor exactly.
+    pub fn push_interleaved_clocked(
+        &mut self,
+        input: &[f32],
+        clock: Option<AudioClockAnchor>,
+    ) -> usize {
         if self.invalid.load(Ordering::Relaxed) {
             return 0;
         }
@@ -131,15 +190,33 @@ impl AudioStreamProducer {
             frames.min(self.samples.vacant_len() / self.channels)
         };
         if accepted > 0 {
+            // Analysis stamps exclusive hop boundaries, so the end boundary
+            // must be representable as well as the first retained frame.
+            let last_frame = end;
+            let stamp = AudioBlockStamp {
+                first_frame: self.next_frame,
+                sample_rate: self.rate,
+                clock,
+                generation: self.generation,
+            };
+            if clock.is_some()
+                && (stamp.source_time().is_none()
+                    || (last_frame != self.next_frame
+                        && AudioBlockStamp {
+                            first_frame: last_frame,
+                            ..stamp
+                        }
+                        .source_time()
+                        .is_none()))
+            {
+                self.invalidate();
+                return 0;
+            }
             // The sole producer reserves both capacities above. Samples become
             // visible before the descriptor; its release publishes both.
             self.samples.push_slice(&input[..accepted * self.channels]);
             let block = Block {
-                stamp: AudioBlockStamp {
-                    first_frame: self.next_frame,
-                    sample_rate: self.rate,
-                    generation: self.generation,
-                },
+                stamp,
                 frames: accepted,
             };
             if self.blocks.try_push(block).is_err() {
@@ -249,6 +326,98 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clocked_partial_reads_keep_anchor_and_resolve_source_time() {
+        let anchor = Instant::now();
+        let (mut writer, mut reader) = audio_stream(1, 8, 4, 2);
+        assert_eq!(
+            writer.push_interleaved_at(&[1., 2., 3., 4.], Some(anchor)),
+            4
+        );
+
+        let mut scratch = [0.; 2];
+        let first = match reader.read(&mut scratch) {
+            Some(AudioStreamRead::Samples { stamp, samples }) => {
+                assert_eq!(samples, 2);
+                stamp
+            }
+            read => panic!("expected first clocked block, got {read:?}"),
+        };
+        assert_eq!(
+            first.clock,
+            Some(AudioClockAnchor {
+                instant: anchor,
+                frame: 0
+            })
+        );
+        assert_eq!(first.source_time(), Some(anchor));
+
+        let second = match reader.read(&mut scratch) {
+            Some(AudioStreamRead::Samples { stamp, samples }) => {
+                assert_eq!(samples, 2);
+                stamp
+            }
+            read => panic!("expected second clocked block, got {read:?}"),
+        };
+        assert_eq!(second.clock, first.clock);
+        assert_eq!(
+            second.source_time(),
+            anchor.checked_add(Duration::from_secs(1))
+        );
+    }
+
+    #[test]
+    fn unclocked_blocks_have_no_guessed_source_time() {
+        let (mut writer, mut reader) = audio_stream(1, 4, 2, 48_000);
+        assert_eq!(writer.push_interleaved(&[1.]), 1);
+        let mut scratch = [0.; 1];
+        let stamp = match reader.read(&mut scratch) {
+            Some(AudioStreamRead::Samples { stamp, .. }) => stamp,
+            read => panic!("expected unclocked block, got {read:?}"),
+        };
+        assert_eq!(stamp.clock, None);
+        assert_eq!(stamp.source_time(), None);
+    }
+
+    #[test]
+    fn dropped_tail_and_downstream_forwarding_keep_clock_metadata() {
+        let anchor = Instant::now();
+        let (mut writer, mut reader) = audio_stream(1, 2, 4, 48_000);
+        assert_eq!(writer.push_interleaved_at(&[1., 2.], Some(anchor)), 2);
+        assert_eq!(writer.push_interleaved_at(&[3., 4.], Some(anchor)), 0);
+        assert_eq!(writer.next_frame(), 4);
+
+        let mut scratch = [0.; 2];
+        let first = match reader.read(&mut scratch) {
+            Some(AudioStreamRead::Samples { stamp, .. }) => stamp,
+            read => panic!("expected queued block, got {read:?}"),
+        };
+        let exact_clock = first.clock;
+
+        let (mut downstream, mut downstream_reader) = audio_stream(1, 4, 2, 48_000);
+        assert_eq!(
+            downstream.push_interleaved_clocked(&[1., 2.], exact_clock),
+            2
+        );
+        let forwarded = match downstream_reader.read(&mut scratch) {
+            Some(AudioStreamRead::Samples { stamp, .. }) => stamp,
+            read => panic!("expected forwarded block, got {read:?}"),
+        };
+        assert_eq!(forwarded.clock, exact_clock);
+        assert_eq!(forwarded.source_time(), first.source_time());
+    }
+
+    #[test]
+    fn invalid_clock_arithmetic_latches_before_publish() {
+        let (mut writer, mut reader) = audio_stream(1, 4, 2, 1);
+        let invalid = AudioClockAnchor {
+            instant: Instant::now(),
+            frame: u64::MAX,
+        };
+        assert_eq!(writer.push_interleaved_clocked(&[1.], Some(invalid)), 0);
+        assert_eq!(reader.read(&mut [0.]), Some(AudioStreamRead::InvalidInput));
+    }
+
+    #[test]
     fn partial_reads_preserve_interleaving_and_source_positions() {
         let (mut writer, mut reader) = audio_stream(2, 8, 4, 48_000);
         assert_eq!(writer.push_interleaved(&[1., 2., 3., 4., 5., 6.]), 6);
@@ -259,7 +428,8 @@ mod tests {
                 stamp: AudioBlockStamp {
                     first_frame: 0,
                     sample_rate: 48_000,
-                    generation: 0
+                    clock: None,
+                    generation: 0,
                 },
                 samples: 4,
             })
@@ -271,7 +441,8 @@ mod tests {
                 stamp: AudioBlockStamp {
                     first_frame: 2,
                     sample_rate: 48_000,
-                    generation: 0
+                    clock: None,
+                    generation: 0,
                 },
                 samples: 2,
             })
@@ -347,7 +518,8 @@ mod tests {
                 stamp: AudioBlockStamp {
                     first_frame: 0,
                     sample_rate: 44_100,
-                    generation: 1
+                    clock: None,
+                    generation: 1,
                 },
                 ..
             })
@@ -358,7 +530,8 @@ mod tests {
                 stamp: AudioBlockStamp {
                     first_frame: 2,
                     sample_rate: 48_000,
-                    generation: 2
+                    clock: None,
+                    generation: 2,
                 },
                 ..
             })

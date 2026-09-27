@@ -916,6 +916,7 @@ mod tests {
                     epoch: 7,
                     end_sample: 512,
                     sample_rate: 48_000,
+                    source_time: None,
                     timeline_time: Some(crate::Seconds(512. / 48_000.)),
                 },
                 dt: crate::Seconds(512. / 48_000.),

@@ -23,6 +23,9 @@ pub struct AudioHopStamp {
     /// Exclusive received-mono sample boundary since analyzer construction.
     pub end_sample: u64,
     pub sample_rate: u32,
+    /// Monotonic source time at the exclusive hop boundary, when retained by
+    /// the producer. Independent of display delivery and transport mapping.
+    pub source_time: Option<std::time::Instant>,
     /// Present only when the producer has an actual transport mapping. Live
     /// mixed audio must not infer this from the display frame receiving it.
     pub timeline_time: Option<Seconds>,
@@ -83,6 +86,7 @@ pub struct AudioHopBatch<T: AudioHopSample = AudioFeatureHop> {
     hops: Vec<T>,
     limit: usize,
     last_end: Option<u64>,
+    last_source_time: Option<std::time::Instant>,
     sample_rate: Option<u32>,
     failure: Option<AudioHopError>,
 }
@@ -96,6 +100,7 @@ impl<T: AudioHopSample + Clone> Clone for AudioHopBatch<T> {
             hops,
             limit: self.limit,
             last_end: self.last_end,
+            last_source_time: self.last_source_time,
             sample_rate: self.sample_rate,
             failure: self.failure,
         }
@@ -116,6 +121,7 @@ impl<T: AudioHopSample> AudioHopBatch<T> {
             hops: Vec::with_capacity(limit),
             limit,
             last_end: None,
+            last_source_time: None,
             sample_rate: None,
             failure: None,
         }
@@ -135,6 +141,7 @@ impl<T: AudioHopSample> AudioHopBatch<T> {
         self.epoch = epoch;
         self.hops.clear();
         self.last_end = None;
+        self.last_source_time = None;
         self.sample_rate = None;
         self.failure = None;
     }
@@ -173,6 +180,7 @@ impl<T: AudioHopSample> AudioHopBatch<T> {
             || stamp.timeline_time.is_some_and(|time| !time.0.is_finite())
             || !hop.is_finite()
             || self.last_end.is_some_and(|end| stamp.end_sample <= end)
+            || self.last_source_time.zip(stamp.source_time).is_some_and(|(last, time)| time <= last)
         {
             Some(AudioHopError::InvalidInput)
         } else if self.hops.len() == self.limit {
@@ -185,6 +193,7 @@ impl<T: AudioHopSample> AudioHopBatch<T> {
             return Err(error);
         }
         self.last_end = Some(stamp.end_sample);
+        if let Some(time) = stamp.source_time { self.last_source_time = Some(time); }
         self.sample_rate = Some(stamp.sample_rate);
         self.hops.push(hop);
         Ok(())
@@ -265,11 +274,31 @@ mod tests {
                 epoch,
                 end_sample,
                 sample_rate: 48_000,
+                source_time: None,
                 timeline_time: Some(Seconds(end_sample as f64 / 48_000.)),
             },
             dt: Seconds(512. / 48_000.),
             features: SendFeatures::default(),
         }
+    }
+
+    #[test]
+    fn source_clock_regression_across_updates_invalidates_until_new_epoch() {
+        let now = std::time::Instant::now();
+        let mut batch = AudioHopBatch::with_capacity(4);
+        batch.begin(1);
+        let mut first = hop(1, 512);
+        first.stamp.source_time = Some(now);
+        batch.push(first).unwrap();
+        batch.begin(1);
+        batch.push(hop(1, 1024)).unwrap(); // unknown does not forget last clock
+        let mut backwards = hop(1, 1536);
+        backwards.stamp.source_time = now.checked_sub(std::time::Duration::from_millis(1));
+        assert_eq!(batch.push(backwards), Err(AudioHopError::InvalidInput));
+        assert!(batch.hops().is_empty());
+        batch.begin(2);
+        backwards.stamp.epoch = 2;
+        batch.push(backwards).unwrap();
     }
 
     #[test]
@@ -365,6 +394,7 @@ mod tests {
                 epoch,
                 end_sample,
                 sample_rate: 48_000,
+                source_time: None,
                 timeline_time: None,
             },
             dt: Seconds(512. / 48_000.),

@@ -18,6 +18,7 @@ use cpal::{Stream, StreamConfig};
 use manifold_core::audio_stream::audio_stream;
 
 use super::{AudioConsumer, CaptureBackend};
+use super::clock::CallbackClock;
 
 /// Information about an available audio input device.
 #[derive(Clone, Debug)]
@@ -115,17 +116,25 @@ impl AudioCaptureDevice {
         let running_cb = running.clone();
         let overflow_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let overflow_cb = overflow_count.clone();
+        let mut clock = CallbackClock::new();
 
         // Build the input stream. The callback runs on a real-time OS thread.
         // RULES: no alloc, no lock, no log, no panic. Only ring buffer writes.
         let stream = device
             .build_input_stream(
                 &stream_config,
-                move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+                move |data: &[f32], info: &cpal::InputCallbackInfo| {
                     if !running_cb.load(Ordering::Relaxed) {
                         return;
                     }
-                    let written = producer.push_interleaved(data);
+                    let timestamp = info.timestamp();
+                    // Preserve CPAL's capture estimate; do not timestamp at the
+                    // content/display drain. The backend determines accuracy.
+                    let source_time = clock.map(
+                        timestamp.callback, timestamp.capture, std::time::Instant::now(),
+                        |later, earlier| later.duration_since(&earlier),
+                    );
+                    let written = producer.push_interleaved_at(data, source_time);
                     if written < data.len() {
                         overflow_cb.fetch_add(1, Ordering::Relaxed);
                     }

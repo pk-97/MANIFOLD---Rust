@@ -376,6 +376,7 @@ impl<'a> OfflineAudioModDriver<'a> {
                         epoch,
                         end_sample: analyzed.end_sample,
                         sample_rate,
+                        source_time: None,
                         timeline_time: Some(Seconds(
                             export_origin.0
                                 + (analyzed.end_sample as f64 - pre_roll_f64) / sample_rate_f64,
@@ -802,7 +803,7 @@ mod tests {
         let mut stale = AudioHopBatch::default();
         stale.begin(99);
         stale.push(AudioFeatureHop {
-            stamp: AudioHopStamp { epoch: 99, end_sample: 512, sample_rate: rate, timeline_time: None },
+            stamp: AudioHopStamp { epoch: 99, end_sample: 512, sample_rate: rate, source_time: None, timeline_time: None },
             dt: Seconds(512.0 / rate as f64),
             features: SendFeatures::default(),
         }).unwrap();

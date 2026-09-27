@@ -19,6 +19,7 @@
 //! The runtime resolves a persisted `AudioDeviceRef` to a [`CaptureSource`] and
 //! calls [`open`]; nothing above this module knows which backend it got.
 
+mod clock;
 mod cpal_input;
 
 #[cfg_attr(target_os = "macos", path = "process_tap.rs")]

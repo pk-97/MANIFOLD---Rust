@@ -196,6 +196,7 @@ mod tests {
             epoch: 17,
             end_sample,
             sample_rate: 48_000,
+            source_time: None,
             timeline_time,
         });
         pulse
@@ -270,7 +271,8 @@ mod tests {
     fn trigger_delivery_preserves_equal_and_out_of_order_source_stamps() {
         let mut queue = TriggerDeliveryQueue::with_capacity(4);
         queue.reset().unwrap();
-        let first = stamped_pulse(10, 2048, None);
+        let mut first = stamped_pulse(10, 2048, None);
+        first.audio_stamp.as_mut().unwrap().source_time = Some(std::time::Instant::now());
         let second = stamped_pulse(11, 1024, Some(Seconds(8.0)));
         let mut pulses = vec![first.clone(), second.clone()];
         queue

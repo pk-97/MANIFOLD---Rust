@@ -94,6 +94,7 @@ struct SendAnalyzer {
     rate: u32,
     epoch: u64,
     analyzer: StreamingSendAnalyzer,
+    received_frames: u64,
     /// Layer-tap → analyzer-rate resampler, built lazily; `(from_rate, state)`.
     resampler: Option<(u32, LinearResampler)>,
     capture_generation: Option<u64>,
@@ -107,6 +108,7 @@ impl SendAnalyzer {
             rate,
             epoch: new_audio_analysis_epoch(),
             analyzer: StreamingSendAnalyzer::new(rate, low_hz, mid_hz),
+            received_frames: 0,
             resampler: None,
             capture_generation,
             channels: send.channels.clone(),
@@ -118,17 +120,32 @@ impl SendAnalyzer {
         &mut self,
         mono: &[f32],
         batch: &mut AudioHopBatch,
+        mut source_time: impl FnMut(usize) -> Option<std::time::Instant>,
         mut spectrum: impl FnMut(&[f32]),
     ) -> Result<(), AudioHopError> {
         batch.begin(self.epoch);
+        if let Some(error) = batch.failure() { return Err(error); }
+        let first_frame = self.received_frames;
+        let Some(end_frame) = first_frame.checked_add(mono.len() as u64) else {
+            batch.invalidate(AudioHopError::InvalidInput);
+            return Err(AudioHopError::InvalidInput);
+        };
+        self.received_frames = end_frame;
         let dt = Seconds(self.analyzer.hop() as f64 / f64::from(self.rate));
         let epoch = self.epoch;
         let sample_rate = self.rate;
         self.analyzer.push_with_hops(mono, |hop, column| {
+            let Some(offset) = hop.end_sample.checked_sub(first_frame)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .filter(|offset| *offset <= mono.len()) else {
+                batch.invalidate(AudioHopError::InvalidInput);
+                return;
+            };
             let result = batch.push(AudioFeatureHop {
                 stamp: AudioHopStamp {
                     epoch, end_sample: hop.end_sample, sample_rate,
                     // Mixed capture/layer samples have no transport anchor yet.
+                    source_time: source_time(offset),
                     timeline_time: None,
                 },
                 dt,
@@ -588,7 +605,13 @@ impl AudioModRuntime {
                     self.visuals.feed_waveform(&send.id, &mono_mix);
                 }
                 let visuals = &mut self.visuals;
-                if let Err(error) = entry.analyze_hops(&mono_mix, &mut hop_batches[i], |column| {
+                let capture_batch = &self.capture_batch;
+                // The existing mixed-source drain is not time aligned. Only
+                // capture-only sends have a single truthful clock today.
+                let capture_only = has_cap && send.layers().is_empty();
+                if let Err(error) = entry.analyze_hops(&mono_mix, &mut hop_batches[i], |offset| {
+                    if capture_only { capture_batch.source_time_at(offset) } else { None }
+                }, |column| {
                     if visualized { visuals.feed_spectrum(&send.id, column); }
                 }) {
                     discontinuities.push(AudioInputDiscontinuity {
@@ -930,10 +953,11 @@ mod hop_tests {
             let mut columns = 0;
             for size in chunks.iter().cycle() {
                 let end = (offset + size).min(input.len());
-                analyzer.analyze_hops(&input[offset..end], &mut batch, |_| columns += 1).unwrap();
+                analyzer.analyze_hops(&input[offset..end], &mut batch, |_| None, |_| columns += 1).unwrap();
                 for hop in batch.hops() {
                     assert_eq!(hop.stamp.epoch, analyzer.epoch);
                     assert_eq!(hop.stamp.timeline_time, None);
+                    assert_eq!(hop.stamp.source_time, None);
                     assert_eq!(hop.stamp.sample_rate, rate);
                     output.push((hop.stamp.end_sample, hop.dt, hop.features));
                 }
@@ -941,7 +965,7 @@ mod hop_tests {
                 if offset == input.len() { break; }
             }
             assert_eq!(columns, output.len());
-            analyzer.analyze_hops(&[], &mut batch, |_| panic!("no input cannot produce a hop")).unwrap();
+            analyzer.analyze_hops(&[], &mut batch, |_| None, |_| panic!("no input cannot produce a hop")).unwrap();
             assert!(batch.hops().is_empty());
             output
         };
@@ -951,20 +975,80 @@ mod hop_tests {
     }
 
     #[test]
+    fn capture_hop_clocks_survive_display_partitions_and_source_block_boundaries() {
+        use manifold_core::audio_stream::{AudioClockAnchor, audio_stream};
+        use std::time::{Duration, Instant};
+
+        let send = AudioSend::new("Clocked capture");
+        let origin = Instant::now();
+        for rate in [44_100, 48_000] {
+            let probe = SendAnalyzer::new(rate, 250.0, 2500.0, &send, None);
+            let hop_size = probe.analyzer.hop();
+            let input: Vec<f32> = (0..rate as usize).map(|index| {
+                0.4 * (index as f32 * 220.0 * std::f32::consts::TAU / rate as f32).sin()
+            }).collect();
+            let run = |chunks: &[usize]| {
+                let (mut source, mut consumer) = audio_stream(1, input.len(), 512, rate);
+                // Clock each source block independently with a small backend
+                // offset. A hop ending exactly on a block boundary must use
+                // the same clock whether the next block has arrived or not.
+                for (index, block) in input.chunks(hop_size).enumerate() {
+                    let frame = (index * hop_size) as u64;
+                    let delta = Duration::from_nanos(frame * 1_000_000_000 / u64::from(rate));
+                    let instant = origin + delta + Duration::from_micros((index % 3) as u64);
+                    source.push_interleaved_clocked(block, Some(AudioClockAnchor { instant, frame }));
+                }
+                let mut analyzer = SendAnalyzer::new(rate, 250.0, 2500.0, &send, None);
+                let mut input_batch = InputBatch::default();
+                let mut hops = AudioHopBatch::default();
+                let mut scratch = vec![0.; input.len()];
+                let mut remaining = input.len();
+                let mut output = Vec::new();
+                for (update, size) in chunks.iter().cycle().enumerate() {
+                    input_batch.begin(update as u64 + 1);
+                    let mut wanted = (*size).min(remaining);
+                    while wanted > 0 {
+                        let read = consumer.read(&mut scratch[..wanted]).unwrap();
+                        let manifold_core::audio_stream::AudioStreamRead::Samples { samples, .. } = read
+                            else { panic!("clocked input must be continuous"); };
+                        input_batch.consume(read, &scratch[..samples], 1, |_| panic!("valid input"));
+                        wanted -= samples;
+                        remaining -= samples;
+                    }
+                    analyzer.analyze_hops(&input_batch.samples, &mut hops,
+                        |offset| input_batch.source_time_at(offset), |_| {}).unwrap();
+                    for hop in hops.hops() {
+                        assert!(hop.stamp.source_time.is_some());
+                        assert_eq!(hop.stamp.timeline_time, None);
+                        output.push((hop.stamp.end_sample, hop.stamp.source_time, hop.features));
+                    }
+                    if remaining == 0 { break; }
+                }
+                output
+            };
+            let expected = run(&[input.len()]); // one-second display stall
+            assert!(expected.len() > 10);
+            assert_eq!(run(&[hop_size]), expected);
+            for fps in [24, 30, 60] { assert_eq!(run(&[rate as usize / fps]), expected); }
+            assert_eq!(run(&[1, 17, 4096, 1003]), expected);
+        }
+    }
+
+    #[test]
     fn live_overflow_exposes_no_partial_batch_and_new_analyzer_recovers() {
         let send = AudioSend::new("Overflow");
         let mut analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);
         let epoch = analyzer.epoch;
         let hop = analyzer.analyzer.hop();
         let mut batch = AudioHopBatch::with_capacity(1);
-        assert_eq!(analyzer.analyze_hops(&vec![0.0; hop * 2], &mut batch, |_| {}),
+        assert_eq!(analyzer.analyze_hops(&vec![0.0; hop * 2], &mut batch, |_| None, |_| {}),
             Err(AudioHopError::CapacityExceeded));
         assert!(batch.hops().is_empty());
-        assert_eq!(analyzer.analyze_hops(&[], &mut batch, |_| {}),
+        assert_eq!(analyzer.analyze_hops(&[], &mut batch, |_| None, |_| {}),
             Err(AudioHopError::CapacityExceeded));
         analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);
         assert_ne!(analyzer.epoch, epoch);
-        analyzer.analyze_hops(&vec![0.0; hop], &mut batch, |_| {}).unwrap();
+        analyzer.analyze_hops(&vec![0.0; hop], &mut batch, |_| None, |_| {}).unwrap();
         assert_eq!(batch.hops().len(), 1);
         assert_eq!(batch.hops()[0].stamp.end_sample, hop as u64);
     }

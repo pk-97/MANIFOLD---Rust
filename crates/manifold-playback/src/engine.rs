@@ -3272,6 +3272,7 @@ mod tests {
                     epoch: 23,
                     end_sample,
                     sample_rate: 48_000,
+                    source_time: None,
                     timeline_time: None,
                 },
                 dt: Seconds(512.0 / 48_000.0),

@@ -1682,6 +1682,7 @@ mod tests {
                     epoch,
                     end_sample,
                     sample_rate: 48_000,
+                    source_time: None,
                     timeline_time: None,
                 },
                 dt: Seconds(512.0 / 48_000.0),
@@ -1877,6 +1878,7 @@ mod tests {
         m.trigger_mode = Some(TriggerFireMode::ClipEdge);
         let mut snapshot = snapshot_low_hop(0.25, 9, 512);
         let mut hop = snapshot.hop_batches[0].hops()[0];
+        hop.stamp.source_time = Some(std::time::Instant::now());
         hop.stamp.timeline_time = Some(Seconds(12.0));
         snapshot.hop_batches[0].reset(9);
         snapshot.hop_batches[0].push(hop).unwrap();

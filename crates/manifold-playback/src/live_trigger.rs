@@ -353,6 +353,7 @@ mod tests {
                         epoch,
                         end_sample,
                         sample_rate: 48_000,
+                        source_time: None,
                         timeline_time: timeline_start.map(|time| Seconds(time + index as f64 * 0.01)),
                     },
                     dt: Seconds(0.01),
