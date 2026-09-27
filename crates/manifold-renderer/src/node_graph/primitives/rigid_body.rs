@@ -197,6 +197,10 @@ ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials
  },
 }
 impl Primitive for RigidBodyNode {
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &["path"]
+    }
+
     fn source_asset_identity(
         &self,
         _: &crate::node_graph::ParamValues,

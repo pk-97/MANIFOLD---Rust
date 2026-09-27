@@ -283,6 +283,10 @@ crate::primitive! {
 }
 
 impl Primitive for FluidRoleSource {
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &["path"]
+    }
+
     fn source_asset_identity(
         &self,
         _: &crate::node_graph::ParamValues,

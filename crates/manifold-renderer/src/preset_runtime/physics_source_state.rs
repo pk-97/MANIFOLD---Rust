@@ -173,6 +173,22 @@ impl InstalledSource {
 }
 
 impl PhysicsSourceState {
+    #[cfg(test)]
+    pub(super) fn published_identity(
+        &self,
+        node: NodeInstanceId,
+    ) -> Option<Result<[u8; 32], &str>> {
+        let sources = match &self.sources {
+            Ok(sources) => sources,
+            Err(error) => return Some(Err(error)),
+        };
+        let source = sources.iter().find(|source| source.node == node)?;
+        match source.published.as_ref()? {
+            PublishedIdentity::Ready(identity) => Some(Ok(*identity)),
+            PublishedIdentity::Failed { message, .. } => Some(Err(message)),
+        }
+    }
+
     /// Replace prepared authored source graphs and resolve their local fluid
     /// ids through this effect slot's prefixed runtime node map.
     pub(super) fn apply_prepared(

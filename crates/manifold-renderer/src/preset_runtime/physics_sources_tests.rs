@@ -6,6 +6,9 @@ use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGra
 use super::prepare;
 use crate::node_graph::PrimitiveRegistry;
 
+#[path = "physics_source_path_tests.rs"]
+mod paths;
+
 const PHYSICS_SOLIDS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/generator-presets/PhysicsSolids.json"

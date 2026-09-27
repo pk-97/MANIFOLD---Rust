@@ -71,7 +71,7 @@ pub(super) fn prepare(
         return Ok(Vec::new());
     }
 
-    let graph = SourceGraph::new(flat)?;
+    let graph = SourceGraph::new(flat, registry)?;
     let fluids: Vec<NodeId> = graph
         .nodes
         .values()
@@ -136,12 +136,8 @@ pub(super) fn prepare(
             asset_nodes: selected
                 .iter()
                 .filter_map(|id| {
-                    use manifold_core::file_loader::{AssetFamily, NodeFileLoad, file_loader_kind};
                     let node = graph.nodes.get(id)?;
-                    match file_loader_kind(&node.type_id) {
-                        None | Some(NodeFileLoad::Folder(AssetFamily::Physics)) => None,
-                        Some(_) => Some(node.node_id.clone()),
-                    }
+                    is_source_asset(&node.type_id).then(|| node.node_id.clone())
                 })
                 .collect(),
         });
@@ -155,10 +151,12 @@ struct SourceGraph {
     numbers: BTreeMap<u32, NodeId>,
     incoming: BTreeMap<u32, Vec<EffectGraphWire>>,
     metadata: Option<manifold_core::effect_graph_def::PresetMetadata>,
+    /// Loader-declared paths backed by the separate loaded-content identity.
+    asset_paths: BTreeMap<String, &'static [&'static str]>,
 }
 
 impl SourceGraph {
-    fn new(def: EffectGraphDef) -> Result<Self, String> {
+    fn new(def: EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, String> {
         let metadata = def.preset_metadata.clone();
         let mut nodes = BTreeMap::new();
         let mut numbers = BTreeMap::new();
@@ -187,12 +185,27 @@ impl SourceGraph {
             }
             incoming.entry(wire.to_node).or_default().push(wire);
         }
+        let asset_paths = nodes
+            .iter()
+            .filter(|(_, node)| is_source_asset(&node.type_id))
+            .filter_map(|(id, node)| {
+                let paths = registry.construct(&node.type_id)?.source_asset_paths();
+                (!paths.is_empty()).then(|| (id.clone(), paths))
+            })
+            .collect();
         Ok(Self {
             nodes,
             numbers,
             incoming,
             metadata,
+            asset_paths,
         })
+    }
+
+    fn is_asset_path(&self, node: &NodeId, param: &str) -> bool {
+        self.asset_paths
+            .get(node.as_str())
+            .is_some_and(|paths| paths.contains(&param))
     }
 
     fn has_node(&self, id: &NodeId) -> bool {
@@ -352,7 +365,8 @@ fn relevant_string_targets(
         .filter_map(|binding| match &binding.target {
             BindingTarget::Node { node_id, param }
                 if selected.contains(node_id.as_str())
-                    && !is_fluid_cache_param(graph, node_id, param) =>
+                    && !is_fluid_cache_param(graph, node_id, param)
+                    && !graph.is_asset_path(node_id, param) =>
             {
                 Some((node_id.as_str().to_owned(), param.clone()))
             }
@@ -373,7 +387,7 @@ fn digest_source(
     canonical: &EffectGraphDef,
 ) -> Result<[u8; 32], String> {
     let mut writer = DigestWriter::default();
-    writer.str("manifold.physics.source.v1");
+    writer.str("manifold.physics.source.v2");
     writer.u32(selected.len() as u32);
     for id in selected {
         let node = graph
@@ -386,8 +400,8 @@ fn digest_source(
             .params
             .iter()
             .filter(|(param, _)| {
-                !(node.type_id == "node.fluid_surface"
-                    && matches!(param.as_str(), "cache_mode" | "cache_path" | "reset"))
+                !(is_fluid_cache_param(graph, &node.node_id, param)
+                    || graph.is_asset_path(&node.node_id, param))
             })
             .collect();
         writer.u32(params.len() as u32);
@@ -547,7 +561,12 @@ fn write_relevant_bindings(
     writer.u32(strings.len() as u32);
     for (binding, _) in strings {
         writer.str(&binding.id);
-        writer.str(effective_string_default(expanded_metadata, binding));
+        let asset_path = matches!(&binding.target, BindingTarget::Node { node_id, param }
+            if graph.is_asset_path(node_id, param));
+        writer.bool(asset_path);
+        if !asset_path {
+            writer.str(effective_string_default(expanded_metadata, binding));
+        }
         writer.json(&binding.target)?;
     }
 
@@ -634,7 +653,19 @@ fn write_relevant_specs(
         writer.u32(string_specs.len() as u32);
         for spec in string_specs {
             writer.str(&spec.id);
-            writer.str(&spec.default_value);
+            // One string may feed both an authenticated file path and an
+            // ordinary text input. That text still participates in physics.
+            let has_text_target = metadata.string_bindings.iter().any(|binding| {
+                binding.id == spec.id
+                    && matches!(&binding.target, BindingTarget::Node { node_id, param }
+                        if selected.contains(node_id.as_str())
+                            && !is_fluid_cache_param(graph, node_id, param)
+                            && !graph.is_asset_path(node_id, param))
+            });
+            writer.bool(has_text_target);
+            if has_text_target {
+                writer.str(&spec.default_value);
+            }
             writer.bool(spec.is_file_picker);
             writer.bool(spec.use_dropdown);
             writer.bool(spec.is_file_path);
@@ -695,6 +726,14 @@ fn is_fluid_cache_param(graph: &SourceGraph, node_id: &NodeId, param: &str) -> b
             .nodes
             .get(node_id.as_str())
             .is_some_and(|node| node.type_id == "node.fluid_surface")
+}
+
+fn is_source_asset(type_id: &str) -> bool {
+    use manifold_core::file_loader::{AssetFamily, NodeFileLoad, file_loader_kind};
+    !matches!(
+        file_loader_kind(type_id),
+        None | Some(NodeFileLoad::Folder(AssetFamily::Physics))
+    )
 }
 
 fn write_impulse_target(writer: &mut DigestWriter, target: ImpulseTarget) {

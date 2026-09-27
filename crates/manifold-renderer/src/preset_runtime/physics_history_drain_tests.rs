@@ -11,6 +11,9 @@ mod string_bindings {
 #[path = "physics_asset_take_tests.rs"]
 mod assets;
 
+#[path = "physics_collection_tests.rs"]
+mod collection;
+
 thread_local! {
     static FLUID_TIME: Cell<Option<f32>> = const { Cell::new(None) };
 }

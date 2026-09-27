@@ -1,14 +1,14 @@
 //! A saved scene's ordinary liquid-only Force must move its immersed rigid
 //! object through the shared solver, without directly targeting that body.
 use super::*;
-use explicit_authoring::{Observe, SAMPLE, author_scene, instrument};
+use explicit_authoring::{author_scene, instrument, Observe, SAMPLE};
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
-use manifold_core::{Beats, GraphTarget, NodeId, Seconds, project::Project};
+use manifold_core::{project::Project, Beats, GraphTarget, NodeId, Seconds};
 use manifold_editing::command::Command;
 use manifold_editing::commands::graph::{InsertSceneModifierCommand, SetGraphNodeParamCommand};
-use manifold_renderer::node_graph::FrameTime;
 use manifold_renderer::node_graph::physics_events::ImpulseTarget;
+use manifold_renderer::node_graph::FrameTime;
 
 fn set_param(
     project: &mut Project,
@@ -310,6 +310,12 @@ fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reloa
                 accepted.particles > 0.0 && accepted.y.is_finite(),
                 "{accepted:?}"
             );
+            assert!(accepted.particles.is_finite(), "{accepted:?}");
+            assert!(
+                accepted.y.is_finite() && accepted.roll.is_finite(),
+                "{accepted:?}"
+            );
+            assert!((0.0..=2.4).contains(&accepted.y), "{accepted:?}");
             assert_finite_and_nonempty(&pixels, 13);
             let mut receipts = 0;
             runtime.drain_scene_impulses(|_, event| {
@@ -335,6 +341,48 @@ fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reloa
             } else {
                 resting_roll = accepted.roll;
                 assert!(resting_roll.abs() < 1e-6, "{accepted:?}");
+            }
+
+            for frame in 14..=120 {
+                pixels = render_frame(&mut runtime, &target, &harness.device, frame);
+                let accepted = SAMPLE.get();
+                assert!(
+                    (accepted.time - frame as f32 / 60.0).abs() < 1e-5,
+                    "viscosity={viscosity} fired={fired} frame={frame} {accepted:?}"
+                );
+                assert!(
+                    accepted.particles.is_finite() && accepted.particles > 0.0,
+                    "{accepted:?}"
+                );
+                assert!(
+                    accepted.y.is_finite() && accepted.roll.is_finite(),
+                    "{accepted:?}"
+                );
+                assert!((0.0..=2.4).contains(&accepted.y), "{accepted:?}");
+                assert_finite_and_nonempty(&pixels, frame);
+            }
+            let final_sample = SAMPLE.get();
+            eprintln!(
+                "authored liquid vortex final: viscosity={viscosity} fired={fired} {final_sample:?}"
+            );
+            let held_final = render_frame(&mut runtime, &target, &harness.device, 120);
+            assert_pixels_close(&pixels, &held_final, 1e-3);
+            let held_sample = SAMPLE.get();
+            assert_eq!(held_sample.time, final_sample.time);
+            assert_eq!(held_sample.y, final_sample.y);
+            assert_eq!(held_sample.roll, final_sample.roll);
+            runtime.drain_scene_impulses(|_, _| panic!("final repeated frame must not fire again"));
+            if fired {
+                std::fs::write(
+                    format!(
+                        "/tmp/manifold_authored_vortex_viscosity_{viscosity:.0}_fired_frame120.png"
+                    ),
+                    readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT),
+                )
+                .unwrap();
+            } else {
+                resting_roll = final_sample.roll;
+                assert!(resting_roll.abs() < 1e-6, "{final_sample:?}");
             }
         }
     }

@@ -678,6 +678,10 @@ impl Primitive for GltfSkeletonPose {
         self.pending_load.is_some()
     }
 
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &["path"]
+    }
+
     fn source_asset_identity(
         &self,
         params: &crate::node_graph::effect_node::ParamValues,

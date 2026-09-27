@@ -1145,6 +1145,14 @@ pub trait EffectNode: Send {
     /// Authored dependency identity, prepared before evaluating live controls.
     fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
 
+    /// File-location parameters whose contents are authenticated by
+    /// source_asset_identity or the native prepared-geometry preflight.
+    /// Only these path spellings may be omitted from take provenance; the
+    /// source must still reject pending, failed or mismatched loaded content.
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Fingerprint of the currently loaded external input. Implementations
     /// must compare the requested selection and perform no IO or hashing here.
     fn source_asset_identity(

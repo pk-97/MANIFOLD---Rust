@@ -402,6 +402,10 @@ pub trait Primitive: PrimitiveSpec {
 
     fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
 
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     fn source_asset_identity(
         &self,
         _params: &super::ParamValues,
@@ -819,6 +823,10 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
         Primitive::set_physics_source_identity(self, identity);
+    }
+
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        Primitive::source_asset_paths(self)
     }
 
     fn source_asset_identity(
