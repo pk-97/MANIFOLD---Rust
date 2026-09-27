@@ -14,7 +14,7 @@ mod drain_tests;
 
 fn setup_input(kind: &str, port: &str) -> bool {
     match kind {
-        "node.rigid_body" => port == "release_count",
+        "node.rigid_body" => matches!(port, "release_count" | "source"),
         "node.fluid_surface" => port == "domain",
         "node.fluid_role_source" => !matches!(port,
             "transform" | "role" | "enabled" | "velocity_x" | "velocity_y"
@@ -426,6 +426,60 @@ mod tests {
         assert!(sampled.iter().any(|kind| kind == "node.lfo"));
         assert!(sampled.iter().any(|kind| kind == "node.physics_world"));
         assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
+    }
+
+    #[test]
+    fn rigid_body_source_is_setup_and_excludes_gpu_mesh_ancestors_from_history() {
+        let mut def: serde_json::Value = serde_json::from_str(include_str!(
+            "../../assets/generator-presets/PhysicsSolids.json"
+        ))
+        .unwrap();
+        // Source-driven bodies take shape from the visible mesh. Remove the
+        // legacy body's opposite shape route before wiring that source back.
+        def["wires"].as_array_mut().unwrap().retain(|wire| {
+            !(wire["fromNode"] == 101 && wire["toNode"] == 102)
+        });
+        def["wires"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "fromNode": 102,
+                "fromPort": "source",
+                "toNode": 101,
+                "toPort": "source"
+            }));
+        let runtime = PresetRuntime::from_json_str(
+            &serde_json::to_string(&def).unwrap(),
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("rigid body source graph loads");
+        let mask = runtime
+            .physics_sample_steps
+            .as_ref()
+            .expect("physics ancestry");
+        let sampled: Vec<_> = runtime
+            .plan
+            .steps()
+            .iter()
+            .zip(mask)
+            .filter(|(_, enabled)| **enabled)
+            .map(|(step, _)| {
+                runtime
+                    .graph
+                    .get_node(step.node)
+                    .unwrap()
+                    .node
+                    .type_id()
+                    .as_str()
+                    .to_owned()
+            })
+            .collect();
+        assert!(sampled.iter().any(|kind| kind == "node.rigid_body"));
+        assert!(
+            !sampled
+                .iter()
+                .any(|kind| kind == "node.platonic_solid_mesh")
+        );
     }
 
     #[cfg(feature = "gpu-proofs")]

@@ -705,7 +705,11 @@ pub fn sync_inspector_data(
                                                 parameter_ids,
                                                 skin,
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
-                                                physics_available: *physics_imported || physics.is_some(),
+                                                physics_available: physics.is_some() || def.as_ref().is_some_and(|def| {
+                                                    manifold_editing::commands::graph::scene_object_physics_eligibility(
+                                                        def, vm.scene_root_node_id, *index as u32,
+                                                    ).is_ok()
+                                                }),
                                                 physics_imported: *physics_imported,
                                                 fluid_roles: if parent_group_id.is_none() {
                                                     def.as_ref().map(|def| super::scene::fluid_role_rows(def, *group_node_id, &fluid_domains))

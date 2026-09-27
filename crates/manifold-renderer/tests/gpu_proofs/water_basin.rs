@@ -26,6 +26,8 @@ use manifold_renderer::render_target::RenderTarget;
 
 use crate::harness;
 
+mod explicit_authoring;
+
 const WATER_BASIN_JSON: &str = include_str!("../../assets/generator-presets/WaterBasin.json");
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;

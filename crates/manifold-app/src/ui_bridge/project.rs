@@ -542,14 +542,6 @@ pub(super) fn dispatch_project(
                         "node.scene_object",
                     ),
                     default,
-                )
-                .with_physics_world(
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
-                        "node.rigid_body",
-                    ),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
-                        "node.pbr_material",
-                    ),
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
                     Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
@@ -865,7 +857,7 @@ pub(super) fn dispatch_project(
                         SceneObjectVm::Known(row) if row.index == *object_index as usize => row.physics,
                         _ => None,
                     }));
-                let mut cmd: Box<dyn manifold_editing::command::Command + Send> = if let Some(physics) = physics {
+                let cmd: Box<dyn manifold_editing::command::Command + Send> = if let Some(physics) = physics {
                     Box::new(manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
                         target, physics.body_node_id, "enabled".into(),
                         manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
@@ -880,12 +872,7 @@ pub(super) fn dispatch_project(
                 } else {
                     return DispatchResult::handled();
                 };
-                cmd.execute(project);
-                if cmd.was_applied() {
-                    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
-                } else if let Some(reason) = cmd.rejection_reason() {
-                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(reason.to_owned()));
-                }
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd));
             }
             DispatchResult::structural()
         }
@@ -1750,6 +1737,7 @@ mod tests {
             effective_scene_param_value(project, &layer_id, original.body_node_id, "friction")
         };
         for enabled in [false, true] {
+            let before_dispatch = effective_def(&project, &layer_id);
             let action = if enabled {
                 ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), scene_id, 0)
             } else {
@@ -1757,6 +1745,12 @@ mod tests {
             };
             dispatch_project(&action, &mut project, &tx, &state, &mut ui,
                 &mut selection, &mut active_layer, &mut prefs);
+            assert!(effective_def(&project, &layer_id) == before_dispatch,
+                "UI dispatch waits for content");
+            let crate::content_command::ContentCommand::ExecuteOnContent(mut cmd) = rx.try_recv().unwrap() else {
+                panic!("toggle must send an undoable edit to content");
+            };
+            cmd.execute(&mut project);
             let current = body(&project);
             assert_eq!(current.enabled, enabled);
             assert_eq!(current.body_node_id, original.body_node_id);
@@ -1773,9 +1767,6 @@ mod tests {
             assert_eq!(body(&reloaded).enabled, enabled);
             assert_eq!(friction(&project), 0.73);
             assert_eq!(friction(&reloaded), 0.73);
-            let crate::content_command::ContentCommand::Execute(mut cmd) = rx.try_recv().unwrap() else {
-                panic!("toggle must send an undoable edit");
-            };
             cmd.undo(&mut project);
             assert_eq!(body(&project).enabled, !enabled);
             cmd.execute(&mut project);
@@ -1825,6 +1816,295 @@ mod tests {
             objects_param(&project, &layer_id, render_scene_id),
             before + 1.0
         );
+    }
+
+    #[test]
+    fn scene_setup_add_object_then_explicit_physics_reuses_world_and_roundtrips() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let (mut project, layer_id, render_scene_id) = physics_solids_layer_project();
+        let original = effective_def(&project, &layer_id);
+        let world_id = original
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.physics_world")
+            .map(|node| node.id)
+            .expect("PhysicsSolids has a shared Physics World");
+        assert_eq!(
+            original
+                .nodes
+                .iter()
+                .filter(|node| node.type_id == "node.physics_world")
+                .count(),
+            1
+        );
+        let object_index = objects_param(&project, &layer_id, render_scene_id) as u32;
+        let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+
+        dispatch_project(
+            &ProjectAction::SceneSetupAddObject(
+                layer_id.clone(),
+                render_scene_id,
+                object_index,
+            ),
+            &mut project,
+            &tx,
+            &state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut prefs,
+        );
+        assert_eq!(
+            effective_def(&project, &layer_id),
+            original,
+            "Add Object waits for content"
+        );
+        let ContentCommand::ExecuteSelecting(mut add, request) = rx.try_recv().unwrap() else {
+            panic!("Add Object must use content-owned editing and selection");
+        };
+        let pending = request.capture(&project);
+        add.execute(&mut project);
+        assert!(add.was_applied(), "add rejected: {:?}", add.rejection_reason());
+        assert!(matches!(
+            pending.resolve(&project),
+            Some(crate::edit_selection::EditSelection::Object { .. })
+        ));
+
+        let added = effective_def(&project, &layer_id);
+        let added_vm = SceneVm::from_def(&added).unwrap();
+        let (object_node_id, group_node_id) = added_vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                    Some((row.object_node_id, row.group_node_id))
+                }
+                _ => None,
+            })
+            .expect("new cube is a known scene object");
+        assert!(
+            added_vm.objects.iter().any(|object| matches!(
+                object,
+                SceneObjectVm::Known(row)
+                    if row.index == object_index as usize && row.physics.is_none()
+            )),
+            "fresh Add Object remains an ordinary mesh"
+        );
+        let group_id = group_node_id.expect("Add Object uses a grouped cube shape");
+        let group = added
+            .nodes
+            .iter()
+            .find(|node| node.id == group_id)
+            .and_then(|node| node.group.as_deref())
+            .expect("new object group");
+        let cube_id = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.cube_mesh")
+            .map(|node| node.id)
+            .expect("new object uses the builtin cube source");
+        assert!(group.wires.iter().any(|wire| {
+            wire.from_node == cube_id
+                && wire.to_node == object_node_id
+                && wire.to_port == "vertices"
+        }));
+
+        // The projection uses the same eligibility helper as dispatch. Build
+        // the real scene panel to keep the Physics property visible for the
+        // fresh cube before it has a body.
+        ui.scene_setup_panel.open();
+        selection.select_layer(layer_id.clone());
+        super::super::projection::inspector::sync_inspector_data(
+            &mut ui,
+            &project,
+            Some(0),
+            &selection,
+            &[],
+            None,
+        );
+        ui.scene_setup_panel.set_selection(
+            layer_id.clone(),
+            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id),
+        );
+        let mut tree = manifold_ui::UITree::new();
+        let rect = manifold_ui::Rect::new(0.0, 0.0, 400.0, 1200.0);
+        let region = tree.begin_region(
+            rect, manifold_ui::ZTier::Base, "scene_setup", manifold_ui::UIFlags::empty(),
+        );
+        let content_start = tree.count();
+        ui.scene_setup_panel
+            .build_docked(&mut tree, rect);
+        tree.end_region(region, content_start);
+        assert!(
+            tree.nodes()
+                .iter()
+                .any(|node| node.text.as_deref() == Some("Physics")),
+            "fresh builtin cube exposes the Physics property"
+        );
+
+        dispatch_project(
+            &ProjectAction::SceneSetupEnablePhysics(
+                layer_id.clone(),
+                render_scene_id,
+                object_index,
+            ),
+            &mut project,
+            &tx,
+            &state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut prefs,
+        );
+        assert_eq!(
+            effective_def(&project, &layer_id),
+            added,
+            "Physics enable waits for content"
+        );
+        let ContentCommand::ExecuteOnContent(mut enable) = rx.try_recv().unwrap() else {
+            panic!("Physics enable must execute on content");
+        };
+        enable.execute(&mut project);
+        assert!(
+            enable.was_applied(),
+            "enable rejected: {:?}",
+            enable.rejection_reason()
+        );
+
+        let enabled = effective_def(&project, &layer_id);
+        assert_eq!(
+            enabled
+                .nodes
+                .iter()
+                .filter(|node| node.type_id == "node.physics_world")
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![world_id],
+            "explicit Physics reuses the existing World"
+        );
+        let enabled_vm = SceneVm::from_def(&enabled).unwrap();
+        let physics = enabled_vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.index == object_index as usize => row.physics.clone(),
+                _ => None,
+            })
+            .expect("enabled cube exposes a Physics body");
+        assert!(!physics.imported, "the explicit Physics body is for the builtin cube");
+        let body_id = physics.body_node_id;
+        let enabled_group = enabled
+            .nodes
+            .iter()
+            .find(|node| node.id == group_id)
+            .and_then(|node| node.group.as_deref())
+            .expect("enabled cube group");
+        assert!(enabled_group.wires.iter().any(|wire| {
+            wire.from_node == cube_id
+                && wire.to_node == body_id
+                && wire.to_port == "source"
+        }), "Physics body must use the actual cube source");
+
+        // The new enable command itself must undo and redo as one edit before
+        // later control edits are introduced.
+        enable.undo(&mut project);
+        let undone_vm = SceneVm::from_def(&effective_def(&project, &layer_id)).unwrap();
+        assert!(undone_vm.objects.iter().any(|object| matches!(
+            object,
+            SceneObjectVm::Known(row)
+                if row.index == object_index as usize && row.physics.is_none()
+        )));
+        enable.execute(&mut project);
+        assert!(enable.was_applied(), "redo of Physics enable was rejected");
+        let redone = effective_def(&project, &layer_id);
+        let redone_vm = SceneVm::from_def(&redone).unwrap();
+        let redone_body_id = redone_vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                    row.physics.as_ref().map(|body| body.body_node_id)
+                }
+                _ => None,
+            })
+            .expect("redo restores the Physics body");
+        assert_eq!(redone_body_id, body_id);
+
+        apply_scene_param_write(
+            &mut project,
+            &layer_id,
+            vec![group_id],
+            body_id,
+            "friction",
+            0.73,
+        )
+        .expect("Physics friction is exposed");
+        assert_eq!(
+            effective_scene_param_value(&project, &layer_id, body_id, "friction"),
+            0.73
+        );
+        let saved = serde_json::to_string(&project).unwrap();
+        let reloaded: Project = serde_json::from_str(&saved).unwrap();
+        let reloaded_vm = SceneVm::from_def(&effective_def(&reloaded, &layer_id)).unwrap();
+        assert_eq!(
+            reloaded_vm
+                .objects
+                .iter()
+                .find_map(|object| match object {
+                    SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                        row.physics.as_ref().map(|body| body.body_node_id)
+                    }
+                    _ => None,
+                }),
+            Some(body_id),
+            "save/reload retains the enabled body"
+        );
+        assert_eq!(
+            effective_scene_param_value(&reloaded, &layer_id, body_id, "friction"),
+            0.73
+        );
+
+        for enabled in [false, true] {
+            let action = if enabled {
+                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), render_scene_id, object_index)
+            } else {
+                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), render_scene_id, object_index)
+            };
+            let before_toggle = effective_def(&project, &layer_id);
+            dispatch_project(
+                &action,
+                &mut project,
+                &tx,
+                &state,
+                &mut ui,
+                &mut selection,
+                &mut active_layer,
+                &mut prefs,
+            );
+            assert_eq!(effective_def(&project, &layer_id), before_toggle);
+            let ContentCommand::ExecuteOnContent(mut toggle) = rx.try_recv().unwrap() else {
+                panic!("Physics toggle must execute on content");
+            };
+            toggle.execute(&mut project);
+            assert!(toggle.was_applied(), "toggle rejected: {:?}", toggle.rejection_reason());
+            let toggled_vm = SceneVm::from_def(&effective_def(&project, &layer_id)).unwrap();
+            let toggled = toggled_vm
+                .objects
+                .iter()
+                .find_map(|object| match object {
+                    SceneObjectVm::Known(row) if row.index == object_index as usize => row.physics.clone(),
+                    _ => None,
+                })
+                .expect("toggle preserves the body");
+            assert_eq!(toggled.body_node_id, body_id);
+            assert_eq!(toggled.enabled, enabled);
+            assert_eq!(
+                effective_scene_param_value(&project, &layer_id, body_id, "friction"),
+                0.73
+            );
+        }
     }
 
     #[test]
@@ -1953,11 +2233,11 @@ mod tests {
         let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut insertions = Vec::new();
-        // Author a source mesh before creating the physics World. Objects added
-        // to an existing World use the ordinary rigid-body insertion path.
+        // Add Fluid before Add Object so the object remains an ordinary mesh
+        // until the explicit Physics toggle is used.
         for action in [
-            ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
             ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
         ] {
             dispatch_project(&action, &mut project, &tx, &state, &mut ui,
                 &mut selection, &mut active, &mut prefs);

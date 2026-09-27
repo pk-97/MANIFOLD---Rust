@@ -12,7 +12,6 @@ use manifold_physics::TriangleMesh;
 use super::{CompoundPreparation, WiredPreparation};
 use crate::generators::mesh_common::MeshVertex;
 use crate::generators::platonic_geometry::{platonic_mesh, platonic_points};
-use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::physics_mesh::{
     MeshSelection, load_compound_materials, prepare_colliders, transform_vertices,
 };
@@ -130,8 +129,9 @@ pub(crate) fn prepare_wired_geometry(
     let mut vertices = Vec::new();
     for (slot, source) in wired.sources.iter().enumerate() {
         let Some(source) = source else { continue };
-        let mut part =
-            load_source_vertices(source).map_err(|error| format!("mesh part {slot}: {error}"))?;
+        let mut part = source
+            .load_vertices()
+            .map_err(|error| format!("mesh part {slot}: {error}"))?;
         transform_vertices(&mut part, wired.part_transforms[slot])?;
         vertices.extend(part);
     }
@@ -153,43 +153,6 @@ pub(crate) fn prepare_wired_geometry(
             Ok(vec![mesh])
         }
     }
-}
-
-fn load_source_vertices(source: &MeshSource) -> Result<Vec<MeshVertex>, String> {
-    let (shape, radius) = match source {
-        MeshSource::Cube { size } => (1, *size * 3.0_f32.sqrt() / 2.0),
-        MeshSource::Platonic { shape, radius } => (*shape, *radius),
-        MeshSource::Gltf { path, selection } => {
-            if path.is_empty() {
-                return Err("mesh source has no file".into());
-            }
-            if selection.translate.iter().any(|value| !value.is_finite()) {
-                return Err("mesh source offsets must be finite".into());
-            }
-            if !(1..=64).contains(&selection.fragment_count)
-                || selection.fragment_index >= selection.fragment_count
-                || selection.mesh < -1
-                || selection.primitive < -1
-                || selection.material < -2
-            {
-                return Err("mesh source has invalid selectors".into());
-            }
-            return selection.load(Path::new(path.as_ref()));
-        }
-    };
-    if shape >= crate::generators::mesh_common::PLATONIC_SHAPES.len() as u32 {
-        return Err("mesh source has an invalid builtin shape".into());
-    }
-    if !radius.is_finite() || radius <= 0.0 {
-        return Err("mesh source size must be finite and positive".into());
-    }
-    let mut vertices = platonic_mesh(shape).to_vec();
-    for vertex in &mut vertices {
-        for axis in 0..3 {
-            vertex.position[axis] *= radius;
-        }
-    }
-    Ok(vertices)
 }
 
 fn transform_points(points: &[[f32; 3]], transform: Transform) -> Result<Vec<[f32; 3]>, String> {
@@ -252,6 +215,7 @@ fn canonical_bits(value: f32) -> u32 {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::node_graph::mesh_source::MeshSource;
     use std::fs;
 
     pub(crate) fn write_two_material_cube_fixture() -> (std::path::PathBuf, CompoundPreparation) {

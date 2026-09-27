@@ -1557,7 +1557,7 @@ fn sync_group_physics_compound(group: &mut GroupDef) -> Result<(), &'static str>
     for port in group.interface.outputs.iter().filter(|port| port.port_type == "Object") {
         let child_id = object_node_for_group_output(group, &port.name)
             .ok_or("Physics compound child output is unavailable")?;
-        sources.push(imported_source_in_level(&group.nodes, &group.wires, child_id)?);
+        sources.push(scene_source_in_level(&group.nodes, &group.wires, child_id)?);
         let transform_wire = group
             .wires
             .iter()
@@ -2924,29 +2924,39 @@ fn physics_body_slot_available(wires: &[EffectGraphWire], world_id: u32, slot: u
     })
 }
 
-/// The source and authored-transform facts needed by the standard imported
-/// object authoring commands.  Keeping this discovery local to editing is
+/// The source and authored-transform facts needed by standard scene-object
+/// physics authoring. Keeping this discovery local to editing is
 /// deliberate: the renderer VM is a read model, while commands must validate
 /// the graph again on the content thread before changing it.
-#[derive(Debug, Clone)]
-struct ImportedPhysicsSource {
-    node_id: NodeId,
-    params: BTreeMap<String, SerializedParamValue>,
-    scope_is_group: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScenePhysicsSourceKind {
+    Imported,
+    Builtin,
 }
 
 #[derive(Debug, Clone)]
-struct ImportedObjectParts {
+struct ScenePhysicsSource {
+    /// Document id of the mesh producer.  Builtin sources are wired directly
+    /// into `node.rigid_body.source`; imported sources use the body's copied
+    /// selection parameters instead.
+    source_id: u32,
+    node_id: NodeId,
+    params: BTreeMap<String, SerializedParamValue>,
+    kind: ScenePhysicsSourceKind,
+}
+
+#[derive(Debug, Clone)]
+struct SceneObjectParts {
     producer_id: u32,
     object_id: u32,
     group_id: Option<u32>,
     authored_transform_id: u32,
-    source: ImportedPhysicsSource,
+    source: ScenePhysicsSource,
     /// Every retained static compound source in render order.  The first
     /// entry is also `source`; keeping the complete list lets the rigid body
     /// author a stable `compound_materials` selector table instead of
     /// collapsing a multi-material asset to the primary material.
-    compound_sources: Vec<ImportedPhysicsSource>,
+    compound_sources: Vec<ScenePhysicsSource>,
     object_handle: String,
     render_indices: Vec<u32>,
 }
@@ -3131,14 +3141,15 @@ fn group_authored_transform_in_level(
 }
 
 /// Follow the scene object's mesh input through the curated single-mesh
-/// modifiers and transparent groups until its glTF source.  Skinned and
-/// otherwise GPU-deformed sources are rejected before mutation because their
-/// rendered geometry is not a stable standard Box3D collider source.
-fn imported_source_in_level(
+/// modifiers and transparent groups until its glTF or builtin mesh source.
+/// Skinned and otherwise GPU-deformed sources are rejected before mutation
+/// because their rendered geometry is not a stable standard Box3D collider
+/// source.
+fn scene_source_in_level(
     nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
     object_id: u32,
-) -> Result<ImportedPhysicsSource, &'static str> {
+) -> Result<ScenePhysicsSource, &'static str> {
     let mut current_nodes = nodes;
     let mut cursor = wires
         .iter()
@@ -3177,10 +3188,24 @@ fn imported_source_in_level(
         }
         match node.type_id.as_str() {
             "node.gltf_mesh_source" => {
-                return Ok(ImportedPhysicsSource {
+                return Ok(ScenePhysicsSource {
+                    source_id: node.id,
                     node_id: node.node_id.clone(),
                     params: node.params.clone(),
-                    scope_is_group,
+                    kind: ScenePhysicsSourceKind::Imported,
+                });
+            }
+            "node.cube_mesh" | "node.platonic_solid_mesh" => {
+                if scope_is_group {
+                    return Err(
+                        "Enable Physics builtin mesh source is hidden in a nested mesh group without a direct source route",
+                    );
+                }
+                return Ok(ScenePhysicsSource {
+                    source_id: node.id,
+                    node_id: node.node_id.clone(),
+                    params: node.params.clone(),
+                    kind: ScenePhysicsSourceKind::Builtin,
                 });
             }
             "node.gltf_skinned_mesh_source"
@@ -3189,17 +3214,17 @@ fn imported_source_in_level(
             | "node.gltf_morph_deltas_source" => {
                 return Err("Enable Physics does not support skinned or GPU-deformed sources");
             }
-            _ => return Err("Enable Physics requires a supported glTF mesh source"),
+            _ => return Err("Enable Physics requires a supported static mesh source"),
         }
     }
-    Err("Enable Physics requires a supported glTF mesh source")
+    Err("Enable Physics requires a supported static mesh source")
 }
 
-fn imported_object_parts(
+fn scene_object_parts(
     def: &EffectGraphDef,
     render_id: u32,
     object_index: u32,
-) -> Result<ImportedObjectParts, &'static str> {
+) -> Result<SceneObjectParts, &'static str> {
     let producer_id = object_producer_id(&def.wires, render_id, object_index)
         .ok_or("Selected scene object is unavailable")?;
     let producer = def
@@ -3223,25 +3248,23 @@ fn imported_object_parts(
             .ok_or("Selected scene object group has no scene_object output")?;
         let authored_transform_id =
             group_authored_transform_in_level(group, object_id)?;
-        let source = imported_source_in_level(&group.nodes, &group.wires, object_id)?;
+        let source = scene_source_in_level(&group.nodes, &group.wires, object_id)?;
         let mut compound_sources = Vec::new();
         for port in group.interface.outputs.iter().filter(|port| port.port_type == "Object") {
             let Some(part_id) = object_node_for_group_output(group, &port.name) else {
                 return Err("Selected scene object group has an unsupported material or mesh chain");
             };
-            compound_sources.push(imported_source_in_level(&group.nodes, &group.wires, part_id)?);
+            compound_sources.push(scene_source_in_level(&group.nodes, &group.wires, part_id)?);
         }
         if compound_sources.is_empty() {
             return Err("Selected scene object group has no material sources");
         }
-        let mut source = source;
-        source.scope_is_group = true;
         let object = group
             .nodes
             .iter()
             .find(|node| node.id == object_id)
             .ok_or("Selected scene object is unavailable")?;
-        return Ok(ImportedObjectParts {
+        return Ok(SceneObjectParts {
             producer_id,
             object_id,
             group_id: Some(producer_id),
@@ -3260,9 +3283,9 @@ fn imported_object_parts(
         return Err("Selected scene object is a custom graph source");
     }
     let authored_transform_id = authored_transform_in_level(&def.nodes, &def.wires, producer_id)?;
-    let source = imported_source_in_level(&def.nodes, &def.wires, producer_id)?;
+    let source = scene_source_in_level(&def.nodes, &def.wires, producer_id)?;
     let compound_sources = vec![source.clone()];
-    Ok(ImportedObjectParts {
+    Ok(SceneObjectParts {
         producer_id,
         object_id: producer_id,
         group_id: None,
@@ -3277,10 +3300,13 @@ fn imported_object_parts(
     })
 }
 
-fn imported_body_params(
-    source: &ImportedPhysicsSource,
+fn scene_body_params(
+    source: &ScenePhysicsSource,
     def: &EffectGraphDef,
 ) -> Result<BTreeMap<String, SerializedParamValue>, &'static str> {
+    if source.kind == ScenePhysicsSourceKind::Builtin {
+        return Ok(BTreeMap::new());
+    }
     let mut params = BTreeMap::new();
     for name in IMPORTED_SOURCE_PARAMS {
         let value = source
@@ -3323,7 +3349,7 @@ fn imported_body_params(
 }
 
 fn compound_materials_param(
-    sources: &[ImportedPhysicsSource],
+    sources: &[ScenePhysicsSource],
 ) -> Result<SerializedParamValue, &'static str> {
     if sources.len() > PHYSICS_BODY_SLOTS as usize {
         return Err("Physics compound objects support at most 64 material parts");
@@ -3345,7 +3371,7 @@ fn compound_materials_param(
 
 fn source_string_binding(
     def: &EffectGraphDef,
-    source: &ImportedPhysicsSource,
+    source: &ScenePhysicsSource,
     body_node_id: NodeId,
 ) -> Option<StringBindingDef> {
     def.preset_metadata
@@ -3388,6 +3414,7 @@ fn add_group_physics(
     _output_id: u32,
     authored_transform_id: u32,
     object_id: u32,
+    source_id: Option<u32>,
 ) -> Result<(NodeId, NodeId), &'static str> {
     let output_exists = group
         .nodes
@@ -3466,6 +3493,9 @@ fn add_group_physics(
         body_id,
         "transform",
     ));
+    if let Some(source_id) = source_id {
+        group.wires.push(scene_build_wire(source_id, "source", body_id, "source"));
+    }
     group
         .wires
         .push(scene_build_wire(body_id, "body", output_id, "body"));
@@ -3535,11 +3565,9 @@ fn remove_group_physics(
             wire.from_port = "transform".into();
         }
     }
-    group.wires.retain(|wire| {
-        !((wire.from_node == body_id && wire.to_node == output_id)
-            || (wire.from_node == authored_transform_id && wire.to_node == body_id)
-            || (wire.to_node == body_id && wire.to_port.starts_with("part_")))
-    });
+    group
+        .wires
+        .retain(|wire| wire.from_node != body_id && wire.to_node != body_id);
     group
         .nodes
         .retain(|node| node.id != body_id && node.id != input_id);
@@ -3593,9 +3621,9 @@ struct ImportedPhysicsBinding {
     body_id: u32,
 }
 
-fn imported_physics_binding(
+fn scene_physics_binding(
     def: &EffectGraphDef,
-    parts: &ImportedObjectParts,
+    parts: &SceneObjectParts,
 ) -> Result<ImportedPhysicsBinding, &'static str> {
     let Some(group_id) = parts.group_id else {
         let pose_wire = def
@@ -3720,7 +3748,101 @@ fn remove_string_binding_target(def: &mut EffectGraphDef, node_id: &NodeId) {
     }
 }
 
-/// Enable standard physics for one imported object.  Grouped imports expose a
+#[derive(Debug, Clone)]
+struct ScenePhysicsPlan {
+    parts: SceneObjectParts,
+    body_params: BTreeMap<String, SerializedParamValue>,
+    world_id: u32,
+    body_slot: u32,
+    world_exists: bool,
+}
+
+/// The shared structural preflight for the physics projection and command.
+/// Keeping this on the editing side means a stale UI snapshot cannot make the
+/// command accept a graph shape that the content thread would later reject.
+fn scene_object_physics_plan(
+    def: &EffectGraphDef,
+    render_scene_node_id: u32,
+    object_index: u32,
+) -> Result<ScenePhysicsPlan, String> {
+    let parts = scene_object_parts(def, render_scene_node_id, object_index)?;
+    if parts.render_indices.is_empty() {
+        return Err("Selected scene object has no render outputs".into());
+    }
+    if scene_physics_binding(def, &parts).is_ok() {
+        return Err("Selected object already has standard physics enabled".into());
+    }
+    if let Some(group_id) = parts.group_id {
+        let assignments = scene_fluid_role_assignments(def, group_id)?;
+        if !assignments.is_empty() {
+            return Err(
+                "Enable Physics cannot target an object with assigned fluid roles".into(),
+            );
+        }
+    }
+    if parts
+        .compound_sources
+        .iter()
+        .any(|source| source.kind != parts.source.kind)
+    {
+        return Err("Enable Physics cannot mix builtin and imported mesh sources".into());
+    }
+    if parts.source.kind == ScenePhysicsSourceKind::Builtin
+        && parts.compound_sources.len() > 1
+    {
+        return Err("Enable Physics does not support compound builtin mesh groups".into());
+    }
+    let mut body_params = scene_body_params(&parts.source, def)?;
+    if parts.source.kind == ScenePhysicsSourceKind::Imported
+        && parts.compound_sources.len() > 1
+    {
+        body_params.insert(
+            "compound_materials".to_string(),
+            compound_materials_param(&parts.compound_sources)?,
+        );
+    }
+    body_params.insert("motion".to_string(), SerializedParamValue::Enum { value: 1 });
+    body_params.insert("mass".to_string(), SerializedParamValue::Float { value: 1.0 });
+    body_params.insert("friction".to_string(), SerializedParamValue::Float { value: 0.5 });
+    body_params.insert("bounce".to_string(), SerializedParamValue::Float { value: 0.15 });
+
+    let worlds: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == "node.physics_world")
+        .map(|node| node.id)
+        .collect();
+    if worlds.len() > 1 {
+        return Err("Enable Physics requires one shared root Physics World".into());
+    }
+    let world_exists = !worlds.is_empty();
+    let world_id = worlds.first().copied().unwrap_or(
+        max_node_id_over(&def.nodes)
+            .checked_add(1)
+            .ok_or_else(|| "Enable Physics document id space is exhausted".to_string())?,
+    );
+    let body_slot = first_free_physics_body_slot(&def.wires, world_id)
+        .ok_or_else(|| "Physics World has no free body slots".to_string())?;
+    Ok(ScenePhysicsPlan {
+        parts,
+        body_params,
+        world_id,
+        body_slot,
+        world_exists,
+    })
+}
+
+/// Pure eligibility shared with the scene projection.  It deliberately runs
+/// the same source, fluid-role, world, and body-slot checks as Enable.
+pub fn scene_object_physics_eligibility(
+    def: &EffectGraphDef,
+    render_scene_node_id: u32,
+    object_index: u32,
+) -> Result<(), String> {
+    scene_object_physics_plan(def, render_scene_node_id, object_index).map(|_| ())
+}
+
+/// Enable standard physics for one scene object. Grouped imports expose a
 /// `body` output and accept a `pose` input so the shared root world remains
 /// outside the visual object group; the flattener then folds that boundary to
 /// the same flat wiring used by a bare object.
@@ -3777,79 +3899,24 @@ impl Command for EnableSceneObjectPhysicsCommand {
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
             return;
         };
-        let Ok(parts) = imported_object_parts(def, self.render_scene_node_id, self.object_index)
-        else {
-            self.rejection =
-                Some("Enable Physics supports imported rigid glTF objects only".into());
-            return;
-        };
-        if parts.render_indices.is_empty() {
-            self.rejection = Some("Selected scene object has no render outputs".into());
-            return;
-        }
-        if imported_physics_binding(def, &parts).is_ok() {
-            self.rejection = Some("Selected object already has standard physics enabled".into());
-            return;
-        }
-        let body_params = match imported_body_params(&parts.source, def) {
-            Ok(mut params) => {
-                if parts.compound_sources.len() > 1 {
-                    match compound_materials_param(&parts.compound_sources) {
-                        Ok(table) => {
-                            params.insert("compound_materials".to_string(), table);
-                        }
-                        Err(reason) => {
-                            self.rejection = Some(reason.into());
-                            return;
-                        }
-                    }
-                }
-                params.insert(
-                    "motion".to_string(),
-                    SerializedParamValue::Enum { value: 1 },
-                );
-                params.insert(
-                    "mass".to_string(),
-                    SerializedParamValue::Float { value: 1.0 },
-                );
-                params.insert(
-                    "friction".to_string(),
-                    SerializedParamValue::Float { value: 0.5 },
-                );
-                params.insert(
-                    "bounce".to_string(),
-                    SerializedParamValue::Float { value: 0.15 },
-                );
-                params
-            }
+        let plan = match scene_object_physics_plan(
+            def,
+            self.render_scene_node_id,
+            self.object_index,
+        ) {
+            Ok(plan) => plan,
             Err(reason) => {
-                self.rejection = Some(reason.into());
+                self.rejection = Some(reason);
                 return;
             }
         };
-        let worlds: Vec<u32> = def
-            .nodes
-            .iter()
-            .filter(|node| node.type_id == "node.physics_world")
-            .map(|node| node.id)
-            .collect();
-        if worlds.len() > 1 {
-            self.rejection = Some("Enable Physics requires one shared root Physics World".into());
-            return;
-        }
-        let world_id = worlds
-            .first()
-            .copied()
-            .unwrap_or_else(|| max_node_id_over(&def.nodes).saturating_add(1));
-        let body_slot = first_free_physics_body_slot(&def.wires, world_id).unwrap_or({
-            // A new world has no occupied slots; this branch is only used to
-            // make the preflight expression total.
-            0
-        });
-        if !worlds.is_empty() && first_free_physics_body_slot(&def.wires, world_id).is_none() {
-            self.rejection = Some("Physics World has no free body slots".into());
-            return;
-        }
+        let ScenePhysicsPlan {
+            parts,
+            body_params,
+            world_id,
+            body_slot,
+            world_exists,
+        } = plan;
         let mut candidate = def.clone();
         let result = (|| {
             let def = &mut candidate;
@@ -3861,7 +3928,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
             let mut next_id = max_node_id_over(&def.nodes).checked_add(1)?;
             let mut taken = std::collections::HashSet::new();
             collect_all_handles(&def.nodes, &mut taken);
-            if worlds.is_empty() {
+            if !world_exists {
                 let handle = dedup_handle("Physics World", &mut taken);
                 def.nodes.push(fresh_scene_node(
                     next_id,
@@ -3893,6 +3960,8 @@ impl Command for EnableSceneObjectPhysicsCommand {
                     output_id,
                     parts.authored_transform_id,
                     parts.object_id,
+                    (parts.source.kind == ScenePhysicsSourceKind::Builtin)
+                        .then_some(parts.source.source_id),
                 )
                 .ok()?;
                 def.wires.push(scene_build_wire(
@@ -3929,6 +3998,14 @@ impl Command for EnableSceneObjectPhysicsCommand {
                     body_id,
                     "transform",
                 ));
+                if parts.source.kind == ScenePhysicsSourceKind::Builtin {
+                    def.wires.push(scene_build_wire(
+                        parts.source.source_id,
+                        "source",
+                        body_id,
+                        "source",
+                    ));
+                }
                 def.wires.push(scene_build_wire(
                     body_id,
                     "body",
@@ -3966,7 +4043,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
                 &self.body_metadata,
                 &body_params,
             );
-            if worlds.is_empty()
+            if !world_exists
                 && let (Some(world), Some(world_metadata)) = (
                     def.nodes.iter().find(|node| node.id == world_id),
                     self.world_metadata.as_ref(),
@@ -3997,7 +4074,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
             refresh_target_manifest(project, &self.target);
         } else {
             self.rejection =
-                Some("Physics edit requires an unmodified imported object graph".into());
+                Some("Physics edit requires an unmodified scene object graph".into());
         }
     }
 
@@ -4024,7 +4101,7 @@ impl Command for EnableSceneObjectPhysicsCommand {
     }
 }
 
-/// Remove the body/world wiring while leaving the imported visual object and
+/// Remove the body/world wiring while leaving the scene visual object and
 /// its authored transform intact.  The world node itself is retained as the
 /// shared scene service, so disabling one object never invalidates another.
 #[derive(Debug)]
@@ -4069,13 +4146,13 @@ impl Command for DisableSceneObjectPhysicsCommand {
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
             return;
         };
-        let Ok(parts) = imported_object_parts(def, self.render_scene_node_id, self.object_index)
+        let Ok(parts) = scene_object_parts(def, self.render_scene_node_id, self.object_index)
         else {
             self.rejection =
-                Some("Disable Physics supports imported rigid glTF objects only".into());
+                Some("Disable Physics supports standard scene object mesh sources only".into());
             return;
         };
-        let Ok(binding) = imported_physics_binding(def, &parts) else {
+        let Ok(binding) = scene_physics_binding(def, &parts) else {
             self.rejection = Some("Selected object does not have standard physics enabled".into());
             return;
         };
@@ -4114,11 +4191,8 @@ impl Command for DisableSceneObjectPhysicsCommand {
                     !((wire.from_node == binding.world_id
                         && wire.from_port == format!("pose_{}", binding.body_slot)
                         && wire.to_node == parts.object_id)
-                        || (wire.from_node == binding.body_id
-                            && wire.to_node == binding.world_id
-                            && wire.to_port == format!("body_{}", binding.body_slot))
-                        || (wire.from_node == parts.authored_transform_id
-                            && wire.to_node == binding.body_id))
+                        || wire.from_node == binding.body_id
+                        || wire.to_node == binding.body_id)
                 });
                 def.wires.push(scene_build_wire(
                     parts.authored_transform_id,
@@ -4165,7 +4239,7 @@ impl Command for DisableSceneObjectPhysicsCommand {
             refresh_target_manifest(project, &self.target);
         } else {
             self.rejection =
-                Some("Physics edit requires an unmodified imported object graph".into());
+                Some("Physics edit requires an unmodified scene object graph".into());
         }
     }
     fn undo(&mut self, project: &mut Project) {
@@ -4300,14 +4374,26 @@ impl Command for SplitSceneObjectCommand {
         let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
             return;
         };
-        let Ok(parts) = imported_object_parts(def, self.render_scene_node_id, self.object_index)
+        let Ok(parts) = scene_object_parts(def, self.render_scene_node_id, self.object_index)
         else {
-            self.rejection = Some("Split Object supports imported rigid glTF objects only".into());
+            self.rejection = Some("Split Object supports standard imported glTF objects only".into());
             return;
         };
         if parts.group_id.is_none() {
             self.rejection = Some(
                 "Split supports imported object groups; group the object before splitting".into(),
+            );
+            return;
+        }
+        if parts.source.kind != ScenePhysicsSourceKind::Imported
+            || parts
+                .compound_sources
+                .iter()
+                .any(|source| source.kind != ScenePhysicsSourceKind::Imported)
+        {
+            self.rejection = Some(
+                "Split supports imported glTF mesh sources only; builtin meshes cannot be split"
+                    .into(),
             );
             return;
         }
@@ -4319,7 +4405,7 @@ impl Command for SplitSceneObjectCommand {
             self.rejection = Some("This object is already a split piece".into());
             return;
         }
-        let existing_binding = imported_physics_binding(def, &parts).ok();
+        let existing_binding = scene_physics_binding(def, &parts).ok();
         let existing_body = existing_binding.as_ref().and_then(|binding| {
             if let Some(group_id) = parts.group_id {
                 def.nodes
@@ -4344,7 +4430,7 @@ impl Command for SplitSceneObjectCommand {
         let total_mass = body_float("mass", 1.0);
         let friction = body_float("friction", 0.5);
         let bounce = body_float("bounce", 0.15);
-        let body_params = match imported_body_params(&parts.source, def) {
+        let body_params = match scene_body_params(&parts.source, def) {
             Ok(mut params) => {
                 params.insert(
                     "motion".to_string(),
@@ -4563,6 +4649,7 @@ impl Command for SplitSceneObjectCommand {
                         output_id,
                         inner_transform,
                         inner_object,
+                        None,
                     )
                     .ok()?;
                     body_node_id
@@ -4726,7 +4813,7 @@ impl Command for SplitSceneObjectCommand {
             refresh_target_manifest(project, &self.target);
         } else {
             self.rejection =
-                Some("Physics edit requires an unmodified imported object graph".into());
+                Some("Physics edit requires an unmodified scene object graph".into());
         }
     }
 

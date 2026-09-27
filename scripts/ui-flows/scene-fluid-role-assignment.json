@@ -63,6 +63,83 @@
     "ScrollTo": {
       "target": {
         "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mass (kg)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
           "name": "scene_setup.properties.add_fluid_role"
         }
       }
@@ -121,7 +198,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.48_velocity_y.value"
+          "text": "Velocity Y"
         }
       }
     }
@@ -217,7 +294,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "name": "param_row.48_velocity_y.value"
+          "text": "Velocity Y"
         }
       }
     }

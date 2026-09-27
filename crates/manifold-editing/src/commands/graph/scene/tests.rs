@@ -163,6 +163,148 @@ fn imported_group_scene_graph() -> EffectGraphDef {
     def
 }
 
+fn builtin_scene_object_graph(mesh_type: &str) -> EffectGraphDef {
+    let mut def = render_scene_graph(1, 0);
+    let node = |id: u32, node_id: &str, type_id: &str, handle: &str| EffectGraphNode {
+        id,
+        node_id: NodeId::new(node_id),
+        type_id: type_id.to_string(),
+        handle: Some(handle.to_string()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let transform = node(11, "builtin_transform", "node.transform_3d", "Transform");
+    let mesh = node(12, "builtin_mesh", mesh_type, "Mesh");
+    let material = node(13, "builtin_material", "node.phong_material", "Material");
+    let object = node(14, "builtin_object", "node.scene_object", "Builtin");
+    let output = node(15, "builtin_output", GROUP_OUTPUT_TYPE_ID, "");
+    let wire = |from_node, from_port: &str, to_node, to_port: &str| EffectGraphWire {
+        from_node,
+        from_port: from_port.into(),
+        to_node,
+        to_port: to_port.into(),
+    };
+    let group = GroupDef {
+        interface: GroupInterface {
+            inputs: vec![],
+            outputs: vec![InterfacePortDef {
+                name: "object".into(),
+                port_type: "Object".into(),
+            }],
+            params: vec![],
+        },
+        nodes: vec![transform, mesh, material, object, output],
+        wires: vec![
+            wire(11, "transform", 14, "transform"),
+            wire(12, "vertices", 14, "vertices"),
+            wire(13, "out", 14, "material"),
+            wire(14, "object", 15, "object"),
+        ],
+        tint: None,
+    };
+    let mut group_node = node(10, "builtin_group", GROUP_TYPE_ID, "Builtin");
+    group_node.group = Some(Box::new(group));
+    def.nodes.push(group_node);
+    def.wires.push(wire(10, "object", 0, "object_0"));
+    def
+}
+
+fn builtin_scene_object_with_fluid_role(mesh_type: &str) -> EffectGraphDef {
+    let mut def = builtin_scene_object_graph(mesh_type);
+    let role = EffectGraphNode {
+        id: 20,
+        node_id: NodeId::new("builtin_role"),
+        type_id: "node.fluid_role_source".into(),
+        handle: Some("Inflow".into()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let fluid = EffectGraphNode {
+        id: 30,
+        node_id: NodeId::new("builtin_fluid"),
+        type_id: "node.fluid_surface".into(),
+        handle: Some("Fluid".into()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let group_node = def.nodes.iter_mut().find(|node| node.id == 10).unwrap();
+    let group = group_node.group.as_mut().unwrap();
+    group.nodes.push(role);
+    let output_id = group.nodes.iter().find(|node| node.type_id == GROUP_OUTPUT_TYPE_ID).unwrap().id;
+    group.interface.outputs.push(InterfacePortDef { name: "role".into(), port_type: "FluidRole".into() });
+    group.wires.push(EffectGraphWire { from_node: 20, from_port: "role".into(), to_node: output_id, to_port: "role".into() });
+    def.nodes.push(fluid);
+    def.wires.push(EffectGraphWire { from_node: 10, from_port: "role".into(), to_node: 30, to_port: "role_0".into() });
+    def
+}
+
+#[test]
+fn builtin_scene_object_physics_uses_live_mesh_source_and_undoes_exactly() {
+    for mesh_type in ["node.cube_mesh", "node.platonic_solid_mesh"] {
+        let graph = builtin_scene_object_graph(mesh_type);
+        assert!(scene_object_physics_eligibility(&graph, 0, 0).is_ok());
+        let (mut project, fx) = project_with_graph(graph.clone());
+        let target = GraphTarget::Effect(fx.clone());
+        let mut enable = EnableSceneObjectPhysicsCommand::new(
+            target,
+            0,
+            0,
+            body_params(),
+            graph.clone(),
+        );
+        enable.execute(&mut project);
+        assert!(enable.was_applied(), "{mesh_type}: {:?}", enable.rejection_reason());
+        let enabled = graph_of(&project, &fx);
+        let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+        let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
+        assert!(group.wires.iter().any(|wire| {
+            wire.from_node == 12
+                && wire.from_port == "source"
+                && wire.to_node == body.id
+                && wire.to_port == "source"
+        }));
+        assert!(!body.params.contains_key("size"));
+        assert!(!body.params.contains_key("radius"));
+        enable.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &graph);
+    }
+}
+
+#[test]
+fn builtin_scene_object_physics_rejects_assigned_fluid_role_atomically() {
+    let graph = builtin_scene_object_with_fluid_role("node.cube_mesh");
+    let (mut project, fx) = project_with_graph(graph.clone());
+    assert!(scene_object_physics_eligibility(&graph, 0, 0).is_err());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        0,
+        0,
+        body_params(),
+        graph.clone(),
+    );
+    enable.execute(&mut project);
+    assert!(!enable.was_applied());
+    assert_eq!(graph_of(&project, &fx), &graph);
+}
+
 fn compound_imported_group_scene_graph() -> EffectGraphDef {
     let mut def = imported_group_scene_graph();
     let render = def.nodes.iter_mut().find(|node| node.id == 0).unwrap();
