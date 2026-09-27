@@ -91,8 +91,9 @@ namespace GridUtils {
         }
     }
 
-    template <class T>
-    void extrapolateGrid(Array3d<T> *grid, Array3d<bool> *valid, int numLayers) {
+    template <class T, class LayerObserver>
+    void extrapolateGridWithObserver(Array3d<T> *grid, Array3d<bool> *valid,
+                                    int numLayers, LayerObserver observe) {
         // char UNKNOWN = 0x00;
         // char WAITING = 0x01;
         // char KNOWN = 0x02;
@@ -156,9 +157,19 @@ namespace GridUtils {
                 threads[i].join();
             }
 
+            // MANIFOLD: retain the derivative of the actual boundary stencil.
+            // The observer runs on the owner after scalar worker writes finish,
+            // while DONE still identifies exactly the neighbors they sampled.
+            observe(extrapolationCells, status);
             if (layers != numLayers - 1) {
                 status.set(extrapolationCells, KNOWN);
             }
         }
+    }
+
+    template <class T>
+    void extrapolateGrid(Array3d<T> *grid, Array3d<bool> *valid, int numLayers) {
+        extrapolateGridWithObserver(grid, valid, numLayers,
+            [](const std::vector<GridIndex> &, Array3d<char> &) {});
     }
 }

@@ -50,6 +50,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
 #pragma once
+#include <cstdint>
 
 #if __MINGW32__ && !_WIN64
     #include "mingw32_threads/mingw.thread.h"
@@ -86,6 +87,7 @@ struct VelocityDataGrid {
 };
 
 class MeshObject;
+class RigidBoundaryVelocityMap;
 
 class MeshLevelSet {
 
@@ -113,7 +115,8 @@ public:
     MeshObject* getClosestMeshObject(GridIndex g);
     float getDistanceAtCellCenter(int i, int j, int k);
     float getDistanceAtCellCenter(GridIndex g);
-    vmath::vec3 getNearestVelocity(vmath::vec3 p);
+    vmath::vec3 getNearestVelocity(vmath::vec3 p, vmath::vec3 *samplePosition = nullptr,
+                                  bool *sampleFound = nullptr);
     float getFaceVelocityU(int i, int j, int k);
     float getFaceVelocityU(GridIndex g);
     float getFaceVelocityV(int i, int j, int k);
@@ -161,7 +164,7 @@ public:
                                           std::vector<vmath::vec3> &vertexVelocities, 
                                           int bandwidth = 1);
     void calculateUnion(MeshLevelSet &levelset);
-    void normalizeVelocityGrid();
+    void normalizeVelocityGrid(RigidBoundaryVelocityMap *rigidMap = nullptr);
     void negate();
     void reset();
 
@@ -289,11 +292,14 @@ private:
     void _computeVelocityGridsSingleThreaded();
     void _computeVelocityGridMT(bool isStatic, int dir);
     void _computeVelocityGridThread(int startidx, int endidx, bool isStatic, int dir);
+    float _sampleFaceVelocity(GridIndex face, int axis, float weight, bool isStatic);
+    void _validateRigidCapture() const;
     float _getCellWeight(int i, int j, int k);
     float _pointToTriangleDistance(vmath::vec3 x0, vmath::vec3 x1, 
                                      vmath::vec3 x2, 
                                      vmath::vec3 x3);
-    vmath::vec3 _pointToTriangleVelocity(vmath::vec3 x0, int triangleIdx);
+    vmath::vec3 _pointToTriangleVelocity(vmath::vec3 x0, int triangleIdx,
+                                       vmath::vec3 *samplePosition = nullptr);
     bool _getBarycentricCoordinates(
               double x0, double y0, 
               double x1, double y1, double x2, double y2, double x3, double y3,
@@ -301,7 +307,8 @@ private:
     float _pointToSegmentDistance(vmath::vec3 x0, vmath::vec3 x1, vmath::vec3 x2);
     vmath::vec3 _pointToSegmentVelocity(vmath::vec3 x0, 
                                         vmath::vec3 x1, vmath::vec3 x2, 
-                                        vmath::vec3 v1, vmath::vec3 v2, float *distance);
+                                        vmath::vec3 v1, vmath::vec3 v2, float *distance,
+                                        vmath::vec3 *samplePosition = nullptr);
     int _orientation(double x1, double y1, double x2, double y2, double *twiceSignedArea);
 
     void _trilinearInterpolateSolidGridPointsThread(int startidx, int endidx, vmath::vec3 offset, double dx, 
@@ -353,6 +360,10 @@ private:
     Array3d<float> _phi;
     Array3d<int> _closestTriangles;
     VelocityDataGrid _velocityData;
+    RigidBoundaryVelocityMap *_rigidBoundaryMap = nullptr;
+    size_t _rigidBoundaryBody = 0;
+    RigidBoundaryVelocityMap *_capturedRigidMap = nullptr;
+    uint64_t _rigidCaptureGeneration = 0;
 
     Array3d<int> _closestMeshObjects;
     std::vector<MeshObject*> _meshObjects;

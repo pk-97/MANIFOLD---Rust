@@ -25,6 +25,7 @@ SOFTWARE.
 #include "meshobject.h"
 
 #include "meshutils.h"
+#include "rigidboundaryvelocity.h"
 
 MeshObject::MeshObject() {
 }
@@ -34,6 +35,20 @@ MeshObject::MeshObject(int i, int j, int k, double dx) :
 }
 
 MeshObject::~MeshObject() {
+}
+
+void MeshObject::setRigidBoundarySource(RigidBoundaryVelocityMap &map, size_t body) {
+    if (body >= map.bodyCount() || _isInversed || _velocityScale != 1.0f) {
+        throw std::invalid_argument("rigid boundary binding requires a valid body and unscaled normal obstacle");
+    }
+    _rigidBoundaryMap = &map;
+    _rigidBoundaryBody = body;
+    _isObjectStateChanged = true;
+}
+
+void MeshObject::clearRigidBoundarySource() {
+    _rigidBoundaryMap = nullptr;
+    _isObjectStateChanged = true;
 }
 
 void MeshObject::resizeGrid(int isize, int jsize, int ksize, double dx) {
@@ -330,6 +345,7 @@ bool MeshObject::isDomainObject() {
 }
 
 void MeshObject::inverse() {
+    if (_rigidBoundaryMap) { throw std::invalid_argument("inversed rigid coupling is not implemented"); }
     _isInversed = !_isInversed;
 }
 
@@ -348,6 +364,9 @@ float MeshObject::getFriction() {
 }
 
 void MeshObject::setVelocityScale(float scale) {
+    if (_rigidBoundaryMap && scale != 1.0f) {
+        throw std::invalid_argument("coupled rigid boundary velocity must use physical units");
+    }
     _velocityScale = scale;
 }
 

@@ -1,6 +1,7 @@
 #include "bridge.h"
 #include "coupling_probe.h"
 #include "coupling_operator_probe.h"
+#include "coupling_boundary_probe.h"
 
 #include <cmath>
 #include <cstring>
@@ -600,6 +601,13 @@ extern "C" int manifold_fluids_coupling_operator_probe() {
 
 extern "C" int manifold_fluids_coupling_closed_pocket_probe() {
     return guarded([] { run_coupling_closed_pocket_probe(); });
+}
+
+extern "C" int manifold_fluids_coupling_boundary_probe(ManifoldRigidBoundaryProbe *result) {
+    return guarded([&] {
+        if (!result) { throw std::invalid_argument("null boundary probe result"); }
+        run_rigid_boundary_probe(*result);
+    });
 }
 
 extern "C" int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,

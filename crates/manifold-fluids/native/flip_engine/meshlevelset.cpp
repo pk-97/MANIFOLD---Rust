@@ -28,6 +28,9 @@ SOFTWARE.
 #include "levelsetutils.h"
 #include "meshutils.h"
 #include "collision.h"
+#include "meshobject.h"
+#include "rigidboundaryvelocity.h"
+#include "gridutils.h"
 
 MeshLevelSet::MeshLevelSet() {
 }
@@ -50,6 +53,12 @@ MeshLevelSet::MeshLevelSet(int isize, int jsize, int ksize, double dx,
                 _closestMeshObjects(isize + 1, jsize + 1, ksize + 1, -1) {
     _phi.fill(getDistanceUpperBound());
     _meshObjects.push_back(meshObject);
+    if (meshObject) {
+        _rigidBoundaryMap = meshObject->getRigidBoundaryMap();
+        _rigidBoundaryBody = meshObject->getRigidBoundaryBody();
+        _capturedRigidMap = _rigidBoundaryMap;
+        if (_capturedRigidMap) { _rigidCaptureGeneration = _capturedRigidMap->captureGeneration(); }
+    }
 }
 
 MeshLevelSet::~MeshLevelSet() {
@@ -165,8 +174,10 @@ float MeshLevelSet::getDistanceAtCellCenter(GridIndex g) {
     return getDistanceAtCellCenter(g.i, g.j, g.k);
 }
 
-vmath::vec3 MeshLevelSet::getNearestVelocity(vmath::vec3 p) {
+vmath::vec3 MeshLevelSet::getNearestVelocity(vmath::vec3 p, vmath::vec3 *samplePosition,
+                                           bool *sampleFound) {
     FLUIDSIM_ASSERT(_isVelocityDataEnabled);
+    if (sampleFound) { *sampleFound = false; }
 
     p -= _positionOffset;
 
@@ -201,7 +212,8 @@ vmath::vec3 MeshLevelSet::getNearestVelocity(vmath::vec3 p) {
         return vmath::vec3(0.0, 0.0, 0.0);
     }
 
-    return _pointToTriangleVelocity(p, nearestTri);
+    if (sampleFound) { *sampleFound = true; }
+    return _pointToTriangleVelocity(p, nearestTri, samplePosition);
 }
 
 float MeshLevelSet::getFaceVelocityU(int i, int j, int k) {
@@ -601,6 +613,15 @@ void MeshLevelSet::fastCalculateSignedDistanceField(TriangleMesh &m,
 }
 
 void MeshLevelSet::calculateUnion(MeshLevelSet &levelset) {
+    _validateRigidCapture();
+    levelset._validateRigidCapture();
+    if (_capturedRigidMap && levelset._capturedRigidMap && _capturedRigidMap != levelset._capturedRigidMap) {
+        throw std::invalid_argument("cannot combine rigid boundaries from different captures");
+    }
+    if (levelset._capturedRigidMap) {
+        _capturedRigidMap = levelset._capturedRigidMap;
+        _rigidCaptureGeneration = levelset._rigidCaptureGeneration;
+    }
     // Merge mesh data
     TriangleMesh *meshOther = levelset.getTriangleMesh();
     int triIndexOffset = (int)_mesh.triangles.size();
@@ -637,8 +658,13 @@ void MeshLevelSet::calculateUnion(MeshLevelSet &levelset) {
     }
 }
 
-void MeshLevelSet::normalizeVelocityGrid() {
+void MeshLevelSet::normalizeVelocityGrid(RigidBoundaryVelocityMap *rigidMap) {
     FLUIDSIM_ASSERT(_isVelocityDataEnabled);
+    _validateRigidCapture();
+    if (_capturedRigidMap && rigidMap != _capturedRigidMap) {
+        throw std::invalid_argument("normalizing a rigid boundary requires its capture map");
+    }
+    if (rigidMap) { rigidMap->normalize(_velocityData); }
 
     ValidVelocityComponentGrid validVelocities(_isize, _jsize, _ksize);
 
@@ -694,12 +720,26 @@ void MeshLevelSet::normalizeVelocityGrid() {
         threads[i].join();
     }
 
-    _velocityData.field.extrapolateVelocityField(
-            validVelocities, _numVelocityExtrapolationLayers
-    );
+    if (rigidMap) {
+        Array3d<float> *fields[] = {_velocityData.field.getArray3dU(),
+            _velocityData.field.getArray3dV(), _velocityData.field.getArray3dW()};
+        Array3d<bool> *valid[] = {&validVelocities.validU, &validVelocities.validV, &validVelocities.validW};
+        for (int axis = 0; axis < 3; ++axis) {
+            GridUtils::extrapolateGridWithObserver(fields[axis], valid[axis], _numVelocityExtrapolationLayers,
+                [rigidMap, axis](const std::vector<GridIndex> &cells, Array3d<char> &status) {
+                    rigidMap->extrapolate(axis, cells, status);
+                });
+        }
+        rigidMap->finish();
+    } else {
+        _velocityData.field.extrapolateVelocityField(validVelocities, _numVelocityExtrapolationLayers);
+    }
 }
 
 void MeshLevelSet::negate() {
+    if (_capturedRigidMap) {
+        throw std::invalid_argument("inversion of a captured rigid boundary is not implemented");
+    }
     _phi.negate();
 
     if (_isVelocityDataEnabled) {
@@ -715,6 +755,10 @@ void MeshLevelSet::reset() {
     _velocityData.reset();
     _closestMeshObjects.fill(-1);
     _meshObjects.clear();
+    _rigidBoundaryMap = nullptr;
+    _rigidBoundaryBody = 0;
+    _capturedRigidMap = nullptr;
+    _rigidCaptureGeneration = 0;
 }
 
 void MeshLevelSet::setGridOffset(GridIndex g) {
@@ -1317,7 +1361,31 @@ void MeshLevelSet::_computeDistanceFieldSigns() {
     }
 }
 
-void MeshLevelSet::_computeVelocityGridThread(int startidx, int endidx, 
+void MeshLevelSet::_validateRigidCapture() const {
+    if (_capturedRigidMap && _rigidCaptureGeneration != _capturedRigidMap->captureGeneration()) {
+        throw std::invalid_argument("cached rigid boundary belongs to an earlier capture");
+    }
+}
+
+float MeshLevelSet::_sampleFaceVelocity(GridIndex face, int axis, float weight, bool isStatic) {
+    if (isStatic && !_rigidBoundaryMap) { return 0.0f; }
+    vmath::vec3 p = axis == 0 ? Grid3d::FaceIndexToPositionU(face, _dx)
+        : axis == 1 ? Grid3d::FaceIndexToPositionV(face, _dx)
+                    : Grid3d::FaceIndexToPositionW(face, _dx);
+    if (_rigidBoundaryMap) {
+        vmath::vec3 point;
+        bool found = false;
+        getNearestVelocity(p + _positionOffset, &point, &found);
+        if (!found) { return 0.0f; }
+        const GridIndex global(face.i + _gridOffset.i, face.j + _gridOffset.j, face.k + _gridOffset.k);
+        return _rigidBoundaryMap->sampleAndRecord(axis, global, _rigidBoundaryBody, weight,
+                                                  {point.x, point.y, point.z});
+    }
+    const vmath::vec3 v = getNearestVelocity(p + _positionOffset);
+    return axis == 0 ? v.x : axis == 1 ? v.y : v.z;
+}
+
+void MeshLevelSet::_computeVelocityGridThread(int startidx, int endidx,
                                               bool isStatic, int dir) {
     int U = 0; int V = 1; int W = 2;
 
@@ -1327,12 +1395,8 @@ void MeshLevelSet::_computeVelocityGridThread(int startidx, int endidx,
             GridIndex g = Grid3d::getUnflattenedIndex(idx, _isize + 1, _jsize);
             float weight = getFaceWeightU(g);
             if (weight > 0.0f) {
-                vmath::vec3 v;
-                if (!isStatic) {
-                    vmath::vec3 p = Grid3d::FaceIndexToPositionU(g, _dx);
-                    v = getNearestVelocity(p + _positionOffset);
-                }
-                _velocityData.field.setU(g, weight * v.x);
+                const float v = _sampleFaceVelocity(g, 0, weight, isStatic);
+                _velocityData.field.setU(g, weight * v);
                 _velocityData.weightU.set(g, weight);
             }
         }
@@ -1343,12 +1407,8 @@ void MeshLevelSet::_computeVelocityGridThread(int startidx, int endidx,
             GridIndex g = Grid3d::getUnflattenedIndex(idx, _isize, _jsize + 1);
             float weight = getFaceWeightV(g);
             if (weight > 0.0f) {
-                vmath::vec3 v;
-                if (!isStatic) {
-                    vmath::vec3 p = Grid3d::FaceIndexToPositionV(g, _dx);
-                    v = getNearestVelocity(p + _positionOffset);
-                }
-                _velocityData.field.setV(g, weight * v.y);
+                const float v = _sampleFaceVelocity(g, 1, weight, isStatic);
+                _velocityData.field.setV(g, weight * v);
                 _velocityData.weightV.set(g, weight);
             }
         }
@@ -1359,12 +1419,8 @@ void MeshLevelSet::_computeVelocityGridThread(int startidx, int endidx,
             GridIndex g = Grid3d::getUnflattenedIndex(idx, _isize, _jsize);
             float weight = getFaceWeightW(g);
             if (weight > 0.0f) {
-                vmath::vec3 v;
-                if (!isStatic) {
-                    vmath::vec3 p = Grid3d::FaceIndexToPositionW(g, _dx);
-                    v = getNearestVelocity(p + _positionOffset);
-                }
-                _velocityData.field.setW(g, weight * v.z);
+                const float v = _sampleFaceVelocity(g, 2, weight, isStatic);
+                _velocityData.field.setW(g, weight * v);
                 _velocityData.weightW.set(g, weight);
             }
         }
@@ -1436,56 +1492,10 @@ void MeshLevelSet::_computeVelocityGridsSingleThreaded() {
         }
     }
 
-    for (int k = 0; k < _ksize; k++) {
-        for (int j = 0; j < _jsize; j++) {
-            for (int i = 0; i < _isize + 1; i++) {
-                float weight = getFaceWeightU(i, j, k);
-                if (weight > 0.0f) {
-                    vmath::vec3 v;
-                    if (!isStatic) {
-                        vmath::vec3 p = Grid3d::FaceIndexToPositionU(i, j, k, _dx);
-                        v = getNearestVelocity(p + _positionOffset);
-                    }
-                    _velocityData.field.setU(i, j, k, weight * v.x);
-                    _velocityData.weightU.set(i, j, k, weight);
-                }
-            }
-        }
-    }
-
-    for (int k = 0; k < _ksize; k++) {
-        for (int j = 0; j < _jsize + 1; j++) {
-            for (int i = 0; i < _isize; i++) {
-                float weight = getFaceWeightV(i, j, k);
-                if (weight > 0.0f) {
-                    vmath::vec3 v;
-                    if (!isStatic) {
-                        vmath::vec3 p = Grid3d::FaceIndexToPositionV(i, j, k, _dx);
-                        v = getNearestVelocity(p + _positionOffset);
-                    }
-                    _velocityData.field.setV(i, j, k, weight * v.y);
-                    _velocityData.weightV.set(i, j, k, weight);
-                }
-            }
-        }
-    }
-
-    for (int k = 0; k < _ksize + 1; k++) {
-        for (int j = 0; j < _jsize; j++) {
-            for (int i = 0; i < _isize; i++) {
-                float weight = getFaceWeightW(i, j, k);
-                if (weight > 0.0f) {
-                    vmath::vec3 v;
-                    if (!isStatic) {
-                        vmath::vec3 p = Grid3d::FaceIndexToPositionW(i, j, k, _dx);
-                        v = getNearestVelocity(p + _positionOffset);
-                    }
-                    _velocityData.field.setW(i, j, k, weight * v.z);
-                    _velocityData.weightW.set(i, j, k, weight);
-                }
-            }
-        }
-    }
+    // Use the same sampling path for serial islands and native worker grids.
+    _computeVelocityGridThread(0, (_isize + 1) * _jsize * _ksize, isStatic, 0);
+    _computeVelocityGridThread(0, _isize * (_jsize + 1) * _ksize, isStatic, 1);
+    _computeVelocityGridThread(0, _isize * _jsize * (_ksize + 1), isStatic, 2);
 }
 
 float MeshLevelSet::_getCellWeight(int i, int j, int k) {
@@ -1565,14 +1575,15 @@ float MeshLevelSet::_pointToTriangleDistance(vmath::vec3 x0, vmath::vec3 x1,
     return vmath::length(cp - x0);
 }
 
-vmath::vec3 MeshLevelSet::_pointToTriangleVelocity(vmath::vec3 x0, int triangleIdx) {
+vmath::vec3 MeshLevelSet::_pointToTriangleVelocity(vmath::vec3 x0, int triangleIdx,
+                                                 vmath::vec3 *samplePosition) {
     Triangle t = _mesh.triangles[triangleIdx];
     vmath::vec3 v1 = _vertexVelocities[t.tri[0]];
     vmath::vec3 v2 = _vertexVelocities[t.tri[1]];
     vmath::vec3 v3 = _vertexVelocities[t.tri[2]];
 
     float eps = 1e-6f;
-    if (fabs(v1.x) < eps && fabs(v1.y) < eps && fabs(v1.z) < eps &&
+    if (!samplePosition && fabs(v1.x) < eps && fabs(v1.y) < eps && fabs(v1.z) < eps &&
             fabs(v2.x) < eps && fabs(v2.y) < eps && fabs(v2.z) < eps &&
             fabs(v3.x) < eps && fabs(v3.y) < eps && fabs(v3.z) < eps) {
         return vmath::vec3(0.0, 0.0, 0.0);
@@ -1599,37 +1610,47 @@ vmath::vec3 MeshLevelSet::_pointToTriangleVelocity(vmath::vec3 x0, int triangleI
     float w31 = invdet * (m13 * b - d * a);
     float w12 = 1 - w23 - w31;
     if (w23 >= 0 && w31 >= 0 && w12 >= 0) { // if we're inside the triangle
+        if (samplePosition) { *samplePosition = w23 * x1 + w31 * x2 + w12 * x3 + _positionOffset; }
         return w23 * v1 + w31 * v2 + w12 * v3; 
     } else { 
         // we have to clamp to one of the edges
         if (w23 > 0) { 
             // this rules out edge 2-3 for us
             float d1, d2;
-            vmath::vec3 vel1 = _pointToSegmentVelocity(x0, x1, x2, v1, v2, &d1);
-            vmath::vec3 vel2 = _pointToSegmentVelocity(x0, x1, x3, v1, v3, &d2);
+            vmath::vec3 p1, p2;
+            vmath::vec3 vel1 = _pointToSegmentVelocity(x0, x1, x2, v1, v2, &d1, samplePosition ? &p1 : nullptr);
+            vmath::vec3 vel2 = _pointToSegmentVelocity(x0, x1, x3, v1, v3, &d2, samplePosition ? &p2 : nullptr);
             if (d1 < d2) {
+                if (samplePosition) { *samplePosition = p1; }
                 return vel1;
             } else {
+                if (samplePosition) { *samplePosition = p2; }
                 return vel2;
             }
         } else if(w31>0) { 
             // this rules out edge 1-3
             float d1, d2;
-            vmath::vec3 vel1 = _pointToSegmentVelocity(x0, x1, x2, v1, v2, &d1);
-            vmath::vec3 vel2 = _pointToSegmentVelocity(x0, x2, x3, v2, v3, &d2);
+            vmath::vec3 p1, p2;
+            vmath::vec3 vel1 = _pointToSegmentVelocity(x0, x1, x2, v1, v2, &d1, samplePosition ? &p1 : nullptr);
+            vmath::vec3 vel2 = _pointToSegmentVelocity(x0, x2, x3, v2, v3, &d2, samplePosition ? &p2 : nullptr);
             if (d1 < d2) {
+                if (samplePosition) { *samplePosition = p1; }
                 return vel1;
             } else {
+                if (samplePosition) { *samplePosition = p2; }
                 return vel2;
             }
         } else { 
             // w12 must be >0, ruling out edge 1-2
             float d1, d2;
-            vmath::vec3 vel1 = _pointToSegmentVelocity(x0, x1, x3, v1, v3, &d1);
-            vmath::vec3 vel2 = _pointToSegmentVelocity(x0, x2, x3, v2, v3, &d2);
+            vmath::vec3 p1, p2;
+            vmath::vec3 vel1 = _pointToSegmentVelocity(x0, x1, x3, v1, v3, &d1, samplePosition ? &p1 : nullptr);
+            vmath::vec3 vel2 = _pointToSegmentVelocity(x0, x2, x3, v2, v3, &d2, samplePosition ? &p2 : nullptr);
             if (d1 < d2) {
+                if (samplePosition) { *samplePosition = p1; }
                 return vel1;
             } else {
+                if (samplePosition) { *samplePosition = p2; }
                 return vel2;
             }
         }
@@ -1697,7 +1718,7 @@ float MeshLevelSet::_pointToSegmentDistance(vmath::vec3 x0, vmath::vec3 x1, vmat
 vmath::vec3 MeshLevelSet::_pointToSegmentVelocity(vmath::vec3 x0, 
                                                   vmath::vec3 x1, vmath::vec3 x2, 
                                                   vmath::vec3 v1, vmath::vec3 v2, 
-                                                  float *distance) {
+                                                  float *distance, vmath::vec3 *samplePosition) {
     vmath::vec3 dx = x2 - x1;
     double m2 = vmath::lengthsq(dx);
     // find parameter value of closest point on segment
@@ -1709,6 +1730,7 @@ vmath::vec3 MeshLevelSet::_pointToSegmentVelocity(vmath::vec3 x0,
     }
 
     *distance = vmath::length(x0 - (s12 * x1 + (1 - s12) * x2));
+    if (samplePosition) { *samplePosition = s12 * x1 + (1 - s12) * x2 + _positionOffset; }
     vmath::vec3 velocity = s12 * v1 + (1 - s12) * v2;
 
     return velocity;

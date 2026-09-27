@@ -12,7 +12,8 @@ Except for the local changes documented below, these files are copied byte-for-b
 - `mixbox/mixbox_stub.cpp`
 - `versionutils.cpp.in` (instantiated by `build.rs` into `OUT_DIR`)
 
-`bridge.cpp`, `bridge.h`, `coupling_probe.*` and `coupling_operator_probe.*` are
+`bridge.cpp`, `bridge.h`, `coupling_probe.*`, `coupling_operator_probe.*` and
+`coupling_boundary_probe.*` are
 MANIFOLD-owned code. The bridge compiles with
 `WITH_MIXBOX=0`, so no external Mixbox runtime or download is required.
 The native mutex serializes all engine operations because upstream thread and
@@ -35,9 +36,22 @@ Local changes:
   exact diagonal for preconditioning. `flip_engine/pcgsolver/pcgsolver.h` adds
   an optional matrix-product callback; ordinary callers keep the original
   solver path. No replacement iterative solver is introduced.
+- The new MANIFOLD-owned `flip_engine/rigidboundaryvelocity.{h,cpp}` retains
+  sparse body-velocity derivatives through native mesh sampling, weighted
+  unions, normalization and extrapolation. It supplies the pressure transpose
+  and the corresponding boundary-velocity update using prepared storage.
+- `flip_engine/meshobject.{h,cpp}` optionally binds an obstacle to that map.
+  `flip_engine/meshlevelset.{h,cpp}` records the actual sampled surface point,
+  propagates capture identity through unions and rejects stale cached captures.
+  Bound obstacles use instantaneous rigid velocity and reject inversion or
+  nonphysical velocity scaling; ordinary obstacles retain their existing path.
+- `flip_engine/gridutils.h` exposes an optional owner-thread observer after
+  each existing extrapolation layer, preserving the native stencil and scalar
+  implementation for both mapped and ordinary callers.
 
 The bounded native probes establish pressure-stage algebra, force/torque,
-energy and closed-pocket constraints. `FluidSimulation` does not yet enable
-production two-way coupling. Geometry attribution, viscosity and Box3D timing
+energy, closed-pocket constraints and the boundary map's interpolation/transpose
+against native mesh velocities. `FluidSimulation` does not yet enable
+production two-way coupling. Enabling the boundary map, viscosity and Box3D timing
 remain integration requirements in
 [`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).

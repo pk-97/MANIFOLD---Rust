@@ -17,6 +17,15 @@ struct Probe {
     max_volume_residual: f64,
 }
 
+#[repr(C)]
+#[derive(Debug, Default)]
+struct BoundaryProbe {
+    max_velocity_error: f64,
+    max_transpose_error: f64,
+    blended_faces: u32,
+    extrapolated_faces: u32,
+}
+
 fn assert_probe_finite(result: &Probe) {
     assert!(
         result.impulse.iter().all(|value| value.is_finite()),
@@ -60,6 +69,18 @@ unsafe extern "C" {
     ) -> i32;
     fn manifold_fluids_coupling_operator_probe() -> i32;
     fn manifold_fluids_coupling_closed_pocket_probe() -> i32;
+    fn manifold_fluids_coupling_boundary_probe(result: *mut BoundaryProbe) -> i32;
+}
+
+#[test]
+fn coupling_mesh_boundary_matches_native_interpolation_and_pressure_work() {
+    let mut result = BoundaryProbe::default();
+    let status = unsafe { manifold_fluids_coupling_boundary_probe(&mut result) };
+    super::super::native_result(status, "rigid boundary attribution").unwrap();
+    println!("{result:?}");
+    assert!(result.max_velocity_error.is_finite() && result.max_velocity_error < 2e-5);
+    assert!(result.max_transpose_error.is_finite() && result.max_transpose_error < 3e-5);
+    assert!(result.blended_faces > 0 && result.extrapolated_faces > 0);
 }
 
 fn probe(resolution: u32, dt: f64, density: f64, exchanges: u32, ratio: f64) -> Probe {

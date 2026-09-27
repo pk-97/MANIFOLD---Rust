@@ -31,6 +31,7 @@ SOFTWARE.
 #include "vmath.h"
 
 class TriangleMesh;
+class RigidBoundaryVelocityMap;
 struct GridIndex;
 
 struct RigidBodyVelocity {
@@ -67,6 +68,13 @@ public:
     void resizeGrid(int isize, int jsize, int ksize, double dx);
 
     void getGridDimensions(int *i, int *j, int *k);
+    // MANIFOLD: caller owns the prepared map for the entire geometry build.
+    // Explicit instantaneous rigid motion replaces pose-chord velocity only
+    // while bound; normal animated/deforming obstacles keep their native path.
+    void setRigidBoundarySource(RigidBoundaryVelocityMap &map, size_t body);
+    void clearRigidBoundarySource();
+    RigidBoundaryVelocityMap *getRigidBoundaryMap() const { return _rigidBoundaryMap; }
+    size_t getRigidBoundaryBody() const { return _rigidBoundaryBody; }
     void updateMeshStatic(TriangleMesh meshCurrent);
     void updateMeshAnimated(TriangleMesh meshPrevious, 
                             TriangleMesh meshCurrent, 
@@ -183,6 +191,8 @@ private:
     int _jsize = 0;
     int _ksize = 0;
     double _dx = 0.0;
+    RigidBoundaryVelocityMap *_rigidBoundaryMap = nullptr;
+    size_t _rigidBoundaryBody = 0;
 
     TriangleMesh _meshPrevious;
     TriangleMesh _meshCurrent;
