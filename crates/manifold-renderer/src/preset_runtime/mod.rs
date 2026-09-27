@@ -95,6 +95,8 @@ mod scene_impulses;
 pub use scene_impulses::SceneImpulseDiagnostics;
 pub use physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 mod physics_carry;
+mod physics_sources;
+mod physics_source_runtime;
 mod convert_heal;
 mod math_view;
 mod math_view_events;

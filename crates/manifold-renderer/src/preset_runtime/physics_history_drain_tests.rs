@@ -172,3 +172,86 @@ fn fluid_graph_recording_receives_authoritative_project_tempo_and_exact_breakpoi
     drop(runtime);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
+    use crate::node_graph::fluid::FluidDomainState;
+    let directory = std::env::temp_dir().join(format!(
+        "manifold-fluid-source-graph-{}",
+        std::process::id()
+    ));
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.fluid_time", || {
+        Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
+    });
+    let mut definition = serde_json::json!({
+        "version": 2, "name": "Recorded source graph",
+        "nodes": [
+            {"id":0,"nodeId":"fluid","typeId":"node.fluid_surface","params":{
+                "resolution":{"type":"Int","value":8}, "fill_height":{"type":"Float","value":0.0},
+                "emission":{"type":"Float","value":0.0}, "cache_mode":{"type":"Enum","value":1},
+                "cache_path":{"type":"String","value":directory.to_str().unwrap()}
+            }},
+            {"id":1,"nodeId":"observe","typeId":"test.fluid_time"},
+            {"id":2,"nodeId":"source","typeId":"system.source"},
+            {"id":3,"nodeId":"output","typeId":"system.final_output"},
+            {"id":4,"nodeId":"input","typeId":"system.generator_input"},
+            {"id":5,"nodeId":"appearance","typeId":"node.pbr_material","params":{
+                "roughness":{"type":"Float","value":0.1}
+            }}
+        ],
+        "wires": [
+            {"fromNode":0,"fromPort":"simulation_time","toNode":1,"toPort":"time"},
+            {"fromNode":2,"fromPort":"out","toNode":3,"toPort":"in"}
+        ]
+    });
+    let time = |seconds| FrameTime {
+        seconds: Seconds(seconds),
+        beats: Beats(seconds * 2.0),
+        delta: Seconds::ZERO,
+        frame_count: 0,
+    };
+    let mut recorded = PresetRuntime::from_json_str(&definition.to_string(), &registry).unwrap();
+    recorded.execute_frame(time(0.0));
+    recorded.execute_frame(time(0.1));
+    drop(recorded);
+    definition["nodes"][0]["params"]["cache_mode"]["value"] = 2.into();
+    definition["nodes"][5]["params"]["roughness"]["value"] = 0.9.into();
+    let mut playback = PresetRuntime::from_json_str(&definition.to_string(), &registry).unwrap();
+    let state = |runtime: &PresetRuntime| {
+        let fluid = runtime
+            .graph
+            .instance_by_node_id(&NodeId::new("fluid"))
+            .unwrap();
+        runtime
+            .graph
+            .get_node(fluid)
+            .unwrap()
+            .node
+            .fluid_domain_snapshot()
+            .unwrap()
+            .state
+    };
+    playback.execute_frame(time(0.1));
+    assert_eq!(state(&playback), FluidDomainState::Ready);
+    let original: EffectGraphDef = serde_json::from_value(definition.clone()).unwrap();
+    definition["nodes"][0]["params"]["gravity"] = serde_json::json!({"type":"Float","value":-3.0});
+    let changed: EffectGraphDef = serde_json::from_value(definition).unwrap();
+    playback.apply_inner_param_overrides(&changed);
+    playback.execute_frame(time(0.1));
+    assert_eq!(state(&playback), FluidDomainState::Failed);
+    playback.apply_inner_param_overrides(&original);
+    playback.execute_frame(time(0.1));
+    assert_eq!(state(&playback), FluidDomainState::Ready);
+    let mut rebuilt = PresetRuntime::from_def(original.clone(), &registry, None).unwrap();
+    rebuilt.apply_physics_source_graphs(Err("unresolved source after rebuild".into()));
+    rebuilt.carry_generator_state_from(&mut playback);
+    rebuilt.execute_frame(time(0.1));
+    assert_eq!(state(&rebuilt), FluidDomainState::Failed);
+    rebuilt.apply_inner_param_overrides(&original);
+    rebuilt.execute_frame(time(0.1));
+    assert_eq!(state(&rebuilt), FluidDomainState::Ready);
+    drop(rebuilt);
+    drop(playback);
+    std::fs::remove_dir_all(directory).unwrap();
+}

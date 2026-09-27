@@ -15,6 +15,8 @@ fn main() {
             "src/node_graph/physics_events.rs",
             "src/node_graph/transform.rs",
             "src/preset_runtime/physics_sampling.rs",
+            "src/preset_runtime/physics_sources.rs",
+            "src/preset_runtime/physics_source_runtime.rs",
             "src/preset_context.rs",
             "../manifold-core/src/tempo.rs",
         ],

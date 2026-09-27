@@ -82,6 +82,7 @@ pub struct PresetRuntime {
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
     pub(super) last_physics_frame_time: Option<FrameTime>,
     pub(super) physics_project_tempo: Option<crate::preset_context::ProjectTempo>,
+    pub(super) physics_source_graphs: Result<Vec<(NodeInstanceId, [u8; 32])>, String>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -1321,6 +1322,7 @@ impl PresetRuntime {
             physics_input_snapshot,
             last_physics_frame_time: None,
             physics_project_tempo: None,
+            physics_source_graphs: Ok(Vec::new()),
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,
@@ -1948,6 +1950,7 @@ impl PresetRuntime {
             seg.bound
                 .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
         }
+        self.refresh_physics_source_graphs(def);
     }
 
     /// Re-bake every binding's reshape from the live manifest — the in-place

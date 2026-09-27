@@ -297,6 +297,7 @@ impl NativeSimulation {
                             request.cache_path.clone(),
                             request.settings,
                             request.project_tempo.as_ref(),
+                            request.source_identity,
                         ) {
                             Ok(reader) => self.playback = Some(reader),
                             Err(error) => setup_error = Some(error),
@@ -469,6 +470,7 @@ impl NativeSimulation {
             });
         }
         Reply {
+            source_identity: request.source_identity,
             epoch: request.epoch,
             tick: playback_tick.unwrap_or(request.start_tick + completed_count as u64),
             started_tick,

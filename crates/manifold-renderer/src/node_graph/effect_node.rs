@@ -1142,6 +1142,9 @@ pub trait EffectNode: Send {
     /// Hosts install an immutable snapshot; native I/O stays on the worker.
     fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::preset_context::ProjectTempo>) {}
 
+    /// Authored dependency identity, prepared before evaluating live controls.
+    fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
+
     /// Resolve the rigid participant before its paired liquid step. This must
     /// not construct or advance a second native world, or publish outputs.
     fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {

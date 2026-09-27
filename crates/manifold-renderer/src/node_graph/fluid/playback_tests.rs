@@ -20,6 +20,15 @@ impl Fixture {
         origin: f64,
         project_tempo: Option<crate::preset_context::ProjectTempo>,
     ) -> Self {
+        Self::with_sources(timed, origin, project_tempo, None)
+    }
+
+    fn with_sources(
+        timed: bool,
+        origin: f64,
+        project_tempo: Option<crate::preset_context::ProjectTempo>,
+        source_identity: Option<[u8; 32]>,
+    ) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let directory = Arc::new(std::env::temp_dir().join(format!(
             "manifold-fluid-project-playback-{}-{}",
@@ -32,6 +41,7 @@ impl Fixture {
         };
         let initial = FluidControls::default();
         let request = Request {
+            source_identity,
             project_tempo,
             epoch: 1,
             settings,
@@ -416,4 +426,160 @@ fn fluid_recording_rejects_losing_project_clock_provenance_mid_take() {
     observe(&mut runtime, 0.0).unwrap();
     assert!(runtime.failure.is_none());
     assert_eq!(runtime.recording_project_timing, Some(false));
+}
+
+#[test]
+fn fluid_playback_revalidates_authored_sources_and_cancels_completed_old_replies() {
+    let fixture = Fixture::with_sources(true, 40.0, None, Some([1; 32]));
+    let mut runtime = fixture.runtime();
+    runtime.set_source_identity(Ok([1; 32]));
+    let (requests, receive) = mpsc::sync_channel(1);
+    let (send, replies) = mpsc::sync_channel(1);
+    runtime.worker = Some(Worker {
+        requests,
+        replies,
+        cancel_epoch: Arc::clone(&runtime.cancel_epoch),
+    });
+    let mut native = NativeSimulation::default();
+    fixture.observe(&mut runtime, 41.0, 1.0);
+    runtime.advance(false).unwrap();
+    let old_reply = native.process(receive.try_recv().unwrap(), &runtime.cancel_epoch);
+    assert!(old_reply.error.is_none());
+    let epoch = runtime.epoch;
+    runtime.set_source_identity(Ok([1; 32]));
+    assert_eq!(runtime.epoch, epoch);
+    runtime.set_source_identity(Ok([2; 32]));
+    assert!(runtime.epoch > epoch);
+    fixture.observe(&mut runtime, 41.0, 1.0);
+    send.send(old_reply).unwrap();
+    runtime.advance(false).unwrap();
+    assert!(!runtime.initialized);
+    assert!(runtime.vertices.is_empty());
+    let reply = native.process(receive.try_recv().unwrap(), &runtime.cancel_epoch);
+    assert!(
+        reply
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("source identity changed")
+    );
+    send.send(reply).unwrap();
+    assert!(runtime.advance(true).is_err());
+}
+
+#[test]
+fn fluid_record_commits_source_only_changes_without_native_ticks_or_new_clock_points() {
+    let directory =
+        std::env::temp_dir().join(format!("manifold-fluid-source-only-{}", std::process::id()));
+    let mut runtime = FluidRuntime::default();
+    runtime.set_source_identity(Ok([1; 32]));
+    runtime
+        .set_cache(CacheMode::Record, directory.to_str().unwrap())
+        .unwrap();
+    runtime
+        .observe(
+            FluidSettings {
+                resolution: 8,
+                fill_height: 0.0,
+                ..Default::default()
+            },
+            FluidControls {
+                emission: false,
+                obstacle_enabled: false,
+                ..Default::default()
+            },
+            Seconds::ZERO,
+            1.0,
+            0.0,
+        )
+        .unwrap();
+    runtime.advance(true).unwrap();
+    let epoch = runtime.epoch;
+    let version = runtime.version;
+    let original = FluidTakeReplay::open(&directory).unwrap();
+    original.validate_source_identity([1; 32]).unwrap();
+    runtime.set_source_identity(Err("temporarily unresolved authored dependency".into()));
+    assert!(runtime.advance(true).is_err());
+    assert_eq!(runtime.epoch, epoch);
+    assert!(runtime.initialized);
+    runtime.set_source_identity(Ok([2; 32]));
+    assert_eq!(runtime.epoch, epoch);
+    runtime.advance(true).unwrap();
+    assert_eq!(runtime.completed_tick, 0);
+    assert_eq!(runtime.version, version);
+    assert_eq!(runtime.committed_source_identity, Some([2; 32]));
+    let updated = FluidTakeReplay::open(&directory).unwrap();
+    updated.validate_source_identity([2; 32]).unwrap();
+    assert!(updated.validate_source_identity([1; 32]).is_err());
+    original.validate_source_identity([1; 32]).unwrap();
+    drop(runtime);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn fluid_source_preparation_error_survives_reset_and_recovers_explicitly() {
+    let mut runtime = FluidRuntime::default();
+    let live_epoch = runtime.epoch;
+    runtime.set_source_identity(Err("invalid authored dependency".into()));
+    runtime.advance(true).unwrap(); // Live does not require cache provenance.
+    runtime.set_source_identity(Ok([1; 32]));
+    assert_eq!(runtime.epoch, live_epoch);
+    runtime.set_source_identity(Err("invalid authored dependency".into()));
+    runtime
+        .set_cache(CacheMode::Record, "unused-source-error-test")
+        .unwrap();
+    runtime.clear();
+    assert_eq!(runtime.domain_snapshot().state, FluidDomainState::Failed);
+    assert!(
+        runtime
+            .advance(true)
+            .unwrap_err()
+            .contains("authored dependency")
+    );
+    runtime.set_source_identity(Ok([3; 32]));
+    runtime.advance(true).unwrap();
+    assert!(runtime.source_error.is_none());
+}
+
+#[test]
+fn fluid_source_acknowledgement_preserves_newer_authored_edits() {
+    let mut runtime = FluidRuntime::default();
+    runtime.set_source_identity(Ok([1; 32]));
+    runtime
+        .set_cache(CacheMode::Record, "unused-source-ack-test")
+        .unwrap();
+    runtime
+        .observe(
+            FluidSettings::default(),
+            FluidControls::default(),
+            Seconds::ZERO,
+            1.0,
+            0.0,
+        )
+        .unwrap();
+    let (requests, receive) = mpsc::sync_channel(1);
+    let (send, replies) = mpsc::sync_channel(1);
+    runtime.worker = Some(Worker {
+        requests,
+        replies,
+        cancel_epoch: Arc::clone(&runtime.cancel_epoch),
+    });
+    runtime.advance(false).unwrap();
+    send.send(cancelled_reply(receive.try_recv().unwrap()))
+        .unwrap();
+    runtime.advance(false).unwrap();
+    assert_eq!(runtime.committed_source_identity, Some([1; 32]));
+    runtime.set_source_identity(Ok([2; 32]));
+    runtime.advance(false).unwrap();
+    let older = receive.try_recv().unwrap();
+    assert!(older.timing.metadata_only);
+    runtime.set_source_identity(Ok([3; 32]));
+    send.send(cancelled_reply(older)).unwrap();
+    runtime.advance(false).unwrap();
+    let newer = receive.try_recv().unwrap();
+    assert_eq!(newer.source_identity, Some([3; 32]));
+    send.send(cancelled_reply(newer)).unwrap();
+    runtime.advance(false).unwrap();
+    assert_eq!(runtime.committed_source_identity, Some([3; 32]));
+    assert!(receive.try_recv().is_err());
 }

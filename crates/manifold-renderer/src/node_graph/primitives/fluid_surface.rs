@@ -197,6 +197,10 @@ impl FluidSurface {
 }
 
 impl Primitive for FluidSurface {
+    fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
+        self.runtime.set_source_identity(identity);
+    }
+
     fn set_physics_project_tempo(&mut self, tempo: Option<&crate::preset_context::ProjectTempo>) {
         self.runtime.set_project_tempo(tempo);
     }

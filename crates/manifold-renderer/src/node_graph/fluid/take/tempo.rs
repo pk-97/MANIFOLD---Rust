@@ -13,7 +13,7 @@ pub(super) fn validate_project_tempo(
     reader: &Reader,
     project_tempo: &ProjectTempo,
 ) -> Result<(), String> {
-    if reader.header.version != super::VERSION || !reader.header.project_timing {
+    if reader.header.version < 4 || !reader.header.project_timing {
         return Err("Physics take: recorded project tempo provenance is unavailable".into());
     }
     let range = reader

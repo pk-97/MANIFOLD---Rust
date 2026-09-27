@@ -400,6 +400,8 @@ pub trait Primitive: PrimitiveSpec {
 
     fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::preset_context::ProjectTempo>) {}
 
+    fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
+
     fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
         Err("Primitive does not support coupled rigid input capture".into())
     }
@@ -807,6 +809,9 @@ impl<P: Primitive + 'static> EffectNode for P {
 
     fn set_physics_project_tempo(&mut self, tempo: Option<&crate::preset_context::ProjectTempo>) {
         Primitive::set_physics_project_tempo(self, tempo);
+    }
+    fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
+        Primitive::set_physics_source_identity(self, identity);
     }
     fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
         Primitive::capture_coupled_rigid(self, ctx)

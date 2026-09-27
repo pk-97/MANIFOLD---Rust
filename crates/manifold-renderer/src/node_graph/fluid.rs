@@ -341,6 +341,7 @@ struct PlaybackCompletion {
 }
 
 struct Request {
+    source_identity: Option<[u8; 32]>,
     project_tempo: Option<crate::preset_context::ProjectTempo>,
     epoch: u64,
     settings: FluidSettings,
@@ -361,6 +362,7 @@ struct Request {
 }
 
 struct Reply {
+    source_identity: Option<[u8; 32]>,
     epoch: u64,
     tick: u64,
     /// Exclusive boundary of native ticks begun, including a failed tick.
@@ -380,6 +382,7 @@ struct Reply {
 
 fn cancelled_reply(request: Request) -> Reply {
     Reply {
+        source_identity: request.source_identity,
         epoch: request.epoch,
         tick: request.start_tick,
         started_tick: request.start_tick,
@@ -440,6 +443,9 @@ impl Drop for Worker {
 }
 
 pub struct FluidRuntime {
+    source_identity: Option<[u8; 32]>,
+    committed_source_identity: Option<[u8; 32]>,
+    source_error: Option<String>,
     project_tempo: Option<crate::preset_context::ProjectTempo>,
     recording_project_timing: Option<bool>,
     worker: Option<Worker>,
@@ -481,6 +487,9 @@ pub struct FluidRuntime {
 impl Default for FluidRuntime {
     fn default() -> Self {
         Self {
+            source_identity: None,
+            committed_source_identity: None,
+            source_error: None,
             project_tempo: None,
             recording_project_timing: None,
             worker: None,
@@ -529,6 +538,29 @@ impl Drop for FluidRuntime {
 }
 
 impl FluidRuntime {
+    pub(crate) fn set_source_identity(&mut self, identity: Result<[u8; 32], String>) {
+        let identity = match identity {
+            Ok(identity) => identity,
+            Err(error) => {
+                if self.source_error.as_ref() != Some(&error) {
+                    if self.cache_mode == CacheMode::Playback {
+                        self.clear();
+                    }
+                    self.source_error = Some(error);
+                }
+                return;
+            }
+        };
+        let recovering = self.source_error.take().is_some();
+        if self.source_identity == Some(identity) && !recovering {
+            return;
+        }
+        self.source_identity = Some(identity);
+        if self.cache_mode == CacheMode::Playback {
+            self.clear();
+        }
+    }
+
     pub(crate) fn set_project_tempo(
         &mut self,
         tempo: Option<&crate::preset_context::ProjectTempo>,
@@ -581,6 +613,7 @@ impl FluidRuntime {
         self.last_transport = None;
         self.history.clear();
         self.timing.clear();
+        self.committed_source_identity = None;
         self.recording_project_timing = None;
         self.role_history.clear();
         if let Some(coupled) = &mut self.coupled {
@@ -629,11 +662,16 @@ impl FluidRuntime {
         (self.target_time - self.simulation_time()).max(0.0)
     }
     pub fn warmup_pending(&self) -> bool {
-        self.busy && !self.initialized && self.failure.is_none()
+        self.busy
+            && !self.initialized
+            && self.failure.is_none()
+            && (self.cache_mode == CacheMode::Live || self.source_error.is_none())
     }
 
     pub fn domain_snapshot(&self) -> FluidDomainSnapshot {
-        let state = if self.failure.is_some() {
+        let state = if self.failure.is_some()
+            || (self.cache_mode != CacheMode::Live && self.source_error.is_some())
+        {
             FluidDomainState::Failed
         } else if self.initialized && self.settings.is_some() {
             FluidDomainState::Ready
@@ -1072,6 +1110,9 @@ impl FluidRuntime {
         if let Some(completed) = reply.playback {
             self.completed_playback = Some(completed.address);
         }
+        if self.cache_mode == CacheMode::Record {
+            self.committed_source_identity = reply.source_identity;
+        }
         if !has_output {
             self.spare = Some(reply.vertices);
             self.spare_whitewater = Some(reply.whitewater);
@@ -1091,6 +1132,11 @@ impl FluidRuntime {
     }
 
     pub fn advance(&mut self, blocking: bool) -> Result<(), String> {
+        if self.cache_mode != CacheMode::Live
+            && let Some(error) = &self.source_error
+        {
+            return Err(error.clone());
+        }
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
@@ -1134,7 +1180,10 @@ impl FluidRuntime {
                 && (if self.cache_mode == CacheMode::Playback {
                     playback == self.completed_playback
                 } else {
-                    due == 0 && !(self.cache_mode == CacheMode::Record && self.timing.pending())
+                    due == 0
+                        && !(self.cache_mode == CacheMode::Record
+                            && (self.timing.pending()
+                                || self.source_identity != self.committed_source_identity))
                 })
             {
                 return Ok(());
@@ -1167,6 +1216,7 @@ impl FluidRuntime {
                 .expect("one recycled role history per request");
             self.role_history.snapshot(&mut role_history);
             let request = Request {
+                source_identity: self.source_identity,
                 project_tempo: self.project_tempo.clone(),
                 epoch: self.epoch,
                 settings,
@@ -1449,6 +1499,7 @@ mod tests {
             let init = request_receiver.recv().unwrap();
             reply_sender
                 .send(Reply {
+                    source_identity: None,
                     timing: Default::default(),
                     playback: None,
                     coupled: None,
@@ -1486,6 +1537,7 @@ mod tests {
                         counts.push(request.count);
                         reply_sender
                             .send(Reply {
+                                source_identity: None,
                                 timing: Default::default(),
                                 playback: None,
                                 coupled: None,
@@ -1536,6 +1588,7 @@ mod tests {
         let init = request_receiver.recv().unwrap();
         reply_sender
             .send(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -1567,6 +1620,7 @@ mod tests {
         assert_eq!(hitch.count, 17);
         reply_sender
             .send(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -1628,6 +1682,7 @@ mod tests {
             .unwrap();
         runtime
             .accept(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -1653,6 +1708,7 @@ mod tests {
         runtime.clear();
         runtime
             .accept(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -2070,6 +2126,7 @@ mod tests {
         runtime.spare_history = None;
         runtime
             .accept(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -2117,6 +2174,7 @@ mod tests {
         let epoch = runtime.epoch;
         runtime
             .accept(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -2141,6 +2199,7 @@ mod tests {
 
         runtime
             .accept(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -2173,6 +2232,7 @@ mod tests {
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
         runtime
             .accept(Reply {
+                source_identity: None,
                 timing: Default::default(),
                 playback: None,
                 coupled: None,
@@ -2212,6 +2272,7 @@ mod tests {
         assert!(
             runtime
                 .accept(Reply {
+                    source_identity: None,
                     timing: Default::default(),
                     playback: None,
                     coupled: None,

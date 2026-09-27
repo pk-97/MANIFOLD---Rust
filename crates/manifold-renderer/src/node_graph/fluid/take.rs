@@ -25,8 +25,9 @@ pub(crate) use playback::PlaybackClock;
 pub(super) use timing::{Capture, TimingHandoff};
 pub use timing::{TakeRange, TakeTime};
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const LEGACY_VERSION: u32 = 3;
+const TIMED_LEGACY_VERSION: u32 = 4;
 const MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
 const HEADER: &str = "take-header.zst";
 const PROGRESS: &str = "take-progress.zst";
@@ -96,6 +97,19 @@ impl FluidTakeReplay {
 
     pub fn recording_failure(&self) -> Option<&str> {
         self.reader.progress.failed.as_deref()
+    }
+
+    /// Verify that this take still belongs to the authored source expected by
+    /// the caller. The value is captured during preflight, before replay can
+    /// advance or any files can be changed.
+    pub(crate) fn validate_source_identity(&self, expected: [u8; 32]) -> Result<(), String> {
+        let Some(actual) = self.reader.source_identity else {
+            return Err("Physics take: source identity is missing".into());
+        };
+        if actual != expected {
+            return Err("Physics take: source identity changed".into());
+        }
+        Ok(())
     }
 
     /// Verify that the recorded project clock still agrees with the current
@@ -247,6 +261,7 @@ impl FluidTakeReplay {
             cache_path: Arc::clone(&pending.cache_path),
             coupled,
             timing: TimingHandoff::default(),
+            source_identity: None,
             playback: None,
         };
         let reply = self.native.process(request, &AtomicU64::new(EPOCH));
@@ -290,6 +305,8 @@ struct Header {
     role_setup: Arc<roles::Setup>,
     coupled_setup: Option<Arc<coupled::Setup>>,
     clock_origin: Option<TakeTime>,
+    #[serde(default)]
+    source_identity: Option<Hash>,
 }
 
 /// Only a committed prefix is playable. No progress record claims a complete
@@ -328,12 +345,16 @@ struct Batch {
     coupled_history: Option<Vec<coupled::Sample>>,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     clock: Vec<TakeTime>,
+    #[serde(default)]
+    source_identity: Option<Hash>,
 }
 
 pub(super) struct Writer {
     directory: Arc<PathBuf>,
     progress: Progress,
     project_timing: bool,
+    source_identity: Option<Hash>,
+    committed_source_identity: Option<Hash>,
 }
 
 impl Writer {
@@ -367,6 +388,7 @@ impl Writer {
                 .as_ref()
                 .map(|rigid| Arc::clone(&rigid.setup)),
             clock_origin: request.timing.points.first().copied(),
+            source_identity: request.source_identity,
         };
         if let Some(origin) = header.clock_origin {
             timing::validate_point(origin)?;
@@ -388,6 +410,8 @@ impl Writer {
             directory,
             progress,
             project_timing,
+            source_identity: header.source_identity,
+            committed_source_identity: header.source_identity,
         })
     }
 
@@ -404,7 +428,13 @@ impl Writer {
         if request.project_tempo.is_some() != self.project_timing {
             return Err("Physics take: project tempo provenance changed during recording".into());
         }
-        if request.count == 0 && request.timing.points.is_empty() {
+        if request.source_identity.is_some() != self.source_identity.is_some() {
+            return Err("Physics take: source identity presence changed during recording".into());
+        }
+        if request.count == 0
+            && request.timing.points.is_empty()
+            && request.source_identity == self.committed_source_identity
+        {
             if let Some(failure) = failure {
                 self.progress.failed = Some(failure.to_owned());
                 publish_progress(&self.directory, &self.progress)?;
@@ -458,6 +488,7 @@ impl Writer {
                 })
                 .collect(),
             clock: request.timing.points.clone(),
+            source_identity: request.source_identity,
         };
         let hash = write_new(&batch_path(&self.directory, self.progress.records), &batch)?;
         let next = Progress {
@@ -470,6 +501,7 @@ impl Writer {
         };
         publish_progress(&self.directory, &next)?;
         self.progress = next;
+        self.committed_source_identity = request.source_identity;
         Ok(())
     }
 }
@@ -483,14 +515,17 @@ pub(super) struct Reader {
     next_record: u64,
     clock_range: Option<TakeRange>,
     clock_index: Vec<ClockIndexEntry>,
+    source_identity: Option<Hash>,
 }
 
 impl Reader {
     pub fn open(directory: Arc<PathBuf>) -> Result<Self, String> {
         let (header, header_hash): (Header, Hash) = read_record(&directory.join(HEADER))?;
         let (progress, _): (Progress, Hash) = read_record(&directory.join(PROGRESS))?;
-        if !matches!(header.version, LEGACY_VERSION | VERSION)
-            || header.epoch == 0
+        if !matches!(
+            header.version,
+            LEGACY_VERSION | TIMED_LEGACY_VERSION | VERSION
+        ) || header.epoch == 0
             || header.upstream_revision != manifold_fluids::UPSTREAM_REVISION
             || header.numerics_revision != manifold_fluids::NUMERICS_REVISION
             || header.solver_identity != super::identity::solver_identity()
@@ -501,6 +536,9 @@ impl Reader {
             return Err("Physics take: incompatible solver, schema or setup identity".into());
         }
         header.settings.validate()?;
+        if header.version < VERSION && header.source_identity.is_some() {
+            return Err("Physics take: legacy schema cannot establish source identity".into());
+        }
         if let Some(origin) = header.clock_origin {
             timing::validate_point(origin)?;
             if origin.simulation.0 != 0.0 {
@@ -527,6 +565,7 @@ impl Reader {
         let mut clock_range = header
             .clock_origin
             .map(|start| TakeRange { start, end: start });
+        let mut source_identity = header.source_identity;
         let mut completed_time = progress.completed_tick as f64 * TICK;
         if let Some(end) = progress.clock_end {
             timing::validate_point(end)?;
@@ -552,6 +591,13 @@ impl Reader {
             {
                 return Err("Physics take: invalid committed input chain".into());
             }
+            if batch.source_identity.is_some() != header.source_identity.is_some() {
+                return Err(
+                    "Physics take: source identity presence changed in committed input chain"
+                        .into(),
+                );
+            }
+            source_identity = batch.source_identity;
             let next_clock_end = validate_clock(&batch.clock, clock_end)?;
             if let Some(last) = batch.clock.last().copied() {
                 if clock_index.len() >= playback::MAX_CLOCK_INDEX_ENTRIES {
@@ -599,6 +645,7 @@ impl Reader {
             next_record: 0,
             clock_range,
             clock_index,
+            source_identity,
         })
     }
 
@@ -809,6 +856,7 @@ impl Reader {
                 cache_path: Arc::new(PathBuf::new()),
                 coupled,
                 timing: TimingHandoff::default(),
+                source_identity: None,
                 project_tempo: None,
                 playback: None,
             }));
@@ -919,5 +967,7 @@ fn read_record<T: serde::de::DeserializeOwned>(path: &Path) -> Result<(T, Hash),
     Ok((record, hash))
 }
 
+#[cfg(test)]
+mod source_tests;
 #[cfg(test)]
 pub(super) mod tests;
