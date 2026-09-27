@@ -9,6 +9,7 @@ use manifold_core::effect_graph_def::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+mod calibration;
 mod maps;
 mod params;
 pub(super) mod project;
@@ -47,6 +48,19 @@ pub fn upgrade_material_graph(
     if !contains_geometry_source(&def.nodes) {
         return MaterialGraphUpgrade::default();
     }
+    if calibration::has_saved_frames(def) {
+        return upgrade_calibrated_material_graph(def, cache);
+    }
+    upgrade_material_graph_in_place(def, cache)
+}
+
+fn upgrade_material_graph_in_place(
+    def: &mut EffectGraphDef,
+    cache: &mut MaterialUpgradeCache,
+) -> MaterialGraphUpgrade {
+    if !contains_geometry_source(&def.nodes) {
+        return MaterialGraphUpgrade::default();
+    }
     let Some(metadata) = def.preset_metadata.as_mut() else {
         return MaterialGraphUpgrade {
             notices: vec!["material upgrade skipped: graph has no preset metadata".to_string()],
@@ -63,6 +77,36 @@ pub fn upgrade_material_graph(
         &mut next_id,
         &mut result,
     );
+    result
+}
+
+fn upgrade_calibrated_material_graph(
+    def: &mut EffectGraphDef,
+    cache: &mut MaterialUpgradeCache,
+) -> MaterialGraphUpgrade {
+    if let Err(error) = calibration::validate_saved_frames(def) {
+        return MaterialGraphUpgrade {
+            notices: vec![format!(
+                "material upgrade skipped for calibrated graph: {error}"
+            )],
+            ..MaterialGraphUpgrade::default()
+        };
+    }
+
+    let mut candidate = def.clone();
+    let mut result = upgrade_material_graph_in_place(&mut candidate, cache);
+    if let Err(error) = calibration::refresh_hashes(def, &mut candidate)
+        .and_then(|()| calibration::validate_saved_frames(&candidate))
+    {
+        result.changed = false;
+        result.binding_updates.clear();
+        result.notices.push(format!(
+            "material upgrade skipped for calibrated graph: {error}"
+        ));
+        return result;
+    }
+
+    *def = candidate;
     result
 }
 
