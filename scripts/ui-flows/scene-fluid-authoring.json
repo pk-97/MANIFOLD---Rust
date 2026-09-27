@@ -1,5 +1,5 @@
 [
-  {"Pointer":{"target":{"Query":{"text":"Scene"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"ScrollTo":{"target":{"Query":{"name":"scene_setup.add_fluid"}}}},
   {"Pointer":{"target":{"Query":{"name":"scene_setup.add_fluid"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value","text":"Fluid 1"}},"check":"Exists"}},

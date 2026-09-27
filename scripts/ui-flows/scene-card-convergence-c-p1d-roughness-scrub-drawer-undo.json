@@ -13,6 +13,34 @@
       }
     }
   },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.objects.group_toggle"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "■ QS1694-W02-1-1"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
   "Snapshot",
   {
     "Assert": {

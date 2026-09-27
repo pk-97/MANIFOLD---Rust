@@ -3,7 +3,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Scene"
+          "text": "Scene",
+          "type": "Button"
         }
       },
       "gesture": {
