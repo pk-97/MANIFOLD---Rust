@@ -212,7 +212,7 @@ impl RigidSimulation {
         Ok(())
     }
 
-    pub(super) fn begin_impulse_tick(&mut self) -> Result<(), String> {
+    pub(super) fn begin_impulse_tick(&mut self) -> Result<TickStamp, String> {
         self.impulse_tick_events.clear();
         let tick = self
             .impulse_queue
@@ -225,7 +225,7 @@ impl RigidSimulation {
             .expect("initialized world has an impulse queue")
             .begin_tick(tick, |event| events.push(event))
             .map_err(|error| format!("Physics: failed to begin impulse tick: {error}"))?;
-        Ok(())
+        Ok(tick)
     }
 
     pub(super) fn apply_impulse_tick(&mut self) -> Result<(), String> {

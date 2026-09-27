@@ -5,12 +5,15 @@ use manifold_physics::{
     BodyConfig, BodyHandle, BodyKind, FieldInput, FieldValue, PhysicsWorld, VectorField,
 };
 use std::sync::Arc;
+use manifold_physics::stepping::{StepCoupling, SubstepExchange, Uncoupled};
 
 use super::transform::Transform;
 use crate::generators::platonic_geometry::platonic_points;
 
 mod targeted_fields;
 mod impulses;
+#[cfg(test)]
+mod coupling_tests;
 
 pub use impulses::{ResolvedRigidImpulse, RigidImpulseTargets};
 use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
@@ -570,6 +573,33 @@ impl RigidSimulation {
         acceleration_field: Option<FieldValue>,
         targeted_fields_input: &[Option<FieldValue>],
     ) -> Result<(), String> {
+        self.advance_with_coupling(
+            bodies, prototype, copy_count, copy_spacing, copy_columns, layout,
+            gravity, now, speed, reset_count, acceleration_field, targeted_fields_input,
+            &mut Uncoupled,
+        )
+    }
+
+    /// Run another native solver inside the existing rigid tick owner. Its
+    /// prepared body bindings must belong to this world and epoch. Authored
+    /// histories, edge events, contacts and publication retain their usual path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_with_coupling<C: StepCoupling>(
+        &mut self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        copy_count: f32,
+        copy_spacing: f32,
+        copy_columns: f32,
+        layout: f32,
+        gravity: [f32; 3],
+        now: Seconds,
+        speed: f32,
+        reset_count: f32,
+        acceleration_field: Option<FieldValue>,
+        targeted_fields_input: &[Option<FieldValue>],
+        coupling: &mut C,
+    ) -> Result<(), String> {
         self.accepted_observation = None;
         if !targeted_fields_input.is_empty() && targeted_fields_input.len() != TARGET_SLOTS {
             return Err(format!(
@@ -955,7 +985,7 @@ impl RigidSimulation {
                     .expect("world constructed above")
                     .set_gravity(tick_gravity)
                     .map_err(|e| e.to_string())?;
-                self.begin_impulse_tick()?;
+                let tick_stamp = self.begin_impulse_tick()?;
                 self.apply_impulse_tick()?;
                 let dynamic_microsteps = self.configure_fast_bodies(
                     &bodies,
@@ -979,21 +1009,45 @@ impl RigidSimulation {
                     .map_err(|e| e.to_string())?;
                 let microstep_time = TICK / microsteps as f64;
                 let solver_substeps = 4;
+                let mut exchange = coupling.begin_tick(tick_stamp, Seconds(TICK))
+                    .map_err(|error| format!("Physics coupling: {error}"))?;
+                // Subtract accepted durations in the same order as the other
+                // solver. The final interval consumes the exact remainder,
+                // including floating-point roundoff from earlier subdivisions.
+                let mut tick_remaining = TICK;
                 for microstep in 1..=microsteps {
                     let target_time = self.physics_time + microstep_time * microstep as f64;
-                    self.prepare_substep(
-                        &bodies,
-                        prototype.as_ref(),
-                        Seconds(target_time),
-                        Seconds(microstep_time),
-                        &sampled_field,
-                        targeted_indices,
-                    )?;
-                    let world = self.world.as_mut().expect("world constructed above");
-                    world
-                        .step(Seconds(microstep_time), solver_substeps)
-                        .map_err(|e| e.to_string())?;
+                    let mut remaining = if microstep == microsteps {
+                        tick_remaining
+                    } else {
+                        microstep_time
+                    };
+                    while remaining > 0.0 {
+                        self.prepare_substep(
+                            &bodies,
+                            prototype.as_ref(),
+                            Seconds(target_time),
+                            Seconds(remaining),
+                            &sampled_field,
+                            targeted_indices,
+                        )?;
+                        let world = self.world.as_mut().expect("world constructed above");
+                        let duration = exchange.next_substep(world, Seconds(remaining))
+                            .map_err(|error| format!("Physics coupling: {error}"))?;
+                        if !duration.0.is_finite() || duration.0 <= 0.0
+                            || duration.0 > remaining || remaining - duration.0 == remaining
+                            || tick_remaining - duration.0 == tick_remaining
+                        {
+                            return Err("Physics coupling returned an invalid substep duration".into());
+                        }
+                        exchange.exchange(world, duration)
+                            .map_err(|error| format!("Physics coupling: {error}"))?;
+                        world.step(duration, solver_substeps).map_err(|error| error.to_string())?;
+                        remaining -= duration.0;
+                        tick_remaining -= duration.0;
+                    }
                 }
+                exchange.finish().map_err(|error| format!("Physics coupling: {error}"))?;
                 completed += 1;
                 self.physics_time += TICK;
                 self.apply_due_authored_edits()?;

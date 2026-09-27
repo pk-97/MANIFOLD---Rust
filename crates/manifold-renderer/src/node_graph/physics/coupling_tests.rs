@@ -1,0 +1,377 @@
+use super::*;
+use manifold_physics::{TickStamp, input::EventStamp};
+
+fn bodies() -> [Option<RigidBody>; MAX_BODIES] {
+    let mut bodies = std::array::from_fn(|_| None);
+    bodies[0] = Some(RigidBody::default());
+    bodies
+}
+
+fn advance<C: StepCoupling>(
+    simulation: &mut RigidSimulation,
+    bodies: [Option<RigidBody>; MAX_BODIES],
+    time: f64,
+    coupling: &mut C,
+) -> Result<(), String> {
+    let mut targeted: [Option<FieldValue>; TARGET_SLOTS] = std::array::from_fn(|_| None);
+    targeted[0] = Some(FieldValue::uniform([0.0, 0.0, 4.0]).unwrap());
+    simulation.advance_with_coupling(
+        bodies,
+        None,
+        0.0,
+        1.25,
+        16.0,
+        0.0,
+        [0.0, -2.0, 0.0],
+        Seconds(time),
+        1.0,
+        0.0,
+        Some(FieldValue::uniform([3.0, 0.0, 0.0]).unwrap()),
+        &targeted,
+        coupling,
+    )
+}
+
+struct Probe {
+    body: BodyHandle,
+    stamps: Vec<TickStamp>,
+    steps: usize,
+    duration: f64,
+    finished: usize,
+    fail_finish: bool,
+    invalid_duration: Option<f64>,
+}
+
+struct ProbeFrame<'a>(&'a mut Probe);
+
+impl StepCoupling for Probe {
+    type Error = &'static str;
+    type Frame<'a> = ProbeFrame<'a>;
+
+    fn begin_tick(&mut self, stamp: TickStamp, _: Seconds) -> Result<Self::Frame<'_>, Self::Error> {
+        self.stamps.push(stamp);
+        Ok(ProbeFrame(self))
+    }
+}
+
+impl SubstepExchange for ProbeFrame<'_> {
+    type Error = &'static str;
+
+    fn next_substep(
+        &mut self,
+        rigid: &PhysicsWorld,
+        maximum: Seconds,
+    ) -> Result<Seconds, Self::Error> {
+        // The real native queue must contain the same global and targeted
+        // forces before EVERY offer, because Box3D clears them after stepping.
+        assert_eq!(
+            rigid
+                .dynamics(self.0.body)
+                .unwrap()
+                .external_linear_acceleration,
+            [3.0, -2.0, 4.0]
+        );
+        Ok(Seconds(
+            self.0
+                .invalid_duration
+                .unwrap_or_else(|| maximum.0.min(FIXED_TICK.0 / 4.0)),
+        ))
+    }
+
+    fn exchange(&mut self, _: &mut PhysicsWorld, duration: Seconds) -> Result<(), Self::Error> {
+        self.0.steps += 1;
+        self.0.duration += duration.0;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<(), Self::Error> {
+        if self.0.fail_finish {
+            return Err("fixture finish failure");
+        }
+        self.0.finished += 1;
+        Ok(())
+    }
+}
+
+fn fixture() -> (RigidSimulation, Probe) {
+    let mut simulation = RigidSimulation::default();
+    advance(&mut simulation, bodies(), 0.0, &mut Uncoupled).unwrap();
+    let probe = Probe {
+        body: simulation.handles[0].unwrap(),
+        stamps: Vec::new(),
+        steps: 0,
+        duration: 0.0,
+        finished: 0,
+        fail_finish: false,
+        invalid_duration: None,
+    };
+    let epoch = simulation.impulse_epoch().unwrap();
+    simulation
+        .enqueue_impulse(
+            EventStamp {
+                epoch,
+                time: Seconds::ZERO,
+                sequence: 1,
+            },
+            ResolvedRigidImpulse {
+                field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
+                targets: RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false,
+                },
+            },
+        )
+        .unwrap();
+    (simulation, probe)
+}
+
+#[test]
+fn scene_physics_coupled_substeps_reuse_forces_and_consume_edge_once() {
+    let (mut simulation, mut probe) = fixture();
+    advance(&mut simulation, bodies(), FIXED_TICK.0 * 2.0, &mut probe).unwrap();
+    let velocity = simulation
+        .world
+        .as_ref()
+        .unwrap()
+        .dynamics(probe.body)
+        .unwrap()
+        .linear_velocity;
+    let expected = [
+        2.0 + 3.0 * FIXED_TICK.0 * 2.0,
+        -2.0 * FIXED_TICK.0 * 2.0,
+        4.0 * FIXED_TICK.0 * 2.0,
+    ];
+    for (actual, expected) in velocity.into_iter().zip(expected) {
+        assert!((f64::from(actual) - expected).abs() < 2e-6);
+    }
+    assert!(probe.steps >= 8);
+    assert!((probe.duration - FIXED_TICK.0 * 2.0).abs() < 1e-15);
+    assert_eq!(probe.finished, 2);
+    assert_eq!(
+        probe
+            .stamps
+            .iter()
+            .map(|stamp| stamp.tick)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert!(
+        probe
+            .stamps
+            .iter()
+            .all(|stamp| Some(stamp.epoch) == simulation.impulse_epoch())
+    );
+    assert_eq!(simulation.impulse_receipts.len(), 1);
+    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
+}
+
+#[test]
+fn scene_physics_coupling_failure_retains_published_pose_and_latches() {
+    let (mut simulation, mut probe) = fixture();
+    let published = simulation.poses;
+    probe.fail_finish = true;
+    let error = advance(&mut simulation, bodies(), FIXED_TICK.0, &mut probe).unwrap_err();
+    assert!(error.contains("fixture finish failure"));
+    assert_eq!(simulation.poses, published);
+    assert_eq!(simulation.physics_time, 0.0);
+    assert_eq!(simulation.impulse_receipts.len(), 1);
+    let steps = probe.steps;
+    assert_eq!(
+        advance(&mut simulation, bodies(), FIXED_TICK.0 * 2.0, &mut probe).unwrap_err(),
+        error
+    );
+    assert_eq!(probe.steps, steps);
+    assert_eq!(simulation.impulse_receipts.len(), 1);
+}
+
+#[test]
+fn scene_physics_coupling_rejects_invalid_offers_before_native_step() {
+    for duration in [
+        0.0,
+        -1.0,
+        f64::NAN,
+        f64::INFINITY,
+        FIXED_TICK.0 * 2.0,
+        f64::MIN_POSITIVE,
+    ] {
+        let (mut simulation, mut probe) = fixture();
+        let before = simulation.world.as_ref().unwrap().pose(probe.body).unwrap();
+        probe.invalid_duration = Some(duration);
+        let error = advance(&mut simulation, bodies(), FIXED_TICK.0, &mut probe).unwrap_err();
+        assert!(error.contains("invalid substep"), "{error}");
+        assert_eq!(probe.steps, 0);
+        assert_eq!(
+            simulation.world.as_ref().unwrap().pose(probe.body).unwrap(),
+            before
+        );
+        assert_eq!(simulation.physics_time, 0.0);
+    }
+}
+
+struct FluidCompanion {
+    fluid: manifold_fluids::FluidWorld,
+    coupling: manifold_fluids::RigidFluidCoupling,
+    epoch: u64,
+    stamps: Vec<TickStamp>,
+}
+
+impl StepCoupling for FluidCompanion {
+    type Error = manifold_fluids::FluidError;
+    type Frame<'a> = manifold_fluids::CoupledFluidFrame<'a, 'a>;
+
+    fn begin_tick(
+        &mut self,
+        stamp: TickStamp,
+        duration: Seconds,
+    ) -> Result<Self::Frame<'_>, Self::Error> {
+        assert_eq!(stamp.epoch, self.epoch);
+        assert_eq!(stamp.tick, self.stamps.len() as u64);
+        self.stamps.push(stamp);
+        self.coupling.begin_frame(&mut self.fluid, duration, &[])
+    }
+}
+
+fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
+    use manifold_fluids::{
+        Bounds, Config, FluidWorld, LiquidOptions, MeshRole, RigidFluidCoupling, TimeStepOptions,
+    };
+    let vertices: Vec<_> = [-0.25, 0.25]
+        .into_iter()
+        .flat_map(|x| {
+            [-0.2, 0.2]
+                .into_iter()
+                .flat_map(move |y| [-0.225, 0.225].into_iter().map(move |z| [x, y, z]))
+        })
+        .collect();
+    let mesh = manifold_physics::cook_hull_mesh(&vertices).unwrap();
+    let mut bodies = bodies();
+    bodies[0] = Some(RigidBody {
+        transform: Transform {
+            pos: std::array::from_fn(|axis| origin[axis] + [1.2, 1.05, 1.2][axis]),
+            ..Transform::default()
+        },
+        mass: 90.0,
+        bounce: 0.0,
+        collider: Some(Arc::new(ColliderGeometry {
+            hulls: vec![vertices],
+        })),
+        ..RigidBody::default()
+    });
+    let mut simulation = RigidSimulation::default();
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 1.0, 0.0)
+        .unwrap();
+    let handle = simulation.handles[0].unwrap();
+    let world = simulation.world.as_ref().unwrap();
+    let mut fluid = FluidWorld::new(Config {
+        cells: [16; 3],
+        cell_size: 0.15,
+        surface_subdivisions: 0,
+        apic: false,
+    })
+    .unwrap();
+    fluid.set_gravity([0.0; 3]).unwrap();
+    fluid
+        .set_liquid_options(LiquidOptions {
+            viscosity: 0.1,
+            surface_tension: 0.0,
+        })
+        .unwrap();
+    fluid
+        .set_time_step_options(TimeStepOptions {
+            min_substeps: 2,
+            max_substeps: 32,
+            cfl: 1,
+            adaptive_obstacles: false,
+        })
+        .unwrap();
+    let mut pose = world.pose(handle).unwrap();
+    pose.position = std::array::from_fn(|axis| pose.position[axis] - origin[axis]);
+    let collider = fluid.add_mesh(&mesh, MeshRole::Collider, pose).unwrap();
+    fluid
+        .add_fluid_box(
+            Bounds {
+                min: [0.45; 3],
+                max: [1.95, 1.65, 1.95],
+            },
+            [0.0; 3],
+        )
+        .unwrap();
+    fluid.step(FIXED_TICK).unwrap();
+    let coupling =
+        RigidFluidCoupling::prepare(&mut fluid, world, &[(collider, handle)], origin, 1000.0)
+            .unwrap();
+    let epoch = simulation.impulse_epoch().unwrap();
+    let mut companion = FluidCompanion {
+        fluid,
+        coupling,
+        epoch,
+        stamps: Vec::new(),
+    };
+    simulation
+        .enqueue_impulse(
+            EventStamp {
+                epoch,
+                time: Seconds::ZERO,
+                sequence: 1,
+            },
+            ResolvedRigidImpulse {
+                field: FieldValue::uniform([1.0, 0.0, 0.0]).unwrap(),
+                targets: RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false,
+                },
+            },
+        )
+        .unwrap();
+    for &time in times {
+        simulation
+            .advance_with_coupling(
+                bodies.clone(),
+                None,
+                0.0,
+                1.25,
+                16.0,
+                0.0,
+                [0.0; 3],
+                Seconds(time),
+                1.0,
+                0.0,
+                None,
+                &[],
+                &mut companion,
+            )
+            .unwrap();
+    }
+    assert_eq!(companion.stamps.len(), 3);
+    assert_eq!(simulation.impulse_receipts.len(), 1);
+    assert!((simulation.physics_time - FIXED_TICK.0 * 3.0).abs() < 1e-15);
+    let stats = companion.coupling.last_stats().unwrap();
+    assert!(stats.particles > 0 && stats.substeps >= 2);
+    let velocity = simulation
+        .world
+        .as_ref()
+        .unwrap()
+        .dynamics(handle)
+        .unwrap()
+        .linear_velocity;
+    assert!(
+        velocity[0] > 0.0 && velocity[0] < 0.95,
+        "liquid reaction: {velocity:?}"
+    );
+    (simulation.poses[0], velocity)
+}
+
+#[test]
+fn scene_physics_real_fluid_exchange_reuses_rigid_clock_and_survives_display_stall() {
+    let origin = [-4.0, 2.0, 7.0];
+    let regular = fluid_trace(
+        &[FIXED_TICK.0, FIXED_TICK.0 * 2.0, FIXED_TICK.0 * 3.0],
+        origin,
+    );
+    let stalled = fluid_trace(&[FIXED_TICK.0 * 3.0], origin);
+    for axis in 0..3 {
+        assert!((regular.0.pos[axis] - stalled.0.pos[axis]).abs() < 1e-4);
+        assert!((regular.1[axis] - stalled.1[axis]).abs() < 1e-3);
+    }
+}

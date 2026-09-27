@@ -18,7 +18,7 @@ pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
 mod frame;
 pub use frame::FluidFrame;
 mod coupling;
-pub use coupling::{RigidBodyState, RigidReaction};
+pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidReaction};
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 

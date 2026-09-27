@@ -6,6 +6,9 @@ use manifold_physics::{BodyDynamics, BodyHandle, BodyImpulse, BodyKind, BodyPose
 
 use crate::{FluidError, FluidFrame, FluidWorld, MeshHandle, MeshRole, native_result};
 
+mod owner;
+pub use owner::{CoupledFluidFrame, RigidFluidCoupling};
+
 /// A collision pose and dynamics snapshot in the fluid simulation's coordinate
 /// frame, in metres and seconds. The centre of mass must match this pose.
 /// Queued external acceleration predicts the boundary velocity at each native

@@ -8,6 +8,7 @@
 pub use manifold_foundation::Seconds;
 pub mod input;
 pub mod interaction;
+pub mod stepping;
 mod field_value;
 pub use field_value::FieldValue;
 pub use interaction::{
