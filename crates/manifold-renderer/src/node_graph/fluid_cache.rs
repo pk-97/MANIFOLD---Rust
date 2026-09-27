@@ -5,10 +5,11 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::fluid::{FluidSettings, TICK};
+use super::fluid::{CoupledRigidFrame, FluidSettings, TICK};
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::fluid::WhitewaterFrame;
+use crate::node_graph::physics::{MAX_BODIES, MAX_COPIES};
 use manifold_fluids::FrameStats;
 
 const MAGIC: &[u8; 8] = b"MFLUIDC1";
@@ -16,7 +17,8 @@ const LEGACY_FORMAT_VERSION: u32 = 3;
 const LEGACY_LIQUID_FORMAT_VERSION: u32 = 4;
 const LEGACY_TIME_STEPS_FORMAT_VERSION: u32 = 5;
 const MESH_VERTEX_FORMAT_VERSION: u32 = 6;
-const FORMAT_VERSION: u32 = 7;
+const DOMAIN_FORMAT_VERSION: u32 = 7;
+const FORMAT_VERSION: u32 = 8;
 const LEGACY_MESH_VERTEX_SIZE: usize = 64;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
@@ -80,6 +82,18 @@ impl CacheWriter {
         obstacle: Transform,
         stats: FrameStats,
     ) -> Result<(), String> {
+        self.append_paired(tick, vertices, whitewater, obstacle, stats, None)
+    }
+
+    pub(crate) fn append_paired(
+        &self,
+        tick: u64,
+        vertices: &[MeshVertex],
+        whitewater: &WhitewaterFrame,
+        obstacle: Transform,
+        stats: FrameStats,
+        rigid: Option<&CoupledRigidFrame>,
+    ) -> Result<(), String> {
         if vertices.len() > self.max_vertices || vertices.len() > MAX_VERTICES {
             return Err("Water cache frame exceeds mesh capacity".into());
         }
@@ -101,8 +115,16 @@ impl CacheWriter {
         encoder
             .include_checksum(true)
             .map_err(|error| format!("Water cache checksum setup failed: {error}"))?;
-        write_frame(&mut encoder, tick, vertices, whitewater, obstacle, stats)
-            .map_err(|error| format!("Water cache frame {tick} could not be written: {error}"))?;
+        write_frame(
+            &mut encoder,
+            tick,
+            vertices,
+            whitewater,
+            obstacle,
+            stats,
+            rigid,
+        )
+        .map_err(|error| format!("Water cache frame {tick} could not be written: {error}"))?;
         let mut writer = encoder
             .finish()
             .map_err(|error| format!("Water cache frame {tick} could not finish: {error}"))?;
@@ -147,6 +169,22 @@ impl CacheReader {
         vertices: &mut Vec<MeshVertex>,
         whitewater: &mut WhitewaterFrame,
     ) -> Result<(Transform, FrameStats), String> {
+        let (obstacle, stats, paired) = self.read_paired_into(tick, vertices, whitewater, None)?;
+        if paired {
+            return Err(format!(
+                "Water cache frame {tick} contains paired rigid poses; use read_paired_into"
+            ));
+        }
+        Ok((obstacle, stats))
+    }
+
+    pub(crate) fn read_paired_into(
+        &self,
+        tick: u64,
+        vertices: &mut Vec<MeshVertex>,
+        whitewater: &mut WhitewaterFrame,
+        rigid: Option<&mut CoupledRigidFrame>,
+    ) -> Result<(Transform, FrameStats, bool), String> {
         let path = frame_path(self.directory.as_ref(), tick);
         let file = File::open(&path)
             .map_err(|error| format!("Water cache has no baked frame for tick {tick}: {error}"))?;
@@ -155,13 +193,14 @@ impl CacheReader {
         decoder
             .window_log_max(23)
             .map_err(|error| format!("Water cache decompression limit failed: {error}"))?;
-        let (decoded_tick, obstacle, stats) = read_frame(
+        let (decoded_tick, obstacle, stats, paired) = read_frame(
             &mut decoder,
             vertices,
             whitewater,
             self.format_version,
             self.max_vertices,
             self.max_whitewater,
+            rigid,
         )
         .map_err(|error| format!("Water cache frame {tick} could not be read: {error}"))?;
         if decoded_tick != tick {
@@ -169,7 +208,7 @@ impl CacheReader {
                 "Water cache frame name {tick} disagrees with its payload {decoded_tick}"
             ));
         }
-        Ok((obstacle, stats))
+        Ok((obstacle, stats, paired))
     }
 }
 
@@ -225,6 +264,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             | LEGACY_LIQUID_FORMAT_VERSION
             | LEGACY_TIME_STEPS_FORMAT_VERSION
             | MESH_VERTEX_FORMAT_VERSION
+            | DOMAIN_FORMAT_VERSION
             | FORMAT_VERSION
     ) {
         return Err(io::Error::new(
@@ -250,7 +290,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
         reader,
         version >= LEGACY_LIQUID_FORMAT_VERSION,
         version >= LEGACY_TIME_STEPS_FORMAT_VERSION,
-        version >= FORMAT_VERSION,
+        version >= DOMAIN_FORMAT_VERSION,
     )? != settings
     {
         return Err(io::Error::new(
@@ -374,6 +414,7 @@ fn write_frame(
     whitewater: &WhitewaterFrame,
     obstacle: Transform,
     stats: FrameStats,
+    rigid: Option<&CoupledRigidFrame>,
 ) -> io::Result<()> {
     write_u64(writer, tick)?;
     write_len(writer, vertices.len(), MAX_VERTICES)?;
@@ -386,7 +427,12 @@ fn write_frame(
     write_u32(writer, stats.triangles)?;
     write_u32(writer, stats.substeps)?;
     write_f64(writer, stats.simulation_ms)?;
-    write_f64(writer, stats.meshing_ms)
+    write_f64(writer, stats.meshing_ms)?;
+    write_bool(writer, rigid.is_some())?;
+    if let Some(rigid) = rigid {
+        write_rigid_frame(writer, tick, rigid)?;
+    }
+    Ok(())
 }
 
 fn read_frame(
@@ -396,7 +442,8 @@ fn read_frame(
     format_version: u32,
     max_vertices: usize,
     max_whitewater: usize,
-) -> io::Result<(u64, Transform, FrameStats)> {
+    rigid: Option<&mut CoupledRigidFrame>,
+) -> io::Result<(u64, Transform, FrameStats, bool)> {
     let tick = read_u64(reader)?;
     let vertex_count = read_len(reader, max_vertices.min(MAX_VERTICES))?;
     if !vertex_count.is_multiple_of(3) {
@@ -436,11 +483,133 @@ fn read_frame(
             "invalid frame metadata or particle count",
         ));
     }
+    let paired = if format_version >= FORMAT_VERSION {
+        if read_bool(reader)? {
+            read_rigid_frame(reader, tick, rigid)?;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     let mut trailing = [0; 1];
     if reader.read(&mut trailing)? != 0 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "trailing bytes"));
     }
-    Ok((tick, obstacle, stats))
+    Ok((tick, obstacle, stats, paired))
+}
+
+fn write_rigid_frame(
+    writer: &mut impl Write,
+    tick: u64,
+    rigid: &CoupledRigidFrame,
+) -> io::Result<()> {
+    validate_rigid_frame(tick, rigid, io::ErrorKind::InvalidInput)?;
+    write_u64(writer, rigid.stamp.epoch)?;
+    write_u64(writer, rigid.stamp.tick)?;
+    for pose in rigid.poses {
+        write_transform(writer, pose)?;
+    }
+    write_len(writer, rigid.copies.len(), MAX_COPIES)?;
+    for copy in &rigid.copies {
+        write_transform(writer, *copy)?;
+    }
+    Ok(())
+}
+
+fn read_rigid_frame(
+    reader: &mut impl Read,
+    tick: u64,
+    rigid: Option<&mut CoupledRigidFrame>,
+) -> io::Result<()> {
+    let epoch = read_u64(reader)?;
+    let stored_tick = read_u64(reader)?;
+    if stored_tick != tick {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "paired rigid tick does not match fluid tick",
+        ));
+    }
+    let mut rigid = rigid;
+    for index in 0..MAX_BODIES {
+        let pose = read_transform(reader)?;
+        if !transform_is_finite(pose) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "non-finite paired rigid pose",
+            ));
+        }
+        if let Some(output) = rigid.as_deref_mut() {
+            output.poses[index] = pose;
+        }
+    }
+    let copy_count = read_len(reader, MAX_COPIES)?;
+    if let Some(output) = rigid {
+        output.copies.resize(copy_count, Transform::default());
+        for copy in &mut output.copies {
+            *copy = read_transform(reader)?;
+            if !transform_is_finite(*copy) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "non-finite paired rigid copy",
+                ));
+            }
+        }
+        output.stamp = manifold_physics::TickStamp { epoch, tick };
+    } else {
+        for _ in 0..copy_count {
+            if !transform_is_finite(read_transform(reader)?) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "non-finite paired rigid copy",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_rigid_frame(
+    tick: u64,
+    rigid: &CoupledRigidFrame,
+    kind: io::ErrorKind,
+) -> io::Result<()> {
+    if rigid.stamp.tick != tick {
+        return Err(io::Error::new(
+            kind,
+            "paired rigid tick does not match fluid tick",
+        ));
+    }
+    if rigid.copies.len() > MAX_COPIES {
+        return Err(io::Error::new(
+            kind,
+            "paired rigid copy count exceeds physics capacity",
+        ));
+    }
+    if rigid
+        .poses
+        .iter()
+        .copied()
+        .any(|pose| !transform_is_finite(pose))
+        || rigid
+            .copies
+            .iter()
+            .copied()
+            .any(|pose| !transform_is_finite(pose))
+    {
+        return Err(io::Error::new(kind, "non-finite paired rigid pose"));
+    }
+    Ok(())
+}
+
+fn transform_is_finite(transform: Transform) -> bool {
+    transform
+        .pos
+        .iter()
+        .chain(&transform.rot_euler)
+        .chain(&transform.scale)
+        .all(|value| value.is_finite())
 }
 
 fn read_legacy_mesh_vertices(
@@ -731,6 +900,40 @@ mod tests {
     fn write_v4_liquid_manifest(directory: &Path) {
         fs::create_dir_all(directory).unwrap();
         fs::write(directory.join(MANIFEST), LEGACY_V4_LIQUID_MANIFEST).unwrap();
+    }
+
+    fn write_unpaired_payload(writer: &mut Vec<u8>, tick: u64) {
+        let (vertices, whitewater, obstacle, stats) = frame();
+        write_u64(writer, tick).unwrap();
+        write_len(writer, vertices.len(), MAX_VERTICES).unwrap();
+        write_float_records(writer, &vertices).unwrap();
+        write_instances(writer, &whitewater.foam).unwrap();
+        write_instances(writer, &whitewater.bubbles).unwrap();
+        write_instances(writer, &whitewater.spray).unwrap();
+        write_transform(writer, obstacle).unwrap();
+        write_u32(writer, stats.particles).unwrap();
+        write_u32(writer, stats.triangles).unwrap();
+        write_u32(writer, stats.substeps).unwrap();
+        write_f64(writer, stats.simulation_ms).unwrap();
+        write_f64(writer, stats.meshing_ms).unwrap();
+    }
+
+    fn write_paired_payload(writer: &mut Vec<u8>, tick: u64, copy_count: u32, nonfinite: bool) {
+        write_unpaired_payload(writer, tick);
+        write_bool(writer, true).unwrap();
+        write_u64(writer, 9).unwrap();
+        write_u64(writer, tick).unwrap();
+        for index in 0..MAX_BODIES {
+            let mut pose = Transform::default();
+            if nonfinite && index == 0 {
+                pose.pos[0] = f32::NAN;
+            }
+            write_transform(writer, pose).unwrap();
+        }
+        write_u32(writer, copy_count).unwrap();
+        for _ in 0..copy_count.min(MAX_COPIES as u32) {
+            write_transform(writer, Transform::default()).unwrap();
+        }
     }
 
     #[test]
@@ -1042,6 +1245,157 @@ mod tests {
         changed = settings;
         changed.boundary_collisions[0] = false;
         assert!(CacheReader::open(Arc::new(directory), changed).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v7_decodes_unpaired_frames_after_v8_bump() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v7-legacy-{}",
+            std::process::id()
+        ));
+        let directory = root.join("frames");
+        let settings = FluidSettings::default();
+        fs::create_dir_all(&directory).unwrap();
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(MAGIC);
+        write_u32(&mut manifest, DOMAIN_FORMAT_VERSION).unwrap();
+        manifest.extend_from_slice(manifold_fluids::UPSTREAM_REVISION.as_bytes());
+        write_f64(&mut manifest, TICK).unwrap();
+        write_settings(&mut manifest, settings).unwrap();
+        fs::write(directory.join(MANIFEST), manifest).unwrap();
+        let mut payload = Vec::new();
+        write_unpaired_payload(&mut payload, 17);
+        fs::write(
+            frame_path(&directory, 17),
+            zstd::stream::encode_all(payload.as_slice(), 1).unwrap(),
+        )
+        .unwrap();
+
+        let reader = CacheReader::open(Arc::new(directory.clone()), settings).unwrap();
+        let mut vertices = Vec::new();
+        let mut whitewater = WhitewaterFrame::default();
+        reader
+            .read_into(17, &mut vertices, &mut whitewater)
+            .unwrap();
+        let (_, _, paired) = reader
+            .read_paired_into(17, &mut vertices, &mut whitewater, None)
+            .unwrap();
+        assert!(!paired);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_paired_round_trip_rejects_unpaired_reader_and_restores_stamp() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-paired-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.join("frames"));
+        let settings = FluidSettings::default();
+        let writer = CacheWriter::create(directory.clone(), settings).unwrap();
+        let (vertices, whitewater, obstacle, stats) = frame();
+        let mut rigid = CoupledRigidFrame {
+            stamp: manifold_physics::TickStamp { epoch: 9, tick: 19 },
+            ..Default::default()
+        };
+        rigid.poses[0].pos = [2.0, 3.0, 4.0];
+        rigid.copies.push(Transform {
+            pos: [5.0, 6.0, 7.0],
+            ..Transform::default()
+        });
+        writer
+            .append_paired(19, &vertices, &whitewater, obstacle, stats, Some(&rigid))
+            .unwrap();
+        let reader = CacheReader::open(directory, settings).unwrap();
+        let mut decoded_vertices = Vec::new();
+        let mut decoded_whitewater = WhitewaterFrame::default();
+        assert!(
+            reader
+                .read_into(19, &mut decoded_vertices, &mut decoded_whitewater)
+                .is_err()
+        );
+        let mut decoded_rigid = CoupledRigidFrame::default();
+        let (decoded_obstacle, decoded_stats, paired) = reader
+            .read_paired_into(
+                19,
+                &mut decoded_vertices,
+                &mut decoded_whitewater,
+                Some(&mut decoded_rigid),
+            )
+            .unwrap();
+        assert!(paired);
+        assert_eq!(decoded_obstacle, obstacle);
+        assert_eq!(decoded_stats, stats);
+        assert_eq!(decoded_rigid.stamp, rigid.stamp);
+        assert_eq!(decoded_rigid.poses[0].pos, rigid.poses[0].pos);
+        assert_eq!(decoded_rigid.copies, rigid.copies);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_paired_rejects_mismatched_tick_count_and_nonfinite_pose() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-paired-invalid-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.join("frames"));
+        let settings = FluidSettings::default();
+        let writer = CacheWriter::create(directory.clone(), settings).unwrap();
+        let (vertices, whitewater, obstacle, stats) = frame();
+        let mut mismatched = CoupledRigidFrame::default();
+        mismatched.stamp.tick = 3;
+        assert!(
+            writer
+                .append_paired(
+                    4,
+                    &vertices,
+                    &whitewater,
+                    obstacle,
+                    stats,
+                    Some(&mismatched)
+                )
+                .is_err()
+        );
+        let reader = CacheReader::open(directory.clone(), settings).unwrap();
+        let path = frame_path(directory.as_ref(), 4);
+        let mut payload = Vec::new();
+        write_paired_payload(&mut payload, 4, MAX_COPIES as u32 + 1, false);
+        fs::write(
+            &path,
+            zstd::stream::encode_all(payload.as_slice(), 1).unwrap(),
+        )
+        .unwrap();
+        let mut decoded_vertices = Vec::new();
+        let mut decoded_whitewater = WhitewaterFrame::default();
+        let mut decoded_rigid = CoupledRigidFrame::default();
+        assert!(
+            reader
+                .read_paired_into(
+                    4,
+                    &mut decoded_vertices,
+                    &mut decoded_whitewater,
+                    Some(&mut decoded_rigid),
+                )
+                .is_err()
+        );
+        payload.clear();
+        write_paired_payload(&mut payload, 4, 0, true);
+        fs::write(
+            &path,
+            zstd::stream::encode_all(payload.as_slice(), 1).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            reader
+                .read_paired_into(
+                    4,
+                    &mut decoded_vertices,
+                    &mut decoded_whitewater,
+                    Some(&mut decoded_rigid),
+                )
+                .is_err()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

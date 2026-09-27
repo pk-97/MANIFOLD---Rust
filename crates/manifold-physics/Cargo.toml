@@ -6,6 +6,10 @@ publish = false
 
 [dependencies]
 manifold-foundation = { path = "../manifold-foundation" }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [build-dependencies]
 cc = "1"

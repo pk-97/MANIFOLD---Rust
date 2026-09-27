@@ -12,6 +12,7 @@ use crate::generators::platonic_geometry::platonic_points;
 
 mod targeted_fields;
 mod impulses;
+mod serialization;
 mod worker;
 #[cfg(test)]
 mod coupling_tests;
@@ -181,12 +182,14 @@ impl CopyLayout {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ColliderGeometry {
     pub hulls: Vec<Vec<[f32; 3]>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RigidBody {
     pub transform: Transform,
     pub enabled: bool,

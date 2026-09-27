@@ -13,7 +13,8 @@ use crate::node_graph::fluid_role::{
 use crate::node_graph::physics::pose_from_transform;
 use crate::node_graph::transform::Transform;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Controls {
     transform: Transform,
     enabled: bool,
@@ -23,6 +24,30 @@ pub(super) struct Controls {
 }
 
 impl Controls {
+    fn validate(self) -> Result<(), String> {
+        if self.transform.billboard
+            || self
+                .transform
+                .pos
+                .iter()
+                .chain(&self.transform.rot_euler)
+                .any(|v| !v.is_finite())
+            || self
+                .transform
+                .scale
+                .iter()
+                .any(|v| !v.is_finite() || *v <= 0.0)
+            || self.velocity.iter().any(|v| !v.is_finite())
+            || !self.inherit_motion.is_finite()
+            || self.inherit_motion < 0.0
+            || !self.friction.is_finite()
+            || !(0.0..=1.0).contains(&self.friction)
+        {
+            return Err("Fluid role: invalid transform or controls".into());
+        }
+        Ok(())
+    }
+
     fn from_role(role: &FluidRole) -> Self {
         Self {
             transform: role.transform,
@@ -61,6 +86,8 @@ impl Controls {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PreparedRole {
     slot: usize,
     geometry: Arc<PreparedFluidGeometry>,
@@ -68,7 +95,8 @@ struct PreparedRole {
     initial: Controls,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Setup {
     roles: Vec<PreparedRole>,
 }
@@ -83,24 +111,9 @@ impl Setup {
             .enumerate()
             .filter_map(|(i, role)| role.as_ref().map(|r| (i, r)))
         {
-            let transform = role.transform;
-            if transform.billboard
-                || transform
-                    .pos
-                    .iter()
-                    .chain(&transform.rot_euler)
-                    .any(|v| !v.is_finite())
-                || transform.scale.iter().any(|v| !v.is_finite() || *v <= 0.0)
-                || role.velocity.iter().any(|v| !v.is_finite())
-                || !role.inherit_motion.is_finite()
-                || role.inherit_motion < 0.0
-                || !role.friction.is_finite()
-                || !(0.0..=1.0).contains(&role.friction)
-                || role.geometry.meshes.is_empty()
-            {
-                return Err(format!(
-                    "Fluid role {slot}: invalid geometry, transform or controls"
-                ));
+            Controls::from_role(role).validate()?;
+            if role.geometry.meshes.is_empty() {
+                return Err(format!("Fluid role {slot}: geometry is empty"));
             }
         }
         Ok(())
@@ -141,6 +154,52 @@ impl Setup {
 
     pub fn len(&self) -> usize {
         self.roles.len()
+    }
+
+    pub(super) fn validate_history(&self, values: &[Controls]) -> Result<(), String> {
+        if self.roles.is_empty() {
+            return if values.is_empty() {
+                Ok(())
+            } else {
+                Err("Physics take: unexpected role controls".into())
+            };
+        }
+        if !values.len().is_multiple_of(self.roles.len()) {
+            return Err("Physics take: incomplete role control frame".into());
+        }
+        for frame in values.chunks_exact(self.roles.len()) {
+            for (value, role) in frame.iter().zip(&self.roles) {
+                value.validate()?;
+                if value.transform.scale != role.initial.transform.scale
+                    || (role.kind == FluidRoleKind::InitialFill && *value != role.initial)
+                {
+                    return Err("Physics take: role setup changed within an epoch".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_recording(&self) -> Result<(), String> {
+        let mut roles = vec![None; MAX_FLUID_ROLES];
+        for role in &self.roles {
+            if role.slot >= MAX_FLUID_ROLES || roles[role.slot].is_some() {
+                return Err("Physics take: invalid or repeated role slot".into());
+            }
+            for mesh in &role.geometry.meshes {
+                manifold_fluids::validate_mesh(mesh).map_err(|error| error.to_string())?;
+            }
+            roles[role.slot] = Some(FluidRole {
+                geometry: Arc::clone(&role.geometry),
+                kind: role.kind,
+                transform: role.initial.transform,
+                enabled: role.initial.enabled,
+                velocity: role.initial.velocity,
+                inherit_motion: role.initial.inherit_motion,
+                friction: role.initial.friction,
+            });
+        }
+        Self::validate(&roles)
     }
 }
 

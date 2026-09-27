@@ -63,6 +63,8 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     runtime.execute_frame(time(2.0));
     let mut binding = prepare(&runtime, &def, &["part_b"]);
     let mut hit = binding.new_capture();
+    // A connected world and domain consume one shared simulation clock.
+    edit(&mut runtime, "world", "speed", 2.0);
     edit(&mut runtime, "fluid", "speed", 2.0);
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.05), 0)

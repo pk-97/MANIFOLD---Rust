@@ -15,7 +15,8 @@ use super::transform::Transform;
 pub const MAX_FLUID_ROLES: usize = 64;
 
 /// Semantic role a prepared geometry source contributes to the fluid solver.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum FluidRoleKind {
     InitialFill,
     Inflow,
@@ -24,7 +25,8 @@ pub enum FluidRoleKind {
 }
 
 /// Immutable prepared local-space geometry for a fluid role.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreparedFluidGeometry {
     pub meshes: Vec<TriangleMesh>,
 }

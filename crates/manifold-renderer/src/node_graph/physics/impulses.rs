@@ -7,7 +7,8 @@ use manifold_physics::{
 use super::{FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, RigidSimulation, TARGET_SLOTS};
 
 /// A fixed set of ordinary body slots and the reset-latched copy group.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RigidImpulseTargets {
     pub bodies: u64,
     pub copies: bool,

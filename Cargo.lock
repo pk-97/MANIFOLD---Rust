@@ -2350,6 +2350,7 @@ dependencies = [
  "cc",
  "manifold-foundation",
  "manifold-physics",
+ "serde",
 ]
 
 [[package]]
@@ -2438,6 +2439,8 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "manifold-foundation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

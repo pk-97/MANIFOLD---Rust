@@ -29,10 +29,12 @@ mod domain;
 mod impulses;
 mod native;
 mod roles;
+mod take;
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub use domain::FluidDomainLayout;
+pub use take::{FluidTakeFrame, FluidTakeReplay};
 
 pub const TICK: f64 = 1.0 / 60.0;
 const HISTORY_CAPACITY: usize = 8192;
@@ -53,7 +55,8 @@ pub struct FluidDomainSnapshot {
     pub accepted_layout: Option<FluidDomainLayout>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FluidSettings {
     pub resolution: u32,
     pub domain_size: f32,
@@ -156,7 +159,8 @@ impl FluidSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FluidControls {
     pub emitter: Transform,
     pub obstacle: Transform,
@@ -219,7 +223,8 @@ impl FluidControls {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Sample {
     time: f64,
     controls: FluidControls,

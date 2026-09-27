@@ -21,6 +21,8 @@ mod coupling;
 pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidReaction};
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
+/// Bump when local numerical changes alter recorded-take replay semantics.
+pub const NUMERICS_REVISION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
@@ -31,7 +33,8 @@ pub struct Config {
     pub apic: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SurfaceOptions {
     pub particle_scale: f64,
     pub smoothing: f64,
@@ -74,7 +77,8 @@ impl SurfaceOptions {
 
 /// Native FLIP coefficients; these are not calibrated physical material units.
 /// Their visible effect depends on domain scale and simulation accuracy.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LiquidOptions {
     pub viscosity: f64,
     pub surface_tension: f64,
@@ -98,7 +102,8 @@ impl LiquidOptions {
 
 /// Adaptive integration within each `step` call, independent of presentation FPS.
 /// Defaults preserve the pinned engine settings. Changing these may change motion.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimeStepOptions {
     pub min_substeps: u32,
     pub max_substeps: u32,
@@ -144,7 +149,8 @@ impl TimeStepOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WhitewaterOptions {
     pub enabled: bool,
     pub max_particles: u32,

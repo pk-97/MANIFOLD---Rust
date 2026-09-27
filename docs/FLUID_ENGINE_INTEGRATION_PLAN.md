@@ -439,6 +439,12 @@ The `scene-forces-controls` UI flow passes Add Force, strength scrub/undo, clear
 
 ### P9 — Recordable takes and complete cache identity
 
+**Local input/cache foundation, 2026-09-27:** `fluid::take` journals the existing worker handoff: resolved controls, role motion, vector-field programs, assigned impulses and rigid inputs. Setup stores prepared geometry once; replay restores shared collider references and uses the existing native worker in batches of at most four ticks. Compressed, bounded records have a SHA-256 chain and an atomically published completed prefix. Opening verifies the committed chain before native work; partial/setup failures remain explicit. Fixed-configuration replay of a six-tick coupled fixture preserves inputs and event assignments exactly and surface/rigid motion within 1e-5.
+
+Cache v8 stores paired rigid poses at every fluid boundary, including tick zero. It retains explicit v3–v7 readers; an unpaired reader rejects paired frames. A native-owner test seeks 0 → 6 → 2 → 6, restores final mesh/poses exactly and confirms neither native world exists during cache playback. The 125-test focused fluid/cache run and six field-serialization tests pass. Two older impulse fixtures now assert the shared owner and shared speed contract.
+
+**Still required:** reproducible random seed, full solver/adapter dependency identity, project transport/tempo mapping, collected asset references, and input identity/range validation when selecting a cache. Existing arbitrary-scene Record/Playback guards remain until that contract is complete. The journal and paired codec are infrastructure, not a completed app Bake workflow. Track remaining work in `BUG-vglg.17`.
+
 - **Entry/read-back:** §5/§6; `CacheWriter`, `CacheReader`, current asset serialization and offline analyzer inputs. Pin new manifest/take structs using existing asset references and camelCase conventions.
 - **Deliver:** timestamped input-take writer/reader, content/dependency hashes, new cache manifest, legacy readers, partial-range metadata and explicit missing-input errors. No UI bake job yet.
 - **Gate/scope:** focused renderer/app/storage-owner tests and clippy; record → reload → replay matches controls/events exactly and fixed-config solver output within declared tolerance. Dependency mutations invalidate the expected cache; material edits do not. Test interrupted/held-out legacy inputs.

@@ -6,6 +6,7 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+serde = { workspace = true }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }
 

@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use crate::{PhysicsError, RadialField, SampledField, UniformField, VectorField, VortexField};
 
+mod serialization;
+
 const MAX_OPERATIONS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq)]

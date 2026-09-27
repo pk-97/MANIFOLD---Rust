@@ -4,7 +4,8 @@ use super::{
 };
 
 /// An owned indexed triangle surface shared by physics adapters.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriangleMesh {
     pub vertices: Vec<[f32; 3]>,
     pub triangles: Vec<[u32; 3]>,

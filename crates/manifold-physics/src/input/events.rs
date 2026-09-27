@@ -10,7 +10,8 @@ const MAX_TICK: u64 = (1 << 53) - 1;
 const MAX_CORRECTIONS: usize = 4;
 
 /// A timestamped discrete input in one simulation epoch.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EventStamp {
     pub epoch: u64,
     pub time: Seconds,
@@ -18,7 +19,8 @@ pub struct EventStamp {
 }
 
 /// An input delivered at the beginning of a native simulation tick.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppliedEvent<T> {
     pub source: EventStamp,
     pub applied: TickStamp,

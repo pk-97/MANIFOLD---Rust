@@ -42,6 +42,7 @@ pub(super) struct NativeSimulation {
     surface: Vec<SurfaceVertex>,
     whitewater: Vec<WhitewaterParticle>,
     writer: Option<CacheWriter>,
+    take_writer: Option<super::take::Writer>,
     playback: Option<CacheReader>,
     cache_epoch: Option<u64>,
     coupled: Option<coupled::Native>,
@@ -167,8 +168,9 @@ impl NativeSimulation {
         tick: u64,
         pose: super::Transform,
         stats: FrameStats,
-        last: bool,
+        coupled: Option<&coupled::Request>,
     ) -> Result<(), String> {
+        let last = tick + 1 == request.start_tick + request.count as u64;
         if request.cache_mode != CacheMode::Record && !last {
             return Ok(());
         }
@@ -208,16 +210,25 @@ impl NativeSimulation {
             request.recycle_whitewater.fill(&self.whitewater, domain);
         }
         if request.cache_mode == CacheMode::Record {
-            self.writer
-                .as_ref()
-                .expect("record writer initialized")
-                .append(
+            let writer = self.writer.as_ref().expect("record writer initialized");
+            if let Some(coupled) = coupled {
+                writer.append_paired(
+                    tick + 1,
+                    &request.recycle,
+                    &request.recycle_whitewater,
+                    pose,
+                    stats,
+                    Some(&coupled.output),
+                )?;
+            } else {
+                writer.append(
                     tick + 1,
                     &request.recycle,
                     &request.recycle_whitewater,
                     pose,
                     stats,
                 )?;
+            }
         }
         if !last {
             request.recycle.clear();
@@ -230,14 +241,15 @@ impl NativeSimulation {
         if cancel_epoch.load(Ordering::Acquire) != request.epoch {
             return cancelled_reply(request);
         }
-        let mut coupled_request = request.coupled.take();
         let mut stats = FrameStats::default();
         let mut pose = request.initial.obstacle;
         let mut setup_error = None;
         let mut completed_count = 0usize;
+        let mut recorded_count = 0usize;
         let mut started_tick = request.start_tick;
         if self.cache_epoch != Some(request.epoch) {
             self.writer = None;
+            self.take_writer = None;
             self.world = None;
             self.coupled = None;
             self.playback = None;
@@ -247,7 +259,16 @@ impl NativeSimulation {
                     CacheMode::Live => {}
                     CacheMode::Record => {
                         match CacheWriter::create(request.cache_path.clone(), request.settings) {
-                            Ok(new_writer) => self.writer = Some(new_writer),
+                            Ok(new_writer) => {
+                                self.writer = Some(new_writer);
+                                match super::take::Writer::create(
+                                    request.cache_path.clone(),
+                                    &request,
+                                ) {
+                                    Ok(writer) => self.take_writer = Some(writer),
+                                    Err(error) => setup_error = Some(error),
+                                }
+                            }
                             Err(error) => setup_error = Some(error),
                         }
                     }
@@ -260,6 +281,7 @@ impl NativeSimulation {
                 }
             }
         }
+        let mut coupled_request = request.coupled.take();
         if cancel_epoch.load(Ordering::Acquire) != request.epoch {
             request.coupled = coupled_request;
             return cancelled_reply(request);
@@ -271,13 +293,31 @@ impl NativeSimulation {
             if request.cache_mode == CacheMode::Playback {
                 request.recycle.clear();
                 request.recycle_whitewater.clear();
-                if request.count > 0 {
+                if request.count > 0 || coupled_request.is_some() {
                     let cache = self.playback.as_ref().expect("playback initialized");
-                    (pose, stats) = cache.read_into(
-                        request.start_tick + request.count as u64,
-                        &mut request.recycle,
-                        &mut request.recycle_whitewater,
-                    )?;
+                    let tick = request.start_tick + request.count as u64;
+                    if let Some(coupled) = &mut coupled_request {
+                        let paired;
+                        (pose, stats, paired) = cache.read_paired_into(
+                            tick,
+                            &mut request.recycle,
+                            &mut request.recycle_whitewater,
+                            Some(&mut coupled.output),
+                        )?;
+                        if !paired {
+                            return Err(
+                                "Physics cache: coupled playback requires paired rigid poses"
+                                    .into(),
+                            );
+                        }
+                        coupled.output.stamp.epoch = request.epoch;
+                    } else {
+                        (pose, stats) = cache.read_into(
+                            tick,
+                            &mut request.recycle,
+                            &mut request.recycle_whitewater,
+                        )?;
+                    }
                     completed_count = request.count;
                     stats.simulation_ms = 0.0;
                     stats.meshing_ms = 0.0;
@@ -285,11 +325,26 @@ impl NativeSimulation {
                 return Ok(());
             }
             let domain = request.settings.domain_layout()?;
+            let preparing = self.world.is_none();
             self.prepare_world(&request, coupled_request.as_ref(), domain)?;
             if let (Some(native), Some(coupled)) = (&self.coupled, &mut coupled_request) {
                 native.prepare_output(&mut coupled.output);
-                if request.count == 0 {
+                if preparing || request.count == 0 {
                     native.capture_initial(&mut coupled.output)?;
+                }
+                if preparing && request.cache_mode == CacheMode::Record {
+                    request.recycle_whitewater.clear();
+                    self.writer
+                        .as_ref()
+                        .expect("record writer initialized")
+                        .append_paired(
+                            0,
+                            &[],
+                            &request.recycle_whitewater,
+                            pose,
+                            stats,
+                            Some(&coupled.output),
+                        )?;
                 }
             }
             request.recycle.clear();
@@ -351,11 +406,29 @@ impl NativeSimulation {
                 stats = tick_stats;
                 completed_count += 1;
                 pose = next_obstacle;
-                let last = index + 1 == request.count;
-                self.capture_output(&mut request, domain, tick, pose, stats, last)?;
+                self.capture_output(
+                    &mut request,
+                    domain,
+                    tick,
+                    pose,
+                    stats,
+                    coupled_request.as_ref(),
+                )?;
+                recorded_count += 1;
             }
             Ok(())
         })();
+        request.coupled = coupled_request;
+        let mut error = result.err();
+        if let Some(writer) = &mut self.take_writer
+            && let Err(record_error) =
+                writer.append(&request, recorded_count, started_tick, error.as_deref())
+        {
+            error = Some(match error {
+                Some(native_error) => format!("{native_error}; {record_error}"),
+                None => record_error,
+            });
+        }
         Reply {
             epoch: request.epoch,
             tick: request.start_tick + completed_count as u64,
@@ -367,8 +440,72 @@ impl NativeSimulation {
             whitewater: request.recycle_whitewater,
             obstacle: pose,
             stats,
-            error: result.err(),
-            coupled: coupled_request,
+            error,
+            coupled: request.coupled,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node_graph::fluid::{take, take::tests::request};
+    use std::sync::Arc;
+
+    #[test]
+    fn fluid_take_paired_cache_replays_initial_and_completed_poses_without_native_worlds() {
+        let directory = Arc::new(std::env::temp_dir().join(format!(
+            "manifold-paired-native-cache-{}",
+            std::process::id()
+        )));
+        let mut input = request();
+        input.cache_mode = CacheMode::Record;
+        input.cache_path = Arc::clone(&directory);
+        let expected = NativeSimulation::default().process(input, &AtomicU64::new(1));
+        assert_eq!(expected.error, None);
+        let mut playback = NativeSimulation::default();
+        for tick in [0, 6, 2, 6] {
+            let mut reader = take::Reader::open(Arc::clone(&directory)).unwrap();
+            let mut input = reader.next_request(23).unwrap().unwrap();
+            input.count = tick;
+            input.impulses.clear();
+            input.cache_mode = CacheMode::Playback;
+            input.cache_path = Arc::clone(&directory);
+            let actual = playback.process(input, &AtomicU64::new(23));
+            assert_eq!(actual.error, None);
+            assert_eq!(actual.tick, tick as u64);
+            assert!(playback.world.is_none() && playback.coupled.is_none());
+            assert_eq!(actual.stats.simulation_ms, 0.0);
+            assert_eq!(actual.stats.meshing_ms, 0.0);
+            let rigid = actual.coupled.as_ref().unwrap();
+            assert_eq!(
+                rigid.output.stamp,
+                manifold_physics::TickStamp {
+                    epoch: 23,
+                    tick: tick as u64
+                }
+            );
+            if tick == 0 {
+                assert!(actual.vertices.is_empty());
+                assert_eq!(
+                    rigid.output.poses[0],
+                    rigid.setup.initial.bodies[0].as_ref().unwrap().transform
+                );
+            } else if tick == 6 {
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u8>(&actual.vertices),
+                    bytemuck::cast_slice::<_, u8>(&expected.vertices)
+                );
+                assert_eq!(
+                    rigid.output.poses,
+                    expected.coupled.as_ref().unwrap().output.poses
+                );
+                assert_eq!(
+                    rigid.output.copies,
+                    expected.coupled.as_ref().unwrap().output.copies
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory.as_ref()).unwrap();
     }
 }

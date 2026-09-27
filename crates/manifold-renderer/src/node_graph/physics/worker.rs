@@ -13,8 +13,10 @@ use super::{
 /// Copy population controls remain authored inputs here. Native rigid copy
 /// count and layout are still latched by [`RigidSimulation`] at the existing
 /// reset points.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RigidSceneInputs {
+    #[serde(with = "super::serialization::array")]
     pub bodies: [Option<RigidBody>; MAX_BODIES],
     pub prototype: Option<RigidBody>,
     pub copy_count: f32,
@@ -23,6 +25,7 @@ pub struct RigidSceneInputs {
     pub layout: f32,
     pub gravity: [f32; 3],
     pub acceleration_field: Option<FieldValue>,
+    #[serde(with = "super::serialization::array")]
     pub targeted_fields: [Option<FieldValue>; TARGET_SLOTS],
 }
 
@@ -53,6 +56,54 @@ pub struct RigidSceneObservation {
 }
 
 impl RigidSceneInputs {
+    /// Validate disk-owned inputs before they reach native code. Geometry is
+    /// cooked by the existing native adapter, which also checks hull validity.
+    pub(crate) fn validate_recording(&self) -> Result<(), String> {
+        super::validate_fragments(&self.bodies)?;
+        if self
+            .gravity
+            .iter()
+            .chain([
+                &self.copy_count,
+                &self.copy_spacing,
+                &self.copy_columns,
+                &self.layout,
+            ])
+            .any(|v| !v.is_finite())
+        {
+            return Err("Physics take: nonfinite rigid world controls".into());
+        }
+        for body in self.bodies.iter().flatten().chain(self.prototype.iter()) {
+            if body.transform.billboard
+                || body.kind > 2
+                || body
+                    .transform
+                    .pos
+                    .iter()
+                    .chain(&body.transform.rot_euler)
+                    .any(|v| !v.is_finite())
+                || body
+                    .transform
+                    .scale
+                    .iter()
+                    .any(|v| !v.is_finite() || *v <= 0.0)
+                || [body.mass, body.friction, body.bounce, body.release_count]
+                    .iter()
+                    .any(|v| !v.is_finite())
+                || body.release_count < 0.0
+            {
+                return Err("Physics take: invalid rigid body controls".into());
+            }
+        }
+        if let Some(prototype) = &self.prototype {
+            super::validate_copy_prototype(prototype)?;
+            if prototype.fragment_parent.is_some() {
+                return Err("Physics take: copy prototype cannot be a fragment".into());
+            }
+        }
+        Ok(())
+    }
+
     /// Compare the parts that require native geometry to be rebuilt.
     ///
     /// Count, spacing, columns, and layout intentionally do not participate:

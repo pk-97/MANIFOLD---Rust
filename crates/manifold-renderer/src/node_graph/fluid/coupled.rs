@@ -63,6 +63,8 @@ impl Default for CoupledRigidFrame {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Setup {
     pub initial: RigidSceneInputs,
     pub colliders: RigidImpulseTargets,
@@ -70,6 +72,35 @@ pub(super) struct Setup {
 }
 
 impl Setup {
+    pub fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
+        if targets.is_empty() {
+            return Err("Fluid coupling: rigid impulse targets are empty".into());
+        }
+        for index in 0..MAX_BODIES {
+            if targets.contains_body(index)
+                && self.initial.bodies[index]
+                    .as_ref()
+                    .is_none_or(|body| !body.enabled)
+            {
+                return Err(format!(
+                    "Fluid coupling: rigid impulse body {index} is absent"
+                ));
+            }
+        }
+        if targets.copies
+            && (self
+                .initial
+                .prototype
+                .as_ref()
+                .is_none_or(|body| !body.enabled)
+                || !self.initial.copy_count.is_finite()
+                || self.initial.copy_count.round() < 1.0)
+        {
+            return Err("Fluid coupling: rigid impulse has no active copies".into());
+        }
+        Ok(())
+    }
+
     fn matches(&self, inputs: CoupledRigidInputs<'_>) -> bool {
         self.colliders == inputs.colliders
             && self.density == inputs.density
@@ -82,7 +113,8 @@ impl Setup {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Sample {
     pub sequence: u64,
     pub time: Seconds,
@@ -138,33 +170,7 @@ impl Runtime {
     }
 
     pub fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
-        if targets.is_empty() {
-            return Err("Fluid coupling: rigid impulse targets are empty".into());
-        }
-        for index in 0..MAX_BODIES {
-            if targets.contains_body(index)
-                && self.setup.initial.bodies[index]
-                    .as_ref()
-                    .is_none_or(|body| !body.enabled)
-            {
-                return Err(format!(
-                    "Fluid coupling: rigid impulse body {index} is absent"
-                ));
-            }
-        }
-        if targets.copies
-            && (self
-                .setup
-                .initial
-                .prototype
-                .as_ref()
-                .is_none_or(|body| !body.enabled)
-                || !self.setup.initial.copy_count.is_finite()
-                || self.setup.initial.copy_count.round() < 1.0)
-        {
-            return Err("Fluid coupling: rigid impulse has no active copies".into());
-        }
-        Ok(())
+        self.setup.validate_impulse_targets(targets)
     }
 
     pub fn clear(&mut self) {

@@ -6,7 +6,8 @@ use manifold_physics::input::AppliedEvent;
 use crate::node_graph::physics::{ResolvedRigidImpulse, RigidImpulseTargets};
 
 /// Which native simulation should receive a resolved graph impulse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ImpulseTarget {
     Rigid(RigidImpulseTargets),
     Fluid,
@@ -47,7 +48,8 @@ impl ImpulseTarget {
 }
 
 /// An owned, resolved impulse ready for native fixed-tick admission.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvedNodeImpulse {
     pub field: FieldValue,
     pub target: ImpulseTarget,

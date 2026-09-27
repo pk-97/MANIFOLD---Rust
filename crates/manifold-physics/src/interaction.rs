@@ -1,4 +1,5 @@
 use super::PhysicsError;
+use serde::{Deserialize, Serialize};
 
 /// A dimensionless world-space vector evaluated at a world-space position.
 pub trait VectorField: Send + Sync {
@@ -15,7 +16,8 @@ pub struct FieldInput<'a> {
 
 /// Identifies a simulation tick within an epoch. A stamp alone does not imply
 /// that the native step completed or that its output has been published.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TickStamp {
     pub epoch: u64,
     pub tick: u64,
@@ -131,6 +133,49 @@ impl VortexField {
         let axis = normalize(axis).ok_or(PhysicsError::InvalidInput(
             "vortex field axis must be finite and non-zero",
         ))?;
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(PhysicsError::InvalidInput(
+                "vortex field radius must be finite and positive",
+            ));
+        }
+        if !falloff.is_finite() || falloff < 0.0 {
+            return Err(PhysicsError::InvalidInput(
+                "vortex field falloff must be finite and non-negative",
+            ));
+        }
+        Ok(Self {
+            center,
+            axis,
+            radius,
+            falloff,
+        })
+    }
+
+    /// Rebuild a field from an axis already normalized by this type.  The
+    /// serde path uses this to preserve the canonical f32 bits returned by
+    /// [`Self::axis`] instead of normalizing the value a second time.
+    pub(crate) fn new_normalized(
+        center: [f32; 3],
+        axis: [f32; 3],
+        radius: f32,
+        falloff: f32,
+    ) -> Result<Self, PhysicsError> {
+        if !center.iter().all(|component| component.is_finite()) {
+            return Err(PhysicsError::InvalidInput(
+                "vortex field center must be finite",
+            ));
+        }
+        if !axis.iter().all(|component| component.is_finite()) {
+            return Err(PhysicsError::InvalidInput(
+                "vortex field axis must be finite and non-zero",
+            ));
+        }
+        let magnitude = length(axis);
+        if !magnitude.is_finite() || (magnitude - 1.0).abs() > 8.0 * f32::EPSILON {
+            return Err(PhysicsError::InvalidInput(
+                "vortex field axis must be normalized",
+            ));
+        }
         if !radius.is_finite() || radius <= 0.0 {
             return Err(PhysicsError::InvalidInput(
                 "vortex field radius must be finite and positive",
@@ -269,6 +314,10 @@ impl SampledField {
 
     pub fn dimensions(&self) -> [u32; 3] {
         self.dimensions
+    }
+
+    pub(crate) fn values(&self) -> &[[f32; 3]] {
+        &self.values
     }
 }
 
@@ -456,11 +505,11 @@ mod tests {
         );
         assert_vec3_close(
             field.sample([axis_component, axis_component, 0.0]),
-            [0.0; 3]
+            [0.0; 3],
         );
         assert_vec3_close(
             field.sample([2.0 * radial[0], 2.0 * radial[1], 0.0]),
-            [0.0; 3]
+            [0.0; 3],
         );
         assert!(VortexField::new([0.0; 3], [0.0; 3], 1.0, 1.0).is_err());
     }

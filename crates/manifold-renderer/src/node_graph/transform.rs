@@ -18,7 +18,8 @@
 /// composed to a model matrix by the consuming renderer per frame. Euler
 /// radians, XYZ application order — matching `render_scene`'s existing
 /// `model_matrix` (`render_scene.rs:419`), which is unchanged.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Transform {
     pub pos: [f32; 3],
     pub rot_euler: [f32; 3], // radians

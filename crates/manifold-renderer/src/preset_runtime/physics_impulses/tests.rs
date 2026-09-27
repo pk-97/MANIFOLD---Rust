@@ -581,13 +581,11 @@ fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
     }
     let runtime = runtime(&def);
     let binding = prepare(&runtime, &def, &["part_a", "part_a_2", "part_b"]);
-    assert_eq!(binding.recipients.len(), 2);
+    assert_eq!(binding.recipients.len(), 1, "coupled participants share one native event owner");
     assert_eq!(binding.recipients[0].id.as_str(), "fluid");
-    assert_eq!(binding.recipients[0].target, ImpulseTarget::Fluid);
-    assert_eq!(binding.recipients[1].id.as_str(), "world");
     assert_eq!(
-        binding.recipients[1].target,
-        ImpulseTarget::Rigid(RigidImpulseTargets {
+        binding.recipients[0].target,
+        ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
             bodies: 1,
             copies: true
         })
