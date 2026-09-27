@@ -6,7 +6,7 @@ use std::sync::Arc;
 use manifold_physics::input::{InputHistory, Timestamped};
 use manifold_physics::{Seconds, TickStamp};
 
-use crate::node_graph::physics::{MAX_BODIES, RigidImpulseTargets, RigidSceneInputs};
+use crate::node_graph::physics::{MAX_BODIES, RigidBody, RigidImpulseTargets, RigidSceneInputs};
 use crate::node_graph::transform::Transform;
 
 use super::HISTORY_CAPACITY;
@@ -110,6 +110,127 @@ impl Setup {
                 left.as_ref().and_then(|body| body.fragment_parent)
                     == right.as_ref().and_then(|body| body.fragment_parent)
             })
+    }
+
+    pub(super) fn same_geometry(&self, other: &Self) -> bool {
+        self.density == other.density
+            && self.colliders == other.colliders
+            && self
+                .initial
+                .bodies
+                .iter()
+                .zip(&other.initial.bodies)
+                .all(|(left, right)| same_body_geometry(left.as_ref(), right.as_ref()))
+            && same_body_geometry(
+                self.initial.prototype.as_ref(),
+                other.initial.prototype.as_ref(),
+            )
+    }
+}
+
+fn same_body_geometry(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.shape == right.shape
+                && left.transform.scale == right.transform.scale
+                && left.fragment_parent == right.fragment_parent
+                && left.collider.as_deref() == right.collider.as_deref()
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+    use crate::node_graph::physics::ColliderGeometry;
+
+    fn body() -> RigidBody {
+        RigidBody {
+            collider: Some(Arc::new(ColliderGeometry {
+                hulls: vec![vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]],
+            })),
+            fragment_parent: Some(2),
+            ..RigidBody::default()
+        }
+    }
+
+    fn setup() -> Setup {
+        let mut initial = RigidSceneInputs::default();
+        initial.bodies[0] = Some(body());
+        initial.bodies[1] = Some(RigidBody::default());
+        initial.prototype = Some(RigidBody::default());
+        Setup {
+            initial,
+            colliders: RigidImpulseTargets::default(),
+            density: 1_000.0,
+        }
+    }
+
+    #[test]
+    fn scene_physics_geometry_coupled_setup_survives_deserialization() {
+        let setup = setup();
+        let encoded = serde_json::to_vec(&setup).unwrap();
+        let decoded: Box<Setup> = serde_json::from_slice(&encoded).unwrap();
+        assert!(setup.same_geometry(&decoded));
+
+        let mut controls_only = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        let initial = &mut controls_only.initial;
+        initial.bodies[0].as_mut().unwrap().transform.pos[0] += 3.0;
+        initial.bodies[0].as_mut().unwrap().transform.rot_euler[1] += 0.5;
+        initial.bodies[0].as_mut().unwrap().enabled = false;
+        initial.bodies[0].as_mut().unwrap().mass += 2.0;
+        initial.bodies[0].as_mut().unwrap().kind = 2;
+        initial.gravity[0] += 1.0;
+        initial.copy_count = 3.0;
+        initial.copy_spacing = 2.0;
+        initial.copy_columns = 4.0;
+        initial.layout = 1.0;
+        assert!(setup.same_geometry(&controls_only));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.density += 1.0;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.colliders.bodies = 1;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.initial.bodies[1] = None;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.initial.prototype = None;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.initial.bodies[0].as_mut().unwrap().shape += 1;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.initial.bodies[0].as_mut().unwrap().transform.scale[0] += 1.0;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        changed.initial.bodies[0].as_mut().unwrap().fragment_parent = Some(3);
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Box<Setup>>(&encoded).unwrap();
+        let collider = changed.initial.bodies[0]
+            .as_mut()
+            .unwrap()
+            .collider
+            .as_mut()
+            .unwrap();
+        Arc::make_mut(collider).hulls[0][0][0] += 1.0;
+        assert!(!setup.same_geometry(&changed));
     }
 }
 

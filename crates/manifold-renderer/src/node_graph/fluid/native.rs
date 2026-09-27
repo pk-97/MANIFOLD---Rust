@@ -298,6 +298,7 @@ impl NativeSimulation {
                             request.settings,
                             request.project_tempo.as_ref(),
                             request.source_identity,
+                            Some(super::PreparedGeometry::from_request(&request)),
                         ) {
                             Ok(reader) => self.playback = Some(reader),
                             Err(error) => setup_error = Some(error),
@@ -605,6 +606,41 @@ mod tests {
                     expected.coupled.as_ref().unwrap().output.copies
                 );
             }
+        }
+        // Each open reconstructs independent Arcs from disk. Equal content
+        // above remains valid; changed current assets must fail before a
+        // cached liquid surface or rigid pose can be published.
+        for change in ["role mesh", "rigid hull", "missing roles", "missing rigid"] {
+            let mut reader = take::Reader::open(Arc::clone(&directory)).unwrap();
+            let mut input = reader.next_request(24).unwrap().unwrap();
+            match change {
+                "role mesh" => {
+                    let mut value = serde_json::to_value(input.role_setup.as_ref()).unwrap();
+                    value["roles"][0]["geometry"]["meshes"][0]["vertices"][0][0] =
+                        serde_json::json!(9.0);
+                    input.role_setup = Arc::new(serde_json::from_value(value).unwrap());
+                }
+                "rigid hull" => {
+                    let rigid = input.coupled.as_mut().unwrap();
+                    let mut value = serde_json::to_value(rigid.setup.as_ref()).unwrap();
+                    value["initial"]["bodies"][0]["collider"]["hulls"][0][0][0] =
+                        serde_json::json!(9.0);
+                    rigid.setup = Arc::new(serde_json::from_value(value).unwrap());
+                }
+                "missing roles" => input.role_setup = Arc::default(),
+                "missing rigid" => input.coupled = None,
+                _ => unreachable!(),
+            }
+            input.cache_mode = CacheMode::Playback;
+            input.cache_path = Arc::clone(&directory);
+            let mut playback = NativeSimulation::default();
+            let actual = playback.process(input, &AtomicU64::new(24));
+            assert!(
+                actual.error.as_ref().unwrap().contains("geometry"),
+                "{change}"
+            );
+            assert!(actual.vertices.is_empty(), "{change}");
+            assert!(playback.world.is_none() && playback.coupled.is_none());
         }
         std::fs::remove_dir_all(directory.as_ref()).unwrap();
     }

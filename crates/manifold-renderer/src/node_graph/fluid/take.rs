@@ -17,6 +17,8 @@ use super::{
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 
+mod geometry;
+pub(crate) use geometry::PreparedGeometry;
 mod playback;
 mod tempo;
 mod timing;

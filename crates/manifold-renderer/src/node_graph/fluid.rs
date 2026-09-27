@@ -38,7 +38,7 @@ pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub use domain::FluidDomainLayout;
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;
-pub(super) use take::PlaybackClock;
+pub(super) use take::{PlaybackClock, PreparedGeometry};
 pub use take::{FluidTakeFrame, FluidTakeIdentity, FluidTakeReplay, TakeRange, TakeTime};
 
 pub const TICK: f64 = 1.0 / 60.0;

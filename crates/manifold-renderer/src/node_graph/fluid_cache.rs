@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::fluid::{
-    CoupledRigidFrame, FluidSettings, FluidTakeIdentity, FluidTakeReplay, PlaybackClock, TICK,
-    simulation_tick,
+    CoupledRigidFrame, FluidSettings, FluidTakeIdentity, FluidTakeReplay, PlaybackClock,
+    PreparedGeometry, TICK, simulation_tick,
 };
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
@@ -212,7 +212,7 @@ pub(crate) struct CacheReader {
 impl CacheReader {
     #[cfg(test)]
     pub(crate) fn open(directory: Arc<PathBuf>, settings: FluidSettings) -> Result<Self, String> {
-        Self::open_for_project(directory, settings, None, None)
+        Self::open_for_project(directory, settings, None, None, None)
     }
 
     pub(crate) fn open_for_project(
@@ -220,6 +220,7 @@ impl CacheReader {
         settings: FluidSettings,
         project_tempo: Option<&crate::preset_context::ProjectTempo>,
         source_identity: Option<[u8; 32]>,
+        geometry: Option<PreparedGeometry<'_>>,
     ) -> Result<Self, String> {
         if directory.as_os_str().is_empty() {
             return Err("Water cache playback path is empty".into());
@@ -230,7 +231,18 @@ impl CacheReader {
         let (format_version, binding) = read_manifest(&mut reader, settings)
             .map_err(|error| format!("Water cache playback rejected manifest: {error}"))?;
         let (take_identity, project_clock) = match binding {
-            CacheManifestBinding::Unbound => (None, None),
+            CacheManifestBinding::Unbound => {
+                if geometry
+                    .as_ref()
+                    .is_some_and(|geometry| !geometry.is_empty())
+                {
+                    return Err(
+                        "Water cache playback requires a committed take to validate scene geometry"
+                            .into(),
+                    );
+                }
+                (None, None)
+            }
             CacheManifestBinding::Pending => {
                 return Err("Water cache playback rejected pending take prefix".into());
             }
@@ -254,6 +266,9 @@ impl CacheReader {
                 }
                 if let Some(identity) = source_identity {
                     replay.validate_source_identity(identity)?;
+                }
+                if let Some(geometry) = &geometry {
+                    replay.validate_prepared_geometry(geometry)?;
                 }
                 (Some(identity), replay.into_playback_clock())
             }

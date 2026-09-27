@@ -152,6 +152,16 @@ impl Setup {
             })
     }
 
+    pub(super) fn same_geometry(&self, other: &Self) -> bool {
+        self.roles.len() == other.roles.len()
+            && self.roles.iter().zip(&other.roles).all(|(left, right)| {
+                left.slot == right.slot
+                    && left.kind == right.kind
+                    && left.initial.transform.scale == right.initial.transform.scale
+                    && left.geometry.meshes == right.geometry.meshes
+            })
+    }
+
     pub fn len(&self) -> usize {
         self.roles.len()
     }
@@ -304,6 +314,42 @@ mod tests {
             2.0
         );
         assert_eq!(controls_at(&samples, &values, 1, 0, 1.0).velocity[0], 3.0);
+    }
+
+    #[test]
+    fn scene_physics_geometry_role_setup_survives_deserialization() {
+        let setup = Setup::new(&[None, Some(role(FluidRoleKind::Inflow))]);
+        let encoded = serde_json::to_vec(&setup).unwrap();
+        let decoded: Setup = serde_json::from_slice(&encoded).unwrap();
+        assert!(setup.same_geometry(&decoded));
+
+        let mut controls_only = serde_json::from_slice::<Setup>(&encoded).unwrap();
+        let initial = &mut controls_only.roles[0].initial;
+        initial.transform.pos[0] += 3.0;
+        initial.transform.rot_euler[1] += 0.5;
+        initial.enabled = !initial.enabled;
+        initial.velocity[0] += 2.0;
+        initial.inherit_motion += 0.1;
+        initial.friction += 0.1;
+        assert!(setup.same_geometry(&controls_only));
+
+        let mut changed = serde_json::from_slice::<Setup>(&encoded).unwrap();
+        changed.roles[0].kind = FluidRoleKind::Collider;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Setup>(&encoded).unwrap();
+        changed.roles[0].slot = 0;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Setup>(&encoded).unwrap();
+        changed.roles[0].initial.transform.scale[0] += 1.0;
+        assert!(!setup.same_geometry(&changed));
+
+        let mut changed = serde_json::from_slice::<Setup>(&encoded).unwrap();
+        let mut meshes = changed.roles[0].geometry.meshes.clone();
+        meshes[0].vertices[0][0] += 1.0;
+        changed.roles[0].geometry = Arc::new(PreparedFluidGeometry { meshes });
+        assert!(!setup.same_geometry(&changed));
     }
 
     #[test]
