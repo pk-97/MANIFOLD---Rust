@@ -4,6 +4,7 @@ use manifold_physics::{BodyConfig, PhysicsWorld, TriangleMesh};
 
 mod boundaries;
 mod gravity;
+mod viscous_motion;
 
 const DT: Seconds = Seconds(1.0 / 60.0);
 
@@ -46,6 +47,17 @@ struct Pair {
 
 impl Pair {
     fn new(ratio: f32, viscosity: f64, kind: BodyKind, density: f64, emit: bool) -> Self {
+        Self::at_height(ratio, viscosity, kind, density, emit, 1.05)
+    }
+
+    fn at_height(
+        ratio: f32,
+        viscosity: f64,
+        kind: BodyKind,
+        density: f64,
+        emit: bool,
+        center_y: f32,
+    ) -> Self {
         let mesh = proxy();
         let mut rigid = PhysicsWorld::new([0.0; 3]).unwrap();
         let angle: f32 = 0.23;
@@ -54,7 +66,7 @@ impl Pair {
                 &mesh.vertices,
                 BodyConfig {
                     kind,
-                    position: [1.2, 1.05, 1.2],
+                    position: [1.2, center_y, 1.2],
                     rotation: [0.0, angle.sin(), 0.0, angle.cos()],
                     mass: 0.5 * 0.4 * 0.45 * 1000.0 * ratio,
                     ..BodyConfig::default()

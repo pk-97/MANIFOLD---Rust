@@ -250,3 +250,124 @@ fn production_coupling_surface_body_remains_near_buoyant_equilibrium() {
     }
     assert!((coarse.drift - fine.drift).abs() < 0.02);
 }
+
+#[derive(Debug)]
+struct ContactMotion {
+    minimum_clearance: f32,
+    final_clearance: f32,
+    final_speed: f32,
+    contact_delta_velocity: f64,
+}
+
+fn run_submerged_contact(fps: usize) -> ContactMotion {
+    let (mut fluid, mut rigid, body) = tank(48, 2.0, 0.4);
+    // Match FLIP's actual inset domain boundary, not the particle-seeding box.
+    // _getBoundaryAABB expands by -(3*dx + 1e-4), half on each side.
+    let floor_height = 1.5 * 0.05 + 0.00005;
+    let mut floor = proxy();
+    for vertex in &mut floor.vertices {
+        vertex[0] *= 1.2 / 0.25;
+        vertex[1] *= 0.075 / 0.2;
+        vertex[2] *= 1.2 / 0.225;
+    }
+    rigid
+        .add_hull(
+            &floor.vertices,
+            BodyConfig {
+                kind: BodyKind::Fixed,
+                position: [1.2, floor_height - 0.075, 1.2],
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let frame_dt = Seconds(1.0 / fps as f64);
+    let mut result = ContactMotion {
+        minimum_clearance: f32::INFINITY,
+        final_clearance: f32::INFINITY,
+        final_speed: f32::INFINITY,
+        contact_delta_velocity: 0.0,
+    };
+    for frame_index in 0..fps {
+        let mut frame = fluid.begin_frame(frame_dt).unwrap();
+        let mut elapsed = 0.0;
+        while elapsed < frame_dt.0 - 1e-12 {
+            let before = rigid.dynamics(body).unwrap();
+            frame
+                .set_rigid_bodies(&[RigidBodyState {
+                    pose: rigid.pose(body).unwrap(),
+                    dynamics: before,
+                }])
+                .unwrap();
+            let dt = frame.next_substep().unwrap().unwrap();
+            frame.advance(dt).unwrap_or_else(|error| {
+                panic!(
+                    "submerged contact fps={fps} frame={frame_index} elapsed={elapsed} dt={dt:?} pose={:?} dynamics={before:?}: {error}",
+                    rigid.pose(body).unwrap()
+                )
+            });
+            let reaction = frame.rigid_reactions().unwrap()[0];
+            rigid
+                .apply_impulses(&[reaction.body_impulse(body).unwrap()])
+                .unwrap();
+            // Use the app's native contact-solver subdivision count.
+            rigid.step(dt, 4).unwrap();
+            let after = rigid.dynamics(body).unwrap();
+            let pose = rigid.pose(body).unwrap();
+            assert!(
+                pose.position
+                    .iter()
+                    .chain(&pose.rotation)
+                    .chain(&after.linear_velocity)
+                    .chain(&after.angular_velocity)
+                    .all(|value| value.is_finite())
+            );
+            // Measure the rotated box's lowest corner, not its centre alone.
+            let [x, y, z, w] = pose.rotation;
+            let vertical_radius = 0.3 * (2.0 * (x * y + w * z)).abs()
+                + 0.2 * (1.0 - 2.0 * (x * x + z * z)).abs()
+                + 0.3 * (2.0 * (y * z - w * x)).abs();
+            result.final_clearance = pose.position[1] - vertical_radius - floor_height;
+            result.minimum_clearance = result.minimum_clearance.min(result.final_clearance);
+            result.final_speed = after
+                .linear_velocity
+                .iter()
+                .map(|value| value * value)
+                .sum::<f32>()
+                .sqrt();
+            // The remaining linear momentum transfer is Box3D's contact
+            // response. Gravity and the solved fluid reaction are removed.
+            result.contact_delta_velocity += f64::from(after.linear_velocity[1])
+                - f64::from(before.linear_velocity[1])
+                - dt.0 * f64::from(before.external_linear_acceleration[1])
+                - reaction.delta_linear[1];
+            elapsed += dt.0;
+        }
+        frame.finish().unwrap();
+    }
+    result
+}
+
+#[test]
+fn production_coupling_submerged_body_settles_on_box3d_floor() {
+    // Predeclared acceptance: no more than half-cell penetration, contact
+    // reached within one second, final speed below 0.1 m/s, and convergent
+    // resting position at 60/120 Hz. Positive non-fluid momentum transfer
+    // proves that this exercises Box3D contact, rather than liquid support.
+    let coarse = run_submerged_contact(60);
+    let fine = run_submerged_contact(120);
+    println!("submerged floor 60Hz: {coarse:?}");
+    println!("submerged floor 120Hz: {fine:?}");
+    for result in [&coarse, &fine] {
+        assert!(result.minimum_clearance > -0.025, "penetration: {result:?}");
+        assert!(
+            result.final_clearance.abs() < 0.035,
+            "resting gap: {result:?}"
+        );
+        assert!(result.final_speed < 0.1, "settling speed: {result:?}");
+        assert!(
+            result.contact_delta_velocity > 0.2,
+            "missing native contact response: {result:?}"
+        );
+    }
+    assert!((coarse.final_clearance - fine.final_clearance).abs() < 0.02);
+}
