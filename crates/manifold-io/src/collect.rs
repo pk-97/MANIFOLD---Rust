@@ -25,6 +25,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+mod mesh_bundle;
+
 /// Which media family an asset belongs to — the `Media/` subfolder it collects
 /// into (D2): `Media/Video`, `Media/Audio`, `Media/Meshes`, `Media/HDRIs`,
 /// `Media/Images`, `Media/Physics`.
@@ -398,8 +400,8 @@ fn kind_of(load: NodeFileLoad) -> AssetKind {
 // ── Collect All and Save (D6) ──────────────────────────────────────
 
 /// What one Collect All and Save pass did (PROJECT_FOLDERS_DESIGN.md D6).
-/// `copied` counts unique files physically written (identical content deduped
-/// by full SHA-256), `already_local` counts refs already inside the project
+/// `copied` counts unique files or asset directories physically written
+/// (file/bundle content deduped by full SHA-256), `already_local` counts refs already inside the project
 /// folder, `re_pointed` counts refs whose stored path was rewritten to the
 /// in-folder form.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -464,6 +466,9 @@ pub fn collect_all_and_save(
     // the first copy landed at. Later refs with the same content re-point to
     // the same file instead of copying it again.
     let mut copied_files: HashMap<(AssetKind, [u8; 32]), PathBuf> = HashMap::new();
+    // Model dependencies participate in identity: identical glTF JSON can
+    // refer to different buffers or textures in different source directories.
+    let mut copied_meshes: HashMap<[u8; 32], PathBuf> = HashMap::new();
     // Directories have no content-hash dedup; dedup by canonical source path
     // so two refs sharing one folder copy it once. Distinct source directories
     // with the same basename get separate destinations.
@@ -502,6 +507,29 @@ pub fn collect_all_and_save(
 
         if !src.is_file() {
             report.missing += 1;
+            continue;
+        }
+
+        if r.kind == AssetKind::Mesh
+            && let Some(bundle) = mesh_bundle::MeshBundle::read(src)?
+        {
+            if path_is_inside(src, &project_dir) && bundle.is_portable_in(&project_dir) {
+                report.already_local += 1;
+                continue;
+            }
+            let target = if let Some(existing) = copied_meshes.get(&bundle.hash) {
+                existing.clone()
+            } else {
+                let family_dir = media_family_dir(&project_dir, r.kind);
+                let name = src.file_stem().unwrap_or_else(|| std::ffi::OsStr::new("model"));
+                let directory = reserve_directory_target(&family_dir, name)?;
+                let (target, bytes) = bundle.copy_to(&directory)?;
+                report.copied += 1;
+                report.bytes_copied += bytes;
+                copied_meshes.insert(bundle.hash, target.clone());
+                target
+            };
+            re_point(project, &r.target, src, &target, &project_dir, &mut report);
             continue;
         }
 
@@ -926,6 +954,9 @@ mod tests {
     mod scene_modifier_relocation_tests {
         include!("collect/scene_modifier_relocation_tests.rs");
     }
+    mod gltf_dependency_tests {
+        include!("collect/gltf_dependency_tests.rs");
+    }
     use manifold_core::clip::TimelineClip;
     use manifold_core::effect_graph_def::{
         BindingTarget, EffectGraphDef, EffectGraphNode, PresetMetadata, StringBindingDef,
@@ -936,6 +967,14 @@ mod tests {
     use manifold_core::preset_type_id::PresetTypeId;
     use manifold_core::types::LayerType;
     use manifold_core::video::VideoClip;
+
+    fn empty_glb() -> Vec<u8> {
+        gltf::binary::Glb {
+            header: gltf::binary::Header { magic: *b"glTF", version: 2, length: 0 },
+            json: std::borrow::Cow::Borrowed(br#"{"asset":{"version":"2.0"}}"#),
+            bin: None,
+        }.to_vec().expect("valid empty GLB")
+    }
 
     fn sp(id: &str, default: &str, file_path: bool) -> StringParamSpecDef {
         StringParamSpecDef {
@@ -1555,7 +1594,8 @@ mod tests {
         let glb_src = src_dir.join("azalea.glb");
         std::fs::write(&video_src, b"fake mp4 bytes").unwrap();
         std::fs::write(&audio_src, b"fake wav bytes").unwrap();
-        std::fs::write(&glb_src, b"fake glb bytes").unwrap();
+        let glb_bytes = empty_glb();
+        std::fs::write(&glb_src, &glb_bytes).unwrap();
 
         let video_before = super::sha256_file(&video_src).unwrap();
         let audio_before = super::sha256_file(&audio_src).unwrap();
@@ -1647,7 +1687,7 @@ mod tests {
         assert_eq!(report.re_pointed, 3, "all three refs re-pointed");
         assert_eq!(report.missing, 0);
         assert_eq!(report.already_local, 0);
-        assert_eq!(report.bytes_copied, 42, "sum of the three fixture file sizes");
+        assert_eq!(report.bytes_copied, 28 + glb_bytes.len() as u64, "sum of the three fixture file sizes");
 
         // Copy-only invariant: sources untouched.
         assert_eq!(super::sha256_file(&video_src).unwrap(), video_before);

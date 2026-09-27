@@ -2392,12 +2392,14 @@ name = "manifold-io"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "gltf",
  "log",
  "manifold-core",
  "pathdiff",
  "serde",
  "serde_json",
  "sha2",
+ "urlencoding",
  "zip",
 ]
 

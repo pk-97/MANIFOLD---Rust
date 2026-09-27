@@ -114,6 +114,8 @@ half-broken-project state by construction.
 
 Directory copies deduplicate shared sources by canonical source path. Each distinct source reserves a fresh destination atomically, adding a suffix when its basename already exists; directories are never merged by basename. `physics_cache_same_basename_folders_get_distinct_destinations` verifies preservation of both sources and a pre-existing destination.
 
+glTF models with external buffers or images collect as a reserved directory under `Media/Meshes`. Only referenced resources are copied; the copied document uses relative URIs, while embedded data, binary chunks and unknown JSON fields are preserved. Bundle deduplication includes the primary file and every referenced resource's content. An already-local primary is portable only when every external URI is relative and resolves inside the project. Missing resources, unsupported URI schemes and malformed JSON/GLB containers fail before that model's authored path changes. Self-contained models retain ordinary byte-for-byte file collection. `CollectReport.copied` counts a bundle once, like other directory assets; its byte count includes all written files.
+
 **D7 — The breadcrumb rides along for free.** `breadcrumb_path_for` (breadcrumb.rs:149)
 appends to the project path, so inside a project folder the breadcrumb is already inside.
 No placement change needed. The only real change is in `--resume`: with **no path

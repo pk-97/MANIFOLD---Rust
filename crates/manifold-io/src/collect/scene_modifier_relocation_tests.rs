@@ -89,7 +89,7 @@ fn scene_modifier_source_relocation_collect_all_save_reload_preserves_calibratio
     let root = unique_temp_root("scene-source-collect");
     let source = root.join("source").join("scan.glb");
     std::fs::create_dir_all(source.parent().expect("source parent")).expect("source directory");
-    std::fs::write(&source, b"placeholder glb bytes").expect("source asset");
+    std::fs::write(&source, empty_glb()).expect("source asset");
 
     let (mut project, layer_id, _) = calibrated_scene_project(&source.to_string_lossy(), false);
     let original_embedded = project.embedded_presets[0].def.clone();
@@ -178,7 +178,7 @@ fn scene_modifier_source_relocation_path_resolver_refreshes_default_and_clip_ove
     let root = unique_temp_root("scene-source-resolve");
     let moved = root.join("moved").join("scan.glb");
     std::fs::create_dir_all(moved.parent().expect("moved parent")).expect("moved directory");
-    std::fs::write(&moved, b"placeholder glb bytes").expect("moved asset");
+    std::fs::write(&moved, empty_glb()).expect("moved asset");
     let old = root.join("old").join("scan.glb");
     let (mut project, layer_id, _) = calibrated_scene_project(&old.to_string_lossy(), false);
     let original_embedded = project.embedded_presets[0].def.clone();

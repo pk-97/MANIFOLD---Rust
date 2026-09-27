@@ -13,6 +13,8 @@ log = { workspace = true }
 sha2 = "0.10"
 flate2 = "1"
 pathdiff = "0.2"
+gltf = { version = "1", default-features = false }
+urlencoding = "2"
 
 [dev-dependencies]
 serde_json = { workspace = true }
