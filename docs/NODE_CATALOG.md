@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 303 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 302 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -253,7 +253,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Voxelize | `node.voxelize_mesh` | Filter | Snaps every vertex to a regular voxel grid, pixel-crushing a smooth mesh into chunky blocks. |
 | Wave Shear Mesh | `node.wave_shear_mesh` | Filter | Shears a textured mesh with a travelling wave while transporting normals and tangents analytically. |
 
-### Materials & Lighting (11)
+### Materials & Lighting (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -432,7 +432,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (87)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -486,7 +486,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 362 |
+| `Lantern` | Lantern | generator | Geometry | 363 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -497,7 +497,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 347 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 348 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
@@ -505,10 +505,11 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1297 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1946 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1301 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1952 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
+| `Scene` | Scene | generator | Geometry | 357 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |

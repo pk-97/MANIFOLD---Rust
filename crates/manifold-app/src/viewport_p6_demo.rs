@@ -64,6 +64,10 @@ fn scene_json(wire_pos_x: bool) -> String {
             "color_b":{{"type":"Float","value":0.3}},
             "ambient":{{"type":"Float","value":0.15}}}}}},
         {{"id":6,"typeId":"node.scene_object","nodeId":"obj"}},
+        {{"id":7,"typeId":"node.bake_environment","nodeId":"environment","params":{{
+            "width":{{"type":"Int","value":16}},
+            "height":{{"type":"Int","value":8}},
+            "intensity":{{"type":"Float","value":0.0}}}}}},
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"show_cam","params":{{
             "orbit":{{"type":"Float","value":0.6}},
             "tilt":{{"type":"Float","value":0.5}},
@@ -91,6 +95,7 @@ fn scene_json(wire_pos_x: bool) -> String {
         {{"fromNode":10,"fromPort":"transform","toNode":6,"toPort":"transform"}},
         {{"fromNode":4,"fromPort":"out","toNode":6,"toPort":"material"}},
         {{"fromNode":6,"fromPort":"object","toNode":20,"toPort":"object_0"}},
+        {{"fromNode":7,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
         {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
         {{"fromNode":5,"fromPort":"out","toNode":20,"toPort":"light_0"}},
         {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}{extra_wire}
