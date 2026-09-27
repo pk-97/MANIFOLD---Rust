@@ -1065,6 +1065,7 @@ impl GeneratorRenderer {
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
                 layer_state.generator.set_project_tempo(project_tempo);
+                layer_state.generator.set_physics_source_instance(layer.gen_params());
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -1435,6 +1436,7 @@ impl GeneratorRenderer {
         t.ready = false;
         t.runtime.set_string_params(string_params);
         t.runtime.set_project_tempo(None);
+        t.runtime.set_physics_source_instance(Some(gp));
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
         for _ in 0..frames {
             let frame_count = t.frame_count;
@@ -1733,6 +1735,7 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
                     ls.generator.set_project_tempo(None);
+                    ls.generator.set_physics_source_instance(layer.gen_params());
                     let ctx = PresetContext {
                         time: frame as f64 * DT,
                         beat: 0.0,

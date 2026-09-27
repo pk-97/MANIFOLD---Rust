@@ -84,6 +84,7 @@ impl PresetRuntime {
         }
         self.last_physics_frame_time = prior.last_physics_frame_time;
         self.physics_project_tempo.clone_from(&prior.physics_project_tempo);
+        self.carry_physics_source_controls_from(prior);
         self.install_physics_source_identities();
 
         // Setup and event wires are intentionally outside historical sampling.

@@ -82,7 +82,8 @@ pub struct PresetRuntime {
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
     pub(super) last_physics_frame_time: Option<FrameTime>,
     pub(super) physics_project_tempo: Option<crate::preset_context::ProjectTempo>,
-    pub(super) physics_source_graphs: Result<Vec<(NodeInstanceId, [u8; 32])>, String>,
+    pub(super) physics_source_graphs: Result<Vec<super::physics_source_runtime::InstalledSource>, String>,
+    pub(super) physics_source_has_instance: bool,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -1323,6 +1324,7 @@ impl PresetRuntime {
             last_physics_frame_time: None,
             physics_project_tempo: None,
             physics_source_graphs: Ok(Vec::new()),
+            physics_source_has_instance: false,
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,

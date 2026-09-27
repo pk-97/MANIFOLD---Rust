@@ -17,6 +17,7 @@ fn main() {
             "src/preset_runtime/physics_sampling.rs",
             "src/preset_runtime/physics_sources.rs",
             "src/preset_runtime/physics_source_runtime.rs",
+            "src/preset_runtime/physics_source_controls.rs",
             "src/preset_context.rs",
             "../manifold-core/src/tempo.rs",
         ],

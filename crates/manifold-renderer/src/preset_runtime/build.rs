@@ -642,6 +642,7 @@ impl PresetRuntime {
             last_physics_frame_time: None,
             physics_project_tempo: None,
             physics_source_graphs: Ok(Vec::new()),
+            physics_source_has_instance: false,
             impulse_identity: std::sync::Arc::new(()),
             scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,

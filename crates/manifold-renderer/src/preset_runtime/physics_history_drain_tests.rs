@@ -48,11 +48,7 @@ impl EffectNode for FluidTimeObserver {
     }
 }
 
-fn runtime() -> PresetRuntime {
-    let mut registry = PrimitiveRegistry::with_builtin();
-    registry.register("test.fluid_time", || {
-        Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
-    });
+fn runtime_definition() -> EffectGraphDef {
     let def = serde_json::json!({
         "version": 2, "name": "Fluid offline history",
         "nodes": [
@@ -71,7 +67,19 @@ fn runtime() -> PresetRuntime {
             {"fromNode":2,"fromPort":"out","toNode":3,"toPort":"in"}
         ]
     });
-    PresetRuntime::from_json_str(&def.to_string(), &registry).unwrap()
+    serde_json::from_value(def).unwrap()
+}
+
+fn runtime_from_definition(def: EffectGraphDef) -> PresetRuntime {
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("test.fluid_time", || {
+        Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
+    });
+    PresetRuntime::from_def(def, &registry, None).unwrap()
+}
+
+fn runtime() -> PresetRuntime {
+    runtime_from_definition(runtime_definition())
 }
 
 #[test]
@@ -251,6 +259,152 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
     rebuilt.apply_inner_param_overrides(&original);
     rebuilt.execute_frame(time(0.1));
     assert_eq!(state(&rebuilt), FluidDomainState::Ready);
+    drop(rebuilt);
+    drop(playback);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn fluid_graph_cache_validates_host_controls_without_treating_effectives_as_edits() {
+    use crate::node_graph::fluid::{FluidDomainSnapshot, FluidDomainState};
+    use manifold_core::effects::{ParameterDriver, PresetInstance};
+    use manifold_core::params::{Param, ParamManifest};
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+    let directory =
+        std::env::temp_dir().join(format!("manifold-fluid-host-source-{}", std::process::id()));
+    let mut def = runtime_definition();
+    def.preset_metadata = Some(serde_json::from_value(serde_json::json!({
+        "id":"PhysicsHostIdentity", "displayName":"Physics host identity", "category":"Test", "oscPrefix":"physics_host",
+        "params":[
+            {"id":"gravity", "name":"Gravity", "min":-20.0, "max":20.0, "defaultValue":-9.8},
+            {"id":"look", "name":"Look", "min":0.0, "max":1.0, "defaultValue":0.5}
+        ],
+        "bindings":[{"id":"gravity", "label":"Gravity", "defaultValue":-9.8,
+            "target":{"kind":"node", "nodeId":"fluid", "param":"gravity"}}]
+    })).unwrap());
+    let mut instance =
+        PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhysicsHostIdentity"));
+    instance.params = ParamManifest::from_params(
+        def.preset_metadata
+            .as_ref()
+            .unwrap()
+            .params
+            .iter()
+            .cloned()
+            .map(Param::bundled)
+            .collect(),
+    );
+    instance.base_tracked = true;
+    def.nodes[0].params.insert(
+        "cache_mode".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::Enum { value: 1 },
+    );
+    def.nodes[0].params.insert(
+        "cache_path".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::String {
+            value: directory.to_str().unwrap().into(),
+        },
+    );
+    let time = |seconds| FrameTime {
+        seconds: Seconds(seconds),
+        beats: Beats(seconds * 2.0),
+        delta: Seconds::ZERO,
+        frame_count: 0,
+    };
+    let snapshot = |runtime: &PresetRuntime| -> FluidDomainSnapshot {
+        let fluid = runtime
+            .graph
+            .instance_by_node_id(&NodeId::new("fluid"))
+            .unwrap();
+        runtime
+            .graph
+            .get_node(fluid)
+            .unwrap()
+            .node
+            .fluid_domain_snapshot()
+            .unwrap()
+    };
+    let apply = |runtime: &mut PresetRuntime, instance: &PresetInstance| {
+        runtime.set_physics_source_instance(Some(instance));
+        runtime.apply_param_values(&instance.params);
+        runtime.execute_frame(time(0.1));
+    };
+    let mut recorded = runtime_from_definition(def.clone());
+    recorded.set_physics_source_instance(Some(&instance));
+    recorded.apply_param_values(&instance.params);
+    recorded.execute_frame(time(0.0));
+    recorded.execute_frame(time(0.1));
+    assert_eq!(snapshot(&recorded).state, FluidDomainState::Ready);
+    drop(recorded);
+
+    def.nodes[0].params.insert(
+        "cache_mode".into(),
+        manifold_core::effect_graph_def::SerializedParamValue::Enum { value: 2 },
+    );
+    let mut playback = runtime_from_definition(def.clone());
+    apply(&mut playback, &instance);
+    assert_eq!(snapshot(&playback).state, FluidDomainState::Ready);
+    let epoch = snapshot(&playback).epoch;
+    instance.set_param("gravity", -3.0);
+    apply(&mut playback, &instance);
+    assert_eq!(snapshot(&playback).state, FluidDomainState::Ready);
+    assert_eq!(
+        snapshot(&playback).epoch,
+        epoch,
+        "an effective value is recorded performance data"
+    );
+    instance.set_base_param("look", 0.9);
+    apply(&mut playback, &instance);
+    assert_eq!(
+        snapshot(&playback).epoch,
+        epoch,
+        "unrelated controls must not invalidate physics"
+    );
+    playback.apply_inner_param_overrides(&def);
+    apply(&mut playback, &instance);
+    assert_eq!(
+        snapshot(&playback).epoch,
+        epoch,
+        "graph refresh must retain host provenance"
+    );
+
+    instance.set_base_param("gravity", -7.0);
+    apply(&mut playback, &instance);
+    assert_eq!(snapshot(&playback).state, FluidDomainState::Failed);
+    instance.set_base_param("gravity", -9.8);
+    apply(&mut playback, &instance);
+    assert_eq!(snapshot(&playback).state, FluidDomainState::Ready);
+    instance.drivers = Some(vec![ParameterDriver::new(
+        "gravity",
+        BeatDivision::Quarter,
+        DriverWaveform::Sine,
+    )]);
+    apply(&mut playback, &instance);
+    assert_eq!(snapshot(&playback).state, FluidDomainState::Failed);
+    instance.drivers = None;
+    apply(&mut playback, &instance);
+    assert_eq!(snapshot(&playback).state, FluidDomainState::Ready);
+
+    let epoch = snapshot(&playback).epoch;
+    let mut rebuilt = runtime_from_definition(def.clone());
+    rebuilt.carry_generator_state_from(&mut playback);
+    rebuilt.execute_frame(time(0.1));
+    assert_eq!(snapshot(&rebuilt).state, FluidDomainState::Ready);
+    assert_eq!(
+        snapshot(&rebuilt).epoch,
+        epoch,
+        "compatible rebuild must carry host provenance"
+    );
+    rebuilt.apply_physics_source_graphs(Err("temporarily unresolved graph".into()));
+    rebuilt.apply_inner_param_overrides(&def);
+    rebuilt.execute_frame(time(0.1));
+    assert_eq!(
+        snapshot(&rebuilt).state,
+        FluidDomainState::Failed,
+        "host-aware recovery must await current controls"
+    );
+    apply(&mut rebuilt, &instance);
+    assert_eq!(snapshot(&rebuilt).state, FluidDomainState::Ready);
     drop(rebuilt);
     drop(playback);
     std::fs::remove_dir_all(directory).unwrap();

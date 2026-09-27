@@ -25,6 +25,7 @@ use crate::node_graph::scene_modifier_expand::{
 pub(super) struct PhysicsSourceGraph {
     pub(super) fluid: NodeId,
     pub(super) digest: [u8; 32],
+    pub(super) control_ids: Vec<String>,
 }
 
 /// Build the stable source identity for every authored fluid domain.
@@ -121,9 +122,11 @@ pub(super) fn prepare(
             registry,
             &mut selected,
         )?;
+        let control_ids = relevant_control_ids(&graph, canonical, &selected, &events);
         sources.push(PhysicsSourceGraph {
             fluid: fluid.clone(),
             digest: digest_source(&graph, &selected, pair, &events, canonical)?,
+            control_ids,
         });
     }
     sources.sort_by(|left, right| left.fluid.as_str().cmp(right.fluid.as_str()));
@@ -285,6 +288,39 @@ fn collect_event_sources(
             .then(left.field_port.cmp(&right.field_port))
     });
     Ok(events)
+}
+
+fn relevant_control_ids(
+    graph: &SourceGraph,
+    canonical: &EffectGraphDef,
+    selected: &BTreeSet<String>,
+    events: &[EventSource],
+) -> Vec<String> {
+    let modifier_ids: BTreeSet<_> = events
+        .iter()
+        .map(|event| event.modifier_id.as_str())
+        .collect();
+    let mut ids = BTreeSet::new();
+    if let Some(metadata) = graph.metadata.as_ref() {
+        for binding in &metadata.bindings {
+            if let BindingTarget::Node { node_id, param } = &binding.target
+                && selected.contains(node_id.as_str())
+                && !is_fluid_cache_param(graph, node_id, param)
+            {
+                ids.insert(binding.id.clone());
+            }
+        }
+    }
+    if let Some(metadata) = canonical.preset_metadata.as_ref() {
+        for binding in &metadata.bindings {
+            if let BindingTarget::SceneModifier { modifier_id, .. } = &binding.target
+                && modifier_ids.contains(modifier_id.as_str())
+            {
+                ids.insert(binding.id.clone());
+            }
+        }
+    }
+    ids.into_iter().collect()
 }
 
 fn digest_source(
@@ -606,6 +642,8 @@ fn write_param_spec(writer: &mut DigestWriter, spec: &ParamSpecDef) -> Result<()
     writer.bool(spec.is_toggle);
     writer.bool(spec.is_trigger);
     writer.bool(spec.wraps);
+    writer.bool(spec.is_trigger_gate);
+    writer.bool(!spec.value_labels.is_empty());
     Ok(())
 }
 

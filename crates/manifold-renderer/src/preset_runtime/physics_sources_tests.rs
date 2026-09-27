@@ -322,6 +322,12 @@ fn event_field_ancestry_and_expanded_binding_semantics_are_hashed() {
     let changed_binding = prepare(&binding_edit, &owner, &prepared.impulse_routes, &registry)
         .expect("binding source graph");
     assert_ne!(base[0].digest, changed_binding[0].digest);
+    assert!(
+        changed_binding[0]
+            .control_ids
+            .iter()
+            .any(|id| id == "generated_force")
+    );
 
     let mut reshaped = binding_edit;
     reshaped
@@ -375,6 +381,18 @@ fn event_field_ancestry_and_expanded_binding_semantics_are_hashed() {
     )
     .expect("event alias source graph");
     assert_ne!(base[0].digest, alias_digest[0].digest);
+    assert!(
+        alias_digest[0]
+            .control_ids
+            .iter()
+            .any(|id| id == "force_trigger_alias")
+    );
+    assert!(
+        alias_digest[0]
+            .control_ids
+            .iter()
+            .all(|id| id != "cache_mode")
+    );
 
     alias_owner
         .preset_metadata
@@ -500,6 +518,89 @@ fn relevant_binding_reshape_and_asset_selector_change_identity() {
         .string_bindings[0]
         .default_value = "b.glb".into();
     assert_ne!(digest(&first), digest(&asset));
+
+    let registry = PrimitiveRegistry::with_builtin();
+    let first_source = prepare(&first, &first, &[], &registry)
+        .expect("control identity")
+        .pop()
+        .expect("fluid source");
+    assert_eq!(first_source.control_ids, vec!["fill"]);
+
+    let mut ordered = first.clone();
+    let ordered_metadata = ordered.preset_metadata.as_mut().expect("metadata");
+    ordered_metadata.bindings.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "zeta",
+            "label": "Zeta",
+            "defaultValue": 0.0,
+            "target": {"kind": "node", "nodeId": "source", "param": "value"}
+        }))
+        .expect("ordered binding"),
+    );
+    ordered_metadata.bindings.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "fill",
+            "label": "Fill duplicate",
+            "defaultValue": 0.5,
+            "target": {"kind": "node", "nodeId": "fluid", "param": "fill_height"}
+        }))
+        .expect("duplicate binding"),
+    );
+    let ordered_source = prepare(&ordered, &ordered, &[], &registry)
+        .expect("ordered controls")
+        .pop()
+        .expect("fluid source");
+    assert_eq!(ordered_source.control_ids, vec!["fill", "zeta"]);
+
+    let mut spec_edit = first.clone();
+    spec_edit
+        .preset_metadata
+        .as_mut()
+        .expect("metadata")
+        .params
+        .push(
+            serde_json::from_value(serde_json::json!({
+                "id": "fill",
+                "name": "Fill",
+                "min": 0.0,
+                "max": 1.0,
+                "defaultValue": 0.5,
+                "isTriggerGate": true,
+                "valueLabels": ["Low", "High"]
+            }))
+            .expect("semantic spec"),
+        );
+    let spec_digest = digest(&spec_edit);
+    let mut label_edit = spec_edit.clone();
+    label_edit
+        .preset_metadata
+        .as_mut()
+        .expect("metadata")
+        .params
+        .last_mut()
+        .expect("semantic spec")
+        .value_labels = vec!["Quiet".into(), "Loud".into()];
+    assert_eq!(spec_digest, digest(&label_edit));
+    label_edit
+        .preset_metadata
+        .as_mut()
+        .unwrap()
+        .params
+        .last_mut()
+        .unwrap()
+        .value_labels
+        .clear();
+    assert_ne!(spec_digest, digest(&label_edit));
+    let before_gate = digest(&label_edit);
+    label_edit
+        .preset_metadata
+        .as_mut()
+        .unwrap()
+        .params
+        .last_mut()
+        .unwrap()
+        .is_trigger_gate = false;
+    assert_ne!(before_gate, digest(&label_edit));
 }
 
 #[test]

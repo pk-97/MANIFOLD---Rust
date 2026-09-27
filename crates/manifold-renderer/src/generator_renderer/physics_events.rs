@@ -76,6 +76,7 @@ impl GeneratorRenderer {
             state.applied_param_version = version;
         }
         state.generator.apply_param_values(&params.params);
+        state.generator.set_physics_source_instance(Some(params));
         state.generator.set_project_tempo(project_tempo);
         state
             .generator
