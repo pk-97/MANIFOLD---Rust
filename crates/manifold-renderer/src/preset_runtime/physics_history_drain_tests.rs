@@ -4,6 +4,10 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
 use std::{borrow::Cow, cell::Cell};
 
+mod string_bindings {
+    include!("physics_string_binding_tests.rs");
+}
+
 thread_local! {
     static FLUID_TIME: Cell<Option<f32>> = const { Cell::new(None) };
 }

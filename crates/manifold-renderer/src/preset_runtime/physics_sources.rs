@@ -26,6 +26,9 @@ pub(super) struct PhysicsSourceGraph {
     pub(super) fluid: NodeId,
     pub(super) digest: [u8; 32],
     pub(super) control_ids: Vec<String>,
+    /// Resolved destinations of relevant host string bindings. Values are
+    /// observed after the existing binding policy has applied overrides.
+    pub(super) string_targets: Vec<(NodeId, String)>,
 }
 
 /// Build the stable source identity for every authored fluid domain.
@@ -127,6 +130,7 @@ pub(super) fn prepare(
             fluid: fluid.clone(),
             digest: digest_source(&graph, &selected, pair, &events, canonical)?,
             control_ids,
+            string_targets: relevant_string_targets(&graph, &selected),
         });
     }
     sources.sort_by(|left, right| left.fluid.as_str().cmp(right.fluid.as_str()));
@@ -321,6 +325,31 @@ fn relevant_control_ids(
         }
     }
     ids.into_iter().collect()
+}
+
+fn relevant_string_targets(
+    graph: &SourceGraph,
+    selected: &BTreeSet<String>,
+) -> Vec<(NodeId, String)> {
+    let targets: BTreeSet<_> = graph
+        .metadata
+        .as_ref()
+        .into_iter()
+        .flat_map(|metadata| &metadata.string_bindings)
+        .filter_map(|binding| match &binding.target {
+            BindingTarget::Node { node_id, param }
+                if selected.contains(node_id.as_str())
+                    && !is_fluid_cache_param(graph, node_id, param) =>
+            {
+                Some((node_id.as_str().to_owned(), param.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    targets
+        .into_iter()
+        .map(|(id, param)| (NodeId::new(id), param))
+        .collect()
 }
 
 fn digest_source(

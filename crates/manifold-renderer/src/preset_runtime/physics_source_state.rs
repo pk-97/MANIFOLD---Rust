@@ -7,7 +7,7 @@
 //! slot's node map whenever identities are installed.
 
 use super::{EffectGraphDef, PrimitiveRegistry, physics_source_controls, physics_sources};
-use crate::node_graph::{Graph, NodeInstanceId};
+use crate::node_graph::{Graph, NodeInstanceId, ParamValue};
 use manifold_core::NodeId;
 use manifold_core::effects::PresetInstance;
 use sha2::{Digest, Sha256};
@@ -32,19 +32,57 @@ struct InstalledSource {
     /// None means the standalone graph has no host. A host-aware graph must
     /// retain an explicit error until its current controls have been observed.
     controls: Option<Result<[u8; 32], String>>,
+    /// Runtime nodes corresponding to the source's stable string targets.
+    string_nodes: Vec<NodeInstanceId>,
+    published: Option<Result<[u8; 32], String>>,
 }
 
 impl InstalledSource {
-    fn identity(&self) -> Result<[u8; 32], String> {
-        let Some(controls) = &self.controls else {
-            return Ok(self.source.digest);
+    fn identity(&self, graph: &Graph) -> Result<[u8; 32], String> {
+        let base = if let Some(controls) = &self.controls {
+            let controls = controls.as_ref().map_err(Clone::clone)?;
+            let mut hash = Sha256::new();
+            hash.update(b"manifold.physics.graph-and-controls.v1");
+            hash.update(self.source.digest);
+            hash.update(controls);
+            hash.finalize().into()
+        } else {
+            self.source.digest
         };
-        let controls = controls.as_ref().map_err(Clone::clone)?;
+        if self.source.string_targets.is_empty() {
+            return Ok(base);
+        }
         let mut hash = Sha256::new();
-        hash.update(b"manifold.physics.graph-and-controls.v1");
-        hash.update(self.source.digest);
-        hash.update(controls);
+        hash.update(b"manifold.physics.source-strings.v1");
+        hash.update(base);
+        hash.update((self.string_nodes.len() as u64).to_be_bytes());
+        for ((id, param), node) in self.source.string_targets.iter().zip(&self.string_nodes) {
+            let Some(ParamValue::String(value)) = graph
+                .get_node(*node)
+                .and_then(|node| node.params.get(param.as_str()))
+            else {
+                return Err(format!(
+                    "Physics take: string input '{id}.{param}' is unavailable"
+                ));
+            };
+            for value in [id.as_str(), param.as_str(), value.as_str()] {
+                hash.update((value.len() as u64).to_be_bytes());
+                hash.update(value.as_bytes());
+            }
+        }
         Ok(hash.finalize().into())
+    }
+
+    fn publish(&mut self, graph: &mut Graph, force: bool) {
+        let identity = self.identity(graph);
+        if force || self.published.as_ref() != Some(&identity) {
+            self.published = Some(identity.clone());
+            graph
+                .get_node_mut(self.node)
+                .expect("prepared fluid exists")
+                .node
+                .set_physics_source_identity(identity);
+        }
     }
 }
 
@@ -112,11 +150,21 @@ impl PhysicsSourceState {
             });
             if controls != source.controls {
                 source.controls = controls;
-                graph
-                    .get_node_mut(source.node)
-                    .expect("prepared fluid exists")
-                    .node
-                    .set_physics_source_identity(source.identity());
+            }
+            source.publish(graph, false);
+        }
+    }
+
+    /// Observe values actually accepted by the existing string bindings,
+    /// including retained values when the host omits an override. No file
+    /// reads, string copies or JSON buffers occur on the successful path.
+    pub(super) fn observe_strings(&mut self, graph: &mut Graph) {
+        let Ok(sources) = &mut self.sources else {
+            return;
+        };
+        for source in sources {
+            if !source.string_nodes.is_empty() {
+                source.publish(graph, false);
             }
         }
     }
@@ -124,19 +172,15 @@ impl PhysicsSourceState {
     /// Install the currently retained identities on the fluid nodes scoped to
     /// this slot. Errors from one slot therefore cannot overwrite another.
     pub(super) fn install(
-        &self,
+        &mut self,
         graph: &mut Graph,
         node_map: &[(NodeId, NodeInstanceId)],
         prefix: &str,
     ) {
-        match &self.sources {
+        match &mut self.sources {
             Ok(sources) => {
                 for source in sources {
-                    graph
-                        .get_node_mut(source.node)
-                        .expect("prepared fluid exists")
-                        .node
-                        .set_physics_source_identity(source.identity());
+                    source.publish(graph, true);
                 }
             }
             Err(error) => {
@@ -227,8 +271,15 @@ impl PhysicsSourceState {
                 });
             resolved.push(InstalledSource {
                 node,
+                string_nodes: source.string_targets.iter().map(|(id, _)| {
+                    let local = prefixed_node_id(prefix, id);
+                    node_map.iter().find_map(|(candidate, instance)| {
+                        (candidate == &local && graph.get_node(*instance).is_some()).then_some(*instance)
+                    }).ok_or_else(|| format!("Physics take: string source '{id}' is absent from the installed graph"))
+                }).collect::<Result<Vec<_>, _>>()?,
                 source,
                 controls,
+                published: None,
             });
         }
         if resolved.len() != scoped_fluid_count(graph, node_map, prefix) {

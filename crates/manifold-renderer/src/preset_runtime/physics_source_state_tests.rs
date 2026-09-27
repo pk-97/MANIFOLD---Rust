@@ -3,6 +3,7 @@ use super::physics_source_state::PhysicsSourceState;
 use super::physics_sources::PhysicsSourceGraph;
 use crate::node_graph::{
     EffectNode, EffectNodeContext, EffectNodeType, Graph, NodeInput, NodeOutput, ParamDef,
+    ParamValue,
 };
 use manifold_core::{NodeId, PresetTypeId, effects::PresetInstance};
 use std::cell::RefCell;
@@ -10,6 +11,7 @@ use std::cell::RefCell;
 type Identity = Result<[u8; 32], String>;
 thread_local! {
     static OBSERVED: RefCell<[Option<Identity>; 2]> = const { RefCell::new([None, None]) };
+    static PUBLICATIONS: RefCell<[usize; 2]> = const { RefCell::new([0, 0]) };
 }
 
 struct SourceObserver(usize, EffectNodeType);
@@ -27,12 +29,110 @@ impl EffectNode for SourceObserver {
         &[]
     }
     fn parameters(&self) -> &[ParamDef] {
-        &[]
+        static PARAMETERS: std::sync::LazyLock<[ParamDef; 1]> = std::sync::LazyLock::new(|| {
+            [ParamDef {
+                name: "selector".into(),
+                label: "Selector",
+                ty: crate::node_graph::ParamType::String,
+                default: ParamValue::String(std::sync::Arc::new("alpha".into())),
+                range: None,
+                enum_values: &[],
+            }]
+        });
+        &*PARAMETERS
     }
     fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
     fn set_physics_source_identity(&mut self, identity: Identity) {
         OBSERVED.with(|observed| observed.borrow_mut()[self.0] = Some(identity));
+        PUBLICATIONS.with(|count| count.borrow_mut()[self.0] += 1);
     }
+}
+
+#[test]
+fn string_observations_are_scoped_retained_and_reinstalled_after_rebuild() {
+    OBSERVED.with(|observed| *observed.borrow_mut() = [None, None]);
+    PUBLICATIONS.with(|count| *count.borrow_mut() = [0, 0]);
+    let mut graph = Graph::new();
+    let first = graph.add_node(Box::new(SourceObserver(
+        0,
+        EffectNodeType::new("node.fluid_surface"),
+    )));
+    let second = graph.add_node(Box::new(SourceObserver(
+        1,
+        EffectNodeType::new("node.fluid_surface"),
+    )));
+    let nodes = [
+        (NodeId::new("c0.fluid"), first),
+        (NodeId::new("c1.fluid"), second),
+    ];
+    let strings = || {
+        let mut sources = source().unwrap();
+        sources[0]
+            .string_targets
+            .push((NodeId::new("fluid"), "selector".into()));
+        Ok(sources)
+    };
+    let mut first_state = PhysicsSourceState::default();
+    let mut second_state = PhysicsSourceState::default();
+    first_state.apply_prepared(&mut graph, &nodes, "c0.", strings());
+    second_state.apply_prepared(&mut graph, &nodes, "c1.", strings());
+    let alpha = observed(0);
+    assert_eq!(alpha, observed(1), "runtime prefixes do not enter identity");
+    first_state.observe_strings(&mut graph);
+    first_state.set_instance(&mut graph, None);
+    PUBLICATIONS.with(|count| {
+        assert_eq!(
+            *count.borrow(),
+            [1, 1],
+            "unchanged observations do not republish"
+        )
+    });
+
+    graph
+        .set_param(
+            first,
+            "selector",
+            ParamValue::String(std::sync::Arc::new("beta".into())),
+        )
+        .unwrap();
+    first_state.observe_strings(&mut graph);
+    let beta = observed(0);
+    assert_ne!(alpha, beta);
+    assert_eq!(observed(1), alpha, "another card stays unchanged");
+    first_state.install(&mut graph, &nodes, "c0.");
+    assert_eq!(observed(0), beta);
+    PUBLICATIONS.with(|count| {
+        assert_eq!(
+            *count.borrow(),
+            [3, 1],
+            "explicit installation republishes after native-node harvest"
+        )
+    });
+
+    let mut fresh = PhysicsSourceState::default();
+    graph
+        .set_param(
+            first,
+            "selector",
+            ParamValue::String(std::sync::Arc::new("alpha".into())),
+        )
+        .unwrap();
+    fresh.apply_prepared(&mut graph, &nodes, "c0.", strings());
+    fresh.carry_controls_from(&first_state);
+    fresh.install(&mut graph, &nodes, "c0.");
+    assert_eq!(
+        observed(0),
+        alpha,
+        "rebuild reads its own strings rather than carrying old values"
+    );
+
+    let mut missing = strings().unwrap();
+    missing[0].string_targets[0].0 = NodeId::new("missing");
+    fresh.apply_prepared(&mut graph, &nodes, "c0.", Ok(missing));
+    assert!(observed(0).unwrap_err().contains("string source 'missing'"));
+    assert_eq!(observed(1), alpha);
+    fresh.apply_prepared(&mut graph, &nodes, "c0.", strings());
+    assert_eq!(observed(0), alpha);
 }
 
 fn source() -> Result<Vec<PhysicsSourceGraph>, String> {
@@ -40,6 +140,7 @@ fn source() -> Result<Vec<PhysicsSourceGraph>, String> {
         fluid: NodeId::new("fluid"),
         digest: [7; 32],
         control_ids: Vec::new(),
+        string_targets: Vec::new(),
     }])
 }
 

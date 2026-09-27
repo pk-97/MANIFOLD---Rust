@@ -21,9 +21,15 @@ impl PresetRuntime {
 
     /// Install every slot's current identity on only its scoped fluid nodes.
     pub(super) fn install_physics_source_identities(&mut self) {
-        for slot in &self.effect_nodes {
+        for slot in &mut self.effect_nodes {
             slot.physics_sources
                 .install(&mut self.graph, &slot.node_map, &slot.card_prefix);
+        }
+    }
+
+    pub(super) fn observe_physics_source_strings(&mut self) {
+        if let Some(slot) = self.effect_nodes.first_mut() {
+            slot.physics_sources.observe_strings(&mut self.graph);
         }
     }
 
@@ -51,7 +57,8 @@ impl PresetRuntime {
     }
 
     /// Runs on authored edits, before card bindings replace graph values with
-    /// effective modulation. Frame sampling never hashes mutable node params.
+    /// effective modulation. Numeric modulation never enters this graph digest;
+    /// applied string inputs are observed separately through their bindings.
     pub(super) fn refresh_physics_source_graphs(&mut self, owner: &EffectGraphDef) {
         if !self
             .graph

@@ -144,6 +144,30 @@ fn coupled_graph(second_body: bool) -> EffectGraphDef {
     def
 }
 
+fn string_metadata(
+    bindings: Vec<serde_json::Value>,
+) -> manifold_core::effect_graph_def::PresetMetadata {
+    serde_json::from_value(serde_json::json!({
+        "id": "physics",
+        "displayName": "Physics",
+        "category": "Diagnostic",
+        "oscPrefix": "physics",
+        "params": [],
+        "bindings": [],
+        "stringBindings": bindings,
+    }))
+    .expect("string metadata parses")
+}
+
+fn string_binding(id: &str, node_id: &str, param: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "label": id,
+        "defaultValue": "asset.glb",
+        "target": {"kind": "node", "nodeId": node_id, "param": param},
+    })
+}
+
 fn digest(def: &EffectGraphDef) -> [u8; 32] {
     let registry = PrimitiveRegistry::with_builtin();
     let sources = prepare(def, def, &[], &registry).expect("source graph prepares");
@@ -205,6 +229,83 @@ fn numeric_node_ids_do_not_participate_in_identity() {
             .expect("test wire target");
     }
     assert_eq!(digest(&renumbered), original);
+}
+
+#[test]
+fn string_targets_are_scoped_deduplicated_and_stable() {
+    let mut base = graph();
+    base.preset_metadata = Some(string_metadata(vec![
+        string_binding("source_file", "source", "asset"),
+        string_binding("source_alias", "source", "asset"),
+        string_binding("fluid_file", "fluid", "surface_asset"),
+        string_binding("fluid_cache", "fluid", "cache_path"),
+        string_binding("appearance", "material", "texture"),
+    ]));
+    let registry = PrimitiveRegistry::with_builtin();
+    let first = prepare(&base, &base, &[], &registry)
+        .expect("string source graph")
+        .pop()
+        .expect("fluid source");
+    assert_eq!(
+        first.string_targets,
+        vec![
+            (NodeId::new("fluid"), "surface_asset".into()),
+            (NodeId::new("source"), "asset".into()),
+        ]
+    );
+
+    let mut reordered = base.clone();
+    reordered
+        .preset_metadata
+        .as_mut()
+        .expect("metadata")
+        .string_bindings
+        .reverse();
+    let numbers = [(1, 101), (2, 202), (3, 303)];
+    for node in &mut reordered.nodes {
+        node.id = numbers
+            .iter()
+            .find_map(|(old, new)| (*old == node.id).then_some(*new))
+            .expect("test node number");
+    }
+    for wire in &mut reordered.wires {
+        wire.from_node = numbers
+            .iter()
+            .find_map(|(old, new)| (*old == wire.from_node).then_some(*new))
+            .expect("test wire source");
+        wire.to_node = numbers
+            .iter()
+            .find_map(|(old, new)| (*old == wire.to_node).then_some(*new))
+            .expect("test wire target");
+    }
+    let stable = prepare(&reordered, &reordered, &[], &registry)
+        .expect("reordered string source graph")
+        .pop()
+        .expect("fluid source");
+    assert_eq!(stable.string_targets, first.string_targets);
+}
+
+#[test]
+fn string_targets_include_coupled_rigid_ancestry() {
+    let mut def = coupled_graph(false);
+    def.preset_metadata = Some(string_metadata(vec![
+        string_binding("rigid_file", "body", "collision_asset"),
+        string_binding("rigid_alias", "body", "collision_asset"),
+        string_binding("fluid_file", "fluid", "surface_asset"),
+        string_binding("appearance_file", "body_object", "unrelated_asset"),
+    ]));
+    let registry = PrimitiveRegistry::with_builtin();
+    let source = prepare(&def, &def, &[], &registry)
+        .expect("coupled string source graph")
+        .pop()
+        .expect("fluid source");
+    assert_eq!(
+        source.string_targets,
+        vec![
+            (NodeId::new("body"), "collision_asset".into()),
+            (NodeId::new("fluid"), "surface_asset".into()),
+        ]
+    );
 }
 
 #[test]
@@ -410,6 +511,33 @@ fn event_field_ancestry_and_expanded_binding_semantics_are_hashed() {
     )
     .expect("reshaped event alias source graph");
     assert_ne!(alias_digest[0].digest, reshaped_alias[0].digest);
+
+    let mut event_string_def = prepared.def.clone();
+    event_string_def
+        .preset_metadata
+        .as_mut()
+        .expect("expanded metadata")
+        .string_bindings
+        .push(
+            serde_json::from_value(string_binding(
+                "event_field_asset",
+                route.field_node.as_str(),
+                "field_asset",
+            ))
+            .expect("event string binding"),
+        );
+    let event_string_sources = prepare(
+        &event_string_def,
+        &owner,
+        &prepared.impulse_routes,
+        &registry,
+    )
+    .expect("event field string source graph");
+    assert!(
+        event_string_sources[0]
+            .string_targets
+            .contains(&(route.field_node.clone(), "field_asset".into()))
+    );
 }
 
 #[test]
