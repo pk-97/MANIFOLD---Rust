@@ -1,10 +1,12 @@
 use manifold_fluids::{
     CoupledFluidFrame, FluidFrame, FluidWorld, FrameStats, MeshRole, RigidFluidCoupling,
 };
+use manifold_physics::input::AppliedEvent;
 use manifold_physics::stepping::{StepCoupling, SubstepExchange, Uncoupled};
 use manifold_physics::{BodyHandle, FieldInput, PhysicsWorld, Seconds, TickStamp};
 
-use crate::node_graph::physics::{MAX_BODIES, RigidSimulation};
+use crate::node_graph::physics::{MAX_BODIES, ResolvedRigidImpulse, RigidSimulation};
+use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitives::quat_to_render_scene_euler;
 use crate::node_graph::transform::Transform;
 
@@ -69,6 +71,7 @@ pub(crate) struct Native {
     observed_time: Seconds,
     observed_sequence: u64,
     completed: TickStamp,
+    rigid_events: Vec<AppliedEvent<ResolvedRigidImpulse>>,
 }
 
 impl Native {
@@ -151,6 +154,7 @@ impl Native {
             observed_time: Seconds::ZERO,
             observed_sequence: 0,
             completed: TickStamp { epoch, tick: 0 },
+            rigid_events: Vec::with_capacity(crate::node_graph::fluid::impulses::IMPULSE_CAPACITY),
         })
     }
 
@@ -175,6 +179,7 @@ impl Native {
         request: &mut Request,
         stamp: TickStamp,
         fields: &[FieldInput<'_>],
+        impulses: &[AppliedEvent<ResolvedNodeImpulse>],
     ) -> Result<FrameStats, String> {
         if stamp != self.completed {
             return Err("Fluid coupling: rigid and liquid tick boundaries differ".into());
@@ -205,6 +210,25 @@ impl Native {
                 "Fluid coupling: rigid input history does not reach the requested tick".into(),
             );
         }
+        self.rigid_events.clear();
+        for event in impulses {
+            if let Some(targets) = event.value.target.rigid_targets() {
+                if self.rigid_events.len() == self.rigid_events.capacity() {
+                    return Err(
+                        "Fluid coupling: assigned impulse batch exceeds prepared capacity".into(),
+                    );
+                }
+                self.rigid_events.push(AppliedEvent {
+                    source: event.source,
+                    applied: event.applied,
+                    lateness: event.lateness,
+                    value: ResolvedRigidImpulse {
+                        field: event.value.field.clone(),
+                        targets,
+                    },
+                });
+            }
+        }
         let mut plain_stats = None;
         {
             let mut participant = Participant {
@@ -216,8 +240,27 @@ impl Native {
                 fields,
                 plain_stats: &mut plain_stats,
             };
-            self.rigid
-                .advance_worker(&latest.inputs, self.observed_time, 1, &mut participant)?;
+            let result = self.rigid.advance_worker_tick(
+                &latest.inputs,
+                self.observed_time,
+                &self.rigid_events,
+                &mut participant,
+            );
+            // The outer request owns delivery receipts for both participants.
+            // Drain the native owner's retained receipt scratch after every
+            // attempt, preserving the original assignment without re-enqueueing.
+            let receipts = self.rigid.drain_applied_impulses();
+            let matching = receipts.len() == self.rigid_events.len()
+                && receipts
+                    .zip(&self.rigid_events)
+                    .all(|(actual, expected)| &actual == expected);
+            result?;
+            if !matching {
+                return Err(
+                    "Fluid coupling: native rigid impulse receipts differ from the assigned batch"
+                        .into(),
+                );
+            }
         }
         let completed = TickStamp {
             epoch: stamp.epoch,

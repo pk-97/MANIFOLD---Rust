@@ -137,6 +137,36 @@ impl Runtime {
             .is_some_and(|sample| sample.inputs == *inputs.scene)
     }
 
+    pub fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
+        if targets.is_empty() {
+            return Err("Fluid coupling: rigid impulse targets are empty".into());
+        }
+        for index in 0..MAX_BODIES {
+            if targets.contains_body(index)
+                && self.setup.initial.bodies[index]
+                    .as_ref()
+                    .is_none_or(|body| !body.enabled)
+            {
+                return Err(format!(
+                    "Fluid coupling: rigid impulse body {index} is absent"
+                ));
+            }
+        }
+        if targets.copies
+            && (self
+                .setup
+                .initial
+                .prototype
+                .as_ref()
+                .is_none_or(|body| !body.enabled)
+                || !self.setup.initial.copy_count.is_finite()
+                || self.setup.initial.copy_count.round() < 1.0)
+        {
+            return Err("Fluid coupling: rigid impulse has no active copies".into());
+        }
+        Ok(())
+    }
+
     pub fn clear(&mut self) {
         self.history.clear();
         self.accepted = None;

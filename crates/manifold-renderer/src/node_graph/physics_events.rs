@@ -10,6 +10,22 @@ use crate::node_graph::physics::{ResolvedRigidImpulse, RigidImpulseTargets};
 pub enum ImpulseTarget {
     Rigid(RigidImpulseTargets),
     Fluid,
+    /// One captured field delivered to both participants of a shared worker.
+    /// The source sequence is admitted once, even when both materials respond.
+    FluidAndRigid(RigidImpulseTargets),
+}
+
+impl ImpulseTarget {
+    pub fn affects_fluid(self) -> bool {
+        matches!(self, Self::Fluid | Self::FluidAndRigid(_))
+    }
+
+    pub fn rigid_targets(self) -> Option<RigidImpulseTargets> {
+        match self {
+            Self::Rigid(targets) | Self::FluidAndRigid(targets) => Some(targets),
+            Self::Fluid => None,
+        }
+    }
 }
 
 /// An owned, resolved impulse ready for native fixed-tick admission.
@@ -37,28 +53,6 @@ pub(crate) fn map_rigid_receipt(
         value: ResolvedNodeImpulse {
             field,
             target: ImpulseTarget::Rigid(targets),
-        },
-    });
-}
-
-/// Convert a fluid-native receipt without allocating or dropping it.
-pub(crate) fn map_fluid_receipt(
-    event: AppliedEvent<FieldValue>,
-    consume: &mut dyn FnMut(AppliedEvent<ResolvedNodeImpulse>),
-) {
-    let AppliedEvent {
-        source,
-        applied,
-        lateness,
-        value: field,
-    } = event;
-    consume(AppliedEvent {
-        source,
-        applied,
-        lateness,
-        value: ResolvedNodeImpulse {
-            field,
-            target: ImpulseTarget::Fluid,
         },
     });
 }

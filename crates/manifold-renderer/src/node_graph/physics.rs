@@ -619,6 +619,42 @@ impl RigidSimulation {
         targeted_fields_input: &[Option<FieldValue>],
         coupling: &mut C,
     ) -> Result<(), String> {
+        self.advance_with_coupling_inner(
+            bodies,
+            prototype,
+            copy_count,
+            copy_spacing,
+            copy_columns,
+            layout,
+            gravity,
+            now,
+            speed,
+            reset_count,
+            acceleration_field,
+            targeted_fields_input,
+            None,
+            coupling,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn advance_with_coupling_inner<C: StepCoupling>(
+        &mut self,
+        bodies: [Option<RigidBody>; MAX_BODIES],
+        prototype: Option<RigidBody>,
+        copy_count: f32,
+        copy_spacing: f32,
+        copy_columns: f32,
+        layout: f32,
+        gravity: [f32; 3],
+        now: Seconds,
+        speed: f32,
+        reset_count: f32,
+        acceleration_field: Option<FieldValue>,
+        targeted_fields_input: &[Option<FieldValue>],
+        assigned_impulses: Option<&[AppliedEvent<ResolvedRigidImpulse>]>,
+        coupling: &mut C,
+    ) -> Result<(), String> {
         self.accepted_observation = None;
         if !targeted_fields_input.is_empty() && targeted_fields_input.len() != TARGET_SLOTS {
             return Err(format!(
@@ -1014,6 +1050,16 @@ impl RigidSimulation {
                     .set_gravity(tick_gravity)
                     .map_err(|e| e.to_string())?;
                 let tick_stamp = self.begin_impulse_tick()?;
+                if let Some(assigned_impulses) = assigned_impulses {
+                    for event in assigned_impulses {
+                        self.impulse_tick_events.push(AppliedEvent {
+                            source: event.source,
+                            applied: event.applied,
+                            lateness: event.lateness,
+                            value: event.value.clone(),
+                        });
+                    }
+                }
                 self.apply_impulse_tick()?;
                 let dynamic_microsteps = self.configure_fast_bodies(
                     &bodies,

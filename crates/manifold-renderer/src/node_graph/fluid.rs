@@ -19,6 +19,7 @@ use super::fluid_cache::CacheMode;
 #[cfg(test)]
 use super::fluid_cache::{CacheReader, CacheWriter};
 use super::fluid_role::FluidRole;
+use super::physics_events::ResolvedNodeImpulse;
 use super::transform::Transform;
 use super::vector_field::ContinuousField;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
@@ -307,7 +308,7 @@ struct Request {
     start_tick: u64,
     count: usize,
     history: Vec<Sample>,
-    impulses: Vec<AppliedEvent<FieldValue>>,
+    impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     role_setup: Arc<roles::Setup>,
     role_history: Vec<roles::Controls>,
     recycle: Vec<MeshVertex>,
@@ -322,7 +323,7 @@ struct Reply {
     tick: u64,
     /// Exclusive boundary of native ticks begun, including a failed tick.
     started_tick: u64,
-    impulses: Vec<AppliedEvent<FieldValue>>,
+    impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     history: Vec<Sample>,
     role_history: Vec<roles::Controls>,
     vertices: Vec<MeshVertex>,
@@ -387,9 +388,9 @@ pub struct FluidRuntime {
     worker: Option<Worker>,
     settings: Option<FluidSettings>,
     history: InputHistory<Sample>,
-    impulses: EventQueue<FieldValue>,
-    applied_impulses: Vec<AppliedEvent<FieldValue>>,
-    spare_impulses: Option<Vec<AppliedEvent<FieldValue>>>,
+    impulses: EventQueue<ResolvedNodeImpulse>,
+    applied_impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
+    spare_impulses: Option<Vec<AppliedEvent<ResolvedNodeImpulse>>>,
     impulse_outstanding: usize,
     role_setup: Arc<roles::Setup>,
     role_history: roles::History,

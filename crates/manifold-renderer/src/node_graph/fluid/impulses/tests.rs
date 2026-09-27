@@ -392,7 +392,10 @@ fn fluid_impulses_sum_uses_scene_coordinates_and_owned_fields() {
         },
         applied: TickStamp { epoch: 1, tick: 0 },
         lateness: Seconds::ZERO,
-        value: field,
+        value: ResolvedNodeImpulse {
+            field,
+            target: ImpulseTarget::Fluid,
+        },
     }];
     let sum = ImpulseSum {
         events: &events,

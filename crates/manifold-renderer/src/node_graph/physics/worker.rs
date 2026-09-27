@@ -1,9 +1,11 @@
 use manifold_core::Seconds;
+use manifold_physics::input::AppliedEvent;
 use manifold_physics::stepping::StepCoupling;
 use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
 
 use super::{
-    AdvancementPolicy, MAX_BODIES, RigidBody, RigidSimulation, TARGET_SLOTS, same_collider,
+    AdvancementPolicy, FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, ResolvedRigidImpulse, RigidBody,
+    RigidSimulation, TARGET_SLOTS, same_collider,
 };
 
 /// The retained scene inputs consumed by the shared FLIP worker.
@@ -119,6 +121,47 @@ impl RigidSimulation {
         result
     }
 
+    /// Consume one batch of events already assigned by the shared worker
+    /// queue. The native queue advances its empty cursor, while these events
+    /// retain their original source and applied metadata.
+    pub(crate) fn advance_worker_tick<C: StepCoupling>(
+        &mut self,
+        inputs: &RigidSceneInputs,
+        now: Seconds,
+        events: &[AppliedEvent<ResolvedRigidImpulse>],
+        coupling: &mut C,
+    ) -> Result<(), String> {
+        self.validate_assigned_impulses(events)?;
+        if self.world.is_some()
+            && (!self.native_topology_matches(inputs)
+                || self.last_time.is_some_and(|last| now.0 < last.0))
+        {
+            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+        }
+        self.ensure_worker_tick_is_owed(now)?;
+
+        let previous_policy = self.advancement_policy;
+        self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 1 };
+        let result = self.advance_with_coupling_inner(
+            inputs.bodies.clone(),
+            inputs.prototype.clone(),
+            inputs.copy_count,
+            inputs.copy_spacing,
+            inputs.copy_columns,
+            inputs.layout,
+            inputs.gravity,
+            now,
+            1.0,
+            0.0,
+            inputs.acceleration_field.clone(),
+            &inputs.targeted_fields,
+            Some(events),
+            coupling,
+        );
+        self.advancement_policy = previous_policy;
+        result
+    }
+
     pub(crate) fn native_world(&self) -> Option<&PhysicsWorld> {
         self.world.as_ref()
     }
@@ -136,6 +179,64 @@ impl RigidSimulation {
             .all(|(left, right)| same_topology_body(left.as_ref(), right.as_ref()))
             && same_topology_body(self.copy_description.as_ref(), inputs.prototype.as_ref())
     }
+
+    fn validate_assigned_impulses(
+        &self,
+        events: &[AppliedEvent<ResolvedRigidImpulse>],
+    ) -> Result<(), String> {
+        if events.len() > IMPULSE_CAPACITY {
+            return Err("Physics worker assigned impulse batch exceeds capacity".into());
+        }
+        let Some(epoch) = self.impulse_epoch else {
+            return Err("Physics worker assigned impulses require an initialized epoch".into());
+        };
+        let Some(queue) = self.impulse_queue.as_ref() else {
+            return Err("Physics worker assigned impulses require an initialized queue".into());
+        };
+        if !queue.is_empty()
+            || !self.impulse_receipts.is_empty()
+            || !self.impulse_tick_events.is_empty()
+        {
+            return Err("Physics worker cannot mix assigned and locally queued impulses".into());
+        }
+        let next_tick = queue.next_tick();
+        for event in events {
+            if event.source.epoch != epoch || event.applied.epoch != epoch {
+                return Err("Physics worker assigned impulse epoch does not match owner".into());
+            }
+            if event.applied.tick != next_tick.tick {
+                return Err(
+                    "Physics worker assigned impulse tick is not the next native tick".into(),
+                );
+            }
+            if !event.source.time.0.is_finite()
+                || !event.lateness.0.is_finite()
+                || event.lateness.0 < 0.0
+            {
+                return Err("Physics worker assigned impulse timing is invalid".into());
+            }
+            self.validate_impulse_targets(event.value.targets)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_worker_tick_is_owed(&self, now: Seconds) -> Result<(), String> {
+        if !now.0.is_finite() {
+            return Err("Physics worker tick clock must be finite".into());
+        }
+        let Some(last_time) = self.last_time else {
+            return Err("Physics worker tick requires an initialized clock".into());
+        };
+        let elapsed = now.0 - last_time.0;
+        if elapsed < 0.0 {
+            return Err("Physics worker cannot seek within an epoch".into());
+        }
+        let due = ((self.accumulator + elapsed + 1e-9) / FIXED_TICK.0).floor();
+        if !due.is_finite() || due < 1.0 {
+            return Err("Physics worker has no owed native tick".into());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -144,12 +245,35 @@ mod tests {
     use crate::node_graph::physics::{
         PhysicsAuthoredSampleScope, PhysicsStepScope, ResolvedRigidImpulse, RigidImpulseTargets,
     };
+    use manifold_physics::TickStamp;
+    use manifold_physics::input::{AppliedEvent, EventStamp};
     use manifold_physics::stepping::Uncoupled;
 
     fn scene() -> RigidSceneInputs {
         let mut scene = RigidSceneInputs::default();
         scene.bodies[0] = Some(RigidBody::default());
         scene
+    }
+
+    fn assigned_event(
+        epoch: u64,
+        tick: u64,
+        sequence: u64,
+        targets: RigidImpulseTargets,
+    ) -> AppliedEvent<ResolvedRigidImpulse> {
+        AppliedEvent {
+            source: EventStamp {
+                epoch,
+                time: Seconds(tick as f64 * super::super::FIXED_TICK.0),
+                sequence,
+            },
+            applied: TickStamp { epoch, tick },
+            lateness: Seconds::ZERO,
+            value: ResolvedRigidImpulse {
+                field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
+                targets,
+            },
+        }
     }
 
     #[test]
@@ -381,5 +505,182 @@ mod tests {
         assert!(worker.pending_time.0.abs() < 1e-12);
         assert_eq!(ordinary.drain_applied_impulses().count(), 1);
         assert_eq!(worker.drain_applied_impulses().count(), 1);
+    }
+
+    #[test]
+    fn assigned_worker_tick_applies_one_force_and_preserves_receipt_metadata() {
+        let epoch = 41;
+        let mut simulation = RigidSimulation::with_worker_epoch(epoch).unwrap();
+        let mut coupling = Uncoupled;
+        let inputs = scene();
+        let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+        let _authored = PhysicsAuthoredSampleScope::new();
+        simulation
+            .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+            .unwrap();
+        let event = assigned_event(
+            epoch,
+            0,
+            2,
+            RigidImpulseTargets {
+                bodies: 1,
+                copies: false,
+            },
+        );
+        let original_source = event.source;
+        let original_applied = event.applied;
+        let original_lateness = event.lateness;
+        let original_value = event.value.clone();
+        simulation
+            .advance_worker_tick(
+                &inputs,
+                Seconds(super::super::FIXED_TICK.0),
+                std::slice::from_ref(&event),
+                &mut coupling,
+            )
+            .unwrap();
+        assert_eq!(event.source, original_source);
+        assert_eq!(event.applied, original_applied);
+        assert_eq!(event.lateness, original_lateness);
+        assert_eq!(event.value, original_value);
+        assert!(simulation.pending_time.0.abs() < 1e-12);
+        let handle = simulation.native_handles().0[0].unwrap();
+        let velocity = simulation
+            .native_world()
+            .unwrap()
+            .linear_velocity(handle)
+            .unwrap();
+        assert!((velocity[0] - 2.0).abs() < 1e-5, "velocity={velocity:?}");
+        assert!(
+            (simulation.poses[0].pos[0] - 2.0 * super::super::FIXED_TICK.0 as f32).abs() < 1e-5
+        );
+        let receipts: Vec<_> = simulation.drain_applied_impulses().collect();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].source, original_source);
+        assert_eq!(receipts[0].applied, original_applied);
+        assert_eq!(receipts[0].lateness, original_lateness);
+    }
+
+    #[test]
+    fn assigned_worker_ticks_do_not_re_admit_source_sequences() {
+        let epoch = 42;
+        let mut simulation = RigidSimulation::with_worker_epoch(epoch).unwrap();
+        let mut coupling = Uncoupled;
+        let inputs = scene();
+        simulation
+            .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+            .unwrap();
+        let first = assigned_event(
+            epoch,
+            0,
+            2,
+            RigidImpulseTargets {
+                bodies: 1,
+                copies: false,
+            },
+        );
+        simulation
+            .advance_worker_tick(
+                &inputs,
+                Seconds(super::super::FIXED_TICK.0),
+                std::slice::from_ref(&first),
+                &mut coupling,
+            )
+            .unwrap();
+        let first_receipts: Vec<_> = simulation.drain_applied_impulses().collect();
+        assert_eq!(first_receipts.len(), 1);
+        let second = assigned_event(
+            epoch,
+            1,
+            1,
+            RigidImpulseTargets {
+                bodies: 1,
+                copies: false,
+            },
+        );
+        simulation
+            .advance_worker_tick(
+                &inputs,
+                Seconds(2.0 * super::super::FIXED_TICK.0),
+                std::slice::from_ref(&second),
+                &mut coupling,
+            )
+            .unwrap();
+        let second_receipts: Vec<_> = simulation.drain_applied_impulses().collect();
+        assert_eq!(second_receipts.len(), 1);
+        assert_eq!(first_receipts[0].source.sequence, 2);
+        assert_eq!(second_receipts[0].source.sequence, 1);
+    }
+
+    #[test]
+    fn invalid_assigned_event_leaves_native_tick_cursor_and_pose_unchanged() {
+        let epoch = 43;
+        let mut simulation = RigidSimulation::with_worker_epoch(epoch).unwrap();
+        let mut coupling = Uncoupled;
+        let inputs = scene();
+        simulation
+            .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+            .unwrap();
+        let handle = simulation.native_handles().0[0].unwrap();
+        let before_pose = simulation.native_world().unwrap().pose(handle).unwrap();
+        let before_cursor = simulation.impulse_queue.as_ref().unwrap().next_tick();
+        let before_physics_time = simulation.physics_time;
+        let invalid_target = assigned_event(
+            epoch,
+            0,
+            1,
+            RigidImpulseTargets {
+                bodies: 1 << 1,
+                copies: false,
+            },
+        );
+        assert!(
+            simulation
+                .advance_worker_tick(
+                    &inputs,
+                    Seconds(super::super::FIXED_TICK.0),
+                    std::slice::from_ref(&invalid_target),
+                    &mut coupling,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            simulation.impulse_queue.as_ref().unwrap().next_tick(),
+            before_cursor
+        );
+        assert_eq!(simulation.physics_time, before_physics_time);
+        assert_eq!(
+            simulation.native_world().unwrap().pose(handle).unwrap(),
+            before_pose
+        );
+
+        let wrong_tick = assigned_event(
+            epoch,
+            1,
+            1,
+            RigidImpulseTargets {
+                bodies: 1,
+                copies: false,
+            },
+        );
+        assert!(
+            simulation
+                .advance_worker_tick(
+                    &inputs,
+                    Seconds(super::super::FIXED_TICK.0),
+                    std::slice::from_ref(&wrong_tick),
+                    &mut coupling,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            simulation.impulse_queue.as_ref().unwrap().next_tick(),
+            before_cursor
+        );
+        assert_eq!(simulation.physics_time, before_physics_time);
+        assert_eq!(
+            simulation.native_world().unwrap().pose(handle).unwrap(),
+            before_pose
+        );
     }
 }

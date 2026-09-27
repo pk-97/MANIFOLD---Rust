@@ -313,6 +313,7 @@ impl NativeSimulation {
                     let tick_stats = if let (Some(rigid), Some(coupled)) =
                         (&mut self.coupled, &mut coupled_request)
                     {
+                        let fields = prepared.fields();
                         rigid.step(
                             native,
                             coupled,
@@ -320,10 +321,25 @@ impl NativeSimulation {
                                 epoch: request.epoch,
                                 tick,
                             },
-                            &prepared.fields(),
+                            if prepared.field.is_empty() && prepared.impulse.is_empty() {
+                                &[]
+                            } else {
+                                &fields
+                            },
+                            prepared.impulse.events,
                         )?
                     } else {
-                        if prepared.field.is_empty() && prepared.impulse.events.is_empty() {
+                        if prepared
+                            .impulse
+                            .events
+                            .iter()
+                            .any(|event| event.value.target.rigid_targets().is_some())
+                        {
+                            return Err(
+                                "Fluid coupling: rigid impulses have no native owner".into()
+                            );
+                        }
+                        if prepared.field.is_empty() && prepared.impulse.is_empty() {
                             native.step(Seconds(super::TICK))
                         } else {
                             native.step_with_fields(Seconds(super::TICK), &prepared.fields())

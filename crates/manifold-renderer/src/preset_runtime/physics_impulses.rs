@@ -183,7 +183,7 @@ impl PresetRuntime {
                 let node = self.graph.get_node(instance).expect("resolved recipient");
                 let expected = match target {
                     ImpulseTarget::Rigid(_) => "node.physics_world",
-                    ImpulseTarget::Fluid => "node.fluid_surface",
+                    ImpulseTarget::Fluid | ImpulseTarget::FluidAndRigid(_) => "node.fluid_surface",
                 };
                 if node.node.type_id().as_str() != expected {
                     return Err(format!("Impulse: recipient `{id}` changed type"));

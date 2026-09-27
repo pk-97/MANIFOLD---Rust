@@ -176,7 +176,7 @@ impl RigidSimulation {
         self.impulse_receipts.drain(..)
     }
 
-    fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
+    pub(super) fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
         if targets.is_empty() {
             return Err("Physics: impulse targets must select a body or copies".into());
         }

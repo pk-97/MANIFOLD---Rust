@@ -7,11 +7,12 @@ use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use super::{FluidRuntime, TICK};
+use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 use manifold_core::Seconds;
 
 pub(super) const IMPULSE_CAPACITY: usize = 256;
 
-pub(super) fn new_queue() -> EventQueue<FieldValue> {
+pub(super) fn new_queue() -> EventQueue<ResolvedNodeImpulse> {
     EventQueue::new(1, Seconds::ZERO, Seconds(TICK), IMPULSE_CAPACITY)
         .expect("fixed fluid impulse queue configuration is valid")
 }
@@ -61,6 +62,22 @@ impl FluidRuntime {
         stamp: EventStamp,
         field: FieldValue,
     ) -> Result<TickStamp, String> {
+        self.enqueue_scene_impulse(
+            stamp,
+            ResolvedNodeImpulse {
+                field,
+                target: ImpulseTarget::Fluid,
+            },
+        )
+    }
+
+    /// Admit one resolved scene event to the shared queue. A combined target
+    /// applies the captured field once to each solver under one source stamp.
+    pub fn enqueue_scene_impulse(
+        &mut self,
+        stamp: EventStamp,
+        impulse: ResolvedNodeImpulse,
+    ) -> Result<TickStamp, String> {
         if self.settings.is_none() {
             return Err("Water: observe the domain before capturing an impulse".into());
         }
@@ -69,6 +86,12 @@ impl FluidRuntime {
         }
         if let Some(error) = &self.failure {
             return Err(error.clone());
+        }
+        if let Some(targets) = impulse.target.rigid_targets() {
+            self.coupled
+                .as_ref()
+                .ok_or("Water: rigid impulses require a connected rigid world")?
+                .validate_impulse_targets(targets)?;
         }
         // Includes the worker-owned batch and undrained delivery receipts.
         // Neither a busy worker nor a slow recorder can grow memory silently.
@@ -79,17 +102,36 @@ impl FluidRuntime {
         }
         let tick = self
             .impulses
-            .enqueue(stamp, field)
+            .enqueue(stamp, impulse)
             .map_err(|error| format!("Water impulse: {error}"))?;
         self.impulse_outstanding += 1;
         Ok(tick)
     }
 
-    /// These receipts identify ticks begun by the native worker, including a
-    /// tick that subsequently failed. They never assert native completion.
+    /// Drain standalone liquid receipts, leaving rigid or combined receipts
+    /// for `drain_scene_impulses`. Dropping this iterator retains unread events.
     pub fn drain_applied_impulses(
         &mut self,
     ) -> impl Iterator<Item = AppliedEvent<FieldValue>> + '_ {
+        let outstanding = &mut self.impulse_outstanding;
+        self.applied_impulses
+            .extract_if(.., |event| event.value.target == ImpulseTarget::Fluid)
+            .map(move |event| {
+                *outstanding -= 1;
+                AppliedEvent {
+                    source: event.source,
+                    applied: event.applied,
+                    lateness: event.lateness,
+                    value: event.value.field,
+                }
+            })
+    }
+
+    /// These receipts identify ticks begun by the native worker, including a
+    /// tick that subsequently failed. They never assert native completion.
+    pub fn drain_scene_impulses(
+        &mut self,
+    ) -> impl Iterator<Item = AppliedEvent<ResolvedNodeImpulse>> + '_ {
         self.impulse_outstanding -= self.applied_impulses.len();
         self.applied_impulses.drain(..)
     }
@@ -98,7 +140,7 @@ impl FluidRuntime {
         &mut self,
         start_tick: u64,
         count: usize,
-    ) -> Result<Vec<AppliedEvent<FieldValue>>, String> {
+    ) -> Result<Vec<AppliedEvent<ResolvedNodeImpulse>>, String> {
         let mut events = self
             .spare_impulses
             .take()
@@ -126,7 +168,7 @@ impl FluidRuntime {
         &mut self,
         epoch: u64,
         started_tick: u64,
-        mut events: Vec<AppliedEvent<FieldValue>>,
+        mut events: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     ) {
         if epoch == self.epoch {
             // A failed/cancelled batch can have an unstarted suffix. Retain it
@@ -141,16 +183,29 @@ impl FluidRuntime {
 }
 
 pub(super) struct ImpulseSum<'a> {
-    pub events: &'a [AppliedEvent<FieldValue>],
+    pub events: &'a [AppliedEvent<ResolvedNodeImpulse>],
     pub origin: [f32; 3],
+}
+
+impl ImpulseSum<'_> {
+    pub fn is_empty(&self) -> bool {
+        !self
+            .events
+            .iter()
+            .any(|event| event.value.target.affects_fluid())
+    }
 }
 
 impl VectorField for ImpulseSum<'_> {
     fn sample(&self, position: [f32; 3]) -> [f32; 3] {
         let scene_position = std::array::from_fn(|axis| position[axis] + self.origin[axis]);
         let mut sum = [0.0; 3];
-        for event in self.events {
-            let value = event.value.sample(scene_position);
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.value.target.affects_fluid())
+        {
+            let value = event.value.field.sample(scene_position);
             for axis in 0..3 {
                 sum[axis] += value[axis];
             }

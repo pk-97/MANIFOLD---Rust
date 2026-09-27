@@ -13,9 +13,7 @@ use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics_events::{
-    map_fluid_receipt, ImpulseTarget, ResolvedNodeImpulse,
-};
+use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 
@@ -212,10 +210,7 @@ impl Primitive for FluidSurface {
         stamp: manifold_physics::input::EventStamp,
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
-        if !matches!(impulse.target, ImpulseTarget::Fluid) {
-            return Err("Liquid Surface cannot accept a rigid impulse".into());
-        }
-        self.runtime.enqueue_impulse(stamp, impulse.field)
+        self.runtime.enqueue_scene_impulse(stamp, impulse)
     }
     fn drain_physics_impulses(
         &mut self,
@@ -223,8 +218,8 @@ impl Primitive for FluidSurface {
             manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>,
         ),
     ) {
-        for event in self.runtime.drain_applied_impulses() {
-            map_fluid_receipt(event, consume);
+        for event in self.runtime.drain_scene_impulses() {
+            consume(event);
         }
     }
     fn fluid_domain_snapshot(&self) -> Option<FluidDomainSnapshot> {

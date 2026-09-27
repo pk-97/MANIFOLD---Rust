@@ -2,12 +2,14 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use manifold_fluids::{LiquidOptions, TimeStepOptions};
+use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds, TickStamp};
 
 use super::{CoupledRigidInputs, RigidImpulseTargets};
 use crate::node_graph::fluid::native::NativeSimulation;
 use crate::node_graph::fluid::{FluidControls, FluidRuntime, FluidSettings, TICK, Worker};
 use crate::node_graph::physics::{ColliderGeometry, RigidBody, RigidSceneInputs};
+use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 use crate::node_graph::transform::Transform;
 
 const ORIGIN: [f32; 3] = [4.0, -3.0, 2.0];
@@ -352,6 +354,7 @@ fn fluid_coupled_worker_mesh_failure_retains_pair_until_reset() {
     runtime.advance(true).unwrap();
     let initial = runtime.coupled_rigid_frame().unwrap().clone();
     let version = runtime.version;
+    enqueue_scene(&mut runtime, 1, 0.0, combined_target(), 0.25);
     observe(&mut runtime, &fixture, TICK, 0.0, true);
     assert!(runtime.advance(true).unwrap_err().contains("capacity"));
     assert_eq!(runtime.completed_tick, 0);
@@ -359,6 +362,12 @@ fn fluid_coupled_worker_mesh_failure_retains_pair_until_reset() {
     assert_eq!(runtime.coupled_rigid_frame().unwrap().stamp, initial.stamp);
     assert_eq!(runtime.coupled_rigid_frame().unwrap().poses, initial.poses);
     assert!(runtime.vertices.is_empty());
+    let receipts: Vec<_> = runtime.drain_scene_impulses().collect();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].value.target, combined_target());
+    assert_eq!(receipts[0].applied.tick, 0);
+    assert!(runtime.advance(true).is_err());
+    assert_eq!(runtime.drain_scene_impulses().count(), 0);
     fixture.0.max_vertices = FluidSettings::default().max_vertices;
     observe(&mut runtime, &fixture, TICK, 0.0, true);
     runtime.advance(true).unwrap();
@@ -376,4 +385,276 @@ fn fluid_coupled_worker_mesh_failure_retains_pair_until_reset() {
         }
     );
     assert!(!runtime.vertices.is_empty());
+}
+
+fn combined_target() -> ImpulseTarget {
+    ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
+        bodies: 1,
+        copies: false,
+    })
+}
+
+fn enqueue_scene(
+    runtime: &mut FluidRuntime,
+    sequence: u64,
+    time: f64,
+    target: ImpulseTarget,
+    strength: f32,
+) -> TickStamp {
+    runtime
+        .enqueue_scene_impulse(
+            EventStamp {
+                epoch: runtime.epoch,
+                time: Seconds(time),
+                sequence,
+            },
+            ResolvedNodeImpulse {
+                field: FieldValue::uniform([strength, 0.0, 0.0]).unwrap(),
+                target,
+            },
+        )
+        .unwrap()
+}
+
+fn empty_fixture() -> (FluidSettings, FluidControls, RigidSceneInputs) {
+    let mut fixture = fixture();
+    fixture.0.resolution = 8;
+    fixture.0.initial_volume = None;
+    fixture.2.acceleration_field = None;
+    fixture
+}
+
+#[test]
+fn fluid_coupled_events_preserve_time_order_and_move_only_selected_bodies_and_copies() {
+    let mut fixture = empty_fixture();
+    let mut other = fixture.2.bodies[0].clone().unwrap();
+    other.transform.pos[2] += 3.0;
+    fixture.2.bodies[1] = Some(other.clone());
+    other.transform.pos[2] += 3.0;
+    fixture.2.prototype = Some(other);
+    fixture.2.copy_count = 2.0;
+    fixture.2.copy_spacing = 4.0;
+    let mut runtime = FluidRuntime::default();
+    observe(&mut runtime, &fixture, 0.0, 0.0, false);
+    runtime.advance(true).unwrap();
+    let initial = runtime.coupled_rigid_frame().unwrap().clone();
+    let target = ImpulseTarget::Rigid(RigidImpulseTargets {
+        bodies: 1,
+        copies: true,
+    });
+    // Source order and delivery order are deliberately different. The native
+    // owner must not re-enqueue and reject sequence 1 after consuming 2.
+    enqueue_scene(&mut runtime, 1, TICK, target, 1.0);
+    enqueue_scene(&mut runtime, 2, 0.0, target, 2.0);
+    observe(&mut runtime, &fixture, 3.0 * TICK, 0.0, false);
+    runtime.advance(true).unwrap();
+    let frame = runtime.coupled_rigid_frame().unwrap();
+    assert_eq!(frame.stamp.tick, 3);
+    let expected = (8.0 * TICK) as f32;
+    assert!((frame.poses[0].pos[0] - initial.poses[0].pos[0] - expected).abs() < 1e-5);
+    assert_eq!(frame.poses[1], initial.poses[1]);
+    for (actual, initial) in frame.copies.iter().zip(&initial.copies) {
+        assert!((actual.pos[0] - initial.pos[0] - expected).abs() < 1e-5);
+    }
+    let receipts: Vec<_> = runtime.drain_scene_impulses().collect();
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|event| event.source.sequence)
+            .collect::<Vec<_>>(),
+        [2, 1]
+    );
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|event| event.applied.tick)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|event| event.lateness == Seconds::ZERO && event.value.target == target)
+    );
+    runtime.advance(true).unwrap();
+    assert_eq!(runtime.drain_scene_impulses().count(), 0);
+}
+
+#[test]
+fn fluid_coupled_combined_event_matches_separate_participants_with_one_receipt() {
+    fn run(combined: bool) -> FluidRuntime {
+        let mut fixture = fixture();
+        fixture.2.acceleration_field = None;
+        let mut runtime = FluidRuntime::default();
+        for tick in 0..=1 {
+            observe(&mut runtime, &fixture, tick as f64 * TICK, 0.0, true);
+            runtime.advance(true).unwrap();
+        }
+        assert!(runtime.stats.particles > 0);
+        if combined {
+            enqueue_scene(&mut runtime, 1, TICK, combined_target(), 0.5);
+        } else {
+            enqueue_scene(&mut runtime, 1, TICK, ImpulseTarget::Fluid, 0.5);
+            enqueue_scene(
+                &mut runtime,
+                2,
+                TICK,
+                ImpulseTarget::Rigid(RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false,
+                }),
+                0.5,
+            );
+        }
+        observe(&mut runtime, &fixture, 3.0 * TICK, 0.0, true);
+        runtime.advance(true).unwrap();
+        let receipts: Vec<_> = runtime.drain_scene_impulses().collect();
+        assert_eq!(receipts.len(), if combined { 1 } else { 2 });
+        assert!(receipts.iter().all(|event| event.applied.tick == 1));
+        runtime
+    }
+    let combined = run(true);
+    let separate = run(false);
+    let a = combined.coupled_rigid_frame().unwrap();
+    let b = separate.coupled_rigid_frame().unwrap();
+    let initial = fixture().2.bodies[0].as_ref().unwrap().transform.pos[0];
+    assert!(a.poses[0].pos[0] > initial + 0.005);
+    for (actual, expected) in a.poses[0].pos.iter().zip(&b.poses[0].pos) {
+        assert!((actual - expected).abs() < 1e-5);
+    }
+    assert_eq!(combined.vertices.len(), separate.vertices.len());
+    for (actual, expected) in combined.vertices.iter().zip(&separate.vertices) {
+        for (actual, expected) in actual.position.iter().zip(&expected.position) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
+fn fluid_coupled_event_late_arrival_waits_for_the_next_worker_batch() {
+    let fixture = empty_fixture();
+    let mut runtime = FluidRuntime::default();
+    let (requests, replies) = mock_worker(&mut runtime);
+    let mut native = NativeSimulation::default();
+    observe(&mut runtime, &fixture, 0.0, 0.0, false);
+    runtime.advance(false).unwrap();
+    replies
+        .send(native.process(requests.recv().unwrap(), &runtime.cancel_epoch))
+        .unwrap();
+    runtime.advance(false).unwrap();
+    observe(&mut runtime, &fixture, 2.0 * TICK, 0.0, false);
+    runtime.advance(false).unwrap();
+    let first = requests.recv().unwrap();
+    let target = combined_target();
+    let assigned = enqueue_scene(&mut runtime, 1, 0.0, target, 1.0);
+    assert_eq!(assigned.tick, 2);
+    replies
+        .send(native.process(first, &runtime.cancel_epoch))
+        .unwrap();
+    runtime.advance(false).unwrap();
+    assert_eq!(runtime.completed_tick, 2);
+    let before = runtime.coupled_rigid_frame().unwrap().poses[0].pos[0];
+    assert_eq!(runtime.drain_scene_impulses().count(), 0);
+    observe(&mut runtime, &fixture, 3.0 * TICK, 0.0, false);
+    runtime.advance(false).unwrap();
+    replies
+        .send(native.process(requests.recv().unwrap(), &runtime.cancel_epoch))
+        .unwrap();
+    runtime.advance(false).unwrap();
+    let after = runtime.coupled_rigid_frame().unwrap().poses[0].pos[0];
+    assert!((after - before - TICK as f32).abs() < 1e-5);
+    let receipts: Vec<_> = runtime.drain_scene_impulses().collect();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].applied, assigned);
+    assert_eq!(receipts[0].source.time, Seconds::ZERO);
+    assert_eq!(receipts[0].lateness, Seconds(2.0 * TICK));
+    assert_eq!(receipts[0].value.target, target);
+}
+
+#[test]
+fn fluid_coupled_invalid_targets_preserve_sequence_and_partial_drains_preserve_receipts() {
+    let fixture = empty_fixture();
+    let mut runtime = FluidRuntime::default();
+    observe(&mut runtime, &fixture, 0.0, 0.0, false);
+    let stamp = EventStamp {
+        epoch: runtime.epoch,
+        time: Seconds::ZERO,
+        sequence: 1,
+    };
+    for targets in [
+        RigidImpulseTargets::default(),
+        RigidImpulseTargets {
+            bodies: 2,
+            copies: false,
+        },
+        RigidImpulseTargets {
+            bodies: 0,
+            copies: true,
+        },
+    ] {
+        assert!(
+            runtime
+                .enqueue_scene_impulse(
+                    stamp,
+                    ResolvedNodeImpulse {
+                        field: FieldValue::uniform([0.0; 3]).unwrap(),
+                        target: ImpulseTarget::FluidAndRigid(targets),
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(runtime.impulse_outstanding, 0);
+    }
+    enqueue_scene(&mut runtime, 1, 0.0, combined_target(), 0.0);
+    enqueue_scene(&mut runtime, 2, 0.0, ImpulseTarget::Fluid, 0.0);
+    enqueue_scene(&mut runtime, 3, 0.0, ImpulseTarget::Fluid, 0.0);
+    observe(&mut runtime, &fixture, TICK, 0.0, false);
+    runtime.advance(true).unwrap();
+    assert_eq!(
+        runtime
+            .drain_applied_impulses()
+            .next()
+            .unwrap()
+            .source
+            .sequence,
+        2
+    );
+    assert_eq!(runtime.impulse_outstanding, 2);
+    let receipts: Vec<_> = runtime.drain_scene_impulses().collect();
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|event| event.source.sequence)
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(runtime.impulse_outstanding, 0);
+
+    // More than one native receipt buffer's worth over the lifetime of a world
+    // must work: the shared worker drains its private receipts after each tick.
+    for tick in 1..=130 {
+        let time = tick as f64 * TICK;
+        enqueue_scene(
+            &mut runtime,
+            (2 * tick + 2) as u64,
+            time,
+            combined_target(),
+            0.0,
+        );
+        enqueue_scene(
+            &mut runtime,
+            (2 * tick + 3) as u64,
+            time,
+            combined_target(),
+            0.0,
+        );
+        observe(&mut runtime, &fixture, time + TICK, 0.0, false);
+        runtime.advance(true).unwrap();
+        assert_eq!(runtime.drain_scene_impulses().count(), 2);
+    }
+    enqueue_scene(&mut runtime, 300, 131.0 * TICK, combined_target(), 1.0);
+    observe(&mut runtime, &fixture, 131.0 * TICK, 1.0, false);
+    runtime.advance(true).unwrap();
+    assert_eq!(runtime.impulse_outstanding, 0);
+    assert_eq!(runtime.drain_scene_impulses().count(), 0);
 }
