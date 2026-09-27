@@ -62,12 +62,12 @@ void MeshObject::getGridDimensions(int *i, int *j, int *k) {
     *i = _isize; *j = _jsize; *k = _ksize; 
 }
 
-void MeshObject::updateMeshStatic(TriangleMesh meshCurrent) {
+void MeshObject::updateMeshStatic(const TriangleMesh &meshCurrent) {
     _meshPrevious = meshCurrent;
     _meshCurrent = meshCurrent;
     _meshNext = meshCurrent;
-    _vertexTranslationsCurrent = std::vector<vmath::vec3>(meshCurrent.vertices.size());
-    _vertexTranslationsNext = std::vector<vmath::vec3>(meshCurrent.vertices.size());
+    _vertexTranslationsCurrent.assign(meshCurrent.vertices.size(), vmath::vec3());
+    _vertexTranslationsNext.assign(meshCurrent.vertices.size(), vmath::vec3());
     _isAnimated = false;
     _isChangingTopology = false;
     _isRigid = true;

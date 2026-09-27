@@ -57,6 +57,7 @@ class MeshFluidSource;
 class ParticleMaskGrid;
 class MACVelocityField;
 class FluidMaterialGrid;
+class RigidFluidCoupling;
 struct DiffuseParticle;
 enum class LimitBehaviour : char;
 
@@ -278,6 +279,8 @@ public:
     void abortUpdate() noexcept;
     bool isUpdateInProgress() const;
     bool isUpdateFailed() const;
+    bool canSetRigidSubstepInput() const;
+    void setRigidCoupling(RigidFluidCoupling *coupling);
 
     /*
         Set Blend filepath string for logging.
@@ -1939,10 +1942,13 @@ private:
     float _getFaceFrictionU(GridIndex g);
     float _getFaceFrictionV(GridIndex g);
     float _getFaceFrictionW(GridIndex g);
-    void _constrainVelocityField(MACVelocityField &MACGrid);
-    void _constrainVelocityFieldMT(MACVelocityField &MACGrid, int dir);
+    void _constrainVelocityField(MACVelocityField &MACGrid,
+                                 MACVelocityField *scale = nullptr);
+    void _constrainVelocityFieldMT(MACVelocityField &MACGrid, int dir,
+                                   MACVelocityField *scale = nullptr);
     void _constrainVelocityFieldThread(int startidx, int endidx, 
-                                       MACVelocityField *vfield, int dir);
+                                       MACVelocityField *vfield, int dir,
+                                       MACVelocityField *scale = nullptr);
     void _constrainVelocityFields();
 
     /*
@@ -2250,6 +2256,7 @@ private:
     bool _isUpdateInProgress = false;
     bool _isUpdateFailed = false;
     bool _isExternallySteppedUpdate = false;
+    RigidFluidCoupling *_rigidCoupling = nullptr;
     bool _hasOfferedUpdateTimeStep = false;
     double _offeredUpdateTimeStep = 0.0;
     StopWatch _frameTimer;

@@ -22,6 +22,23 @@ typedef struct ManifoldFluidsWhitewaterParticle {
     uint8_t type;
 } ManifoldFluidsWhitewaterParticle;
 
+typedef struct ManifoldFluidsRigidBodyInput {
+    float pose[7];
+    float center[3];
+    float linear_velocity[3];
+    float angular_velocity[3];
+    float inverse_mass;
+    float inverse_inertia[9];
+    uint32_t enabled;
+} ManifoldFluidsRigidBodyInput;
+
+typedef struct ManifoldFluidsRigidReaction {
+    double linear[3];
+    double angular[3];
+    double delta_linear[3];
+    double delta_angular[3];
+} ManifoldFluidsRigidReaction;
+
 int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
                                  double cell_size, uint32_t surface_subdivisions,
                                  int apic, void **world_out);
@@ -36,6 +53,13 @@ int manifold_fluids_world_add_fluid_mesh(void *world, const float *vertices,
                                          size_t vertex_count, const uint32_t *triangles,
                                          size_t triangle_count, const float *pose,
                                          const float *velocity);
+int manifold_fluids_world_prepare_rigid_coupling(void *world, const uint32_t *slots,
+                                                  size_t count, double density);
+int manifold_fluids_world_set_rigid_bodies(void *world,
+                                            const ManifoldFluidsRigidBodyInput *inputs,
+                                            size_t count);
+int manifold_fluids_world_rigid_reactions(void *world, ManifoldFluidsRigidReaction *out,
+                                          size_t capacity, size_t *count_out);
 int manifold_fluids_world_set_mesh_motion(void *world, uint32_t slot,
                                           const float *previous, const float *current,
                                           const float *next);

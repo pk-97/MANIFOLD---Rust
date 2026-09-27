@@ -45,6 +45,8 @@ public:
     std::vector<Body> bodies;
     std::vector<Entry> entries;
 
+    static void validateBody(const Body &body) { validate(body); }
+
     // Call at resource preparation, not from a solver iteration. Changing body
     // topology may require a larger budget; prepare rejects unprepared storage.
     void reserve(size_t bodyCount, size_t entryCount) {

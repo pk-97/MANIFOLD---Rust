@@ -17,6 +17,8 @@ mod mesh;
 pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
 mod frame;
 pub use frame::FluidFrame;
+mod coupling;
+pub use coupling::{RigidBodyState, RigidReaction};
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 
@@ -450,6 +452,7 @@ pub struct FluidWorld {
     normal_scratch: Vec<[f32; 3]>,
     whitewater_scratch: Vec<NativeWhitewaterParticle>,
     mesh_state: mesh::MeshState,
+    rigid_coupling: Option<coupling::RigidCouplingState>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
 }
@@ -492,6 +495,7 @@ impl FluidWorld {
             normal_scratch: Vec::new(),
             whitewater_scratch: Vec::new(),
             mesh_state,
+            rigid_coupling: None,
             _not_sync: PhantomData,
         })
     }

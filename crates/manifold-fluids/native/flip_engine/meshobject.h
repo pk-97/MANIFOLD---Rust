@@ -75,7 +75,7 @@ public:
     void clearRigidBoundarySource();
     RigidBoundaryVelocityMap *getRigidBoundaryMap() const { return _rigidBoundaryMap; }
     size_t getRigidBoundaryBody() const { return _rigidBoundaryBody; }
-    void updateMeshStatic(TriangleMesh meshCurrent);
+    void updateMeshStatic(const TriangleMesh &meshCurrent);
     void updateMeshAnimated(TriangleMesh meshPrevious, 
                             TriangleMesh meshCurrent, 
                             TriangleMesh meshNext);

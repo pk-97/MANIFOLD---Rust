@@ -78,7 +78,7 @@ impl MeshState {
         })
     }
 
-    fn validate_handle(
+    pub(super) fn validate_handle(
         &self,
         handle: MeshHandle,
         role: Option<MeshRole>,

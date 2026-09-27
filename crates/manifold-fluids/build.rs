@@ -114,6 +114,7 @@ fn main() {
         "particlesystem.cpp",
         "polygonizer3d.cpp",
         "rigidboundaryvelocity.cpp",
+        "rigidfluidcoupling.cpp",
         "pressuresolver.cpp",
         "scalarfield.cpp",
         "spatialpointgrid.cpp",

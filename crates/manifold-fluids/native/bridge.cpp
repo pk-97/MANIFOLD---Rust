@@ -5,6 +5,8 @@
 #include "coupling_viscosity_probe.h"
 #include "coupling_viscosity_operator_probe.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -14,9 +16,11 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "fluidsimulation.h"
+#include "rigidfluidcoupling.h"
 #include "aabb.h"
 #include "forcefield.h"
 #include "grid3d.h"
@@ -43,6 +47,20 @@ void set_error(const char *message) {
 
 void set_error(const std::exception &error) {
     LAST_ERROR = error.what();
+}
+
+size_t checked_add(size_t a, size_t b, const char *message) {
+    if (a > std::numeric_limits<size_t>::max() - b) {
+        throw std::invalid_argument(message);
+    }
+    return a + b;
+}
+
+size_t checked_product(size_t a, size_t b, const char *message) {
+    if (b != 0 && a > std::numeric_limits<size_t>::max() / b) {
+        throw std::invalid_argument(message);
+    }
+    return a * b;
 }
 
 template <typename Function>
@@ -411,6 +429,9 @@ struct NativeWorld {
 
     ~NativeWorld();
 
+    // FluidSimulation stores a non-owning coupling pointer. Declaring the
+    // adapter first keeps it alive until after simulation destruction.
+    std::unique_ptr<RigidFluidCoupling> rigid_coupling;
     std::unique_ptr<FluidSimulation> simulation;
     std::unique_ptr<NativeField> force_field;
     std::unique_ptr<MeshFluidSource> emitter;
@@ -434,6 +455,10 @@ struct NativeWorld {
     vmath::vec3 emitter_velocity{0.0f, 0.0f, 0.0f};
     bool obstacle_added = false;
     std::unordered_map<uint32_t, NativeMeshRole> mesh_roles;
+    std::vector<uint32_t> rigid_bound_slots;
+    std::vector<RigidFluidCoupling::Body> rigid_input_bodies;
+    std::vector<MeshPose> rigid_parsed_poses;
+    bool rigid_input_ready = false;
 };
 
 void register_source(NativeWorld &native, MeshFluidSource *source);
@@ -446,6 +471,15 @@ NativeWorld::~NativeWorld() {
         return;
     }
     simulation->abortUpdate();
+    for (uint32_t slot : rigid_bound_slots) {
+        auto iterator = mesh_roles.find(slot);
+        if (iterator != mesh_roles.end() && iterator->second.obstacle) {
+            iterator->second.obstacle->clearRigidBoundarySource();
+        }
+    }
+    if (!simulation->isUpdateFailed()) {
+        simulation->setRigidCoupling(nullptr);
+    }
     for (auto &entry : mesh_roles) {
         NativeMeshRole &role = entry.second;
         if (role.role == 2 && role.obstacle) {
@@ -486,6 +520,81 @@ void register_obstacle(NativeWorld &native, MeshObject *obstacle) {
 void unregister_obstacle(NativeWorld &native, MeshObject *obstacle) {
     if (obstacle != nullptr) {
         native.simulation->removeMeshObstacle(obstacle);
+    }
+}
+
+size_t rigid_bound_index(const NativeWorld &native, uint32_t slot) {
+    for (size_t index = 0; index < native.rigid_bound_slots.size(); ++index) {
+        if (native.rigid_bound_slots[index] == slot) {
+            return index;
+        }
+    }
+    return std::numeric_limits<size_t>::max();
+}
+
+std::array<double, 3> read_rigid_vector(const float *values, const char *name) {
+    if (values == nullptr) {
+        throw std::invalid_argument(std::string(name) + " pointer must be non-null");
+    }
+    std::array<double, 3> result{};
+    for (size_t axis = 0; axis < result.size(); ++axis) {
+        result[axis] = values[axis];
+        if (!std::isfinite(result[axis])) {
+            throw std::invalid_argument(std::string(name) + " must be finite");
+        }
+    }
+    return result;
+}
+
+RigidFluidCoupling::Body read_rigid_body(const ManifoldFluidsRigidBodyInput &input) {
+    RigidFluidCoupling::Body body;
+    body.motion.center = read_rigid_vector(input.center, "rigid body center");
+    const auto linear = read_rigid_vector(input.linear_velocity, "rigid body linear velocity");
+    const auto angular = read_rigid_vector(input.angular_velocity, "rigid body angular velocity");
+    for (size_t axis = 0; axis < 3; ++axis) {
+        body.motion.velocity[axis] = linear[axis];
+        body.motion.velocity[axis + 3] = angular[axis];
+    }
+    body.mobility.inverseMass = input.inverse_mass;
+    if (!std::isfinite(body.mobility.inverseMass) || body.mobility.inverseMass < 0.0) {
+        throw std::invalid_argument("rigid body inverse mass must be finite and non-negative");
+    }
+    for (size_t row = 0; row < 3; ++row) {
+        for (size_t column = 0; column < 3; ++column) {
+            const double value = input.inverse_inertia[row * 3 + column];
+            if (!std::isfinite(value)) {
+                throw std::invalid_argument("rigid body inverse inertia must be finite");
+            }
+            body.mobility.inverseInertia[row][column] = value;
+        }
+    }
+    // Box3D rotates its tensor in f32: transpose entries can differ by a few
+    // rounding units (a rotated fixture differs by 1.5e-8). PCG needs exact
+    // symmetry, so average only differences bounded by the input precision.
+    // The double-precision PSD validator still rejects invalid mobility.
+    double inertia_scale = 0.0;
+    for (const auto &row : body.mobility.inverseInertia) {
+        for (double value : row) { inertia_scale = std::max(inertia_scale, std::abs(value)); }
+    }
+    const double symmetry_tolerance = 8.0 * std::numeric_limits<float>::epsilon() * inertia_scale;
+    for (size_t row = 0; row < 3; ++row) {
+        for (size_t column = row + 1; column < 3; ++column) {
+            auto &a = body.mobility.inverseInertia[row][column];
+            auto &b = body.mobility.inverseInertia[column][row];
+            if (std::abs(a - b) > symmetry_tolerance) {
+                throw std::invalid_argument("rigid body inverse inertia exceeds f32 symmetry tolerance");
+            }
+            a = b = 0.5 * (a + b);
+        }
+    }
+    RigidPressureCoupling::validateBody(body.mobility);
+    return body;
+}
+
+void require_rigid_upload_slot(const NativeWorld &native, uint32_t slot) {
+    if (rigid_bound_index(native, slot) != std::numeric_limits<size_t>::max()) {
+        throw std::invalid_argument(
+            "bound rigid collider state must be uploaded through set_rigid_bodies");
     }
 }
 
@@ -695,6 +804,10 @@ extern "C" int manifold_fluids_world_add_mesh(void *world, uint32_t slot, uint8_
             throw std::invalid_argument("unknown fluid mesh role");
         }
         auto *native = static_cast<NativeWorld *>(world);
+        if (native->rigid_coupling) {
+            throw std::invalid_argument(
+                "rigid coupling topology is prepared; rebuild before adding fluid meshes");
+        }
         if (native->mesh_roles.find(slot) != native->mesh_roles.end()) {
             throw std::invalid_argument("fluid mesh slot is already occupied");
         }
@@ -773,6 +886,207 @@ extern "C" int manifold_fluids_world_add_fluid_mesh(
     });
 }
 
+extern "C" int manifold_fluids_world_prepare_rigid_coupling(
+    void *world, const uint32_t *slots, size_t count, double density) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        if (slots == nullptr || count == 0) {
+            throw std::invalid_argument("rigid coupling requires at least one collider slot");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (native->rigid_coupling) {
+            throw std::invalid_argument("rigid coupling can only be prepared once per world");
+        }
+        if (native->simulation->isUpdateInProgress() || native->simulation->isUpdateFailed()) {
+            throw std::runtime_error("rigid coupling requires a healthy idle fluid world");
+        }
+
+        std::vector<uint32_t> bound_slots;
+        bound_slots.reserve(count);
+        std::unordered_set<uint32_t> seen;
+        seen.reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const uint32_t slot = slots[index];
+            if (!seen.insert(slot).second) {
+                throw std::invalid_argument("rigid coupling collider slots must be unique");
+            }
+            auto iterator = native->mesh_roles.find(slot);
+            if (iterator == native->mesh_roles.end() || iterator->second.role != 2 ||
+                !iterator->second.obstacle) {
+                throw std::invalid_argument(
+                    "rigid coupling slots must name existing collider meshes");
+            }
+            bound_slots.push_back(slot);
+        }
+        if (!std::isfinite(density) || density <= 0.0 ||
+            static_cast<float>(density) <= 0.0f) {
+            throw std::invalid_argument("rigid coupling density must be finite and positive");
+        }
+
+        const size_t ni = native->isize;
+        const size_t nj = native->jsize;
+        const size_t nk = native->ksize;
+        const size_t ni1 = checked_add(ni, 1, "rigid coupling storage dimensions overflow");
+        const size_t nj1 = checked_add(nj, 1, "rigid coupling storage dimensions overflow");
+        const size_t nk1 = checked_add(nk, 1, "rigid coupling storage dimensions overflow");
+        const size_t u = checked_product(
+            checked_product(ni1, nj, "rigid coupling face storage overflow"), nk,
+            "rigid coupling face storage overflow");
+        const size_t v = checked_product(
+            checked_product(ni, nj1, "rigid coupling face storage overflow"), nk,
+            "rigid coupling face storage overflow");
+        const size_t w = checked_product(
+            checked_product(ni, nj, "rigid coupling face storage overflow"), nk1,
+            "rigid coupling face storage overflow");
+        const size_t face_count = checked_add(
+            checked_add(u, v, "rigid coupling face storage overflow"), w,
+            "rigid coupling face storage overflow");
+        const size_t boundary_entries = checked_product(
+            checked_product(2, face_count, "rigid coupling boundary storage overflow"), count,
+            "rigid coupling boundary storage overflow");
+        const size_t pressure_entries = checked_product(
+            2, boundary_entries, "rigid coupling pressure storage overflow");
+        const size_t viscosity_terms = checked_product(
+            checked_product(checked_product(6, ni1, "rigid coupling viscosity storage overflow"),
+                            nj1, "rigid coupling viscosity storage overflow"),
+            nk1, "rigid coupling viscosity storage overflow");
+        const size_t viscosity_body_entries = checked_product(
+            16, boundary_entries, "rigid coupling viscosity storage overflow");
+
+        auto candidate = std::make_unique<RigidFluidCoupling>();
+        candidate->density = density;
+        candidate->physicalDensity();
+        candidate->prepare(static_cast<int>(native->isize), static_cast<int>(native->jsize),
+                           static_cast<int>(native->ksize), native->cell_size, count,
+                           RigidFluidCoupling::Storage{boundary_entries, pressure_entries,
+                                                       viscosity_terms, viscosity_body_entries});
+        std::vector<RigidFluidCoupling::Body> input_bodies(count);
+        std::vector<MeshPose> parsed_poses(count);
+
+        size_t bound_count = 0;
+        try {
+            for (; bound_count < count; ++bound_count) {
+                auto iterator = native->mesh_roles.find(bound_slots[bound_count]);
+                // Retain upload preflight geometry storage before stepping.
+                iterator->second.next_mesh = iterator->second.current_mesh;
+                iterator->second.obstacle->setRigidBoundarySource(
+                    candidate->boundaryMap(), bound_count);
+            }
+            native->simulation->setRigidCoupling(candidate.get());
+        } catch (...) {
+            for (size_t index = 0; index < bound_count; ++index) {
+                auto iterator = native->mesh_roles.find(bound_slots[index]);
+                if (iterator != native->mesh_roles.end() && iterator->second.obstacle) {
+                    iterator->second.obstacle->clearRigidBoundarySource();
+                }
+            }
+            throw;
+        }
+
+        native->rigid_coupling = std::move(candidate);
+        native->rigid_bound_slots = std::move(bound_slots);
+        native->rigid_input_bodies = std::move(input_bodies);
+        native->rigid_parsed_poses = std::move(parsed_poses);
+        native->rigid_input_ready = false;
+    });
+}
+
+extern "C" int manifold_fluids_world_set_rigid_bodies(
+    void *world, const ManifoldFluidsRigidBodyInput *inputs, size_t count) {
+    return guarded([&] {
+        if (world == nullptr || inputs == nullptr) {
+            throw std::invalid_argument("rigid body input pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (!native->rigid_coupling) {
+            throw std::invalid_argument("rigid coupling has not been prepared");
+        }
+        if (!native->simulation->canSetRigidSubstepInput()) {
+            throw std::runtime_error("rigid body state cannot be uploaded at this simulation stage");
+        }
+        if (count != native->rigid_bound_slots.size()) {
+            throw std::invalid_argument("rigid body input count does not match prepared collider slots");
+        }
+
+        native->rigid_coupling->invalidate();
+        native->rigid_input_ready = false;
+        for (size_t index = 0; index < count; ++index) {
+            if (inputs[index].enabled > 1) {
+                throw std::invalid_argument("rigid body enabled must be 0 or 1");
+            }
+            const MeshPose pose = read_pose(inputs[index].pose);
+            const auto body = read_rigid_body(inputs[index]);
+            auto iterator = native->mesh_roles.find(native->rigid_bound_slots[index]);
+            if (iterator == native->mesh_roles.end() || iterator->second.role != 2 ||
+                !iterator->second.obstacle) {
+                throw std::runtime_error("prepared rigid collider slot no longer exists");
+            }
+            transform_mesh_into(iterator->second.mesh, pose, iterator->second.next_mesh);
+            native->rigid_parsed_poses[index] = pose;
+            native->rigid_input_bodies[index] = body;
+        }
+
+        for (size_t index = 0; index < count; ++index) {
+            auto iterator = native->mesh_roles.find(native->rigid_bound_slots[index]);
+            NativeMeshRole &role = iterator->second;
+            const MeshPose &pose = native->rigid_parsed_poses[index];
+            update_role_mesh(role, pose, pose, pose);
+            if (inputs[index].enabled != 0) {
+                role.obstacle->enable();
+            } else {
+                role.obstacle->disable();
+            }
+            native->rigid_coupling->bodies[index] = native->rigid_input_bodies[index];
+        }
+        native->rigid_input_ready = true;
+    });
+}
+
+extern "C" int manifold_fluids_world_rigid_reactions(
+    void *world, ManifoldFluidsRigidReaction *out, size_t capacity, size_t *count_out) {
+    return guarded([&] {
+        if (count_out == nullptr) {
+            throw std::invalid_argument("rigid reaction count output pointer must be non-null");
+        }
+        *count_out = 0;
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (!native->rigid_coupling) {
+            throw std::invalid_argument("rigid coupling has not been prepared");
+        }
+        if (native->simulation->isUpdateFailed()) {
+            throw std::runtime_error("rigid reactions are unavailable after a failed fluid update");
+        }
+        const size_t count = native->rigid_bound_slots.size();
+        if (capacity < count || (count != 0 && out == nullptr)) {
+            throw std::invalid_argument("rigid reaction output capacity is too small");
+        }
+        const auto &impulses = native->rigid_coupling->impulses();
+        const auto &changes = native->rigid_coupling->velocityChanges();
+        if (impulses.size() != count || changes.size() != count) {
+            throw std::runtime_error("rigid reaction count does not match prepared collider slots");
+        }
+        for (size_t index = 0; index < count; ++index) {
+            for (size_t dof = 0; dof < 6; ++dof) {
+                if (!std::isfinite(impulses[index][dof]) || !std::isfinite(changes[index][dof])) {
+                    throw std::runtime_error("rigid reaction contains a non-finite value");
+                }
+            }
+            for (size_t axis = 0; axis < 3; ++axis) {
+                out[index].linear[axis] = impulses[index][axis];
+                out[index].angular[axis] = impulses[index][axis + 3];
+                out[index].delta_linear[axis] = changes[index][axis];
+                out[index].delta_angular[axis] = changes[index][axis + 3];
+            }
+        }
+        *count_out = count;
+    });
+}
+
 extern "C" int manifold_fluids_world_set_mesh_motion(
     void *world, uint32_t slot, const float *previous, const float *current, const float *next) {
     return guarded([&] {
@@ -784,6 +1098,7 @@ extern "C" int manifold_fluids_world_set_mesh_motion(
         if (iterator == native->mesh_roles.end()) {
             throw std::invalid_argument("fluid mesh slot does not exist");
         }
+        require_rigid_upload_slot(*native, slot);
         const MeshPose parsed_previous = read_pose(previous);
         const MeshPose parsed_current = read_pose(current);
         const MeshPose parsed_next = read_pose(next);
@@ -801,6 +1116,7 @@ extern "C" int manifold_fluids_world_set_mesh_enabled(void *world, uint32_t slot
         if (iterator == native->mesh_roles.end()) {
             throw std::invalid_argument("fluid mesh slot does not exist");
         }
+        require_rigid_upload_slot(*native, slot);
         NativeMeshRole &role = iterator->second;
         if (role.role == 2) {
             enabled != 0 ? role.obstacle->enable() : role.obstacle->disable();
@@ -865,6 +1181,10 @@ extern "C" int manifold_fluids_world_remove_mesh(void *world, uint32_t slot) {
             throw std::invalid_argument("fluid mesh slot does not exist");
         }
         NativeMeshRole &role = iterator->second;
+        if (rigid_bound_index(*native, slot) != std::numeric_limits<size_t>::max()) {
+            throw std::invalid_argument(
+                "bound rigid collider cannot be removed after preparation; rebuild the world");
+        }
         if (role.role == 2) {
             unregister_obstacle(*native, role.obstacle.get());
         } else {
@@ -1122,7 +1442,14 @@ extern "C" int manifold_fluids_world_step(void *world, double dt,
 extern "C" int manifold_fluids_world_begin_frame(void *world, double dt) {
     return guarded([&] {
         if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
-        static_cast<NativeWorld *>(world)->simulation->beginUpdate(dt);
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->beginUpdate(dt);
+        if (native->rigid_coupling) {
+            // A new frame cannot expose or reuse the previous frame's last
+            // accepted exchange, even before its first body upload.
+            native->rigid_coupling->invalidate();
+            native->rigid_input_ready = false;
+        }
     });
 }
 
@@ -1131,14 +1458,24 @@ extern "C" int manifold_fluids_world_next_substep(void *world, double *dt_out) {
         if (world == nullptr || dt_out == nullptr) {
             throw std::invalid_argument("substep pointers must be non-null");
         }
-        *dt_out = static_cast<NativeWorld *>(world)->simulation->nextUpdateTimeStep();
+        auto *native = static_cast<NativeWorld *>(world);
+        if (native->rigid_coupling && native->simulation->isUpdateInProgress() &&
+            native->simulation->canSetRigidSubstepInput() && !native->rigid_input_ready) {
+            throw std::runtime_error(
+                "rigid body state must be uploaded before requesting the next substep");
+        }
+        *dt_out = native->simulation->nextUpdateTimeStep();
     });
 }
 
 extern "C" int manifold_fluids_world_advance_substep(void *world, double dt) {
     return guarded([&] {
         if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
-        static_cast<NativeWorld *>(world)->simulation->advanceUpdate(dt);
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->advanceUpdate(dt);
+        if (native->rigid_coupling) {
+            native->rigid_input_ready = false;
+        }
     });
 }
 
@@ -1155,7 +1492,13 @@ extern "C" int manifold_fluids_world_finish_frame(void *world, ManifoldFluidsFra
 
 extern "C" void manifold_fluids_world_abort_frame(void *world) {
     std::lock_guard<std::mutex> lock(NATIVE_MUTEX);
-    if (world != nullptr) { static_cast<NativeWorld *>(world)->simulation->abortUpdate(); }
+    if (world != nullptr) {
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->abortUpdate();
+        if (native->rigid_coupling) {
+            native->rigid_input_ready = false;
+        }
+    }
 }
 
 namespace {

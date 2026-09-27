@@ -23,6 +23,7 @@ SOFTWARE.
 */
 
 #include "fluidsimulation.h"
+#include "rigidfluidcoupling.h"
 
 #include <cstring>
 #include <iomanip>
@@ -5648,6 +5649,11 @@ void FluidSimulation::_addStaticObjectsToSolidSDF(double dt, std::vector<MeshObj
     StopWatch t;
     t.start();
 
+    if (_rigidCoupling) {
+        _addStaticObjectsToSDF(dt, _solidSDF);
+        return;
+    }
+
     _updatePrecomputedSolidLevelSet(dt, objectStatus);
 
     if (_isStaticSolidLevelSetPrecomputed) {
@@ -5691,16 +5697,17 @@ std::vector<MeshObjectStatus> FluidSimulation::_getSolidObjectStatus() {
 }
 
 void FluidSimulation::_updateSolidLevelSet(double dt) {
+    const bool isCoupled = _rigidCoupling != nullptr;
     std::vector<MeshObjectStatus> objectStatus = _getSolidObjectStatus();
     if (_isSolidStateChanged(objectStatus)) {
         _isSolidLevelSetUpToDate = false;
     }
 
-    if (_isSolidLevelSetUpToDate) {
+    if (_isSolidLevelSetUpToDate && !isCoupled) {
         return;
     }
 
-    if (_markerParticles.empty() && 
+    if (!isCoupled && _markerParticles.empty() &&
             _addedFluidMeshObjectQueue.empty() && 
             _meshFluidSources.empty() && 
             !_isInternalObstacleMeshOutputEnabled) {
@@ -5723,7 +5730,10 @@ void FluidSimulation::_updateSolidLevelSet(double dt) {
 
     _addStaticObjectsToSolidSDF(dt, objectStatus);
     _addAnimatedObjectsToSolidSDF(dt);
-    _solidSDF.normalizeVelocityGrid();
+    _solidSDF.normalizeVelocityGrid(isCoupled ? &_rigidCoupling->boundaryMap() : nullptr);
+    if (isCoupled) {
+        _rigidCoupling->finishBoundary();
+    }
     _resolveSolidLevelSetUpdateCollisions();
 
     _isSolidLevelSetUpToDate = true;
@@ -5859,7 +5869,17 @@ void FluidSimulation::_updateObstacleObjects(double) {
     StopWatch t;
     t.start();
 
-    bool runObstacleObjectUpdate = _isFluidOrWhitewaterInSimulation() || 
+    if (_rigidCoupling) {
+        RigidBoundaryVelocityMap *boundaryMap = &_rigidCoupling->boundaryMap();
+        for (MeshObject *object : _obstacles) {
+            if (object->getRigidBoundaryMap() && object->getRigidBoundaryMap() != boundaryMap) {
+                throw std::invalid_argument("Error: obstacle is bound to a different rigid fluid coupling map.\n");
+            }
+        }
+    }
+
+    bool runObstacleObjectUpdate = _rigidCoupling ||
+                                   _isFluidOrWhitewaterInSimulation() ||
                                    _isFluidGeneratingThisFrame() ||
                                    _isInternalObstacleMeshOutputEnabled;
 
@@ -6327,7 +6347,8 @@ void FluidSimulation::_applyViscosityToVelocityField(double dt) {
     StopWatch t;
     t.start();
 
-    _constrainVelocityField(_MACVelocity);
+    _constrainVelocityField(_MACVelocity,
+                            _rigidCoupling ? &_rigidCoupling->boundaryScale() : nullptr);
 
     ViscositySolverParameters params;
     params.cellwidth = _dx;
@@ -6338,10 +6359,20 @@ void FluidSimulation::_applyViscosityToVelocityField(double dt) {
     params.viscosity = &_viscosity;
     params.errorTolerance = _viscositySolverErrorTolerance;
     params.maxIterations = _maxViscositySolveIterations;
+    if (_rigidCoupling) {
+        _rigidCoupling->configureViscosity(params);
+    }
 
     _viscositySolver = ViscositySolver();
     bool success = _viscositySolver.applyViscosityToVelocityField(params);
     _viscositySolverStatus = _viscositySolver.getSolverStatus();
+
+    if (_rigidCoupling && !success) {
+        throw std::runtime_error("Error: coupled viscosity solve failed.\n");
+    }
+    if (_rigidCoupling) {
+        _rigidCoupling->finishViscosity(_solidSDF.getVelocityDataGrid()->field);
+    }
 
     if (_currentFrameTimeStepNumber == 0) {
         _viscositySolverSuccess = success;
@@ -6517,7 +6548,10 @@ void FluidSimulation::_pressureSolve(double dt) {
         }
         */
 
-        Array3d<float> densityGrid = Array3d<float>(_isize, _jsize, _ksize, 1.0f);
+        const float pressureDensity = _rigidCoupling
+            ? (float)_rigidCoupling->physicalDensity()
+            : 1.0f;
+        Array3d<float> densityGrid = Array3d<float>(_isize, _jsize, _ksize, pressureDensity);
         if (_isSurfaceDensityAttributeEnabled || _isFluidParticleDensityAttributeEnabled) {
             // Compute variable density grid
             densityGrid.fill(0.0f);
@@ -6544,14 +6578,24 @@ void FluidSimulation::_pressureSolve(double dt) {
 
         params.isSurfaceTensionEnabled = _isSurfaceTensionEnabled;
         if (_isSurfaceTensionEnabled) {
-            params.surfaceTensionConstant = _surfaceTensionConstant;
+            params.surfaceTensionConstant = _surfaceTensionConstant *
+                                            (_rigidCoupling ? pressureDensity : 1.0f);
             params.curvatureGrid = &_fluidCurvatureGrid;
+        }
+
+        if (_rigidCoupling) {
+            _rigidCoupling->configurePressure(params);
         }
 
         PressureSolver psolver;
         bool success = psolver.solve(params);
         if (success) {
             psolver.applySolutionToVelocityField();
+            if (_rigidCoupling) {
+                _rigidCoupling->finishPressure(_solidSDF.getVelocityDataGrid()->field);
+            }
+        } else if (_rigidCoupling) {
+            throw std::runtime_error("Error: coupled pressure solve failed.\n");
         }
 
         _pressureSolverStatus = psolver.getSolverStatus();
@@ -6749,16 +6793,18 @@ float FluidSimulation::_getFaceFrictionW(GridIndex g) {
     return 0.25f * friction;
 }
 
-void FluidSimulation::_constrainVelocityField(MACVelocityField &MACGrid) {
+void FluidSimulation::_constrainVelocityField(MACVelocityField &MACGrid,
+                                              MACVelocityField *scale) {
     _updateWeightGrid();
 
     int U = 0; int V = 1; int W = 2;
-    _constrainVelocityFieldMT(MACGrid, U);
-    _constrainVelocityFieldMT(MACGrid, V);
-    _constrainVelocityFieldMT(MACGrid, W);
+    _constrainVelocityFieldMT(MACGrid, U, scale);
+    _constrainVelocityFieldMT(MACGrid, V, scale);
+    _constrainVelocityFieldMT(MACGrid, W, scale);
 }
 
-void FluidSimulation::_constrainVelocityFieldMT(MACVelocityField &MACGrid, int dir) {
+void FluidSimulation::_constrainVelocityFieldMT(MACVelocityField &MACGrid, int dir,
+                                                MACVelocityField *scale) {
 
     int U = 0; int V = 1; int W = 2;
 
@@ -6777,7 +6823,7 @@ void FluidSimulation::_constrainVelocityFieldMT(MACVelocityField &MACGrid, int d
     std::vector<int> intervals = ThreadUtils::splitRangeIntoIntervals(0, gridsize, numthreads);
     for (int i = 0; i < numthreads; i++) {
         threads[i] = std::thread(&FluidSimulation::_constrainVelocityFieldThread, this,
-                                 intervals[i], intervals[i + 1], &MACGrid, dir);
+                                 intervals[i], intervals[i + 1], &MACGrid, dir, scale);
     }
 
     for (int i = 0; i < numthreads; i++) {
@@ -6786,7 +6832,8 @@ void FluidSimulation::_constrainVelocityFieldMT(MACVelocityField &MACGrid, int d
 }
 
 void FluidSimulation::_constrainVelocityFieldThread(int startidx, int endidx, 
-                                                    MACVelocityField *vfield, int dir) {
+                                                    MACVelocityField *vfield, int dir,
+                                                    MACVelocityField *scale) {
 
     int U = 0; int V = 1; int W = 2;
 
@@ -6796,12 +6843,16 @@ void FluidSimulation::_constrainVelocityFieldThread(int startidx, int endidx,
             GridIndex g = Grid3d::getUnflattenedIndex(idx, _isize + 1, _jsize);
             if(_weightGrid.U(g) == 0) {
                 vfield->setU(g, _solidSDF.getFaceVelocityU(g));
+                if (scale) { scale->setU(g, 1.0f); }
             } else if (_weightGrid.U(g) < 1.0f) {
                 float f = _getFaceFrictionU(g);
                 float uface = _solidSDF.getFaceVelocityU(g);
                 float umac = vfield->U(g);
                 float uf = f * uface + (1.0f - f) * umac;
                 vfield->setU(g, uf);
+                if (scale) { scale->setU(g, f); }
+            } else if (scale) {
+                scale->setU(g, 0.0f);
             }
         }
 
@@ -6811,12 +6862,16 @@ void FluidSimulation::_constrainVelocityFieldThread(int startidx, int endidx,
             GridIndex g = Grid3d::getUnflattenedIndex(idx, _isize, _jsize + 1);
             if(_weightGrid.V(g) == 0) {
                 vfield->setV(g, _solidSDF.getFaceVelocityV(g));
+                if (scale) { scale->setV(g, 1.0f); }
             } else if (_weightGrid.V(g) < 1.0f) {
                 float f = _getFaceFrictionV(g);
                 float vface = _solidSDF.getFaceVelocityV(g);
                 float vmac = vfield->V(g);
                 float vf = f * vface + (1.0f - f) * vmac;
                 vfield->setV(g, vf);
+                if (scale) { scale->setV(g, f); }
+            } else if (scale) {
+                scale->setV(g, 0.0f);
             }
         }
 
@@ -6826,12 +6881,16 @@ void FluidSimulation::_constrainVelocityFieldThread(int startidx, int endidx,
             GridIndex g = Grid3d::getUnflattenedIndex(idx, _isize, _jsize);
             if(_weightGrid.W(g) == 0) {
                 vfield->setW(g, _solidSDF.getFaceVelocityW(g));
+                if (scale) { scale->setW(g, 1.0f); }
             } else if (_weightGrid.W(g) < 1.0f) {
                 float f = _getFaceFrictionW(g);
                 float wface = _solidSDF.getFaceVelocityW(g);
                 float wmac = vfield->W(g);
                 float wf = f * wface + (1.0f - f) * wmac;
                 vfield->setW(g, wf);
+                if (scale) { scale->setW(g, f); }
+            } else if (scale) {
+                scale->setW(g, 0.0f);
             }
         }
 
@@ -10835,9 +10894,16 @@ void FluidSimulation::_outputSimulationData() {
 
 void FluidSimulation::_stepFluid(double dt) {
     srand(_currentFrame + _currentFrameTimeStepNumber);
-    if (!_isSkippedFrame) {
-        _launchUpdateObstacleObjectsThread(dt);
-        _joinUpdateObstacleObjectsThread();
+    if (_rigidCoupling) {
+        _rigidCoupling->beginSubstep();
+    }
+    if (!_isSkippedFrame || _rigidCoupling) {
+        if (_rigidCoupling) {
+            _updateObstacleObjects(dt);
+        } else {
+            _launchUpdateObstacleObjectsThread(dt);
+            _joinUpdateObstacleObjectsThread();
+        }
         _launchUpdateLiquidLevelSetThread();
         _joinUpdateLiquidLevelSetThread();
         _launchAdvectVelocityFieldThread();
@@ -10961,7 +11027,7 @@ double FluidSimulation::_getMaximumMarkerParticleSpeed() {
 }
 
 double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
-    if (!_isAdaptiveObstacleTimeSteppingEnabled) {
+    if (!_isAdaptiveObstacleTimeSteppingEnabled && !_rigidCoupling) {
         return 0.0;
     }
 
@@ -10975,6 +11041,15 @@ double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
         }
 
         TriangleMesh m = obj->getMesh();
+        if (_rigidCoupling && obj->getRigidBoundaryMap() == &_rigidCoupling->boundaryMap()) {
+            const size_t body = obj->getRigidBoundaryBody();
+            for (size_t vidx = 0; vidx < m.vertices.size(); vidx++) {
+                // A large proxy can cross the liquid domain while every
+                // vertex lies outside it. Its boundary speed still matters.
+                maxu = fmax(_rigidCoupling->pointSpeed(body, m.vertices[vidx]), maxu);
+            }
+            continue;
+        }
         std::vector<vmath::vec3> vels = obj->getFrameVertexVelocities(_currentFrame, dt);
         for (size_t vidx = 0; vidx < vels.size(); vidx++) {
             if (domainBounds.isPointInside(m.vertices[vidx])) {
@@ -11191,6 +11266,9 @@ void FluidSimulation::_beginUpdate(double dt, bool externallyStepped) {
     if (_isUpdateFailed) {
         throw std::runtime_error("Error: FluidSimulation update session has failed; rebuild the simulation.\n");
     }
+    if (_rigidCoupling && !externallyStepped) {
+        throw std::runtime_error("Error: rigid fluid coupling requires an externally stepped update.\n");
+    }
 
     if (externallyStepped) {
         if (!std::isfinite(dt) || dt <= 0.0) {
@@ -11202,6 +11280,13 @@ void FluidSimulation::_beginUpdate(double dt, bool externallyStepped) {
         std::string msg = "Error: delta time must be greater than or equal to 0.\n";
         msg += "delta time: " + _toString(dt) + "\n";
         throw std::domain_error(msg);
+    }
+
+    if (_rigidCoupling) {
+        _rigidCoupling->requireCompatible(_isize, _jsize, _ksize, _dx);
+        if (_isSurfaceDensityAttributeEnabled || _isFluidParticleDensityAttributeEnabled) {
+            throw std::runtime_error("Error: rigid fluid coupling does not support variable density attributes.\n");
+        }
     }
 
     _timingData = TimingData();
@@ -11334,6 +11419,10 @@ void FluidSimulation::advanceUpdate(double dt) {
             throw std::runtime_error("Error: externally stepped update encountered a failed pressure or viscosity solve.\n");
         }
 
+        if (_rigidCoupling) {
+            _rigidCoupling->finishSubstep();
+        }
+
         _currentNumFluidCells = _getNumFluidCells();
         _logStepInfo();
 
@@ -11348,6 +11437,9 @@ void FluidSimulation::advanceUpdate(double dt) {
         _hasOfferedUpdateTimeStep = false;
         _offeredUpdateTimeStep = 0.0;
     } catch (...) {
+        if (_rigidCoupling) {
+            _rigidCoupling->invalidate();
+        }
         _isUpdateInProgress = false;
         _isUpdateFailed = true;
         _hasOfferedUpdateTimeStep = false;
@@ -11411,6 +11503,9 @@ void FluidSimulation::finishUpdate() {
         _hasOfferedUpdateTimeStep = false;
         _offeredUpdateTimeStep = 0.0;
     } catch (...) {
+        if (_rigidCoupling) {
+            _rigidCoupling->invalidate();
+        }
         _isUpdateInProgress = false;
         _isUpdateFailed = true;
         _hasOfferedUpdateTimeStep = false;
@@ -11432,6 +11527,22 @@ void FluidSimulation::abortUpdate() noexcept {
     _offeredUpdateTimeStep = 0.0;
     _isCurrentFrameFinished = false;
     _joinNativeThreadsNoexcept();
+    if (_rigidCoupling) {
+        _rigidCoupling->invalidate();
+    }
+}
+
+void FluidSimulation::setRigidCoupling(RigidFluidCoupling *coupling) {
+    if (_isUpdateInProgress) {
+        throw std::runtime_error("Error: rigid fluid coupling cannot be changed while an update is in progress.\n");
+    }
+    if (_isUpdateFailed) {
+        throw std::runtime_error("Error: rigid fluid coupling cannot be changed after a failed update.\n");
+    }
+    if (coupling) {
+        coupling->requireCompatible(_isize, _jsize, _ksize, _dx);
+    }
+    _rigidCoupling = coupling;
 }
 
 bool FluidSimulation::isUpdateInProgress() const {
@@ -11440,6 +11551,11 @@ bool FluidSimulation::isUpdateInProgress() const {
 
 bool FluidSimulation::isUpdateFailed() const {
     return _isUpdateFailed;
+}
+
+bool FluidSimulation::canSetRigidSubstepInput() const {
+    return !_isUpdateFailed && !_hasOfferedUpdateTimeStep &&
+           (!_isUpdateInProgress || _currentFrameDeltaTimeRemaining > 0.0);
 }
 
 void FluidSimulation::update(double dt) {

@@ -17,13 +17,14 @@ unsafe extern "C" {
 /// An unpublished fluid frame, exclusively borrowed by its simulation owner.
 ///
 /// Between substeps the owner can advance another physics backend. Collider
-/// motion must be supplied before beginning the frame. This does not itself
-/// exchange liquid/body reactions. Dropping an unfinished frame invalidates
+/// motion is supplied before the frame for ordinary colliders. Prepared rigid
+/// coupling uploads fresh body state before each substep offer and exposes its
+/// accepted reaction afterward. Dropping an unfinished frame invalidates
 /// the native world: rebuild it before reuse.
 /// A partly advanced world cannot supply a surface or whitewater snapshot.
 #[must_use = "finish the frame after all substeps, or dropping it invalidates the world"]
 pub struct FluidFrame<'a> {
-    world: &'a mut FluidWorld,
+    pub(super) world: &'a mut FluidWorld,
     finished: bool,
 }
 
