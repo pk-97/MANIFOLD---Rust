@@ -635,6 +635,9 @@ pub fn sync_inspector_data(
                                         super::scene::filter_inactive_physics_parameter_ids(
                                             def.as_ref(), physics.as_ref(), &mut parameter_ids,
                                         );
+                                        super::scene::filter_inactive_fluid_role_parameter_ids(
+                                            def.as_ref(), *group_node_id, &mut parameter_ids,
+                                        );
                                         // P4b: every Known object gets a Skin
                                         // row, even when no `node.layer_source`
                                         // exists yet — `source_node_id: None`

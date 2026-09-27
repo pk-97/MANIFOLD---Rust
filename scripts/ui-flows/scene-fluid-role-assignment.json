@@ -207,6 +207,30 @@
     }
   },
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Builtin Shape"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Radius"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
     "ScrollTo": {
       "target": {
         "Query": {
@@ -283,7 +307,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 4"
+          "text": "\u25a0 Object 4"
         }
       }
     }
@@ -292,7 +316,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 4"
+          "text": "\u25a0 Object 4"
         }
       },
       "gesture": {
@@ -319,6 +343,30 @@
         }
       },
       "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Builtin Shape"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Radius"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
     }
   },
   "Snapshot"

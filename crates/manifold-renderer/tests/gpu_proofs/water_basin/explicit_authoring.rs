@@ -14,17 +14,18 @@ use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
 
 #[derive(Clone, Copy, Debug, Default)]
-struct Sample {
-    time: f32,
-    y: f32,
-    particles: f32,
-    collider_width: f32,
+pub(super) struct Sample {
+    pub(super) time: f32,
+    pub(super) y: f32,
+    pub(super) particles: f32,
+    pub(super) collider_width: f32,
+    pub(super) roll: f32,
 }
-thread_local! { static SAMPLE: Cell<Sample> = const { Cell::new(Sample {
-    time: 0.0, y: 0.0, particles: 0.0, collider_width: 0.0,
+thread_local! { pub(super) static SAMPLE: Cell<Sample> = const { Cell::new(Sample {
+    time: 0.0, y: 0.0, particles: 0.0, collider_width: 0.0, roll: 0.0,
 }) }; }
 
-struct Observe(EffectNodeType);
+pub(super) struct Observe(pub(super) EffectNodeType);
 impl EffectNode for Observe {
     fn type_id(&self) -> &EffectNodeType {
         &self.0
@@ -81,7 +82,8 @@ impl EffectNode for Observe {
             ctx.inputs.transform("pose"),
             ctx.inputs.scalar("time"),
             ctx.inputs.scalar("particles"),
-        ) else {
+        )
+        else {
             ctx.mark_outputs_pending();
             return;
         };
@@ -100,6 +102,7 @@ impl EffectNode for Observe {
             y: pose.pos[1],
             particles,
             collider_width: max - min,
+            roll: pose.rot_euler[2],
         });
     }
 }
@@ -125,8 +128,7 @@ fn set(
     assert!(command.was_applied(), "{:?}", command.rejection_reason());
 }
 
-#[test]
-fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
+pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_core::NodeId) {
     let mut project = Project::default();
     let preset = PresetTypeId::new("SceneStarter");
     let baseline = bundled_preset_def(&preset).unwrap();
@@ -208,7 +210,7 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
     set(
         &mut project,
         &target,
-        &baseline,
+        baseline,
         vec![group_id],
         mesh,
         "size",
@@ -217,7 +219,7 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
     set(
         &mut project,
         &target,
-        &baseline,
+        baseline,
         vec![group_id],
         transform,
         "pos_y",
@@ -255,6 +257,12 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
         .unwrap()
         .node_id
         .clone();
+    (project, target, baseline.clone(), body_id)
+}
+
+#[test]
+fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
+    let (project, target, _, body_id) = author_scene();
     let saved = serde_json::to_string(&project).unwrap();
     let restored: Project = serde_json::from_str(&saved).unwrap();
     // Flatten only for test instrumentation; the saved scene retains ordinary
@@ -262,50 +270,7 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
     let mut def =
         manifold_core::flatten::flatten_groups(restored.graph_for_target(&target, None).unwrap())
             .unwrap();
-    let body = def
-        .nodes
-        .iter()
-        .find(|node| node.node_id == body_id)
-        .unwrap()
-        .id;
-    let world = def
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.physics_world")
-        .unwrap()
-        .id;
-    let liquid = def
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.fluid_surface")
-        .unwrap()
-        .id;
-    let slot = def
-        .wires
-        .iter()
-        .find(|wire| wire.from_node == body && wire.to_node == world)
-        .unwrap()
-        .to_port
-        .strip_prefix("body_")
-        .unwrap()
-        .to_owned();
-    let observer = def.nodes.iter().map(|node| node.id).max().unwrap() + 1;
-    def.nodes.push(serde_json::from_value::<EffectGraphNode>(serde_json::json!({
-        "id": observer, "nodeId": "explicit_physics_observer", "typeId": "test.explicit_physics_observer"
-    })).unwrap());
-    for (from_node, from_port, to_port) in [
-        (body, "body".to_owned(), "body"),
-        (world, format!("pose_{slot}"), "pose"),
-        (liquid, "simulation_time".to_owned(), "time"),
-        (liquid, "particle_count".to_owned(), "particles"),
-    ] {
-        def.wires.push(EffectGraphWire {
-            from_node,
-            from_port,
-            to_node: observer,
-            to_port: to_port.into(),
-        });
-    }
+    instrument(&mut def, &body_id);
     let harness = harness::shared();
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.explicit_physics_observer", || {
@@ -357,4 +322,106 @@ fn scene_physics_explicit_object_uses_shared_world_after_fluid_authoring() {
         readback_to_srgb_png(&harness.device, &output.texture, WIDTH, HEIGHT),
     )
     .unwrap();
+}
+
+/// Observe accepted output through existing group boundaries, retaining the
+/// authored identities used by scene-modifier expansion.
+pub(super) fn instrument(def: &mut EffectGraphDef, body_id: &manifold_core::NodeId) {
+    fn expose(
+        def: &mut EffectGraphDef,
+        identity: &manifold_core::NodeId,
+        port: &str,
+        ty: &str,
+    ) -> (u32, String) {
+        use manifold_core::effect_graph_def::{GROUP_OUTPUT_TYPE_ID, InterfacePortDef};
+        for node in &mut def.nodes {
+            if &node.node_id == identity {
+                return (node.id, port.into());
+            }
+            if let Some(group) = &mut node.group
+                && let Some(inner) = group.nodes.iter().find(|inner| &inner.node_id == identity)
+            {
+                let inner_id = inner.id;
+                let output = group
+                    .nodes
+                    .iter()
+                    .find(|inner| inner.type_id == GROUP_OUTPUT_TYPE_ID)
+                    .unwrap()
+                    .id;
+                let name = format!("test_{port}");
+                group.interface.outputs.push(InterfacePortDef {
+                    name: name.clone(),
+                    port_type: ty.into(),
+                });
+                group.wires.push(EffectGraphWire {
+                    from_node: inner_id,
+                    from_port: port.into(),
+                    to_node: output,
+                    to_port: name.clone(),
+                });
+                return (node.id, name);
+            }
+        }
+        panic!("missing observed node {identity:?}");
+    }
+    let world = def
+        .nodes
+        .iter()
+        .find(|node| node.type_id == "node.physics_world")
+        .unwrap()
+        .id;
+    let liquid_id = def
+        .nodes
+        .iter()
+        .chain(
+            def.nodes
+                .iter()
+                .filter_map(|node| node.group.as_ref())
+                .flat_map(|group| &group.nodes),
+        )
+        .find(|node| node.type_id == "node.fluid_surface")
+        .unwrap()
+        .node_id
+        .clone();
+    let body = expose(def, body_id, "body", "RigidBody");
+    let time = expose(def, &liquid_id, "simulation_time", "Scalar(F32)");
+    let particles = expose(def, &liquid_id, "particle_count", "Scalar(F32)");
+    let slot = def
+        .wires
+        .iter()
+        .find(|wire| wire.from_node == body.0 && wire.to_node == world)
+        .unwrap()
+        .to_port
+        .strip_prefix("body_")
+        .unwrap()
+        .to_owned();
+    let observer = def
+        .nodes
+        .iter()
+        .chain(
+            def.nodes
+                .iter()
+                .filter_map(|node| node.group.as_ref())
+                .flat_map(|group| &group.nodes),
+        )
+        .map(|node| node.id)
+        .max()
+        .unwrap()
+        + 1;
+    def.nodes.push(serde_json::from_value::<EffectGraphNode>(serde_json::json!({
+        "id": observer, "nodeId": "explicit_physics_observer", "typeId": "test.explicit_physics_observer"
+    })).unwrap());
+    for (from_node, from_port, to_port) in [
+        (body.0, body.1, "body"),
+        (world, format!("pose_{slot}"), "pose"),
+        (time.0, time.1, "time"),
+        (particles.0, particles.1, "particles"),
+    ] {
+        def.wires.push(EffectGraphWire {
+            from_node,
+            from_port,
+            to_node: observer,
+            to_port: to_port.into(),
+        });
+    }
 }

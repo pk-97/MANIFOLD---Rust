@@ -85,10 +85,21 @@ pub(crate) fn group_fluid_role_ids(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     group_id: Option<u32>,
 ) -> Vec<u32> {
+    fn collect(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], ids: &mut Vec<u32>) {
+        for node in nodes {
+            if node.type_id == "node.fluid_role_source" {
+                ids.push(node.id);
+            }
+            if let Some(group) = node.group.as_deref() {
+                collect(&group.nodes, ids);
+            }
+        }
+    }
     let Some(group) = group_id.and_then(|id| def.nodes.iter().find(|node| node.id == id))
-        .and_then(|node| node.group.as_ref()) else { return Vec::new(); };
-    group.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source")
-        .map(|node| node.id).collect()
+        .and_then(|node| node.group.as_deref()) else { return Vec::new(); };
+    let mut ids = Vec::new();
+    collect(&group.nodes, &mut ids);
+    ids
 }
 
 /// Resolve a modifier's controls through its scoped stable node identity.
@@ -278,28 +289,92 @@ pub(crate) fn filter_inactive_physics_parameter_ids(
     }) {
         return;
     }
-    let Some(metadata) = def.preset_metadata.as_ref() else {
-        return;
+    let Some(metadata) = def.preset_metadata.as_ref() else { return; };
+    retain_effective_binding_targets(metadata, parameter_ids, |target| {
+        matches!(target,
+            BindingTarget::Node { node_id, param }
+                if node_id == &body.node_id
+                    && matches!(param.as_str(), "shape" | "collider_parts"))
+    });
+}
+
+/// Remove fallback controls from a fluid role whose geometry comes from one or
+/// more authoritative `mesh_N` inputs. The role node is found by stable graph
+/// identity while walking the selected object's complete nested group scope.
+pub(crate) fn filter_inactive_fluid_role_parameter_ids(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    group_id: Option<u32>,
+    parameter_ids: &mut Vec<String>,
+) {
+    use manifold_core::effect_graph_def::BindingTarget;
+
+    let Some(def) = def else { return; };
+    let (nodes, wires) = match group_id {
+        Some(id) => {
+            let Some(group) = def.nodes.iter().find(|node| node.id == id)
+                .and_then(|node| node.group.as_deref()) else { return; };
+            (&group.nodes, &group.wires)
+        }
+        None => (&def.nodes, &def.wires),
     };
+    let mut wired_role_nodes = Vec::new();
+    collect_wired_fluid_role_nodes(nodes, wires, &mut wired_role_nodes);
+    if wired_role_nodes.is_empty() {
+        return;
+    }
+    let Some(metadata) = def.preset_metadata.as_ref() else { return; };
+    retain_effective_binding_targets(metadata, parameter_ids, |target| {
+        matches!(target,
+            BindingTarget::Node { node_id, param }
+                if wired_role_nodes.iter().any(|role| role == node_id)
+                    && matches!(param.as_str(),
+                        "shape" | "radius" | "path" | "mesh_index" |
+                        "primitive_index" | "material_index" | "compound_materials"))
+    });
+}
+
+fn collect_wired_fluid_role_nodes(
+    nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
+    wires: &[manifold_core::effect_graph_def::EffectGraphWire],
+    result: &mut Vec<manifold_core::NodeId>,
+) {
+    for node in nodes {
+        if node.type_id == "node.fluid_role_source"
+            && !node.node_id.is_empty()
+            && wires.iter().any(|wire| {
+                wire.to_node == node.id
+                    && wire.to_port.strip_prefix("mesh_")
+                        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+            })
+        {
+            result.push(node.node_id.clone());
+        }
+        if let Some(group) = node.group.as_deref() {
+            collect_wired_fluid_role_nodes(&group.nodes, &group.wires, result);
+        }
+    }
+}
+
+fn retain_effective_binding_targets(
+    metadata: &manifold_core::effect_graph_def::PresetMetadata,
+    parameter_ids: &mut Vec<String>,
+    mut is_inactive: impl FnMut(&manifold_core::effect_graph_def::BindingTarget) -> bool,
+) {
     parameter_ids.retain(|parameter_id| {
-        let mut inactive_body_target = false;
-        let mut effective_elsewhere = false;
+        let mut has_inactive_target = false;
+        let mut has_effective_target = false;
         for binding in metadata
             .bindings
             .iter()
             .filter(|binding| binding.id.as_str() == parameter_id.as_str())
         {
-            match &binding.target {
-                BindingTarget::Node { node_id, param }
-                    if node_id == &body.node_id
-                        && matches!(param.as_str(), "shape" | "collider_parts") =>
-                {
-                    inactive_body_target = true;
-                }
-                _ => effective_elsewhere = true,
+            if is_inactive(&binding.target) {
+                has_inactive_target = true;
+            } else {
+                has_effective_target = true;
             }
         }
-        !inactive_body_target || effective_elsewhere
+        !has_inactive_target || has_effective_target
     });
 }
 
@@ -727,5 +802,139 @@ mod sections_for_doc_ids_tests {
         filter_inactive_physics_parameter_ids(Some(&def), Some(&physics), &mut parameter_ids);
         assert!(parameter_ids.contains(&"10_shape".to_string()));
         assert!(parameter_ids.contains(&"10_collider_parts".to_string()));
+    }
+
+    fn fluid_role_projection_fixture(grouped: bool, source_wired: bool) -> EffectGraphDef {
+        let mut def = azalea_like_fixture();
+        let role = serde_json::from_value::<EffectGraphNode>(serde_json::json!({
+            "id": 20, "nodeId": "role", "typeId": "node.fluid_role_source"
+        })).unwrap();
+        let mesh = serde_json::from_value::<EffectGraphNode>(serde_json::json!({
+            "id": 21, "nodeId": "mesh", "typeId": "node.cube_mesh"
+        })).unwrap();
+        let mesh_wire = EffectGraphWire {
+            from_node: 21,
+            from_port: "source".to_string(),
+            to_node: 20,
+            to_port: "mesh_0".to_string(),
+        };
+        if grouped {
+            let inner = EffectGraphNode {
+                id: 41,
+                node_id: NodeId::new("nested_group"),
+                type_id: "group".to_string(),
+                handle: Some("Nested".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: Some(Box::new(GroupDef {
+                    tint: None,
+                    interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+                    nodes: vec![role, mesh],
+                    wires: source_wired.then_some(vec![mesh_wire]).unwrap_or_default(),
+                })),
+            };
+            let outer = EffectGraphNode {
+                id: 40,
+                node_id: NodeId::new("object_group"),
+                type_id: "group".to_string(),
+                handle: Some("Object".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: None,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: Some(Box::new(GroupDef {
+                    tint: None,
+                    interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+                    nodes: vec![inner],
+                    wires: Vec::new(),
+                })),
+            };
+            def.nodes = vec![outer];
+            def.wires = Vec::new();
+        } else {
+            def.nodes = vec![role, mesh];
+            def.wires = source_wired.then_some(vec![mesh_wire]).unwrap_or_default();
+        }
+
+        let ids = [
+            "20_shape", "20_radius", "20_path", "20_mesh_index", "20_primitive_index",
+            "20_material_index", "20_compound_materials", "20_geometry", "20_collider_parts",
+            "21_shape", "20_mixed_shape", "20_shape_duplicate", "21_shape_duplicate",
+        ];
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        metadata.params = ids.iter().map(|id| ParamSpecDef {
+            id: (*id).to_string(),
+            name: (*id).to_string(),
+            section: Some("Fluid Role".to_string()),
+            ..Default::default()
+        }).collect();
+        let role_binding = |id: &str, param: &str| BindingDef {
+            id: id.to_string(),
+            target: BindingTarget::Node { node_id: NodeId::new("role"), param: param.to_string() },
+            ..binding_defaults()
+        };
+        let mesh_binding = |id: &str| BindingDef {
+            id: id.to_string(),
+            target: BindingTarget::Node { node_id: NodeId::new("mesh"), param: "shape".to_string() },
+            ..binding_defaults()
+        };
+        metadata.bindings = vec![
+            role_binding("20_shape", "shape"),
+            role_binding("20_radius", "radius"),
+            role_binding("20_path", "path"),
+            role_binding("20_mesh_index", "mesh_index"),
+            role_binding("20_primitive_index", "primitive_index"),
+            role_binding("20_material_index", "material_index"),
+            role_binding("20_compound_materials", "compound_materials"),
+            role_binding("20_geometry", "geometry"),
+            role_binding("20_collider_parts", "collider_parts"),
+            mesh_binding("21_shape"),
+            role_binding("20_mixed_shape", "shape"),
+            mesh_binding("20_mixed_shape"),
+            role_binding("20_shape_duplicate", "shape"),
+            mesh_binding("21_shape_duplicate"),
+        ];
+        def
+    }
+
+    #[test]
+    fn mesh_wired_fluid_role_projection_hides_only_fallback_controls_direct_grouped_and_reloaded() {
+        let expected_ids = [
+            "20_geometry",
+            "20_collider_parts",
+            "21_shape",
+            "20_mixed_shape",
+            "21_shape_duplicate",
+        ];
+        for grouped in [false, true] {
+            let def = fluid_role_projection_fixture(grouped, true);
+            let group_id = grouped.then_some(40);
+            assert_eq!(group_fluid_role_ids(&def, group_id), if grouped { vec![20] } else { Vec::new() });
+            let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[20, 21]);
+            filter_inactive_fluid_role_parameter_ids(Some(&def), group_id, &mut parameter_ids);
+            assert_eq!(parameter_ids, expected_ids);
+
+            let reloaded: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+            let mut reloaded_ids = parameter_ids_for_doc_ids(Some(&reloaded), &[20, 21]);
+            filter_inactive_fluid_role_parameter_ids(Some(&reloaded), group_id, &mut reloaded_ids);
+            assert_eq!(reloaded_ids, expected_ids, "reload preserves role projection");
+        }
+    }
+
+    #[test]
+    fn unwired_fluid_role_projection_retains_fallback_controls() {
+        let def = fluid_role_projection_fixture(true, false);
+        let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[20, 21]);
+        let expected = parameter_ids.clone();
+        filter_inactive_fluid_role_parameter_ids(Some(&def), Some(40), &mut parameter_ids);
+        assert_eq!(parameter_ids, expected);
     }
 }
