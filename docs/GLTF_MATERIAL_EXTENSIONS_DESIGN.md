@@ -129,6 +129,10 @@ dated E1–E6 record above describes the original implementation.
   The load-time upgrade enables varying colours on older imports. Constant
   colours already baked into saved material factors keep a white vertex stream,
   preserving the equivalent factor product without tinting twice.
+  For calibrated scene modifiers, this upgrade validates the saved source
+  identities first and refreshes their hashes only for the added colour flag.
+  Saved offsets, radii and source routes remain unchanged; stale calibration
+  refuses the graph upgrade with a notice.
 - Legacy specular/glossiness import preserves diffuse and RGB specular factors
   and maps. Glossiness conversion computes `1 - factor * texture.a`. Previously
   imported graphs recover omitted settings and maps from their source model at

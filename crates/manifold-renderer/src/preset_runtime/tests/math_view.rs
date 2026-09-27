@@ -1,7 +1,10 @@
 use super::*;
 use manifold_core::effect_graph_def::BindingTarget;
 fn owner() -> EffectGraphDef {
-    crate::node_graph::scene_modifier_expand::math_view_test_owner()
+    let mut owner = crate::node_graph::scene_modifier_expand::math_view_test_owner();
+    // Internal render-view preparation receives a canonical loaded document.
+    manifold_core::phong_migration::migrate_phong_to_pbr(&mut owner);
+    owner
 }
 
 #[cfg(feature = "gpu-proofs")]

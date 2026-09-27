@@ -27,6 +27,7 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
         "sheen_mode" => Some(MaterialFeature::Sheen),
         "anisotropy_mode" => Some(MaterialFeature::Anisotropy),
         "translucency_mode" => Some(MaterialFeature::Translucency),
+        "subsurface_feature_mode" => Some(MaterialFeature::Subsurface),
         _ => None,
     };
     if let Some(feature) = feature_mode {
@@ -38,12 +39,20 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
         "color_r" | "color_g" | "color_b" | "metallic" | "roughness" => {
             Some(MaterialGroup::Surface)
         }
-        "ambient" | "specular" | "baked_look" | "normal_scale" | "occlusion_strength" => Some(MaterialGroup::Advanced),
+        "ambient" | "specular" | "baked_look" | "normal_scale" | "occlusion_strength" => {
+            Some(MaterialGroup::Advanced)
+        }
         "clearcoat_normal_scale" => Some(MaterialGroup::Feature(MaterialFeature::Coat)),
-        "subsurface_weight" | "subsurface_radius_r" | "subsurface_radius_g"
-        | "subsurface_radius_b" | "subsurface_color_r" | "subsurface_color_g"
-        | "subsurface_color_b" | "subsurface_anisotropy" | "subsurface_mode"
-        | "subsurface_samples" => Some(MaterialGroup::Subsurface),
+        "subsurface_weight"
+        | "subsurface_radius_r"
+        | "subsurface_radius_g"
+        | "subsurface_radius_b"
+        | "subsurface_color_r"
+        | "subsurface_color_g"
+        | "subsurface_color_b"
+        | "subsurface_anisotropy"
+        | "subsurface_mode"
+        | "subsurface_samples" => Some(MaterialGroup::Feature(MaterialFeature::Subsurface)),
         "translucency_color_r" | "translucency_color_g" | "translucency_color_b" => {
             Some(MaterialGroup::Feature(MaterialFeature::Translucency))
         }
@@ -105,17 +114,46 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
 /// controls still fail the schema-coverage test.
 fn advanced_map_metadata(name: &str) -> bool {
     if ["", "nrm_", "mr_", "occ_", "em_"].iter().any(|prefix| {
-        name.strip_prefix(prefix).is_some_and(|suffix| matches!(suffix, "uv_set" | "mip_filter"))
+        name.strip_prefix(prefix)
+            .is_some_and(|suffix| matches!(suffix, "uv_set" | "mip_filter"))
     }) {
         return true;
     }
-    ["sheen_color_", "sheen_roughness_", "iridescence_", "iridescence_thickness_",
-        "anisotropy_", "clearcoat_", "clearcoat_roughness_", "clearcoat_normal_",
-        "specular_", "specular_color_", "transmission_", "volume_thickness_",
-        "diffuse_transmission_", "diffuse_transmission_color_"].iter().any(|prefix| {
-        name.strip_prefix(prefix).is_some_and(|suffix| matches!(suffix,
-            "uv_m00" | "uv_m01" | "uv_m10" | "uv_m11" | "uv_tx" | "uv_ty"
-            | "tex_coord" | "wrap_u" | "wrap_v" | "mag_filter" | "min_filter" | "mip_filter"))
+    [
+        "sheen_color_",
+        "sheen_roughness_",
+        "iridescence_",
+        "iridescence_thickness_",
+        "anisotropy_",
+        "clearcoat_",
+        "clearcoat_roughness_",
+        "clearcoat_normal_",
+        "specular_",
+        "specular_color_",
+        "transmission_",
+        "volume_thickness_",
+        "diffuse_transmission_",
+        "diffuse_transmission_color_",
+    ]
+    .iter()
+    .any(|prefix| {
+        name.strip_prefix(prefix).is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "uv_m00"
+                    | "uv_m01"
+                    | "uv_m10"
+                    | "uv_m11"
+                    | "uv_tx"
+                    | "uv_ty"
+                    | "tex_coord"
+                    | "wrap_u"
+                    | "wrap_v"
+                    | "mag_filter"
+                    | "min_filter"
+                    | "mip_filter"
+            )
+        })
     })
 }
 
@@ -236,12 +274,16 @@ mod tests {
     #[test]
     fn material_inspector_schema_covers_pbr() {
         let params = PbrMaterial::PARAMS;
-        assert_eq!(params.len(), 296);
+        assert_eq!(params.len(), 297);
         let mut names = std::collections::HashSet::<&str>::new();
         let mut feature_modes = 0;
         let mut map_families = [0usize; 5];
         for param in params {
-            assert!(names.insert(param.name.as_ref()), "duplicate {}", param.name);
+            assert!(
+                names.insert(param.name.as_ref()),
+                "duplicate {}",
+                param.name
+            );
             let role = material_param_role("node.pbr_material", param.name.as_ref())
                 .unwrap_or_else(|| panic!("unclassified {}", param.name));
             match role {
@@ -258,14 +300,28 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(feature_modes, 7);
+        assert_eq!(feature_modes, 8);
         assert_eq!(map_families, [10, 10, 10, 10, 10]);
         assert!(material_param_role("node.phong_material", "color_r").is_none());
         assert!(material_param_role("node.pbr_material", "subsurface_unknown").is_none());
-        assert_eq!(material_param_role("node.pbr_material", "subsurface_mode"),
-            Some(MaterialParamRole::Scalar(MaterialGroup::Subsurface)));
-        assert_eq!(material_param_role("node.pbr_material", "subsurface_color_r"),
-            Some(MaterialParamRole::Colour(MaterialGroup::Subsurface, MaterialColour::Subsurface, RgbChannel::R)));
+        assert_eq!(
+            material_param_role("node.pbr_material", "subsurface_mode"),
+            Some(MaterialParamRole::Scalar(MaterialGroup::Feature(
+                MaterialFeature::Subsurface
+            )))
+        );
+        assert_eq!(
+            material_param_role("node.pbr_material", "subsurface_feature_mode"),
+            Some(MaterialParamRole::FeatureMode(MaterialFeature::Subsurface))
+        );
+        assert_eq!(
+            material_param_role("node.pbr_material", "subsurface_color_r"),
+            Some(MaterialParamRole::Colour(
+                MaterialGroup::Feature(MaterialFeature::Subsurface),
+                MaterialColour::Subsurface,
+                RgbChannel::R
+            ))
+        );
         assert_eq!(material_param_role("node.pbr_material", "volume_scattering_color_r"),
             Some(MaterialParamRole::Colour(MaterialGroup::Feature(MaterialFeature::Glass), MaterialColour::VolumeScattering, RgbChannel::R)));
         assert_eq!(material_param_role("node.pbr_material", "volume_geometry"),

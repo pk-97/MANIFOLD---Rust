@@ -25,19 +25,24 @@ impl crate::app::Application {
             #[cfg(target_os = "macos")]
             internal_clipboard_change_count: &mut self.internal_clipboard_change_count,
         };
-        match action {
-            CardEditAction::Copy => host.handle_effect_copy(),
-            CardEditAction::Cut => host.handle_effect_cut(),
-            CardEditAction::Paste => host.handle_effect_paste(),
-            CardEditAction::Duplicate => host.handle_effect_duplicate(),
-            CardEditAction::Delete => host.handle_effect_delete(),
-            CardEditAction::Group => host.handle_effect_group(),
-            CardEditAction::Ungroup => host.handle_effect_ungroup(),
-        };
+        host.edit_cards(action);
     }
 }
 
 impl AppInputHost<'_> {
+    /// Shared by live menus and the rendered interaction harness.
+    pub(crate) fn edit_cards(&mut self, action: CardEditAction) -> bool {
+        match action {
+            CardEditAction::Copy => self.handle_effect_copy(),
+            CardEditAction::Cut => self.handle_effect_cut(),
+            CardEditAction::Paste => self.handle_effect_paste(),
+            CardEditAction::Duplicate => self.handle_effect_duplicate(),
+            CardEditAction::Delete => self.handle_effect_delete(),
+            CardEditAction::Group => self.handle_effect_group(),
+            CardEditAction::Ungroup => self.handle_effect_ungroup(),
+        }
+    }
+
     pub(super) fn card_effect_target(&self) -> EffectTarget {
         let layer = self.ui_root.inspector.inspected_layer_id().cloned()
             .or_else(|| self.active_layer.clone());
@@ -53,6 +58,7 @@ impl AppInputHost<'_> {
             self.ui_root.effect_clipboard.copy_selection(effects, groups, &ids);
             self.ui_root.scene_modifier_clipboard = None;
             self.ui_root.object_modifier_clipboard = None;
+            self.ui_root.scene_item_clipboard = None;
             true
         }).unwrap_or(false)
     }

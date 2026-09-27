@@ -20,9 +20,9 @@
 //! of the layer. Building row/slider/drawer machinery anywhere else is
 //! forbidden (WIDGET_TREE_DESIGN section 5b, Peter's standing rule, INV-8).
 
+use crate::panels::GraphParamTarget;
 use crate::panels::param_card::{ParamCardKind, ParamCardStringInfo, RelightCardConfig, RowMod};
 use crate::panels::param_slider_shared::{AbletonMappingDisplay, AudioRowState, AudioSendChoice};
-use crate::panels::GraphParamTarget;
 use manifold_foundation::{EffectId, LayerId, ParamId};
 
 /// UI-side copy of the persisted material descriptor vocabulary. The UI crate
@@ -37,13 +37,27 @@ pub enum MaterialFeature {
     Sheen,
     Anisotropy,
     Translucency,
+    Subsurface,
 }
+
+/// Optional material features in their stable inspector order. Keep all
+/// feature surfaces on this shared vocabulary so adding a feature cannot
+/// leave one of the add/order paths behind.
+pub const MATERIAL_FEATURES: &[MaterialFeature] = &[
+    MaterialFeature::Coat,
+    MaterialFeature::Iridescence,
+    MaterialFeature::Emission,
+    MaterialFeature::Glass,
+    MaterialFeature::Sheen,
+    MaterialFeature::Anisotropy,
+    MaterialFeature::Translucency,
+    MaterialFeature::Subsurface,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialGroup {
     Surface,
     Opacity,
-    Subsurface,
     Feature(MaterialFeature),
     Advanced,
 }
@@ -460,7 +474,9 @@ impl ParamSurface {
 
     /// ABL badge: any row has an Ableton mapping.
     pub fn has_abl(&self) -> bool {
-        self.rows.iter().any(|r| r.mapping.ableton_display.is_some())
+        self.rows
+            .iter()
+            .any(|r| r.mapping.ableton_display.is_some())
     }
 }
 
@@ -513,7 +529,10 @@ mod stable_key_tests {
     /// not a refactor.
     #[test]
     fn stable_key_is_pinned() {
-        assert_eq!(super::stable_key("intensity"), 9_466_175_151_710_844_563_u64);
+        assert_eq!(
+            super::stable_key("intensity"),
+            9_466_175_151_710_844_563_u64
+        );
         assert_ne!(super::stable_key("intensity"), super::stable_key("speed"));
     }
 }

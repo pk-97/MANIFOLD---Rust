@@ -20,7 +20,10 @@ mod common;
 const HOST: &str = include_str!("fixtures/scene-modifiers/nested_multimaterial_v2.json");
 
 fn host() -> EffectGraphDef {
-    serde_json::from_str(HOST).expect("nested v2 host parses")
+    let mut host = serde_json::from_str(HOST).expect("nested v2 host parses");
+    // Match the project loader before comparing prepared graphs across saves.
+    manifold_core::phong_migration::migrate_phong_to_pbr(&mut host);
+    host
 }
 
 fn apply_loop(project: &mut Project, def: EffectGraphDef) -> (manifold_core::LayerId, usize) {

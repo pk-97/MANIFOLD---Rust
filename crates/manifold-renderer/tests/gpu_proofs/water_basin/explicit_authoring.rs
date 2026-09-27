@@ -130,7 +130,7 @@ fn set(
 
 pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_core::NodeId) {
     let mut project = Project::default();
-    let preset = PresetTypeId::new("SceneStarter");
+    let preset = PresetTypeId::new("Scene");
     let baseline = bundled_preset_def(&preset).unwrap();
     let scene = baseline
         .nodes
@@ -160,7 +160,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         scene,
         0,
         (0.0, 0.0),
-        metadata_for_node_type("node.phong_material"),
+        metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.scene_object"),
         baseline.clone(),

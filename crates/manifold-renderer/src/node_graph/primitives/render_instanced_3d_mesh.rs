@@ -19,10 +19,6 @@ use crate::node_graph::primitive::Primitive;
 
 const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
     ConditionalRequirement {
-        on_material_kind: MaterialKind::Phong,
-        required_inputs: &["light"],
-    },
-    ConditionalRequirement {
         on_material_kind: MaterialKind::Pbr,
         required_inputs: &["light", "envmap"],
     },
@@ -278,14 +274,13 @@ mod tests {
         let prim = RenderInstanced3DMesh::new();
         let node: &dyn EffectNode = &prim;
         let rules = node.conditional_requirements();
-        assert_eq!(rules.len(), 3);
+        assert_eq!(rules.len(), 2);
         let by_kind = |k: MaterialKind| {
             rules
                 .iter()
                 .find(|r| r.on_material_kind == k)
                 .unwrap_or_else(|| panic!("missing rule for {k:?}"))
         };
-        assert_eq!(by_kind(MaterialKind::Phong).required_inputs, &["light"]);
         assert_eq!(
             by_kind(MaterialKind::Pbr).required_inputs,
             &["light", "envmap"]

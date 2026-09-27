@@ -2234,7 +2234,7 @@ mod warmup_tests {
 
     fn apricot_weather_layer(model_path: &str) -> Layer {
         let mut layer = Layer::new("Apricot".to_string(), LayerType::Generator, 0);
-        layer.change_generator_type(PresetTypeId::new("ApricotWeather"));
+        layer.change_generator_type(PresetTypeId::new("BlossomWire"));
         let mut clip = TimelineClip::new_generator(Beats(0.0), Beats(8.0));
         let mut strings = BTreeMap::new();
         strings.insert("modelPath".to_string(), model_path.to_string());
@@ -2533,7 +2533,7 @@ mod warmup_tests {
 
     /// INV2 — a layer whose async warmup work never finishes within the
     /// per-layer wall-clock budget must terminate with `BudgetExhausted` rather
-    /// than blocking open indefinitely. We use the real ApricotWeather scene
+    /// than blocking open indefinitely. We use the real BlossomWire scene
     /// with a 1ns wall-clock budget: the cap trips before the GLB parse can
     /// quiesce, even if a disk cache makes the parse fast on the second run.
     #[test]

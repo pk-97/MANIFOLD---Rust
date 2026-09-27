@@ -95,7 +95,7 @@ fn scene_setup_fog_edit_survives_save_reload_and_scene_vm_re_shows_it() {
     let idx = project.timeline.add_layer(
         "Scene",
         LayerType::Generator,
-        PresetTypeId::from_string("SceneStarter".to_string()),
+        PresetTypeId::from_string("Scene".to_string()),
     );
     {
         let layer = &mut project.timeline.layers[idx];
@@ -201,7 +201,7 @@ fn scene_setup_mesh_source_vertex_count_survives_save_reload_and_header_resums_i
     let idx = project.timeline.add_layer(
         "Scene",
         LayerType::Generator,
-        PresetTypeId::from_string("SceneStarter".to_string()),
+        PresetTypeId::from_string("Scene".to_string()),
     );
     {
         let layer = &mut project.timeline.layers[idx];

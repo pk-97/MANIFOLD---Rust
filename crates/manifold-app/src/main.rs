@@ -43,6 +43,7 @@ mod graph_target;
 mod fluid_domain_edit;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
+mod scene_item_transfer;
 mod object_modifier_transfer;
 mod generator_change;
 mod modifier_preset;

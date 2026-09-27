@@ -1,19 +1,9 @@
 //! Starter looks change existing factors through the material batch command.
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::effects::PresetInstance;
-use manifold_core::material_inspector::MaterialParamRole;
+use manifold_core::material_inspector::{MaterialParamRole, MATERIAL_FEATURE_MODE_PARAMS};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_ui::panels::actions::{MaterialLook, MaterialParamWrite};
-
-const FEATURE_MODE_PARAMS: &[&str] = &[
-    "coat_mode",
-    "iridescence_mode",
-    "emission_mode",
-    "glass_mode",
-    "sheen_mode",
-    "anisotropy_mode",
-    "translucency_mode",
-];
 
 pub(super) fn recipe(look: MaterialLook) -> &'static [(&'static str, f32)] {
     match look {
@@ -99,7 +89,7 @@ pub(super) fn writes(
             .map(|name| (name, 0.0))
             .collect()
     } else {
-        FEATURE_MODE_PARAMS
+        MATERIAL_FEATURE_MODE_PARAMS
             .iter()
             .map(|&name| (name.to_owned(), 1.0))
             .collect()

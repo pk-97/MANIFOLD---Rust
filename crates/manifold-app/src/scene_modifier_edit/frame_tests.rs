@@ -139,7 +139,7 @@ fn add_cube_object(project: &mut Project, layer_id: &LayerId, service: &mut Edit
         index,
         (900.0, 200.0 + 40.0 * index as f32),
         manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
-            "node.phong_material",
+            "node.pbr_material",
         ),
         manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
         manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),

@@ -469,7 +469,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     use manifold_renderer::node_graph::{bundled_preset_def, scene_exposure::metadata_for_node_type};
 
     let mut project = Project::default();
-    let preset = PresetTypeId::new("SceneStarter");
+    let preset = PresetTypeId::new("Scene");
     let baseline = bundled_preset_def(&preset).unwrap();
     let render_id = baseline.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
     let layer = Layer::new_generator("Fluid Authoring".into(), preset, 0);
@@ -673,7 +673,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
     let mut project = Project::default();
-    let preset = PresetTypeId::new("SceneStarter");
+    let preset = PresetTypeId::new("Scene");
     let baseline = bundled_preset_def(&preset).unwrap();
     let render_id = baseline.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
     let layer = Layer::new_generator("Assigned Mesh Fill".into(), preset, 0);

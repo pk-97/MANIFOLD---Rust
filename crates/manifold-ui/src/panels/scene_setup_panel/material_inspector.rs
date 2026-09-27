@@ -3,19 +3,23 @@
 use super::*;
 
 impl ScenePanel {
-    pub(super) fn material_row_feature(&self, row: &ParamRow) -> Option<crate::param_surface::MaterialFeature> {
-        Self::row_feature(row).or_else(|| self.material_object_gain(row)
-            .then_some(crate::param_surface::MaterialFeature::Emission))
+    pub(super) fn material_row_feature(
+        &self,
+        row: &ParamRow,
+    ) -> Option<crate::param_surface::MaterialFeature> {
+        Self::row_feature(row).or_else(|| {
+            self.material_object_gain(row)
+                .then_some(crate::param_surface::MaterialFeature::Emission)
+        })
     }
 
     fn sync_material_feature_order(&mut self) {
-        use crate::param_surface::MaterialFeature;
-        let features = [MaterialFeature::Coat, MaterialFeature::Iridescence, MaterialFeature::Emission,
-            MaterialFeature::Glass, MaterialFeature::Sheen, MaterialFeature::Anisotropy,
-            MaterialFeature::Translucency];
-        let visible = features.map(|feature| self.full_params.as_ref()
-            .is_some_and(|surface| self.material_feature_visible(&surface.rows, feature)));
-        for (feature, visible) in features.into_iter().zip(visible) {
+        let features = crate::param_surface::MATERIAL_FEATURES;
+        for &feature in features {
+            let visible = self
+                .full_params
+                .as_ref()
+                .is_some_and(|surface| self.material_feature_visible(&surface.rows, feature));
             if visible {
                 self.material_visible_features.insert(feature);
                 if !self.material_feature_order.contains(&feature) {
@@ -31,7 +35,9 @@ impl ScenePanel {
         mode_id: &manifold_foundation::ParamId,
         target: GraphParamTarget,
     ) -> Vec<PanelAction> {
-        let Some(info) = self.active_material_info.as_ref() else { return Vec::new() };
+        let Some(info) = self.active_material_info.as_ref() else {
+            return Vec::new();
+        };
         if !self.material_action_context(&info.object, &info.material, false) {
             return Vec::new();
         }
@@ -40,7 +46,10 @@ impl ScenePanel {
             object: info.object.clone(),
             material: info.material.clone(),
             kind: MaterialEditKind::Feature,
-            writes: vec![MaterialParamWrite { param_id: mode_id.clone(), value: 3.0 }],
+            writes: vec![MaterialParamWrite {
+                param_id: mode_id.clone(),
+                value: 3.0,
+            }],
             description: format!("Remove {} feature", Self::material_feature_label(feature)),
         })]
     }
@@ -73,12 +82,12 @@ impl ScenePanel {
                 crate::param_surface::MaterialFeature::Sheen => "Sheen".to_string(),
                 crate::param_surface::MaterialFeature::Anisotropy => "Anisotropy".to_string(),
                 crate::param_surface::MaterialFeature::Translucency => "Translucency".to_string(),
+                crate::param_surface::MaterialFeature::Subsurface => "Subsurface".to_string(),
             },
             MaterialParamRole::Scalar(group) | MaterialParamRole::Colour(group, ..) => {
                 match group {
                     MaterialGroup::Surface => "Surface".to_string(),
                     MaterialGroup::Opacity => "Opacity & Cutout".to_string(),
-                    MaterialGroup::Subsurface => "Subsurface".to_string(),
                     MaterialGroup::Feature(feature) => match feature {
                         crate::param_surface::MaterialFeature::Coat => "Coat".to_string(),
                         crate::param_surface::MaterialFeature::Iridescence => {
@@ -92,6 +101,9 @@ impl ScenePanel {
                         }
                         crate::param_surface::MaterialFeature::Translucency => {
                             "Translucency".to_string()
+                        }
+                        crate::param_surface::MaterialFeature::Subsurface => {
+                            "Subsurface".to_string()
                         }
                     },
                     MaterialGroup::Advanced => "Advanced".to_string(),
@@ -145,15 +157,7 @@ impl ScenePanel {
         let Some(info) = &self.active_material_info else {
             return cy;
         };
-        let features = [
-            crate::param_surface::MaterialFeature::Coat,
-            crate::param_surface::MaterialFeature::Iridescence,
-            crate::param_surface::MaterialFeature::Emission,
-            crate::param_surface::MaterialFeature::Glass,
-            crate::param_surface::MaterialFeature::Sheen,
-            crate::param_surface::MaterialFeature::Anisotropy,
-            crate::param_surface::MaterialFeature::Translucency,
-        ];
+        let features = crate::param_surface::MATERIAL_FEATURES;
         for texture in &info.textures {
             if !texture.connected || Self::material_family_for_port(&texture.port).is_some() {
                 continue;
@@ -232,8 +236,10 @@ impl ScenePanel {
             }
             crate::param_surface::MaterialFeature::Anisotropy => port == "anisotropy_map",
             crate::param_surface::MaterialFeature::Translucency => matches!(
-                port, "diffuse_transmission_map" | "diffuse_transmission_color_map"
+                port,
+                "diffuse_transmission_map" | "diffuse_transmission_color_map"
             ),
+            crate::param_surface::MaterialFeature::Subsurface => false,
         }
     }
 
@@ -364,7 +370,10 @@ impl ScenePanel {
 
     pub(super) fn material_bucket(&self, row: &ParamRow) -> usize {
         if let Some(feature) = self.material_row_feature(row) {
-            return 2 + self.material_feature_order.iter().position(|candidate| *candidate == feature)
+            return 2 + self
+                .material_feature_order
+                .iter()
+                .position(|candidate| *candidate == feature)
                 .unwrap_or(self.material_feature_order.len() + feature as usize);
         }
         match row.spec.material_role {
@@ -372,8 +381,6 @@ impl ScenePanel {
             | Some(MaterialParamRole::Colour(MaterialGroup::Surface, ..)) => 0,
             Some(MaterialParamRole::Scalar(MaterialGroup::Opacity))
             | Some(MaterialParamRole::Colour(MaterialGroup::Opacity, ..)) => 1,
-            Some(MaterialParamRole::Scalar(MaterialGroup::Subsurface))
-            | Some(MaterialParamRole::Colour(MaterialGroup::Subsurface, ..)) => 9,
             Some(MaterialParamRole::FeatureMode(feature))
             | Some(MaterialParamRole::Scalar(MaterialGroup::Feature(feature)))
             | Some(MaterialParamRole::Colour(MaterialGroup::Feature(feature), ..)) => {
@@ -399,8 +406,12 @@ impl ScenePanel {
         rows: &[ParamRow],
         feature: crate::param_surface::MaterialFeature,
     ) -> bool {
-        let mode = rows.iter().find(|row| self.material_param_selected(row)
-            && row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature)))
+        let mode = rows
+            .iter()
+            .find(|row| {
+                self.material_param_selected(row)
+                    && row.spec.material_role == Some(MaterialParamRole::FeatureMode(feature))
+            })
             .map(|row| row.value.base.round() as i32);
         if mode == Some(3) {
             return false;
@@ -485,6 +496,7 @@ impl ScenePanel {
                 inner_name == "anisotropy_strength"
             }
             crate::param_surface::MaterialFeature::Translucency => inner_name == "translucency",
+            crate::param_surface::MaterialFeature::Subsurface => inner_name == "subsurface_weight",
         }
     }
 
@@ -499,6 +511,7 @@ impl ScenePanel {
             crate::param_surface::MaterialFeature::Sheen => "Sheen",
             crate::param_surface::MaterialFeature::Anisotropy => "Anisotropy",
             crate::param_surface::MaterialFeature::Translucency => "Translucency",
+            crate::param_surface::MaterialFeature::Subsurface => "Subsurface",
         }
     }
 
@@ -525,12 +538,16 @@ impl ScenePanel {
             ],
             crate::param_surface::MaterialFeature::Anisotropy => &[("anisotropy_strength", 0.5)],
             crate::param_surface::MaterialFeature::Translucency => &[("translucency", 0.5)],
+            crate::param_surface::MaterialFeature::Subsurface => &[("subsurface_weight", 0.5)],
         };
         let mut writes = vec![MaterialParamWrite {
             param_id: mode_id.clone(),
             value: 2.0,
         }];
-        if rows.iter().any(|row| &row.id == mode_id && row.value.base.round() == 3.0) {
+        if rows
+            .iter()
+            .any(|row| &row.id == mode_id && row.value.base.round() == 3.0)
+        {
             return writes;
         }
         for &(name, value) in seed_names {
@@ -693,8 +710,12 @@ impl ScenePanel {
 
         // Boolean and trigger parameters use the shared button/dispatch path.
         if info.spec.is_toggle || info.spec.is_trigger {
-            info.spec.default = self.properties_card.last_pushed_values.get(slot)
-                .copied().filter(|value| !value.is_nan())
+            info.spec.default = self
+                .properties_card
+                .last_pushed_values
+                .get(slot)
+                .copied()
+                .filter(|value| !value.is_nan())
                 .unwrap_or(self.properties_card.current_values[slot]);
             let row = build_toggle_trigger_row(
                 tree,
@@ -1216,10 +1237,18 @@ impl ScenePanel {
                 (MaterialLook::Glass, "Glass", 3_u64),
             ];
             let gap = ROW_GAP;
-            let min_button_w = looks.iter().map(|(_, label, _)| {
-                tree.text_width(label, btn_style().font_size, crate::node::FontWeight::Regular) + 2.0 * GAP
-            }).fold(0.0_f32, f32::max);
-            let columns = (((inner_w + gap) / (min_button_w + gap)).floor() as usize).clamp(1, looks.len());
+            let min_button_w = looks
+                .iter()
+                .map(|(_, label, _)| {
+                    tree.text_width(
+                        label,
+                        btn_style().font_size,
+                        crate::node::FontWeight::Regular,
+                    ) + 2.0 * GAP
+                })
+                .fold(0.0_f32, f32::max);
+            let columns =
+                (((inner_w + gap) / (min_button_w + gap)).floor() as usize).clamp(1, looks.len());
             let button_w = ((inner_w - gap * (columns - 1) as f32) / columns as f32).max(0.0);
             for (position, (look, label, offset)) in looks.into_iter().enumerate() {
                 let id = tree.add_button_keyed(
@@ -1259,17 +1288,9 @@ impl ScenePanel {
         info: &MaterialInspectorInfo,
     ) -> f32 {
         let feature_rows = self.selected_material_rows();
-        const FEATURES: [crate::param_surface::MaterialFeature; 7] = [
-            crate::param_surface::MaterialFeature::Coat,
-            crate::param_surface::MaterialFeature::Iridescence,
-            crate::param_surface::MaterialFeature::Emission,
-            crate::param_surface::MaterialFeature::Glass,
-            crate::param_surface::MaterialFeature::Sheen,
-            crate::param_surface::MaterialFeature::Anisotropy,
-            crate::param_surface::MaterialFeature::Translucency,
-        ];
+        let features = crate::param_surface::MATERIAL_FEATURES;
         let mut add_features = Vec::new();
-        for feature in FEATURES {
+        for &feature in features {
             if self.material_feature_visible(&feature_rows, feature) {
                 continue;
             }
@@ -1534,7 +1555,9 @@ mod tests {
             ),
             material_test_row(
                 "subsurface_mode",
-                MaterialParamRole::Scalar(MaterialGroup::Subsurface),
+                MaterialParamRole::Scalar(MaterialGroup::Feature(
+                    crate::param_surface::MaterialFeature::Subsurface,
+                )),
                 0.0,
                 0.0,
             ),
@@ -1553,7 +1576,13 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["Surface", "Opacity & Cutout", "Coat", "Subsurface", "Advanced"]
+            vec![
+                "Surface",
+                "Opacity & Cutout",
+                "Coat",
+                "Subsurface",
+                "Advanced"
+            ]
         );
         assert!(names.windows(2).all(|pair| pair[0] != pair[1]));
         assert!(!panel.material_section_folded("Subsurface"));
@@ -1599,8 +1628,11 @@ mod tests {
             [PanelAction::Project(ProjectAction::MaterialParamsSet { kind: MaterialEditKind::Feature, writes, .. })]
                 if writes.len() == 1 && writes[0].param_id.as_ref() == "51_coat_mode" && writes[0].value == 1.0
         ));
-        let actions = panel.material_remove_action(feature, &"51_coat_mode".into(),
-            GraphParamTarget::GeneratorOf(LayerId::new("layer")));
+        let actions = panel.material_remove_action(
+            feature,
+            &"51_coat_mode".into(),
+            GraphParamTarget::GeneratorOf(LayerId::new("layer")),
+        );
         assert!(matches!(actions.as_slice(),
             [PanelAction::Project(ProjectAction::MaterialParamsSet { kind: MaterialEditKind::Feature, object, material, writes, .. })]
                 if object.node.as_str() == "object" && material.node.as_str() == "material"
@@ -1664,20 +1696,39 @@ mod tests {
     #[test]
     fn material_inspector_removed_feature_stays_hidden_and_readds_without_reseeding() {
         let feature = crate::param_surface::MaterialFeature::Coat;
-        let mode = material_test_row("51_coat_mode", MaterialParamRole::FeatureMode(feature), 3.0, 0.0);
-        let factor = material_test_row("51_clearcoat",
-            MaterialParamRole::Scalar(MaterialGroup::Feature(feature)), 0.0, 0.0);
+        let mode = material_test_row(
+            "51_coat_mode",
+            MaterialParamRole::FeatureMode(feature),
+            3.0,
+            0.0,
+        );
+        let factor = material_test_row(
+            "51_clearcoat",
+            MaterialParamRole::Scalar(MaterialGroup::Feature(feature)),
+            0.0,
+            0.0,
+        );
         let mut panel = ScenePanel::new();
         panel.material_visible_features.insert(feature);
         let rows = vec![mode.clone(), factor];
-        assert!(!panel.material_feature_visible(&rows, feature), "Removed overrides retained section presence");
+        assert!(
+            !panel.material_feature_visible(&rows, feature),
+            "Removed overrides retained section presence"
+        );
         let writes = panel.material_feature_writes(&rows, feature, &mode.id);
-        assert_eq!(writes.len(), 1, "re-adding must preserve even a zero-valued factor");
+        assert_eq!(
+            writes.len(),
+            1,
+            "re-adding must preserve even a zero-valued factor"
+        );
         assert_eq!(writes[0].param_id, mode.id);
         assert_eq!(writes[0].value, 2.0);
         let mut restored = rows;
         restored[0].value.base = 2.0;
-        assert!(panel.material_feature_visible(&restored, feature), "Undo removal restores the section");
+        assert!(
+            panel.material_feature_visible(&restored, feature),
+            "Undo removal restores the section"
+        );
     }
 
     #[test]
@@ -1685,8 +1736,18 @@ mod tests {
         use crate::param_surface::MaterialFeature;
         let mut panel = ScenePanel::new();
         panel.material_feature_order = vec![MaterialFeature::Glass, MaterialFeature::Coat];
-        let glass = material_test_row("51_glass_mode", MaterialParamRole::FeatureMode(MaterialFeature::Glass), 2.0, 0.0);
-        let coat = material_test_row("51_coat_mode", MaterialParamRole::FeatureMode(MaterialFeature::Coat), 2.0, 0.0);
+        let glass = material_test_row(
+            "51_glass_mode",
+            MaterialParamRole::FeatureMode(MaterialFeature::Glass),
+            2.0,
+            0.0,
+        );
+        let coat = material_test_row(
+            "51_coat_mode",
+            MaterialParamRole::FeatureMode(MaterialFeature::Coat),
+            2.0,
+            0.0,
+        );
         assert!(panel.material_bucket(&glass) < panel.material_bucket(&coat));
     }
 

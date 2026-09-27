@@ -805,7 +805,7 @@ mod tests {
         let index = project.timeline.add_layer(
             "Scene",
             LayerType::Generator,
-            PresetTypeId::new("SceneStarter"),
+            PresetTypeId::new("Scene"),
         );
         let layer_id = project.timeline.layers[index].layer_id.clone();
         let target = GraphTarget::Generator(layer_id.clone());

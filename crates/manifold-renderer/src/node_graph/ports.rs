@@ -46,7 +46,7 @@ pub enum PortType {
     /// their scattered scalar params). Same lifetime model as `Camera`.
     Light,
     /// CPU-only struct wire carrying a [`Material`](crate::node_graph::material::Material).
-    /// Produced by `node.{unlit,phong,pbr,cel}_material` atoms, consumed by
+    /// Produced by `node.{unlit,pbr,cel}_material` atoms, consumed by
     /// 3D mesh renderers as a single `material: Material` input describing the
     /// shaded surface (kind + base colour + roughness/metallic/etc.).
     /// Same CPU-struct lifetime model as `Camera` / `Light`.

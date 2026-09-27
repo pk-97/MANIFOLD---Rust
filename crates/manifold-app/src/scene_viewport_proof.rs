@@ -496,7 +496,7 @@ fn scene_effect_rebuild_and_inactive_owner(consume_source: bool) {
         .clips
         .push(TimelineClip::new_generator(Beats::ZERO, Beats(4.0)));
     let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
-        include_str!("../../manifold-renderer/assets/generator-presets/SceneStarter.json"),
+        include_str!("../../manifold-renderer/assets/generator-presets/Scene.json"),
     )
     .unwrap();
     def.nodes
@@ -517,7 +517,7 @@ fn scene_effect_rebuild_and_inactive_owner(consume_source: bool) {
                 to_port: "envmap".into(),
             });
     }
-    let mut effect = PresetInstance::new(PresetTypeId::new("SceneStarter"));
+    let mut effect = PresetInstance::new(PresetTypeId::new("Scene"));
     effect.graph = Some(def);
     effect.refresh_manifest_from_graph();
     let effect_id = effect.id.clone();

@@ -284,7 +284,7 @@ impl ShadowRayParams {
 #[derive(Clone, Copy, Debug)]
 pub struct GiMaterial {
     pub albedo: [f32; 3],
-    /// Material kind: unlit 0, Phong 1, PBR 2, cel 3.
+    /// Material kind GPU ABI: unlit 0, reserved 1, PBR 2, cel 3.
     pub kind: f32,
     pub emissive: [f32; 3],
     _pad1: f32,

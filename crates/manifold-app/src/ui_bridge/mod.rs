@@ -34,6 +34,7 @@ pub(crate) use scrub::ScrubState;
 /// same way the Scene Setup panel's other dispatch arms do.
 pub(crate) use project::generator_catalog_default;
 
+use crate::content_command::ContentCommand;
 use manifold_core::LayerId;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
@@ -284,6 +285,23 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
             | RootAction::ClipTriggerDrawerClick(..) => DispatchResult::handled(),
             // Panel already updated its UI-local selection; ride
             // `structural_change: true` back so Properties follows this frame.
+            RootAction::SceneItemRightClicked => DispatchResult::structural(),
+            RootAction::SceneItemMove(delta) => {
+                if let Some(item) = ctx.ui.scene_setup_panel.selected_scene_item() {
+                    ContentCommand::send(ctx.content_tx, ContentCommand::SceneItem(crate::scene_item_transfer::SceneItemAction::Move {
+                        layer: item.layer_id, scene: item.scene, index: item.index, delta: *delta,
+                        kind: if item.is_light { crate::scene_item_transfer::SceneItemKind::Light } else { crate::scene_item_transfer::SceneItemKind::Object },
+                    }));
+                }
+                DispatchResult::structural()
+            }
+            RootAction::SceneItemRename | RootAction::SceneItemFrame => {
+                let action = if matches!(a, RootAction::SceneItemRename) {
+                    ctx.ui.scene_setup_panel.rename_selection_action()
+                } else { ctx.ui.scene_setup_panel.frame_selection_action() };
+                if let Some(action) = action { ctx.ui.pending_keyboard_actions.push(action); }
+                DispatchResult::structural()
+            }
             RootAction::SceneSetupSelectionChanged(_) => DispatchResult::structural(),
             // Audio/Scene Setup dock toggles (headless-harness path; the live
             // app toggles in app_render). Structural: geometry changes.

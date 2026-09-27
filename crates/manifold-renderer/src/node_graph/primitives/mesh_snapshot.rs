@@ -244,7 +244,7 @@ use crate::node_graph::parameters::ParamDef;
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::Source;
 use crate::node_graph::primitives::scene_object::SceneObjectNode;
-use super::{PhongMaterial, RenderScene, Transform3D, UnlitMaterial};
+use super::{CelMaterial, PbrMaterial, RenderScene, Transform3D, UnlitMaterial};
 
 /// `Graph::connect` needs a `&'static str` port name; these helpers only
 /// ever address the first handful of scene objects, so a small literal
@@ -475,10 +475,12 @@ fn render_mesh_scene(
     g.set_param(cam, "distance", ParamValue::Float(distance)).unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
     let render = g.add_node(Box::new(Render3DMesh::new()));
+    let env = g.add_node(Box::new(BakeEquirectEnvmap::new()));
     let sink = g.add_node(Box::new(FinalOutput::new()));
 
     g.connect((mesh, "out"), (render, "vertices")).unwrap();
     g.connect((cam, "out"), (render, "camera")).unwrap();
+    g.connect((env, "envmap"), (render, "envmap")).unwrap();
     g.connect((render, "color"), (sink, "in")).unwrap();
 
     let (_material, bcmap) = build(&mut g, render);
@@ -674,7 +676,7 @@ fn back_face_lit_by_two_sided_normal_faces_viewer() {
     let orbit = -std::f32::consts::FRAC_PI_2;
 
     let out = render_mesh_scene(w, h, &back_facing_tri(), orbit, 3.0, |g, render| {
-        let mat = g.add_node(Box::new(PhongMaterial::new()));
+        let mat = g.add_node(Box::new(PbrMaterial::new()));
         g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
         g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
         g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
@@ -832,12 +834,12 @@ fn render_scene_shared_depth_resolves_occlusion_between_objects() {
     );
 }
 
-/// One Phong-lit quad (facing the camera, normal aligned with the
+/// One cel-lit quad (facing the camera, normal aligned with the
 /// light so `N·L == 1` at every covered fragment) rendered through
 /// `node.render_scene` with `objects = 1` and either 1 or 2 IDENTICAL
 /// lights wired to `light_0` (/ `light_1`). Ambient = 0 so the readback
 /// is pure per-light diffuse accumulation.
-fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]> {
+fn render_scene_cel_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]> {
     let device = crate::test_device();
     let format = GpuTextureFormat::Rgba16Float;
 
@@ -850,17 +852,13 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
     g.set_param(cam, "distance", ParamValue::Float(4.0)).unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(1.0)).unwrap();
 
-    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    let mat = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
     g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
     g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
-    g.set_param(mat, "ambient", ParamValue::Float(0.0)).unwrap();
-    // Zero specular tint so the readback isolates the diffuse term the
-    // gate cares about (specular would also double correctly with
-    // identical lights, but a flat diffuse-only comparison is cleaner).
-    g.set_param(mat, "specular_color_r", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat, "specular_color_g", ParamValue::Float(0.0)).unwrap();
-    g.set_param(mat, "specular_color_b", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat, "cel_bands", ParamValue::Float(4.0)).unwrap();
+    g.set_param(mat, "band_low", ParamValue::Float(0.0)).unwrap();
+    g.set_param(mat, "band_high", ParamValue::Float(1.0)).unwrap();
 
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(1.0)).unwrap();
@@ -944,8 +942,8 @@ fn render_scene_phong_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4
 #[test]
 fn render_scene_multi_light_accumulates_diffuse_linearly() {
     let (w, h) = (64u32, 64u32);
-    let one = render_scene_phong_quad_frame(w, h, 1);
-    let two = render_scene_phong_quad_frame(w, h, 2);
+    let one = render_scene_cel_quad_frame(w, h, 1);
+    let two = render_scene_cel_quad_frame(w, h, 2);
 
     let center_idx = (h / 2 * w + w / 2) as usize;
     let p1 = one[center_idx];
@@ -964,7 +962,7 @@ fn render_scene_multi_light_accumulates_diffuse_linearly() {
     }
 }
 
-/// Two cubes, offset in X and one slightly nearer the camera, phong-lit
+/// Two cubes, offset in X and one slightly nearer the camera, cel-lit
 /// by one sun light, through `node.render_scene`. Reinhard-tonemapped
 /// Rgba8 PNG bytes — visual gate for the orchestrator to eyeball.
 fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
@@ -984,17 +982,17 @@ fn render_scene_two_cubes_png(w: u32, h: u32) -> Vec<u8> {
     g.set_param(cam, "distance", ParamValue::Float(9.0)).unwrap();
     g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
 
-    let mat0 = g.add_node(Box::new(PhongMaterial::new()));
+    let mat0 = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat0, "color_r", ParamValue::Float(0.85)).unwrap();
     g.set_param(mat0, "color_g", ParamValue::Float(0.3)).unwrap();
     g.set_param(mat0, "color_b", ParamValue::Float(0.3)).unwrap();
-    g.set_param(mat0, "ambient", ParamValue::Float(0.2)).unwrap();
+    g.set_param(mat0, "band_low", ParamValue::Float(0.08)).unwrap();
 
-    let mat1 = g.add_node(Box::new(PhongMaterial::new()));
+    let mat1 = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat1, "color_r", ParamValue::Float(0.3)).unwrap();
     g.set_param(mat1, "color_g", ParamValue::Float(0.55)).unwrap();
     g.set_param(mat1, "color_b", ParamValue::Float(0.85)).unwrap();
-    g.set_param(mat1, "ambient", ParamValue::Float(0.2)).unwrap();
+    g.set_param(mat1, "band_low", ParamValue::Float(0.08)).unwrap();
 
     let render = g.add_node(Box::new(RenderScene::new()));
     g.set_param(render, "objects", ParamValue::Float(2.0)).unwrap();
@@ -1117,7 +1115,7 @@ fn scene_two_cubes_renders_to_png() {
 /// with an 8×8 checkerboard-alpha `base_color_map_0` wired via a `Source`
 /// placeholder node, pre-bound the same way `render_mesh_scene`'s optional
 /// `bcmap` wiring works for `node.render_mesh`. Mirrors
-/// `render_scene_phong_quad_frame`'s camera/mesh setup, minus lights.
+/// `render_scene_cel_quad_frame`'s camera/mesh setup, minus lights.
 fn render_scene_bcmap_quad_frame(w: u32, h: u32, mask: bool, checker: &[[f32; 4]], cw: u32, ch: u32) -> Vec<[f32; 4]> {
     let device = crate::test_device();
     let format = GpuTextureFormat::Rgba16Float;
@@ -1440,7 +1438,7 @@ fn walk_gltf_node(
 
 /// Load the azalea `.glb` fixture, flatten it to one combined world-space
 /// `Array<MeshVertex>` buffer, and render it lit through `node.render_scene`
-/// with a `PhongMaterial` + a default Sun light + a bbox-framed orbit
+/// with a `CelMaterial` + a default Sun light + a bbox-framed orbit
 /// camera. Ignored by default: needs a GPU, a large fixture, and writes a
 /// file. Point `MESH_SNAP_OUT` at an absolute path to control the output
 /// location; defaults to `target/mesh-snap/azalea_render_scene.png`.
@@ -1531,11 +1529,11 @@ fn azalea_glb_renders_lit_through_render_scene() {
     g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
     g.set_param(cam, "look_y", ParamValue::Float(0.0)).unwrap();
 
-    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    let mat = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat, "color_r", ParamValue::Float(0.45)).unwrap();
     g.set_param(mat, "color_g", ParamValue::Float(0.55)).unwrap();
     g.set_param(mat, "color_b", ParamValue::Float(0.35)).unwrap();
-    g.set_param(mat, "ambient", ParamValue::Float(0.35)).unwrap();
+    g.set_param(mat, "band_low", ParamValue::Float(0.35)).unwrap();
 
     // Key light front-lighting the CAMERA-FACING side. The M6-D4 flip is
     // view-based (`if dot(N, V) < 0.0 { N = -N; }`): a convex mesh's
@@ -1650,7 +1648,7 @@ fn azalea_glb_renders_lit_through_render_scene() {
 
 /// Render the azalea fixture through the real `node.gltf_mesh_source`
 /// primitive (whole-scene mode) into `node.render_scene`, lit with the
-/// same `PhongMaterial` + Sun-light + orbit-camera setup as
+/// same `CelMaterial` + Sun-light + orbit-camera setup as
 /// `azalea_glb_renders_lit_through_render_scene`. Ignored by default:
 /// needs a GPU, a large fixture, and writes a file. Point `MESH_SNAP_OUT`
 /// at an absolute path to control the output location.
@@ -1739,11 +1737,11 @@ fn gltf_mesh_source_renders_azalea_to_png() {
     g.set_param(cam, "fov_y", ParamValue::Float(0.9)).unwrap();
     g.set_param(cam, "look_y", ParamValue::Float(0.0)).unwrap();
 
-    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    let mat = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat, "color_r", ParamValue::Float(0.45)).unwrap();
     g.set_param(mat, "color_g", ParamValue::Float(0.55)).unwrap();
     g.set_param(mat, "color_b", ParamValue::Float(0.35)).unwrap();
-    g.set_param(mat, "ambient", ParamValue::Float(0.35)).unwrap();
+    g.set_param(mat, "band_low", ParamValue::Float(0.35)).unwrap();
 
     let light = g.add_node(Box::new(LightNode::new()));
     g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun
@@ -1968,11 +1966,11 @@ fn gltf_textured_azalea_renders_through_render_scene_to_png() {
 
     // WHITE base color so albedo == the sampled texture (base_color × map),
     // making the raw texture unmistakable rather than a green-tinted blend.
-    let mat = g.add_node(Box::new(PhongMaterial::new()));
+    let mat = g.add_node(Box::new(CelMaterial::new()));
     g.set_param(mat, "color_r", ParamValue::Float(1.0)).unwrap();
     g.set_param(mat, "color_g", ParamValue::Float(1.0)).unwrap();
     g.set_param(mat, "color_b", ParamValue::Float(1.0)).unwrap();
-    g.set_param(mat, "ambient", ParamValue::Float(0.35)).unwrap();
+    g.set_param(mat, "band_low", ParamValue::Float(0.35)).unwrap();
 
     let light = g.add_node(Box::new(LightNode::new()));
     g.set_param(light, "mode", ParamValue::Enum(0)).unwrap(); // Sun

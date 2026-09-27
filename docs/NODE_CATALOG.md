@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 303 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 302 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -253,7 +253,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Voxelize | `node.voxelize_mesh` | Filter | Snaps every vertex to a regular voxel grid, pixel-crushing a smooth mesh into chunky blocks. |
 | Wave Shear Mesh | `node.wave_shear_mesh` | Filter | Shears a textured mesh with a travelling wave while transporting normals and tangents analytically. |
 
-### Materials & Lighting (11)
+### Materials & Lighting (10)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -263,7 +263,6 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | Light | `node.light` | Source | A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer. |
 | Matcap Two-Tone | `node.matcap_two_tone` | Filter | Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights. |
 | PBR Material | `node.pbr_material` | Source | A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces. |
-| Phong Material | `node.phong_material` | Source | A basic shiny material with soft diffuse shading and a sharp highlight. The cheap go-to for lit 3D surfaces. |
 | Rim Light (Fresnel) | `node.rim_light` | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
 | Shininess (Blinn) | `node.shininess` | Filter | Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting. |
 | Surface Bumps | `node.surface_bumps` | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
@@ -433,11 +432,10 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (87)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
-| `ApricotWeather` | Apricot Weather | generator | Geometry | 180 |
 | `AutoGain` | Auto Gain | effect | Color | 4 |
 | `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
 | `BlackHole` | Black Hole | generator | Sim | 18 |
@@ -465,7 +463,6 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `FilmGrain` | Film Grain | effect | Filmic | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
-| `FogBlast` | Fog Blast | generator | Geometry | 92 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
@@ -489,8 +486,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 362 |
-| `LightOrbit` | Light Orbit | generator | Geometry | 81 |
+| `Lantern` | Lantern | generator | Geometry | 363 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -501,7 +497,7 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 347 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 348 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
@@ -509,13 +505,11 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1297 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1946 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1301 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1952 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SceneStarter` | Scene Starter | generator | Geometry | 141 |
-| `SceneStrobe` | Scene Strobe | generator | Geometry | 81 |
-| `Skin` | Skin | generator | Geometry | 64 |
+| `Scene` | Scene | generator | Geometry | 357 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
@@ -524,13 +518,9 @@ _Generated from the node registry. Do not hand-edit. 303 nodes registered, group
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 4 |
 | `Tesseract` | Tesseract | generator | Geometry | 12 |
 | `Text` | Text | generator | Text & Media | 9 |
-| `TimeScrub` | Time Scrub | generator | Geometry | 81 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
-| `WaveGrid` | Wave Grid | generator | Geometry | 76 |
-| `WaveRing` | Wave Ring | generator | Geometry | 76 |
-| `WaveSpiral` | Wave Spiral | generator | Geometry | 76 |
 | `Wireframe` | Wireframe | generator | Geometry | 12 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
 
@@ -741,7 +731,6 @@ One `Material` per node, wired into `render_3d_mesh` / `render_instanced_3d_mesh
 | Display Name | Type ID | Purpose |
 |---|---|---|
 | Unlit Material | `node.unlit_material` | Flat-colour material — no lighting / shadow term; renderer writes base + emission directly. No `light` input required |
-| Phong Material | `node.phong_material` | Lambert diffuse + Blinn-Phong specular + ambient floor — cheap lit baseline (requires a `light`) |
 | Cel Material | `node.cel_material` | Cel-shaded — Lambert N·L quantized into `cel_bands` discrete bands (the DigitalPlants look; requires a `light`) |
 
 *Photoreal PBR (Cook-Torrance + IBL) lives inside `node.render_3d_mesh`'s `node.pbr_material`, not as standalone wireable atoms — the standalone `cook_torrance_specular` / `equirect_envmap_sample` were removed 2026-05-30 (zero references; below the level any tool exposes, cf. Blender's Principled BSDF). The à-la-carte shading atoms above stay for stylized / NPR looks (no canonical answer to compose).*
@@ -924,7 +913,6 @@ All shipping generators are JSON-defined sub-graphs at [`assets/generator-preset
 
 | Preset | Topology shape |
 |---|---|
-| ApricotWeather | Scene 1 — imported glTF scan composited via `render_scene`, one object per glTF material (mirrors `node_graph::gltf_import`'s per-material-object shape, not a merged mesh): 3× (`gltf_mesh_source(material_index=k)` → `bend_mesh(sway, base-anchored)` → `phong_material` + `gltf_texture_source` as base color), one shared `transform_3d` offset (combined bbox center) so the 3 materials stay coherent, `grid_mesh`→`make_triangles` ground plane, `node.atmosphere` fog, one shadow-casting `node.light` orbited by `value`→`math(Cos/Sin)`→`scale_offset_value` off a `sunAngle` hub, `orbit_camera`. A 4th glTF material (24-vertex reference cube) is excluded from the graph entirely — curation, not a bug. |
 | BasicShapes | trigger-cycled SDF shapes, atomized: `clip_trigger_index` (variant cycle, modulus mux'd 3/6/3 on fill) + `math(Modulo/Divide/Floor)` derive `shape_idx`/`rot_step`/`is_wireframe`; 8-row `mux_scalar` table → signed rotation snap; `trigger_ease_to(window_beats=0.25)` glides between snaps over a quarter beat; three `basic_shape` instances (Square / Diamond / Octagon) → `mux_texture` selected by shape_idx. Shape selection is graph-visible; rotation-easing atom is generic (any snap-on-trigger glide). |
 | BlackHole | Kerr black hole with relativistic geodesic lensing: 4× `wgsl_compute` (deflection bake → 3 tex out; Schwarzschild orbit integrator with aliased `Array<Particle>`; polar+hemisphere particle splat with dual atomic accums; cinematic compositor reading deflection + polar density + sky) + `seed_particles` (active_count=0 → simulate self-seeds) + `resolve_accumulator` ×2 + `gaussian_blur` ×10 (deflection H/V ×3 + polar density H/V ×2) + `affine_scalar` ×2 (deg→rad) + `math` (Reciprocal for scale→uv_scale). First consumer of the naga-introspected dynamic escape hatch. |
 | ComputeStrangeAttractor | particle sim, atomized onto `wgsl_compute`: `seed_particles(OnceOnReset) → wgsl_compute(attractor_simulate — switch on attractor_type for Lorenz/Rössler/Aizawa/Thomas/Halvorsen, RK2 substeps + first-frame init/warmup + NaN guard, integrate + project bundled in one dispatch) → array_diffuse_particles → scatter_particles(Discard) → resolve_accumulator → reinhard_tone_map`. Adding a new attractor is a JSON edit (append a `case` to the switch + entries to the per-attractor center/scale/dt tables). clip_trigger via `clip_trigger_cycle` + `mux_scalar` (manual vs trigger-driven). Brightness compensated by canvas_area_scale. |

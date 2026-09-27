@@ -7,6 +7,17 @@
 
 ---
 
+## 2026-09-27 retirement amendment
+
+Status: SHIPPED · BUG-oxxi. This amendment supersedes historical Phong
+runtime references below. Supported runtime kinds are Unlit, PBR and Cel;
+scene authoring defaults to PBR, with Baked Look for flat imagery. Numeric GPU
+kind tags remain stable. Phong nodes are converted once at load time by
+`manifold_core::phong_migration`; there is no Phong registry entry, shader path
+or material inspector. The screen-space `node.shininess` primitive is separate
+and retained. See [Material inspector](MATERIAL_INSPECTOR_DESIGN.md) for conversion
+and feature-state semantics.
+
 ## 1. Goal
 
 Introduce a `Material` port type and a v1 set of material atoms that 3D mesh renderers consume to drive surface shading. Aligns MANIFOLD's 3D-rendering shape with TouchDesigner / Blender / Unreal / Unity: bundled renderer + first-class Light + first-class Material. The current pattern of "compose shading via atoms downstream of a G-buffer" (MetallicGlass's cook_torrance + envmap chain) collapses into a single Material wire.

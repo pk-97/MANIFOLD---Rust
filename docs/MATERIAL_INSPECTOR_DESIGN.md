@@ -11,6 +11,24 @@ Peter described the problem as “a huge wall of sliders” where users cannot t
 
 Companions: [MATERIAL_SYSTEM_DESIGN.md](MATERIAL_SYSTEM_DESIGN.md) owns material wires and runtime kinds; [GLTF_MATERIAL_EXTENSIONS_DESIGN.md](GLTF_MATERIAL_EXTENSIONS_DESIGN.md) records the extension implementation; [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) owns parameter projection, shared widgets and routing. Source code takes precedence over historical shader claims in those records.
 
+## 2026-09-27 material convergence amendment
+
+Status: SHIPPED · BUG-oxxi. New primitives, layer planes, the minimal Scene
+preset and GLB imports use PBR material authoring. Layer planes use Baked Look
+for flat source imagery. Subsurface is an optional feature alongside coat,
+sheen and transmission: Add reveals it, Enable controls contribution, Remove
+hides it while retaining authored settings. `subsurface_feature_mode` stores
+FollowValues/Off/On/Removed independently of the Diffusion/RandomWalk
+`subsurface_mode` estimator. Existing nonzero scattering values remain active.
+
+Phong is retired from the primitive registry and rendering. Load-time graph
+conversion preserves colour, emission, alpha, maps and control identities;
+shininess converts to roughness with `sqrt(2 / (max(power, 1) + 2))`. Animated or wired
+shininess uses ordinary math nodes so modulation remains live. Appearance is
+an approximation. Converted saves contain PBR. This is a migration, not a
+second supported material workflow. The independent screen-space shininess
+primitive remains useful to OilyFluid and relighting.
+
 ## 1. Audit — what exists
 
 Verified by source inspection on 2026-09-22 at `bb2376a3b8aa77703190343610a1578e2bba4e35`. This is a dated snapshot, not a rendered-behaviour certification. No app build, runtime reproduction or visual verification was performed for this design. Extend these seams; do not redesign them.

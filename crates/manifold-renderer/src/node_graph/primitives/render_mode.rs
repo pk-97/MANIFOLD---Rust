@@ -28,7 +28,7 @@ use crate::node_graph::render_mode::{RENDER_MODE_LABELS, RenderMode};
 crate::primitive! {
     name: RenderModeNode,
     type_id: "node.render_mode",
-    purpose: "Scene-wide viewport shading-mode producer: Blender-style Rendered/Solid/Wireframe/Points as a performable scene modifier, emitted as a single RenderMode struct consumed by render_scene's optional `render_mode` input (SCENE_RENDER_MODE_DESIGN.md). Wireframe draws the color pass as triangle lines with an unlit line_color × line_brightness material; Solid substitutes a flat clay Phong material; Points draws the mesh as points. Every param is port-shadowed by a same-named optional scalar input, so the mode row on a MIDI pad or line brightness on the kick is a live look switch. Unwired into render_scene = Rendered = byte-identical to no render_mode.",
+    purpose: "Scene-wide viewport shading-mode producer: Blender-style Rendered/Solid/Wireframe/Points as a performable scene modifier, emitted as a single RenderMode struct consumed by render_scene's optional `render_mode` input (SCENE_RENDER_MODE_DESIGN.md). Wireframe draws the color pass as triangle lines with an unlit line_color × line_brightness material; Solid substitutes a flat clay PBR material; Points draws the mesh as points. Every param is port-shadowed by a same-named optional scalar input, so the mode row on a MIDI pad or line brightness on the kick is a live look switch. Unwired into render_scene = Rendered = byte-identical to no render_mode.",
     inputs: {
         mode: ScalarF32 optional,
         clay_color_r: ScalarF32 optional,

@@ -634,8 +634,9 @@ const CORNER_WORLD: [f32; 3] = [0.0, 0.0, -1.7];
 const OPEN_WORLD: [f32; 3] = [0.0, 0.0, 3.0];
 
 /// I-ED1 fixture (RAYTRACING_DESIGN.md section 14.3): a flat open plane,
-/// PHONG material (no `envmap` requirement — PBR would force the magenta
-/// unwired-env fallback), zero lights, zero emission, RT on, NO env wired.
+/// PBR material with an explicitly black environment, zero lights, zero
+/// emission, and RT on. The explicit environment keeps this fixture on the
+/// current PBR path while isolating the ambient recompose.
 /// The GI gather's env-miss reads the black dummy, so `gi` is exactly 0 at
 /// every depth and the irradiance texture is `(0,0,0, ao)`. The recomposed
 /// flat ambient (ED2) is the ONLY term lighting the surface:
@@ -663,11 +664,17 @@ fn ambient_only_scene_json(ambient: f32) -> String {
             "tilt":{{"type":"Float","value":{TILT}}},
             "distance":{{"type":"Float","value":{DISTANCE}}},
             "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{{
+        {{"id":8,"typeId":"node.bake_environment","nodeId":"env","params":{{
+            "width":{{"type":"Int","value":16}},
+            "height":{{"type":"Int","value":8}},
+            "intensity":{{"type":"Float","value":0.0}}}}}},
+        {{"id":4,"typeId":"node.pbr_material","nodeId":"ground_mat","params":{{
             "color_r":{{"type":"Float","value":0.8}},
             "color_g":{{"type":"Float","value":0.8}},
             "color_b":{{"type":"Float","value":0.8}},
-            "ambient":{{"type":"Float","value":{ambient}}}}}}},
+            "ambient":{{"type":"Float","value":{ambient}}},
+            "metallic":{{"type":"Float","value":0.0}},
+            "roughness":{{"type":"Float","value":1.0}}}}}},
         {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
             "objects":{{"type":"Int","value":1}},
             "lights":{{"type":"Int","value":0}},
@@ -679,12 +686,13 @@ fn ambient_only_scene_json(ambient: f32) -> String {
         {{"fromNode":2,"fromPort":"out","toNode":20,"toPort":"mesh_0"}},
         {{"fromNode":3,"fromPort":"out","toNode":20,"toPort":"camera"}},
         {{"fromNode":4,"fromPort":"out","toNode":20,"toPort":"material_0"}},
+        {{"fromNode":8,"fromPort":"envmap","toNode":20,"toPort":"envmap"}},
         {{"fromNode":20,"fromPort":"color","toNode":99,"toPort":"in"}}
         ]}}"#
     )
 }
 
-/// I-ED1 (RAYTRACING_DESIGN.md section 14.3): no-env RT scenes keep today's
+/// I-ED1 (RAYTRACING_DESIGN.md section 14.3): current PBR RT scenes keep today's
 /// ambient/AO values. Sweep the Ambient knob 0.25 / 0.5 / 1.0; each probe
 /// must equal `albedo * ambient * AMBIENT_IRRADIANCE_SCALE` (ao ~ 1 open
 /// sky) within the same ~0.002 band rt_t38 measures, and the pairwise
@@ -945,4 +953,3 @@ fn write_png(bytes: &[u8], w: u32, h: u32, path: &str) {
     image::save_buffer(path, &out, w, h, image::ExtendedColorType::Rgba8)
         .unwrap_or_else(|e| panic!("write {path}: {e}"));
 }
-

@@ -2912,7 +2912,7 @@ impl Application {
                             *render_scene_node_id,
                             *next_index,
                             *centroid,
-                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.phong_material"),
+                            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
                             manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
                             manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
                             default.clone(),

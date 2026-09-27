@@ -1292,7 +1292,7 @@ pub struct RenderScene {
     rt_moments_valid: bool,
     rt_history_ping: usize,
     /// ED2 (section 14, PBR-only RT consumers): one-shot latch for the
-    /// "phong/cel draw in an RT scene" warning — logged once, never
+    /// "cel draw in an RT scene" warning — logged once, never
     /// per-frame.
     rt_nonpbr_warned: bool,
     /// RT-T1-C: current-frame half-res/full-res primary-hit vertex normal
@@ -1789,18 +1789,18 @@ fn wireframe_material(render_mode: &crate::node_graph::render_mode::RenderMode) 
     )
 }
 
-/// D7: solid shading = a synthesized Phong material carrying the wire's flat
-/// `clay_color` and neutral specular, so the scene's own lights still shade
-/// every object. Rides the existing `fs_phong` pipeline (via `pipeline_for`)
+/// D7: solid shading = a synthesized PBR material carrying the wire's flat
+/// `clay_color`, zero metallic, and a matte roughness, so the scene's own
+/// lights still shade every object. Rides the existing `fs_pbr` pipeline.
 /// — no shader change, no new pipeline. The substitution happens at
 /// material-gather time, upstream of `pipeline_for`, so pipeline caching is
 /// untouched.
 fn clay_material(render_mode: &crate::node_graph::render_mode::RenderMode) -> Material {
-    Material::phong(
+    Material::pbr(
         render_mode.clay_color,
         0.0,
-        [1.0, 1.0, 1.0],
-        32.0,
+        0.0,
+        0.7,
         [0.0; 3],
         0.0,
     )
@@ -2063,7 +2063,7 @@ impl RenderScene {
             // substitutes the object's material at the gather site —
             // wireframe and points get the unlit line surface (D2: the
             // wire's line_color/line_brightness serve Points too), solid
-            // the clay Phong, Rendered passes the object's own material
+            // the clay PBR material, Rendered passes the object's own material
             // through untouched. Upstream of `pipeline_for`, so the
             // ordinary per-kind pipeline cache picks the substitute's
             // shader and no shader changes.
@@ -2728,7 +2728,7 @@ impl RenderScene {
         let has_casters = !casters.is_empty();
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
         // RAYTRACING_DESIGN.md section 14 ED2 (PBR-only consumers, Peter
-        // 2026-07-31): phong/cel draws in an RT scene get the flat ambient
+        // 2026-07-31): cel draws in an RT scene get the flat ambient
         // recompose and NO traced env/GI — degrade loud, not silent. Once
         // per scene instance: per-frame spam breaks the hot path, and a
         // silent hole reads as "RT looks wrong".
@@ -2736,12 +2736,12 @@ impl RenderScene {
             && !self.rt_nonpbr_warned
             && opaque_draws
                 .iter()
-                .any(|d| matches!(d.kind, MaterialKind::Phong | MaterialKind::Cel))
+                .any(|d| matches!(d.kind, MaterialKind::Cel))
         {
             self.rt_nonpbr_warned = true;
             log::warn!(
                 "render_scene: RT lighting reaches PBR materials only — this scene has \
-                 phong/cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
+                 cel objects, which get flat ambient only (RAYTRACING_DESIGN.md section 14 ED2)"
             );
         }
         // RAYTRACING_DESIGN.md RT-D3: shadow maps STOP RENDERING when
@@ -3007,8 +3007,11 @@ impl RenderScene {
                         // the raster forward term reads.
                         d.uniforms.diffuse_transmission_params,
                     ).with_surface(
-                        match d.kind { MaterialKind::Unlit => 0.0, MaterialKind::Phong => 1.0,
-                            MaterialKind::Pbr => 2.0, MaterialKind::Cel => 3.0 },
+                        match d.kind {
+                            MaterialKind::Unlit => 0.0,
+                            MaterialKind::Pbr => 2.0,
+                            MaterialKind::Cel => 3.0,
+                        },
                         {
                             let mr = d.uniforms.pbr_metallic_roughness;
                             let dielectric = ((mr[2] - 1.0) / (mr[2] + 1.0)).powi(2);
@@ -8229,7 +8232,6 @@ impl RenderScene {
         }
         let fs_entry = match kind {
             MaterialKind::Unlit => "fs_unlit",
-            MaterialKind::Phong => "fs_phong",
             MaterialKind::Pbr => "fs_pbr",
             MaterialKind::Cel => "fs_cel",
         };
@@ -8290,13 +8292,11 @@ impl RenderScene {
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
         for kind in [
             MaterialKind::Unlit,
-            MaterialKind::Phong,
             MaterialKind::Pbr,
             MaterialKind::Cel,
         ] {
             let fs_entry = match kind {
                 MaterialKind::Unlit => "fs_unlit",
-                MaterialKind::Phong => "fs_phong",
                 MaterialKind::Pbr => "fs_pbr",
                 MaterialKind::Cel => "fs_cel",
             };
@@ -8468,7 +8468,7 @@ impl RenderScene {
     pub fn description() -> PrimitiveDescription {
         PrimitiveDescription {
             type_id: RENDER_SCENE_TYPE_ID,
-            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) plus scene_object's optional instance_count scalar — wired, the live count is clamped to the backing buffer capacity for main, shadow, and RT draws; unwired preserves capacity-based behavior. Each instance's world transform is composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps (IMPORT_FIDELITY_DESIGN.md D3): normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the Phong/PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog (P3) and split-sum IBL (F-P1) apply scene-wide.",
+            purpose: "Multi-object 3D scene renderer: draws `objects` separate Array<MeshVertex> meshes (one draw call each, no fixed cap on object count) into ONE shared depth buffer, so nearer objects correctly occlude farther ones — the gap node.render_mesh / node.render_copies can't close (each of those renders into its own private depth buffer). Each object carries its own material_n: Material, an optional base_color_map_n: Texture2D albedo/alpha map, an optional transform_n: Transform (from node.transform_3d; unwired = identity) composed CPU-side into a model matrix, and an optional instances_n: Array(InstanceTransform) plus scene_object's optional instance_count scalar — wired, the live count is clamped to the backing buffer capacity for main, shadow, and RT draws; unwired preserves capacity-based behavior. Each instance's world transform is composed as model_n · T_instance (instance TRS first, the object group's transform_n second, so scattered instances stay glued to their group under a group move); unwired draws once with an identity instance. Instances share the shared depth buffer too, so they correctly occlude and are occluded by every other object in the scene — the gap node.render_copies' private-depth-buffer instancing can't close. When base_color_map_n is wired, the sampled texel modulates material_n's base_color (rgb × rgb) and its alpha drives that material's alpha-cutout discard when alpha_mode is Mask — same resolve_albedo path as node.render_mesh. Each object also carries four optional maps (IMPORT_FIDELITY_DESIGN.md D3): normal_map_n (tangent-space, glTF convention, reconstructed into world space via a screen-space cotangent frame — no vertex tangents needed), mr_map_n (glTF metallic-roughness packing: G=roughness, B=metallic), occlusion_map_n (R channel, darkens ONLY the PBR diffuse IBL term, never direct lighting or specular IBL), and emissive_map_n (sRGB, multiplied by the material's emission factor, added after lighting in every material kind including Unlit). All four are unwired-safe (dummy-bound, byte-identical output). `lights` shared Light inputs light_0..light_{lights-1} (no fixed cap — lights ride a runtime-sized storage buffer) accumulate in the PBR/Cel shading — each light's direct term is summed, ambient + emission are added once. ONE shared envmap input lights every PBR object in the scene (an environment map is scene-wide, not per-object). Shadows: the first 4 lights (in slot order) whose cast_shadows is set drop real shadow maps onto the scene (PCF-softened per the light's shadow_softness); lights past that cap still illuminate but cast no shadow. Atmosphere/fog (P3) and split-sum IBL (F-P1) apply scene-wide.",
             composition_notes: "objects and lights are reconfigure params: changing either rebuilds the port list (mesh_n/material_n/base_color_map_n/normal_map_n/mr_map_n/occlusion_map_n/emissive_map_n/transform_n/instances_n object ports, light_0..N); the render node itself carries only `objects`/`lights` as params now, same dynamic-port pattern as node.switch_texture's num_inputs. Wire a node.transform_3d into transform_n to place/animate that object — each of its nine scalar ports (pos/rot/scale) is independently port-shadowed, so an LFO into rot_y spins it live; leaving transform_n unwired renders the object at the origin, unrotated, unit scale. base_color_map_n and the four D3 maps are all optional — leaving any unwired renders that object exactly as before that port existed. Wire scene_object's optional `instance_count` scalar to bound active copies; values are floored, clamped to capacity, and invalid/non-positive values draw zero. instances_n is optional — wire node.scatter_on_mesh (or any Array(InstanceTransform) producer) to draw that many copies; density control lives on the producer (e.g. scatter_on_mesh's port-shadowed count), not on render_scene. A missing mesh_n or material_n, or a PBR material_n with envmap left unwired, is a structured error (ctx.error + magenta clear on `color`), matching render_mesh's no-silent-fallbacks contract. Object 0 clears the shared color+depth target; objects 1..N load onto it — the shared depth buffer resolves occlusion regardless of which object happens to be object 0.",
             examples: &[],
             inputs: &[],
@@ -8665,12 +8665,9 @@ fn build_uniforms(
             material.ior,
             material.specular_factor,
         ],
-        specular: [
-            material.specular_color[0],
-            material.specular_color[1],
-            material.specular_color[2],
-            material.specular_power,
-        ],
+        // Reserved for the retired legacy path; keep the named uniform slot so
+        // the shared render-scene ABI stays stable.
+        specular: [0.0; 4],
         pbr_specular_tint: [
             material.specular_tint[0],
             material.specular_tint[1],
