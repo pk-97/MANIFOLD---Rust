@@ -53,6 +53,7 @@ impl AppInputHost<'_> {
             self.ui_root.effect_clipboard.copy_selection(effects, groups, &ids);
             self.ui_root.scene_modifier_clipboard = None;
             self.ui_root.object_modifier_clipboard = None;
+            self.ui_root.scene_item_clipboard = None;
             true
         }).unwrap_or(false)
     }

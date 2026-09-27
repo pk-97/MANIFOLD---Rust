@@ -145,15 +145,12 @@ fn pre_migration_scene_starter_migrates_once_renders_and_is_idempotent_on_reload
     assert_eq!(def, reloaded, "reload must round-trip byte-identical (JSON-level)");
 
     // ---- Visual half: the migrated-at-load-time render of the HELD-OUT
-    // pre-migration JSON matches the render of the checked-in, already-
-    // migrated SceneStarter.json (graph_tool migrate --in-place's actual
-    // output) — same scene, same pixels, migration changed nothing a
+    // pre-migration JSON matches the render of the serialized, already-
+    // migrated def — same scene, same pixels, migration changed nothing a
     // viewer would see. ----
     let (pre_bytes, w, h) = render_readback(PRE_MIGRATION_JSON);
-    let current_json = include_str!(
-        "../../assets/generator-presets/SceneStarter.json"
-    );
-    let (post_bytes, w2, h2) = render_readback(current_json);
+    let migrated_json = serde_json::to_string(&def).expect("migrated def must serialize");
+    let (post_bytes, w2, h2) = render_readback(&migrated_json);
     assert_eq!((w, h), (w2, h2));
 
     write_png(&pre_bytes, w, h, "/tmp/scene_starter_pre_migration.png");

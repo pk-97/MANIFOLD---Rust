@@ -501,22 +501,6 @@ crate::param_tooltips!("node.pbr_material", {
     "baked_look" => "Off by default: the material stays lit and responds to the scene's Environment/Ambient/Sun controls. Turn it on to ignore all scene lighting and show the base colour flat, as if it were pre-baked.",
 });
 
-crate::param_tooltips!("node.phong_material", {
-    "color_r" => "Red component of the surface colour, from 0 to 1.",
-    "color_g" => "Green component of the surface colour, from 0 to 1.",
-    "color_b" => "Blue component of the surface colour, from 0 to 1.",
-    "color_a" => "How opaque the surface is. 1 is solid, lower values let what is behind show through.",
-    "ambient" => "How lit the shadowed side stays. 0 leaves unlit faces fully dark for hard contrast, and higher values raise the floor so the whole object reads. Around 0.3 gives a half-lit look.",
-    "specular_color_r" => "Red component of the highlight colour, from 0 to 1. Tint it to colour the shine.",
-    "specular_color_g" => "Green component of the highlight colour, from 0 to 1. Tint it to colour the shine.",
-    "specular_color_b" => "Blue component of the highlight colour, from 0 to 1. Tint it to colour the shine.",
-    "specular_power" => "How tight the shiny highlight is. Around 1 is very soft and almost matte, 32 is a normal glossy spot, and 256 is a tiny pinpoint glint.",
-    "emission_r" => "Red component of the glow colour the surface gives off on its own, from 0 to 1. Needs Emission Intensity above 0 to show.",
-    "emission_g" => "Green component of the glow colour the surface gives off on its own, from 0 to 1. Needs Emission Intensity above 0 to show.",
-    "emission_b" => "Blue component of the glow colour the surface gives off on its own, from 0 to 1. Needs Emission Intensity above 0 to show.",
-    "emission_intensity" => "How brightly the surface glows on its own, independent of any light. 0 means no glow, and higher values make it self-lit.",
-});
-
 crate::param_tooltips!("node.unlit_material", {
     "color_r" => "The red amount of the flat base colour.",
     "color_g" => "The green amount of the flat base colour.",

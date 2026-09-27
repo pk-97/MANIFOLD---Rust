@@ -31,7 +31,6 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.physics_world",
     "node.transform_3d",
     "node.pbr_material",
-    "node.phong_material",
     "node.unlit_material",
     "node.cel_material",
     "node.light",
@@ -143,6 +142,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
+    let material_migrated = manifold_core::phong_migration::migrate_phong_to_pbr(def);
     let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
@@ -152,7 +152,7 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
-    repaired || migrated || bokeh_source_migrated
+    material_migrated || repaired || migrated || bokeh_source_migrated
 }
 
 /// The layered gather consumes the original signed CoC and computes its own
@@ -367,7 +367,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
     let category = match node.type_id.as_str() {
         "node.rigid_body" | "node.physics_world" => "Physics".to_string(),
         "node.transform_3d" => "Transform".to_string(),
-        "node.pbr_material" | "node.phong_material" | "node.unlit_material" | "node.cel_material" => {
+        "node.pbr_material" | "node.unlit_material" | "node.cel_material" => {
             "Material".to_string()
         }
         "node.light" => return display.to_string(),
@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn material_inspector_metadata_classifies_every_descriptor() {
         let metadata = metadata_for_node_type("node.pbr_material");
-        assert_eq!(metadata.len(), 290);
+        assert_eq!(metadata.len(), 291);
         assert!(metadata.iter().all(|param| param.material_role.is_some()));
         assert_eq!(
             metadata
@@ -684,7 +684,7 @@ mod tests {
                     Some(manifold_core::material_inspector::MaterialParamRole::FeatureMode(_))
                 ))
                 .count(),
-            7
+            8
         );
     }
 

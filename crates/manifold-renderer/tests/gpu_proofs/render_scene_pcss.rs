@@ -75,11 +75,11 @@ fn pcss_scene_json(occluder_y: f32, softness: u32, light_size: f32) -> String {
             "tilt":{{"type":"Float","value":0.95}},
             "distance":{{"type":"Float","value":60.0}},
             "fov_y":{{"type":"Float","value":0.14}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.05}}}}}},
+            "band_low":{{"type":"Float","value":0.05}}}}}},
         {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{
             "objects":{{"type":"Int","value":2}},
             "lights":{{"type":"Int","value":1}}}}}},
@@ -320,7 +320,7 @@ fn pcss_rt_toggle_scene_json(occluder_y: f32, softness: u32, light_size: f32) ->
             "tilt":{{"type":"Float","value":0.95}},
             "distance":{{"type":"Float","value":60.0}},
             "fov_y":{{"type":"Float","value":0.14}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}}}}}},

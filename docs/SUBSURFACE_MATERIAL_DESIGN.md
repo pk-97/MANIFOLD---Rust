@@ -10,6 +10,15 @@ accurate higher cost". Both modes therefore use one physical material payload.
 Quality changes the transport estimator, not the material identity. Extend the
 existing renderer and Metal acceleration lifecycle; do not add another renderer.
 
+## 2026-09-27 authoring amendment
+
+Status: SHIPPED · BUG-oxxi. Subsurface uses the shared optional material
+feature workflow. Its feature state is separate from the transport estimator:
+adding seeds a useful weight, disabling/removing gates evaluated weight to
+zero while preserving authored controls, and re-adding restores them. Existing
+nonzero weight follows its saved value. This changes authoring and activation,
+not the transport algorithms or the qualification limits recorded below.
+
 ## 1. Audit — verified 2026-09-26
 
 | Existing piece | Source anchor | Reuse |

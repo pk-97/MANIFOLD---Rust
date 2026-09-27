@@ -284,6 +284,7 @@ pub struct UIRoot {
     /// Written only through `set_scene_modifier_clipboard` so the latest
     /// copy wins across both clipboards.
     pub scene_modifier_clipboard: Option<crate::scene_modifier_transfer::ModifierClipboard>,
+    pub scene_item_clipboard: Option<crate::scene_item_transfer::SceneItemClipboard>,
     pub object_modifier_clipboard: Option<crate::object_modifier_transfer::ObjectModifierClipboard>,
     pub object_cards_have_focus: bool,
 
@@ -500,6 +501,7 @@ impl UIRoot {
             gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             scene_modifier_clipboard: None,
             object_modifier_clipboard: None,
+            scene_item_clipboard: None,
             object_cards_have_focus: false,
             cursor_hover_actions: Vec::new(),
             pending_keyboard_actions: Vec::new(),
@@ -541,6 +543,7 @@ impl UIRoot {
         if clipboard.is_some() {
             self.effect_clipboard.clear();
             self.object_modifier_clipboard = None;
+            self.scene_item_clipboard = None;
         }
         self.scene_modifier_clipboard = clipboard;
     }

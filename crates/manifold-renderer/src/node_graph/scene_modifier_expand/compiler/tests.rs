@@ -11,6 +11,9 @@ pub(super) fn fixture() -> EffectGraphDef {
         "/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
     )))
     .unwrap();
+    // Low-level preparation tests receive a typed authoring document directly;
+    // model the normal project/runtime load contract before route discovery.
+    manifold_core::phong_migration::migrate_phong_to_pbr(&mut owner);
     let mut recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/scene-modifier-presets/ElasticSculpture.json"

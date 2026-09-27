@@ -31,7 +31,7 @@ use super::{
 /// The add-object gesture (D7): one undoable composite edit that (1) bumps
 /// `render_scene`'s `objects` count by one, (2) builds a new group named
 /// "Object N" containing a placeholder `node.cube_mesh` + a tinted
-/// `node.phong_material` + a `node.transform_3d`, wired to a
+/// `node.pbr_material` + a `node.transform_3d`, wired to a
 /// `system.group_output` boundary exposing `vertices`/`material`/`transform`,
 /// (3) wires the group's three outputs to the new `mesh_k`/`material_k`/
 /// `transform_k` ports on `render_scene`. Mirrors `GroupNodesCommand`'s
@@ -514,7 +514,7 @@ impl Command for AddSceneObjectCommand {
                     );
                     let mat_node = scene_build_node(
                         mat_id,
-                        "node.phong_material",
+                        "node.pbr_material",
                         Some(format!("mat_{k}")),
                         mat_params,
                     );
@@ -625,7 +625,7 @@ impl Command for AddSceneObjectCommand {
                     &mut meta.bindings,
                     mat_id,
                     &mat_node_id,
-                    "node.phong_material",
+                    "node.pbr_material",
                     &format!("{handle} — Material"),
                     &self.material_metadata,
                     &mat_node_params,
@@ -751,6 +751,7 @@ impl Command for AddSceneLightCommand {
         let pos = self.pos;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let light_id = max_node_id_over(&def.nodes).checked_add(1)?;
                 let prev_metadata = def.preset_metadata.clone();
 
                 let (light_id, light_node_id, light_node_params, prev) = {
@@ -764,7 +765,6 @@ impl Command for AddSceneLightCommand {
                         },
                     );
 
-                    let light_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
                     // D7a defaults, transcribed from `node.light`'s own param defs
                     // (`crates/manifold-renderer/src/node_graph/primitives/light.rs`):
                     // mode=Sun / color white / intensity 1.0 / cast_shadows ON already
@@ -1353,7 +1353,7 @@ fn collect_all_handles(nodes: &[EffectGraphNode], out: &mut std::collections::Ha
 /// `BindingTarget::Node` falls inside the duplicated subtree onto the
 /// clone's fresh ids, so file-dependent nodes (e.g. `node.gltf_mesh_source`)
 /// keep their "Model File" path binding on the copy.
-fn deep_clone_with_fresh_ids(
+pub fn deep_clone_with_fresh_ids(
     src: &EffectGraphNode,
     next_id: &mut u32,
     taken: &mut std::collections::HashSet<String>,
@@ -1383,6 +1383,22 @@ fn deep_clone_with_fresh_ids(
                 .map(|(_, n)| *n)
                 .unwrap_or(id)
         };
+        // Group interface parameters address inner nodes by their display
+        // handles. The deep clone deduplicates every child handle, so carry
+        // the direct child's old→new map across the interface as well. Nested
+        // groups perform the same rewrite in their own recursive clone.
+        let handle_map: std::collections::HashMap<_, _> = group
+            .nodes
+            .iter()
+            .zip(&new_nodes)
+            .filter_map(|(old, new)| Some((old.handle.as_ref()?, new.handle.as_ref()?.clone())))
+            .map(|(old, new)| (old.clone(), new))
+            .collect();
+        for param in &mut group.interface.params {
+            if let Some(new_handle) = handle_map.get(&param.target_handle) {
+                param.target_handle = new_handle.clone();
+            }
+        }
         let new_wires: Vec<EffectGraphWire> = group
             .wires
             .iter()
@@ -2143,7 +2159,10 @@ fn target_string_bindings(
 /// them (the importer deliberately fans out one outer control to many nodes).
 /// Return only ids that no longer have any surviving binding so the host
 /// manifest and its modulation collections can be pruned by the caller.
-pub(super) fn prune_scene_object_metadata(def: &mut EffectGraphDef, removed: &[NodeId]) -> Vec<String> {
+pub(super) fn prune_scene_object_metadata(
+    def: &mut EffectGraphDef,
+    removed: &[NodeId],
+) -> Vec<String> {
     let Some(meta) = def.preset_metadata.as_mut() else {
         return Vec::new();
     };
@@ -2675,13 +2694,13 @@ impl Command for AddSceneEnvironmentCommand {
         let pos = self.pos;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let env_id = max_node_id_over(&def.nodes).checked_add(1)?;
                 let prev_metadata = def.preset_metadata.clone();
 
                 let (env_id, env_node_id, env_node_params, prev) = {
                     let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                     let prev = (nodes.clone(), wires.clone());
 
-                    let env_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
                     // Primitive defaults (`node.bake_environment`) match the importer's
                     // OWN softbox default (F-P4) so a freshly-added environment reads
                     // as a sane, lit studio rather than a black void — explicit here
@@ -2834,13 +2853,13 @@ impl Command for AddSceneFogCommand {
         let pos = self.pos;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let fog_id = max_node_id_over(&def.nodes).checked_add(1)?;
                 let prev_metadata = def.preset_metadata.clone();
 
                 let (fog_id, fog_node_id, prev) = {
                     let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                     let prev = (nodes.clone(), wires.clone());
 
-                    let fog_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
                     // A freshly-added fog node starts at density 0 (the primitive's own
                     // default — "subtle" is authored by hand in the starter preset, not
                     // stamped here) so adding it is never a visible surprise; the
@@ -3035,10 +3054,10 @@ impl Command for AddObjectTransformCommand {
         let pos = self.pos;
         let result =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let xf_id = max_node_id_over(&def.nodes).checked_add(1)?;
                 let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
                 let prev = (nodes.clone(), wires.clone());
 
-                let xf_id = nodes.iter().map(|n| n.id).max().map_or(0, |m| m + 1);
                 let params = BTreeMap::new();
                 let mut xf_node = scene_build_node(
                     xf_id,

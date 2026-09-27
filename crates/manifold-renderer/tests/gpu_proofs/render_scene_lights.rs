@@ -53,11 +53,11 @@ fn scene_json(light_specs: &[(f32, f32, f32, f32)]) -> String {
             "tilt":{"type":"Float","value":0.6},
             "distance":{"type":"Float","value":6.0},
             "fov_y":{"type":"Float","value":0.8}}},
-        {"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
+        {"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
             "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.02}}},"#,
+            "band_low":{"type":"Float","value":0.02}}},"#,
     );
 
     // The render_scene node: 1 object, `n` lights.
@@ -191,14 +191,6 @@ fn light_contract_scene_json(
 ) -> String {
     let rt = if rt_enabled { "true" } else { "false" };
     let material_node = match material {
-        "phong" => r#"{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{
-            "color_r":{"type":"Float","value":1.0},
-            "color_g":{"type":"Float","value":1.0},
-            "color_b":{"type":"Float","value":1.0},
-            "ambient":{"type":"Float","value":0.0},
-            "specular_color_r":{"type":"Float","value":0.0},
-            "specular_color_g":{"type":"Float","value":0.0},
-            "specular_color_b":{"type":"Float","value":0.0}}}"#,
         "pbr" => r#"{"id":4,"typeId":"node.pbr_material","nodeId":"mat","params":{
             "color_r":{"type":"Float","value":1.0},
             "color_g":{"type":"Float","value":1.0},
@@ -383,13 +375,13 @@ fn eight_lights_render_past_the_old_cap_of_four() {
 #[test]
 fn zero_lights_render_without_validation_error() {
     // D4: no light ports wired. render_scene must still bind the one zeroed
-    // storage entry so Metal never sees a null slot. Bump ambient so the
-    // plane is visible-from-ambient (proving the draw ran, not just that it
+    // storage entry so Metal never sees a null slot. Bump the shadow band so
+    // the plane is visible (proving the draw ran, not just that it
     // didn't crash). A GPU validation error would panic in the executor's
     // commit_and_wait; reaching the asserts means binding 8 stayed valid.
     let json = scene_json(&[]).replace(
-        r#""ambient":{"type":"Float","value":0.02}"#,
-        r#""ambient":{"type":"Float","value":0.4}"#,
+        r#""band_low":{"type":"Float","value":0.02}"#,
+        r#""band_low":{"type":"Float","value":0.4}"#,
     );
     let (bytes, w, h) = render_scene_readback(&json);
     write_png(&bytes, w, h, "/tmp/render_scene_0_lights.png");
@@ -399,9 +391,9 @@ fn zero_lights_render_without_validation_error() {
 
 #[test]
 fn light_contract_point_position_aim_range_and_sun_controls() {
-    // The same direct-light probe runs through all three surface pipelines.
+    // The same direct-light probe runs through both current surface pipelines.
     // Aim must not affect a Point light: only its position determines L.
-    for material in ["phong", "pbr", "cel"] {
+    for material in ["pbr", "cel"] {
         let point = |pos_y: f32, aim_x: f32, range: f32| {
             render_light_contract_scene(
                 &light_contract_scene_json(material, 1, pos_y, aim_x, range, false),
@@ -443,7 +435,7 @@ fn light_contract_point_position_aim_range_and_sun_controls() {
     // With negligible distance falloff, moving the Point sideways must
     // still change N dot L. This distinguishes position-derived direction
     // from a fix that only applies distance attenuation to the old Sun vector.
-    let overhead_json = light_contract_scene_json("phong", 1, 4.0, 0.0, 1_000_000.0, false);
+    let overhead_json = light_contract_scene_json("cel", 1, 4.0, 0.0, 1_000_000.0, false);
     let side_json = overhead_json.replace(
         r#""pos_x":{"type":"Float","value":0.0}"#,
         r#""pos_x":{"type":"Float","value":6.0}"#,
@@ -454,20 +446,20 @@ fn light_contract_point_position_aim_range_and_sun_controls() {
     assert!(overhead > side * 1.2, "Point direction must follow position: overhead={overhead} side={side}");
 
     // A zero-range Point is finite and contributes no direct light. Keep this
-    // on Phong to isolate the exact zero-range contract from PBR IBL policy.
+    // on Cel to isolate the exact zero-range contract from PBR IBL policy.
     let zero = render_light_contract_scene(
-        &light_contract_scene_json("phong", 1, 4.0, 0.0, 0.0, false),
+        &light_contract_scene_json("cel", 1, 4.0, 0.0, 0.0, false),
         false,
         false,
     );
     assert!(zero.is_finite() && zero < 0.01, "zero-range Point must be dark and finite: {zero:.5}");
     let short_range = render_light_contract_scene(
-        &light_contract_scene_json("phong", 1, 4.0, 0.0, 2.0, false),
+        &light_contract_scene_json("cel", 1, 4.0, 0.0, 2.0, false),
         false,
         false,
     );
     let long_range = render_light_contract_scene(
-        &light_contract_scene_json("phong", 1, 4.0, 0.0, 8.0, false),
+        &light_contract_scene_json("cel", 1, 4.0, 0.0, 8.0, false),
         false,
         false,
     );

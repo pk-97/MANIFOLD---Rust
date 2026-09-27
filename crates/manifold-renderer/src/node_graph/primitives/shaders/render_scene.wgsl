@@ -14,7 +14,7 @@
 //      between objects instead of each rendering into its own buffer.
 //   2. A runtime-sized `lights: array<vec4<f32>>` buffer (4
 //      vec4s each — position/direction and mode, premultiplied colour
-//      and caster slot, range/falloff/cone cosines, then spot forward) so the Phong/PBR/Cel
+//      and caster slot, range/falloff/cone cosines, then spot forward) so the PBR/Cel
 //      entry points sum every wired light's direct term instead of
 //      reading exactly one `light_dir`/`light_color` pair. Ambient and
 //      emission are added exactly once (after the light loop), not
@@ -78,7 +78,7 @@ struct Uniforms {
     // dielectric F0 term below. Defaults collapse the formula to the
     // pre-G-P4 hardcoded F0 = 0.04 exactly.
     pbr_metallic_roughness: vec4<f32>,
-    // rgb: specular tint, w: Phong exponent.
+    // Retired legacy lighting slot, kept reserved for uniform ABI stability.
     specular: vec4<f32>,
     // GLB_CONFORMANCE_DESIGN.md G-P4/D5: KHR_materials_specular's
     // specularColorFactor (rgb, default [1,1,1]). w: GLTF_MATERIAL_
@@ -855,7 +855,7 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
 
 // GBUFFER_DESIGN.md section 2 D5, P2: the EMIT_VELOCITY pipeline variant's
 // FsOut struct is text-substituted in here (replacing this comment) so
-// fs_unlit/fs_phong/fs_pbr/fs_cel can return a second MRT output
+// fs_unlit/fs_pbr/fs_cel can return a second MRT output
 // (`@location(1) velocity`) alongside `color`. Inert (a no-op comment) in
 // the base/velocity-off compile — GBUFFER_FSOUT_VELOCITY_STRUCT is the
 // substitution marker `render_scene.rs` targets.
@@ -1509,44 +1509,6 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     // untouched (alpha contract). exposure_ev = 0 (PINHOLE default) → ×1,
     // byte-identical to pre-lens builds (I2/I5).
     let rgb = apply_fog(albedo.rgb + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
-    return apply_appearance(rgb, albedo.a, in.appearance_weight);
-}
-
-// Phong — Lambert diffuse + Blinn-Phong specular, summed over every
-// wired light; ambient + emission added exactly once (not blended per
-// light the way the single-light render_3d_mesh.wgsl does it).
-@fragment
-fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv, in.vertex_color);
-    if appearance_discard(in.appearance_weight) {
-        discard;
-    }
-    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
-        discard;
-    }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
-    if dot(N, V) < 0.0 {
-        N = -N;
-    }
-
-    var lit = vec3<f32>(0.0);
-    let light_count = u32(u.scene_params.x);
-    for (var i = 0u; i < light_count; i = i + 1u) {
-        let l_dir = light_direction_attenuation(i, in.world_pos);
-        let l_col = lights[i * LIGHT_STRIDE + 1u];
-        let L = l_dir.xyz;
-        let H = (L + V) / max(length(L + V), 1e-6);
-        let n_dot_l = max(dot(N, L), 0.0);
-        let n_dot_h = max(dot(N, H), 0.0);
-        let diffuse = albedo.rgb * n_dot_l;
-        let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
-        let vis = shadow_factor(in.world_pos, l_col.w, in.clip_pos.xy);
-        lit = lit + (diffuse + spec) * l_col.rgb * l_dir.w * vis;
-    }
-    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
-    // exp2(exposure_ev) — CAMERA_AND_LENS_DESIGN.md section 2 D5, see fs_unlit.
-    let rgb = apply_fog(lit + ambient + resolve_emissive(in.uv), in.world_pos) * exp2(u.scene_params.z);
     return apply_appearance(rgb, albedo.a, in.appearance_weight);
 }
 

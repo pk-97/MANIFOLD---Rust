@@ -58,10 +58,9 @@ const LOOP_CAMERA_TYPE_ID: &str = "node.loop_camera";
 const CAMERA_LENS_TYPE_ID: &str = "node.camera_lens";
 const MOTION_BLUR_TYPE_ID: &str = "node.motion_blur";
 const BOKEH_GATHER_TYPE_ID: &str = "node.bokeh_gather";
-/// PBR/phong/unlit/cel — the four material atoms (D3's Objects material row).
+/// PBR/unlit/cel — the three material atoms (D3's Objects material row).
 const MATERIAL_TYPE_IDS: &[&str] = &[
     "node.pbr_material",
-    "node.phong_material",
     "node.unlit_material",
     "node.cel_material",
 ];
@@ -278,7 +277,7 @@ pub struct MaterialColorRow {
     /// scope once `base_color_addr` no longer exists.
     pub scope_path: Vec<u32>,
     /// `true` only for `node.pbr_material` — metallic/roughness is a
-    /// PBR-only concept, so a phong/unlit/cel material's quick knobs are
+    /// PBR-only concept, so an unlit/cel material's quick knobs are
     /// base color alone (D4: "the atom's own params otherwise").
     pub is_pbr: bool,
     /// The fixed map-input vocabulary exposed by the material inspector.
@@ -663,7 +662,7 @@ fn find_scene_object_in_group<'a>(
 /// the shape `migrate_scene_object_wires` produces for every pre-existing
 /// (migrated) project: the minted `node.scene_object` stays a ROOT-level
 /// sibling of the mesh producer's group rather than nested inside it (D5's
-/// "same-scope re-point", confirmed against the shipped `SceneStarter.json`:
+/// "same-scope re-point", confirmed against the shipped `Scene.json`:
 /// `scene_object` id 32/33 at root, `vertices` wired straight from group
 /// node 10/20's own boundary port). Returns the [`Level`] the resolved node
 /// actually lives in (root, or the crossed group's own body — callers must
@@ -1530,7 +1529,7 @@ mod tests {
     #[test]
     fn ungrouped_scene_object_resolves_known_at_root_scope() {
         let mesh = node(1, "node.cube_mesh", Some("mesh"));
-        let mat = with_param(node(2, "node.phong_material", Some("mat")), "color_r", SerializedParamValue::Float { value: 0.4 });
+        let mat = with_param(node(2, "node.cel_material", Some("mat")), "color_r", SerializedParamValue::Float { value: 0.4 });
         let transform = with_param(node(3, TRANSFORM_3D_TYPE_ID, Some("t")), "pos_x", SerializedParamValue::Float { value: 4.0 });
         let obj = node(4, SCENE_OBJECT_TYPE_ID, Some("Bare Hero"));
         let scene = with_param(node(10, RENDER_SCENE_TYPE_ID, None), "objects", SerializedParamValue::Float { value: 1.0 });
@@ -1560,7 +1559,7 @@ mod tests {
                 assert_eq!(t.pos_value.0, 4.0);
                 assert!(t.pos_addr.0.scope_path.is_empty(), "root-level transform has an empty scope");
                 match &row.material {
-                    MaterialVm::Known(m) => assert!(!m.is_pbr, "phong material is not PBR"),
+                    MaterialVm::Known(m) => assert!(!m.is_pbr, "cel material is not PBR"),
                     MaterialVm::None => panic!("expected a resolved material"),
                 }
             }
@@ -1577,7 +1576,7 @@ mod tests {
         let mesh = node(object_id + 100, "node.cube_mesh", Some("mesh"));
         let bend = node(object_id + 101, "node.bend_mesh", Some("bend"));
         let mat = with_param(
-            node(object_id + 102, "node.phong_material", Some("mat")),
+            node(object_id + 102, "node.cel_material", Some("mat")),
             "color_r",
             SerializedParamValue::Float { value: 0.4 },
         );
@@ -1624,7 +1623,7 @@ mod tests {
                 assert!(row.modifier_chain_parseable, "a well-formed one-modifier chain parses");
                 match &row.material {
                     MaterialVm::Known(m) => {
-                        assert!(!m.is_pbr, "phong material is not PBR");
+                        assert!(!m.is_pbr, "cel material is not PBR");
                         assert_eq!(m.scope_path, vec![2], "material lives inside the group — scoped address");
                     }
                     MaterialVm::None => panic!("expected a resolved material"),
@@ -1800,7 +1799,7 @@ mod tests {
     }
 
     #[test]
-    fn pbr_material_gets_metallic_roughness_but_phong_does_not() {
+    fn pbr_material_gets_metallic_roughness_but_cel_does_not() {
         let group_iface = GroupInterface { inputs: vec![], outputs: vec![], params: vec![] };
         let mesh = node(1, "node.cube_mesh", Some("mesh"));
         let mat = with_param(
@@ -2279,21 +2278,21 @@ mod tests {
     /// not nested inside it (the shape a fresh glTF import produces instead,
     /// already covered by this file's `grouped_scene_object_def`-style tests).
     /// without `resolve_producer_through_group`,
-    /// every already-shipped, already-migrated bundled preset (SceneStarter and
+    /// the shipped, already-migrated bundled scene preset (Scene and
     /// the ~9 others P2 regenerated) silently showed no transform/material
     /// controls and a wrong vertex count in the panel, despite rendering
     /// correctly (the render path reads through `SceneObject`'s resolved Slots,
     /// never through this trace).
     #[test]
     fn bundled_scene_starter_preset_resolves_transform_material_and_vertex_count() {
-        let preset_type = manifold_core::PresetTypeId::from_string("SceneStarter".to_string());
+        let preset_type = manifold_core::PresetTypeId::from_string("Scene".to_string());
         let d = crate::node_graph::bundled_presets::bundled_preset_def(&preset_type)
-            .expect("SceneStarter is a bundled preset");
-        let vm = SceneVm::from_def(d).expect("SceneStarter resolves");
-        assert_eq!(vm.objects.len(), 2, "Floor + Cube");
+            .expect("Scene is a bundled preset");
+        let vm = SceneVm::from_def(d).expect("Scene resolves");
+        assert_eq!(vm.objects.len(), 1, "Cube");
         for obj in &vm.objects {
             let SceneObjectVm::Known(row) = obj else {
-                panic!("SceneStarter's objects must resolve Known, not Custom — migration shape unparsed");
+                panic!("Scene's objects must resolve Known, not Custom — migration shape unparsed");
             };
             assert!(row.transform.is_some(), "{}: transform must resolve through the group boundary", row.name);
             assert!(
@@ -2303,7 +2302,7 @@ mod tests {
             );
         }
         assert!(vm.header.vertex_count > 0, "vertex count must resolve through the group boundary, not silently 0");
-        assert!(vm.header.vertex_count_exact, "SceneStarter's mesh sources have known vertex counts");
+        assert!(vm.header.vertex_count_exact, "Scene's mesh sources have known vertex counts");
     }
 
     /// UX-P3a's exposed-state read (D8): unexposed by default, flips on

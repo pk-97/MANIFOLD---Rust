@@ -10,14 +10,21 @@ pub(crate) fn default_skin_target(
 ) -> manifold_ui::panels::scene_setup_panel::SkinTargetMap {
     use manifold_renderer::node_graph::scene_vm::MaterialVm;
     use manifold_ui::panels::scene_setup_panel::SkinTargetMap;
-    if let (Some(def), MaterialVm::Known(row)) = (def, material)
-        && node_at(def, &row.scope_path, row.node_doc_id)
-            .is_some_and(|(node, _)| node.type_id == "node.unlit_material")
-    {
-        SkinTargetMap::BaseColor
-    } else {
-        SkinTargetMap::Emissive
+    if let (Some(def), MaterialVm::Known(row)) = (def, material) {
+        let is_base_color =
+            node_at(def, &row.scope_path, row.node_doc_id).is_some_and(|(node, _)| {
+                node.type_id == "node.unlit_material"
+                    || (node.type_id == "node.pbr_material"
+                        && matches!(
+                            node.params.get("baked_look"),
+                            Some(SerializedParamValue::Bool { value: true })
+                        ))
+            });
+        if is_base_color {
+            return SkinTargetMap::BaseColor;
+        }
     }
+    SkinTargetMap::Emissive
 }
 
 fn feature(value: core::MaterialFeature) -> ui::MaterialFeature {
@@ -29,6 +36,7 @@ fn feature(value: core::MaterialFeature) -> ui::MaterialFeature {
         core::MaterialFeature::Sheen => ui::MaterialFeature::Sheen,
         core::MaterialFeature::Anisotropy => ui::MaterialFeature::Anisotropy,
         core::MaterialFeature::Translucency => ui::MaterialFeature::Translucency,
+        core::MaterialFeature::Subsurface => ui::MaterialFeature::Subsurface,
     }
 }
 
@@ -88,7 +96,6 @@ fn group(value: core::MaterialGroup) -> ui::MaterialGroup {
         core::MaterialGroup::Opacity => ui::MaterialGroup::Opacity,
         core::MaterialGroup::Feature(f) => ui::MaterialGroup::Feature(feature(f)),
         core::MaterialGroup::Advanced => ui::MaterialGroup::Advanced,
-        core::MaterialGroup::Subsurface => ui::MaterialGroup::Subsurface,
     }
 }
 pub(super) fn role(value: core::MaterialParamRole) -> ui::MaterialParamRole {
@@ -208,9 +215,17 @@ pub(super) fn inspector_info(
         })
         .collect();
     Some(MaterialInspectorInfo {
-        object_gain: def.preset_metadata.as_ref().into_iter().flat_map(|meta| &meta.bindings)
+        object_gain: def
+            .preset_metadata
+            .as_ref()
+            .into_iter()
+            .flat_map(|meta| &meta.bindings)
             .find_map(|binding| match &binding.target {
-                BindingTarget::Node {node_id, param} if node_id == &object_ref.node && param == "emission_strength" => Some(binding.id.clone().into()),
+                BindingTarget::Node { node_id, param }
+                    if node_id == &object_ref.node && param == "emission_strength" =>
+                {
+                    Some(binding.id.clone().into())
+                }
                 _ => None,
             }),
         object: object_ref,
@@ -357,11 +372,11 @@ pub(super) fn enrich_surface(
                 {
                     row.spec.inactive_reason =
                         Some("Mapped placement — edit individual matrix values".into());
-                } else if let Some(
-                    Role::Scalar(ui::MaterialGroup::Feature(feature))
-                    | Role::Colour(ui::MaterialGroup::Feature(feature), ..),
-                ) = row.spec.material_role
-                {
+                } else if let Some(feature) = match row.spec.material_role {
+                    Some(Role::Scalar(ui::MaterialGroup::Feature(feature)))
+                    | Some(Role::Colour(ui::MaterialGroup::Feature(feature), ..)) => Some(feature),
+                    _ => None,
+                } {
                     if feature_modes.iter().any(|(owner, f, mode)| {
                         owner == id && *f == feature && (*mode == 1.0 || *mode == 3.0)
                     }) {

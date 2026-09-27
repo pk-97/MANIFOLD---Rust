@@ -1,0 +1,301 @@
+{
+  "version": 2,
+  "name": "Scene",
+  "presetMetadata": {
+    "id": "Scene",
+    "displayName": "Scene",
+    "category": "Geometry",
+    "oscPrefix": "scene",
+    "available": false,
+    "isLineBased": false,
+    "params": [],
+    "bindings": []
+  },
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.orbit_camera",
+      "handle": "camera",
+      "params": {
+        "distance": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.9
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 0.7
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.35
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "environment",
+      "typeId": "node.bake_environment",
+      "handle": "environment",
+      "params": {
+        "fill": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "handle": "sun",
+      "params": {
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 7.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 7.0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "cube",
+      "typeId": "group",
+      "handle": "Cube",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "object",
+              "portType": "Object"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 11,
+            "nodeId": "cube_mesh",
+            "typeId": "node.cube_mesh",
+            "handle": "cube_mesh",
+            "params": {
+              "size": {
+                "type": "Float",
+                "value": 1.2
+              }
+            }
+          },
+          {
+            "id": 12,
+            "nodeId": "cube_mat",
+            "typeId": "node.pbr_material",
+            "handle": "cube_mat",
+            "params": {
+              "ambient": {
+                "type": "Float",
+                "value": 0.05
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 0.35
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 0.85
+              },
+              "metallic": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "roughness": {
+                "type": "Float",
+                "value": 0.7
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "cube_xform",
+            "typeId": "node.transform_3d",
+            "handle": "cube_xform",
+            "params": {
+              "pos_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.6
+              },
+              "pos_z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 22,
+            "nodeId": "cube_object",
+            "typeId": "node.scene_object",
+            "handle": "Cube"
+          },
+          {
+            "id": 14,
+            "nodeId": "cube_out",
+            "typeId": "system.group_output",
+            "handle": "output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 11,
+            "fromPort": "vertices",
+            "toNode": 22,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "material"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "transform",
+            "toNode": 22,
+            "toPort": "transform"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "object",
+            "toNode": 14,
+            "toPort": "object"
+          }
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "handle": "scene",
+      "params": {
+        "lights": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "objects": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "envmap",
+      "toNode": 20,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 20,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "object",
+      "toNode": 20,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "color",
+      "toNode": 21,
+      "toPort": "in"
+    }
+  ]
+}

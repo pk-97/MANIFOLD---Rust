@@ -52,7 +52,7 @@ pub fn loaded_generator_presets_from_bundled()
             // registry seeds PresetInstance slots (via `init_defaults`), so it
             // MUST carry the same stamped scene exposures as the def cache
             // (`bundled_presets::rebuild_def_cache`). Without this, a bundled
-            // scene preset (SceneStarter, the default scene) shows exposed card
+            // scene preset (Scene, the default scene) shows exposed card
             // rows whose backing instance slot never exists. Same deterministic
             // migration, applied on this parallel parse path.
             crate::node_graph::scene_exposure::migrate_scene_exposures(&mut def);

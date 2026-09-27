@@ -1119,7 +1119,6 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
         let cache_before_use = device.render_pipeline_cache_len();
         for kind in [
             MaterialKind::Unlit,
-            MaterialKind::Phong,
             MaterialKind::Pbr,
             MaterialKind::Cel,
         ] {

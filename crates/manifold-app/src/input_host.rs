@@ -22,6 +22,7 @@ use crate::ui_root::UIRoot;
 pub(crate) mod automation;
 mod card_edit;
 mod object_card_edit;
+mod scene_item_edit;
 
 /// Wrapper implementing TimelineInputHost by borrowing Application fields.
 ///
@@ -55,6 +56,9 @@ pub struct AppInputHost<'a> {
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
+    fn navigate_scene_selection(&mut self, delta: i32, reorder: bool) -> bool { self.scene_navigation(delta, reorder) }
+    fn rename_scene_selection(&mut self) -> bool { self.scene_rename_or_frame(true) }
+    fn frame_scene_selection(&mut self) -> bool { self.scene_rename_or_frame(false) }
     fn handle_inspector_keyboard(&mut self) -> bool {
         // Future: inspector arrow key stepping for loop duration.
         // Stub returns false — correct until clip inspector is ported.
@@ -329,10 +333,12 @@ impl TimelineInputHost for AppInputHost<'_> {
         let clipboard = std::mem::take(&mut self.ui_root.effect_clipboard);
         let modifiers = self.ui_root.scene_modifier_clipboard.take();
         let objects = self.ui_root.object_modifier_clipboard.take();
+        let scene_items = self.ui_root.scene_item_clipboard.take();
         if self.copy_effect_selection() { self.paste_effect_selection(); }
         self.ui_root.effect_clipboard = clipboard;
         self.ui_root.scene_modifier_clipboard = modifiers;
         self.ui_root.object_modifier_clipboard = objects;
+        self.ui_root.scene_item_clipboard = scene_items;
         true
     }
 
@@ -2155,11 +2161,11 @@ mod automation_clipboard_host_tests {
     #[test]
     fn modifier_paste_dispatches_from_clipboard_into_empty_modifier_stack() {
         let mut h = Harness::new();
-        let mut layer = Layer::new_generator("WaveGrid".into(), PresetTypeId::new("WaveGrid"), 0);
+        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = LayerId::new("modifier-shortcut-layer");
         layer.layer_id = layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
-            .expect("WaveGrid fixture")
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene fixture")
             .clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
@@ -2174,16 +2180,16 @@ mod automation_clipboard_host_tests {
         .expect("scene modifier add");
         add.execute(&mut h.project);
         let mut destination = Layer::new_generator(
-            "WaveGrid Destination".into(),
-            PresetTypeId::new("WaveGrid"),
+            "Scene Destination".into(),
+            PresetTypeId::new("Scene"),
             0,
         );
         let destination_id = LayerId::new("modifier-shortcut-destination");
         destination.layer_id = destination_id.clone();
         let destination_graph = manifold_renderer::node_graph::bundled_preset_def(
-            &PresetTypeId::new("WaveGrid"),
+            &PresetTypeId::new("Scene"),
         )
-        .expect("WaveGrid destination fixture")
+        .expect("Scene destination fixture")
         .clone();
         destination.gen_params_or_init().graph = Some(destination_graph);
         destination.gen_params_or_init().refresh_manifest_from_graph();
@@ -2250,11 +2256,11 @@ mod automation_clipboard_host_tests {
     #[test]
     fn modifier_cut_captures_before_removal_and_consumes_capture_failure() {
         let mut h = Harness::new();
-        let mut layer = Layer::new_generator("WaveGrid".into(), PresetTypeId::new("WaveGrid"), 0);
+        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
         let layer_id = LayerId::new("modifier-cut-layer");
         layer.layer_id = layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
-            .expect("WaveGrid fixture").clone();
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene fixture").clone();
         layer.gen_params_or_init().graph = Some(graph);
         layer.gen_params_or_init().refresh_manifest_from_graph();
         h.project.timeline.layers.push(layer);
@@ -2339,14 +2345,14 @@ mod automation_clipboard_host_tests {
 
         // Scene-modifier scope on a generator layer, one SceneFog applied.
         let mut gen_layer = Layer::new_generator(
-            "WaveGrid".into(),
-            PresetTypeId::new("WaveGrid"),
+            "Scene".into(),
+            PresetTypeId::new("Scene"),
             0,
         );
         let gen_layer_id = LayerId::new("supersede-gen");
         gen_layer.layer_id = gen_layer_id.clone();
-        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
-            .expect("WaveGrid fixture")
+        let graph = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .expect("Scene fixture")
             .clone();
         gen_layer.gen_params_or_init().graph = Some(graph);
         gen_layer.gen_params_or_init().refresh_manifest_from_graph();
@@ -2584,4 +2590,34 @@ mod automation_clipboard_host_tests {
         assert!(service.undo(&mut authoritative));
         assert_eq!(points(&authoritative, "amount"), vec![(2.0, 0.2), (6.0, 0.6), (10.0, 0.8)]);
     }
+    #[test]
+    fn scene_object_shortcuts_copy_snapshot_and_queue_content_owned_edits() {
+        let mut h = Harness::new();
+        let mut layer = Layer::new_generator("Scene".into(), PresetTypeId::new("Scene"), 0);
+        let layer_id = layer.layer_id.clone();
+        layer.gen_params_or_init().graph = Some(manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene")).unwrap().clone());
+        layer.gen_params_or_init().refresh_manifest_from_graph();
+        h.project.timeline.layers.push(layer);
+        h.selection.select_layer(layer_id.clone());
+        h.ui_root.scene_setup_panel.open();
+        crate::ui_bridge::sync_inspector_data(&mut h.ui_root, &h.project, Some(0), &h.selection, &[], None);
+        h.ui_root.object_cards_have_focus = true;
+        let before = serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap();
+        assert!(h.host().handle_effect_copy());
+        assert!(h.ui_root.scene_item_clipboard.is_some());
+        assert!(h.rx.is_empty(), "copy does not edit the project");
+        assert!(h.host().handle_effect_paste());
+        assert_eq!(serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap(), before, "UI must await the accepted snapshot");
+        let ContentCommand::SceneItem(action) = h.rx.try_recv().unwrap() else { panic!("scene paste"); };
+        let command = crate::scene_item_transfer::build_action(&h.project, action).unwrap();
+        let mut editing = EditingService::new();
+        editing.execute(command, &mut h.project);
+        assert!(editing.take_rejection().is_none());
+        assert!(editing.undo(&mut h.project));
+        assert_eq!(serde_json::to_value(h.project.timeline.layers[0].gen_params().unwrap()).unwrap(), before);
+        assert!(h.host().handle_effect_cut());
+        assert!(h.ui_root.scene_item_clipboard.is_some());
+        assert!(matches!(h.ui_root.pending_keyboard_actions.last(), Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupRemoveObject(..)))));
+    }
+
 }

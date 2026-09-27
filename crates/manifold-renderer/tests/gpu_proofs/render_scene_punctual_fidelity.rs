@@ -34,12 +34,12 @@ fn scene(
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{
             "orbit":{{"type":"Float","value":0.0}},"tilt":{{"type":"Float","value":0.55}},
             "distance":{{"type":"Float","value":8.0}},"fov_y":{{"type":"Float","value":0.9}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},"color_g":{{"type":"Float","value":1.0}},
-            "color_b":{{"type":"Float","value":1.0}},"ambient":{{"type":"Float","value":0.0}},
-            "specular_color_r":{{"type":"Float","value":0.0}},
-            "specular_color_g":{{"type":"Float","value":0.0}},
-            "specular_color_b":{{"type":"Float","value":0.0}}}}}},
+            "color_b":{{"type":"Float","value":1.0}},"band_low":{{"type":"Float","value":0.0}},
+            "emission_r":{{"type":"Float","value":0.0}},
+            "emission_g":{{"type":"Float","value":0.0}},
+            "emission_b":{{"type":"Float","value":0.0}}}}}},
         {{"id":30,"typeId":"node.light","nodeId":"light","params":{{
             "mode":{{"type":"Enum","value":{mode}}},"falloff":{{"type":"Enum","value":{falloff}}},
             "pos_x":{{"type":"Float","value":0.0}},"pos_y":{{"type":"Float","value":{pos_y}}},

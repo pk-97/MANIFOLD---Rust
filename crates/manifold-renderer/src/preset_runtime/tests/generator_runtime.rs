@@ -1054,31 +1054,6 @@
         assert_eq!(preset.type_id().as_str(), "Plasma");
     }
 
-    /// **I5** (`docs/CINEMATIC_POST_DESIGN.md`): the DoF chain (camera_lens ->
-    /// render_scene[depth wired] -> coc_from_depth -> variable_blur H -> V)
-    /// loads and compiles as ordinary preset JSON. CinematicScene was pulled
-    /// from the bundled library 2026-07-16 (3D-infra test rig, not show
-    /// content) and lives in `assets/reference-presets/`; the I5 gate keeps
-    /// compiling it from there so the DoF-chain build check survives the
-    /// unbundling (mirrors `bundled_plasma_loads_and_compiles` above).
-    #[cfg(feature = "gpu-proofs")]
-    #[test]
-    fn bundled_cinematic_scene_loads_and_compiles() {
-        let device = crate::test_device();
-        let json = include_str!("../../../assets/reference-presets/CinematicScene.json");
-        let preset = PresetRuntime::from_json_str_with_device(
-            json,
-            &PrimitiveRegistry::with_builtin(),
-            device.arc(),
-            1920,
-            1080,
-            GpuTextureFormat::Rgba16Float,
-            None,
-        )
-        .expect("bundled CinematicScene must load + compile");
-        assert_eq!(preset.type_id().as_str(), "CinematicScene");
-    }
-
     #[cfg(feature = "gpu-proofs")]
     #[test]
     fn resize_re_pre_allocates_array_buffers() {

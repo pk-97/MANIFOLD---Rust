@@ -146,16 +146,16 @@ fn lightless_ground_emitter_scene_json(emit_on: bool) -> String {
             "tilt":{{"type":"Float","value":{TILT}}},
             "distance":{{"type":"Float","value":{DISTANCE}}},
             "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"ground_mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"ground_mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.0}}}}}},
-        {{"id":8,"typeId":"node.phong_material","nodeId":"emitter_mat","params":{{
+            "band_low":{{"type":"Float","value":0.0}}}}}},
+        {{"id":8,"typeId":"node.cel_material","nodeId":"emitter_mat","params":{{
             "color_r":{{"type":"Float","value":0.02}},
             "color_g":{{"type":"Float","value":0.02}},
             "color_b":{{"type":"Float","value":0.02}},
-            "ambient":{{"type":"Float","value":0.0}},
+            "band_low":{{"type":"Float","value":0.0}},
             "emission_r":{{"type":"Float","value":{er}}},
             "emission_g":{{"type":"Float","value":{eg}}},
             "emission_b":{{"type":"Float","value":{eb}}},

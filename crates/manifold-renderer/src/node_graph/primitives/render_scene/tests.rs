@@ -1028,9 +1028,9 @@ fn render_mode_wireframe_draws_lines_and_substitutes_unlit_line_material() {
 }
 
 #[test]
-fn render_mode_solid_substitutes_phong_clay_material() {
+fn render_mode_solid_substitutes_pbr_clay_material() {
     // D7: under Solid every object's effective material is a synthesized
-    // Phong carrying the wire's flat clay_color with neutral specular, and
+    // PBR carrying the wire's flat clay_color with matte roughness, and
     // the color pass still draws Fill (Solid is a shading substitution,
     // not a topology change).
     let mode = crate::node_graph::render_mode::RenderMode {
@@ -1046,18 +1046,17 @@ fn render_mode_solid_substitutes_phong_clay_material() {
     let material = clay_material(&mode);
     assert_eq!(
         material.kind,
-        crate::node_graph::material::MaterialKind::Phong,
-        "D7: Solid rides the existing Phong pipeline — every object's effective kind is Phong"
+        crate::node_graph::material::MaterialKind::Pbr,
+        "D7: Solid rides the existing PBR pipeline — every object's effective kind is PBR"
     );
     assert_eq!(
         material.base_color, mode.clay_color,
         "clay_color flows from the wire into the synthesized material"
     );
-    // Neutral specular/emission — the struct defaults, independent of the
-    // object's own material, with zero emission so the flat clay reads as
-    // lit surface only.
-    assert_eq!(material.specular_color, [1.0, 1.0, 1.0, 1.0]);
-    assert_eq!(material.specular_power, 32.0);
+    // Matte PBR/emission — the struct defaults, independent of the object's
+    // own material, with zero emission so the flat clay reads as lit surface.
+    assert_eq!(material.metallic, 0.0);
+    assert_eq!(material.roughness, 0.7);
     assert_eq!(material.emission, [0.0, 0.0, 0.0, 1.0]);
     assert_eq!(material.ambient, 0.0);
     assert_eq!(

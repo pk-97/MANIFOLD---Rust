@@ -55,6 +55,13 @@ impl PresetRuntime {
         manifest: Option<&ParamManifest>,
         render_fused: bool,
     ) -> Result<Self, JsonGeneratorLoadError> {
+        let doc = if manifold_core::phong_migration::contains_phong_materials(&doc) {
+            let mut migrated = doc;
+            manifold_core::phong_migration::migrate_phong_to_pbr(&mut migrated);
+            migrated
+        } else {
+            doc
+        };
         if !doc.scene_modifiers.iter().any(|modifier|
             manifold_core::scene_modifier_math_view::is_math_view_recipe(&modifier.graph)) {
             return Self::from_def_for_render_view(doc, registry, manifest, render_fused, None);

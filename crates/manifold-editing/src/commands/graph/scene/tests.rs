@@ -1,12 +1,13 @@
 use super::super::test_support::*;
 use super::super::*;
+use super::max_node_id_over;
 use crate::command::Command;
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, GROUP_TYPE_ID, GroupDef, GroupInterface, ParamSpecDef,
-    PresetMetadata, StringBindingDef,
+    BindingDef, BindingTarget, GROUP_TYPE_ID, GroupDef, GroupInterface, GroupParamDef,
+    ParamSpecDef, PresetMetadata, StringBindingDef,
 };
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
@@ -50,6 +51,104 @@ fn render_scene_graph(objects: u32, lights: u32) -> EffectGraphDef {
         nodes: vec![render],
         wires: vec![],
     }
+}
+
+#[test]
+fn scene_insertions_allocate_ids_across_nested_groups() {
+    let mut graph = render_scene_graph(0, 0);
+    graph.nodes.push(serde_json::from_value(serde_json::json!({
+        "id": 1, "nodeId": "group", "typeId": "group", "handle": "Group",
+        "group": {
+            "interface": { "inputs": [], "outputs": [] },
+            "nodes": [{ "id": 100, "nodeId": "object", "typeId": "node.scene_object" }],
+            "wires": []
+        }
+    })).unwrap());
+    for kind in 0..4 {
+        let (mut project, effect) = project_with_graph(graph.clone());
+        let target = GraphTarget::Effect(effect.clone());
+        let mut command: Box<dyn Command> = match kind {
+            0 => Box::new(AddSceneLightCommand::new(target, vec![], 0, 0,
+                (0.0, 0.0), Vec::new(), mirror_catalog_default())),
+            1 => Box::new(AddSceneEnvironmentCommand::new(target, vec![], 0,
+                (0.0, 0.0), Vec::new(), mirror_catalog_default())),
+            2 => Box::new(AddSceneFogCommand::new(target, vec![], 0,
+                (0.0, 0.0), Vec::new(), mirror_catalog_default())),
+            _ => Box::new(AddObjectTransformCommand::new(target, vec![1], 100,
+                (0.0, 0.0), mirror_catalog_default())),
+        };
+        command.execute(&mut project);
+        let edited = graph_of(&project, &effect);
+        assert_eq!(max_node_id_over(&edited.nodes), 101, "insertion {kind}");
+        let after = edited.clone();
+        command.undo(&mut project);
+        assert_eq!(graph_of(&project, &effect), &graph);
+        command.execute(&mut project);
+        // New stable IDs are allowed on redo; document addresses remain unique.
+        assert_eq!(max_node_id_over(&graph_of(&project, &effect).nodes), 101);
+        assert_eq!(graph_of(&project, &effect).nodes.len(), after.nodes.len());
+    }
+}
+
+#[test]
+fn deep_clone_retargets_group_interface_control_to_cloned_handle() {
+    use std::collections::{BTreeMap, HashSet};
+
+    let child = EffectGraphNode {
+        id: 2,
+        node_id: NodeId::new("child"),
+        type_id: "node.transform_3d".to_string(),
+        handle: Some("transform".to_string()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let source = EffectGraphNode {
+        id: 1,
+        node_id: NodeId::new("group"),
+        type_id: GROUP_TYPE_ID.to_string(),
+        handle: Some("Object".to_string()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params: vec![GroupParamDef {
+                    name: "position".to_string(),
+                    target_handle: "transform".to_string(),
+                    target_param: "pos_x".to_string(),
+                    default: None,
+                }],
+            },
+            nodes: vec![child],
+            wires: Vec::new(),
+            tint: None,
+        })),
+    };
+    let mut next_id = 10;
+    let mut handles = HashSet::from(["Object".to_string(), "transform".to_string()]);
+    let mut stable_ids = Vec::new();
+    let clone = deep_clone_with_fresh_ids(&source, &mut next_id, &mut handles, &mut stable_ids);
+    let source_group = source.group.as_ref().unwrap();
+    let clone_group = clone.group.as_ref().unwrap();
+    assert_eq!(source_group.interface.params[0].target_handle, "transform");
+    let cloned_child_handle = clone_group.nodes[0].handle.as_deref().unwrap();
+    assert_ne!(cloned_child_handle, "transform");
+    assert_eq!(
+        clone_group.interface.params[0].target_handle,
+        cloned_child_handle
+    );
 }
 
 fn physics_scene_graph() -> EffectGraphDef {
@@ -179,11 +278,7 @@ fn add_scene_object_command_bumps_count_builds_group_and_undo_restores() {
         "cube + material + transform + scene_object bind + group_output boundary"
     );
     assert!(body.nodes.iter().any(|n| n.type_id == "node.cube_mesh"));
-    assert!(
-        body.nodes
-            .iter()
-            .any(|n| n.type_id == "node.phong_material")
-    );
+    assert!(body.nodes.iter().any(|n| n.type_id == "node.pbr_material"));
     assert!(body.nodes.iter().any(|n| n.type_id == "node.transform_3d"));
     assert!(body.nodes.iter().any(|n| n.type_id == "node.scene_object"));
     assert_eq!(
@@ -434,7 +529,7 @@ fn add_scene_object_command_stamps_exposures_and_undo_redo_are_stable() {
         let mat_node = body
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.phong_material")
+            .find(|n| n.type_id == "node.pbr_material")
             .unwrap();
         let transform_node = body
             .nodes
@@ -2373,7 +2468,7 @@ fn rename_scene_object_command_renames_group_and_sweeps_section_and_undo_restore
         .unwrap()
         .nodes
         .iter()
-        .find(|n| n.type_id == "node.phong_material")
+        .find(|n| n.type_id == "node.pbr_material")
         .unwrap();
     let (mat_node_id, mat_u32_id) = (mat_node.node_id.clone(), mat_node.id);
 

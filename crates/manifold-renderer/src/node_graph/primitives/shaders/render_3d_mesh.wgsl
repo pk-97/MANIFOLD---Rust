@@ -1,6 +1,6 @@
 // node.render_3d_mesh — vertex+fragment pipeline that draws an
 // Array<MeshVertex> as a triangle list with depth testing and a
-// per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel).
+// per-MaterialKind fragment shader (Unlit / PBR / Cel).
 //
 // Material system M4: the renderer holds an AHashMap<MaterialKind,
 // GpuRenderPipeline> and dispatches the matching pipeline per the
@@ -10,7 +10,7 @@
 // shape at the same binding — we therefore share one Uniforms struct
 // across every entry point in this file. Per-entry-point MSL is
 // emitted by naga with only the bindings each entry actually
-// accesses, so unlit/phong/cel pipelines don't reference the envmap
+// accesses, so unlit/cel pipelines don't reference the envmap
 // binding even though the WGSL declares it.
 //
 // MeshVertex layout (80 bytes):
@@ -32,7 +32,6 @@
 //
 // Entry points:
 //   fs_unlit         — flat colour passthrough + emission
-//   fs_phong         — Lambert diffuse + Blinn-Phong specular
 //   fs_pbr           — Cook-Torrance D_GGX * G_Smith * F_Schlick + IBL
 //   fs_cel           — Lambert N·L quantized into cel_bands
 //   fs_world_pos     — emit interpolated world position (G-buffer)
@@ -70,7 +69,7 @@ struct Uniforms {
     emission: vec4<f32>,
     // x: metallic [0,1], y: roughness [0.01,1], z/w: reserved.
     pbr_metallic_roughness: vec4<f32>,
-    // rgb: specular tint, w: Phong exponent.
+    // Retired legacy lighting slot, kept reserved for uniform ABI stability.
     specular: vec4<f32>,
     // x: cel_bands (count, as f32), y: band_low, z: band_high, w: reserved.
     cel_params: vec4<f32>,
@@ -191,29 +190,6 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     }
     let rgb = albedo.rgb + u.emission.rgb;
     return vec4<f32>(rgb, albedo.a);
-}
-
-// Phong — Lambert diffuse + Blinn-Phong specular.
-@fragment
-fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv);
-    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
-        discard;
-    }
-    var N = resolve_normal(in.uv, in.world_normal);
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
-    if dot(N, V) < 0.0 {
-        N = -N;
-    }
-    let L = normalize(u.light_dir.xyz);
-    let H = normalize(L + V);
-    let n_dot_l = max(dot(N, L), 0.0);
-    let n_dot_h = max(dot(N, H), 0.0);
-    let ambient = u.light_color.a;
-    let diffuse = albedo.rgb * (1.0 - ambient) * n_dot_l + albedo.rgb * ambient;
-    let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
-    let lit = (diffuse + spec) * u.light_color.rgb * u.light_dir.w;
-    return vec4<f32>(lit + u.emission.rgb, albedo.a);
 }
 
 // PBR — Cook-Torrance microfacet specular + Lambert diffuse + IBL

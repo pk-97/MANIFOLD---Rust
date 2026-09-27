@@ -1527,6 +1527,24 @@ impl UIRoot {
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
+            PanelAction::Root(RootAction::SceneItemRightClicked) => {
+                self.object_cards_have_focus = true;
+                let mut items = card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
+                let selected = self.scene_setup_panel.selected_scene_item();
+                if let Some(selected) = selected {
+                    items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
+                    items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));
+                    items.push(DropdownItem::new("Move Down").with_action(PanelAction::Root(RootAction::SceneItemMove(1))));
+                    if !selected.is_light {
+                        items.push(DropdownItem::new("Frame Selected").with_action(PanelAction::Root(RootAction::SceneItemFrame)));
+                    }
+                } else {
+                    // Camera and World remain addressable for navigation; only paste applies.
+                    items.retain(|item| item.label.starts_with("Paste"));
+                }
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             PanelAction::Root(RootAction::ObjectModifierCardRightClicked(address)) => {
                 self.object_cards_have_focus = true;
                 self.scene_setup_panel.select_object_modifier_by_address(

@@ -37,6 +37,7 @@ struct Uniforms {
     base_color: vec4<f32>,
     emission: vec4<f32>,
     pbr_metallic_roughness: vec4<f32>,
+    // Retired legacy lighting slot, kept reserved for uniform ABI stability.
     specular: vec4<f32>,
     cel_params: vec4<f32>,
     // x: use_normal_map, y: use_roughness_map, z: use_base_color_map,
@@ -166,28 +167,6 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
     }
     let rgb = albedo.rgb + u.emission.rgb;
     return vec4<f32>(rgb, albedo.a);
-}
-
-@fragment
-fn fs_phong(in: VsOut) -> @location(0) vec4<f32> {
-    let albedo = resolve_albedo(in.uv);
-    if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
-        discard;
-    }
-    var N = resolve_normal(in.uv, in.world_normal);
-    let V = normalize(u.camera_pos.xyz - in.world_pos);
-    if dot(N, V) < 0.0 {
-        N = -N;
-    }
-    let L = normalize(u.light_dir.xyz);
-    let H = normalize(L + V);
-    let n_dot_l = max(dot(N, L), 0.0);
-    let n_dot_h = max(dot(N, H), 0.0);
-    let ambient = u.light_color.a;
-    let diffuse = albedo.rgb * (1.0 - ambient) * n_dot_l + albedo.rgb * ambient;
-    let spec = u.specular.rgb * pow(n_dot_h, max(u.specular.w, 1.0)) * n_dot_l;
-    let lit = (diffuse + spec) * u.light_color.rgb * u.light_dir.w;
-    return vec4<f32>(lit + u.emission.rgb, albedo.a);
 }
 
 @fragment

@@ -44,6 +44,15 @@ impl InputHandler {
             return true;
         }
 
+        if self.inspector_has_focus {
+            if (m.is_none() || m.is_command_only()) && matches!(logical_key, Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)) {
+                let delta = if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) { -1 } else { 1 };
+                if host.navigate_scene_selection(delta, m.is_command_only()) { return true; }
+            }
+            if m.is_none() && matches!(logical_key, Key::Named(NamedKey::F2 | NamedKey::Enter)) && host.rename_scene_selection() { return true; }
+            if m.is_none() && matches!(logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("f")) && host.frame_scene_selection() { return true; }
+        }
+
         // ── Backtick — toggle performance HUD (Unity line 217) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "`") && m.is_none() {
             host.toggle_performance_hud();
@@ -536,9 +545,20 @@ mod b14_keyboard_layer_tests {
         effect_duplicate_result: bool,
         effect_duplicate_calls: u32,
         clip_cut_calls: u32,
+        scene_focus: bool,
+        scene_navigation: Vec<(i32, bool)>,
+        scene_rename: usize,
+        scene_frame: usize,
     }
 
     impl TimelineInputHost for MockHost {
+        fn navigate_scene_selection(&mut self, delta: i32, reorder: bool) -> bool {
+            if !self.scene_focus { return false; }
+            self.scene_navigation.push((delta, reorder)); true
+        }
+        fn rename_scene_selection(&mut self) -> bool { if !self.scene_focus { return false; } self.scene_rename += 1; true }
+        fn frame_scene_selection(&mut self) -> bool { if !self.scene_focus { return false; } self.scene_frame += 1; true }
+
         fn handle_inspector_keyboard(&mut self) -> bool {
             false
         }
@@ -1017,4 +1037,24 @@ mod b14_keyboard_layer_tests {
         assert!(host.paste_pasteboard_files_calls.is_empty());
         assert!(host.paste_clips_calls.is_empty());
     }
+    #[test]
+    fn scene_keys_take_priority_over_timeline_navigation_only_with_focus() {
+        let (mut handler, mut host) = selected_host();
+        handler.inspector_has_focus = true;
+        host.scene_focus = true;
+        let command = Modifiers { command: true, ..Modifiers::NONE };
+        for (key, modifiers) in [(Key::Named(NamedKey::ArrowUp), Modifiers::NONE),
+            (Key::Named(NamedKey::ArrowDown), command), (Key::Named(NamedKey::F2), Modifiers::NONE),
+            (Key::Named(NamedKey::Enter), Modifiers::NONE), (Key::Character("f".into()), Modifiers::NONE)] {
+            assert!(handler.handle_keyboard_input(&key, modifiers, &mut host));
+        }
+        assert_eq!(host.scene_navigation, vec![(-1, false), (1, true)]);
+        assert_eq!((host.scene_rename, host.scene_frame), (2, 1));
+        assert!(host.move_layer_calls.is_empty());
+        handler.inspector_has_focus = false;
+        handler.handle_keyboard_input(&Key::Named(NamedKey::ArrowUp), Modifiers::NONE, &mut host);
+        assert_eq!(host.scene_navigation.len(), 2);
+        assert!(!host.move_layer_calls.is_empty());
+    }
+
 }

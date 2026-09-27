@@ -1816,21 +1816,21 @@ mod tests {
     use crate::node_graph::material::MaterialKind;
 
     /// Stand-in for a 3D mesh renderer that requires `light` whenever
-    /// the wired material's kind is `Phong`. Mirrors what
+    /// the wired material's kind is `Cel`. Mirrors what
     /// `render_3d_mesh` will declare after the M4 tranche.
-    struct PhongRequiresLightRenderer {
+    struct CelRequiresLightRenderer {
         type_id: EffectNodeType,
     }
 
-    impl PhongRequiresLightRenderer {
+    impl CelRequiresLightRenderer {
         fn new() -> Self {
             Self {
-                type_id: EffectNodeType::new("test.renderer_phong_needs_light"),
+                type_id: EffectNodeType::new("test.renderer_cel_needs_light"),
             }
         }
     }
 
-    impl crate::node_graph::EffectNode for PhongRequiresLightRenderer {
+    impl crate::node_graph::EffectNode for CelRequiresLightRenderer {
     fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
         crate::node_graph::depth_rule::DepthRule::Terminal
     }
@@ -1872,7 +1872,7 @@ mod tests {
         }
         fn conditional_requirements(&self) -> &'static [ConditionalRequirement] {
             const RULES: &[ConditionalRequirement] = &[ConditionalRequirement {
-                on_material_kind: MaterialKind::Phong,
+                on_material_kind: MaterialKind::Cel,
                 required_inputs: &["light"],
             }];
             RULES
@@ -1895,12 +1895,12 @@ mod tests {
     }
 
     #[test]
-    fn conditional_requirement_unmet_when_phong_material_lacks_light() {
-        use crate::node_graph::primitives::PhongMaterial;
+    fn conditional_requirement_unmet_when_cel_material_lacks_light() {
+        use crate::node_graph::primitives::CelMaterial;
 
         let mut g = Graph::new();
-        let mat = g.add_node(Box::new(PhongMaterial::new()));
-        let renderer = g.add_node(Box::new(PhongRequiresLightRenderer::new()));
+        let mat = g.add_node(Box::new(CelMaterial::new()));
+        let renderer = g.add_node(Box::new(CelRequiresLightRenderer::new()));
         g.connect((mat, "out"), (renderer, "material")).unwrap();
         let _ = renderer_to_final(&mut g, renderer);
 
@@ -1911,7 +1911,7 @@ mod tests {
                 missing_input,
             }) => {
                 assert_eq!(node, renderer);
-                assert_eq!(material_kind, MaterialKind::Phong);
+                assert_eq!(material_kind, MaterialKind::Cel);
                 assert_eq!(missing_input, "light");
             }
             other => panic!("expected ConditionalRequirementUnmet, got {other:?}"),
@@ -1920,12 +1920,12 @@ mod tests {
 
     #[test]
     fn conditional_requirement_satisfied_with_light_wired() {
-        use crate::node_graph::primitives::{LightNode, PhongMaterial};
+        use crate::node_graph::primitives::{CelMaterial, LightNode};
 
         let mut g = Graph::new();
-        let mat = g.add_node(Box::new(PhongMaterial::new()));
+        let mat = g.add_node(Box::new(CelMaterial::new()));
         let light = g.add_node(Box::new(LightNode::new()));
-        let renderer = g.add_node(Box::new(PhongRequiresLightRenderer::new()));
+        let renderer = g.add_node(Box::new(CelRequiresLightRenderer::new()));
         g.connect((mat, "out"), (renderer, "material")).unwrap();
         g.connect((light, "out"), (renderer, "light")).unwrap();
         let _ = renderer_to_final(&mut g, renderer);
@@ -1934,15 +1934,15 @@ mod tests {
     }
 
     #[test]
-    fn unlit_material_skips_phong_rule_so_no_light_required() {
-        // A renderer that only requires `light` on Phong should be
+    fn unlit_material_skips_cel_rule_so_no_light_required() {
+        // A renderer that only requires `light` on Cel should be
         // happy with an Unlit material and no light wired — the rule
         // doesn't fire for Unlit.
         use crate::node_graph::primitives::UnlitMaterial;
 
         let mut g = Graph::new();
         let mat = g.add_node(Box::new(UnlitMaterial::new()));
-        let renderer = g.add_node(Box::new(PhongRequiresLightRenderer::new()));
+        let renderer = g.add_node(Box::new(CelRequiresLightRenderer::new()));
         g.connect((mat, "out"), (renderer, "material")).unwrap();
         let _ = renderer_to_final(&mut g, renderer);
 

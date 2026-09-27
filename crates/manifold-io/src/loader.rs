@@ -205,6 +205,13 @@ pub fn load_project_from_json_with(
     let mut project: Project =
         serde_json::from_str(&migrated).map_err(|e| LoadError::Deserialize(format!("{e}")))?;
 
+    // Phong was a renderer primitive, so this data migration belongs after
+    // typed project deserialization but before graph validation, embedded
+    // preset installation, and (especially) instance manifest reconciliation.
+    // That ordering lets old graph bindings keep their outer ParamIds while
+    // their inner targets move to the generated math chain.
+    migrate_phong_graphs(&mut project);
+
     // Reject incompatible nested definitions before installing any file-owned
     // presets in the catalog or reconciling their parameter manifests.
     crate::graph_schema::validate_project_graphs(&project)
@@ -243,6 +250,42 @@ pub fn load_project_from_json_with(
     project.sync_bpm_from_tempo_map();
 
     Ok(project)
+}
+
+fn migrate_phong_graphs(project: &mut Project) {
+    let migrate = |graph: &mut manifold_core::effect_graph_def::EffectGraphDef| {
+        manifold_core::phong_migration::migrate_phong_to_pbr(graph);
+    };
+
+    for preset in &mut project.embedded_presets {
+        migrate(&mut preset.def);
+    }
+    for effect in &mut project.settings.master_effects {
+        if let Some(graph) = effect.graph.as_mut() {
+            migrate(graph);
+        }
+    }
+    for layer in &mut project.timeline.layers {
+        if let Some(generator) = layer.gen_params_mut()
+            && let Some(graph) = generator.graph_def_mut().as_mut()
+        {
+            migrate(graph);
+        }
+        if let Some(effects) = layer.effects.as_mut() {
+            for effect in effects {
+                if let Some(graph) = effect.graph.as_mut() {
+                    migrate(graph);
+                }
+            }
+        }
+        for clip in &mut layer.clips {
+            for effect in &mut clip.effects {
+                if let Some(graph) = effect.graph.as_mut() {
+                    migrate(graph);
+                }
+            }
+        }
+    }
 }
 
 /// Run post-load validation steps 5-7: structural validation, missing file
@@ -642,6 +685,64 @@ mod layer_type_dmx_round_trip_tests {
             layer.layer_type,
             LayerType::Dmx,
             "legacy string \"Led\" must load as Dmx (D15 alias)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod phong_graph_migration_tests {
+    use super::*;
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::preset_def::PresetKind;
+    use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset};
+
+    #[test]
+    fn embedded_phong_definition_is_migrated_before_loader_reconciliation() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [{
+                "id": 1,
+                "nodeId": "legacy-material",
+                "typeId": "node.phong_material",
+                "handle": "material",
+                "params": {
+                    "specular_power": {"type": "Float", "value": 32.0},
+                    "specular_color_r": {"type": "Float", "value": 0.3}
+                }
+            }],
+            "wires": [],
+            "presetMetadata": {
+                "id": "legacy-phong",
+                "displayName": "Legacy Phong",
+                "category": "Materials",
+                "oscPrefix": "legacy_phong",
+                "params": [],
+                "bindings": []
+            }
+        }))
+        .unwrap();
+
+        let mut project = Project::default();
+        project.embedded_presets.push(EmbeddedPreset {
+            kind: PresetKind::Effect,
+            def,
+            origin: EmbeddedOrigin::Saved,
+        });
+        let json = serde_json::to_string(&project).unwrap();
+
+        let loaded = load_project_from_json(&json).expect("legacy project loads");
+        let migrated = &loaded.embedded_presets[0].def.nodes[0];
+        assert_eq!(migrated.type_id, "node.pbr_material");
+        assert!(migrated.params.contains_key("roughness"));
+        assert!(migrated.params.contains_key("specular_tint_r"));
+        assert!(!migrated.params.contains_key("specular_power"));
+
+        let resaved = serde_json::to_string(&loaded).unwrap();
+        let reloaded = load_project_from_json(&resaved).expect("migrated project reloads");
+        assert_eq!(
+            reloaded.embedded_presets[0].def,
+            loaded.embedded_presets[0].def,
+            "the one-shot migration must be stable across save and reload"
         );
     }
 }

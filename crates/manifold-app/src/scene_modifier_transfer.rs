@@ -386,10 +386,10 @@ mod tests {
 
     fn fixture() -> (Project, LayerId, NodeId, String) {
         let mut project = Project::default();
-        let mut layer = Layer::new_generator("Source".into(), PresetTypeId::new("WaveGrid"), 0);
+        let mut layer = Layer::new_generator("Source".into(), PresetTypeId::new("Scene"), 0);
         let id = layer.layer_id.clone();
         let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveGrid"))
+            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
                 .unwrap()
                 .clone();
         layer.gen_params_or_init().graph = Some(graph);
@@ -433,7 +433,7 @@ mod tests {
             .unwrap()
             .value = 0.9;
         let destination =
-            Layer::new_generator("Destination".into(), PresetTypeId::new("WaveRing"), 1);
+            Layer::new_generator("Destination".into(), PresetTypeId::new("PhysicsBoxes"), 1);
         let id = destination.layer_id.clone();
         project.timeline.layers.push(destination);
         let target = GraphTarget::Generator(id.clone());
@@ -444,7 +444,7 @@ mod tests {
             crate::scene_modifier_edit::with_admission(command),
             &mut project,
         );
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         let host = project.graph_target_owner(&target).unwrap();
         let graph = host.graph.as_ref().unwrap();
         assert_ne!(graph.scene_modifiers[0].id, modifier);
@@ -461,7 +461,7 @@ mod tests {
             before
         );
         assert!(service.redo(&mut project));
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         assert_eq!(
             serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap(),
             after
@@ -570,7 +570,7 @@ mod tests {
             crate::scene_modifier_edit::with_admission(command),
             &mut project,
         );
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
 
         let host = project.graph_target_owner(&target).unwrap();
         let graph = host.graph.as_ref().unwrap();
@@ -607,7 +607,7 @@ mod tests {
             before
         );
         assert!(service.redo(&mut project));
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         assert_eq!(
             serde_json::to_value(project.graph_target_owner(&target).unwrap()).unwrap(),
             after
@@ -644,7 +644,7 @@ mod tests {
             }],
         };
         let graph =
-            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaveRing"))
+            manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("PhysicsBoxes"))
                 .unwrap();
         assert!(
             transfer(
@@ -669,14 +669,14 @@ mod tests {
         let command = crate::generator_change::build_change(
             &project,
             id.clone(),
-            PresetTypeId::new("WaveRing"),
+            PresetTypeId::new("PhysicsBoxes"),
         )
         .unwrap();
         service.execute(
             crate::scene_modifier_edit::with_admission(command),
             &mut project,
         );
-        assert!(service.take_rejection().is_none());
+        assert_eq!(service.take_rejection(), None);
         let host = project.graph_target_owner(&target).unwrap();
         assert_eq!(host.graph.as_ref().unwrap().scene_modifiers[0].id, modifier);
         assert_eq!(host.params.get(&amount).unwrap().base, 0.37);
@@ -692,7 +692,7 @@ mod tests {
                 .unwrap()
                 .generator_type()
                 .as_str(),
-            "WaveRing"
+            "PhysicsBoxes"
         );
         assert!(service.undo(&mut project));
         assert_eq!(
@@ -701,7 +701,7 @@ mod tests {
                 .unwrap()
                 .generator_type()
                 .as_str(),
-            "WaveGrid"
+            "Scene"
         );
         assert!(service.redo(&mut project));
         assert_eq!(
@@ -710,7 +710,7 @@ mod tests {
                 .unwrap()
                 .generator_type()
                 .as_str(),
-            "WaveRing"
+            "PhysicsBoxes"
         );
     }
 }

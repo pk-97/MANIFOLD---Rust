@@ -1190,7 +1190,7 @@ pub trait EffectNode: Send {
     /// Default: empty — most nodes have unconditional requirements
     /// (declared via [`NodePort::required`](crate::node_graph::ports::NodePort)).
     /// The bundled 3D mesh renderers override this to encode their
-    /// per-MaterialKind input requirements (Phong/Pbr/Cel need a
+    /// per-MaterialKind input requirements (Pbr/Cel need a
     /// `light`; Pbr also needs an `envmap`; Unlit needs neither).
     fn conditional_requirements(&self) -> &'static [ConditionalRequirement] {
         &[]

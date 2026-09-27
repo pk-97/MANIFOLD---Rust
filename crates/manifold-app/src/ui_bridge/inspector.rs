@@ -18,7 +18,7 @@ mod scene_card_convergence_tests {
     //! ParamSnapshot`/`ParamChanged`/`ParamCommit` to) yields exactly ONE
     //! undo unit whose undo restores the pre-drag value, and the write
     //! lands in the layer's own instance def (mirrors project.rs's
-    //! `scene_layer_project` SceneStarter fixture — C7's precedent for
+    //! `scene_layer_project` Scene fixture — C7's precedent for
     //! testing a scene write against the layer's REAL def, not a bare
     //! `EffectGraphDef` literal).
     // Test-only imports, relocated from file scope at the P-D landing: this
@@ -42,20 +42,30 @@ mod scene_card_convergence_tests {
     };
     use manifold_ui::{DriverConfigAction, PanelAction, ScrubPhase, ScrubValue, ValueRef};
 
-    /// A fresh SceneStarter generator layer + its `render_scene` node id —
-    /// same fixture `project.rs`'s `scene_layer_project` uses. SceneStarter
-    /// ships a wired `node.atmosphere` (fog_density 0.04, height_falloff
-    /// 0.3), so `AtmosphereVm::from_def` resolves `Wired` without any
-    /// synthetic graph surgery.
+    /// A fresh Scene generator layer + its `render_scene` node id —
+    /// same starter as `project.rs`, with Fog explicitly added for the
+    /// parameter routing checks below.
     fn scene_layer_project() -> (Project, LayerId) {
         let mut project = Project::default();
         let idx = project.timeline.add_layer(
             "Scene",
             LayerType::Generator,
-            PresetTypeId::from_string("SceneStarter".to_string()),
+            PresetTypeId::from_string("Scene".to_string()),
         );
         let layer_id = project.timeline.layers[idx].layer_id.clone();
+        add_fixture_fog(&mut project, &layer_id);
         (project, layer_id)
+    }
+
+    fn add_fixture_fog(project: &mut Project, layer_id: &LayerId) {
+        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("Scene"))
+            .unwrap().clone();
+        let scene = def.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
+        let mut fog = manifold_editing::commands::graph::AddSceneFogCommand::new(
+            manifold_core::GraphTarget::Generator(layer_id.clone()), Vec::new(), scene,
+            (0.0, 0.0), manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.atmosphere"), def,
+        );
+        manifold_editing::command::Command::execute(&mut fog, project);
     }
 
     /// The layer's fog-density write address, read straight off the SAME
@@ -69,14 +79,14 @@ mod scene_card_convergence_tests {
         layer.generator_graph().cloned().unwrap_or_else(|| {
             manifold_renderer::node_graph::bundled_preset_def(&layer.generator_type().clone())
                 .cloned()
-                .expect("SceneStarter is a bundled preset")
+                .expect("Scene is a bundled preset")
         })
     }
 
     fn density_node_id(def: &manifold_core::effect_graph_def::EffectGraphDef) -> u32 {
-        let vm = SceneVm::from_def(def).expect("SceneStarter resolves as a scene");
+        let vm = SceneVm::from_def(def).expect("Scene resolves as a scene");
         let AtmosphereVm::Wired(a) = vm.atmosphere else {
-            panic!("SceneStarter's atmosphere must be Wired");
+            panic!("Scene's atmosphere must be Wired");
         };
         a.node_doc_id
     }
@@ -736,7 +746,7 @@ mod scene_card_convergence_tests {
         /// fog_density is a P1-stamped exposed card param from creation —
         /// `migrate_scene_exposures` runs on every bundled generator preset
         /// at load (`bundled_generator_presets.rs`'s own comment), so
-        /// SceneStarter's atmosphere node is ALREADY exposed, no
+        /// Scene's atmosphere node is ALREADY exposed, no
         /// expose-then-arm dance through the scene panel's (now-dead
         /// this slice, per BUG_BACKLOG.md) synthesized-id path needed —
         /// this is byte-for-byte the same "real exposed param" every other
@@ -771,7 +781,7 @@ mod scene_card_convergence_tests {
                         "fog_density",
                     )
                 })
-                .expect("SceneStarter's fog_density must already be exposed by P1 stamping");
+                .expect("Scene's fog_density must already be exposed by P1 stamping");
             // The OLD synth-id `DriverToggle` dispatch this fixture used to
             // run did double duty: it exposed AND armed an enabled driver in
             // one shot (BUG-249's "expose-then-arm"). `driver_toggle_atomic`/
@@ -1339,22 +1349,24 @@ mod scene_card_convergence_tests {
             card_param_case(true);
         }
 
-        /// Two SceneStarter generator layers (same structural preset, so a
+        /// Two Scene generator layers (same structural preset, so a
         /// P1-stamped exposed param id resolves in either instance).
         fn two_scene_layer_project() -> (Project, LayerId, LayerId) {
             let mut project = Project::default();
             let idx_a = project.timeline.add_layer(
                 "A",
                 LayerType::Generator,
-                PresetTypeId::from_string("SceneStarter".to_string()),
+                PresetTypeId::from_string("Scene".to_string()),
             );
             let layer_a = project.timeline.layers[idx_a].layer_id.clone();
             let idx_b = project.timeline.add_layer(
                 "B",
                 LayerType::Generator,
-                PresetTypeId::from_string("SceneStarter".to_string()),
+                PresetTypeId::from_string("Scene".to_string()),
             );
             let layer_b = project.timeline.layers[idx_b].layer_id.clone();
+            add_fixture_fog(&mut project, &layer_a);
+            add_fixture_fog(&mut project, &layer_b);
             (project, layer_a, layer_b)
         }
 
@@ -3632,7 +3644,7 @@ mod scene_card_convergence_tests {
             let idx2 = project.timeline.add_layer(
                 "Scene2",
                 LayerType::Generator,
-                PresetTypeId::from_string("SceneStarter".to_string()),
+                PresetTypeId::from_string("Scene".to_string()),
             );
             let layer_id_2 = project.timeline.layers[idx2].layer_id.clone();
             let idx1 = project.timeline.find_layer_index_by_id(&layer_id).unwrap();

@@ -1058,6 +1058,20 @@ impl ContentThread {
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
+            ContentCommand::SceneItem(action) => {
+                let selection = action.selection_request();
+                let result = self.engine.project().ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::scene_item_transfer::build_action(project, action));
+                match result {
+                    Ok(command) => {
+                        let command = if let Some(request) = selection {
+                            ContentCommand::ExecuteSelecting(command, request)
+                        } else { ContentCommand::ExecuteOnContent(command) };
+                        self.handle_command(command);
+                    }
+                    Err(reason) => self.report_graph_edit_rejection(reason),
+                }
+            }
             ContentCommand::ObjectModifier(action) => {
                 let (layer_id, owner_id) = match &action {
                     crate::object_modifier_transfer::ObjectModifierAction::Add {
@@ -2211,7 +2225,7 @@ mod modifier_selection_tests {
     fn first_modifier_selection_can_compare_against_the_catalog_graph() {
         let mut project = manifold_core::project::Project::default();
         let layer = manifold_core::layer::Layer::new_generator(
-            "Scene".into(), manifold_core::PresetTypeId::new("SceneStarter"), 0,
+            "Scene".into(), manifold_core::PresetTypeId::new("Scene"), 0,
         );
         let layer_id = layer.layer_id.clone();
         project.timeline.layers.push(layer);

@@ -14,6 +14,25 @@ Peter, 2026-07-17, looking at the shipped v2 panel against a real GLB import: *"
 
 Binding constraints checked (DESIGN_AUTHORING section 1): no hot path (panel rebuild is event-gated, stays event-gated); thread residency unchanged (UI-local panel + `PanelAction` dispatch, house model); no time model involvement; **no persistence** (`SceneSelection` is explicitly never serialized — scene_setup_panel.rs:559); performance surface — yes, the whole point: selection latency and scrub affordance are performer-facing.
 
+## 2026-09-27 scene editing amendment
+
+Status: SHIPPED · BUG-oxxi. The selected outliner object or light owns
+Copy, Cut, Paste, Duplicate and Delete while the scene panel has focus.
+Modifier-card selection retains its existing shortcuts. Up/Down navigates
+visible rows; Command/Ctrl+Up/Down reorders scene inputs without changing
+object identity; Return/F2 renames; F frames the selected object. Text entry
+retains keyboard priority. Context-menu and header actions submit the same
+content-owned commands as keyboard actions.
+
+Copy captures an immutable graph and parameter snapshot, including upstream
+geometry, material, maps, animation and modifier dependencies. Cut captures
+before removal. Paste remaps identities and bound controls, copies modulation,
+and commits one undo unit; successful insertion selects the new item. Undo
+restores the prior instance and redo preserves inserted identities. Physics
+copy transfers only the selected body into the destination world and rejects
+ambiguous ownership or capacity overflow. Camera and World are navigation and
+paste destinations, not deletable scene items.
+
 ## 1. Audit — what exists (verified 2026-07-17, against `624d34a4`)
 
 | Piece | Where | State |

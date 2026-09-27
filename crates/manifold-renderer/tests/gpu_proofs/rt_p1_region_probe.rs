@@ -131,11 +131,11 @@ fn scene_json(rt_enabled: bool) -> String {
             "tilt":{{"type":"Float","value":{TILT}}},
             "distance":{{"type":"Float","value":{DISTANCE}}},
             "fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{
+        {{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{{
             "color_r":{{"type":"Float","value":1.0}},
             "color_g":{{"type":"Float","value":1.0}},
             "color_b":{{"type":"Float","value":1.0}},
-            "ambient":{{"type":"Float","value":0.05}}}}}},
+            "band_low":{{"type":"Float","value":0.05}}}}}},
         {{"id":30,"typeId":"node.light","nodeId":"sun_0","params":{{
             "mode":{{"type":"Enum","value":0}},
             "pos_x":{{"type":"Float","value":3.0}},

@@ -8,7 +8,7 @@
 //! `EffectGraphDef`, at the light/camera node's OWN `node.params` entry,
 //! root-scoped). What THIS proves is the other half of BUG-237's own
 //! hypothesis space: that a def mutated EXACTLY that way — a plain
-//! `node.params` float overwrite on the SceneStarter preset, the same
+//! `node.params` float overwrite on the Scene preset, the same
 //! shape `SetGraphNodeParamCommand::execute` produces — actually renders
 //! DIFFERENT pixels through the real `PresetRuntime`. Together the two
 //! halves close BUG-237: card row → command → def (proven in
@@ -39,7 +39,7 @@ fn render_def(def: &EffectGraphDef) -> (Vec<u8>, u32, u32) {
         GpuTextureFormat::Rgba16Float,
         None,
     )
-    .expect("mutated SceneStarter def must build");
+    .expect("mutated Scene def must build");
 
     let target = h.make_target("bug237-light-camera-commit-render-proof");
     for frame in 0..2 {
@@ -101,8 +101,8 @@ fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
 }
 
 fn scene_starter_def() -> EffectGraphDef {
-    let json = include_str!("../../assets/generator-presets/SceneStarter.json");
-    serde_json::from_str(json).expect("SceneStarter.json must parse")
+    let json = include_str!("../../assets/generator-presets/Scene.json");
+    serde_json::from_str(json).expect("Scene.json must parse")
 }
 
 /// BUG-237, Light half: node 4 (the "Sun" light, `mode: 0`) at its default
@@ -114,7 +114,7 @@ fn scene_starter_def() -> EffectGraphDef {
 fn sun_intensity_commit_visibly_changes_the_render() {
     let baseline = scene_starter_def();
     let mut bright = baseline.clone();
-    let light = bright.nodes.iter_mut().find(|n| n.id == 4).expect("SceneStarter node 4 must be the Sun light");
+    let light = bright.nodes.iter_mut().find(|n| n.id == 4).expect("Scene node 4 must be the Sun light");
     assert_eq!(light.type_id, "node.light", "node 4 must be a light");
     light.params.insert("intensity".to_string(), SerializedParamValue::Float { value: 8.0 });
 
@@ -143,7 +143,7 @@ fn sun_intensity_commit_visibly_changes_the_render() {
 fn camera_orbit_commit_visibly_changes_the_framing() {
     let baseline = scene_starter_def();
     let mut orbited = baseline.clone();
-    let cam = orbited.nodes.iter_mut().find(|n| n.id == 1).expect("SceneStarter node 1 must be the orbit camera");
+    let cam = orbited.nodes.iter_mut().find(|n| n.id == 1).expect("Scene node 1 must be the orbit camera");
     assert_eq!(cam.type_id, "node.orbit_camera", "node 1 must be the orbit camera");
     let base_orbit = match cam.params.get("orbit") {
         Some(SerializedParamValue::Float { value }) => *value,

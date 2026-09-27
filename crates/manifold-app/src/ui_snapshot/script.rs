@@ -649,6 +649,16 @@ impl Runner {
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
                 }
+                ContentCommand::SceneItem(action) => {
+                    let selection = action.selection_request();
+                    match crate::scene_item_transfer::build_action(&data.project, action) {
+                        Ok(command) => match selection {
+                            Some(request) => ContentCommand::ExecuteSelecting(command, request),
+                            None => ContentCommand::ExecuteOnContent(command),
+                        },
+                        Err(message) => ContentCommand::GraphEditRejected(message),
+                    }
+                }
                 other => other,
             };
             match cmd {

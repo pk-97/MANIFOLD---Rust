@@ -1614,10 +1614,7 @@ impl Application {
                             new_handle,
                             default,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                     }
                     self.needs_rebuild = true;
                 }
@@ -1641,10 +1638,7 @@ impl Application {
                             new_handle,
                             default,
                         );
-                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                            Box::new(cmd);
-                        boxed.execute(&mut self.local_project);
-                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                        self.send_content_cmd(ContentCommand::ExecuteOnContent(Box::new(cmd)));
                     }
                     self.needs_rebuild = true;
                 }

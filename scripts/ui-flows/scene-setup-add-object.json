@@ -38,7 +38,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 3"
+          "text": "\u25a0 Object 3"
         }
       },
       "check": {
@@ -65,10 +65,34 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "■ Object 3"
+          "text": "\u25a0 Object 3"
         }
       },
       "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Coat"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
     }
   }
 ]

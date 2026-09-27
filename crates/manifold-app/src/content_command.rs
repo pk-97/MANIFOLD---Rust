@@ -26,6 +26,7 @@ pub enum ContentCommand {
     ExecuteSelecting(Box<dyn Command + Send>, crate::edit_selection::SelectAfterEdit),
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
     ObjectModifier(crate::object_modifier_transfer::ObjectModifierAction),
+    SceneItem(crate::scene_item_transfer::SceneItemAction),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
     GraphEditRejected(String),
     ExecuteBatch(Vec<Box<dyn Command>>, String),

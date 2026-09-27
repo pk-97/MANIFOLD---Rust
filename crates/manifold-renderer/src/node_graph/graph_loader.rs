@@ -717,6 +717,20 @@ pub fn instantiate_def(
         });
     }
 
+    // Standalone preset definitions can reach the renderer without passing
+    // through the project loader (catalog imports, previews, and editor
+    // snapshots). Apply the one-shot Phong migration at this shared choke
+    // point, while the common current-document path stays borrowed.
+    let phong_migrated;
+    let def = if manifold_core::phong_migration::contains_phong_materials(def) {
+        let mut owned = def.clone();
+        manifold_core::phong_migration::migrate_phong_to_pbr(&mut owned);
+        phong_migrated = owned;
+        &phong_migrated
+    } else {
+        def
+    };
+
     // All raw host loads use the same structural preparation before any
     // primitive is installed. A standalone recipe still requires attachment.
     let modifier_owner = def;
@@ -1900,6 +1914,160 @@ mod tests {
 
     fn registry() -> PrimitiveRegistry {
         PrimitiveRegistry::with_builtin()
+    }
+
+    #[test]
+    fn standalone_old_phong_definition_is_migrated_before_instantiation() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [{
+                "id": 1,
+                "nodeId": "material",
+                "typeId": "node.phong_material",
+                "handle": "material",
+                "params": {
+                    "specular_power": {"type": "Float", "value": 32.0}
+                }
+            }],
+            "wires": []
+        }))
+        .unwrap();
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("standalone legacy material loads through the migration");
+        let id = graph.node_id_by_handle("material").expect("material handle");
+        let node = graph.get_node(id).expect("material node");
+        assert_eq!(node.node.type_id().as_str(), "node.pbr_material");
+        assert!(node.params.get("roughness").is_some());
+    }
+
+    #[test]
+    fn standalone_old_phong_render_mesh_gets_neutral_environment() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [
+                {"id": 1, "nodeId": "material", "typeId": "node.phong_material", "handle": "material"},
+                {"id": 2, "nodeId": "mesh", "typeId": "node.cube_mesh", "handle": "mesh"},
+                {"id": 3, "nodeId": "camera", "typeId": "node.camera_orbit", "handle": "camera"},
+                {"id": 4, "nodeId": "light", "typeId": "node.light", "handle": "light"},
+                {"id": 5, "nodeId": "render", "typeId": "node.render_mesh", "handle": "render"}
+            ],
+            "wires": [
+                {"fromNode": 2, "fromPort": "vertices", "toNode": 5, "toPort": "vertices"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "camera"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "material"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "light"}
+            ]
+        })).unwrap();
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("legacy Phong render graph gets an explicit neutral environment");
+        let material_id = graph.node_id_by_handle("material").expect("material handle");
+        assert_eq!(
+            graph.get_node(material_id).unwrap().node.type_id().as_str(),
+            "node.pbr_material"
+        );
+        let environment_id = graph
+            .node_id_by_handle("render_phong_environment")
+            .expect("migration-added environment handle");
+        assert_eq!(
+            graph.get_node(environment_id).unwrap().node.type_id().as_str(),
+            "node.bake_environment"
+        );
+    }
+
+    #[test]
+    fn standalone_old_phong_render_scene_material_port_gets_neutral_environment() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [
+                {"id": 1, "nodeId": "material", "typeId": "node.phong_material", "handle": "material"},
+                {"id": 2, "nodeId": "mesh", "typeId": "node.cube_mesh", "handle": "mesh"},
+                {"id": 3, "nodeId": "camera", "typeId": "node.camera_orbit", "handle": "camera"},
+                {"id": 4, "nodeId": "light", "typeId": "node.light", "handle": "light"},
+                {"id": 5, "nodeId": "render_scene", "typeId": "node.render_scene", "handle": "render_scene",
+                 "params": {"objects": {"type": "Int", "value": 1}, "lights": {"type": "Int", "value": 1}}}
+            ],
+            "wires": [
+                {"fromNode": 2, "fromPort": "vertices", "toNode": 5, "toPort": "mesh_0"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "material_0"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "camera"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "light_0"}
+            ]
+        })).unwrap();
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("legacy render_scene material port gets an explicit environment");
+        let environment_id = graph
+            .node_id_by_handle("render_scene_phong_environment")
+            .expect("render_scene migration environment handle");
+        assert_eq!(
+            graph.get_node(environment_id).unwrap().node.type_id().as_str(),
+            "node.bake_environment"
+        );
+    }
+
+    #[test]
+    fn grouped_scene_object_from_old_phong_gets_scene_environment() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [
+                {"id": 10, "nodeId": "object_group", "typeId": "group", "handle": "object_group",
+                 "group": {
+                    "interface": {"inputs": [], "outputs": [{"name": "object", "portType": "Object"}]},
+                    "nodes": [
+                        {"id": 11, "nodeId": "material", "typeId": "node.phong_material", "handle": "material"},
+                        {"id": 12, "nodeId": "mesh", "typeId": "node.cube_mesh", "handle": "mesh"},
+                        {"id": 13, "nodeId": "scene_object", "typeId": "node.scene_object", "handle": "scene_object"},
+                        {"id": 14, "nodeId": "group_output", "typeId": "system.group_output", "handle": "output"}
+                    ],
+                    "wires": [
+                        {"fromNode": 12, "fromPort": "vertices", "toNode": 13, "toPort": "vertices"},
+                        {"fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "material"},
+                        {"fromNode": 13, "fromPort": "object", "toNode": 14, "toPort": "object"}
+                    ]
+                 }},
+                {"id": 20, "nodeId": "camera", "typeId": "node.camera_orbit", "handle": "camera"},
+                {"id": 21, "nodeId": "render_scene", "typeId": "node.render_scene", "handle": "render_scene",
+                 "params": {"objects": {"type": "Int", "value": 1}, "lights": {"type": "Int", "value": 0}}}
+            ],
+            "wires": [
+                {"fromNode": 10, "fromPort": "object", "toNode": 21, "toPort": "object_0"},
+                {"fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "camera"}
+            ]
+        })).unwrap();
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("grouped scene object gets an explicit environment");
+        assert!(graph.node_id_by_handle("render_scene_phong_environment").is_some());
     }
 
     /// Standalone instantiation: every boundary node lives in the graph;

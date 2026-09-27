@@ -74,7 +74,7 @@ fn caster_scene(
         {{"id":6,"typeId":"node.make_triangles","nodeId":"occ_tris","params":{{"src_cols":{{"type":"Int","value":10}},"src_rows":{{"type":"Int","value":10}}}}}},
         {{"id":7,"typeId":"node.transform_3d","nodeId":"occ_xform","params":{{"pos_y":{{"type":"Float","value":1.5}}}}}},
         {{"id":3,"typeId":"node.orbit_camera","nodeId":"cam","params":{{"orbit":{{"type":"Float","value":{ORBIT}}},"tilt":{{"type":"Float","value":{TILT}}},"distance":{{"type":"Float","value":{DISTANCE}}},"fov_y":{{"type":"Float","value":{FOV_Y}}}}}}},
-        {{"id":4,"typeId":"node.phong_material","nodeId":"mat","params":{{"color_r":{{"type":"Float","value":1.0}},"color_g":{{"type":"Float","value":1.0}},"color_b":{{"type":"Float","value":1.0}},"ambient":{{"type":"Float","value":0.05}}}}}},
+        {{"id":4,"typeId":"node.cel_material","nodeId":"mat","params":{{"color_r":{{"type":"Float","value":1.0}},"color_g":{{"type":"Float","value":1.0}},"color_b":{{"type":"Float","value":1.0}},"band_low":{{"type":"Float","value":0.05}}}}}},
         {lights},
         {{"id":20,"typeId":"node.render_scene","nodeId":"scene","params":{{"objects":{{"type":"Int","value":2}},"lights":{{"type":"Int","value":9}},"rt_enabled":{{"type":"Bool","value":{rt_enabled}}},"rt_shadows":{{"type":"Bool","value":{rt_shadows}}},"rt_ao":{{"type":"Bool","value":false}},"rt_gi":{{"type":"Bool","value":false}},"rt_reflections":{{"type":"Bool","value":false}}}}}},
         {{"id":99,"typeId":"system.final_output","nodeId":"out"}}
