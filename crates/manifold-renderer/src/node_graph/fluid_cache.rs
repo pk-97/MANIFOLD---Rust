@@ -5,7 +5,7 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::fluid::{CoupledRigidFrame, FluidSettings, TICK};
+use super::fluid::{CoupledRigidFrame, FluidSettings, FluidTakeIdentity, FluidTakeReplay, TICK};
 use super::transform::Transform;
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::fluid::WhitewaterFrame;
@@ -19,7 +19,12 @@ const LEGACY_TIME_STEPS_FORMAT_VERSION: u32 = 5;
 const MESH_VERTEX_FORMAT_VERSION: u32 = 6;
 const DOMAIN_FORMAT_VERSION: u32 = 7;
 const PAIRED_FORMAT_VERSION: u32 = 8;
-const FORMAT_VERSION: u32 = 9;
+const LEGACY_SOURCE_IDENTITY_FORMAT_VERSION: u32 = 9;
+const FORMAT_VERSION: u32 = 10;
+const TAKE_TICK_LIMIT: u64 = (1 << 53) - 1;
+const BINDING_UNBOUND: u8 = 0;
+const BINDING_PENDING: u8 = 1;
+const BINDING_BOUND: u8 = 2;
 const LEGACY_MESH_VERTEX_SIZE: usize = 64;
 const MANIFEST: &str = "manifest.bin";
 const MAX_VERTICES: usize = 3_145_728;
@@ -45,12 +50,37 @@ impl CacheMode {
 
 pub(crate) struct CacheWriter {
     directory: Arc<PathBuf>,
+    settings: FluidSettings,
     max_vertices: usize,
     max_whitewater: usize,
+    binding: CacheManifestBinding,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheManifestBinding {
+    Unbound,
+    Pending,
+    Bound(FluidTakeIdentity),
 }
 
 impl CacheWriter {
+    #[cfg(test)]
     pub(crate) fn create(directory: Arc<PathBuf>, settings: FluidSettings) -> Result<Self, String> {
+        Self::create_inner(directory, settings, CacheManifestBinding::Unbound)
+    }
+
+    pub(crate) fn create_for_take(
+        directory: Arc<PathBuf>,
+        settings: FluidSettings,
+    ) -> Result<Self, String> {
+        Self::create_inner(directory, settings, CacheManifestBinding::Pending)
+    }
+
+    fn create_inner(
+        directory: Arc<PathBuf>,
+        settings: FluidSettings,
+        binding: CacheManifestBinding,
+    ) -> Result<Self, String> {
         if directory.as_os_str().is_empty() {
             return Err("Water cache record path is empty".into());
         }
@@ -67,12 +97,40 @@ impl CacheWriter {
         }
         fs::create_dir_all(directory.as_ref())
             .map_err(|error| format!("Water cache could not create its directory: {error}"))?;
-        write_manifest_atomic(directory.as_ref(), settings)?;
+        write_manifest_atomic(directory.as_ref(), settings, binding)?;
         Ok(Self {
             directory,
+            settings,
             max_vertices: settings.max_vertices,
             max_whitewater: settings.whitewater.max_particles as usize,
+            binding,
         })
+    }
+
+    pub(crate) fn publish_take_prefix(
+        &mut self,
+        identity: FluidTakeIdentity,
+    ) -> Result<(), String> {
+        validate_take_identity(identity)
+            .map_err(|error| format!("Water cache take prefix identity is invalid: {error}"))?;
+        if self.binding == CacheManifestBinding::Unbound {
+            return Err("Water cache writer is not bound to a take".into());
+        }
+        if let CacheManifestBinding::Bound(previous) = self.binding {
+            if identity.setup != previous.setup {
+                return Err("Water cache take prefix identity changed after publication".into());
+            }
+            if identity.completed_tick < previous.completed_tick {
+                return Err("Water cache take prefix regressed after publication".into());
+            }
+        }
+        write_manifest_atomic(
+            self.directory.as_ref(),
+            self.settings,
+            CacheManifestBinding::Bound(identity),
+        )?;
+        self.binding = CacheManifestBinding::Bound(identity);
+        Ok(())
     }
 
     pub(crate) fn append(
@@ -142,6 +200,7 @@ impl CacheWriter {
 pub(crate) struct CacheReader {
     directory: Arc<PathBuf>,
     format_version: u32,
+    take_identity: Option<FluidTakeIdentity>,
     max_vertices: usize,
     max_whitewater: usize,
 }
@@ -154,11 +213,35 @@ impl CacheReader {
         let manifest = File::open(directory.join(MANIFEST))
             .map_err(|error| format!("Water cache playback could not open manifest: {error}"))?;
         let mut reader = BufReader::new(manifest);
-        let format_version = read_manifest(&mut reader, settings)
+        let (format_version, binding) = read_manifest(&mut reader, settings)
             .map_err(|error| format!("Water cache playback rejected manifest: {error}"))?;
+        let take_identity = match binding {
+            CacheManifestBinding::Unbound => None,
+            CacheManifestBinding::Pending => {
+                return Err("Water cache playback rejected pending take prefix".into());
+            }
+            CacheManifestBinding::Bound(identity) => {
+                let replay = FluidTakeReplay::open(directory.as_ref()).map_err(|error| {
+                    format!("Water cache playback could not validate its committed take: {error}")
+                })?;
+                if replay.settings() != settings {
+                    return Err(
+                        "Water cache playback take settings do not match its committed take".into(),
+                    );
+                }
+                if replay.identity() != identity {
+                    return Err(
+                        "Water cache playback take identity does not match its committed take"
+                            .into(),
+                    );
+                }
+                Some(identity)
+            }
+        };
         Ok(Self {
             directory,
             format_version,
+            take_identity,
             max_vertices: settings.max_vertices,
             max_whitewater: settings.whitewater.max_particles as usize,
         })
@@ -186,6 +269,14 @@ impl CacheReader {
         whitewater: &mut WhitewaterFrame,
         rigid: Option<&mut CoupledRigidFrame>,
     ) -> Result<(Transform, FrameStats, bool), String> {
+        if let Some(identity) = self.take_identity()
+            && tick > identity.completed_tick
+        {
+            return Err(format!(
+                "Water cache frame tick {tick} exceeds committed take prefix {}",
+                identity.completed_tick
+            ));
+        }
         let path = frame_path(self.directory.as_ref(), tick);
         let file = File::open(&path)
             .map_err(|error| format!("Water cache has no baked frame for tick {tick}: {error}"))?;
@@ -211,6 +302,10 @@ impl CacheReader {
         }
         Ok((obstacle, stats, paired))
     }
+
+    pub(crate) fn take_identity(&self) -> Option<FluidTakeIdentity> {
+        self.take_identity
+    }
 }
 
 fn frame_path(directory: &Path, tick: u64) -> PathBuf {
@@ -225,7 +320,11 @@ fn temporary_path(path: &Path) -> PathBuf {
     ))
 }
 
-fn write_manifest_atomic(directory: &Path, settings: FluidSettings) -> Result<(), String> {
+fn write_manifest_atomic(
+    directory: &Path,
+    settings: FluidSettings,
+    binding: CacheManifestBinding,
+) -> Result<(), String> {
     let path = directory.join(MANIFEST);
     let temporary = temporary_path(&path);
     let file = OpenOptions::new()
@@ -234,7 +333,7 @@ fn write_manifest_atomic(directory: &Path, settings: FluidSettings) -> Result<()
         .open(&temporary)
         .map_err(|error| format!("Water cache could not create manifest: {error}"))?;
     let mut writer = BufWriter::new(file);
-    write_header(&mut writer, settings)
+    write_header(&mut writer, settings, binding)
         .map_err(|error| format!("Water cache manifest could not be written: {error}"))?;
     writer
         .flush()
@@ -244,17 +343,35 @@ fn write_manifest_atomic(directory: &Path, settings: FluidSettings) -> Result<()
         .map_err(|error| format!("Water cache manifest could not publish atomically: {error}"))
 }
 
-fn write_header(writer: &mut impl Write, settings: FluidSettings) -> io::Result<()> {
+fn write_header(
+    writer: &mut impl Write,
+    settings: FluidSettings,
+    binding: CacheManifestBinding,
+) -> io::Result<()> {
     writer.write_all(MAGIC)?;
     write_u32(writer, FORMAT_VERSION)?;
     writer.write_all(manifold_fluids::UPSTREAM_REVISION.as_bytes())?;
     write_f64(writer, TICK)?;
     writer.write_all(&super::fluid::identity::solver_identity())?;
     write_settings(writer, settings)?;
-    write_u64(writer, settings.seed)
+    write_u64(writer, settings.seed)?;
+    match binding {
+        CacheManifestBinding::Unbound => write_u8(writer, BINDING_UNBOUND),
+        CacheManifestBinding::Pending => write_u8(writer, BINDING_PENDING),
+        CacheManifestBinding::Bound(identity) => {
+            validate_take_identity(identity)?;
+            write_u8(writer, BINDING_BOUND)?;
+            writer.write_all(&identity.setup)?;
+            writer.write_all(&identity.inputs)?;
+            write_u64(writer, identity.completed_tick)
+        }
+    }
 }
 
-fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<u32> {
+fn read_manifest(
+    reader: &mut impl Read,
+    settings: FluidSettings,
+) -> io::Result<(u32, CacheManifestBinding)> {
     let mut magic = [0; MAGIC.len()];
     reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -269,6 +386,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             | MESH_VERTEX_FORMAT_VERSION
             | DOMAIN_FORMAT_VERSION
             | PAIRED_FORMAT_VERSION
+            | LEGACY_SOURCE_IDENTITY_FORMAT_VERSION
             | FORMAT_VERSION
     ) {
         return Err(io::Error::new(
@@ -290,7 +408,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             "fixed tick does not match 60 Hz",
         ));
     }
-    if version >= FORMAT_VERSION {
+    if version >= LEGACY_SOURCE_IDENTITY_FORMAT_VERSION {
         let mut identity = [0; 32];
         reader.read_exact(&mut identity)?;
         if identity != super::fluid::identity::solver_identity() {
@@ -305,7 +423,7 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
         version >= LEGACY_LIQUID_FORMAT_VERSION,
         version >= LEGACY_TIME_STEPS_FORMAT_VERSION,
         version >= DOMAIN_FORMAT_VERSION,
-        version >= FORMAT_VERSION,
+        version >= LEGACY_SOURCE_IDENTITY_FORMAT_VERSION,
     )? != settings
     {
         return Err(io::Error::new(
@@ -313,7 +431,50 @@ fn read_manifest(reader: &mut impl Read, settings: FluidSettings) -> io::Result<
             "physical settings do not match",
         ));
     }
-    Ok(version)
+    if version < FORMAT_VERSION {
+        return Ok((version, CacheManifestBinding::Unbound));
+    }
+    let binding = match read_u8(reader)? {
+        BINDING_UNBOUND => CacheManifestBinding::Unbound,
+        BINDING_PENDING => CacheManifestBinding::Pending,
+        BINDING_BOUND => {
+            let mut setup = [0; 32];
+            let mut inputs = [0; 32];
+            reader.read_exact(&mut setup)?;
+            reader.read_exact(&mut inputs)?;
+            let identity = FluidTakeIdentity {
+                setup,
+                inputs,
+                completed_tick: read_u64(reader)?,
+            };
+            validate_take_identity(identity)?;
+            CacheManifestBinding::Bound(identity)
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid take binding state",
+            ));
+        }
+    };
+    let mut trailing = [0; 1];
+    if reader.read(&mut trailing)? != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing manifest bytes",
+        ));
+    }
+    Ok((version, binding))
+}
+
+fn validate_take_identity(identity: FluidTakeIdentity) -> io::Result<()> {
+    if identity.completed_tick > TAKE_TICK_LIMIT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "committed take tick exceeds exact integer range",
+        ));
+    }
+    Ok(())
 }
 
 fn write_settings(writer: &mut impl Write, settings: FluidSettings) -> io::Result<()> {
@@ -785,6 +946,9 @@ fn read_len(reader: &mut impl Read, max: usize) -> io::Result<usize> {
 fn write_bool(writer: &mut impl Write, value: bool) -> io::Result<()> {
     writer.write_all(&[value as u8])
 }
+fn write_u8(writer: &mut impl Write, value: u8) -> io::Result<()> {
+    writer.write_all(&[value])
+}
 fn read_bool(reader: &mut impl Read) -> io::Result<bool> {
     match read_u8(reader)? {
         0 => Ok(false),
@@ -880,6 +1044,14 @@ mod tests {
                 meshing_ms: 2.5,
             },
         )
+    }
+
+    fn take_identity(completed_tick: u64) -> FluidTakeIdentity {
+        FluidTakeIdentity {
+            setup: [0x11; 32],
+            inputs: [0x22; 32],
+            completed_tick,
+        }
     }
 
     // Fixed bytes from the pre-LiquidOptions v3 manifest layout at 72e5d2cf6;
@@ -990,6 +1162,7 @@ mod tests {
             .append(7, &vertices, &whitewater, obstacle, stats)
             .unwrap();
         let reader = CacheReader::open(directory, settings).unwrap();
+        assert_eq!(reader.take_identity(), None);
         let mut decoded_vertices = Vec::new();
         let mut decoded_whitewater = WhitewaterFrame::default();
         let (decoded_obstacle, decoded_stats) = reader
@@ -1026,6 +1199,66 @@ mod tests {
                 .is_err()
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_take_writer_stays_pending_until_prefix_publication() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-pending-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.join("frames"));
+        let _writer =
+            CacheWriter::create_for_take(directory.clone(), FluidSettings::default()).unwrap();
+        let error = CacheReader::open(directory, FluidSettings::default())
+            .err()
+            .unwrap();
+        assert!(error.contains("pending take prefix"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v9_keeps_source_identity_without_take_binding() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-v9-legacy-{}",
+            std::process::id()
+        ));
+        let directory = root.join("frames");
+        let settings = FluidSettings::default();
+        fs::create_dir_all(&directory).unwrap();
+        let mut manifest = Vec::new();
+        manifest.extend_from_slice(MAGIC);
+        write_u32(&mut manifest, LEGACY_SOURCE_IDENTITY_FORMAT_VERSION).unwrap();
+        manifest.extend_from_slice(manifold_fluids::UPSTREAM_REVISION.as_bytes());
+        write_f64(&mut manifest, TICK).unwrap();
+        manifest.extend_from_slice(&super::super::fluid::identity::solver_identity());
+        write_settings(&mut manifest, settings).unwrap();
+        write_u64(&mut manifest, settings.seed).unwrap();
+        fs::write(directory.join(MANIFEST), manifest).unwrap();
+
+        let reader = CacheReader::open(Arc::new(directory), settings).unwrap();
+        assert_eq!(reader.take_identity(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_v10_rejects_unknown_and_truncated_binding_payloads() {
+        let settings = FluidSettings::default();
+        let identity = take_identity(12);
+        let mut manifest = Vec::new();
+        write_header(
+            &mut manifest,
+            settings,
+            CacheManifestBinding::Bound(identity),
+        )
+        .unwrap();
+        let mut unknown = Vec::new();
+        write_header(&mut unknown, settings, CacheManifestBinding::Unbound).unwrap();
+        *unknown.last_mut().unwrap() = 9;
+        assert!(read_manifest(&mut unknown.as_slice(), settings).is_err());
+        for length in [0, manifest.len() - 1, manifest.len() - 8] {
+            assert!(read_manifest(&mut &manifest[..length], settings).is_err());
+        }
     }
 
     #[test]

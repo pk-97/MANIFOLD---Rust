@@ -67,8 +67,9 @@ impl NativeSimulation {
         // content thread along with all native work.
         self.world = None;
         self.coupled = None;
-        let mut new = FluidWorld::new_seeded(domain.config(request.settings), request.settings.seed)
-            .map_err(|e| e.to_string())?;
+        let mut new =
+            FluidWorld::new_seeded(domain.config(request.settings), request.settings.seed)
+                .map_err(|e| e.to_string())?;
         new.set_liquid_options(request.settings.liquid)
             .map_err(|e| e.to_string())?;
         new.set_time_step_options(request.settings.time_steps)
@@ -247,10 +248,9 @@ impl NativeSimulation {
                 || self.cache_epoch != Some(request.epoch)
             {
                 Some("Physics take: timing update has no initialized recording owner".into())
-            } else if let Some(writer) = &mut self.take_writer {
-                writer.append(&request, 0, request.start_tick, None).err()
             } else {
-                Some("Physics take: timing update has no input journal".into())
+                self.record_input_prefix(&request, 0, request.start_tick, None)
+                    .err()
             };
             let mut reply = cancelled_reply(request);
             reply.error = error;
@@ -273,7 +273,10 @@ impl NativeSimulation {
                 match request.cache_mode {
                     CacheMode::Live => {}
                     CacheMode::Record => {
-                        match CacheWriter::create(request.cache_path.clone(), request.settings) {
+                        match CacheWriter::create_for_take(
+                            request.cache_path.clone(),
+                            request.settings,
+                        ) {
                             Ok(new_writer) => {
                                 self.writer = Some(new_writer);
                                 match super::take::Writer::create(
@@ -435,9 +438,9 @@ impl NativeSimulation {
         })();
         request.coupled = coupled_request;
         let mut error = result.err();
-        if let Some(writer) = &mut self.take_writer
+        if self.take_writer.is_some()
             && let Err(record_error) =
-                writer.append(&request, recorded_count, started_tick, error.as_deref())
+                self.record_input_prefix(&request, recorded_count, started_tick, error.as_deref())
         {
             error = Some(match error {
                 Some(native_error) => format!("{native_error}; {record_error}"),
@@ -459,6 +462,25 @@ impl NativeSimulation {
             coupled: request.coupled,
             timing: request.timing,
         }
+    }
+
+    fn record_input_prefix(
+        &mut self,
+        request: &Request,
+        completed: usize,
+        started_tick: u64,
+        failure: Option<&str>,
+    ) -> Result<(), String> {
+        let take = self
+            .take_writer
+            .as_mut()
+            .ok_or("Physics take: recording has no input journal")?;
+        take.append(request, completed, started_tick, failure)?;
+        let identity = take.identity();
+        self.writer
+            .as_mut()
+            .ok_or("Physics take: recording has no geometry cache")?
+            .publish_take_prefix(identity)
     }
 }
 

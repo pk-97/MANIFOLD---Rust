@@ -681,3 +681,107 @@ fn fluid_take_project_clock_rejects_timing_changed_after_open() {
     );
     assert!(FluidTakeReplay::open(directory.0.as_ref()).is_err());
 }
+
+#[test]
+fn fluid_take_cache_rejects_replaced_inputs_with_same_setup_and_tick() {
+    use crate::node_graph::fluid_cache::CacheReader;
+    let original = Directory::new();
+    let replacement = Directory::new();
+    let mut input = request();
+    let settings = input.settings;
+    input.cache_mode = CacheMode::Record;
+    input.cache_path = Arc::clone(&original.0);
+    let output =
+        super::super::native::NativeSimulation::default().process(input, &AtomicU64::new(1));
+    assert_eq!(output.error, None);
+    let expected = FluidTakeReplay::open(original.0.as_ref())
+        .unwrap()
+        .identity();
+    assert_eq!(
+        CacheReader::open(Arc::clone(&original.0), settings)
+            .unwrap()
+            .take_identity(),
+        Some(expected)
+    );
+
+    let mut changed = request();
+    changed.history.last_mut().unwrap().controls.gravity[0] = 4.0;
+    let mut writer = Writer::create(Arc::clone(&replacement.0), &changed).unwrap();
+    writer.append(&changed, 6, 6, None).unwrap();
+    let substituted = writer.identity();
+    assert_eq!(expected.setup, substituted.setup);
+    assert_eq!(expected.completed_tick, substituted.completed_tick);
+    assert_ne!(expected.inputs, substituted.inputs);
+    // Another valid performance cannot authorize this cache merely because
+    // geometry, solver settings and the completed range still match.
+    for entry in fs::read_dir(replacement.0.as_ref()).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), original.0.join(entry.file_name())).unwrap();
+    }
+    assert!(CacheReader::open(Arc::clone(&original.0), settings).is_err());
+}
+
+#[test]
+fn fluid_take_cache_reader_keeps_its_committed_range_as_recording_advances() {
+    use crate::node_graph::fluid_cache::CacheReader;
+    let directory = Directory::new();
+    let mut input = request();
+    let settings = input.settings;
+    let role_setup = Arc::clone(&input.role_setup);
+    input.cache_mode = CacheMode::Record;
+    input.cache_path = Arc::clone(&directory.0);
+    let mut native = super::super::native::NativeSimulation::default();
+    let first = native.process(input, &AtomicU64::new(1));
+    assert_eq!(first.error, None);
+    let reader = CacheReader::open(Arc::clone(&directory.0), settings).unwrap();
+    assert_eq!(reader.take_identity().unwrap().completed_tick, 6);
+
+    let mut next = Reader::open(Arc::clone(&directory.0))
+        .unwrap()
+        .next_request(1)
+        .unwrap()
+        .unwrap();
+    // Continuing a live owner must preserve its prepared geometry identity;
+    // reloading a take is a new-world operation, not a native checkpoint.
+    next.role_setup = role_setup;
+    next.coupled = first.coupled;
+    next.start_tick = 6;
+    next.count = 1;
+    next.impulses.clear();
+    let mut sample = next.history.last().unwrap().clone();
+    sample.time = 7.0 * TICK;
+    next.history.push(sample);
+    let role_count = next.role_setup.len();
+    next.role_history
+        .extend_from_within(next.role_history.len() - role_count..);
+    let rigid = next.coupled.as_mut().unwrap();
+    let mut sample = rigid.history.last().unwrap().clone();
+    sample.sequence += 1;
+    sample.time = Seconds(7.0 * TICK);
+    rigid.history.push(sample);
+    next.cache_mode = CacheMode::Record;
+    next.cache_path = Arc::clone(&directory.0);
+    let seventh = native.process(next, &AtomicU64::new(1));
+    assert_eq!(seventh.error, None);
+    assert_eq!(seventh.tick, 7);
+    assert!(directory.0.join("tick_000000000007.zst").is_file());
+    let mut mesh = Vec::new();
+    let mut whitewater = Default::default();
+    let mut poses = Default::default();
+    // A valid new frame is present, but this reader must retain the range
+    // backed by its already-verified input prefix.
+    assert!(
+        reader
+            .read_paired_into(7, &mut mesh, &mut whitewater, Some(&mut poses))
+            .is_err()
+    );
+    let updated = CacheReader::open(Arc::clone(&directory.0), settings).unwrap();
+    assert_eq!(updated.take_identity().unwrap().completed_tick, 7);
+    updated
+        .read_paired_into(7, &mut mesh, &mut whitewater, Some(&mut poses))
+        .unwrap();
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&mesh),
+        bytemuck::cast_slice::<_, u8>(&seventh.vertices)
+    );
+}

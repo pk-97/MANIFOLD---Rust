@@ -27,6 +27,16 @@ const HEADER: &str = "take-header.zst";
 const PROGRESS: &str = "take-progress.zst";
 type Hash = [u8; 32];
 
+/// Exact committed input prefix backing a geometry cache. The input digest
+/// includes resolved controls/events and observed project timing, while the
+/// setup digest includes geometry, initial conditions and solver identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FluidTakeIdentity {
+    pub setup: [u8; 32],
+    pub inputs: [u8; 32],
+    pub completed_tick: u64,
+}
+
 /// A completed replay boundary. Surface, particles and rigid poses always
 /// belong to this same tick. Consume receipts only when `advance` returns true;
 /// they describe the most recently completed batch.
@@ -69,6 +79,14 @@ impl FluidTakeReplay {
     /// finished. A failed recording can still have a replayable prefix.
     pub fn recorded_tick(&self) -> u64 {
         self.reader.completed_tick()
+    }
+
+    pub fn identity(&self) -> FluidTakeIdentity {
+        self.reader.progress.identity()
+    }
+
+    pub fn settings(&self) -> FluidSettings {
+        self.reader.header.settings
     }
 
     pub fn recording_failure(&self) -> Option<&str> {
@@ -258,6 +276,16 @@ struct Progress {
     clock_end: Option<TakeTime>,
 }
 
+impl Progress {
+    fn identity(&self) -> FluidTakeIdentity {
+        FluidTakeIdentity {
+            setup: self.header_hash,
+            inputs: self.last_batch_hash,
+            completed_tick: self.completed_tick,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Batch {
@@ -279,6 +307,10 @@ pub(super) struct Writer {
 }
 
 impl Writer {
+    pub fn identity(&self) -> FluidTakeIdentity {
+        self.progress.identity()
+    }
+
     pub fn create(directory: Arc<PathBuf>, request: &Request) -> Result<Self, String> {
         if request.start_tick != 0 || request.epoch == 0 {
             return Err(
