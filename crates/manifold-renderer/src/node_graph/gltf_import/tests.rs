@@ -4552,21 +4552,14 @@ fn box_animated_fixture_path() -> std::path::PathBuf {
         .join("../../tests/fixtures/gltf/khronos/BoxAnimated.glb")
 }
 
-/// GLTF_ANIMATION_DESIGN.md A1's `duration_s`, read straight off the
-/// assembled graph's animated `node.gltf_animation_source` — so the
-/// render tests below can pick exact `(beats, seconds)` pairs that
-/// land on a specific `progress` through the DEFAULT (unwired) beat
-/// drive, without wiring a scrub source into the graph.
+/// BoxAnimated has an animated ancestor, so the importer uses the whole
+/// hierarchy pose path. Read its authored duration through the existing pose
+/// helper, rather than the now-empty single-node animation summary.
 #[cfg(feature = "gpu-proofs")]
 fn box_animated_duration_s() -> f32 {
-    let summary = gltf_load::gltf_import_summary(&box_animated_fixture_path())
-        .expect("parse BoxAnimated.glb");
-    summary
-        .materials
-        .iter()
-        .find_map(|m| m.animations.first().and_then(|a| a.as_ref()))
-        .expect("BoxAnimated.glb must resolve an animation on one of its materials")
-        .duration_s
+    let (def, _) = assemble_import_graph(&box_animated_fixture_path())
+        .expect("assemble BoxAnimated.glb");
+    skeleton_pose_duration_s(&def)
 }
 
 /// `BoxAnimated.glb`'s "inner_box" (the only animated object) sits almost

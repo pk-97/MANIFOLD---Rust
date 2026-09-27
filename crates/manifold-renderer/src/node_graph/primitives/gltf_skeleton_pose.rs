@@ -46,7 +46,7 @@ use super::gltf_anim_shared::{
 };
 use crate::generators::mesh_common::JointMatrix;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_anim_cache::{AnimClip, AnimSetLookup, GltfAnimSet, get_or_spawn_load};
+use crate::node_graph::gltf_anim_cache::{AnimClip, GltfAnimSet, spawn_load};
 use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
@@ -261,10 +261,8 @@ crate::primitive! {
         last_path: String = String::new(),
         // Resident once loaded; `None` while unloaded/loading/failed.
         anim_set: Option<Arc<GltfAnimSet>> = None,
-        // Background loader channel. `Some` means a load is in flight (or
-        // was resolved from the shared cache without spawning a thread —
-        // see `AnimSetLookup::Ready`); we don't spawn another until it
-        // returns.
+        // Background source validation/cache lookup. One request stays in
+        // flight until it returns; successful sampling retains its Arc.
         pending_load: Option<mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>> = None,
     },
 }
@@ -584,10 +582,7 @@ impl Primitive for GltfSkeletonPose {
             self.pending_load = None;
         }
         if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
-            match get_or_spawn_load(std::path::Path::new(&path)) {
-                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
-                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
-            }
+            self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
             match rx.try_recv() {

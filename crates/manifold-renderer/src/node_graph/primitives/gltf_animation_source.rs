@@ -61,7 +61,7 @@ use super::gltf_anim_shared::{
     LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_anim_cache::{AnimSetLookup, GltfAnimSet, get_or_spawn_load};
+use crate::node_graph::gltf_anim_cache::{GltfAnimSet, spawn_load};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
 
@@ -417,10 +417,7 @@ impl Primitive for GltfAnimationSource {
             self.pending_load = None;
         }
         if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
-            match get_or_spawn_load(std::path::Path::new(&path)) {
-                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
-                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
-            }
+            self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
             match rx.try_recv() {
