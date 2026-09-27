@@ -3,9 +3,10 @@
 //! Caches the outputs of `node.hdri_source`'s EXR decode and
 //! `node.gltf_mesh_source`'s glTF parse/flatten step under
 //! `~/Library/Caches/com.latentspace.manifold/decode_cache/`. The cache key is
-//! a SHA-256 of the source file bytes, not the path, so the same path with new
-//! content is a guaranteed miss. A cache hit never records a cold touch; a miss
-//! records one, keeping the warmup cold-touch detector honest.
+//! a SHA-256 of source contents, not the path. Mesh keys include every resolved
+//! glTF buffer as well as the primary file. Warm lookup still reads the source
+//! and resolves buffers; only a full geometry flatten or image decode records
+//! a cold touch.
 //!
 //! The cache is disk-only shared state. A stable per-root file lock serializes
 //! manifest reconciliation, access touches, writes, and eviction across
@@ -25,15 +26,17 @@ use manifold_foundation::cold_touch::{ColdTouchKind, record_cold_touch};
 use sha2::{Digest, Sha256};
 
 use crate::generators::mesh_common::MeshVertex;
-use crate::node_graph::gltf_load::{GltfMeshSelector, load_gltf_mesh as load_gltf_mesh_uncached};
+use crate::node_graph::gltf_load::{
+    GltfMeshSelector, load_gltf_mesh_from_buffers, parse_buffer_snapshot,
+};
 use crate::node_graph::primitives::hdri_source::load_hdri as load_hdri_uncached;
 
 /// On-disk format version. Bumped whenever the header or payload layout
 /// changes so old entries are treated as corrupt and re-decoded.
 const CACHE_VERSION: u32 = 1;
-/// MeshVertex now carries UV1, corrected transforms and RGBA vertex colour.
+/// Version 3 binds decoded vertices to primary and resolved buffer contents.
 /// Separate keys let older app processes keep their own compatible cache.
-const MESH_CACHE_VERSION: u32 = 2;
+const MESH_CACHE_VERSION: u32 = 3;
 
 /// Magic header: "MANIFOLD DECODE CACHE" shortened to four bytes.
 const MAGIC: &[u8; 4] = b"MDC1";
@@ -505,7 +508,7 @@ fn write_hdri_cache(
     Ok(())
 }
 
-/// Load a GLB mesh flatten through the cache. The cached payload is the raw
+/// Load a glTF mesh flatten through the cache. The cached payload is the raw
 /// `Vec<MeshVertex>` from `load_gltf_mesh` *before* fit/translate; those cheap
 /// per-vertex passes are applied by the caller after the cache read. A miss
 /// records the GLB-parse cold touch; a hit does not.
@@ -521,7 +524,8 @@ fn cached_load_gltf_mesh_with_root(
     selector: GltfMeshSelector,
     root: Option<PathBuf>,
 ) -> Result<Vec<MeshVertex>, String> {
-    let file_hash = sha256_file(path)?;
+    let source = parse_buffer_snapshot(path)?;
+    let file_hash = source.identity;
     let selector_str = mesh_selector_key(&selector);
     let key = key_hash("gltf_mesh", &file_hash, selector_str.as_bytes());
 
@@ -534,7 +538,7 @@ fn cached_load_gltf_mesh_with_root(
 
     record_gltf_mesh_miss();
     record_cold_touch(ColdTouchKind::GlbParse);
-    let verts = load_gltf_mesh_uncached(path, selector)?;
+    let verts = load_gltf_mesh_from_buffers(&source.document, &source.buffers, selector)?;
 
     if let Some(ref root) = root
         && let Err(e) = write_mesh_cache(root, "gltf_mesh", &key, &file_hash, &selector_str, &verts)
@@ -907,6 +911,10 @@ fn read_hash(cursor: &mut &[u8]) -> Option<[u8; 32]> {
 }
 
 #[cfg(test)]
+#[path = "decode_cache_dependency_tests.rs"]
+mod dependency_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::ops::Deref;
@@ -1233,7 +1241,7 @@ mod tests {
         let v1 =
             cached_load_gltf_mesh_with_root(&path, selector, Some(root.to_path_buf())).unwrap();
 
-        let file_hash = sha256_file(&path).unwrap();
+        let file_hash = parse_buffer_snapshot(&path).unwrap().identity;
         let key = key_hash(
             "gltf_mesh",
             &file_hash,

@@ -108,8 +108,49 @@ pub(crate) fn parse_document_and_buffers(
     path: &std::path::Path,
 ) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_document_and_buffers_from_slice(path, &bytes)
+}
 
-    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(&bytes)
+/// The exact document and resolved buffers used by a mesh decode. The
+/// identity includes contents, not the location of the owning model file.
+pub(crate) struct GltfBufferSnapshot {
+    pub document: gltf::Document,
+    pub buffers: Vec<gltf::buffer::Data>,
+    pub identity: [u8; 32],
+}
+
+/// Resolve dependencies through the canonical importer before consulting the
+/// decoded mesh cache. A missing or changed external buffer must not be hidden
+/// by a cache hit. On a miss the caller flattens these same bytes, without
+/// reopening the model or its buffers under the captured identity.
+pub(crate) fn parse_buffer_snapshot(
+    path: &std::path::Path,
+) -> Result<GltfBufferSnapshot, String> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (document, buffers) = parse_document_and_buffers_from_slice(path, &bytes)?;
+    let mut hash = Sha256::new();
+    hash.update(b"manifold.gltf-buffer-snapshot.v1");
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(&bytes);
+    hash.update((buffers.len() as u64).to_le_bytes());
+    for buffer in &buffers {
+        hash.update((buffer.0.len() as u64).to_le_bytes());
+        hash.update(&buffer.0);
+    }
+    Ok(GltfBufferSnapshot {
+        document,
+        buffers,
+        identity: hash.finalize().into(),
+    })
+}
+
+fn parse_document_and_buffers_from_slice(
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
+    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(bytes)
         .map_err(|e| format!("{}: gltf parse failed: {e}", path.display()))?;
 
     // Re-run the crate's structural validation, filtering out the
@@ -864,53 +905,59 @@ fn walk_gltf_node(
     Ok(())
 }
 
-/// Parse a `.glb`/`.gltf` file and flatten the selected geometry into a
-/// triangle-list `Vec<MeshVertex>`. See [`GltfMeshSelector`] for the three
-/// selection modes. Returns `Err(String)` on any failure — a missing/
-/// unreadable file, an unsupported required extension, an out-of-range
-/// mesh/primitive index, or a non-Triangles primitive — rather than
-/// panicking, since this runs on a background thread inside
-/// `node.gltf_mesh_source`. A missing default scene no longer errors:
-/// `resolve_import_nodes` falls back per `GLB_XFAIL_BURNDOWN_DESIGN.md` D5.
+/// Uncached fixture entry point. Production mesh loads flatten the snapshot
+/// already read and authenticated by the shared decoded-mesh cache.
+#[cfg(test)]
 pub(crate) fn load_gltf_mesh(
     path: &std::path::Path,
     selector: GltfMeshSelector,
 ) -> Result<Vec<MeshVertex>, String> {
-    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
+    let (document, buffers) = parse_document_and_buffers(path)?;
+    load_gltf_mesh_from_buffers(&document, &buffers, selector)
+}
 
+/// Flatten the already resolved source used to key a decoded-mesh cache entry.
+/// Mesh vertices depend on document data and buffers, not decoded images.
+/// Invalid selectors or unsupported geometry return an error. A missing
+/// default scene retains the existing `resolve_import_nodes` policy.
+pub(crate) fn load_gltf_mesh_from_buffers(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    selector: GltfMeshSelector,
+) -> Result<Vec<MeshVertex>, String> {
     let mut out = Vec::new();
     match selector {
         GltfMeshSelector::WholeScene => {
-            for node in resolve_import_nodes(&document) {
+            for node in resolve_import_nodes(document) {
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
-                    &document,
-                    &buffers,
+                    document,
+                    buffers,
                     MaterialFilter::All,
                     &mut out,
                 )?;
             }
         }
         GltfMeshSelector::Material { material_index } => {
-            for node in resolve_import_nodes(&document) {
+            for node in resolve_import_nodes(document) {
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
-                    &document,
-                    &buffers,
+                    document,
+                    buffers,
                     MaterialFilter::Material(material_index),
                     &mut out,
                 )?;
             }
         }
         GltfMeshSelector::DefaultMaterial => {
-            for node in resolve_import_nodes(&document) {
+            for node in resolve_import_nodes(document) {
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
-                    &document,
-                    &buffers,
+                    document,
+                    buffers,
                     MaterialFilter::DefaultOnly,
                     &mut out,
                 )?;
@@ -922,7 +969,7 @@ pub(crate) fn load_gltf_mesh(
                 format!("mesh_index {mesh_index} out of range (document has {} meshes)", meshes.len())
             })?;
             for primitive in mesh.primitives() {
-                flatten_primitive(&primitive, &buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
+                flatten_primitive(&primitive, buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
             }
         }
         GltfMeshSelector::Primitive {
@@ -940,7 +987,7 @@ pub(crate) fn load_gltf_mesh(
                     primitives.len()
                 )
             })?;
-            flatten_primitive(primitive, &buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
+            flatten_primitive(primitive, buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
         }
     }
     Ok(out)
