@@ -94,5 +94,146 @@
         "Count": 1
       }
     }
-  }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u25a0 Object 3"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Copy"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u25a0 Object 3"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Paste"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u25a0 Object 3_3"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "+ Add Subsurface"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Object 3_3_2 \u2014 Transform"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u25a0 Object 3_3"
+        }
+      },
+      "gesture": "RightClick"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Delete"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u25a0 Object 3_3"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u25a0 Object 3_3"
+        }
+      },
+      "check": {
+        "Count": 1
+      }
+    }
+  },
+  "Snapshot"
 ]

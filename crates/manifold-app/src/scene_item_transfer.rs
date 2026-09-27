@@ -210,7 +210,7 @@ fn cloned_handle_rewrites(
     destination: &EffectGraphDef,
     ids: &HashMap<NodeId, NodeId>,
 ) -> Vec<(String, String)> {
-    let mut rewrites = Vec::new();
+    let mut rewrites = HashMap::new();
     visit_nodes(&source.nodes, &mut |node| {
         let Some(old_handle) = node.handle.as_deref() else {
             return;
@@ -225,17 +225,23 @@ fn cloned_handle_rewrites(
             return;
         };
         if old_handle != new_handle {
-            rewrites.push((old_handle.to_owned(), new_handle.to_owned()));
+            // Groups may share their authored label with the inner scene
+            // object. The inner object's label is the outliner's display name.
+            rewrites.insert(old_handle.to_owned(), new_handle.to_owned());
         }
     });
-    rewrites.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
-    rewrites.dedup();
+    let mut rewrites: Vec<_> = rewrites.into_iter().collect();
+    rewrites.sort_by_key(|(old, _)| (std::cmp::Reverse(old.len()), old.clone()));
     rewrites
 }
 
-fn rewrite_label(mut label: String, rewrites: &[(String, String)]) -> String {
+fn rewrite_label(label: String, rewrites: &[(String, String)]) -> String {
     for (old, new) in rewrites {
-        label = label.replace(old, new);
+        if label.contains(old) {
+            // A copied handle contains its source as a prefix. Rewriting the
+            // result again would append a second copy suffix to section labels.
+            return label.replace(old, new);
+        }
     }
     label
 }
