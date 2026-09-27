@@ -6,13 +6,15 @@ use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{
-    FluidControls, FluidDomainSnapshot, FluidDomainState, FluidRuntime, FluidSettings,
+    CoupledRigidInputs, FluidControls, FluidDomainSnapshot, FluidDomainState, FluidRuntime,
+    FluidSettings,
 };
 use crate::node_graph::fluid_cache::CacheMode;
 use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::physics::{RigidImpulseTargets, RigidSceneObservation};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
@@ -103,6 +105,7 @@ crate::primitive! {
         viscosity: ScalarF32 optional, surface_tension: ScalarF32 optional,
         gravity: ScalarF32 optional, emission: ScalarF32 optional, inflow_speed: ScalarF32 optional,
         speed: ScalarF32 optional, reset: ScalarF32 optional, surface_subdivisions: ScalarF32 optional,
+        liquid_density: ScalarF32 optional,
         surface_particle_scale: ScalarF32 optional, surface_smoothing: ScalarF32 optional,
         surface_smoothing_iterations: ScalarF32 optional, whitewater: ScalarF32 optional,
         whitewater_wavecrest_rate: ScalarF32 optional, whitewater_turbulence_rate: ScalarF32 optional,
@@ -125,6 +128,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Closed −Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Closed +Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("liquid_density"), label: "Liquid Density", ty: ParamType::Float, default: ParamValue::Float(1000.0), range: Some((1.0, 5000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("viscosity"), label: "Viscosity", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("surface_tension"), label: "Surface Tension", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
@@ -148,7 +152,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "CPU reference engine, not a real-time guarantee. The optional domain Transform sets the axis-aligned container centre and full XYZ dimensions in metres. Bounds round outward around that centre to uniform cells. Domain rotation and billboarding are rejected. Without that input, Domain Size preserves the cube centred in X/Z with floor Y=0. Closed face toggles control all six boundaries; domain and boundary edits restart the simulation. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. The optional acceleration_field is a scene-space vector field in metres per second squared, shared with Physics World. It is retained and sampled at fixed ticks; live changes do not rebuild the simulation. Mesh-role and vector-field graphs currently require Live mode pending complete cache and input-take identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer and surface detail changes restart the simulation. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Two-way Box3D coupling is not part of this integration. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
+    composition_notes: "CPU reference engine, not a real-time guarantee. The optional domain Transform sets the axis-aligned container centre and full XYZ dimensions in metres. Bounds round outward around that centre to uniform cells. Domain rotation and billboarding are rejected. Without that input, Domain Size preserves the cube centred in X/Z with floor Y=0. Closed face toggles control all six boundaries; domain and boundary edits restart the simulation. FluidRole inputs accept prepared closed meshes or explicit collision proxies with live translation/rotation; geometry, role and scale edits restart the world. The optional acceleration_field is a scene-space vector field in metres per second squared, shared with Physics World. It is retained and sampled at fixed ticks; live changes do not rebuild the simulation. Mesh-role and vector-field graphs currently require Live mode pending complete cache and input-take identity support. Legacy emitter/obstacle/initial_volume transforms describe axis-aligned boxes using full dimensions; rotations and billboards are rejected, and initial_volume must be fully contained in the domain. The optional initial_volume seeds a localized zero-velocity column in addition to the fill_height pool. Domain size, resolution, fill, initial volume, transfer, density and surface detail changes restart the simulation. In a coupled Physics World pair, the rigid world owns playback speed and both reset controls restart the same native pair; the liquid density is physical kg/m3 and is passed to the shared worker. Coupled Physics World support uses the shared Live worker; non-Live cache modes reject coupled scenes until paired input takes are supported. Native state lives on a background worker. Preview retains time debt and displays the latest complete mesh; export drains the same fixed 60 Hz ticks. Historical controls use the existing 240 Hz stateless physics ancestry sampler. Reset and backwards transport start a fresh simulation. Wire obstacle_pose to the visible unit-cube collider to avoid showing it ahead of the fluid. Overflow is a visible error, never a truncated mesh. Native whitewater is optional and defaults off. Its foam, bubbles and spray outputs are instance transforms at the same accepted tick as the mesh; wire each matching count to scene_object.instance_count and author particle meshes/materials separately. Particle scale and smoothing affect surface reconstruction, not solver dynamics. Liquid, surface and whitewater settings restart the world. Viscosity and surface tension use scale-dependent native coefficients, not calibrated material units. Surface-tension validation includes the 64-cubed dam-break regression; the honey reference uses zero tension. Whitewater capacity bounds native emission; the three output arrays each reserve that capacity. Particle instances shrink during their last 0.2 seconds. Mesh output uses the engine mesher; material and rendering stay separate graph nodes. cache_mode is Live, Record or Playback and cache_path names a compressed fixed-60-Hz geometry snapshot stream. Record publishes atomically; Playback uses baked geometry, whitewater, obstacle pose and stats exactly and does not run the solver. Playback requires every requested tick and never silently falls back to Live. The physical settings and fixed tick are part of the cache manifest.",
     examples: ["WaterBasin", "WaterDamBreak", "HoneyDamBreak"],
     picker: { label: "Liquid Surface", category: Atom },
     summary: "Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion.",
@@ -165,6 +169,11 @@ crate::primitive! {
         last_lag: u32 = u32::MAX,
         role_pending: bool = false,
         domain_failure: bool = false,
+        coupled_mode: bool = false,
+        coupled_observation: Option<RigidSceneObservation> = None,
+        coupled_colliders: RigidImpulseTargets = RigidImpulseTargets::default(),
+        coupled_error: Option<String> = None,
+        coupled_previous_reset: Option<f32> = None,
     },
 }
 
@@ -188,6 +197,39 @@ impl Primitive for FluidSurface {
         self.runtime.clear();
         self.role_pending = false;
         self.domain_failure = false;
+        self.coupled_observation = None;
+        self.coupled_error = None;
+        self.coupled_previous_reset = None;
+    }
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        if self.coupled_mode == enabled {
+            return;
+        }
+        self.coupled_mode = enabled;
+        self.runtime.clear();
+        self.coupled_observation = None;
+        self.coupled_error = None;
+        self.coupled_previous_reset = None;
+    }
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        observation: Option<&RigidSceneObservation>,
+        colliders: RigidImpulseTargets,
+        error: Option<&str>,
+    ) {
+        self.set_coupled_physics(true);
+        self.coupled_observation = observation.cloned();
+        self.coupled_colliders = colliders;
+        self.coupled_error = error.map(str::to_owned);
+    }
+    fn coupled_rigid_frame(&self) -> Option<&crate::node_graph::fluid::CoupledRigidFrame> {
+        if !self.coupled_mode || self.role_pending || self.domain_failure {
+            return None;
+        }
+        if self.coupled_observation.is_none() || self.coupled_error.is_some() {
+            return None;
+        }
+        self.runtime.coupled_rigid_frame()
     }
     fn physics_impulse_epoch(&self) -> Option<u64> {
         self.runtime.impulse_epoch()
@@ -260,8 +302,23 @@ impl Primitive for FluidSurface {
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.domain_failure = false;
-        let mut roles = std::array::from_fn::<_, MAX_FLUID_ROLES, _>(|_| None);
         self.role_pending = false;
+        let coupled_observation = if self.coupled_mode {
+            if let Some(error) = self.coupled_error.clone() {
+                Self::report_failure(&mut self.domain_failure, ctx, error);
+                return;
+            }
+            let Some(observation) = self.coupled_observation.as_ref() else {
+                self.role_pending = true;
+                self.runtime.hold_pending(ctx.time.seconds);
+                ctx.mark_outputs_pending();
+                return;
+            };
+            Some(observation)
+        } else {
+            None
+        };
+        let mut roles = std::array::from_fn::<_, MAX_FLUID_ROLES, _>(|_| None);
         for (index, port) in ROLE_PORTS.iter().enumerate() {
             if let Some(slot) = ctx.inputs.slot(port) {
                 roles[index] = ctx.inputs.fluid_role(port);
@@ -291,6 +348,7 @@ impl Primitive for FluidSurface {
             ("surface_smoothing_iterations", 2.0),
             ("whitewater", 0.0),
             ("whitewater_capacity", 100000.0),
+            ("liquid_density", 1000.0),
         ] {
             if !ctx.scalar_or_param(name, fallback).is_finite() {
                 Self::report_failure(
@@ -306,6 +364,15 @@ impl Primitive for FluidSurface {
                 &mut self.domain_failure,
                 ctx,
                 "Water: surface detail must be between 0 and 2".into(),
+            );
+            return;
+        }
+        let liquid_density = ctx.scalar_or_param("liquid_density", 1000.0);
+        if !liquid_density.is_finite() || liquid_density <= 0.0 {
+            Self::report_failure(
+                &mut self.domain_failure,
+                ctx,
+                "Water: liquid density must be finite and positive".into(),
             );
             return;
         }
@@ -403,15 +470,61 @@ impl Primitive for FluidSurface {
             emission: emitter.is_some() && ctx.scalar_or_param("emission", 1.0) > 0.5,
             inflow_speed: ctx.scalar_or_param("inflow_speed", 1.5),
         };
-        if let Err(error) = self.runtime.observe_scene_with_field(
-            settings,
-            controls,
-            &roles,
-            acceleration_field,
-            ctx.time.seconds,
-            ctx.scalar_or_param("speed", 1.0),
-            ctx.scalar_or_param("reset", 0.0),
-        ) {
+        let authored_only = crate::node_graph::physics::authored_sample_only();
+        let fluid_reset = ctx.scalar_or_param("reset", 0.0);
+        let (transport, speed, rigid_reset_edge) = if let Some(observation) = coupled_observation {
+            if (observation.transport.0 - ctx.time.seconds.0).abs() > 1e-9 {
+                Self::report_failure(
+                    &mut self.domain_failure,
+                    ctx,
+                    "Fluid coupling: rigid observation transport does not match liquid transport"
+                        .into(),
+                );
+                return;
+            }
+            let reset_changed = self
+                .coupled_previous_reset
+                .is_some_and(|previous| previous != observation.reset);
+            if authored_only && reset_changed {
+                self.role_pending = true;
+                self.runtime.hold_pending(ctx.time.seconds);
+                ctx.mark_outputs_pending();
+                return;
+            }
+            (observation.transport, observation.speed, reset_changed)
+        } else {
+            (ctx.time.seconds, ctx.scalar_or_param("speed", 1.0), false)
+        };
+        if rigid_reset_edge && !authored_only {
+            self.runtime.request_reset();
+        }
+        let result = if let Some(observation) = coupled_observation {
+            self.runtime.observe_coupled_scene_with_field(
+                settings,
+                controls,
+                &roles,
+                acceleration_field,
+                Some(CoupledRigidInputs {
+                    scene: &observation.inputs,
+                    colliders: self.coupled_colliders,
+                    density: f64::from(liquid_density),
+                }),
+                transport,
+                speed,
+                fluid_reset,
+            )
+        } else {
+            self.runtime.observe_scene_with_field(
+                settings,
+                controls,
+                &roles,
+                acceleration_field,
+                transport,
+                speed,
+                fluid_reset,
+            )
+        };
+        if let Err(error) = result {
             Self::report_failure(&mut self.domain_failure, ctx, error);
             return;
         }
@@ -428,6 +541,9 @@ impl Primitive for FluidSurface {
         }
         if crate::node_graph::physics::authored_sample_only() {
             return;
+        }
+        if let Some(observation) = coupled_observation {
+            self.coupled_previous_reset = Some(observation.reset);
         }
         let lag = self.runtime.lag_seconds() as f32;
         ctx.outputs
@@ -531,11 +647,226 @@ mod tests {
     use crate::node_graph::MockBackend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs};
     use crate::node_graph::effect_node::FrameTime;
+    use crate::node_graph::physics::{
+        PhysicsAuthoredSampleScope, PhysicsStepScope, RigidImpulseTargets, RigidSceneInputs,
+        RigidSceneObservation,
+    };
     use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
-    use crate::node_graph::physics::PhysicsStepScope;
+    use manifold_core::{Beats, Seconds};
     use manifold_physics::FieldValue;
     use manifold_physics::input::EventStamp;
-    use manifold_core::{Beats, Seconds};
+
+    fn coupled_observation(transport: f64, speed: f32, reset: f32) -> RigidSceneObservation {
+        RigidSceneObservation {
+            inputs: RigidSceneInputs::default(),
+            transport: Seconds(transport),
+            speed,
+            reset,
+        }
+    }
+
+    fn run_mock(
+        fluid: &mut FluidSurface,
+        params: &ParamValues,
+        transport: f64,
+        errors: &mut Vec<String>,
+    ) {
+        let backend = MockBackend::new();
+        let inputs = NodeInputs::new(&[], &backend, &[]);
+        let mut scalar = Vec::new();
+        let mut camera = Vec::new();
+        let mut light = Vec::new();
+        let mut material = Vec::new();
+        let mut transform = Vec::new();
+        let mut atmosphere = Vec::new();
+        let mut render_mode = Vec::new();
+        let mut object = Vec::new();
+        let outputs = NodeOutputs::new(
+            &[],
+            &backend,
+            &mut scalar,
+            &mut camera,
+            &mut light,
+            &mut material,
+            &mut transform,
+            &mut atmosphere,
+            &mut render_mode,
+            &mut object,
+        );
+        let time = FrameTime {
+            beats: Beats(transport),
+            seconds: Seconds(transport),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+        let mut ctx =
+            EffectNodeContext::new(time, params, inputs, outputs, None).with_errors(errors);
+        Primitive::run(fluid, &mut ctx);
+    }
+
+    fn coupled_params() -> ParamValues {
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("resolution"), ParamValue::Float(8.0));
+        params.insert(Cow::Borrowed("fill_height"), ParamValue::Float(0.0));
+        params.insert(Cow::Borrowed("gravity"), ParamValue::Float(0.0));
+        params
+    }
+
+    #[test]
+    fn coupled_fluid_uses_paired_runtime_speed_and_publishes_frame() {
+        let _offline = PhysicsStepScope::for_render(true);
+        let mut fluid = FluidSurface::new();
+        let mut errors = Vec::new();
+        let params = coupled_params();
+        let first = coupled_observation(0.0, 1.0, 0.0);
+        Primitive::set_coupled_physics(&mut fluid, true);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&first),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            fluid.runtime.domain_snapshot().state,
+            FluidDomainState::Ready
+        );
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+
+        let second = coupled_observation(1.0 / 60.0, 2.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&second),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock(&mut fluid, &params, 1.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+    }
+
+    #[test]
+    fn coupled_fluid_pending_and_error_never_fall_back_to_standalone() {
+        let _offline = PhysicsStepScope::for_render(true);
+        let mut fluid = FluidSurface::new();
+        let params = coupled_params();
+        let mut errors = Vec::new();
+        Primitive::set_coupled_physics(&mut fluid, true);
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_ne!(
+            fluid.runtime.domain_snapshot().state,
+            FluidDomainState::Ready
+        );
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert_eq!(
+            Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+            FluidDomainState::PendingInputs
+        );
+
+        let observation = coupled_observation(0.0, 1.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&observation),
+            RigidImpulseTargets::default(),
+            Some("rigid capture failed"),
+        );
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert_eq!(
+            Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+            FluidDomainState::Failed
+        );
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("rigid capture failed"))
+        );
+    }
+
+    #[test]
+    fn coupled_fluid_reset_edges_are_independent_and_historical_world_reset_is_pending() {
+        let _offline = PhysicsStepScope::for_render(true);
+        let mut fluid = FluidSurface::new();
+        let mut params = coupled_params();
+        let mut errors = Vec::new();
+        let first = coupled_observation(0.0, 1.0, 0.0);
+        Primitive::set_coupled_physics(&mut fluid, true);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&first),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let initial_epoch = fluid.runtime.domain_snapshot().epoch;
+
+        let world_reset = coupled_observation(1.0 / 60.0, 1.0, 1.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&world_reset),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        {
+            let _historical = PhysicsAuthoredSampleScope::new();
+            run_mock(&mut fluid, &params, 1.0 / 60.0, &mut errors);
+        }
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(fluid.runtime.domain_snapshot().epoch, initial_epoch);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+
+        run_mock(&mut fluid, &params, 1.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let after_world_reset = fluid.runtime.domain_snapshot().epoch;
+        assert_eq!(after_world_reset, initial_epoch + 1);
+
+        params.insert(Cow::Borrowed("reset"), ParamValue::Float(1.0));
+        let same_world_reset = coupled_observation(2.0 / 60.0, 1.0, 1.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&same_world_reset),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock(&mut fluid, &params, 2.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(fluid.runtime.domain_snapshot().epoch, after_world_reset + 1);
+    }
+
+    #[test]
+    fn coupled_fluid_rejects_transport_and_density_mismatch() {
+        let _offline = PhysicsStepScope::for_render(true);
+        let mut fluid = FluidSurface::new();
+        let mut params = coupled_params();
+        let mut errors = Vec::new();
+        let observation = coupled_observation(0.25, 1.0, 0.0);
+        Primitive::set_coupled_physics(&mut fluid, true);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&observation),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("transport")));
+        errors.clear();
+
+        params.insert(Cow::Borrowed("liquid_density"), ParamValue::Float(-1.0));
+        let valid = coupled_observation(0.0, 1.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&valid),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("density")));
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_none());
+    }
 
     #[test]
     fn scene_physics_unconnected_fluid_source_does_not_emit_demo_liquid() {

@@ -1135,6 +1135,34 @@ pub trait EffectNode: Send {
         None
     }
 
+    /// Configure ownership during graph preparation, before any evaluation.
+    fn set_coupled_physics(&mut self, _enabled: bool) {}
+
+    /// Resolve the rigid participant before its paired liquid step. This must
+    /// not construct or advance a second native world, or publish outputs.
+    fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
+        Err("Node does not support coupled rigid input capture".into())
+    }
+
+    /// Hand the captured rigid inputs to the liquid's existing worker owner.
+    /// A missing observation is pending; an error fails the entire pair.
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        _observation: Option<&crate::node_graph::physics::RigidSceneObservation>,
+        _colliders: crate::node_graph::physics::RigidImpulseTargets,
+        _error: Option<&str>,
+    ) {}
+
+    fn coupled_rigid_frame(&self) -> Option<&crate::node_graph::fluid::CoupledRigidFrame> {
+        None
+    }
+
+    /// Latch the rigid result of the liquid step before any scene consumer runs.
+    fn accept_coupled_rigid_frame(
+        &mut self,
+        _frame: Option<&crate::node_graph::fluid::CoupledRigidFrame>,
+    ) {}
+
     /// Epoch of native impulse inputs accepted by this node, if any.
     fn physics_impulse_epoch(&self) -> Option<u64> {
         None

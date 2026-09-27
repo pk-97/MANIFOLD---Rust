@@ -26,6 +26,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevisionRule};
+use crate::node_graph::physics_scene::{coupled_execution_order, CoupledSceneSteps};
 use crate::node_graph::ports::{KnownItem, PortType};
 use crate::node_graph::validation::{GraphError, topological_sort, validate};
 
@@ -169,6 +170,8 @@ pub struct ExecutionPlan {
     /// non-stateful nodes here keeps the late pass cost proportional
     /// to the number of feedback / accumulator nodes in the graph.
     late_capture_steps: Vec<usize>,
+    /// Coupled fluid/rigid scene participants in final execution-step order.
+    coupled_scenes: Vec<CoupledSceneSteps>,
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2: plan-compiled mesh revision
     /// rules, indexed by `ResourceId`, parallel to `resource_types`.
     /// `Some` only for outputs with the `MeshVertex` channel layout —
@@ -307,6 +310,10 @@ impl ExecutionPlan {
         &self.late_capture_steps
     }
 
+    pub(crate) fn coupled_scenes(&self) -> &[CoupledSceneSteps] {
+        &self.coupled_scenes
+    }
+
     /// Profiling-only: a sub-plan containing just the first `k` execution
     /// steps. Steps are topologically ordered, so `[0..k]` is always a valid
     /// executable prefix — every dependency of a kept step is also kept.
@@ -323,11 +330,18 @@ impl ExecutionPlan {
     /// steps via the marginal `time[k] - time[k-1]`. NOT used on the live
     /// render path.
     pub fn truncated(&self, k: usize) -> ExecutionPlan {
-        let k = k.min(self.steps.len());
+        let mut k = k.min(self.steps.len());
+        for pair in &self.coupled_scenes {
+            if k > pair.fluid_step && k <= pair.rigid_step {
+                k = pair.fluid_step;
+                break;
+            }
+        }
         let mut p = self.clone();
         p.steps.truncate(k);
         p.hoistable_steps.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
+        p.coupled_scenes.retain(|pair| pair.rigid_step < k);
         p
     }
 }
@@ -384,15 +398,8 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // (most unit-test fixtures) fall back to running every node.
     let full_order = topological_sort(graph)?;
     let has_root = graph.nodes().any(|inst| graph.is_liveness_root(inst.id));
-    let order: Vec<NodeInstanceId> = if has_root {
-        let live = crate::node_graph::validation::reachable_from_liveness_roots(graph);
-        full_order
-            .into_iter()
-            .filter(|id| live.contains(id))
-            .collect()
-    } else {
-        full_order
-    };
+    let (order, coupled_scenes) =
+        coupled_execution_order(graph, &full_order, has_root)?;
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.
@@ -1082,6 +1089,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         provided_texture_resources,
         hoistable_steps,
         late_capture_steps,
+        coupled_scenes,
         mesh_rules,
     })
 }

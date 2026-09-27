@@ -396,6 +396,7 @@ pub struct FluidRuntime {
     role_history: roles::History,
     last_transport: Option<f64>,
     previous_reset: Option<f32>,
+    reset_requested: bool,
     target_time: f64,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -433,6 +434,7 @@ impl Default for FluidRuntime {
             role_history: roles::History::default(),
             last_transport: None,
             previous_reset: None,
+            reset_requested: false,
             target_time: 0.0,
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -482,7 +484,14 @@ impl FluidRuntime {
         Ok(())
     }
 
+    /// Reset the shared owner at its next valid full observation. Multiple
+    /// participant reset edges collapse into the same epoch transition.
+    pub(crate) fn request_reset(&mut self) {
+        self.reset_requested = true;
+    }
+
     pub fn clear(&mut self) {
+        self.reset_requested = false;
         self.settings = None;
         self.accepted_observation = None;
         self.last_transport = None;
@@ -627,6 +636,9 @@ impl FluidRuntime {
         reset: f32,
     ) -> Result<(), String> {
         self.accepted_observation = None;
+        if super::physics::authored_sample_only() && self.reset_requested {
+            return Ok(());
+        }
         if let Some(rigid) = rigid {
             rigid.validate()?;
             if self.cache_mode != CacheMode::Live {
@@ -682,6 +694,7 @@ impl FluidRuntime {
         if self.settings != Some(settings)
             || role_topology_changed
             || coupling_changed
+            || self.reset_requested
             || reset_edge
             || self
                 .last_transport

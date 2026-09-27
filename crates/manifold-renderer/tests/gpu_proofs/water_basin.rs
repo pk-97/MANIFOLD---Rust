@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use std::time::Instant;
+use std::cell::Cell;
 
 use half::f16;
 use manifold_core::params::ParamManifest;
@@ -13,7 +14,12 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{readback_raw_halves, readback_to_srgb_png};
-use manifold_renderer::node_graph::{PrimitiveRegistry, physics::PhysicsStepScope};
+use manifold_renderer::node_graph::{
+    EffectNode, EffectNodeContext, EffectNodeType, NodeInput, NodeOutput, NodePort, ParamDef,
+    ParamValue, PortKind, PortType, PrimitiveRegistry, physics::PhysicsStepScope,
+};
+use manifold_renderer::node_graph::depth_rule::DepthRule;
+use manifold_renderer::node_graph::transform::Transform;
 use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_renderer::render_target::RenderTarget;
@@ -24,6 +30,93 @@ const WATER_BASIN_JSON: &str = include_str!("../../assets/generator-presets/Wate
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 const LAST_FRAME: u32 = 90;
+
+#[derive(Clone, Copy, Default)]
+struct CoupledObserverSample {
+    simulation_time: f32,
+    pose_x: f32,
+    particles: f32,
+}
+
+thread_local! {
+    static COUPLED_OBSERVER_SAMPLE: Cell<CoupledObserverSample> =
+        const { Cell::new(CoupledObserverSample { simulation_time: 0.0, pose_x: 0.0, particles: 0.0 }) };
+}
+
+struct CoupledObserver {
+    type_id: EffectNodeType,
+}
+
+impl EffectNode for CoupledObserver {
+    fn depth_rule(&self) -> DepthRule {
+        DepthRule::Terminal
+    }
+
+    fn type_id(&self) -> &EffectNodeType {
+        &self.type_id
+    }
+
+    fn inputs(&self) -> &[NodeInput] {
+        static INPUTS: [NodeInput; 3] = [
+            NodePort {
+                name: std::borrow::Cow::Borrowed("time"),
+                ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+                kind: PortKind::Input,
+                required: true,
+            },
+            NodePort {
+                name: std::borrow::Cow::Borrowed("pose"),
+                ty: PortType::Transform,
+                kind: PortKind::Input,
+                required: true,
+            },
+            NodePort {
+                name: std::borrow::Cow::Borrowed("particles"),
+                ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+                kind: PortKind::Input,
+                required: true,
+            },
+        ];
+        &INPUTS
+    }
+
+    fn outputs(&self) -> &[NodeOutput] {
+        static OUTPUTS: [NodeOutput; 1] = [NodePort {
+            name: std::borrow::Cow::Borrowed("visible"),
+            ty: PortType::Scalar(manifold_renderer::node_graph::ports::ScalarType::F32),
+            kind: PortKind::Output,
+            required: false,
+        }];
+        &OUTPUTS
+    }
+
+    fn parameters(&self) -> &[ParamDef] {
+        &[]
+    }
+
+    fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(ParamValue::Float(simulation_time)) = ctx.inputs.scalar("time") else {
+            ctx.mark_outputs_pending();
+            return;
+        };
+        let Some(Transform { pos: [pose_x, ..], .. }) = ctx.inputs.transform("pose") else {
+            ctx.mark_outputs_pending();
+            return;
+        };
+        let Some(ParamValue::Float(particles)) = ctx.inputs.scalar("particles") else {
+            ctx.mark_outputs_pending();
+            return;
+        };
+        COUPLED_OBSERVER_SAMPLE.with(|sample| {
+            sample.set(CoupledObserverSample {
+                simulation_time,
+                pose_x,
+                particles,
+            });
+        });
+        ctx.outputs.set_scalar("visible", ParamValue::Float(1.0));
+    }
+}
 
 fn context(frame: u32) -> PresetContext {
     let seconds = f64::from(frame) / 60.0;
@@ -120,6 +213,18 @@ fn assert_finite_and_nonempty(bytes: &[u8], frame: u32) {
     );
 }
 
+fn assert_pixels_close(before: &[u8], after: &[u8], tolerance: f32) {
+    assert_eq!(before.len(), after.len());
+    for (before, after) in before.chunks_exact(8).zip(after.chunks_exact(8)) {
+        for channel in 0..4 {
+            let offset = channel * 2;
+            let before = f16::from_le_bytes([before[offset], before[offset + 1]]).to_f32();
+            let after = f16::from_le_bytes([after[offset], after[offset + 1]]).to_f32();
+            assert!((before - after).abs() <= tolerance, "paused frame changed: {before} vs {after}");
+        }
+    }
+}
+
 #[test]
 fn water_basin_renders_complete_finite_frames_through_tick_90() {
     let started = Instant::now();
@@ -165,6 +270,146 @@ fn water_basin_renders_complete_finite_frames_through_tick_90() {
     std::fs::write("/tmp/manifold_water_timing.txt", format!(
         "90 solver ticks plus initialization; 640x360, readback every frame, three PNG encodes. Total wall time including setup: {:.3} seconds. This is a headless proof, not app FPS.\n", started.elapsed().as_secs_f64()
     )).unwrap();
+}
+
+#[test]
+fn water_basin_paired_rigid_pose_publishes_through_fluid_worker() {
+    let mut def: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
+    // Keep this fixture's authored controls authoritative: the reference
+    // preset's exposed defaults otherwise re-enable Pour and resolution 24.
+    def.as_object_mut().unwrap().remove("presetMetadata");
+    let nodes = def["nodes"].as_array_mut().unwrap();
+    let fluid = nodes.iter_mut().find(|node| node["id"] == 4).unwrap();
+    for (name, value) in [
+        ("resolution", 12.0),
+        ("fill_height", 1.0),
+        ("emission", 0.0),
+        ("gravity", 0.0),
+    ] {
+        fluid["params"][name] = serde_json::json!({"type": "Float", "value": value});
+    }
+    nodes.extend([
+        serde_json::json!({
+            "id": 500, "nodeId": "paired_physics", "typeId": "node.physics_world",
+            "handle": "Paired Physics", "params": {
+                "gravity_x": {"type": "Float", "value": 0.0},
+                "gravity_y": {"type": "Float", "value": 0.0},
+                "gravity_z": {"type": "Float", "value": 0.0},
+                "speed": {"type": "Float", "value": 1.0},
+                "reset": {"type": "Float", "value": 0.0}
+            }
+        }),
+        serde_json::json!({
+            "id": 501, "nodeId": "paired_body", "typeId": "node.rigid_body",
+            "handle": "Paired Moving Body", "params": {
+                "enabled": {"type": "Bool", "value": true},
+                "shape": {"type": "Enum", "value": 1},
+                "motion": {"type": "Enum", "value": 1},
+                "mass": {"type": "Float", "value": 200.0},
+                "friction": {"type": "Float", "value": 0.2},
+                "bounce": {"type": "Float", "value": 0.0}
+            }
+        }),
+        serde_json::json!({
+            "id": 502, "nodeId": "paired_acceleration", "typeId": "node.uniform_vector_field",
+            "handle": "Paired Acceleration", "params": {
+                "x": {"type": "Float", "value": 20.0},
+                "y": {"type": "Float", "value": 0.0},
+                "z": {"type": "Float", "value": 0.0}
+            }
+        }),
+        serde_json::json!({
+            "id": 503, "nodeId": "paired_observer", "typeId": "node.test_coupled_observer",
+            "handle": "Coupled Observer"
+        }),
+    ]);
+    let wires = def["wires"].as_array_mut().unwrap();
+    wires.retain(|wire| {
+        !((wire["fromNode"] == 6 && wire["toNode"] == 7)
+            || (wire["fromNode"] == 7 && wire["toNode"] == 4)
+            || (wire["fromNode"] == 4
+                && wire["fromPort"] == "obstacle_pose"
+                && wire["toNode"] == 12
+                && wire["toPort"] == "transform"))
+    });
+    wires.extend([
+        serde_json::json!({"fromNode": 7, "fromPort": "transform", "toNode": 501, "toPort": "transform"}),
+        serde_json::json!({"fromNode": 501, "fromPort": "body", "toNode": 500, "toPort": "body_0"}),
+        serde_json::json!({"fromNode": 502, "fromPort": "out", "toNode": 500, "toPort": "acceleration_field"}),
+        serde_json::json!({"fromNode": 500, "fromPort": "pose_0", "toNode": 12, "toPort": "transform"}),
+        serde_json::json!({"fromNode": 4, "fromPort": "simulation_time", "toNode": 503, "toPort": "time"}),
+        serde_json::json!({"fromNode": 4, "fromPort": "particle_count", "toNode": 503, "toPort": "particles"}),
+        serde_json::json!({"fromNode": 500, "fromPort": "pose_0", "toNode": 503, "toPort": "pose"}),
+        serde_json::json!({"fromNode": 503, "fromPort": "visible", "toNode": 12, "toPort": "visible"}),
+    ]);
+
+    let harness = harness::shared();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register("node.test_coupled_observer", || {
+        Box::new(CoupledObserver {
+            type_id: EffectNodeType::new("node.test_coupled_observer"),
+        })
+    });
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &def.to_string(),
+        &registry,
+        Arc::clone(&harness.device),
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .unwrap_or_else(|error| panic!("paired Water Basin graph must build: {error}"));
+    let target = RenderTarget::new(
+        &harness.device,
+        WIDTH,
+        HEIGHT,
+        GpuTextureFormat::Rgba16Float,
+        "paired-water-basin-proof",
+    );
+    let _offline = PhysicsStepScope::for_render(true);
+    let initial = render_frame(&mut runtime, &target, &harness.device, 0);
+    assert_finite_and_nonempty(&initial, 0);
+    let initial_observer = COUPLED_OBSERVER_SAMPLE.with(Cell::get);
+    assert!(initial_observer.simulation_time.abs() < 1.0e-6);
+    let progressed = (1..=3).fold(initial.clone(), |_, frame| {
+        let pixels = render_frame(&mut runtime, &target, &harness.device, frame);
+        assert_finite_and_nonempty(&pixels, frame);
+        pixels
+    });
+    let progressed_observer = COUPLED_OBSERVER_SAMPLE.with(Cell::get);
+    assert!((progressed_observer.simulation_time - 3.0 / 60.0).abs() < 1.0e-6);
+    assert!(progressed_observer.particles > 0.0, "paired fixture must contain liquid");
+    assert!(
+        progressed_observer.pose_x > initial_observer.pose_x + 1.0e-4,
+        "coupled rigid pose must advance: {} -> {}",
+        initial_observer.pose_x,
+        progressed_observer.pose_x
+    );
+    let changed = initial
+        .chunks_exact(8)
+        .zip(progressed.chunks_exact(8))
+        .filter(|(before, after)| {
+            (0..3).any(|channel| {
+                let offset = channel * 2;
+                let before = f16::from_le_bytes([before[offset], before[offset + 1]]).to_f32();
+                let after = f16::from_le_bytes([after[offset], after[offset + 1]]).to_f32();
+                (before - after).abs() > 0.001
+            })
+        })
+        .count();
+    assert!(changed > 0, "paired rigid pose must move the rendered obstacle");
+    let paused = render_frame(&mut runtime, &target, &harness.device, 3);
+    assert_finite_and_nonempty(&paused, 3);
+    assert_pixels_close(&progressed, &paused, 1.0e-3);
+    let paused_observer = COUPLED_OBSERVER_SAMPLE.with(Cell::get);
+    assert!((paused_observer.simulation_time - progressed_observer.simulation_time).abs() < 1.0e-6);
+    assert!((paused_observer.pose_x - progressed_observer.pose_x).abs() < 1.0e-6);
+    std::fs::write(
+        "/tmp/manifold_coupled_scene.png",
+        readback_to_srgb_png(&harness.device, &target.texture, WIDTH, HEIGHT),
+    )
+    .expect("write coupled scene proof image");
 }
 
 #[test]

@@ -26,6 +26,24 @@ impl ImpulseTarget {
             Self::Fluid => None,
         }
     }
+
+    /// Merge authored selections which resolve to one shared native owner.
+    pub(crate) fn union(self, other: Self) -> Self {
+        let fluid = self.affects_fluid() || other.affects_fluid();
+        let rigid = match (self.rigid_targets(), other.rigid_targets()) {
+            (Some(left), Some(right)) => Some(RigidImpulseTargets {
+                bodies: left.bodies | right.bodies,
+                copies: left.copies || right.copies,
+            }),
+            (left, right) => left.or(right),
+        };
+        match (fluid, rigid) {
+            (true, Some(targets)) => Self::FluidAndRigid(targets),
+            (true, None) => Self::Fluid,
+            (false, Some(targets)) => Self::Rigid(targets),
+            (false, None) => unreachable!("each input has at least one recipient"),
+        }
+    }
 }
 
 /// An owned, resolved impulse ready for native fixed-tick admission.

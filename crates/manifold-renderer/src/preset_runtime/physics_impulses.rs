@@ -174,27 +174,32 @@ impl PresetRuntime {
         if targets.is_empty() {
             return Err("Impulse: selection has no physical recipients".into());
         }
-        let recipients = targets
-            .into_iter()
-            .map(|(id, target)| {
-                let instance = self.graph.instance_by_node_id(&id).ok_or_else(|| {
-                    format!("Impulse: recipient `{id}` is absent from the installed graph")
-                })?;
-                let node = self.graph.get_node(instance).expect("resolved recipient");
-                let expected = match target {
-                    ImpulseTarget::Rigid(_) => "node.physics_world",
-                    ImpulseTarget::Fluid | ImpulseTarget::FluidAndRigid(_) => "node.fluid_surface",
-                };
-                if node.node.type_id().as_str() != expected {
-                    return Err(format!("Impulse: recipient `{id}` changed type"));
-                }
-                Ok(Recipient {
-                    id,
-                    instance,
-                    target,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        let mut recipients: Vec<Recipient> = Vec::with_capacity(targets.len());
+        for (mut id, target) in targets {
+            let mut instance = self.graph.instance_by_node_id(&id).ok_or_else(|| {
+                format!("Impulse: recipient `{id}` is absent from the installed graph")
+            })?;
+            let node = self.graph.get_node(instance).expect("resolved recipient");
+            let expected = match target {
+                ImpulseTarget::Fluid => "node.fluid_surface",
+                ImpulseTarget::Rigid(_) => "node.physics_world",
+                ImpulseTarget::FluidAndRigid(_) => unreachable!("authoring resolves individual owners"),
+            };
+            if node.node.type_id().as_str() != expected {
+                return Err(format!("Impulse: recipient `{id}` changed type"));
+            }
+            if let Some(pair) = self.graph.coupled_scenes().iter()
+                .find(|pair| pair.rigid == instance)
+            {
+                instance = pair.fluid;
+                id = self.graph.get_node(instance).expect("coupled owner exists").node_id.clone();
+            }
+            if let Some(existing) = recipients.iter_mut().find(|entry| entry.instance == instance) {
+                existing.target = existing.target.union(target);
+            } else {
+                recipients.push(Recipient { id, instance, target });
+            }
+        }
         let source = self
             .graph
             .instance_by_node_id(field_node)

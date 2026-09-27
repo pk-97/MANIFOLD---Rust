@@ -819,6 +819,18 @@ pub(crate) fn reachable_from_liveness_roots(graph: &Graph) -> AHashSet<NodeInsta
         if !live.insert(id) {
             continue;
         }
+        for pair in graph.coupled_scenes() {
+            let sibling = if pair.fluid == id {
+                Some(pair.rigid)
+            } else if pair.rigid == id {
+                Some(pair.fluid)
+            } else {
+                None
+            };
+            if let Some(sibling) = sibling {
+                frontier.push(sibling);
+            }
+        }
         for w in graph.wires() {
             if w.to.0 == id {
                 frontier.push(w.from.0);
@@ -1110,6 +1122,56 @@ mod tests {
             Err(GraphError::RequiredInputUnwired { node, port })
                 if node == orphan && port == "source"
         ));
+    }
+
+    #[test]
+    fn live_coupled_partner_required_input_is_validated() {
+        let mut live = Graph::new();
+        let fluid = live.add_node(Box::new(TestNode::new(
+            FINAL_OUTPUT_TYPE_ID,
+            vec![],
+            vec![],
+        )));
+        let rigid = live.add_node(Box::new(TestNode::new(
+            "rigid_world",
+            vec![input("velocity", PortType::Texture2D, true)],
+            vec![],
+        )));
+        live.add_coupled_scene(
+            fluid,
+            rigid,
+            crate::node_graph::physics::RigidImpulseTargets::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            crate::node_graph::execution_plan::compile(&live),
+            Err(GraphError::RequiredInputUnwired { node, port })
+                if node == rigid && port == "velocity"
+        ));
+
+        let mut dead = Graph::new();
+        dead.add_node(Box::new(TestNode::new(
+            FINAL_OUTPUT_TYPE_ID,
+            vec![],
+            vec![],
+        )));
+        let dead_fluid = dead.add_node(Box::new(TestNode::new(
+            "dead_fluid",
+            vec![],
+            vec![],
+        )));
+        let dead_rigid = dead.add_node(Box::new(TestNode::new(
+            "dead_rigid",
+            vec![input("velocity", PortType::Texture2D, true)],
+            vec![],
+        )));
+        dead.add_coupled_scene(
+            dead_fluid,
+            dead_rigid,
+            crate::node_graph::physics::RigidImpulseTargets::default(),
+        )
+        .unwrap();
+        assert!(crate::node_graph::execution_plan::compile(&dead).is_ok());
     }
 
     #[test]

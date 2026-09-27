@@ -396,6 +396,28 @@ pub trait Primitive: PrimitiveSpec {
         None
     }
 
+    fn set_coupled_physics(&mut self, _enabled: bool) {}
+
+    fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
+        Err("Primitive does not support coupled rigid input capture".into())
+    }
+
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        _observation: Option<&crate::node_graph::physics::RigidSceneObservation>,
+        _colliders: crate::node_graph::physics::RigidImpulseTargets,
+        _error: Option<&str>,
+    ) {}
+
+    fn coupled_rigid_frame(&self) -> Option<&crate::node_graph::fluid::CoupledRigidFrame> {
+        None
+    }
+
+    fn accept_coupled_rigid_frame(
+        &mut self,
+        _frame: Option<&crate::node_graph::fluid::CoupledRigidFrame>,
+    ) {}
+
     /// Mirror of the native impulse admission hooks on [`EffectNode`].
     fn physics_impulse_epoch(&self) -> Option<u64> {
         None
@@ -776,6 +798,29 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn rigid_scene_observation(&self) -> Option<&crate::node_graph::physics::RigidSceneObservation> {
         Primitive::rigid_scene_observation(self)
+    }
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        Primitive::set_coupled_physics(self, enabled);
+    }
+    fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
+        Primitive::capture_coupled_rigid(self, ctx)
+    }
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        observation: Option<&crate::node_graph::physics::RigidSceneObservation>,
+        colliders: crate::node_graph::physics::RigidImpulseTargets,
+        error: Option<&str>,
+    ) {
+        Primitive::set_coupled_rigid_inputs(self, observation, colliders, error);
+    }
+    fn coupled_rigid_frame(&self) -> Option<&crate::node_graph::fluid::CoupledRigidFrame> {
+        Primitive::coupled_rigid_frame(self)
+    }
+    fn accept_coupled_rigid_frame(
+        &mut self,
+        frame: Option<&crate::node_graph::fluid::CoupledRigidFrame>,
+    ) {
+        Primitive::accept_coupled_rigid_frame(self, frame);
     }
     fn physics_impulse_epoch(&self) -> Option<u64> {
         Primitive::physics_impulse_epoch(self)

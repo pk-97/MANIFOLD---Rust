@@ -224,10 +224,11 @@ fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits(
     let mut recipients = Vec::new();
     runtime.drain_scene_impulses(|id, event| {
         assert_eq!(event.value.field.sample([0.0; 3]), [2.0, 0.0, 0.0]);
+        assert!(matches!(event.value.target, ImpulseTarget::FluidAndRigid(_)));
         recipients.push(id.to_string());
     });
     recipients.sort();
-    assert_eq!(recipients, ["fluid", "world"]);
+    assert_eq!(recipients, ["fluid"], "one shared owner admits the source hit once");
     edit(&mut runtime, "domain", "pos_x", 2.0);
     assert!(
         runtime

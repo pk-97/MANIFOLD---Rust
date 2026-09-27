@@ -46,6 +46,7 @@ pub(crate) mod execution;
 mod execution_plan;
 pub mod freeze;
 pub mod fluid;
+pub(crate) mod physics_scene;
 pub mod fluid_role;
 pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;

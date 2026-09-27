@@ -9,6 +9,8 @@ use std::{borrow::Cow, cell::Cell};
 mod source_tests;
 #[path = "scene_routes_tests.rs"]
 mod scene_routes_tests;
+#[path = "coupled_playback_tests.rs"]
+mod coupled_playback_tests;
 
 const DT: f64 = 1.0 / 60.0;
 thread_local! { static POSITIONS: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) }; }

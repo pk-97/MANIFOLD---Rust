@@ -90,6 +90,9 @@ struct PhysicsSample<'a> {
     params: &'a [Option<ParamValues>],
 }
 
+#[path = "execution/coupled_physics.rs"]
+mod coupled_physics;
+
 pub struct Executor {
     backend: Box<dyn Backend>,
     /// Scratch buffer reused across steps to avoid per-step allocation.
@@ -965,6 +968,12 @@ impl Executor {
                 .all(|(&selected, params)| !selected || params.is_some()),
             "physics sample params must be present for every selected step",
         );
+        assert!(
+            plan.coupled_scenes().iter().all(|pair| {
+                sample_steps[pair.fluid_step] == sample_steps[pair.rigid_step]
+            }),
+            "physics samples must include both participants of a coupled scene",
+        );
         let _scope = PhysicsAuthoredSampleScope::new();
         self.execute_frame_inner(
             graph,
@@ -1061,6 +1070,23 @@ impl Executor {
         // branch's input port.
         while let Some(idx) = worklist.pop() {
             let step = &steps[idx];
+            // A physical pair is one simulation dependency even when a mux
+            // currently displays only one participant's outputs.
+            for pair in plan.coupled_scenes() {
+                let partner = if idx == pair.fluid_step {
+                    Some(pair.rigid_step)
+                } else if idx == pair.rigid_step {
+                    Some(pair.fluid_step)
+                } else {
+                    None
+                };
+                if let Some(partner) = partner
+                    && !self.live_steps[partner]
+                {
+                    self.live_steps[partner] = true;
+                    worklist.push(partner);
+                }
+            }
             let Some(inst) = graph.get_node(step.node) else {
                 continue;
             };
@@ -1518,6 +1544,10 @@ impl Executor {
                 // free_after entirely — slots stay bound from last
                 // frame so re-selection picks up the prior state.
                 continue;
+            }
+
+            if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
+                self.capture_coupled_scene(graph, plan, *pair, time, sample);
             }
 
             // Memoized-dataflow skip (constant-subgraph hoisting): a PURE
@@ -2151,6 +2181,16 @@ impl Executor {
                         }
                     }
                 }
+            }
+
+            // The plan makes the rigid publication step adjacent to the
+            // liquid step. No consumer can observe either output until this
+            // accepted pair has been latched.
+            if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
+                let (fluid, rigid) = graph
+                    .node_pair_mut(step.node, plan.steps()[pair.rigid_step].node)
+                    .expect("compiled coupled participants exist");
+                rigid.node.accept_coupled_rigid_frame(fluid.node.coupled_rigid_frame());
             }
 
             // Storage freshness advances independently of semantic content:

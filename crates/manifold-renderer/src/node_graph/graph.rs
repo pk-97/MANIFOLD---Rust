@@ -9,6 +9,8 @@ use ahash::{AHashMap, AHashSet};
 
 use crate::node_graph::effect_node::{EffectNode, NodeInstanceId, NodeWire, ParamValues};
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::physics::RigidImpulseTargets;
+use crate::node_graph::physics_scene::CoupledScene;
 use crate::node_graph::validation::{GraphError, validate_connection};
 
 /// One instance of an [`EffectNode`] within a [`Graph`].
@@ -114,6 +116,7 @@ pub struct Graph {
     modifier_buffer_budget: Option<super::scene_modifier_expand::PreparedModifierBufferBudget>,
     prepared_params: AHashMap<NodeInstanceId, Vec<PreparedParam>>,
     prepared_param_rejections: usize,
+    coupled_scenes: Vec<CoupledScene>,
 }
 
 impl Graph {
@@ -128,6 +131,7 @@ impl Graph {
             modifier_buffer_budget: None,
             prepared_params: AHashMap::default(),
             prepared_param_rejections: 0,
+            coupled_scenes: Vec::new(),
         }
     }
 
@@ -290,6 +294,66 @@ impl Graph {
             .map(|inst| inst.id)
     }
 
+    pub(crate) fn coupled_scenes(&self) -> &[CoupledScene] {
+        &self.coupled_scenes
+    }
+
+    pub(crate) fn add_coupled_scene(
+        &mut self,
+        fluid: NodeInstanceId,
+        rigid: NodeInstanceId,
+        colliders: RigidImpulseTargets,
+    ) -> Result<(), GraphError> {
+        if fluid == rigid {
+            return Err(GraphError::CycleDetected {
+                involves: vec![fluid],
+            });
+        }
+        if self.nodes.get(&fluid).is_none() {
+            return Err(GraphError::NodeNotFound(fluid));
+        }
+        if self.nodes.get(&rigid).is_none() {
+            return Err(GraphError::NodeNotFound(rigid));
+        }
+        if let Some(existing) = self
+            .coupled_scenes
+            .iter_mut()
+            .find(|pair| pair.fluid == fluid && pair.rigid == rigid)
+        {
+            existing.colliders.bodies |= colliders.bodies;
+            existing.colliders.copies |= colliders.copies;
+        } else {
+            self.coupled_scenes.push(CoupledScene {
+                fluid,
+                rigid,
+                colliders,
+            });
+        }
+        self.nodes
+            .get_mut(&fluid)
+            .expect("validated coupled fluid node")
+            .node
+            .set_coupled_physics(true);
+        self.nodes
+            .get_mut(&rigid)
+            .expect("validated coupled rigid node")
+            .node
+            .set_coupled_physics(true);
+        Ok(())
+    }
+
+    pub(crate) fn node_pair_mut(
+        &mut self,
+        a: NodeInstanceId,
+        b: NodeInstanceId,
+    ) -> Option<(&mut NodeInstance, &mut NodeInstance)> {
+        if a == b {
+            return None;
+        }
+        let [first, second] = self.nodes.get_disjoint_mut([&a, &b]);
+        Some((first?, second?))
+    }
+
     /// Register a handle for a node that was added via plain
     /// [`add_node`]. Used by ChainSpec snapshot construction where the
     /// splice function adds nodes anonymously and the handle map
@@ -325,6 +389,29 @@ impl Graph {
         // strand a stale handle->dead-id mapping that future
         // node_id_by_handle lookups would honor.
         self.handles.retain(|_, v| *v != id);
+        let affected: Vec<_> = self
+            .coupled_scenes
+            .iter()
+            .filter(|pair| pair.fluid == id || pair.rigid == id)
+            .copied()
+            .collect();
+        self.coupled_scenes
+            .retain(|pair| pair.fluid != id && pair.rigid != id);
+        for pair in affected {
+            let surviving = if pair.fluid == id {
+                pair.rigid
+            } else {
+                pair.fluid
+            };
+            if !self
+                .coupled_scenes
+                .iter()
+                .any(|other| other.fluid == surviving || other.rigid == surviving)
+                && let Some(inst) = self.nodes.get_mut(&surviving)
+            {
+                inst.node.set_coupled_physics(false);
+            }
+        }
         Some(removed)
     }
 
