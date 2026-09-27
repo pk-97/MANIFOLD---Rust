@@ -2,6 +2,7 @@
 #include "coupling_probe.h"
 #include "coupling_operator_probe.h"
 #include "coupling_boundary_probe.h"
+#include "coupling_viscosity_probe.h"
 
 #include <cmath>
 #include <cstring>
@@ -607,6 +608,13 @@ extern "C" int manifold_fluids_coupling_boundary_probe(ManifoldRigidBoundaryProb
     return guarded([&] {
         if (!result) { throw std::invalid_argument("null boundary probe result"); }
         run_rigid_boundary_probe(*result);
+    });
+}
+
+extern "C" int manifold_fluids_coupling_viscosity_probe(ManifoldViscousBoundaryProbe *result) {
+    return guarded([&] {
+        if (!result) { throw std::invalid_argument("null viscous probe result"); }
+        run_viscous_boundary_probe(*result);
     });
 }
 

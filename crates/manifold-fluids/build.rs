@@ -25,6 +25,14 @@ fn main() {
     println!("cargo:rerun-if-changed={}", engine_dir.display());
     println!(
         "cargo:rerun-if-changed={}",
+        native_dir.join("coupling_viscosity_probe.cpp").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        native_dir.join("coupling_viscosity_probe.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
         native_dir.join("coupling_boundary_probe.cpp").display()
     );
     println!(
@@ -119,6 +127,7 @@ fn main() {
         .file(native_dir.join("coupling_probe.cpp"))
         .file(native_dir.join("coupling_operator_probe.cpp"))
         .file(native_dir.join("coupling_boundary_probe.cpp"))
+        .file(native_dir.join("coupling_viscosity_probe.cpp"))
         .file(engine_dir.join("mixbox/mixbox_stub.cpp"))
         .file(generated_version);
     for source in sources {

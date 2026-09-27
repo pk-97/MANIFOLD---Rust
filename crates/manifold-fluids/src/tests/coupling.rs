@@ -1,5 +1,5 @@
-//! Pressure-stage feasibility gates; no Box3D world, mesh reconstruction,
-//! viscosity, advection or production two-way scheduling is exercised here.
+//! Native pressure, boundary attribution and prescribed viscous stress gates.
+//! No Box3D world, advection or production two-way scheduling is exercised here.
 
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -24,6 +24,22 @@ struct BoundaryProbe {
     max_transpose_error: f64,
     blended_faces: u32,
     extrapolated_faces: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct ViscousProbe {
+    max_linear_balance_error: f64,
+    max_angular_balance_error: f64,
+    max_linear_absolute_error: f64,
+    max_angular_absolute_error: f64,
+    max_rigid_velocity_error: f64,
+    max_rigid_impulse: f64,
+    max_density_scaling_error: f64,
+    max_passive_energy_ratio: f64,
+    low_viscosity_energy_ratio: f64,
+    high_viscosity_energy_ratio: f64,
+    cases: u32,
 }
 
 fn assert_probe_finite(result: &Probe) {
@@ -70,6 +86,31 @@ unsafe extern "C" {
     fn manifold_fluids_coupling_operator_probe() -> i32;
     fn manifold_fluids_coupling_closed_pocket_probe() -> i32;
     fn manifold_fluids_coupling_boundary_probe(result: *mut BoundaryProbe) -> i32;
+    fn manifold_fluids_coupling_viscosity_probe(result: *mut ViscousProbe) -> i32;
+}
+
+#[test]
+fn coupling_viscous_boundary_balances_momentum_and_dissipates_energy() {
+    let mut result = ViscousProbe::default();
+    let status = unsafe { manifold_fluids_coupling_viscosity_probe(&mut result) };
+    println!("{result:?}");
+    super::super::native_result(status, "viscous boundary reaction").unwrap();
+    assert_eq!(result.cases, 17);
+    assert!(result.max_linear_absolute_error.is_finite());
+    assert!(result.max_angular_absolute_error.is_finite());
+    assert!(result.max_linear_balance_error.is_finite() && result.max_linear_balance_error < 1e-4);
+    assert!(
+        result.max_angular_balance_error.is_finite() && result.max_angular_balance_error < 1e-4
+    );
+    assert!(result.max_rigid_velocity_error.is_finite() && result.max_rigid_velocity_error < 2e-5);
+    assert!(result.max_rigid_impulse.is_finite() && result.max_rigid_impulse < 1e-4);
+    assert!(
+        result.max_density_scaling_error.is_finite() && result.max_density_scaling_error < 1e-6
+    );
+    assert!(
+        result.max_passive_energy_ratio.is_finite() && result.max_passive_energy_ratio <= 1.00001
+    );
+    assert!(result.high_viscosity_energy_ratio < result.low_viscosity_energy_ratio);
 }
 
 #[test]

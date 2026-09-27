@@ -167,6 +167,10 @@ static void box3d_set_mass( b3BodyId body_id, float mass )
 	}
 	data.mass = mass;
 	b3Body_SetMassData( body_id, data );
+	/* SetMassData refreshes local inverse inertia but leaves the cached world
+	 * matrix stale until the native pose is refreshed. Preserve the pose while
+	 * forcing that refresh at the bridge seam. */
+	b3Body_SetTransform( body_id, b3Body_GetPosition( body_id ), b3Body_GetRotation( body_id ) );
 }
 
 uint32_t manifold_box3d_world_create( float gx, float gy, float gz )
@@ -411,6 +415,7 @@ uint64_t manifold_box3d_mesh_body_create(
 		},
 	};
 	b3Body_SetMassData( body_id, mass_data );
+	b3Body_SetTransform( body_id, b3Body_GetPosition( body_id ), b3Body_GetRotation( body_id ) );
 	*mesh_out = (uintptr_t)mesh;
 	return b3StoreBodyId( body_id );
 }
@@ -688,6 +693,174 @@ int manifold_box3d_body_field_state(
 		default: return BOX3D_BRIDGE_ERROR;
 	}
 	*enabled_out = b3Body_IsEnabled( body_id ) ? 1 : 0;
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_dynamics(
+	uint64_t body_value,
+	float* center_out,
+	float* linear_out,
+	float* angular_out,
+	float* inverse_mass_out,
+	float* inverse_inertia_out,
+	int* type_out,
+	int* enabled_out,
+	int* awake_out )
+{
+	if ( center_out == NULL || linear_out == NULL || angular_out == NULL || inverse_mass_out == NULL ||
+		inverse_inertia_out == NULL || type_out == NULL || enabled_out == NULL || awake_out == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+
+	b3Pos center = b3Body_GetWorldCenterOfMass( body_id );
+	b3Vec3 linear = b3Body_GetLinearVelocity( body_id );
+	b3Vec3 angular = b3Body_GetAngularVelocity( body_id );
+	b3Matrix3 inverse_inertia = b3Body_GetWorldInverseRotationalInertia( body_id );
+	center_out[0] = (float)center.x;
+	center_out[1] = (float)center.y;
+	center_out[2] = (float)center.z;
+	linear_out[0] = linear.x;
+	linear_out[1] = linear.y;
+	linear_out[2] = linear.z;
+	angular_out[0] = angular.x;
+	angular_out[1] = angular.y;
+	angular_out[2] = angular.z;
+	*inverse_mass_out = b3Body_GetInverseMass( body_id );
+	/* b3Matrix3 stores its columns in cx/cy/cz; export rows explicitly. */
+	inverse_inertia_out[0] = inverse_inertia.cx.x;
+	inverse_inertia_out[1] = inverse_inertia.cy.x;
+	inverse_inertia_out[2] = inverse_inertia.cz.x;
+	inverse_inertia_out[3] = inverse_inertia.cx.y;
+	inverse_inertia_out[4] = inverse_inertia.cy.y;
+	inverse_inertia_out[5] = inverse_inertia.cz.y;
+	inverse_inertia_out[6] = inverse_inertia.cx.z;
+	inverse_inertia_out[7] = inverse_inertia.cy.z;
+	inverse_inertia_out[8] = inverse_inertia.cz.z;
+	switch ( b3Body_GetType( body_id ) )
+	{
+		case b3_staticBody: *type_out = 0; break;
+		case b3_dynamicBody: *type_out = 1; break;
+		case b3_kinematicBody: *type_out = 2; break;
+		default: return BOX3D_BRIDGE_ERROR;
+	}
+	*enabled_out = b3Body_IsEnabled( body_id ) ? 1 : 0;
+	*awake_out = b3Body_IsAwake( body_id ) ? 1 : 0;
+	return BOX3D_BRIDGE_OK;
+}
+
+static int box3d_vec3_finite( b3Vec3 value )
+{
+	return isfinite( value.x ) && isfinite( value.y ) && isfinite( value.z );
+}
+
+static int box3d_matrix_finite( b3Matrix3 value )
+{
+	return box3d_vec3_finite( value.cx ) && box3d_vec3_finite( value.cy ) && box3d_vec3_finite( value.cz );
+}
+
+int manifold_box3d_body_preflight_impulse(
+	uint32_t world_value,
+	uint64_t body_value,
+	const float* linear,
+	const float* angular )
+{
+	if ( linear == NULL || angular == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	for ( int i = 0; i < 3; ++i )
+	{
+		if ( !isfinite( linear[i] ) || !isfinite( angular[i] ) )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) || b3Body_GetType( body_id ) != b3_dynamicBody || !b3Body_IsEnabled( body_id ) )
+	{
+		return BOX3D_BRIDGE_OK;
+	}
+
+	if ( linear[0] != 0.0f || linear[1] != 0.0f || linear[2] != 0.0f )
+	{
+		b3Vec3 velocity = b3Body_GetLinearVelocity( body_id );
+		float inverse_mass = b3Body_GetInverseMass( body_id );
+		b3Vec3 predicted = b3MulAdd( velocity, inverse_mass, (b3Vec3){ linear[0], linear[1], linear[2] } );
+		if ( !box3d_vec3_finite( velocity ) || !isfinite( inverse_mass ) || !box3d_vec3_finite( predicted ) )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+		float length_squared = b3LengthSquared( predicted );
+		float maximum_speed = b3World_GetMaximumLinearSpeed( b3LoadWorldId( world_value ) );
+		float maximum_speed_squared = maximum_speed * maximum_speed;
+		if ( !isfinite( length_squared ) || !isfinite( maximum_speed ) || !isfinite( maximum_speed_squared ) ||
+			length_squared > maximum_speed_squared )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+
+	if ( angular[0] != 0.0f || angular[1] != 0.0f || angular[2] != 0.0f )
+	{
+		b3Vec3 velocity = b3Body_GetAngularVelocity( body_id );
+		b3Quat rotation = b3Body_GetRotation( body_id );
+		b3Vec3 impulse = { angular[0], angular[1], angular[2] };
+		b3Vec3 local_impulse = b3InvRotateVector( rotation, impulse );
+		b3Matrix3 local_inertia = b3Body_GetLocalRotationalInertia( body_id );
+		b3Matrix3 local_inverse = b3Det( local_inertia ) > 0.0f ? b3InvertT( local_inertia ) : b3Mat3_zero;
+		b3Vec3 local_delta = b3MulMV( local_inverse, local_impulse );
+		b3Vec3 delta = b3RotateVector( rotation, local_delta );
+		b3Vec3 predicted = b3Add( velocity, delta );
+		if ( !box3d_vec3_finite( velocity ) || !box3d_vec3_finite( local_impulse ) ||
+			!box3d_matrix_finite( local_inertia ) || !box3d_matrix_finite( local_inverse ) ||
+			!box3d_vec3_finite( local_delta ) || !box3d_vec3_finite( delta ) || !box3d_vec3_finite( predicted ) )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_apply_impulse(
+	uint64_t body_value,
+	const float* linear,
+	const float* angular )
+{
+	if ( linear == NULL || angular == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	for ( int i = 0; i < 3; ++i )
+	{
+		if ( !isfinite( linear[i] ) || !isfinite( angular[i] ) )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) || b3Body_GetType( body_id ) != b3_dynamicBody || !b3Body_IsEnabled( body_id ) )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	int wake = ( linear[0] != 0.0f || linear[1] != 0.0f || linear[2] != 0.0f ||
+		angular[0] != 0.0f || angular[1] != 0.0f || angular[2] != 0.0f );
+	if ( linear[0] != 0.0f || linear[1] != 0.0f || linear[2] != 0.0f )
+	{
+		b3Body_ApplyLinearImpulseToCenter( body_id, (b3Vec3){ linear[0], linear[1], linear[2] }, wake != 0 );
+	}
+	if ( angular[0] != 0.0f || angular[1] != 0.0f || angular[2] != 0.0f )
+	{
+		b3Body_ApplyAngularImpulse( body_id, (b3Vec3){ angular[0], angular[1], angular[2] }, wake != 0 );
+	}
 	return BOX3D_BRIDGE_OK;
 }
 

@@ -151,6 +151,28 @@ mod ffi {
             type_out: *mut i32,
             enabled_out: *mut i32,
         ) -> i32;
+        pub fn manifold_box3d_body_dynamics(
+            body: u64,
+            center_out: *mut f32,
+            linear_out: *mut f32,
+            angular_out: *mut f32,
+            inverse_mass_out: *mut f32,
+            inverse_inertia_out: *mut f32,
+            type_out: *mut i32,
+            enabled_out: *mut i32,
+            awake_out: *mut i32,
+        ) -> i32;
+        pub fn manifold_box3d_body_preflight_impulse(
+            world: u32,
+            body: u64,
+            linear: *const f32,
+            angular: *const f32,
+        ) -> i32;
+        pub fn manifold_box3d_body_apply_impulse(
+            body: u64,
+            linear: *const f32,
+            angular: *const f32,
+        ) -> i32;
         pub fn manifold_box3d_body_apply_field(
             body: u64,
             force: *const f32,
@@ -242,6 +264,32 @@ pub struct BodyPose {
     pub rotation: [f32; 4],
 }
 
+/// A body's current state and effective response to impulses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyDynamics {
+    pub kind: BodyKind,
+    pub enabled: bool,
+    pub awake: bool,
+    pub center_of_mass: [f32; 3],
+    pub linear_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub inverse_mass: f32,
+    /// World-space inverse inertia in row-major order.
+    pub inverse_inertia: [[f32; 3]; 3],
+}
+
+/// A world-space impulse applied at a body's center of mass.
+///
+/// `linear` is in SI kg m/s and `angular` is a world-space angular impulse
+/// about the center of mass in SI kg m^2/s. The angular component carries no
+/// extra lever-arm torque.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyImpulse {
+    pub body: BodyHandle,
+    pub linear: [f32; 3],
+    pub angular: [f32; 3],
+}
+
 const MAX_BODY_HULLS: usize = 64;
 const COOKED_HULL_MAX_VERTICES: i32 = 42;
 
@@ -263,6 +311,12 @@ struct FieldApplication {
     impulse: [f32; 3],
 }
 
+struct ImpulseApplication {
+    native: u64,
+    linear: [f32; 3],
+    angular: [f32; 3],
+}
+
 enum OwnedGeometry {
     Hulls(Vec<usize>),
     Mesh(usize),
@@ -274,6 +328,7 @@ pub struct PhysicsWorld {
     provenance: u64,
     bodies: Vec<BodyRecord>,
     field_scratch: Vec<FieldApplication>,
+    impulse_scratch: Vec<ImpulseApplication>,
     field_seen: Vec<bool>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
@@ -339,6 +394,7 @@ impl PhysicsWorld {
             provenance: if provenance == 0 { 1 } else { provenance },
             bodies: Vec::new(),
             field_scratch: Vec::new(),
+            impulse_scratch: Vec::new(),
             field_seen: Vec::new(),
             _not_sync: PhantomData,
         })
@@ -461,6 +517,8 @@ impl PhysicsWorld {
         self.field_seen.push(false);
         self.field_scratch
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
+        self.impulse_scratch
+            .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -546,6 +604,8 @@ impl PhysicsWorld {
         self.field_seen.push(false);
         self.field_scratch
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
+        self.impulse_scratch
+            .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -878,6 +938,173 @@ impl PhysicsWorld {
         } else {
             Err(PhysicsError::NativeFailure)
         }
+    }
+
+    /// Read a body's current rigid dynamics state and effective impulse response.
+    pub fn dynamics(&self, handle: BodyHandle) -> Result<BodyDynamics, PhysicsError> {
+        let native = self.native_body(handle)?;
+        let mut center_of_mass = [0.0; 3];
+        let mut linear_velocity = [0.0; 3];
+        let mut angular_velocity = [0.0; 3];
+        let mut inverse_mass = 0.0;
+        let mut inverse_inertia_values = [0.0; 9];
+        let mut body_type = 0;
+        let mut enabled = 0;
+        let mut awake = 0;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_dynamics(
+                native,
+                center_of_mass.as_mut_ptr(),
+                linear_velocity.as_mut_ptr(),
+                angular_velocity.as_mut_ptr(),
+                &mut inverse_mass,
+                inverse_inertia_values.as_mut_ptr(),
+                &mut body_type,
+                &mut enabled,
+                &mut awake,
+            )
+        };
+        if result != 0 {
+            return Err(PhysicsError::NativeFailure);
+        }
+        let kind = match body_type {
+            0 => BodyKind::Fixed,
+            1 => BodyKind::Dynamic,
+            2 => BodyKind::Animated,
+            _ => return Err(PhysicsError::NativeFailure),
+        };
+        if !center_of_mass
+            .iter()
+            .chain(linear_velocity.iter())
+            .chain(angular_velocity.iter())
+            .chain(std::iter::once(&inverse_mass))
+            .chain(inverse_inertia_values.iter())
+            .all(|value| value.is_finite())
+        {
+            return Err(PhysicsError::NativeFailure);
+        }
+        let enabled = enabled != 0;
+        let effective = kind == BodyKind::Dynamic && enabled;
+        Ok(BodyDynamics {
+            kind,
+            enabled,
+            awake: awake != 0,
+            center_of_mass,
+            linear_velocity,
+            angular_velocity,
+            inverse_mass: if effective { inverse_mass } else { 0.0 },
+            inverse_inertia: if effective {
+                [
+                    [
+                        inverse_inertia_values[0],
+                        inverse_inertia_values[1],
+                        inverse_inertia_values[2],
+                    ],
+                    [
+                        inverse_inertia_values[3],
+                        inverse_inertia_values[4],
+                        inverse_inertia_values[5],
+                    ],
+                    [
+                        inverse_inertia_values[6],
+                        inverse_inertia_values[7],
+                        inverse_inertia_values[8],
+                    ],
+                ]
+            } else {
+                [[0.0; 3]; 3]
+            },
+        })
+    }
+
+    /// Apply a validated batch of center-of-mass linear and angular impulses.
+    /// The complete batch is checked before any native body is modified.
+    pub fn apply_impulses(&mut self, impulses: &[BodyImpulse]) -> Result<(), PhysicsError> {
+        self.field_seen.fill(false);
+        self.impulse_scratch.clear();
+        let result = (|| {
+            let _lock = native_lock();
+            for impulse in impulses {
+                validate_vec3(impulse.linear, "linear impulse")?;
+                validate_vec3(impulse.angular, "angular impulse")?;
+                let native = self.body_record(impulse.body)?.native;
+                let seen = &mut self.field_seen[impulse.body.index as usize];
+                if *seen {
+                    return Err(PhysicsError::InvalidInput("duplicate impulse body handle"));
+                }
+                *seen = true;
+
+                let mut center_of_mass = [0.0; 3];
+                let mut linear_velocity = [0.0; 3];
+                let mut angular_velocity = [0.0; 3];
+                let mut inverse_mass = 0.0;
+                let mut inverse_inertia_values = [0.0; 9];
+                let mut body_type = 0;
+                let mut enabled = 0;
+                let mut awake = 0;
+                let dynamics_result = unsafe {
+                    ffi::manifold_box3d_body_dynamics(
+                        native,
+                        center_of_mass.as_mut_ptr(),
+                        linear_velocity.as_mut_ptr(),
+                        angular_velocity.as_mut_ptr(),
+                        &mut inverse_mass,
+                        inverse_inertia_values.as_mut_ptr(),
+                        &mut body_type,
+                        &mut enabled,
+                        &mut awake,
+                    )
+                };
+                if dynamics_result != 0 {
+                    return Err(PhysicsError::NativeFailure);
+                }
+                if !linear_velocity
+                    .iter()
+                    .chain(angular_velocity.iter())
+                    .chain(std::iter::once(&inverse_mass))
+                    .chain(inverse_inertia_values.iter())
+                    .all(|value| value.is_finite())
+                {
+                    return Err(PhysicsError::NativeFailure);
+                }
+                if body_type != BodyKind::Dynamic.native_value() || enabled == 0 {
+                    continue;
+                }
+                let preflight_result = unsafe {
+                    ffi::manifold_box3d_body_preflight_impulse(
+                        self.native,
+                        native,
+                        impulse.linear.as_ptr(),
+                        impulse.angular.as_ptr(),
+                    )
+                };
+                if preflight_result != 0 {
+                    return Err(PhysicsError::InvalidInput("impulse result is invalid"));
+                }
+                self.impulse_scratch.push(ImpulseApplication {
+                    native,
+                    linear: impulse.linear,
+                    angular: impulse.angular,
+                });
+            }
+
+            for application in &self.impulse_scratch {
+                let apply_result = unsafe {
+                    ffi::manifold_box3d_body_apply_impulse(
+                        application.native,
+                        application.linear.as_ptr(),
+                        application.angular.as_ptr(),
+                    )
+                };
+                if apply_result != 0 {
+                    return Err(PhysicsError::NativeFailure);
+                }
+            }
+            Ok(())
+        })();
+        self.impulse_scratch.clear();
+        result
     }
 
     /// Read a body's current world-space velocity at a point in local coordinates.
@@ -1225,6 +1452,9 @@ fn validate_config(mut config: BodyConfig) -> Result<BodyConfig, PhysicsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[path = "coupling_body.rs"]
+    mod coupling_body;
 
     fn cube(height: f32) -> Vec<[f32; 3]> {
         vec![

@@ -27,6 +27,7 @@ SOFTWARE.
 
 #include "array3d.h"
 #include "pcgsolver/pcgsolver.h"
+#include "viscousboundaryreaction.h"
 #include "vmath.h"
 
 class MACVelocityField;
@@ -41,6 +42,9 @@ struct ViscositySolverParameters {
     ParticleLevelSet *liquidSDF;
     MeshLevelSet *solidSDF;
     Array3d<float> *viscosity;
+    ViscousBoundaryReaction *boundaryReaction = nullptr;
+    // kg/m^3. The native viscosity field is kinematic viscosity in m^2/s.
+    double reactionDensity = 1.0;
     double errorTolerance = 1e-4;
     int maxIterations = 900;
 };
@@ -63,7 +67,9 @@ public:
 private:
 
     struct ViscosityVolumeGrid {
-        int isize, jsize, ksize;
+        // A fresh solver must allocate its grids even when its stack storage
+        // previously held a solver with the same dimensions.
+        int isize = 0, jsize = 0, ksize = 0;
         Array3d<float> center;
         Array3d<float> U;
         Array3d<float> V;
@@ -230,6 +236,14 @@ private:
 
     bool _solveLinearSystem(SparseMatrixf &matrix, std::vector<float> &rhs, 
                             std::vector<float> &soln);
+    bool _validateReactionInputs();
+    bool _captureBoundaryReaction(const std::vector<float> &soln, double density);
+    bool _captureReactionTerm(const GridIndex *faces, const int *axes,
+                              const int *signs, int count, float weight,
+                              const std::vector<float> &soln, double density);
+    bool _getReactionFaceValue(int axis, GridIndex g,
+                               const std::vector<float> &soln,
+                               double *value);
     void _applySolutionToVelocityField(std::vector<float> &soln);
 
     int _isize;
@@ -241,6 +255,7 @@ private:
     ParticleLevelSet *_liquidSDF;
     MeshLevelSet *_solidSDF;
     Array3d<float> *_viscosity;
+    ViscousBoundaryReaction *_boundaryReaction = nullptr;
 
     FaceStateGrid _state;
     ViscosityVolumeGrid _volumes;

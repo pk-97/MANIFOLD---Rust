@@ -41,6 +41,9 @@ SOFTWARE.
 #include "meshlevelset.h"
 #include "interpolation.h"
 
+#include <cmath>
+#include <limits>
+
 ViscositySolver::ViscositySolver() {
 }
 
@@ -48,9 +51,32 @@ ViscositySolver::~ViscositySolver() {
 }
 
 bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters params) {
+    ViscousBoundaryReaction *boundaryReaction = params.boundaryReaction;
+    struct ReactionCaptureGuard {
+        ViscousBoundaryReaction *reaction;
+        bool committed = false;
+        ~ReactionCaptureGuard() {
+            if (reaction != nullptr && !committed) {
+                reaction->invalidate();
+            }
+        }
+    } reactionGuard{boundaryReaction};
+
     _initialize(params);
+    _boundaryReaction = boundaryReaction;
+    if (boundaryReaction != nullptr &&
+        !boundaryReaction->beginCapture(_isize, _jsize, _ksize, _dx, params.reactionDensity)) {
+        _solverStatus = "***Viscosity boundary reaction FAILED: invalid capture parameters";
+        return false;
+    }
+
     _computeFaceStateGrid();
     _computeVolumeGrid();
+    if (boundaryReaction != nullptr && !_validateReactionInputs()) {
+        boundaryReaction->invalidate();
+        _solverStatus = "***Viscosity boundary reaction FAILED: invalid native inputs";
+        return false;
+    }
     _computeMatrixIndexTable();
 
     int matsize = _matrixIndex.matrixSize;
@@ -59,6 +85,12 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
         _solverIterations = 0;
         _solverError = 0.0f;
         _solverStatus = "Viscosity Solver Iterations: 0\nEstimated Error: 0.0";
+        if (boundaryReaction != nullptr && !boundaryReaction->finish()) {
+            boundaryReaction->invalidate();
+            _solverStatus = "***Viscosity boundary reaction FAILED: output validation";
+            return false;
+        }
+        reactionGuard.committed = true;
         return true;
     }
 
@@ -70,10 +102,22 @@ bool ViscositySolver::applyViscosityToVelocityField(ViscositySolverParameters pa
 
     bool success = _solveLinearSystem(matrix, rhs, soln);
     if (!success) {
+        if (boundaryReaction != nullptr) {
+            boundaryReaction->invalidate();
+        }
+        return false;
+    }
+
+    if (boundaryReaction != nullptr &&
+        !_captureBoundaryReaction(soln, params.reactionDensity)) {
+        boundaryReaction->invalidate();
+        _solverStatus = "***Viscosity boundary reaction FAILED: stencil extraction";
         return false;
     }
 
     _applySolutionToVelocityField(soln);
+
+    reactionGuard.committed = true;
 
     return true;
 }
@@ -861,6 +905,230 @@ bool ViscositySolver::_solveLinearSystem(SparseMatrixf &matrix, std::vector<floa
     _solverStatus = ss.str();
 
     return retval;
+}
+
+bool ViscositySolver::_validateReactionInputs() {
+    if (!std::isfinite(_dx) || _dx <= 0.0f ||
+        !std::isfinite(_deltaTime) || _deltaTime <= 0.0f || _viscosity == nullptr) {
+        return false;
+    }
+
+    const auto finiteNonnegative = [](Array3d<float> &grid) {
+        const size_t count = static_cast<size_t>(grid.width) * grid.height * grid.depth;
+        const float *values = grid.getRawArray();
+        for (size_t index = 0; index < count; ++index) {
+            if (!std::isfinite(values[index]) || values[index] < 0.0f) { return false; }
+        }
+        return true;
+    };
+    const auto finiteVelocity = [](Array3d<float> &grid) {
+        const size_t count = static_cast<size_t>(grid.width) * grid.height * grid.depth;
+        const float *values = grid.getRawArray();
+        for (size_t index = 0; index < count; ++index) {
+            if (!std::isfinite(values[index])) { return false; }
+        }
+        return true;
+    };
+    return finiteVelocity(*_velocityField->getArray3dU())
+        && finiteVelocity(*_velocityField->getArray3dV())
+        && finiteVelocity(*_velocityField->getArray3dW())
+        && finiteNonnegative(*_viscosity) && finiteNonnegative(_volumes.center)
+        && finiteNonnegative(_volumes.U) && finiteNonnegative(_volumes.V)
+        && finiteNonnegative(_volumes.W) && finiteNonnegative(_volumes.edgeU)
+        && finiteNonnegative(_volumes.edgeV) && finiteNonnegative(_volumes.edgeW);
+}
+
+bool ViscositySolver::_getReactionFaceValue(int axis, GridIndex g,
+                                             const std::vector<float> &soln,
+                                             double *value) {
+    FaceState state;
+    int matrixIndex;
+    if (axis == 0) {
+        state = _state.U(g);
+        matrixIndex = _matrixIndex.U(g.i, g.j, g.k);
+    } else if (axis == 1) {
+        state = _state.V(g);
+        matrixIndex = _matrixIndex.V(g.i, g.j, g.k);
+    } else if (axis == 2) {
+        state = _state.W(g);
+        matrixIndex = _matrixIndex.W(g.i, g.j, g.k);
+    } else {
+        return false;
+    }
+
+    if (state == FaceState::fluid) {
+        if (matrixIndex < 0 || static_cast<size_t>(matrixIndex) >= soln.size()) {
+            return false;
+        }
+        *value = soln[matrixIndex];
+    } else if (state == FaceState::solid) {
+        if (axis == 0) {
+            *value = _velocityField->U(g);
+        } else if (axis == 1) {
+            *value = _velocityField->V(g);
+        } else {
+            *value = _velocityField->W(g);
+        }
+    } else {
+        return false;
+    }
+    return std::isfinite(*value);
+}
+
+bool ViscositySolver::_captureReactionTerm(const GridIndex *faces, const int *axes,
+                                           const int *signs, int count, float weight,
+                                           const std::vector<float> &soln, double density) {
+    if (!std::isfinite(weight)) {
+        return false;
+    }
+    if (weight <= 0.0f) {
+        return true;
+    }
+
+    bool hasActiveFluid = false;
+    for (int n = 0; n < count; n++) {
+        int matrixIndex = -1;
+        FaceState state;
+        if (axes[n] == 0) {
+            state = _state.U(faces[n]);
+            matrixIndex = _matrixIndex.U(faces[n].i, faces[n].j, faces[n].k);
+        } else if (axes[n] == 1) {
+            state = _state.V(faces[n]);
+            matrixIndex = _matrixIndex.V(faces[n].i, faces[n].j, faces[n].k);
+        } else if (axes[n] == 2) {
+            state = _state.W(faces[n]);
+            matrixIndex = _matrixIndex.W(faces[n].i, faces[n].j, faces[n].k);
+        } else {
+            return false;
+        }
+        if (state == FaceState::fluid && matrixIndex >= 0) {
+            hasActiveFluid = true;
+        }
+    }
+    if (!hasActiveFluid) {
+        return true;
+    }
+
+    double values[4] = {0.0, 0.0, 0.0, 0.0};
+    double strain = 0.0;
+    for (int n = 0; n < count; n++) {
+        if (!_getReactionFaceValue(axes[n], faces[n], soln, &values[n])) {
+            return false;
+        }
+        strain += static_cast<double>(signs[n]) * values[n];
+    }
+    if (!std::isfinite(strain)) {
+        return false;
+    }
+
+    const double impulseScale = density * static_cast<double>(_dx) * _dx * _dx * weight;
+    if (!std::isfinite(impulseScale)) {
+        return false;
+    }
+    for (int n = 0; n < count; n++) {
+        FaceState state;
+        if (axes[n] == 0) {
+            state = _state.U(faces[n]);
+        } else if (axes[n] == 1) {
+            state = _state.V(faces[n]);
+        } else {
+            state = _state.W(faces[n]);
+        }
+        if (state == FaceState::solid) {
+            const double impulse = -impulseScale * signs[n] * strain;
+            if (!std::isfinite(impulse) || !_boundaryReaction->accumulate(axes[n], faces[n], impulse)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool ViscositySolver::_captureBoundaryReaction(const std::vector<float> &soln, double density) {
+    if (_boundaryReaction == nullptr || !std::isfinite(density) || density <= 0.0) {
+        return false;
+    }
+
+    const float invdx = 1.0f / _dx;
+    const float factor = _deltaTime * invdx * invdx;
+    for (int k = 1; k < _ksize; k++) {
+        for (int j = 1; j < _jsize; j++) {
+            for (int i = 1; i < _isize; i++) {
+                GridIndex normalFaces[2] = {GridIndex(i + 1, j, k), GridIndex(i, j, k)};
+                int normalAxes[2] = {0, 0};
+                const int normalSigns[2] = {1, -1};
+                float weight = 2.0f * factor * _viscosity->get(i, j, k) * _volumes.center(i, j, k);
+                if (!_captureReactionTerm(normalFaces, normalAxes, normalSigns, 2,
+                                          weight, soln, density)) {
+                    return false;
+                }
+
+                normalFaces[0] = GridIndex(i, j + 1, k);
+                normalFaces[1] = GridIndex(i, j, k);
+                normalAxes[0] = 1;
+                normalAxes[1] = 1;
+                weight = 2.0f * factor * _viscosity->get(i, j, k) * _volumes.center(i, j, k);
+                if (!_captureReactionTerm(normalFaces, normalAxes, normalSigns, 2,
+                                          weight, soln, density)) {
+                    return false;
+                }
+
+                normalFaces[0] = GridIndex(i, j, k + 1);
+                normalFaces[1] = GridIndex(i, j, k);
+                normalAxes[0] = 2;
+                normalAxes[1] = 2;
+                weight = 2.0f * factor * _viscosity->get(i, j, k) * _volumes.center(i, j, k);
+                if (!_captureReactionTerm(normalFaces, normalAxes, normalSigns, 2,
+                                          weight, soln, density)) {
+                    return false;
+                }
+
+                GridIndex shearFaces[4] = {
+                    GridIndex(i, j, k), GridIndex(i, j - 1, k),
+                    GridIndex(i, j, k), GridIndex(i - 1, j, k)};
+                const int shearAxesW[4] = {0, 0, 1, 1};
+                const int shearSigns[4] = {1, -1, 1, -1};
+                const float viscW = 0.25f * (_viscosity->get(i - 1, j, k) +
+                                             _viscosity->get(i - 1, j - 1, k) +
+                                             _viscosity->get(i, j, k) +
+                                             _viscosity->get(i, j - 1, k));
+                weight = factor * viscW * _volumes.edgeW(i, j, k);
+                if (!_captureReactionTerm(shearFaces, shearAxesW, shearSigns, 4,
+                                          weight, soln, density)) {
+                    return false;
+                }
+
+                shearFaces[1] = GridIndex(i, j, k - 1);
+                shearFaces[3] = GridIndex(i - 1, j, k);
+                const int shearAxesV[4] = {0, 0, 2, 2};
+                const float viscV = 0.25f * (_viscosity->get(i - 1, j, k) +
+                                             _viscosity->get(i - 1, j, k - 1) +
+                                             _viscosity->get(i, j, k) +
+                                             _viscosity->get(i, j, k - 1));
+                weight = factor * viscV * _volumes.edgeV(i, j, k);
+                if (!_captureReactionTerm(shearFaces, shearAxesV, shearSigns, 4,
+                                          weight, soln, density)) {
+                    return false;
+                }
+
+                shearFaces[0] = GridIndex(i, j, k);
+                shearFaces[1] = GridIndex(i, j, k - 1);
+                shearFaces[2] = GridIndex(i, j, k);
+                shearFaces[3] = GridIndex(i, j - 1, k);
+                const int shearAxesU[4] = {1, 1, 2, 2};
+                const float viscU = 0.25f * (_viscosity->get(i, j - 1, k) +
+                                             _viscosity->get(i, j - 1, k - 1) +
+                                             _viscosity->get(i, j, k) +
+                                             _viscosity->get(i, j, k - 1));
+                weight = factor * viscU * _volumes.edgeU(i, j, k);
+                if (!_captureReactionTerm(shearFaces, shearAxesU, shearSigns, 4,
+                                          weight, soln, density)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return _boundaryReaction->finish();
 }
 
 void ViscositySolver::_applySolutionToVelocityField(std::vector<float> &soln) {
