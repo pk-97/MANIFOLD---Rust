@@ -61,7 +61,9 @@ The bounded native probes establish pressure-stage algebra, force/torque,
 energy, closed-pocket constraints and the boundary map's interpolation/transpose
 against native mesh velocities. Prescribed viscous boundaries are checked for
 linear/angular momentum balance, dissipation, rigid-motion invariance, density
-scaling and failure atomicity. `FluidSimulation` does not yet enable production
+scaling and failure atomicity. A separate frozen-geometry energy test rejects
+delayed viscous feedback for light bodies/high viscosity. It does not qualify
+that candidate for production. `FluidSimulation` does not yet enable production
 two-way coupling. Enabling the boundary map, viscous feedback and Box3D timing
 remain integration requirements in
 [`FLUID_ENGINE_INTEGRATION_PLAN.md`](../../../docs/FLUID_ENGINE_INTEGRATION_PLAN.md).

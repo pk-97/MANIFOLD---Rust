@@ -42,6 +42,13 @@ struct ViscousProbe {
     cases: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Default)]
+struct ViscousFeedbackProbe {
+    impulses: [f64; 8],
+    energy_ratios: [f64; 8],
+}
+
 fn assert_probe_finite(result: &Probe) {
     assert!(
         result.impulse.iter().all(|value| value.is_finite()),
@@ -87,6 +94,40 @@ unsafe extern "C" {
     fn manifold_fluids_coupling_closed_pocket_probe() -> i32;
     fn manifold_fluids_coupling_boundary_probe(result: *mut BoundaryProbe) -> i32;
     fn manifold_fluids_coupling_viscosity_probe(result: *mut ViscousProbe) -> i32;
+    fn manifold_fluids_coupling_viscous_feedback_probe(result: *mut ViscousFeedbackProbe) -> i32;
+}
+
+#[test]
+fn coupling_partitioned_viscous_feedback_rejects_energy_growth() {
+    let mut result = ViscousFeedbackProbe::default();
+    let status = unsafe { manifold_fluids_coupling_viscous_feedback_probe(&mut result) };
+    println!("{result:?}");
+    super::super::native_result(status, "viscous feedback feasibility").unwrap();
+    assert!(
+        result
+            .impulses
+            .iter()
+            .all(|value| value.is_finite() && *value < 0.0)
+    );
+    assert!(
+        result
+            .energy_ratios
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+    );
+    // Even one light-body exchange adds energy at both viscosities/intervals.
+    // Higher viscosity also fails for a body with the liquid's density.
+    for index in [0, 1, 2, 3, 6, 7] {
+        assert!(result.energy_ratios[index] > 1.01, "{result:?}");
+    }
+    // Lower-viscosity equal-density controls dissipate energy, so the candidate
+    // failure depends on physical stiffness/mass rather than a reversed sign.
+    for index in [4, 5] {
+        assert!(result.energy_ratios[index] <= 1.0, "{result:?}");
+    }
+    for index in [0, 2, 4, 6] {
+        assert!(result.impulses[index + 1].abs() < result.impulses[index].abs());
+    }
 }
 
 #[test]

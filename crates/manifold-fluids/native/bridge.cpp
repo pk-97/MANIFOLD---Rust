@@ -618,6 +618,13 @@ extern "C" int manifold_fluids_coupling_viscosity_probe(ManifoldViscousBoundaryP
     });
 }
 
+extern "C" int manifold_fluids_coupling_viscous_feedback_probe(ManifoldViscousFeedbackProbe *result) {
+    return guarded([&] {
+        if (result == nullptr) { throw std::invalid_argument("null viscous feedback probe result"); }
+        run_viscous_feedback_probe(*result);
+    });
+}
+
 extern "C" int manifold_fluids_world_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
                                                double cell_size, uint32_t surface_subdivisions,
                                                int apic, void **world_out) {

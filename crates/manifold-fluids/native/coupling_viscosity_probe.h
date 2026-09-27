@@ -16,3 +16,11 @@ struct ManifoldViscousBoundaryProbe {
 };
 
 void run_viscous_boundary_probe(ManifoldViscousBoundaryProbe &result);
+
+struct ManifoldViscousFeedbackProbe {
+    // Ordered by density ratio {0.1,1}, viscosity {1,10}, dt {1/60,1/120}.
+    double impulses[8];
+    double energy_ratios[8];
+};
+
+void run_viscous_feedback_probe(ManifoldViscousFeedbackProbe &result);

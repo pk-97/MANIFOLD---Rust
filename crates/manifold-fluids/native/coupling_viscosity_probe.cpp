@@ -320,3 +320,49 @@ void run_viscous_boundary_probe(ManifoldViscousBoundaryProbe &result) {
     require(result.high_viscosity_energy_ratio<result.low_viscosity_energy_ratio,
             "higher viscosity did not dissipate more energy");
 }
+
+void run_viscous_feedback_probe(ManifoldViscousFeedbackProbe &result) {
+    struct ThreadLimit {
+        int previous=ThreadUtils::getMaxThreadCount();
+        ThreadLimit() { ThreadUtils::setMaxThreadCount(2); }
+        ~ThreadLimit() { ThreadUtils::setMaxThreadCount(previous); }
+    } threads;
+    result={};
+    size_t index=0;
+    // A frozen inner box moves only along X; the outer tank is fixed and the
+    // liquid starts at rest. Other body DOFs are constrained and do no work.
+    // One explicit reaction update must not add more than 1% total kinetic
+    // energy. This is a rejection test, not a production exchange algorithm.
+    for (double ratio : {0.1,1.0}) for (double nu : {1.0,10.0}) for (double dt : {DT,DT/2}) {
+        Scene scene(nu,false,false,false);
+        // This region contains every internal-obstacle solid face, with a
+        // liquid gap separating it from all tank-wall solid faces.
+        const auto inner=[](const Point &p) {
+            return p[0]>.75 && p[0]<2.25 && p[1]>.75 && p[1]<2.25 && p[2]>.75 && p[2]<2.25;
+        };
+        each_face([&](int axis,GridIndex g,const Point &p) {
+            const float value=axis==0 && !scene.is_fluid(axis,g) && inner(p) ? 1.0f : 0.0f;
+            component(scene.velocity,axis).set(g,value);
+        });
+        ViscousBoundaryReaction reaction;
+        require(reaction.prepare(N,N,N,DX),"viscous feedback storage preparation failed");
+        ViscositySolver solver;
+        require(solver.applyViscosityToVelocityField(scene.params(dt,1000,&reaction)),
+                "viscous feedback candidate solve failed");
+        double impulse=0.0, fluidEnergy=0.0;
+        each_face([&](int axis,GridIndex g,const Point &p) {
+            if (axis==0 && inner(p)) { impulse+=reaction.impulse(axis,g); }
+            if (scene.solved(axis,g)) {
+                const double v=component(scene.velocity,axis).get(g);
+                fluidEnergy+=0.5*1000*DX*DX*DX*v*v;
+            }
+        });
+        const double mass=1000*ratio*(2*0.38)*(2*0.44)*(2*0.32);
+        const double velocity=1+impulse/mass;
+        result.impulses[index]=impulse;
+        result.energy_ratios[index]=(0.5*mass*velocity*velocity+fluidEnergy)/(0.5*mass);
+        require(std::isfinite(impulse) && impulse<0 && std::isfinite(result.energy_ratios[index]),
+                "viscous feedback candidate produced invalid measurements");
+        ++index;
+    }
+}
