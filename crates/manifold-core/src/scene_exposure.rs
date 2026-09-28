@@ -528,14 +528,16 @@ where
     // `scale_x`, any material param) still shows on the card. Unlike the
     // default-value repair above, this doesn't need a stamped override on
     // the node — `card_visible_for` is a pure function of `(type_id, param)`
-    // — so it applies to every auto exposure the vocab node has, whether or
-    // not its value diverges from the manifest default. Idempotent: a
-    // second run re-derives the same flag and writes nothing.
-    for (_, node_id, type_id, _, _, _) in &found {
+    // — so it applies to every exact numeric auto-stamp the vocab node has,
+    // whether or not its value diverges from the manifest default. The id
+    // guard keeps curated controls targeting the same node param untouched.
+    // Idempotent: a second run re-derives the same flag and writes nothing.
+    for (node_doc_id, node_id, type_id, _, _, _) in &found {
         let metadata = provider.metadata_for_type(type_id);
         for meta_entry in &metadata {
             let Some(binding) = meta.bindings.iter().find(|b| {
                 !b.user_added
+                    && b.id == format!("{}_{}", node_doc_id, meta_entry.name)
                     && matches!(
                         &b.target,
                         BindingTarget::Node { node_id: nid, param }
@@ -1887,6 +1889,114 @@ mod tests {
             "second migration run is a no-op once repaired"
         );
         assert_eq!(def, after_repair);
+    }
+
+    /// Repair pass 2 must identify auto-stamped exposures by their exact
+    /// numeric stamp id, not only by target and `user_added`. A curated
+    /// resolution control can share the same node target while keeping its
+    /// own card visibility and range.
+    #[test]
+    fn migrate_preserves_curated_resolution_card_control() {
+        struct TestProvider;
+        impl SceneExposureMetadataProvider for TestProvider {
+            fn metadata_for_type(&self, type_id: &str) -> Vec<SceneParamMetadata> {
+                if type_id == "node.render_scene" {
+                    vec![float_meta("resolution", "Resolution")]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+
+        let node = make_node(7, "node.render_scene");
+        let node_id = node.node_id.clone();
+
+        let mut auto_spec = float_spec_default("7_resolution", "Resolution", "Rendering");
+        auto_spec.card_visible = true;
+        auto_spec.min = 0.0;
+        auto_spec.max = 1.0;
+        let auto_binding = BindingDef {
+            id: "7_resolution".to_string(),
+            label: "Resolution".to_string(),
+            default_value: 0.5,
+            target: BindingTarget::Node {
+                node_id: node_id.clone(),
+                param: "resolution".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        let mut curated_spec =
+            float_spec_default("curated_resolution", "Output Resolution", "Rendering");
+        curated_spec.card_visible = true;
+        curated_spec.min = 0.25;
+        curated_spec.max = 4.0;
+        let curated_binding = BindingDef {
+            id: "curated_resolution".to_string(),
+            label: "Output Resolution".to_string(),
+            default_value: 2.0,
+            target: BindingTarget::Node {
+                node_id,
+                param: "resolution".to_string(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: true,
+        };
+
+        let mut def = EffectGraphDef {
+            scene_modifiers: Vec::new(),
+            version: 1,
+            name: None,
+            description: None,
+            preset_metadata: Some(PresetMetadata {
+                params: vec![auto_spec, curated_spec],
+                bindings: vec![auto_binding, curated_binding],
+                ..empty_scene_preset_metadata()
+            }),
+            nodes: vec![node],
+            wires: Vec::new(),
+        };
+
+        assert!(migrate_scene_exposures(
+            &mut def,
+            &["node.render_scene"],
+            |_n| "Rendering".to_string(),
+            &TestProvider,
+        ));
+
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let auto = meta.params.iter().find(|p| p.id == "7_resolution").unwrap();
+        assert!(
+            !auto.card_visible,
+            "auto-stamped resolution follows curation"
+        );
+        let curated = meta
+            .params
+            .iter()
+            .find(|p| p.id == "curated_resolution")
+            .unwrap();
+        assert!(curated.card_visible, "curated resolution remains visible");
+        assert_eq!(
+            (curated.min, curated.max),
+            (0.25, 4.0),
+            "curated resolution range remains authored"
+        );
+
+        let after_repair = def.clone();
+        assert!(!migrate_scene_exposures(
+            &mut def,
+            &["node.render_scene"],
+            |_n| "Rendering".to_string(),
+            &TestProvider,
+        ));
+        assert_eq!(def, after_repair, "second run must be idempotent");
     }
 
     /// Minimal `ParamSpecDef` builder for the card-visible repair test —

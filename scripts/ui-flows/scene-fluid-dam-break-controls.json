@@ -1,0 +1,164 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u25a0 Water"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.resolution.value"
+        }
+      },
+      "check": {
+        "TextEquals": "64"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.surface_detail"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.4_grid_budget_mcells"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.4_grid_budget_mcells.value"
+        }
+      },
+      "check": {
+        "TextEquals": "8.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.resolution.value"
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "param_row.resolution.slider"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.resolution.value"
+        }
+      },
+      "check": {
+        "TextEquals": "260"
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.resolution.value"
+        }
+      },
+      "check": {
+        "TextEquals": "64"
+      }
+    }
+  },
+  {
+    "SetParam": {
+      "param": {
+        "GeneratorParam": {
+          "param": "4_grid_budget_mcells"
+        }
+      },
+      "value": 4.0
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "param_row.4_grid_budget_mcells.value"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.4_grid_budget_mcells.value"
+        }
+      },
+      "check": {
+        "TextEquals": "4.00"
+      }
+    }
+  },
+  "Snapshot"
+]

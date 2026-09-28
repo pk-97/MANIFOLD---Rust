@@ -14,7 +14,7 @@
         "id": "resolution",
         "name": "Resolution",
         "min": 8.0,
-        "max": 96.0,
+        "max": 512.0,
         "defaultValue": 64.0,
         "wholeNumbers": true,
         "isToggle": false,

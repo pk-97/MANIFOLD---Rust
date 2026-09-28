@@ -34,6 +34,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
         "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
         "fluidauthoring" => Some(physics_scene("Scene", "Fluid Authoring")),
+        "waterdambreak" => Some(physics_scene("WaterDamBreak", "Water — Dam Break")),
         "states" => Some(states_scene()),
         "inspector" => Some(inspector_scene()),
         "audiovisualizers" => {

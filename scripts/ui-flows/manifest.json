@@ -39,7 +39,10 @@
       "scene-fluid-object-lifecycle",
       "scene-forces-controls"
     ],
+    "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls"],
+    "crates/manifold-renderer/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls"],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
+      "scene-fluid-dam-break-controls",
       "scene-setup",
       "scene-card",
       "scene-panel",
@@ -139,6 +142,7 @@
   },
   "flows": {
     "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-dam-break-controls": "waterdambreak",
     "scene-fluid-role-assignment": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",
