@@ -8,8 +8,8 @@ const RESOLUTION_PARAM: &str = "resolution";
 const LEGACY_MIN: f32 = 8.0;
 const LEGACY_MAX: f32 = 96.0;
 
-/// Repair the bundled fluid resolution card range that predates the
-/// primitive's current `8..512` range. The exact range guard keeps authored
+/// Repair the bundled fluid resolution card ranges (Basin 8..64, others 8..96)
+/// that predate the current primitive range. The exact guard keeps authored
 /// custom ranges intact, while `user_added` protects user-created exposures.
 pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
     let mut fluid_node_ids = Vec::new();
@@ -27,6 +27,11 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
     };
     let Some(metadata) = def.preset_metadata.as_mut() else {
         return false;
+    };
+    let legacy_max = if metadata.id.as_str() == "WaterBasin" {
+        64.0
+    } else {
+        LEGACY_MAX
     };
 
     let mut changed = false;
@@ -47,7 +52,7 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
 
         for binding_id in binding_ids {
             let Some(spec) = metadata.params.iter_mut().find(|spec| {
-                spec.id == binding_id && spec.min == LEGACY_MIN && spec.max == LEGACY_MAX
+                spec.id == binding_id && spec.min == LEGACY_MIN && spec.max == legacy_max
             }) else {
                 continue;
             };
@@ -133,11 +138,25 @@ mod tests {
 
     #[test]
     fn shipped_fluid_presets_use_current_resolution_range() {
-        for json in [WATER_BASIN_JSON, WATER_DAM_BREAK_JSON, HONEY_DAM_BREAK_JSON] {
+        for (json, legacy_max) in [
+            (WATER_BASIN_JSON, 64.0),
+            (WATER_DAM_BREAK_JSON, 96.0),
+            (HONEY_DAM_BREAK_JSON, 96.0),
+        ] {
             let mut def: EffectGraphDef = serde_json::from_str(json).expect("preset parses");
-            migrate(&mut def);
             let spec = resolution_spec(&def, "resolution");
             assert_eq!((spec.min, spec.max), (8.0, 512.0));
+            def.preset_metadata
+                .as_mut()
+                .unwrap()
+                .params
+                .iter_mut()
+                .find(|spec| spec.id == "resolution")
+                .unwrap()
+                .max = legacy_max;
+            assert!(migrate(&mut def));
+            assert_eq!(resolution_spec(&def, "resolution").max, 512.0);
+            assert!(!migrate(&mut def));
         }
     }
 
