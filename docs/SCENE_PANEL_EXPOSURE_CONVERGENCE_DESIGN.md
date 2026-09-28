@@ -63,7 +63,7 @@ The panel keeps what makes it a scene panel: the outliner (Camera · World · li
 2. **Wire-driven params — ACCEPTED.** Exposed wire-fed params render read-only "driven" on the card row exactly as the panel does today (wire-wins-at-eval).
 3. **Un-expose semantics — ACCEPTED.** Removing an exposure removes the panel row — honest single-mechanism behavior.
 4. **UI density follow-ups — PARKED.** Compact 3-cell vec3 row, swatch placement, outliner glyphs: separate small decisions, not in this design's scope.
-5. **Migration shape — ACCEPTED.** Load-time, idempotent, stamps curated exposures (same posture as `migrate_scene_object_wires`, never silently dropping).
+5. **Migration shape — ACCEPTED.** Load-time, idempotent, stamps curated exposures (same posture as `migrate_scene_object_wires`, never silently dropping). Card-visibility repair applies only to exact numeric auto-stamp IDs; it preserves named preset controls. Scene ownership uses the numeric prefix for auto-stamps and the first binding target for named controls, so secondary fan-out targets do not acquire another copy of a control.
 6. **Ableton surface — AMENDED by Peter.** Not card-only. Ableton mapping (and every row affordance: T/∿/A/Ableton) must ship in the unified row component the card path provides, so panel rows get it free and every future panel does too. The row component is a library dumb agents reach for; no per-panel affordance forks, ever. Consequence for P2: panel rows render through the card's row builders with the full affordance set, not a minimal subset.
 
 ## 6. Phasing (per DESIGN_DOC_STANDARD)

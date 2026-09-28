@@ -10,7 +10,7 @@
     "available": true,
     "isLineBased": false,
     "params": [
-      { "id": "resolution", "name": "Resolution", "min": 8.0, "max": 64.0, "defaultValue": 24.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "section": "Fluid", "cardVisible": true },
+      { "id": "resolution", "name": "Resolution", "min": 8.0, "max": 512.0, "defaultValue": 24.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "section": "Fluid", "cardVisible": true },
       { "id": "pour", "name": "Pour", "min": 0.0, "max": 1.0, "defaultValue": 1.0, "wholeNumbers": true, "isToggle": true, "isTrigger": false, "formatString": "F0", "section": "Fluid", "cardVisible": true },
       { "id": "flow", "name": "Flow", "min": 0.0, "max": 5.0, "defaultValue": 1.5, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F1", "section": "Fluid", "cardVisible": true },
       { "id": "speed", "name": "Speed", "min": 0.0, "max": 4.0, "defaultValue": 1.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F1", "section": "Fluid", "cardVisible": true },

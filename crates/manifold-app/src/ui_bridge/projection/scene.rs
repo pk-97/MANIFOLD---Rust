@@ -234,8 +234,8 @@ pub(crate) fn sections_for_doc_ids(
 /// Project the exact exposed parameter ids owned by the supplied scene nodes.
 /// Keep this predicate shared with [`sections_for_doc_ids`]: ordinary stamped
 /// ids are owned by their numeric prefix, while cloned `_duplicate` ids are
-/// resolved through their exact binding target. Fan-out bindings under an
-/// ordinary id do not acquire ownership from their target.
+/// resolved through their exact binding target. Curated names use their first
+/// binding as owner; secondary fan-out targets do not acquire ownership.
 pub(crate) fn parameter_ids_for_doc_ids(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
     doc_ids: &[u32],
@@ -401,11 +401,25 @@ fn parameter_owned_by_doc_ids(
                 _ => false,
             });
     }
-    parameter_id
+    if let Some(prefix_doc_id) = parameter_id
         .split('_')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
-        .is_some_and(|prefix_doc_id| doc_ids.contains(&prefix_doc_id))
+    {
+        return doc_ids.contains(&prefix_doc_id);
+    }
+    // Curated controls have ordinary names such as `resolution`, rather
+    // than stamped numeric prefixes. Use the same primary-binding owner
+    // as object_modifier_parameter_ids; secondary fan-out targets do not
+    // acquire the control or its section.
+    meta.bindings.iter().find(|binding| binding.id == parameter_id)
+        .is_some_and(|binding| match &binding.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
+                doc_id_for_node_id(&def.nodes, node_id)
+                    .is_some_and(|owner| doc_ids.contains(&owner))
+            }
+            _ => false,
+        })
 }
 
 fn doc_id_for_node_id(
@@ -582,6 +596,22 @@ mod sections_for_doc_ids_tests {
         assert_eq!(object_modifier_parameter_ids(Some(&def), None, 7), vec!["custom_amount"]);
         assert_eq!(object_modifier_parameter_ids(Some(&def), None, 1), vec!["1_intensity"]);
         assert!(object_modifier_parameter_ids(Some(&def), Some(404), 7).is_empty());
+        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[7]), vec!["custom_amount"]);
+        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[1]), vec!["1_intensity"]);
+    }
+
+    #[test]
+    fn dam_break_water_owns_curated_quality_controls_after_migration_and_reload() {
+        let mut def: EffectGraphDef = serde_json::from_str(include_str!(
+            "../../../../manifold-renderer/assets/generator-presets/WaterDamBreak.json"
+        )).unwrap();
+        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
+        let def: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+        let ids = parameter_ids_for_doc_ids(Some(&def), &[4]);
+        for id in ["resolution", "surface_detail", "whitewater", "surface_particle_scale", "4_grid_budget_mcells"] {
+            assert!(ids.iter().any(|actual| actual == id), "missing Water control {id}");
+        }
+        assert!(!ids.iter().any(|id| id == "environment_mode"));
     }
 
     #[test]

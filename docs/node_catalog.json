@@ -37348,7 +37348,7 @@
         {
           "default": "64",
           "id": "resolution",
-          "max": "96",
+          "max": "512",
           "min": "8",
           "name": "Resolution"
         },
@@ -87026,7 +87026,7 @@
         {
           "default": "24",
           "id": "resolution",
-          "max": "64",
+          "max": "512",
           "min": "8",
           "name": "Resolution"
         },
@@ -94518,7 +94518,7 @@
         {
           "default": "64",
           "id": "resolution",
-          "max": "96",
+          "max": "512",
           "min": "8",
           "name": "Resolution"
         },

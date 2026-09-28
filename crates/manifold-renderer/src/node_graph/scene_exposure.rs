@@ -10,6 +10,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;
 mod fluid_objects;
+mod fluid_quality;
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
 use crate::node_graph::parameters::ParamType;
@@ -165,6 +166,7 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
     let material_migrated = manifold_core::phong_migration::migrate_phong_to_pbr(def);
     let compound = compound::migrate(def);
     let fluid_objects = fluid_objects::migrate(def);
+    let fluid_quality = fluid_quality::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
@@ -174,7 +176,13 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
-    compound || fluid_objects || material_migrated || repaired || migrated || bokeh_source_migrated
+    compound
+        || fluid_objects
+        || fluid_quality
+        || material_migrated
+        || repaired
+        || migrated
+        || bokeh_source_migrated
 }
 
 /// The layered gather consumes the original signed CoC and computes its own
