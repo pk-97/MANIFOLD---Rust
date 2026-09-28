@@ -585,6 +585,8 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
 }
 
 fn fluid_session_json() -> &'static str {
+    // Keep several filled cell layers at resolution 8 so boundary clipping
+    // leaves a visible surface for the navigation and material assertions.
     r#"{
         "version": 2,
         "name": "ViewportFluidProof",
@@ -611,7 +613,7 @@ fn fluid_session_json() -> &'static str {
             {"id":0,"typeId":"system.generator_input","nodeId":"input"},
             {"id":1,"typeId":"node.value","nodeId":"domain_value","params":{"value":{"type":"Float","value":0.0}}},
             {"id":2,"typeId":"node.transform_3d","nodeId":"domain","params":{"pos_y":{"type":"Float","value":2.0},"scale_x":{"type":"Float","value":4.0},"scale_y":{"type":"Float","value":4.0},"scale_z":{"type":"Float","value":4.0}}},
-            {"id":3,"typeId":"node.fluid_surface","nodeId":"water","params":{"resolution":{"type":"Float","value":8.0},"fill_height":{"type":"Float","value":0.8},"max_capacity":{"type":"Float","value":100000.0}}},
+            {"id":3,"typeId":"node.fluid_surface","nodeId":"water","params":{"resolution":{"type":"Float","value":8.0},"fill_height":{"type":"Float","value":1.5},"max_capacity":{"type":"Float","value":100000.0}}},
             {"id":4,"typeId":"node.scene_object","nodeId":"water_object"},
             {"id":5,"typeId":"node.phong_material","nodeId":"mat","params":{"color_r":{"type":"Float","value":0.8},"color_g":{"type":"Float","value":0.35},"color_b":{"type":"Float","value":0.12},"ambient":{"type":"Float","value":0.2}}},
             {"id":6,"typeId":"node.orbit_camera","nodeId":"cam","params":{"orbit":{"type":"Float","value":0.6},"tilt":{"type":"Float","value":0.7},"distance":{"type":"Float","value":9.0},"fov_y":{"type":"Float","value":0.8}}},

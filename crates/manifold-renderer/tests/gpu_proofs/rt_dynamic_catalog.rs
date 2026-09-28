@@ -33,13 +33,17 @@ const EXPECTED_STOCK_IDS: &[&str] = &[
     "MathView",
     "OrderedRecon",
     "OrderedReconHit",
+    "RadialForce",
     "RenderMode",
     "SceneFog",
     "SceneLoop",
+    "Shatter",
     "SpatialEchoes",
     "SurfacePeel",
     "SurfacePeelHit",
     "SurfaceWaves",
+    "UniformForce",
+    "VortexForce",
     "VortexFragments",
     "WavesEchoes",
 ];
@@ -55,13 +59,17 @@ fn recipe_json(id: &str) -> &'static str {
         "OrderedReconHit" => {
             include_str!("../../assets/scene-modifier-presets/OrderedReconHit.json")
         }
+        "RadialForce" => include_str!("../../assets/scene-modifier-presets/RadialForce.json"),
         "RenderMode" => include_str!("../../assets/scene-modifier-presets/RenderMode.json"),
         "SceneFog" => include_str!("../../assets/scene-modifier-presets/SceneFog.json"),
         "SceneLoop" => include_str!("../../assets/scene-modifier-presets/SceneLoop.json"),
+        "Shatter" => include_str!("../../assets/scene-modifier-presets/Shatter.json"),
         "SpatialEchoes" => include_str!("../../assets/scene-modifier-presets/SpatialEchoes.json"),
         "SurfacePeel" => include_str!("../../assets/scene-modifier-presets/SurfacePeel.json"),
         "SurfacePeelHit" => include_str!("../../assets/scene-modifier-presets/SurfacePeelHit.json"),
         "SurfaceWaves" => include_str!("../../assets/scene-modifier-presets/SurfaceWaves.json"),
+        "UniformForce" => include_str!("../../assets/scene-modifier-presets/UniformForce.json"),
+        "VortexForce" => include_str!("../../assets/scene-modifier-presets/VortexForce.json"),
         "VortexFragments" => {
             include_str!("../../assets/scene-modifier-presets/VortexFragments.json")
         }
@@ -91,10 +99,37 @@ fn discovered_stock_ids() -> Vec<String> {
 }
 
 fn catalog_host() -> EffectGraphDef {
-    let mut owner: EffectGraphDef = serde_json::from_str(include_str!(
+    with_catalog_environment(serde_json::from_str(include_str!(
         "../fixtures/scene-modifiers/nested_multimaterial_v2.json"
     ))
-    .expect("catalog host fixture must parse");
+    .expect("catalog host fixture must parse"))
+}
+
+fn physics_catalog_host() -> EffectGraphDef {
+    use manifold_core::{GraphTarget, project::Project, types::LayerType};
+    use manifold_editing::{command::Command, commands::graph::EnableSceneObjectPhysicsCommand};
+    use manifold_renderer::node_graph::{gltf_import::assemble_import_graph, scene_exposure::metadata_for_node_type};
+
+    // Shatter requires an imported object with authored Physics. Use the same
+    // compound source as the existing release/material preservation proof.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/cc0__tiger_lily.glb");
+    let (owner, _) = assemble_import_graph(&fixture).expect("catalog physics source imports");
+    let scene_id = owner.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
+    let mut project = Project::default();
+    let layer = project.timeline.add_layer("Catalog Physics", LayerType::Generator,
+        owner.preset_metadata.as_ref().unwrap().id.clone());
+    project.timeline.layers[layer].gen_params_or_init().graph = Some(owner.clone());
+    let target = GraphTarget::Generator(project.timeline.layers[layer].layer_id.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(target, scene_id, 0,
+        metadata_for_node_type("node.rigid_body"), owner)
+        .with_world_metadata(metadata_for_node_type("node.physics_world"));
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "catalog Physics: {:?}", enable.rejection_reason());
+    with_catalog_environment(project.timeline.layers[layer].generator_graph().unwrap().clone())
+}
+
+fn with_catalog_environment(mut owner: EffectGraphDef) -> EffectGraphDef {
     owner.version = 3;
     let scene = owner
         .nodes
@@ -106,9 +141,11 @@ fn catalog_host() -> EffectGraphDef {
         SerializedParamValue::Bool { value: true },
     );
     let scene_id = scene.id;
+    let environment_id = owner.nodes.iter().map(|node| node.id).max().unwrap() + 1;
+    owner.wires.retain(|wire| wire.to_node != scene_id || wire.to_port != "envmap");
     owner.nodes.push(
         serde_json::from_value(serde_json::json!({
-            "id": 40,
+            "id": environment_id,
             "nodeId": "catalog_environment",
             "typeId": "node.bake_environment",
             "params": {
@@ -122,7 +159,7 @@ fn catalog_host() -> EffectGraphDef {
     owner
         .wires
         .push(manifold_core::effect_graph_def::EffectGraphWire {
-            from_node: 40,
+            from_node: environment_id,
             from_port: "envmap".into(),
             to_node: scene_id,
             to_port: "envmap".into(),
@@ -672,6 +709,25 @@ fn render_and_witness_controlled(
             anim_progress: 0.0,
             trigger_count: 0,
         };
+        if frame == 0 && label == "Shatter" {
+            // Imported collision geometry is prepared asynchronously. Resolve
+            // it at the initial time before requiring a resident RT scene.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                let mut encoder = h.device.create_encoder("catalog-physics-warmup");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut encoder, &h.device);
+                    runtime.render(&mut gpu, &target.texture, &context, &manifest);
+                }
+                encoder.commit_and_wait_completed();
+                assert!(runtime.errors().is_empty(), "{label}: {:?}", runtime.errors());
+                if !runtime.warmup_pending() {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{label} warmup timed out");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
         let mut status = None;
         let mut snapshot = None;
         let mut expectations = None;
@@ -834,7 +890,8 @@ fn rt_dynamic_catalog_all_stock_and_compositions() {
     }
 
     for id in EXPECTED_STOCK_IDS {
-        render_and_witness(attach(catalog_host(), &[id]), id, 3);
+        let owner = if *id == "Shatter" { physics_catalog_host() } else { catalog_host() };
+        render_and_witness(attach(owner, &[id]), id, 3);
     }
 
     for (label, ids) in [
