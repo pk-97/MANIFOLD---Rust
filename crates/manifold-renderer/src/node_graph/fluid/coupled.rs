@@ -271,7 +271,7 @@ impl Runtime {
                 colliders: inputs.colliders,
                 density: inputs.density,
             }),
-            history: InputHistory::with_capacity(HISTORY_CAPACITY)
+            history: InputHistory::with_growing_capacity(HISTORY_CAPACITY)
                 .expect("coupled history has at least two entries"),
             spare_history: Some(Vec::with_capacity(HISTORY_CAPACITY)),
             spare_output: Some(CoupledRigidFrame::default()),

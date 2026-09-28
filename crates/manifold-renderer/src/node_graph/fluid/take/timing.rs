@@ -1,6 +1,6 @@
-//! Bounded recording-clock provenance for fluid takes.
+//! Retained recording-clock provenance for fluid takes.
 //!
-//! The capture owns the same fixed-capacity history used by the simulation
+//! The capture owns the same growing history used by the simulation
 //! adapters. It records the clock observed by the host and only
 //! advances its acknowledged boundary after the worker accepts a matching
 //! handoff.
@@ -39,7 +39,7 @@ pub(in crate::node_graph::fluid) struct TimingHandoff {
     pub metadata_only: bool,
 }
 
-/// Bounded host capture of the recording clock.
+/// Retained host capture of the recording clock.
 pub(in crate::node_graph::fluid) struct Capture {
     history: InputHistory<TakeTime>,
     spare: Option<Vec<TakeTime>>,
@@ -55,7 +55,7 @@ impl Capture {
             "fluid take timing history capacity must be at least two"
         );
         Self {
-            history: InputHistory::with_capacity(capacity)
+            history: InputHistory::with_growing_capacity(capacity)
                 .expect("fluid take timing history capacity must be at least two"),
             spare: Some(Vec::with_capacity(capacity)),
             observed_sequence: 0,
@@ -266,12 +266,16 @@ mod tests {
     }
 
     #[test]
-    fn fluid_take_clock_bounded_overflow_is_explicit() {
+    fn fluid_take_clock_grows_until_acknowledgement() {
         let mut capture = Capture::new(2);
         capture.record(point(0.0, 0.0, 0.0)).unwrap();
         capture.record(point(1.0, 1.0, 1.0)).unwrap();
-        assert!(capture.record(point(2.0, 2.0, 2.0)).is_err());
-        assert!(capture.record(point(3.0, 3.0, 3.0)).is_err());
+        capture.record(point(2.0, 2.0, 2.0)).unwrap();
+        capture.record(point(3.0, 3.0, 3.0)).unwrap();
+        let handoff = capture.snapshot(false);
+        assert_eq!(handoff.points.len(), 4);
+        capture.recycle(handoff, true).unwrap();
+        assert_eq!(capture.history.len(), 1);
     }
 
     #[test]

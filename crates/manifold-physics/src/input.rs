@@ -23,6 +23,7 @@ pub enum HistoryError {
     InvalidTime,
     NonMonotonic,
     CapacityExceeded,
+    AllocationFailed,
 }
 
 impl fmt::Display for HistoryError {
@@ -34,6 +35,7 @@ impl fmt::Display for HistoryError {
             Self::CapacityExceeded => {
                 "physics input history is full; restart the simulation or bake the scene"
             }
+            Self::AllocationFailed => "physics input history allocation failed",
         })
     }
 }
@@ -46,13 +48,16 @@ pub enum HistoryWrite {
     Replaced,
 }
 
-/// Fixed-capacity history that never overwrites unread inputs to make room.
-/// Overflow latches until `clear`, so a caller cannot continue across a lost
-/// sample merely because a worker later frees some storage.
+/// History that never overwrites unread inputs to make room. Fixed-capacity
+/// instances report overflow; growing instances reserve geometrically at the
+/// boundary. Either failure latches until `clear`, so a caller cannot continue
+/// across a lost sample merely because a worker later frees some storage.
 pub struct InputHistory<T> {
     samples: VecDeque<T>,
     limit: usize,
+    growing: bool,
     exhausted: bool,
+    failure: Option<HistoryError>,
 }
 
 impl<T: Timestamped> InputHistory<T> {
@@ -63,7 +68,30 @@ impl<T: Timestamped> InputHistory<T> {
         Ok(Self {
             samples: VecDeque::with_capacity(capacity),
             limit: capacity,
+            growing: false,
             exhausted: false,
+            failure: None,
+        })
+    }
+
+    /// Create a history that grows geometrically when it reaches its current
+    /// limit. Growth is attempted only at the exhaustion boundary, so normal
+    /// recording remains allocation-free. Allocation failure latches until
+    /// `clear`, just like fixed-capacity exhaustion.
+    pub fn with_growing_capacity(initial_capacity: usize) -> Result<Self, HistoryError> {
+        if initial_capacity < 2 {
+            return Err(HistoryError::InvalidCapacity);
+        }
+        let mut samples = VecDeque::new();
+        samples
+            .try_reserve(initial_capacity)
+            .map_err(|_| HistoryError::AllocationFailed)?;
+        Ok(Self {
+            samples,
+            limit: initial_capacity,
+            growing: true,
+            exhausted: false,
+            failure: None,
         })
     }
 
@@ -82,7 +110,7 @@ impl<T: Timestamped> InputHistory<T> {
         consumed_until: Seconds,
     ) -> Result<HistoryWrite, HistoryError> {
         if self.exhausted {
-            return Err(HistoryError::CapacityExceeded);
+            return Err(self.failure.unwrap_or(HistoryError::CapacityExceeded));
         }
         let time = sample.time().0;
         if !time.is_finite() || !consumed_until.0.is_finite() {
@@ -104,8 +132,26 @@ impl<T: Timestamped> InputHistory<T> {
             }
         }
         if self.samples.len() == self.limit {
-            self.exhausted = true;
-            return Err(HistoryError::CapacityExceeded);
+            if self.growing {
+                let Some(next_limit) = self.limit.checked_mul(2) else {
+                    self.exhausted = true;
+                    self.failure = Some(HistoryError::AllocationFailed);
+                    return Err(HistoryError::AllocationFailed);
+                };
+                if self
+                    .samples
+                    .try_reserve(next_limit.saturating_sub(self.samples.len()))
+                    .is_err()
+                {
+                    self.exhausted = true;
+                    self.failure = Some(HistoryError::AllocationFailed);
+                    return Err(HistoryError::AllocationFailed);
+                }
+                self.limit = next_limit;
+            } else {
+                self.exhausted = true;
+                return Err(HistoryError::CapacityExceeded);
+            }
         }
         self.samples.push_back(sample);
         Ok(HistoryWrite::Appended)
@@ -115,7 +161,7 @@ impl<T: Timestamped> InputHistory<T> {
     /// Returns the number removed for adapters with parallel packed storage.
     pub fn prune_before(&mut self, retain_from: Seconds) -> Result<usize, HistoryError> {
         if self.exhausted {
-            return Err(HistoryError::CapacityExceeded);
+            return Err(self.failure.unwrap_or(HistoryError::CapacityExceeded));
         }
         if !retain_from.0.is_finite() {
             return Err(HistoryError::InvalidTime);
@@ -131,6 +177,7 @@ impl<T: Timestamped> InputHistory<T> {
     pub fn clear(&mut self) {
         self.samples.clear();
         self.exhausted = false;
+        self.failure = None;
     }
 
     pub fn is_exhausted(&self) -> bool {
@@ -298,6 +345,52 @@ mod tests {
     }
 
     #[test]
+    fn growing_history_preserves_interpolation_and_same_time_edits() {
+        let mut history = InputHistory::with_growing_capacity(2).unwrap();
+        history.record(Sample(0.0, 0.0), Seconds(0.0)).unwrap();
+        history.record(Sample(1.0, 10.0), Seconds(0.0)).unwrap();
+        assert_eq!(
+            history.record(Sample(1.0, 20.0), Seconds(0.0)),
+            Ok(HistoryWrite::Appended)
+        );
+        assert!(history.samples.capacity() >= 4);
+        assert_eq!(history.len(), 3);
+        assert_eq!(value(&history, 0.5), 5.0);
+        assert_eq!(value(&history, 1.0), 20.0);
+        assert_eq!(
+            history.record(Sample(1.0, 30.0), Seconds(0.0)),
+            Ok(HistoryWrite::Replaced)
+        );
+        assert_eq!(value(&history, 1.0), 30.0);
+    }
+
+    #[test]
+    fn growing_history_prunes_and_reuses_expanded_storage() {
+        let mut history = InputHistory::with_growing_capacity(2).unwrap();
+        for sample in [Sample(0.0, 0.0), Sample(1.0, 10.0), Sample(2.0, 20.0)] {
+            history.record(sample, Seconds(0.0)).unwrap();
+        }
+        assert_eq!(history.prune_before(Seconds(1.0)), Ok(1));
+        assert_eq!(value(&history, 1.5), 15.0);
+        history.record(Sample(3.0, 30.0), Seconds(0.0)).unwrap();
+        assert_eq!(value(&history, 2.5), 25.0);
+        assert!(!history.is_exhausted());
+    }
+
+    #[test]
+    fn growing_history_clear_resets_after_growth() {
+        let mut history = InputHistory::with_growing_capacity(2).unwrap();
+        history.record(Sample(0.0, 0.0), Seconds(0.0)).unwrap();
+        history.record(Sample(1.0, 1.0), Seconds(0.0)).unwrap();
+        history.record(Sample(2.0, 2.0), Seconds(0.0)).unwrap();
+        history.clear();
+        assert!(history.is_empty());
+        assert!(!history.is_exhausted());
+        history.record(Sample(-1.0, 4.0), Seconds(-1.0)).unwrap();
+        assert_eq!(value(&history, -1.0), 4.0);
+    }
+
+    #[test]
     fn overflow_preserves_prefix_and_latches_until_clear() {
         let mut history = InputHistory::with_capacity(2).unwrap();
         let capacity = history.samples.capacity();
@@ -354,6 +447,10 @@ mod tests {
         assert!(matches!(
             InputHistory::<Sample>::with_capacity(1),
             Err(HistoryError::InvalidCapacity)
+        ));
+        assert!(matches!(
+            InputHistory::<Sample>::with_growing_capacity(usize::MAX),
+            Err(HistoryError::AllocationFailed)
         ));
         let mut history = InputHistory::with_capacity(3).unwrap();
         history.record(Sample(1.0, 2.0), Seconds(0.0)).unwrap();

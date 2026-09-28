@@ -141,8 +141,22 @@ pub(in crate::node_graph::fluid) fn request() -> Request {
         }
     }
     runtime.advance(false).unwrap();
-    let request = receive.recv().unwrap();
-    assert_eq!(request.count, 6);
+    let mut request = receive.recv().unwrap();
+    // Keep exercising legacy six-tick recorded batches even though live
+    // publication now uses shorter batches. Seal the remaining fixture inputs.
+    for tick in request.count as u64..6 {
+        runtime
+            .impulses
+            .begin_tick(
+                manifold_physics::TickStamp {
+                    epoch: runtime.epoch,
+                    tick,
+                },
+                |event| request.impulses.push(event),
+            )
+            .unwrap();
+    }
+    request.count = 6;
     request
 }
 
