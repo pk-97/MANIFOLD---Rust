@@ -111,11 +111,20 @@ impl PresetRuntime {
                 let guards = crate::node_graph::scene_modifier_expand::PreparedModifierParameterGuards::prepare(&doc)?;
                 (
                     prepared.def,
-                    Some((doc, prepared.routes, sources, guards, prepared.event_routes)),
+                    Some((doc, prepared.routes, sources, guards, prepared.event_routes, prepared.impulse_routes)),
                 )
             } else {
                 (doc, None)
             };
+        // Editor fusion changes execution topology, not the authored simulation.
+        // Compare the effective unfused definition when carrying physics state.
+        let content_key = crate::node_graph::freeze::install::def_content_key(&render_def);
+        let physics_sources = super::physics_sources::prepare(
+            &render_def,
+            authoring.as_ref().map_or(&render_def, |(owner, ..)| owner),
+            authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice()),
+            registry,
+        );
         let fused = if render_fused {
             crate::node_graph::freeze::install::fused_generator_view_for(&render_def)
         } else {
@@ -135,11 +144,15 @@ impl PresetRuntime {
             Some(view) => (*view.def).clone(),
             None => render_def,
         };
-        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules)?;
+        let impulse_routes = authoring.as_ref().map_or(&[][..], |(_, _, _, _, _, routes)| routes.as_slice());
+        let mut runtime = Self::from_render_def(render_def, registry, manifest, &mesh_rules, impulse_routes)?;
+        runtime.apply_physics_source_graphs(physics_sources);
+        runtime.effect_nodes[0].def_content_key = content_key;
         if let Some(view) = &fused {
             runtime.effect_nodes[0].bound.fused_retarget = view.retarget.clone();
         }
-        if let Some((canonical, routes, sources, guards, event_routes)) = authoring {
+        if let Some((canonical, routes, sources, guards, event_routes, impulse_routes)) = authoring {
+            runtime.prepare_modifier_impulses(&canonical, &impulse_routes, registry)?;
             crate::node_graph::scene_modifier_expand::validate_modifier_runtime(
                 &canonical,
                 &runtime.graph,
@@ -316,7 +329,7 @@ impl PresetRuntime {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
                 view.events.carry_from(&previous.events);
                 for (variant, previous_variant) in view.variants.iter_mut().zip(&mut previous.variants) {
-                    variant.carry_modifier_control_state_from(previous_variant);
+                    variant.carry_generator_state_from(previous_variant);
                 }
             }
         }

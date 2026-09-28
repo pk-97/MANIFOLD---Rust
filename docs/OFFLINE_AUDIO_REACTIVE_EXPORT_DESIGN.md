@@ -69,7 +69,12 @@ The live path is untouched by this design.
   where the timeline has none) so envelopes/decays are settled at first frame.
 - **D4 — Determinism is a feature and a test.** Same project + range + fps →
   bit-identical `SendFeatures` sequences across runs. No wall-clock, no
-  threads in the analysis path.
+  threads in the analysis path. The shared analyzer also produces the same
+  features at matching source-sample boundaries for different frame partitions;
+  the export-driver regression compares 24/30/60 FPS with non-hop-aligned
+  pre-roll. This is an analysis guarantee, not a claim that the current
+  display-tick modulation/event evaluator is independent of FPS. Physics input
+  capture must retain every stamped analyzer hop and respect D1's interval ends.
 - **D5 — Scope/spectrogram UI is not driven offline** (`set_scope` stays off).
   Meters and calibration are live-UX concerns.
 - **D6 — Allocation discipline:** all send buffers sized once at export init;

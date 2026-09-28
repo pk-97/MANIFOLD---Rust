@@ -11,13 +11,16 @@ use manifold_renderer::node_graph::{ParamType, PrimitiveRegistry};
 /// Load-bearing externs behind the "is this a file reader?" check.
 ///
 /// A primitive is a file reader iff it declares a `ParamType::String` param
-/// named `path` or `folder` — the exact convention every file-reading
-/// primitive uses ("path comes via presetMetadata.stringBindings… same
-/// convention as node.gltf_mesh_source's `path`" / `node.image_folder`'s
-/// `folder`). String params with OTHER names (layer ids, font names, enum
-/// hints) are not collected, so they shouldn't require a table entry.
+/// named `path`, `folder`, or `cache_path` — the exact convention every
+/// file-reading primitive uses ("path comes via presetMetadata.stringBindings…
+/// same convention as node.gltf_mesh_source's `path`" / `node.image_folder`'s
+/// `folder` / node.fluid_surface's `cache_path`). String params with OTHER
+/// names (layer ids, font names, enum hints) are not collected, so they
+/// shouldn't require a table entry.
 fn is_file_reader(param_names: &[&str]) -> bool {
-    param_names.iter().any(|n| *n == "path" || *n == "folder")
+    param_names
+        .iter()
+        .any(|n| *n == "path" || *n == "folder" || *n == "cache_path")
 }
 
 #[test]

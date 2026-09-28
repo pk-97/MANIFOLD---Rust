@@ -384,6 +384,90 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
+    /// Current accepted setup state for native fluid-domain bounds.
+    fn fluid_domain_snapshot(
+        &self,
+    ) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
+        None
+    }
+
+    /// Resolved rigid inputs from the latest successful graph evaluation.
+    fn rigid_scene_observation(&self) -> Option<&crate::node_graph::physics::RigidSceneObservation> {
+        None
+    }
+
+    fn set_coupled_physics(&mut self, _enabled: bool) {}
+
+    fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::preset_context::ProjectTempo>) {}
+
+    fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
+
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn source_asset_identity(
+        &self,
+        _params: &super::ParamValues,
+    ) -> super::source_asset::SourceAssetIdentity<'_> {
+        super::source_asset::SourceAssetIdentity::Unsupported
+    }
+
+    fn capture_coupled_rigid(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
+        Err("Primitive does not support coupled rigid input capture".into())
+    }
+
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        _observation: Option<&crate::node_graph::physics::RigidSceneObservation>,
+        _colliders: crate::node_graph::physics::RigidImpulseTargets,
+        _error: Option<&str>,
+    ) {}
+
+    fn coupled_rigid_frame(&self) -> Option<&crate::node_graph::fluid::CoupledRigidFrame> {
+        None
+    }
+
+    fn accept_coupled_rigid_frame(
+        &mut self,
+        _frame: Option<&crate::node_graph::fluid::CoupledRigidFrame>,
+    ) {}
+
+    /// Mirror of the native impulse admission hooks on [`EffectNode`].
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        None
+    }
+
+    /// Timestamp an impulse against the exact native observation accepted at
+    /// the supplied transport value, if this primitive owns such a clock.
+    fn physics_impulse_stamp(
+        &self,
+        _transport: manifold_core::Seconds,
+        _sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        Err("node does not expose a native impulse clock".into())
+    }
+
+    /// Queue one resolved impulse for a native fixed-tick simulation.
+    fn enqueue_physics_impulse(
+        &mut self,
+        _stamp: manifold_physics::input::EventStamp,
+        _impulse: crate::node_graph::physics_events::ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        Err("node does not accept physics impulses".into())
+    }
+
+    /// Drain native tick-start impulse receipts into the graph-owned sink.
+    fn drain_physics_impulses(
+        &mut self,
+        _consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<
+                crate::node_graph::physics_events::ResolvedNodeImpulse,
+            >,
+        ),
+    ) {
+    }
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -721,6 +805,82 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn warmup_pending(&self) -> bool {
         Primitive::warmup_pending(self)
+    }
+    fn fluid_domain_snapshot(
+        &self,
+    ) -> Option<crate::node_graph::fluid::FluidDomainSnapshot> {
+        Primitive::fluid_domain_snapshot(self)
+    }
+    fn rigid_scene_observation(&self) -> Option<&crate::node_graph::physics::RigidSceneObservation> {
+        Primitive::rigid_scene_observation(self)
+    }
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        Primitive::set_coupled_physics(self, enabled);
+    }
+
+    fn set_physics_project_tempo(&mut self, tempo: Option<&crate::preset_context::ProjectTempo>) {
+        Primitive::set_physics_project_tempo(self, tempo);
+    }
+    fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
+        Primitive::set_physics_source_identity(self, identity);
+    }
+
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        Primitive::source_asset_paths(self)
+    }
+
+    fn source_asset_identity(
+        &self,
+        params: &super::ParamValues,
+    ) -> super::source_asset::SourceAssetIdentity<'_> {
+        Primitive::source_asset_identity(self, params)
+    }
+    fn capture_coupled_rigid(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Result<(), String> {
+        Primitive::capture_coupled_rigid(self, ctx)
+    }
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        observation: Option<&crate::node_graph::physics::RigidSceneObservation>,
+        colliders: crate::node_graph::physics::RigidImpulseTargets,
+        error: Option<&str>,
+    ) {
+        Primitive::set_coupled_rigid_inputs(self, observation, colliders, error);
+    }
+    fn coupled_rigid_frame(&self) -> Option<&crate::node_graph::fluid::CoupledRigidFrame> {
+        Primitive::coupled_rigid_frame(self)
+    }
+    fn accept_coupled_rigid_frame(
+        &mut self,
+        frame: Option<&crate::node_graph::fluid::CoupledRigidFrame>,
+    ) {
+        Primitive::accept_coupled_rigid_frame(self, frame);
+    }
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        Primitive::physics_impulse_epoch(self)
+    }
+    fn physics_impulse_stamp(
+        &self,
+        transport: manifold_core::Seconds,
+        sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        Primitive::physics_impulse_stamp(self, transport, sequence)
+    }
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: crate::node_graph::physics_events::ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        Primitive::enqueue_physics_impulse(self, stamp, impulse)
+    }
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(
+            manifold_physics::input::AppliedEvent<
+                crate::node_graph::physics_events::ResolvedNodeImpulse,
+            >,
+        ),
+    ) {
+        Primitive::drain_physics_impulses(self, consume)
     }
     fn fused_gather_sampler_mode(
         &self,
@@ -1324,6 +1484,15 @@ macro_rules! __primitive_port_type {
     };
     (RigidBody) => {
         $crate::node_graph::ports::PortType::RigidBody
+    };
+    (FluidRole) => {
+        $crate::node_graph::ports::PortType::FluidRole
+    };
+    (MeshSource) => {
+        $crate::node_graph::ports::PortType::MeshSource
+    };
+    (VectorField) => {
+        $crate::node_graph::ports::PortType::VectorField
     };
     (RenderMode) => {
         $crate::node_graph::ports::PortType::RenderMode

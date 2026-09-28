@@ -45,6 +45,14 @@ const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 const WRAP_MODES: &[&str] = &["Repeat", "ClampToEdge", "MirrorRepeat"];
 const FILTER_MODES: &[&str] = &["Linear", "Nearest"];
 
+fn finite_clamped(value: f32, fallback: f32, min: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        fallback
+    }
+}
+
 crate::primitive! {
     name: PbrMaterial,
     type_id: "node.pbr_material",
@@ -97,6 +105,12 @@ crate::primitive! {
         volume_attenuation_color_r: ScalarF32 optional,
         volume_attenuation_color_g: ScalarF32 optional,
         volume_attenuation_color_b: ScalarF32 optional,
+        volume_geometry: ScalarF32 optional,
+        volume_scattering_density: ScalarF32 optional,
+        volume_scattering_color_r: ScalarF32 optional,
+        volume_scattering_color_g: ScalarF32 optional,
+        volume_scattering_color_b: ScalarF32 optional,
+        volume_particle_density: ScalarF32 optional,
         // RAYTRACING_DESIGN.md section 16 TL3: thin-surface translucency
         // for backlit foliage. Default 0.0 (inert). Populated from
         // KHR_materials_diffuse_transmission's diffuseTransmissionFactor
@@ -1145,6 +1159,54 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("subsurface_anisotropy"), label: "Subsurface Anisotropy", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-0.95, 0.95)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("subsurface_mode"), label: "Subsurface Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Diffusion", "Random Walk"] },
         ParamDef { name: Cow::Borrowed("subsurface_samples"), label: "Subsurface Samples", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
+        ParamDef {
+            name: Cow::Borrowed("volume_geometry"),
+            label: "Geometric Volume",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_scattering_density"),
+            label: "Volume Scattering Density",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 100.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_scattering_color_r"),
+            label: "Volume Scattering Colour R",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_scattering_color_g"),
+            label: "Volume Scattering Colour G",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_scattering_color_b"),
+            label: "Volume Scattering Colour B",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("volume_particle_density"),
+            label: "Volume Particle Density",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
         ParamDef { name: Cow::Borrowed("subsurface_feature_mode"), label: "Subsurface Feature", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["Follow Values", "Off", "On", "Removed"] },
     ],
     depth_rule: Terminal,
@@ -1252,6 +1314,38 @@ impl Primitive for PbrMaterial {
         let volume_attenuation_color_r = ctx.scalar_or_param("volume_attenuation_color_r", 1.0);
         let volume_attenuation_color_g = ctx.scalar_or_param("volume_attenuation_color_g", 1.0);
         let volume_attenuation_color_b = ctx.scalar_or_param("volume_attenuation_color_b", 1.0);
+        let volume_geometry =
+            finite_clamped(ctx.scalar_or_param("volume_geometry", 0.0), 0.0, 0.0, 1.0) > 0.5;
+        let volume_scattering_density = finite_clamped(
+            ctx.scalar_or_param("volume_scattering_density", 0.0),
+            0.0,
+            0.0,
+            100.0,
+        );
+        let volume_scattering_color_r = finite_clamped(
+            ctx.scalar_or_param("volume_scattering_color_r", 1.0),
+            1.0,
+            0.0,
+            1.0,
+        );
+        let volume_scattering_color_g = finite_clamped(
+            ctx.scalar_or_param("volume_scattering_color_g", 1.0),
+            1.0,
+            0.0,
+            1.0,
+        );
+        let volume_scattering_color_b = finite_clamped(
+            ctx.scalar_or_param("volume_scattering_color_b", 1.0),
+            1.0,
+            0.0,
+            1.0,
+        );
+        let volume_particle_density = finite_clamped(
+            ctx.scalar_or_param("volume_particle_density", 0.0),
+            0.0,
+            0.0,
+            1000.0,
+        );
         // RAYTRACING_DESIGN.md section 16 TL3.
         let mut translucency = ctx.scalar_or_param("translucency", 0.0);
         let translucency_color_r = ctx
@@ -1745,6 +1839,14 @@ impl Primitive for PbrMaterial {
             volume_attenuation_color_g,
             volume_attenuation_color_b,
         ];
+        material.volume_geometry = volume_geometry;
+        material.volume_scattering_density = volume_scattering_density;
+        material.volume_scattering_color = [
+            volume_scattering_color_r,
+            volume_scattering_color_g,
+            volume_scattering_color_b,
+        ];
+        material.volume_particle_density = volume_particle_density;
         material.subsurface = Subsurface {
             weight: subsurface_weight,
             radius: subsurface_radius,
@@ -2007,6 +2109,55 @@ mod tests {
         assert_eq!(PbrMaterial::OUTPUTS.len(), 1);
         assert_eq!(PbrMaterial::OUTPUTS[0].name, "out");
         assert_eq!(PbrMaterial::OUTPUTS[0].ty, PortType::Material);
+    }
+
+    #[test]
+    fn geometric_volume_controls_default_disabled_and_sanitize_values() {
+        let defaults = run_material(ParamValues::default(), None);
+        assert!(!defaults.volume_geometry);
+        assert_eq!(defaults.volume_scattering_density, 0.0);
+        assert_eq!(defaults.volume_scattering_color, [1.0, 1.0, 1.0]);
+        assert_eq!(defaults.volume_particle_density, 0.0);
+
+        let mut params = ParamValues::default();
+        for (name, value) in [
+            ("volume_geometry", 1.0),
+            ("volume_scattering_density", 12.5),
+            ("volume_scattering_color_r", 0.2),
+            ("volume_scattering_color_g", 0.4),
+            ("volume_scattering_color_b", 0.6),
+            ("volume_particle_density", 240.0),
+        ] {
+            params.insert(Cow::Borrowed(name), ParamValue::Float(value));
+        }
+        let set = run_material(params, None);
+        assert!(set.volume_geometry);
+        assert_eq!(set.volume_scattering_density, 12.5);
+        assert_eq!(set.volume_scattering_color, [0.2, 0.4, 0.6]);
+        assert_eq!(set.volume_particle_density, 240.0);
+
+        let mut invalid = ParamValues::default();
+        invalid.insert(
+            Cow::Borrowed("volume_geometry"),
+            ParamValue::Float(f32::NAN),
+        );
+        invalid.insert(
+            Cow::Borrowed("volume_scattering_density"),
+            ParamValue::Float(200.0),
+        );
+        invalid.insert(
+            Cow::Borrowed("volume_scattering_color_r"),
+            ParamValue::Float(-1.0),
+        );
+        invalid.insert(
+            Cow::Borrowed("volume_particle_density"),
+            ParamValue::Float(2000.0),
+        );
+        let sanitized = run_material(invalid, None);
+        assert!(!sanitized.volume_geometry);
+        assert_eq!(sanitized.volume_scattering_density, 100.0);
+        assert_eq!(sanitized.volume_scattering_color[0], 0.0);
+        assert_eq!(sanitized.volume_particle_density, 1000.0);
     }
 
     #[test]

@@ -10,6 +10,12 @@
 //! These are **runtime** values: never serialized, recomputed every analysis
 //! block. See `docs/AUDIO_MODULATION_DESIGN.md` section 5.
 
+mod hops;
+pub use hops::{
+    AudioFeatureHop, AudioHopBatch, AudioHopCursor, AudioHopError, AudioHopSample, AudioHopStamp,
+    new_audio_analysis_epoch,
+};
+
 /// The detector outputs for one frequency band, all normalized **0..1**. The
 /// same five detectors run on every band (`Full`/`Low`/`Mid`/`High`), so any
 /// feature can be measured over any band — the cross-product the drawer exposes.
@@ -66,13 +72,40 @@ pub struct SendFeatures {
     pub pitch_confidence: f32,
 }
 
-/// All sends' features at one instant, indexed by send position in
-/// `AudioSetup::sends`. Owned and rebuilt each tick from the worker's latest
-/// frame; the evaluator resolves a slider's `AudioSendId` to a send index via
-/// the `AudioSetup` and reads the matching entry.
+/// Latest values for meters plus each send's completed analysis hops, indexed
+/// by `AudioSetup::sends`. Producers reuse these buffers on the content thread;
+/// stateful evaluators consume the hops with their own independent cursors.
 #[derive(Clone, Debug, Default)]
 pub struct AudioFeatureSnapshot {
     pub sends: Vec<SendFeatures>,
+    /// Authoritative completed hops, indexed like `sends`. An empty vector is
+    /// the legacy snapshot-only contract; an empty batch means no new hop.
+    pub hop_batches: Vec<AudioHopBatch>,
+    /// Source discontinuities observed during this update. Consumers recording
+    /// inputs must invalidate that interval instead of treating it as silence.
+    pub input_discontinuities: Vec<AudioInputDiscontinuity>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AudioInputSource {
+    Capture,
+    Layer(crate::LayerId),
+    Send(crate::AudioSendId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioInputProblem {
+    Gap { first_frame: u64, end_frame: u64 },
+    SourceChanged,
+    FormatChanged,
+    InvalidInput,
+    AnalysisOverflow,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioInputDiscontinuity {
+    pub source: AudioInputSource,
+    pub problem: AudioInputProblem,
 }
 
 impl AudioFeatureSnapshot {
@@ -81,8 +114,8 @@ impl AudioFeatureSnapshot {
         self.sends.get(send_index)
     }
 
-    /// True when no send has any features — the evaluator can skip the walk.
+    /// True when there is neither a legacy snapshot nor an authoritative batch.
     pub fn is_empty(&self) -> bool {
-        self.sends.is_empty()
+        self.sends.is_empty() && self.hop_batches.is_empty()
     }
 }

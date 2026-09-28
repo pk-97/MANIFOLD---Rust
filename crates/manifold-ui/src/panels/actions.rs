@@ -251,6 +251,19 @@ pub enum ProjectAction {
     /// next_index)`. Dispatches the EXISTING `AddSceneObjectCommand`
     /// (SCENE_BUILD P5) — no new mutation path.
     SceneSetupAddObject(LayerId, u32, u32),
+    /// Add a liquid domain to the existing scene, with a source and material.
+    SceneSetupAddFluid(LayerId, u32),
+    /// Assign a selected model to an explicit fluid domain. The app resolves
+    /// the domain snapshot id to a stable scoped graph reference before queuing.
+    SceneSetupAssignFluidRole {
+        layer_id: LayerId,
+        render_scene_node_id: u32,
+        object_index: u32,
+        domain_node_id: u32,
+        role: u32,
+    },
+    SceneSetupRemoveFluidRole { layer_id: LayerId, source_node_id: u32 },
+    SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain_node_id: u32 },
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),
@@ -263,6 +276,13 @@ pub enum ProjectAction {
     /// `(layer_id, render_scene_node_doc_id, source_index)`. Dispatches the
     /// shared content-owned scene item transfer.
     SceneSetupDuplicateObject(LayerId, u32, u32),
+    /// Duplicate one physical child mesh inside a compound scene object:
+    /// `(layer_id, render_scene_node_doc_id, physical_index)`.
+    SceneSetupDuplicateSubmesh(LayerId, u32, u32),
+    /// Enable standard imported-object physics: `(layer_id, render_scene_node_id, object_index)`.
+    SceneSetupEnablePhysics(LayerId, u32, u32),
+    /// Disable standard imported-object physics.
+    SceneSetupDisablePhysics(LayerId, u32, u32),
     /// P4 "Import Model…" button: `(layer_id, render_scene_node_doc_id)`.
     /// Opens a native file dialog (the app's existing open-file plumbing,
     /// same `rfd::FileDialog` pattern as `ClipReplaceAudioClicked`) and, on
@@ -275,7 +295,7 @@ pub enum ProjectAction {
     /// `(layer_id, render_scene_node_doc_id, object_index)`. Computes camera focus
     /// parameters to frame the selected object and writes them through the same
     /// param-change path every other slider uses.
-    SceneSetupFrameSelected(LayerId, u32, usize),
+    SceneSetupFrameSelected(LayerId, u32, u32),
     /// P5 "Add modifier" chip: `(layer_id, group_node_id, type_id)`.
     /// Dispatches `InsertMeshModifierCommand`, appending the chosen D6 atom
     /// at the end of the object's stack (no position picker in v1 — D6's
@@ -295,6 +315,9 @@ pub enum ProjectAction {
     /// render_scene_node_doc_id, object_index)`. Dispatches the new
     /// `RemoveSceneObjectCommand` — the inverse of `SceneSetupAddObject`.
     SceneSetupRemoveObject(LayerId, u32, u32),
+    /// Remove one physical child mesh inside a compound scene object:
+    /// `(layer_id, render_scene_node_doc_id, physical_index)`.
+    SceneSetupRemoveSubmesh(LayerId, u32, u32),
     /// per-row "✕" in the Lights section: `(layer_id,
     /// render_scene_node_doc_id, light_index)`. Dispatches the new
     /// `RemoveSceneLightCommand` — the inverse of `SceneSetupAddLight`.
@@ -920,6 +943,31 @@ pub enum RootAction {
     /// `scene_setup_panel::MESH_MODIFIER_CHOICES` the chips used, each item
     /// dispatching the SAME `SceneSetupAddModifier` — no new mutation path.
     SceneSetupAddModifierClicked(LayerId, u32, crate::node::NodeId),
+    /// Scene Setup's dedicated force picker affordance. The app resolves the
+    /// selected recipe from the panel's `force_picker` snapshot and applies
+    /// the existing scene modifier command.
+    SceneSetupAddForceClicked(LayerId),
+    SceneSetupFluidRoleClicked {
+        layer_id: LayerId,
+        render_scene_node_id: u32,
+        object_index: u32,
+        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
+        button_node_id: crate::node::NodeId,
+    },
+    SceneSetupFluidDomainClicked {
+        layer_id: LayerId,
+        render_scene_node_id: u32,
+        object_index: u32,
+        role: u32,
+        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
+        anchor: Rect,
+    },
+    SceneSetupFluidRoleTargetClicked {
+        layer_id: LayerId,
+        source_node_id: u32,
+        domains: Vec<super::scene_setup_panel::FluidDomainOption>,
+        button_node_id: crate::node::NodeId,
+    },
     /// Open the object-target and preview menu for a scene modifier card.
     SceneModifierObjectsClicked(LayerId, NodeId),
     /// Open the shared preset menu for one exact scene modifier card.

@@ -18,17 +18,17 @@ fn output_resource(
     plan: &ExecutionPlan,
     node: crate::node_graph::NodeInstanceId,
     port: &str,
-) -> ResourceId {
+) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
                 if name == port {
-                    return id;
+                    return Some(id);
                 }
             }
         }
     }
-    panic!("plan: no output `{port}` on node {node:?}");
+    None
 }
 
 /// Whole-chain graph: one cached [`Graph`] containing every effect of
@@ -74,9 +74,14 @@ fn output_resource(
 pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
+    /// Captured event routes belong to this installed graph, never a rebuild.
+    pub(super) impulse_identity: std::sync::Arc<()>,
+    pub(super) scene_impulses: super::scene_impulses::SceneImpulses,
     /// Plan-aligned physics input ancestry, built once with the graph.
     pub(super) physics_sample_steps: Option<Vec<bool>>,
+    pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
     pub(super) last_physics_frame_time: Option<FrameTime>,
+    pub(super) physics_project_tempo: Option<crate::preset_context::ProjectTempo>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -203,11 +208,12 @@ pub struct PresetRuntime {
 /// input texture; a generator produces from nothing and writes into a
 /// host-provided target.
 pub(super) enum PresetIo {
-    /// Effect chain. `source_slot` receives the upstream input texture each
-    /// frame (via `replace_texture_2d`); `output_slot` holds the chain's final
-    /// output texture, which the host reads via [`PresetRuntime::output_texture`].
+    /// Effect chain. When present, `source_slot` receives the upstream input
+    /// texture each frame (via `replace_texture_2d`); source-independent chains
+    /// leave it absent. `output_slot` holds the chain's final output texture,
+    /// which the host reads via [`PresetRuntime::output_texture`].
     Transform {
-        source_slot: Slot,
+        source_slot: Option<Slot>,
         output_slot: Slot,
     },
     /// Generator. No input. The host installs its target texture into
@@ -222,6 +228,7 @@ pub(super) enum PresetIo {
 }
 
 pub(super) struct EffectSlot {
+    pub(super) physics_sources: super::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -762,6 +769,7 @@ impl PresetRuntime {
                             &prefix,
                         );
                         effect_nodes.push(EffectSlot {
+                            physics_sources: Default::default(),
                             effect_id: fx.id.clone(),
                             effect_type: fx.effect_type().clone(),
                             legacy_index: *legacy_index,
@@ -1124,6 +1132,7 @@ impl PresetRuntime {
                 "",
             );
             effect_nodes.push(EffectSlot {
+                physics_sources: Default::default(),
                 effect_id: fx.id.clone(),
                 effect_type: fx.effect_type().clone(),
                 legacy_index: *legacy_index,
@@ -1175,7 +1184,8 @@ impl PresetRuntime {
         }
 
         // Compile and find the resources we need to pin / read.
-        let plan = match compile(&graph) {
+        let plan = match super::physics_sampling::retain_physics_setup_outputs(&mut graph)
+            .and_then(|()| compile(&graph)) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!(
@@ -1191,7 +1201,8 @@ impl PresetRuntime {
             }
         };
         let source_resource = output_resource(&plan, source_node, "out");
-        let final_output_resource = output_resource(&plan, prev_node, prev_out_port);
+        let final_output_resource = output_resource(&plan, prev_node, prev_out_port)
+            .expect("plan output resource has an assigned slot");
 
         // Assign Texture2D resources to a small set of physical slots
         // via a lifetime-planner simulation. The source resource gets
@@ -1212,7 +1223,7 @@ impl PresetRuntime {
             .resource_to_slot
             .iter()
             .filter(|(resource, _)| {
-                **resource != source_resource
+                Some(**resource) != source_resource
                     && **resource != final_output_resource
                     && plan.is_provided_texture(**resource)
             })
@@ -1240,7 +1251,7 @@ impl PresetRuntime {
                 ));
                 continue;
             }
-            let label = if slot_idx == assignment.source_slot.0 {
+            let label = if assignment.source_slot == Some(Slot(slot_idx)) {
                 "chain-graph-source"
             } else {
                 "chain-graph-pingpong"
@@ -1261,7 +1272,7 @@ impl PresetRuntime {
                 backend.bind_resource_to_slot(*res_id, resolve(*sim_slot));
             }
         }
-        let source_slot = resolve(assignment.source_slot);
+        let source_slot = assignment.source_slot.map(resolve);
         let output_slot = resolve(
             *assignment
                 .resource_to_slot
@@ -1303,11 +1314,18 @@ impl PresetRuntime {
                 return None;
             }
         };
+        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
+            super::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
+        });
         let mut runtime = Self {
             graph,
             plan,
             physics_sample_steps,
+            physics_input_snapshot,
             last_physics_frame_time: None,
+            physics_project_tempo: None,
+            impulse_identity: std::sync::Arc::new(()),
+            scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::new(Box::new(backend)),
@@ -1344,205 +1362,14 @@ impl PresetRuntime {
         // same one-shot the generator path does at construction (a no-op when
         // no effect in the chain declares any).
         runtime.apply_string_defaults();
+        runtime.initialize_chain_physics_sources(effects, primitives);
         if let Some(prior) = prior {
             runtime.harvest_state_from(prior);
         }
+        runtime.install_physics_source_identities();
         Some(runtime)
     }
 
-    /// State harvest across a rebuild (docs/CHAIN_FUSION_DESIGN.md section 5): for
-    /// every card whose `(effect_id, def_content_key)` matches a card in the
-    /// prior runtime, move the prior node *impls* (the `Box<dyn EffectNode>`
-    /// holding sim buffers, trail textures, DNN workers) and their StateStore
-    /// buckets into this runtime, matched per node by stable `NodeId` + type.
-    ///
-    /// Safe because a matching content key means the prior impl's baked
-    /// configuration (ports, WGSL source, pipelines — all derived from the
-    /// def) is identical to what this build just constructed; params and
-    /// bindings live on `NodeInstance` / the binding apply path and are this
-    /// build's own. Skipped when dimensions changed — resolution-dependent
-    /// state must rebuild, exactly as today. Cards that were edited (key
-    /// mismatch) or removed keep fresh instances; intentional resets (seek,
-    /// project load, idle clear, card deletion) run through `clear_state` /
-    /// pool eviction, untouched by this path.
-    fn harvest_state_from(&mut self, prior: &mut Self) {
-        if prior.width != self.width || prior.height != self.height {
-            return;
-        }
-        // Harvest only when the chain is the SAME SET of active cards —
-        // reorders, value edits, editor open/close, fused-segment swap-ins.
-        // A membership change (card added / removed / enabled / disabled /
-        // skip-flipped) resets everything, exactly as before the harvest
-        // existed: a feedback trail accumulated through a card that was just
-        // toggled off holds that card's look — and latching blends (Screen /
-        // Additive at full amount) would hold it FOREVER, leaving stale
-        // blown-out frames rotating in the loop with no escape. Toggling is
-        // an intentional look change; the reset is the escape hatch.
-        let same_card_set = self.effect_nodes.len() == prior.effect_nodes.len()
-            && self.effect_nodes.iter().all(|s| {
-                prior
-                    .effect_nodes
-                    .iter()
-                    .any(|p| p.effect_id == s.effect_id)
-            });
-        if !same_card_set {
-            return;
-        }
-        // new instance → old instance, for every node whose impl was carried
-        // over. Drives the persistent-texture pass below.
-        let mut harvested: ahash::AHashMap<NodeInstanceId, NodeInstanceId> =
-            ahash::AHashMap::default();
-        for (idx, slot) in self.effect_nodes.iter().enumerate() {
-            if slot.def_content_key == 0 {
-                continue;
-            }
-            let Some((old_idx, old_slot)) = prior.effect_nodes.iter().enumerate().find(|(_, s)| {
-                s.effect_id == slot.effect_id
-                    && s.effect_type == slot.effect_type
-                    && s.def_content_key == slot.def_content_key
-            }) else {
-                continue;
-            };
-            // A stateful card's state is a function of what FEEDS it — a
-            // feedback trail is a picture of the upstream chain. Carry it
-            // only when the ordered sequence of cards before this one is
-            // unchanged; an upstream reorder resets exactly this card (the
-            // trail's content no longer corresponds to anything the chain
-            // produces, and latching blends would hold the stale look
-            // forever). Downstream reorders carry. Identity is by EffectId,
-            // not content key, so upstream VALUE edits still carry — the
-            // trail just evolves with the new look.
-            let prefix_unchanged = idx == old_idx
-                && self.effect_nodes[..idx]
-                    .iter()
-                    .zip(&prior.effect_nodes[..old_idx])
-                    .all(|(a, b)| a.effect_id == b.effect_id);
-            if !prefix_unchanged {
-                continue;
-            }
-            for (node_id, new_inst) in &slot.node_map {
-                let Some((_, old_inst)) = old_slot.node_map.iter().find(|(nid, _)| nid == node_id)
-                else {
-                    continue;
-                };
-                let Some(old_node) = prior.graph.get_node_mut(*old_inst) else {
-                    continue;
-                };
-                let Some(new_node) = self.graph.get_node_mut(*new_inst) else {
-                    continue;
-                };
-                if old_node.node.type_id() != new_node.node.type_id() {
-                    continue;
-                }
-                std::mem::swap(&mut old_node.node, &mut new_node.node);
-                prior
-                    .state_store
-                    .migrate_node(*old_inst, *new_inst, &mut self.state_store);
-                harvested.insert(*new_inst, *old_inst);
-            }
-        }
-        if std::env::var("MANIFOLD_LOG_HARVEST").is_ok() {
-            eprintln!(
-                "[harvest] slots new={} prior={} nodes_carried={} persistent_new={}",
-                self.effect_nodes.len(),
-                prior.effect_nodes.len(),
-                harvested.len(),
-                self.plan.persistent_resources().len(),
-            );
-        }
-        if harvested.is_empty() {
-            return;
-        }
-
-        // Cross-frame PIXELS live in backend persistent slots, not in the
-        // impls or the StateStore — feedback's trail is its persistent `out`
-        // texture, and the back-edge producer's slot is the other half of
-        // the zero-copy ping-pong (`FeedbackState` tracks only dims + mode).
-        // Install each harvested node's persistent textures into the new
-        // backend's slots: one atomic retain per texture, no GPU copy. The
-        // migrated `FeedbackState` then correctly skips its first-frame
-        // re-seed, reading the carried trail. (Array-buffer state —
-        // `aliased_array_io` — is not migrated; no chain effect uses it.)
-        let producer_of = |plan: &ExecutionPlan, node: NodeInstanceId, port: &str| {
-            plan.steps().iter().find(|s| s.node == node).and_then(|s| {
-                s.outputs
-                    .iter()
-                    .find(|(name, _)| *name == port)
-                    .map(|(_, id)| *id)
-            })
-        };
-        // (new persistent resource, old persistent resource) pairs.
-        let mut moves: Vec<(ResourceId, ResourceId)> = Vec::new();
-        for &res in self.plan.persistent_resources() {
-            // Producing (node, port) of this persistent resource in the new plan.
-            let Some((n_inst, port)) = self.plan.steps().iter().find_map(|s| {
-                s.outputs
-                    .iter()
-                    .find(|(_, id)| *id == res)
-                    .map(|(name, _)| (s.node, *name))
-            }) else {
-                continue;
-            };
-            let Some(&o_inst) = harvested.get(&n_inst) else {
-                continue;
-            };
-            let Some(o_res) = producer_of(&prior.plan, o_inst, port) else {
-                continue;
-            };
-            moves.push((res, o_res));
-        }
-        if moves.is_empty() {
-            return;
-        }
-        // MOVE the owned RenderTargets across backends. Ownership (and pool
-        // bookkeeping) transfers with the target; the prior runtime is being
-        // dropped, so its emptied slots never render again. NEVER install via
-        // `replace_texture_2d` here — that records a borrowed SHADOW over the
-        // slot, and the feedback ping-pong's `swap_texture_2d` refuses
-        // shadowed slots, freezing the trail with per-frame swap errors.
-        let Some(old_metal) = prior
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<MetalBackend>())
-        else {
-            return; // mock backend — nothing to move
-        };
-        let Some(new_metal) = self
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<MetalBackend>())
-        else {
-            return;
-        };
-        let mut installed = 0usize;
-        let total = moves.len();
-        let mut installed_res: Vec<ResourceId> = Vec::with_capacity(total);
-        for (res, o_res) in moves {
-            let Some(old_slot) = crate::node_graph::Backend::slot_for(old_metal, o_res) else {
-                continue;
-            };
-            let Some(new_slot) = crate::node_graph::Backend::slot_for(new_metal, res) else {
-                continue;
-            };
-            let Some(rt) = old_metal.take_render_target(old_slot) else {
-                continue;
-            };
-            // The displaced fresh target drops here (pooled → returns to pool).
-            let _fresh = new_metal.swap_texture_2d(new_slot, rt);
-            installed += 1;
-            installed_res.push(res);
-        }
-        // The fresh executor would clear-to-black each persistent slot on
-        // first acquisition — mark the carried ones initialized instead.
-        for res in installed_res {
-            self.executor.mark_persistent_initialized(res);
-        }
-        if std::env::var("MANIFOLD_LOG_HARVEST").is_ok() {
-            eprintln!("[harvest] persistent targets moved {installed}/{total}");
-        }
-    }
 
     /// Structured errors produced by `try_build` and per-frame `run`.
     /// Each entry carries the affected effect's identity so the
@@ -1668,6 +1495,7 @@ impl PresetRuntime {
             // so bound params keep their live value and only the unbound
             // inner-node values change.
             if fx.graph_version != slot.applied_graph_version {
+                slot.refresh_chain_physics_source(&mut self.graph, fx, None);
                 // `slot.card_prefix` translates `fx.graph`'s (unprefixed,
                 // per-card) node ids into the segment's `c{i}.`-prefixed
                 // `node_map`/`fused_retarget` namespace for a segment member
@@ -1729,6 +1557,7 @@ impl PresetRuntime {
                 slot.bound.cache.clear_tail(n_static);
             }
             slot.bound.apply(&mut self.graph, &fx.params);
+            slot.physics_sources.set_instance(&mut self.graph, Some(fx));
             // Push the "3D Shading" D3 relight knobs into the spliced graph
             // every frame. Float-knob edits are no longer structural (D8/P7),
             // so the chain doesn't rebuild on a drag; these writes keep the
@@ -1791,17 +1620,14 @@ impl PresetRuntime {
             }
         }
 
-        // Install the upstream input texture into the source slot —
-        // no GPU copy. `GpuTexture::clone` is one atomic retain on the
-        // underlying `MTLTexture`; the source slot's `RenderTarget`
-        // adopts the cloned texture in place, dropping its previous
-        // texture's retain. The Source node's evaluate is a no-op, so
-        // the first downstream effect reads the upstream texture
-        // directly via slot lookup. Eliminates the per-chain
-        // `copy_texture_to_texture` (was ~600μs full-screen blit at 4K)
-        // **and** keeps the active compute encoder alive across the
-        // chain boundary (the blit would have ended it, forcing a
-        // fresh compute encoder + cache loss on the first effect).
+        // Install the upstream input texture into the source slot when the
+        // graph consumes it — no GPU copy. `GpuTexture::clone` is one atomic
+        // retain on the underlying `MTLTexture`; the source slot's
+        // `RenderTarget` adopts the cloned texture in place, dropping its
+        // previous texture's retain. The Source node's evaluate is a no-op,
+        // so the first downstream effect reads the upstream texture directly
+        // via slot lookup. A source-independent chain has no source slot and
+        // runs without touching the host input.
         let PresetIo::Transform {
             source_slot,
             output_slot,
@@ -1811,14 +1637,16 @@ impl PresetRuntime {
             // via `render` instead. Defensive — callers never cross the wires.
             return None;
         };
-        let metal = self
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<MetalBackend>())
-            .expect("PresetRuntime backend is MetalBackend");
-        let ok = metal.replace_texture_2d(source_slot, input_texture.clone());
-        debug_assert!(ok, "source slot pre-bound at build time");
+        if let Some(source_slot) = source_slot {
+            let metal = self
+                .executor
+                .backend_mut()
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<MetalBackend>())
+                .expect("PresetRuntime backend is MetalBackend");
+            let ok = metal.replace_texture_2d(source_slot, input_texture.clone());
+            debug_assert!(ok, "source slot pre-bound at build time");
+        }
 
         let frame_time = FrameTime {
             beats: manifold_core::Beats(ctx.beat),
@@ -1839,6 +1667,7 @@ impl PresetRuntime {
         // The `with_gpu` variant passes `state: None, owner_key: 0`,
         // which makes those primitives panic.
         self.refresh_plan_if_forced_outputs_changed();
+        self.sample_physics_history(frame_time);
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -1847,6 +1676,8 @@ impl PresetRuntime {
             &mut self.state_store,
             ctx.owner_key,
         );
+        self.last_physics_frame_time = Some(frame_time);
+        self.observe_impulse_setup();
 
         // The chain output is in the slot pre-bound to the last
         // effect's output resource.
@@ -1931,6 +1762,7 @@ impl PresetRuntime {
             seg.bound
                 .apply_inner_overrides(&mut self.graph, &seg.node_map, Some(def));
         }
+        self.refresh_physics_source_graphs(def);
     }
 
     /// Re-bake every binding's reshape from the live manifest — the in-place
@@ -2027,10 +1859,11 @@ impl PresetRuntime {
             return;
         }
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(time, None);
+        self.sample_physics_history(time);
         self.executor
             .execute_frame(&mut self.graph, &self.plan, time);
         self.last_physics_frame_time = Some(time);
+        self.observe_impulse_setup();
         self.consume_trigger_markers();
     }
 
@@ -2109,7 +1942,7 @@ impl PresetRuntime {
         self.executor
             .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
         self.refresh_plan_if_forced_outputs_changed();
-        self.sample_physics_history(frame_time, Some(frame_context));
+        self.sample_physics_history(frame_time);
         self.executor.execute_frame_with_state(
             &mut self.graph,
             &self.plan,
@@ -2122,6 +1955,7 @@ impl PresetRuntime {
             ctx.owner_key,
         );
         self.last_physics_frame_time = Some(frame_time);
+        self.observe_impulse_setup();
 
         self.render_math_views(gpu, target, ctx, params);
 
@@ -2132,6 +1966,8 @@ impl PresetRuntime {
     /// Reset all generator state (per-primitive `extra_fields` + the runtime
     /// `StateStore`). Called after export warmup re-seek.
     pub fn reset_state(&mut self, _device: &GpuDevice) {
+        self.impulse_identity = std::sync::Arc::new(());
+        self.reset_modifier_impulses();
         self.last_physics_frame_time = None;
         for view in &mut self.math_views {
             view.events.clear();

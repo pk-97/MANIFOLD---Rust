@@ -3,12 +3,13 @@
 use std::collections::{HashMap, HashSet};
 
 use manifold_core::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+    BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID, SerializedParamValue,
 };
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::{GraphTarget, LayerId, NodeId};
 use manifold_editing::command::Command;
+use manifold_editing::commands::graph::SceneFluidRoleAssignment;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SceneItemKind {
@@ -38,6 +39,8 @@ pub(crate) struct SceneItemClipboard {
     root: u32,
     port: String,
     pub(crate) kind: SceneItemKind,
+    fluid_role_group: Option<u32>,
+    fluid_role_assignments: Vec<SceneFluidRoleAssignment>,
 }
 
 fn visit_nodes(nodes: &[EffectGraphNode], f: &mut impl FnMut(&EffectGraphNode)) {
@@ -70,6 +73,17 @@ impl SceneItemClipboard {
                 wire.to_node == scene && wire.to_port == format!("{}{index}", kind.prefix())
             })
             .ok_or("Selected scene item is no longer available")?;
+        let fluid_role_group = source
+            .nodes
+            .iter()
+            .find(|node| node.id == output.from_node && node.type_id == GROUP_TYPE_ID)
+            .map(|node| node.id);
+        let fluid_role_assignments = fluid_role_group
+            .map(|group| {
+                manifold_editing::commands::graph::scene_fluid_role_assignments(source, group)
+            })
+            .transpose()?
+            .unwrap_or_default();
         // Walk the actual upstream graph, including shared material, animation,
         // mesh and map producers. Physics worlds contribute only the body slots
         // used by this item, never all the other objects in the simulation.
@@ -131,6 +145,8 @@ impl SceneItemClipboard {
             root: output.from_node,
             port: output.from_port.clone(),
             kind,
+            fluid_role_group,
+            fluid_role_assignments,
         })
     }
 }
@@ -410,7 +426,8 @@ fn paste(
         doc_ids.insert(source.id, clone.id);
         added.push(clone);
     }
-    let stable: HashMap<_, _> = node_ids.into_iter().collect();
+    let node_id_map = node_ids;
+    let stable: HashMap<_, _> = node_id_map.iter().cloned().collect();
     // The common clone helper deliberately clears exposures for graph copies.
     // Scene copies carry their bindings and therefore restore these flags.
     fn restore_exposures(
@@ -493,6 +510,20 @@ fn paste(
         to_node: scene,
         to_port: format!("{}{count}", clipboard.kind.prefix()),
     });
+    if !clipboard.fluid_role_assignments.is_empty() {
+        let original_group = clipboard
+            .fluid_role_group
+            .ok_or("Copied fluid role group identity is unavailable")?;
+        let cloned_group = *doc_ids
+            .get(&original_group)
+            .ok_or("Copied fluid role group is unavailable in destination")?;
+        manifold_editing::commands::graph::restore_scene_object_fluid_roles(
+            &mut graph,
+            &clipboard.fluid_role_assignments,
+            cloned_group,
+            &node_id_map,
+        )?;
+    }
     let handle_rewrites = cloned_handle_rewrites(&clipboard.graph, &graph, &stable);
     let remaps = transfer_metadata(&clipboard.graph, &mut graph, &stable, &handle_rewrites)?;
     manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut graph);

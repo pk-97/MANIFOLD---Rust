@@ -26,6 +26,8 @@ pub enum FrameRenderStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameRenderFailure {
+    /// A stateful simulation failed or could not produce a complete frame.
+    Simulation,
     /// An object's geometry failed validation (counts, strides, weights).
     InvalidGeometry,
     /// A surface-rendering scratch resource failed admission or allocation.

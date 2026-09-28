@@ -14,6 +14,7 @@ use manifold_gpu::GpuBinding;
 
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::standalone_pipeline::standalone_pipeline;
@@ -42,6 +43,7 @@ crate::primitive! {
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
+        source: MeshSource,
     },
     params: [
         ParamDef {
@@ -78,6 +80,7 @@ crate::primitive! {
 impl Primitive for GenerateCubeMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let size = ctx.param_f32("size", 1.0);
+        ctx.outputs.set_mesh_source("source", MeshSource::Cube { size });
 
         // Allocation-only param — not used by the shader, but the generated
         // uniform lays out every PARAM, so pack it (the body ignores it).
@@ -136,8 +139,10 @@ mod tests {
         let layout = ArrayType::of_known::<MeshVertex>();
         assert_eq!(GenerateCubeMesh::TYPE_ID, "node.cube_mesh");
         assert!(GenerateCubeMesh::INPUTS.is_empty());
-        assert_eq!(GenerateCubeMesh::OUTPUTS.len(), 1);
+        assert_eq!(GenerateCubeMesh::OUTPUTS.len(), 2);
         assert_eq!(GenerateCubeMesh::OUTPUTS[0].name, "vertices");
+        assert_eq!(GenerateCubeMesh::OUTPUTS[1].name, "source");
+        assert_eq!(GenerateCubeMesh::OUTPUTS[1].ty, PortType::MeshSource);
         assert_eq!(
             GenerateCubeMesh::OUTPUTS[0].ty,
             PortType::Array(layout)
@@ -163,4 +168,3 @@ mod tests {
         assert_eq!(node.type_id().as_str(), "node.cube_mesh");
     }
 }
-

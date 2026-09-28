@@ -1,4 +1,6 @@
-use crate::chain_dispatch::{clear_chain_state, dispatch_chain};
+use crate::chain_dispatch::{
+    clear_chain_state, dispatch_chain, dispatch_chain_with_scene_viewport,
+};
 use crate::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
 use crate::effect::PostProcessEffect;
 use crate::preset_runtime::PresetRuntime;
@@ -607,6 +609,14 @@ pub struct LayerCompositor {
     /// helpers) — `false` costs one `bool` set per dispatch, zero GPU/CPU
     /// timing. Set via [`Self::set_profiling`].
     profiling_enabled: bool,
+    /// Render-only scene viewport request routed to the one screen chain
+    /// holding the selected effect. All other chains clear their capture.
+    scene_viewport_request: Option<(
+        EffectId,
+        NodeId,
+        crate::node_graph::scene_viewport::SceneViewportConfig,
+    )>,
+    scene_viewport_error: Option<crate::node_graph::scene_viewport::SceneViewportHostError>,
     /// RT_QUALITY_SETTINGS_DESIGN.md D5 — per-frame RT quality values from the
     /// active column (realtime vs export). Set per frame via [`set_rt_quality`];
     /// forwarded to every chain's executor through dispatch_chain. Default = live
@@ -722,6 +732,8 @@ impl LayerCompositor {
             preview_request: None,
             dump_request: None,
             profiling_enabled: false,
+            scene_viewport_request: None,
+            scene_viewport_error: None,
             rt_quality: crate::node_graph::RtQuality::default(),
             layer_skin_registry: crate::layer_skin::LayerSkinRegistry::new(
                 device,
@@ -738,8 +750,24 @@ impl LayerCompositor {
     fn apply_preview_targets(&mut self) {
         let request = self.preview_request.clone();
         let dump = self.dump_request.clone();
-        let apply = |chain: &mut Option<PresetRuntime>| {
+        let viewport_request = self.scene_viewport_request.clone();
+        let mut viewport_applied = false;
+        let mut viewport_error = None;
+        let mut apply = |chain: &mut Option<PresetRuntime>| {
             if let Some(cg) = chain.as_mut() {
+                if let Some((effect_id, node_id, config)) = &viewport_request {
+                    match cg.set_scene_viewport(effect_id, node_id, *config) {
+                        Ok(()) => viewport_applied = true,
+                        Err(error) => match error {
+                            crate::node_graph::scene_viewport::SceneViewportError::TargetNotFound => {}
+                            other => viewport_error = Some(
+                                crate::node_graph::scene_viewport::SceneViewportHostError::InvalidTarget(other),
+                            ),
+                        },
+                    }
+                } else {
+                    cg.clear_scene_viewport();
+                }
                 match &request {
                     Some((effect_id, node_id)) => {
                         cg.set_preview_target(effect_id, node_id.as_ref())
@@ -773,6 +801,13 @@ impl LayerCompositor {
         for chain in self.group_effect_chains.values_mut() {
             apply(chain);
         }
+        self.scene_viewport_error = viewport_error.or_else(|| {
+            viewport_request.as_ref().and_then(|_| {
+                (!viewport_applied).then_some(
+                    crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime,
+                )
+            })
+        });
     }
 
     /// Ensure a layer scratch buffer exists for the given `LayerId`,
@@ -993,6 +1028,7 @@ impl LayerCompositor {
                     false,
                     crate::node_graph::RtQuality::default(),
                     &self.layer_skin_registry,
+                    None,
                 );
                 // §5.4: pending geometry is incomplete preparation — the
                 // wrapper's status gates quiescence below.
@@ -1222,6 +1258,7 @@ impl LayerCompositor {
                     false,
                     crate::node_graph::RtQuality::default(),
                     layer_sources,
+                    None,
                 );
                 // §5.4: pending geometry is incomplete preparation — the
                 // wrapper's status gates quiescence below.
@@ -1736,6 +1773,7 @@ impl LayerCompositor {
         profiling: bool,
         rt_quality: crate::node_graph::RtQuality,
         layer_sources: &crate::layer_skin::LayerSkinRegistry,
+        project_tempo: Option<&crate::preset_context::ProjectTempo>,
     ) -> Option<&'a GpuTexture> {
         dispatch_chain(
             effect_chain,
@@ -1749,6 +1787,51 @@ impl LayerCompositor {
             profiling,
             rt_quality,
             layer_sources,
+            project_tempo,
+        )
+    }
+
+    /// Apply an effect chain and, when requested, install the render-only
+    /// viewport immediately before its first run. This keeps a rebuilt chain
+    /// from missing the request on the frame it is created.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_effects_with_scene_viewport<'a>(
+        effect_chain: &'a mut Option<PresetRuntime>,
+        gpu: &mut GpuEncoder,
+        input_texture: &'a GpuTexture,
+        effects: &[PresetInstance],
+        groups: &[EffectGroup],
+        ctx: &PresetContext,
+        preview_effect: Option<&EffectId>,
+        scope: &str,
+        profiling: bool,
+        rt_quality: crate::node_graph::RtQuality,
+        layer_sources: &crate::layer_skin::LayerSkinRegistry,
+        scene_viewport: Option<(
+            &EffectId,
+            &NodeId,
+            crate::node_graph::scene_viewport::SceneViewportConfig,
+        )>,
+        scene_viewport_error: &mut Option<
+            crate::node_graph::scene_viewport::SceneViewportHostError,
+        >,
+        project_tempo: Option<&crate::preset_context::ProjectTempo>,
+    ) -> Option<&'a GpuTexture> {
+        dispatch_chain_with_scene_viewport(
+            effect_chain,
+            gpu,
+            input_texture,
+            effects,
+            groups,
+            ctx,
+            preview_effect,
+            scope,
+            profiling,
+            rt_quality,
+            layer_sources,
+            scene_viewport,
+            scene_viewport_error,
+            project_tempo,
         )
     }
 
@@ -1811,6 +1894,8 @@ impl LayerCompositor {
         // sample inner node outputs. Owned clone so it survives the raw-pointer
         // borrows of `self.effect_chains` below. Cheap; `None` when no preview.
         let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
+        let scene_viewport_request = self.scene_viewport_request.clone();
+        let mut scene_viewport_error = self.scene_viewport_error;
 
         // Pre-scan: count multi-clip layers and collect the set of
         // active `LayerId`s that need a chain this frame. Effect
@@ -2034,7 +2119,7 @@ impl LayerCompositor {
                         anim_progress: 0.0,
                         trigger_count: ld.trigger_count,
                     };
-                    Self::apply_effects(
+                    Self::apply_effects_with_scene_viewport(
                         effect_chain,
                         gpu,
                         layer_buf.source_texture(),
@@ -2046,6 +2131,11 @@ impl LayerCompositor {
                         self.profiling_enabled,
                         self.rt_quality,
                         &self.layer_skin_registry,
+                        scene_viewport_request
+                            .as_ref()
+                            .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
+                        &mut scene_viewport_error,
+                        frame.project_tempo,
                     )
                 } else {
                     None
@@ -2080,6 +2170,7 @@ impl LayerCompositor {
                 }
             }
         }
+        self.scene_viewport_error = scene_viewport_error;
     }
 
     /// Phase B: Blend all layer outputs into main in order.
@@ -2386,6 +2477,7 @@ impl LayerCompositor {
                                 self.profiling_enabled,
                                 self.rt_quality,
                                 &self.layer_skin_registry,
+                                frame.project_tempo,
                             ) {
                                 Some(t) => t,
                                 None => group_buf.source_texture() as *const _,
@@ -2500,6 +2592,8 @@ impl LayerCompositor {
         // preview can sample inner outputs). Owned clone to avoid re-borrowing
         // `self` inside the group loop. `None` when no preview is active.
         let preview_fx = self.preview_request.as_ref().map(|(e, _)| e.clone());
+        let scene_viewport_request = self.scene_viewport_request.clone();
+        let mut scene_viewport_error = self.scene_viewport_error;
         // Early exit: no groups → nothing to fold
         if !frame.layers.iter().any(|l| l.is_group) {
             return;
@@ -2606,7 +2700,7 @@ impl LayerCompositor {
                     anim_progress: 0.0,
                     trigger_count: 0,
                 };
-                let result = Self::apply_effects(
+                let result = Self::apply_effects_with_scene_viewport(
                     effect_chain,
                     gpu,
                     group_buf.source_texture(),
@@ -2618,6 +2712,11 @@ impl LayerCompositor {
                     self.profiling_enabled,
                     self.rt_quality,
                     &self.layer_skin_registry,
+                    scene_viewport_request
+                        .as_ref()
+                        .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
+                    &mut scene_viewport_error,
+                    frame.project_tempo,
                 );
                 result.map_or(group_buf.source_texture() as *const _, |t| t as *const _)
             } else {
@@ -2644,6 +2743,7 @@ impl LayerCompositor {
                 self.layer_outputs_scratch.remove(pos);
             }
         }
+        self.scene_viewport_error = scene_viewport_error;
     }
 
     /// Snapshot outputs after all frame readers, including master effects.
@@ -2721,6 +2821,82 @@ impl Compositor for LayerCompositor {
     /// applied to every screen chain by `apply_preview_targets` each frame.
     fn set_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {
         self.preview_request = request;
+    }
+
+    fn set_scene_viewport_request(
+        &mut self,
+        request: Option<(
+            EffectId,
+            NodeId,
+            crate::node_graph::scene_viewport::SceneViewportConfig,
+        )>,
+    ) {
+        self.scene_viewport_request = request;
+        self.scene_viewport_error = None;
+        self.apply_preview_targets();
+    }
+
+    fn scene_viewport_texture(&self) -> Option<&GpuTexture> {
+        if self.scene_viewport_error.is_some() {
+            return None;
+        }
+        self.scene_viewport_request.as_ref()?;
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        chains
+            .filter_map(|chain| chain.as_ref())
+            .find_map(|chain| {
+                chain
+                    .scene_viewport_status()
+                    .and_then(|_| chain.scene_viewport_texture())
+            })
+    }
+
+    fn scene_viewport_status(
+        &self,
+    ) -> Result<
+        crate::frame_status::FrameRenderStatus,
+        crate::node_graph::scene_viewport::SceneViewportHostError,
+    > {
+        if let Some(error) = self.scene_viewport_error {
+            return Err(error);
+        }
+        let Some((_effect_id, _, _)) = self.scene_viewport_request.as_ref() else {
+            return Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime);
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains.filter_map(|chain| chain.as_ref()) {
+            if let Some(status) = chain.scene_viewport_status() {
+                return Ok(status);
+            }
+        }
+        Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime)
+    }
+
+    fn write_scene_viewport_fluid_domains(
+        &self,
+        output: &mut Vec<(
+            NodeId,
+            crate::node_graph::fluid::FluidDomainSnapshot,
+        )>,
+    ) {
+        if self.scene_viewport_error.is_some() {
+            return;
+        }
+        let Some((effect_id, _, _)) = self.scene_viewport_request.as_ref() else {
+            return;
+        };
+        let chains = std::iter::once(&self.master_effect_chain)
+            .chain(self.effect_chains.values())
+            .chain(self.group_effect_chains.values());
+        for chain in chains.filter_map(|chain| chain.as_ref()) {
+            if chain.scene_viewport_status().is_some() {
+                chain.write_fluid_domains(effect_id, output);
+            }
+        }
     }
 
     /// The captured preview texture for this frame, if a preview is active and
@@ -3049,6 +3225,8 @@ impl Compositor for LayerCompositor {
         // The effect chain reads directly from tonemap.output (no copy into main)
         // and blits the processed result back to tonemap.output via copy.
         // Saves 2x full-resolution texture copies per frame.
+        let scene_viewport_request = self.scene_viewport_request.clone();
+        let mut scene_viewport_error = self.scene_viewport_error;
         if has_enabled_effects(frame.master_effects) {
             let width = self.main.width();
             let height = self.main.height();
@@ -3082,7 +3260,7 @@ impl Compositor for LayerCompositor {
 
             // Feed tonemap output directly into the effect chain — the first
             // effect reads from tonemap.output without copying.
-            if let Some(processed) = Self::apply_effects(
+            if let Some(processed) = Self::apply_effects_with_scene_viewport(
                 master_ec,
                 gpu,
                 &self.tonemap.output.texture,
@@ -3094,6 +3272,11 @@ impl Compositor for LayerCompositor {
                 self.profiling_enabled,
                 self.rt_quality,
                 &self.layer_skin_registry,
+                scene_viewport_request
+                    .as_ref()
+                    .map(|(effect_id, node_id, config)| (effect_id, node_id, *config)),
+                &mut scene_viewport_error,
+                frame.project_tempo,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Use the texture `apply_effects` returned directly — under the
@@ -3104,6 +3287,7 @@ impl Compositor for LayerCompositor {
                 gpu.copy_texture_to_texture(processed, &self.tonemap.output.texture, width, height);
             }
         }
+        self.scene_viewport_error = scene_viewport_error;
 
         // ── LED composite: master FX (gated by led_exit_index) ──
         // The LED path runs raw HDR end-to-end — no dedicated tonemap stage.
@@ -3167,6 +3351,7 @@ impl Compositor for LayerCompositor {
                 self.profiling_enabled,
                 self.rt_quality,
                 &self.layer_skin_registry,
+                frame.project_tempo,
             ) {
                 gpu.copy_texture_to_texture(
                     processed,
@@ -3597,6 +3782,7 @@ mod chain_pool_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 0,
             compositor_dirty: true,
             clips: &[],
@@ -3947,6 +4133,7 @@ mod chain_pool_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 0,
             compositor_dirty: true,
             clips: std::slice::from_ref(&clip),
@@ -4189,6 +4376,7 @@ mod muted_clip_output_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 1,
             compositor_dirty: true,
             clips,
@@ -4384,6 +4572,7 @@ mod led_composite_pixel_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 1,
             compositor_dirty: true,
             clips: &clips,
@@ -4875,6 +5064,7 @@ mod scene_linear_presentation_gpu_tests {
             time: 0.0,
             beat: 0.0,
             dt: 1.0 / 60.0,
+            project_tempo: None,
             frame_count: 1,
             compositor_dirty: true,
             clips: std::slice::from_ref(&clip),

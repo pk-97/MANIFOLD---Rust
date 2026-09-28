@@ -127,17 +127,33 @@ impl PresetRuntime {
         &mut self,
         values: Option<&std::collections::BTreeMap<String, String>>,
     ) {
-        let Some(values) = values else { return };
+        let Some(values) = values else {
+            self.observe_physics_source_strings();
+            return;
+        };
         for binding in &self.string_bindings {
             let Some(v) = values.get(binding.source_key.as_str()) else {
                 continue;
             };
+            let value = self
+                .graph
+                .get_node(binding.target_node)
+                .and_then(|node| node.params.get(binding.target_param.as_str()))
+                .and_then(|current| match current {
+                    ParamValue::String(current) if current.as_str() == v => Some(current.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| std::sync::Arc::new(v.clone()));
+            // Even an equal value must reach Graph::set_param so restoring a
+            // protected source clears its prior rejection. Reuse the Arc to
+            // avoid allocating for the host's repeated unchanged observation.
             let _ = self.graph.set_param(
                 binding.target_node,
                 &binding.target_param,
-                ParamValue::String(std::sync::Arc::new(v.clone())),
+                ParamValue::String(value),
             );
         }
+        self.observe_physics_source_strings();
     }
 
     /// Seed every string binding's value once at construction, before the
@@ -159,6 +175,7 @@ impl PresetRuntime {
                 ParamValue::String(std::sync::Arc::new(seed.clone())),
             );
         }
+        self.observe_physics_source_strings();
     }
 
     pub fn set_string_params(

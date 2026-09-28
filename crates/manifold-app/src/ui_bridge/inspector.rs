@@ -31,6 +31,8 @@ mod scene_card_convergence_tests {
     use crate::ui_root::UIRoot;
     use manifold_core::LayerId;
     use manifold_core::PresetTypeId;
+    use manifold_core::effect_graph_def::ParamSpecDef;
+    use manifold_core::params::Param;
     use manifold_core::effects::ParameterDriver;
     use manifold_core::effects::PresetInstance;
     use manifold_core::project::Project;
@@ -619,6 +621,19 @@ mod scene_card_convergence_tests {
                 let mut n = 0;
                 for c in cmds {
                     match c {
+                        ContentCommand::FireParameter { target, param_id } => {
+                            self.service.execute(
+                                Box::new(manifold_editing::commands::effects::FireGraphParamCommand::new(
+                                    target,
+                                    param_id,
+                                )),
+                                &mut self.project,
+                            );
+                            if self.service.take_rejection().is_none() {
+                                self.undo_depth += 1;
+                                n += 1;
+                            }
+                        }
                         ContentCommand::Execute(cmd) => {
                             self.service.execute(cmd, &mut self.project);
                             self.undo_depth += 1;
@@ -806,6 +821,36 @@ mod scene_card_convergence_tests {
                 }]);
             }
             std::borrow::Cow::Owned(real)
+        }
+
+        /// A genuine momentary parameter for ParamFire coverage. The
+        /// SceneStarter card has ordinary continuous controls, so this keeps
+        /// the fire fixture explicit instead of dispatching an invalid click
+        /// against a slider-shaped parameter.
+        fn trigger_param(
+            _h: &mut Harness,
+            project: &mut Project,
+            layer_id: &LayerId,
+        ) -> manifold_core::effects::ParamId {
+            let (_, layer) = project
+                .timeline
+                .find_layer_by_id_mut(layer_id)
+                .expect("layer resolves");
+            let inst = layer.gen_params_or_init();
+            let id = "test.fire";
+            if !inst.params.contains(id) {
+                inst.params.push(Param::bundled(ParamSpecDef {
+                    id: id.to_string(),
+                    name: "Fire".to_string(),
+                    min: 0.0,
+                    max: f32::MAX,
+                    default_value: 0.0,
+                    whole_numbers: true,
+                    is_trigger: true,
+                    ..ParamSpecDef::default()
+                }));
+            }
+            std::borrow::Cow::Owned(id.to_string())
         }
 
         /// Immutable read of a layer's generator instance — the probe-side
@@ -2024,7 +2069,7 @@ mod scene_card_convergence_tests {
         fn param_fire_atomic() {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
-            let pid = materialized_param(&mut h, &mut project, &layer_id);
+            let pid = trigger_param(&mut h, &mut project, &layer_id);
             let before = gen_inst(&project, &layer_id).get_base_param(pid.as_ref());
             let probe_lid = layer_id.clone();
             let probe_pid = pid.clone();
@@ -2886,6 +2931,25 @@ mod scene_card_convergence_tests {
                 (fx, std::borrow::Cow::Owned(pid))
             }
 
+            fn effect_with_trigger_param(
+                effect_type: manifold_core::PresetTypeId,
+            ) -> (PresetInstance, manifold_core::effects::ParamId) {
+                let mut fx = PresetInstance::new(effect_type);
+                fx.init_defaults();
+                let pid: manifold_core::effects::ParamId = std::borrow::Cow::Owned("test.fire".to_string());
+                fx.params.push(Param::bundled(ParamSpecDef {
+                    id: pid.to_string(),
+                    name: "Fire".to_string(),
+                    min: 0.0,
+                    max: f32::MAX,
+                    default_value: 0.0,
+                    whole_numbers: true,
+                    is_trigger: true,
+                    ..ParamSpecDef::default()
+                }));
+                (fx, pid)
+            }
+
             /// One project carrying the SAME preset type as both a master
             /// effect and a layer effect, so a test can dispatch the
             /// identical action against either `GraphTarget` and compare.
@@ -2901,6 +2965,31 @@ mod scene_card_convergence_tests {
                 let (master_fx, pid) = effect_with_first_param(et.clone());
                 let master_id = master_fx.id.clone();
                 let (layer_fx, _) = effect_with_first_param(et);
+                let layer_effect_id = layer_fx.id.clone();
+
+                let (mut project, layer_id) = scene_layer_project();
+                project.settings.master_effects.push(master_fx);
+                project
+                    .timeline
+                    .find_layer_by_id_mut(&layer_id)
+                    .expect("fixture layer resolves")
+                    .1
+                    .effects_mut()
+                    .push(layer_fx);
+
+                TwoScopes {
+                    project,
+                    master_target: manifold_core::GraphTarget::Effect(master_id),
+                    layer_target: manifold_core::GraphTarget::Effect(layer_effect_id),
+                    pid,
+                }
+            }
+
+            fn trigger_scopes(effect_type: &'static str) -> TwoScopes {
+                let et = manifold_core::PresetTypeId::new(effect_type);
+                let (master_fx, pid) = effect_with_trigger_param(et.clone());
+                let master_id = master_fx.id.clone();
+                let (layer_fx, _) = effect_with_trigger_param(et);
                 let layer_effect_id = layer_fx.id.clone();
 
                 let (mut project, layer_id) = scene_layer_project();
@@ -3072,6 +3161,47 @@ mod scene_card_convergence_tests {
             // ── AudioModToggle ────────────────────────────────────────
 
             #[test]
+            fn audio_mod_fire_without_send_arms_clip_mode_layer() {
+                let s = trigger_scopes("Bloom");
+                assert!(s.project.audio_setup.sends.is_empty());
+                let pid = s.pid.clone();
+                let target = s.layer_target.clone();
+                scope_atomic(
+                    "audio_mod_fire_clip_without_send",
+                    s.project,
+                    &s.layer_target,
+                    PanelAction::Modulation(ModulationAction::AudioModToggle(
+                        manifold_ui::GraphParamTarget::Effect(0), pid.clone(),
+                    )),
+                    move |project| {
+                        project.preset_instance(&target)
+                            .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
+                            .map(|m| (m.trigger_mode, m.source.send_id.is_empty(), m.enabled))
+                    },
+                    None,
+                    Some((Some(manifold_core::audio_trigger::TriggerFireMode::ClipEdge), true, true)),
+                );
+            }
+
+            #[test]
+            fn audio_mod_fire_without_send_does_not_invent_master_clip_timing() {
+                let s = trigger_scopes("Bloom");
+                let pid = s.pid.clone();
+                let target = s.master_target.clone();
+                scope_inert(
+                    "master_fire_requires_audio_source",
+                    s.project,
+                    &s.master_target,
+                    PanelAction::Modulation(ModulationAction::AudioModToggle(
+                        manifold_ui::GraphParamTarget::Effect(0), pid.clone(),
+                    )),
+                    move |project| project.preset_instance(&target)
+                        .and_then(|instance| instance.find_audio_mod(pid.as_ref()))
+                        .map(|m| m.enabled),
+                );
+            }
+
+            #[test]
             fn audio_mod_toggle_master() {
                 let mut s = two_scopes("Bloom");
                 with_send(&mut s.project);
@@ -3223,7 +3353,7 @@ mod scene_card_convergence_tests {
 
             #[test]
             fn param_fire_master() {
-                let s = two_scopes("Bloom");
+                let s = trigger_scopes("Bloom");
                 let pid = s.pid.clone();
                 let t = s.master_target.clone();
                 let before = s
@@ -3247,7 +3377,7 @@ mod scene_card_convergence_tests {
 
             #[test]
             fn param_fire_layer() {
-                let s = two_scopes("Bloom");
+                let s = trigger_scopes("Bloom");
                 let pid = s.pid.clone();
                 let t = s.layer_target.clone();
                 let before = s
@@ -3266,6 +3396,46 @@ mod scene_card_convergence_tests {
                     move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
                     before,
                     before + 1.0,
+                );
+            }
+
+            #[test]
+            fn param_fire_multiple_stale_clicks_are_sequential() {
+                let s = trigger_scopes("Bloom");
+                let pid = s.pid.clone();
+                let target = s.master_target.clone();
+                let mut project = s.project;
+                let mut h = Harness::new(None);
+                let ui_snapshot = serde_json::to_value(&project).unwrap();
+                let action = PanelAction::Params(ParamsAction::ParamFire(
+                    manifold_ui::GraphParamTarget::Effect(0),
+                    pid.clone(),
+                ));
+                h.dispatch_with_editor(&action, &mut project, Some(&target));
+                h.dispatch_with_editor(&action, &mut project, Some(&target));
+                assert_eq!(serde_json::to_value(&project).unwrap(), ui_snapshot, "ParamFire must not mutate the UI project");
+
+                let mut side = ContentSide::new(&project);
+                assert_eq!(side.apply(h.drain()), 2);
+                assert_eq!(
+                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    2.0
+                );
+                assert!(side.service.undo(&mut side.project));
+                assert_eq!(
+                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    1.0
+                );
+                assert!(side.service.undo(&mut side.project));
+                assert_eq!(
+                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    0.0
+                );
+                assert!(side.service.redo(&mut side.project));
+                assert!(side.service.redo(&mut side.project));
+                assert_eq!(
+                    side.project.preset_instance(&target).unwrap().get_base_param(pid.as_ref()),
+                    2.0
                 );
             }
 

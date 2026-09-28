@@ -92,12 +92,18 @@ pub(crate) fn build_action(
             {
                 return Err(reason);
             }
+            let targets = if recipe.preset_metadata.as_ref()
+                .and_then(|m| m.scene_modifier.as_ref()).is_some_and(|r| r.shatter.is_some()) {
+                shatter_targets(graph, &scene)?
+            } else {
+                SceneTargetSelection::AllObjects
+            };
             let instance = prepare_new_scene_modifier(
                 graph,
                 recipe,
                 NodeId::new(manifold_core::short_id()),
                 scene,
-                SceneTargetSelection::AllObjects,
+                targets,
             )
             .map_err(|e| e.to_string())?;
             InsertSceneModifierCommand::new(
@@ -159,13 +165,33 @@ pub(crate) fn build_action(
                 .iter()
                 .find(|m| m.id == id)
                 .ok_or("Modifier is no longer present")?;
-            let enabled = &instance
+            let recipe = instance
                 .graph
                 .preset_metadata
                 .as_ref()
                 .and_then(|m| m.scene_modifier.as_ref())
-                .ok_or("Modifier metadata is missing")?
-                .enabled_param;
+                .ok_or("Modifier metadata is missing")?;
+            let enabled = &recipe.enabled_param;
+            if recipe.preparation_params.iter().any(|param| param == enabled) {
+                let value = instance
+                    .graph
+                    .preset_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.params.iter().find(|param| param.id == *enabled))
+                    .ok_or("Modifier prepared enabled parameter is missing")?
+                    .default_value;
+                let next = if value > 0.5 { 0.0 } else { 1.0 };
+                return SetSceneModifierPreparationParamCommand::new(
+                    project,
+                    target,
+                    &default,
+                    id,
+                    enabled.clone(),
+                    next,
+                )
+                .map(|command| Box::new(command) as Box<dyn Command>)
+                .map_err(|error| error.to_string());
+            }
             let bindings = &graph
                 .preset_metadata
                 .as_ref()
@@ -436,6 +462,30 @@ pub(crate) fn preparation_target_for_node_param(
         scale: binding.scale,
         offset: binding.offset,
     }))
+}
+
+/// Choose imported physical objects on attachment, leaving a scene's floor and
+/// ordinary props out of the saved Shatter target list. The normal target picker
+/// remains available for subsequent edits.
+fn shatter_targets(
+    graph: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &SceneNodeRef,
+) -> Result<SceneTargetSelection, String> {
+    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    let choices = manifold_renderer::node_graph::scene_modifier_authoring::scene_modifier_objects(graph, scene)
+        .map_err(|e| e.to_string())?;
+    let vm = SceneVm::from_def(graph).ok_or("Scene objects are unavailable")?;
+    let objects: Vec<_> = vm.objects.iter().filter_map(|object| {
+        let SceneObjectVm::Known(row) = object else { return None };
+        if !row.physics_imported || row.physics.is_none() { return None; }
+        let node = descend_nodes(&graph.nodes, &row.visible_addr.scope_path)?
+            .iter().find(|n| n.id == row.visible_addr.node_doc_id)?;
+        choices.iter().find(|reference| reference.node == node.node_id).cloned()
+    }).collect();
+    if objects.is_empty() {
+        return Err("Enable Physics on an imported object before adding Shatter".into());
+    }
+    Ok(SceneTargetSelection::Explicit { objects })
 }
 
 fn descend_nodes<'a>(
@@ -875,6 +925,25 @@ mod routing_tests {
     }
 
     #[test]
+    fn shatter_defaults_to_imported_physics_objects_and_preserves_the_floor() {
+        use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
+        use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(
+            "../../manifold-renderer/assets/generator-presets/PhysicsSolids.json"
+        )).unwrap();
+        let scene = SceneNodeRef { scope: vec![], node: NodeId::new("scene") };
+        assert!(super::shatter_targets(&graph, &scene).is_err());
+        let mesh = graph.nodes.iter_mut().find(|n| n.id == 112).unwrap();
+        mesh.type_id = "node.gltf_mesh_source".into();
+        mesh.params.clear();
+        mesh.params.insert("path".into(), SerializedParamValue::String { value: "scan.glb".into() });
+        graph.wires.retain(|w| w.to_node != 112);
+        assert_eq!(super::shatter_targets(&graph, &scene).unwrap(), SceneTargetSelection::Explicit {
+            objects: vec![SceneNodeRef { scope: vec![], node: NodeId::new("physics_demo_114") }],
+        });
+    }
+
+    #[test]
     fn ordinary_aliases_do_not_become_preparation_controls() {
         let first = binding("live_a");
         let second = binding("live_b");
@@ -895,6 +964,56 @@ mod routing_tests {
             select_preparation_binding(&bindings, &["prep".into()], &NodeId::new("node"), "value")
                 .expect_err("duplicate preparation aliases are ambiguous");
         assert!(error.contains("ambiguous"));
+    }
+}
+
+#[cfg(test)]
+mod prepared_toggle_tests {
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::{GraphTarget, PresetTypeId};
+    use manifold_editing::service::EditingService;
+
+    #[test]
+    fn imported_shatter_toggle_preserves_add_undo() {
+        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/gltf/cc0__oomurasaki_azalea_r._x_pulchrum.glb"));
+        let (graph, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(path).unwrap();
+        let scene_id = graph.nodes.iter().find(|node| node.type_id == "node.render_scene").unwrap().id;
+        let mut layer = Layer::new_generator("Scan".into(), PresetTypeId::new("PhotoscanBaseline"), 0);
+        let layer_id = layer.layer_id.clone();
+        layer.gen_params_or_init().graph = Some(graph.clone());
+        layer.gen_params_or_init().refresh_manifest_from_graph();
+        let mut project = Project::default();
+        project.timeline.layers.push(layer);
+        let target = GraphTarget::Generator(layer_id.clone());
+        let physics = manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
+            target.clone(), scene_id, 0,
+            manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+            graph,
+        ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world"));
+        let mut editing = EditingService::new();
+        editing.execute(with_admission(Box::new(physics)), &mut project);
+        assert!(editing.take_rejection().is_none());
+        let before = serde_json::to_value(&project).unwrap();
+        let add = build_action(&project, SceneModifierAction::Add(layer_id.clone(), "Shatter".into())).unwrap();
+        editing.execute(with_admission(add), &mut project);
+        assert!(editing.take_rejection().is_none());
+        let after_add = serde_json::to_value(&project).unwrap();
+        let id = project.graph_target_owner(&target).unwrap().graph.as_ref().unwrap().scene_modifiers[0].id.clone();
+        let toggle = build_action(&project, SceneModifierAction::Toggle(layer_id, id)).unwrap();
+        editing.execute(with_admission(toggle), &mut project);
+        assert!(editing.take_rejection().is_none());
+        let after_toggle = serde_json::to_value(&project).unwrap();
+        assert_ne!(after_toggle, after_add);
+        assert!(editing.undo(&mut project));
+        assert_eq!(serde_json::to_value(&project).unwrap(), after_add);
+        assert!(editing.redo(&mut project));
+        assert_eq!(serde_json::to_value(&project).unwrap(), after_toggle);
+        assert!(editing.undo(&mut project));
+        assert_eq!(serde_json::to_value(&project).unwrap(), after_add);
+        assert!(editing.undo(&mut project));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
     }
 }
 

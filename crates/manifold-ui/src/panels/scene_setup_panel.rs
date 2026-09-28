@@ -33,6 +33,10 @@ mod row_gesture_tests;
 mod material_inspector;
 #[path = "scene_setup_panel/object_modifiers.rs"]
 mod object_modifiers;
+#[path = "scene_setup_panel/forces.rs"]
+mod forces;
+#[path = "scene_setup_panel/fluid_roles.rs"]
+mod fluid_roles;
 
 use crate::{ProjectAction, RootAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
@@ -41,7 +45,7 @@ use crate::input::UIEvent;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
-use manifold_foundation::{AudioSendId, LayerId};
+use manifold_foundation::{AudioSendId, LayerId, NodeId as FoundationNodeId};
 
 use super::{GraphParamTarget, PanelAction, ParamsAction};
 use super::actions::{MaterialEditKind, MaterialParamWrite};
@@ -56,7 +60,8 @@ use super::param_slider_shared::{
 };
 use crate::param_surface::{
     MaterialGroup, MaterialLook, MaterialMapFamily, MaterialParamRole, ObjectModifierCardInfo,
-    ModifierObjectRef, ParamRow, ParamSurface, RgbChannel, RowMapping, RowRole, RowSpec,
+    ModifierObjectRef, ModifierPickerEntry, ParamRow, ParamSurface, RgbChannel, RowMapping,
+    RowRole, RowSpec,
 };
 use crate::slider::GAP;
 
@@ -75,11 +80,16 @@ const KEY_IMPORT_MODEL: u64 = 80_016;
 const KEY_OUTLINER_SCENE: u64 = 80_017;
 const KEY_OUTLINER_LIGHTS: u64 = 80_018;
 const KEY_OUTLINER_OBJECTS: u64 = 80_019;
+const KEY_OUTLINER_FORCES: u64 = 80_023;
 /// Frame button offset: use offset 33 to avoid collision with Remove (20), Duplicate (21), and mod buttons (22..32)
 const OBJ_OFF_FRAME: u64 = 33;
 /// P4b Skin row source/target dropdown buttons.
 const OBJ_OFF_SKIN_SOURCE: u64 = 34;
 const OBJ_OFF_SKIN_TARGET: u64 = 35;
+const OBJ_OFF_PHYSICS: u64 = 36;
+const OBJ_OFF_FLUID_ROLE: u64 = 37;
+const OBJ_OFF_FLUID_ROLE_TARGET: u64 = 38;
+const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -399,6 +409,12 @@ pub struct ObjectKnownRow {
     /// ungrouped scene_object (D1's first-class "hand-built graph, no
     /// group" case).
     pub group_node_id: Option<u32>,
+    /// A virtual compound parent row. Parent rows precede their physical
+    /// children in the renderer's flat preorder list.
+    pub is_group: bool,
+    /// The compound parent for a child row. `None` means a top-level object
+    /// (including a virtual group parent).
+    pub parent_group_id: Option<u32>,
     pub name: String,
     pub visible: RowValue,
     pub transform: Option<Box<TransformRowVm>>,
@@ -425,9 +441,35 @@ pub struct ObjectKnownRow {
     /// different strings for the same node kind). Filters the unified
     /// properties card down to exactly this object's rows.
     pub sections: Vec<String>,
+    /// Exact exposed parameter ids owned by this object and its scene-node
+    /// stack. This is the authoritative row filter when objects share a
+    /// section label; an empty list owns no rows.
+    pub parameter_ids: Vec<String>,
     /// P4b: the object's layer-skin row. `None` when no `node.layer_source`
     /// is wired into the object's material maps.
     pub skin: Option<SkinRowVm>,
+    pub physics_enabled: bool,
+    pub physics_available: bool,
+    pub physics_imported: bool,
+    pub fluid_role_available: bool,
+    pub fluid_roles: Result<Vec<FluidRoleRow>, String>,
+}
+
+enum PropertyOwners<'a> {
+    All,
+    Nodes(&'a [u32]),
+    Parameters(&'a [String]),
+}
+
+impl PropertyOwners<'_> {
+    fn contains(&self, id: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Nodes(ids) => id.split('_').next().and_then(|s| s.parse::<u32>().ok())
+                .is_some_and(|id| ids.contains(&id)),
+            Self::Parameters(ids) => ids.iter().any(|owned| owned == id),
+        }
+    }
 }
 
 /// One Objects-section row (D3/D4).
@@ -561,11 +603,30 @@ pub enum CameraRowVm {
     Custom,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct FluidDomainOption {
+    pub node_doc_id: u32,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FluidRoleRow {
+    pub source_node_id: u32,
+    pub name: String,
+    pub target_label: String,
+}
+
 /// Full live-panel view model for one selected generator layer's scene —
 /// translated 1:1 from `manifold_renderer::node_graph::scene_vm::SceneVm`'s
 /// Header/Environment/Atmosphere sections by `state_sync` (this crate can't
 /// depend on `manifold-renderer`/`manifold-core`, so the translation is the
 /// UI-facing DTO boundary, same convention as `AudioSendRow`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneForceRowVm {
+    pub instance_id: FoundationNodeId,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneSetupVm {
     pub layer_id: LayerId,
@@ -581,6 +642,7 @@ pub struct SceneSetupVm {
     pub atmosphere: AtmosphereRowVm,
     /// P2: the Objects section's rows, in `mesh_k` order.
     pub objects: Vec<ObjectRowVm>,
+    pub fluid_domains: Vec<FluidDomainOption>,
     /// P3: the Lights section's rows, in `light_k` order. Never capped —
     /// REALTIME_3D D4's shadow-caster limit (K=4) is the renderer's job; the
     /// panel reports the true count and renders every row regardless.
@@ -604,17 +666,22 @@ pub struct SceneSetupVm {
     /// used to compute scene-relative slider ranges (center ± 2×extent per axis).
     /// Fallback to descriptor defaults when None.
     pub scene_bounds: Option<([f32; 3], [f32; 3])>,
+    /// Scene force rows projected with stable instance identities.
+    pub forces: Vec<SceneForceRowVm>,
+    /// Typed force recipe picker for the selected scene layer.
+    pub force_picker: Vec<ModifierPickerEntry>,
 }
 
 /// P5's outliner selection (D7): the one scene item whose controls the
 /// properties region shows. UI-local workspace state — like fold state,
 /// NEVER serialized (`rg -n "SceneSelection" crates/manifold-io
-/// crates/manifold-core` must stay 0 hits). `u32` payloads are node doc
-/// ids — removal-stable, unlike indices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// crates/manifold-core` must stay 0 hits). Object/light `u32` payloads and
+/// force `NodeId` payloads are stable graph identities, unlike indices.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SceneSelection {
     Object(u32),
     Light(u32),
+    Force(FoundationNodeId),
     Camera,
     World,
     /// scene-panel-ux lane: outliner group fold toggle (Scene/Lights/Objects)
@@ -920,6 +987,9 @@ pub struct ScenePanel {
     object_modifier_drag_indicator: Option<NodeId>,
     selected_object_modifier: Option<ObjectModifierCardInfo>,
     object_modifier_pressed_card: Option<usize>,
+    /// Shared parameter cards for force recipes in the selected scene.
+    force_cards: Vec<ParamCardPanel>,
+    force_pressed_card: Option<(LayerId, FoundationNodeId)>,
     /// P2 slice 2a: the scene panel's bound layer's FULL generator
     /// `ParamSurface` (every exposed param, every section) — built by
     /// `state_sync` the SAME way the main inspector's generator card is
@@ -933,6 +1003,8 @@ pub struct ScenePanel {
     add_light_id: Option<NodeId>,
     /// BUG-hlw8 "+ Plane" — dispatches `SceneSetupAddLayerPlane`.
     add_plane_id: Option<NodeId>,
+    add_fluid_id: Option<NodeId>,
+    add_force_id: Option<NodeId>,
     /// "Import Model…" (P4) — dispatches `SceneSetupImportModelClicked`,
     /// which opens the file dialog + merges on the app side (the panel
     /// itself never touches the filesystem).
@@ -971,10 +1043,20 @@ pub struct ScenePanel {
     /// header's "Duplicate" button, when a Known object is selected this
     /// frame — resolves to `PanelAction::SceneSetupDuplicateObject`.
     object_duplicate_ids: Vec<(NodeId, usize)>,
+    /// Child-only remove/duplicate targets. Physical indices are not unique
+    /// across a virtual group parent and its first child, so these have their
+    /// own routing tables and stable widget keys use the object node id.
+    submesh_remove_ids: Vec<(NodeId, usize)>,
+    submesh_duplicate_ids: Vec<(NodeId, usize)>,
     /// scene-panel-ux lane: `(frame_button_node_id, object_index)` for the properties
     /// header's "Frame" button, when a Known object is selected this frame
     /// — resolves to `PanelAction::SceneSetupFrameSelected`.
-    object_frame_ids: Vec<(NodeId, usize)>,
+    object_frame_ids: Vec<(NodeId, u32)>,
+    object_enable_physics_ids: Vec<(NodeId, usize)>,
+    object_disable_physics_ids: Vec<(NodeId, usize)>,
+    object_fluid_role_ids: Vec<(NodeId, usize)>,
+    fluid_role_target_ids: Vec<(NodeId, u32)>,
+    fluid_role_remove_ids: Vec<(NodeId, u32)>,
     /// scene-panel-ux lane: fold state for properties sections, keyed by
     /// section NAME globally within the panel (folding "Material" folds it
     /// for every object). UI-local, never serialized. Missing entry = expanded.
@@ -982,6 +1064,9 @@ pub struct ScenePanel {
     /// scene-panel-ux lane: fold state for outliner groups (Scene/Lights/Objects).
     /// UI-local, never serialized. Missing entry = expanded.
     outliner_folded: ahash::AHashMap<&'static str, bool>,
+    /// Expanded compound groups, keyed per bound layer and kept in UI state.
+    expanded_groups: std::collections::HashMap<LayerId, ahash::AHashSet<u32>>,
+    group_toggle_ids: Vec<(NodeId, u32)>,
     /// UX-P2 (D6): `(button_node_id, group_node_id)` for the single "+ Add
     /// Modifier" button built this frame, when the selected object's chain
     /// is addable (was `modifier_add_ids: Vec<(NodeId, u32, String)>`, one
@@ -1057,11 +1142,15 @@ impl Default for ScenePanel {
             object_modifier_drag_indicator: None,
             selected_object_modifier: None,
             object_modifier_pressed_card: None,
+            force_cards: Vec::new(),
+            force_pressed_card: None,
             full_params: None,
             full_param_id_index: ahash::AHashMap::new(),
             add_object_id: None,
             add_light_id: None,
             add_plane_id: None,
+            add_fluid_id: None,
+            add_force_id: None,
             import_model_id: None,
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
@@ -1069,9 +1158,18 @@ impl Default for ScenePanel {
             object_name_ids: Vec::new(),
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
+            submesh_remove_ids: Vec::new(),
+            submesh_duplicate_ids: Vec::new(),
             object_frame_ids: Vec::new(),
+            object_enable_physics_ids: Vec::new(),
+            object_disable_physics_ids: Vec::new(),
+            object_fluid_role_ids: Vec::new(),
+            fluid_role_target_ids: Vec::new(),
+            fluid_role_remove_ids: Vec::new(),
             section_folded: ahash::AHashMap::new(),
             outliner_folded: ahash::AHashMap::new(),
+            expanded_groups: std::collections::HashMap::new(),
+            group_toggle_ids: Vec::new(),
             add_modifier_button_id: None,
             skin_source_ids: Vec::new(),
             skin_target_ids: Vec::new(),
@@ -1116,6 +1214,9 @@ impl ScenePanel {
         for card in &self.object_modifier_cards {
             card.register_intents(intents);
         }
+        for card in &self.force_cards {
+            card.register_intents(intents);
+        }
     }
 
     pub fn open(&mut self) {
@@ -1136,6 +1237,7 @@ impl ScenePanel {
     /// staleness").
     pub fn configure(&mut self, state: SceneSetupState) {
         self.state = state;
+        if !matches!(self.state, SceneSetupState::Live(_)) { self.clear_force_cards(); }
         self.rebuild_object_modifier_cards_from_projection();
     }
 
@@ -1258,6 +1360,22 @@ impl ScenePanel {
                 });
                 card.sync_values(tree, &mut modifier_slots);
             }
+            for card in &mut self.force_cards {
+                if card.node_count() == 0 { continue; }
+                let mut force_slots = surface.rows.iter().map(|row| {
+                    (
+                        row.id.as_ref(),
+                        crate::view::UiParamSlot {
+                            value: row.value.effective,
+                            base: row.value.base,
+                            exposed: row.value.exposed,
+                            min: row.spec.min,
+                            max: row.spec.max,
+                        },
+                    )
+                });
+                card.sync_values(tree, &mut force_slots);
+            }
         }
         for &(node, slot) in &self.material_mode_ids {
             let label = match card.current_values[slot].round() as i32 { 1 => "Off", 2 => "On", _ => "Auto" };
@@ -1338,12 +1456,22 @@ impl ScenePanel {
         self.add_object_id = None;
         self.add_light_id = None;
         self.add_plane_id = None;
+        self.add_fluid_id = None;
+        self.add_force_id = None;
         self.import_model_id = None;
         self.outliner_row_ids.clear();
+        self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
+        self.submesh_remove_ids.clear();
+        self.submesh_duplicate_ids.clear();
+        self.object_enable_physics_ids.clear();
+        self.object_disable_physics_ids.clear();
+        self.object_fluid_role_ids.clear();
+        self.fluid_role_target_ids.clear();
+        self.fluid_role_remove_ids.clear();
         self.add_modifier_button_id = None;
         self.skin_source_ids.clear();
         self.skin_target_ids.clear();
@@ -1359,6 +1487,9 @@ impl ScenePanel {
         // cards hidden by a non-object selection cannot claim a fresh row's
         // node range during event routing.
         for card in &mut self.object_modifier_cards {
+            card.clear_nodes();
+        }
+        for card in &mut self.force_cards {
             card.clear_nodes();
         }
         self.active_material_info = None;
@@ -1488,7 +1619,7 @@ impl ScenePanel {
 
         // ── Outliner ──
         let selected = self.resolve_selection(vm);
-        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, selected);
+        cy = self.build_outliner(tree, inner_x, inner_w, cy, vm, &selected);
         cy += ROW_GAP * 2.0;
 
         // ── Properties ──
@@ -1519,7 +1650,7 @@ impl ScenePanel {
         if matches!(selection, SceneSelection::OutlinerFold(_)) { return false; }
         let SceneSetupState::Live(vm) = &self.state else { return false; };
         self.selected_object_modifier = None;
-        self.selection.insert(vm.layer_id.clone(), *selection);
+        self.selection.insert(vm.layer_id.clone(), selection.clone());
         true
     }
 
@@ -1529,12 +1660,12 @@ impl ScenePanel {
     /// into `self.selection` so a later `object_name_rect`/click lookup
     /// this same frame sees the same answer `build_outliner` used.
     fn resolve_selection(&mut self, vm: &SceneSetupVm) -> SceneSelection {
-        let current = self.selection.get(&vm.layer_id).copied();
+        let current = self.selection.get(&vm.layer_id).cloned();
         let resolved = match current {
-            Some(sel) if Self::selection_exists(vm, sel) => sel,
+            Some(sel) if Self::selection_exists(vm, sel.clone()) => sel,
             _ => Self::default_selection(vm),
         };
-        self.selection.insert(vm.layer_id.clone(), resolved);
+        self.selection.insert(vm.layer_id.clone(), resolved.clone());
         resolved
     }
 
@@ -1548,6 +1679,7 @@ impl ScenePanel {
             SceneSelection::Light(id) => {
                 vm.lights.iter().any(|l| matches!(l, LightRowVm::Known(r) if r.node_doc_id == id))
             }
+            SceneSelection::Force(id) => vm.forces.iter().any(|row| row.instance_id == id),
         }
     }
 
@@ -1577,7 +1709,7 @@ impl ScenePanel {
         inner_w: f32,
         mut cy: f32,
         vm: &SceneSetupVm,
-        selected: SceneSelection,
+        selected: &SceneSelection,
     ) -> f32 {
         // Scene group header
         let scene_folded = self.outliner_folded.get("Scene").copied().unwrap_or(false);
@@ -1628,9 +1760,40 @@ impl ScenePanel {
             }
         }
 
+        // Forces are scene modifier cards with stable instance identities. The
+        // header owns the typed recipe picker affordance; rows only select.
+        let forces_folded = self.outliner_folded.get("Forces").copied().unwrap_or(false);
+        let (next_y, add_force) = self.build_outliner_fold_header_with_button(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            "Forces",
+            forces_folded,
+            KEY_OUTLINER_FORCES,
+            KEY_OUTLINER_FORCES + 1,
+            "+ Force",
+        );
+        cy = next_y;
+        self.add_force_id = Some(add_force);
+        if !forces_folded {
+            for force in &vm.forces {
+                cy = self.build_outliner_row(
+                    tree,
+                    inner_x,
+                    inner_w,
+                    cy,
+                    &format!("\u{26A1} {}", force.title),
+                    SceneSelection::Force(force.instance_id.clone()),
+                    selected,
+                    EyeSlot::Empty,
+                );
+            }
+        }
+
         // Objects group header with Import Model button
         let objects_folded = self.outliner_folded.get("Objects").copied().unwrap_or(false);
-        cy = self.build_outliner_fold_header_with_button(
+        let (next_y, import_model) = self.build_outliner_fold_header_with_button(
             tree,
             inner_x,
             inner_w,
@@ -1641,21 +1804,58 @@ impl ScenePanel {
             KEY_IMPORT_MODEL,
             "Import Model…",
         );
+        cy = next_y;
+        self.import_model_id = Some(import_model);
         if !objects_folded {
             for obj in &vm.objects {
                 match obj {
                     ObjectRowVm::Known(row) => {
                         let label = format!("\u{25A0} {}", row.name);
-                        cy = self.build_outliner_row(
-                            tree,
-                            inner_x,
-                            inner_w,
-                            cy,
-                            &label,
-                            SceneSelection::Object(row.object_node_id),
-                            selected,
-                            EyeSlot::Live(row.visible.clone()),
-                        );
+                        if row.is_group {
+                            let expanded = self
+                                .expanded_groups
+                                .get(&vm.layer_id)
+                                .is_some_and(|groups| groups.contains(&row.object_node_id));
+                            cy = self.build_group_outliner_row(
+                                tree,
+                                inner_x,
+                                inner_w,
+                                cy,
+                                &label,
+                                row.object_node_id,
+                                selected,
+                                expanded,
+                                EyeSlot::Live(row.visible.clone()),
+                            );
+                        } else if let Some(group_id) = row.parent_group_id {
+                            let expanded = self
+                                .expanded_groups
+                                .get(&vm.layer_id)
+                                .is_some_and(|groups| groups.contains(&group_id));
+                            if expanded {
+                                cy = self.build_child_outliner_row(
+                                    tree,
+                                    inner_x,
+                                    inner_w,
+                                    cy,
+                                    &format!("\u{25A0} {}", row.name),
+                                    SceneSelection::Object(row.object_node_id),
+                                    selected,
+                                    EyeSlot::Live(row.visible.clone()),
+                                );
+                            }
+                        } else {
+                            cy = self.build_outliner_row(
+                                tree,
+                                inner_x,
+                                inner_w,
+                                cy,
+                                &label,
+                                SceneSelection::Object(row.object_node_id),
+                                selected,
+                                EyeSlot::Live(row.visible.clone()),
+                            );
+                        }
                     }
                     ObjectRowVm::Custom { index } => {
                         cy = self.build_outliner_row_static(
@@ -1685,6 +1885,7 @@ impl ScenePanel {
         self.add_object_id = Some(ids.object);
         self.add_light_id = Some(ids.light);
         self.add_plane_id = Some(ids.plane);
+        self.add_fluid_id = Some(ids.fluid);
         cy
     }
 
@@ -1703,10 +1904,10 @@ impl ScenePanel {
         cy: f32,
         label: &str,
         sel: SceneSelection,
-        selected: SceneSelection,
+        selected: &SceneSelection,
         eye: EyeSlot,
     ) -> f32 {
-        let is_selected = sel == selected;
+        let is_selected = &sel == selected;
         let row_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
@@ -1715,9 +1916,9 @@ impl ScenePanel {
             ROW_H,
             outliner_row_style(is_selected),
             label,
-            outliner_row_key(sel),
+            outliner_row_key(sel.clone()),
         );
-        self.outliner_row_ids.push((row_id, sel));
+        self.outliner_row_ids.push((row_id, sel.clone()));
         match eye {
             EyeSlot::Live(row) => {
                 let on = row.value > 0.5;
@@ -1740,6 +1941,109 @@ impl ScenePanel {
                 }
             }
             EyeSlot::Empty => {}
+        }
+        cy + ROW_H
+    }
+
+    /// A compound parent row: the chevron has its own hit target so folding
+    /// never changes selection, while the name remains a normal selectable
+    /// object row.
+    fn build_group_outliner_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        group_id: u32,
+        selected: &SceneSelection,
+        expanded: bool,
+        eye: EyeSlot,
+    ) -> f32 {
+        let toggle_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x,
+            cy,
+            STEP_W,
+            ROW_H,
+            btn_style(),
+            if expanded { "\u{25BE}" } else { "\u{25B8}" },
+            outliner_group_toggle_key(group_id),
+        );
+        self.group_toggle_ids.push((toggle_id, group_id));
+        tree.set_name(toggle_id, "scene_setup.objects.group_toggle");
+        let row_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + STEP_W,
+            cy,
+            inner_w - STEP_W * 2.0,
+            ROW_H,
+            outliner_row_style(&SceneSelection::Object(group_id) == selected),
+            label,
+            outliner_row_key(SceneSelection::Object(group_id)),
+        );
+        self.outliner_row_ids.push((row_id, SceneSelection::Object(group_id)));
+        if let EyeSlot::Live(row) = eye {
+            let eye_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x + inner_w - STEP_W,
+                cy,
+                STEP_W,
+                ROW_H,
+                if row.driven { driven_label_style() } else { btn_style() },
+                if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
+                outliner_eye_key(group_id),
+            );
+            if !row.driven {
+                self.outliner_eye_ids.push((eye_id, row));
+            }
+        }
+        cy + ROW_H
+    }
+
+    /// Child rows are indented one level under their virtual parent. Their
+    /// controls keep the same trailing eye slot and selection semantics.
+    fn build_child_outliner_row(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        label: &str,
+        sel: SceneSelection,
+        selected: &SceneSelection,
+        eye: EyeSlot,
+    ) -> f32 {
+        let indent = STEP_W;
+        let row_id = tree.add_button_keyed(
+            Some(self.content_parent),
+            inner_x + indent,
+            cy,
+            inner_w - STEP_W - indent,
+            ROW_H,
+            outliner_row_style(&sel == selected),
+            label,
+            outliner_row_key(sel.clone()),
+        );
+        self.outliner_row_ids.push((row_id, sel.clone()));
+        if let EyeSlot::Live(row) = eye {
+            let object_node_id = match sel {
+                SceneSelection::Object(id) => id,
+                _ => 0,
+            };
+            let eye_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                inner_x + inner_w - STEP_W,
+                cy,
+                STEP_W,
+                ROW_H,
+                if row.driven { driven_label_style() } else { btn_style() },
+                if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
+                outliner_eye_key(object_node_id),
+            );
+            if !row.driven {
+                self.outliner_eye_ids.push((eye_id, row));
+            }
         }
         cy + ROW_H
     }
@@ -1837,7 +2141,7 @@ impl ScenePanel {
     }
 
     /// Build a foldable outliner group header with a right-aligned button
-    /// (Objects group with "Import Model…"). Returns the updated cy position.
+    /// Returns the updated cy position and the button's live node id.
     fn build_outliner_fold_header_with_button(
         &mut self,
         tree: &mut UITree,
@@ -1849,7 +2153,7 @@ impl ScenePanel {
         header_key: u64,
         button_key: u64,
         button_label: &str,
-    ) -> f32 {
+    ) -> (f32, NodeId) {
         let header_id = tree.add_button_keyed(
             Some(self.content_parent),
             inner_x,
@@ -1894,8 +2198,7 @@ impl ScenePanel {
             name,
             section_label_style(),
         );
-        // Right-aligned Import Model button
-        self.import_model_id = Some(tree.add_button_keyed(
+        let button_id = tree.add_button_keyed(
             Some(header_id),
             inner_x + inner_w - button_w,
             cy,
@@ -1904,10 +2207,10 @@ impl ScenePanel {
             btn_style,
             button_label,
             button_key,
-        ));
+        );
         // Register outliner fold header for click routing
         self.outliner_row_ids.push((header_id, SceneSelection::OutlinerFold(name)));
-        cy + ROW_H
+        (cy + ROW_H, button_id)
     }
 
     /// The panel's ONE param-row renderer (P2 slice 2a). Filters
@@ -1945,13 +2248,47 @@ impl ScenePanel {
         self.build_filtered_properties_excluding(tree, inner_x, inner_w, cy, (owner.0, owner.1, &[]))
     }
 
+    fn build_filtered_properties_parameter_ids(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        cy: f32,
+        (sections, parameter_ids, excluded_ids): (&[String], &[String], &[String]),
+    ) -> f32 {
+        self.build_filtered_properties_with_ownership(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            (sections, PropertyOwners::Parameters(parameter_ids), excluded_ids),
+        )
+    }
+
     fn build_filtered_properties_excluding(
         &mut self,
         tree: &mut UITree,
         inner_x: f32,
         inner_w: f32,
-        mut cy: f32,
+        cy: f32,
         (sections, owner_ids, excluded_ids): (&[String], Option<&[u32]>, &[String]),
+    ) -> f32 {
+        self.build_filtered_properties_with_ownership(
+            tree,
+            inner_x,
+            inner_w,
+            cy,
+            (sections, owner_ids.map_or(PropertyOwners::All, PropertyOwners::Nodes), excluded_ids),
+        )
+    }
+
+    fn build_filtered_properties_with_ownership(
+        &mut self,
+        tree: &mut UITree,
+        inner_x: f32,
+        inner_w: f32,
+        mut cy: f32,
+        (sections, owners, excluded_ids): (&[String], PropertyOwners<'_>, &[String]),
     ) -> f32 {
         let Some(config) = self.full_params.clone() else {
             self.properties_card.resize(0);
@@ -1968,6 +2305,12 @@ impl ScenePanel {
             self.properties_card.resize(0);
             return cy;
         };
+        let imported_selection = self.state.as_live().is_some_and(|vm| {
+            self.selection.get(&vm.layer_id).is_some_and(|selection| {
+                matches!(selection, SceneSelection::Object(id) if vm.objects.iter().any(|object|
+                    matches!(object, ObjectRowVm::Known(row) if row.object_node_id == *id && row.physics_imported)))
+            })
+        });
         let mut retained: Vec<usize> = Vec::new();
         for section in sections {
             for (i, p) in config.rows.iter().enumerate() {
@@ -1976,18 +2319,14 @@ impl ScenePanel {
                     && self.active_material_info.as_ref().is_some_and(|info| {
                         info.params.iter().any(|(_, id)| id == &p.id)
                     });
-                let owned = selected_material_id || owner_ids.is_none_or(|ids| {
-                    p.id.as_ref()
-                        .split('_')
-                        .next()
-                        .and_then(|s| s.parse::<u32>().ok())
-                        .is_some_and(|id| ids.contains(&id))
-                });
+                let owned = selected_material_id || owners.contains(p.id.as_ref());
                 let excluded = !selected_material_id
                     && excluded_ids.iter().any(|id| id == p.id.as_ref());
                 if p.spec.section.as_deref() == Some(section.as_str())
                     && owned
                     && !excluded
+                    && !(imported_selection && p.spec.name == "Shape")
+                    && (imported_selection || p.spec.name != "Collider Detail")
                     && !retained.contains(&i)
                     && self.material_param_selected(p)
                     && self.material_row_feature(p).is_none_or(|feature| self.material_feature_visible(&config.rows, feature))
@@ -2342,7 +2681,20 @@ impl ScenePanel {
                     // header sync all in lockstep).
                     return (true, vec![PanelAction::Root(RootAction::OpenSceneSetup)]);
                 }
+                if let Some((_, group_id)) = self.group_toggle_ids.iter().find(|(id, _)| *id == *node_id) {
+                    let Some(vm) = self.state.as_live() else {
+                        return (true, Vec::new());
+                    };
+                    let groups = self.expanded_groups.entry(vm.layer_id.clone()).or_default();
+                    if !groups.insert(*group_id) {
+                        groups.remove(group_id);
+                    }
+                    return (true, vec![PanelAction::Params(ParamsAction::SectionFoldToggled)]);
+                }
                 if let Some(actions) = self.object_modifier_card_click(*node_id, tree) {
+                    return (true, actions);
+                }
+                if let Some(actions) = self.force_card_click(*node_id, tree) {
                     return (true, actions);
                 }
                 // D7: an outliner row click sets the UI-local selection —
@@ -2361,7 +2713,7 @@ impl ScenePanel {
                     // Normal selection change
                     if let SceneSetupState::Live(vm) = &self.state {
                         self.selected_object_modifier = None;
-                        self.selection.insert(vm.layer_id.clone(), *sel);
+                        self.selection.insert(vm.layer_id.clone(), sel.clone());
                         return (true, vec![PanelAction::Root(RootAction::SceneSetupSelectionChanged(vm.layer_id.clone()))]);
                     }
                     return (true, Vec::new());
@@ -2444,6 +2796,39 @@ impl ScenePanel {
                             vm.scene_root_node_id,
                             *index as u32,
                         )));
+                    } else if let Some((_, index)) =
+                        self.submesh_duplicate_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupDuplicateSubmesh(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
+                        )));
+                    } else if let Some((_, index)) = self.object_enable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
+                    } else if let Some((_, index)) = self.object_fluid_role_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupFluidRoleClicked {
+                            layer_id: vm.layer_id.clone(),
+                            render_scene_node_id: vm.scene_root_node_id,
+                            object_index: *index as u32,
+                            domains: vm.fluid_domains.clone(),
+                            button_node_id: *node_id,
+                        }));
+                    } else if let Some((_, source_node_id)) = self.fluid_role_target_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupFluidRoleTargetClicked {
+                            layer_id: vm.layer_id.clone(), source_node_id: *source_node_id,
+                            domains: vm.fluid_domains.clone(), button_node_id: *node_id,
+                        }));
+                    } else if let Some((_, source_node_id)) = self.fluid_role_remove_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveFluidRole {
+                            layer_id: vm.layer_id.clone(), source_node_id: *source_node_id,
+                        }));
+                    } else if let Some((_, index)) = self.object_disable_physics_ids.iter().find(|(id, _)| *id == *node_id) {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupDisablePhysics(
+                            vm.layer_id.clone(), vm.scene_root_node_id, *index as u32,
+                        )));
                     } else if let Some((light_node_id, _, current_name)) =
                         self.light_name_ids.iter().find(|(_, id, _)| *id == *node_id)
                     {
@@ -2466,10 +2851,15 @@ impl ScenePanel {
                         self.add_object_id,
                         self.add_light_id,
                         self.add_plane_id,
+                        self.add_fluid_id,
                         *node_id,
                         vm,
                     ) {
                         actions.push(act);
+                    } else if self.add_force_id == Some(*node_id) {
+                        actions.push(PanelAction::Root(RootAction::SceneSetupAddForceClicked(
+                            vm.layer_id.clone(),
+                        )));
                     } else if self.import_model_id == Some(*node_id) {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(
                             vm.layer_id.clone(),
@@ -2528,6 +2918,14 @@ impl ScenePanel {
                             *index as u32,
                         )));
                     } else if let Some((_, index)) =
+                        self.submesh_remove_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveSubmesh(
+                            vm.layer_id.clone(),
+                            vm.scene_root_node_id,
+                            *index as u32,
+                        )));
+                    } else if let Some((_, index)) =
                         self.light_remove_ids.iter().find(|(id, _)| *id == *node_id)
                     {
                         actions.push(PanelAction::Project(ProjectAction::SceneSetupRemoveLight(
@@ -2581,6 +2979,9 @@ impl ScenePanel {
                 if let Some(action) = self.object_modifier_card_double_click(*node_id, tree) {
                     return (true, vec![action]);
                 }
+                if let Some(action) = self.force_card_double_click(*node_id, tree) {
+                    return (true, vec![action]);
+                }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let card = &self.properties_card;
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -2598,6 +2999,9 @@ impl ScenePanel {
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
                 if let Some(actions) = self.object_modifier_card_pointer_down(*node_id, *pos, tree) {
+                    return (true, actions);
+                }
+                if let Some(actions) = self.force_card_pointer_down(*node_id, *pos, tree) {
                     return (true, actions);
                 }
                 if let SceneSetupState::Live(vm) = &self.state {
@@ -2623,12 +3027,20 @@ impl ScenePanel {
                 if self.begin_object_modifier_drag(*node_id, tree) {
                     return (true, Vec::new());
                 }
+                if node_id.is_some_and(|node| self.force_card_index_for_node(node).is_some())
+                    && self.force_pressed_card.is_some()
+                {
+                    return (true, Vec::new());
+                }
                 (self.properties_card.row_host.is_dragging(), Vec::new())
             }
             UIEvent::Drag { pos, modifiers, .. } => {
                 if self.object_modifier_drag.is_some() || self.object_modifier_pressed_card.is_some() {
                     self.update_object_modifier_drag(*pos, tree, self.object_modifier_bounds);
                     return (true, self.object_modifier_card_drag(*pos, tree, modifiers.shift));
+                }
+                if self.force_pressed_card.is_some() {
+                    return (true, self.force_card_drag(*pos, tree, modifiers.shift));
                 }
                 if let SceneSetupState::Live(vm) = &self.state {
                     let target = GraphParamTarget::GeneratorOf(vm.layer_id.clone());
@@ -2652,6 +3064,9 @@ impl ScenePanel {
                 }
                 if self.object_modifier_pressed_card.is_some() {
                     return (true, self.end_object_modifier_card_gesture(tree));
+                }
+                if self.force_pressed_card.is_some() {
+                    return (true, self.end_force_card_gesture(tree));
                 }
                 let was_dragging = self.properties_card.row_host.is_dragging();
                 let actions = self.properties_card.row_host.handle_drag_end();
@@ -2715,16 +3130,22 @@ fn outliner_row_key(sel: SceneSelection) -> u64 {
         SceneSelection::OutlinerFold(name) => match name {
             "Scene" => KEY_OUTLINER_SCENE,
             "Lights" => KEY_OUTLINER_LIGHTS,
+            "Forces" => KEY_OUTLINER_FORCES,
             "Objects" => KEY_OUTLINER_OBJECTS,
             _ => OUTLINER_KEY_BASE + 100, // fallback
         },
         SceneSelection::Light(id) => OUTLINER_KEY_BASE + 2 + (id as u64) * 2,
         SceneSelection::Object(id) => OUTLINER_KEY_BASE + 3 + (id as u64) * 2,
+        SceneSelection::Force(id) => crate::param_surface::stable_key(&format!("scene.force.{id}")),
     }
 }
 
 fn outliner_eye_key(object_node_id: u32) -> u64 {
     OUTLINER_EYE_KEY_BASE + object_node_id as u64
+}
+
+fn outliner_group_toggle_key(group_id: u32) -> u64 {
+    (1_u64 << 62) | group_id as u64
 }
 
 /// Selected-row styling, transcribed from the `layer_header.rs` precedent
@@ -2826,1176 +3247,5 @@ fn driven_label_style() -> UIStyle {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::input::Modifiers;
-
-    /// C-P1a: wrap a plain `RowValue` in an idle (no active modulation)
-    /// `ModulatedRow` — the shape `EnvironmentRowVm`/`AtmosphereRowVm` now
-    /// carry for every converted row.
-    fn mrow(value: RowValue) -> ModulatedRow {
-        ModulatedRow { value, modulation: Box::new(RowModulation::default()) }
-    }
-
-    fn triplet(node_doc_id: u32, x: f32, y: f32, z: f32, min: f32, max: f32) -> (RowValue, RowValue, RowValue) {
-        (
-            RowValue { addr: RowAddr::root(node_doc_id, "x"), value: x, min, max, driven: false, exposed: false },
-            RowValue { addr: RowAddr::root(node_doc_id, "y"), value: y, min, max, driven: false, exposed: false },
-            RowValue { addr: RowAddr::root(node_doc_id, "z"), value: z, min, max, driven: false, exposed: false },
-        )
-    }
-
-    /// C-P1b: `triplet` wrapped element-wise in idle `mrow`s — the shape
-    /// `TransformRowVm`/`ObjectMaterialVm` now carry for every converted
-    /// Object row.
-    fn mtriplet(
-        node_doc_id: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-        min: f32,
-        max: f32,
-    ) -> (ModulatedRow, ModulatedRow, ModulatedRow) {
-        let (rx, ry, rz) = triplet(node_doc_id, x, y, z, min, max);
-        (mrow(rx), mrow(ry), mrow(rz))
-    }
-
-    /// C-P1c: wrap a plain `EnumRowValue`-shaped `(RowValue, labels)` pair in
-    /// an idle `ModulatedEnumRow` — the shape `LightKnownRow`'s Mode/Cast
-    /// Shadows/Shadow Softness now carry.
-    fn menum(row: RowValue, labels: Vec<&'static str>) -> ModulatedEnumRow {
-        ModulatedEnumRow { row: mrow(row), labels }
-    }
-
-    #[test]
-    fn closed_panel_builds_nothing() {
-        let mut panel = ScenePanel::new();
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(tree.count(), 0, "a closed panel must not build any node");
-    }
-
-    #[test]
-    fn no_selection_state_renders_a_sentence_without_panicking() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::NoSelection("Select a layer.".to_string()));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(tree.count() > 0);
-    }
-
-    #[test]
-    fn live_state_with_unwired_env_and_fog_shows_add_buttons() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(SceneSetupVm {
-            layer_id: LayerId::new("layer-1"),
-            scene_name: "Scene".to_string(),
-            multiple_scenes: false,
-            object_count: 0,
-            light_count: 0,
-            shadow_caster_count: 0,
-            scene_root_node_id: 0,
-            environment: EnvironmentRowVm::None,
-            atmosphere: AtmosphereRowVm::None,
-            objects: Vec::new(),
-            lights: Vec::new(),
-            camera: CameraRowVm::None,
-            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
-            scene_bounds: None,
-        })));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.add_environment_id.is_some());
-        assert!(panel.add_fog_id.is_some());
-        assert!(panel.add_object_id.is_some());
-        assert!(panel.add_light_id.is_some());
-        assert!(panel.add_plane_id.is_some());
-    }
-
-    /// A synthetic multi-object def (P2 gate): one Known "Azalea" object with
-    /// a full transform + pbr material + a Bend modifier, one Custom object,
-    /// and header counts — proves the Objects section renders both shapes,
-    /// the rename click resolves to the right group node id, and the
-    /// "+ Object"/"+ Light" buttons carry the Vm's own counts as
-    /// `next_index`.
-    fn azalea_shaped_vm() -> SceneSetupVm {
-        SceneSetupVm {
-            layer_id: LayerId::new("layer-1"),
-            scene_name: "Scene".to_string(),
-            multiple_scenes: false,
-            object_count: 2,
-            light_count: 1,
-            shadow_caster_count: 1,
-            scene_root_node_id: 99,
-            environment: EnvironmentRowVm::None,
-            atmosphere: AtmosphereRowVm::None,
-            objects: vec![
-                ObjectRowVm::Known(Box::new(ObjectKnownRow {
-                    index: 0,
-                    object_node_id: 40,
-                    group_node_id: Some(42),
-                    name: "Azalea".to_string(),
-                    visible: RowValue { addr: RowAddr { scope_path: vec![42], node_doc_id: 40, param_id: "visible".to_string() }, value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
-                    transform: Some(Box::new(TransformRowVm {
-                        pos: mtriplet(50, 1.0, 2.0, 3.0, -100.0, 100.0),
-                        rot: mtriplet(50, 0.0, 0.0, 0.0, -std::f32::consts::TAU, std::f32::consts::TAU),
-                        scale: mtriplet(50, 1.0, 1.0, 1.0, 0.01, 10.0),
-                    })),
-                    material: ObjectMaterialVm::Pbr {
-                        color: mtriplet(51, 0.8, 0.8, 0.82, 0.0, 1.0),
-                        metallic: mrow(RowValue { addr: RowAddr::root(51, "metallic"), value: 0.0, min: 0.0, max: 1.0, driven: false, exposed: false }),
-                        roughness: mrow(RowValue { addr: RowAddr::root(51, "roughness"), value: 0.5, min: 0.01, max: 1.0, driven: false, exposed: false }),
-                    },
-                    material_inspector: None,
-                    modifiers: vec![ModifierKnownRow {
-                        index: 0,
-                        node_doc_id: 70,
-                        display_name: "Bend".to_string(),
-                        parameter_ids: vec!["70_amount".to_string()],
-                    }],
-                    modifiers_addable: true,
-                    sections: Vec::new(),
-                    skin: None,
-                })),
-                ObjectRowVm::Custom { index: 1 },
-            ],
-            lights: vec![
-                LightRowVm::Known(Box::new(LightKnownRow {
-                    index: 0,
-                    node_doc_id: 60,
-                    name: "Sun".to_string(),
-                    mode: menum(
-                        RowValue { addr: RowAddr::root(60, "mode"), value: 0.0, min: 0.0, max: 1.0, driven: false, exposed: false },
-                        vec!["Sun", "Point"],
-                    ),
-                    color: mtriplet(60, 1.0, 1.0, 1.0, 0.0, 1.0),
-                    intensity: mrow(RowValue { addr: RowAddr::root(60, "intensity"), value: 2.5, min: 0.0, max: 10.0, driven: false, exposed: false }),
-                    pos: mtriplet(60, 5.0, 2.0, 3.0, -100.0, 100.0),
-                    aim: mtriplet(60, 0.0, 0.0, 0.0, -100.0, 100.0),
-                    cast_shadows: menum(
-                        RowValue { addr: RowAddr::root(60, "cast_shadows"), value: 1.0, min: 0.0, max: 1.0, driven: false, exposed: false },
-                        vec!["Off", "On"],
-                    ),
-                    shadow_softness: menum(
-                        RowValue { addr: RowAddr::root(60, "shadow_softness"), value: 3.0, min: 0.0, max: 3.0, driven: false, exposed: false },
-                        vec!["Hard", "Soft", "VerySoft", "Contact"],
-                    ),
-                    light_size: mrow(RowValue { addr: RowAddr::root(60, "light_size"), value: 4.0, min: 0.0, max: 20.0, driven: false, exposed: false }),
-                    sections: Vec::new(),
-                })),
-                LightRowVm::Custom { index: 1 },
-            ],
-            camera: CameraRowVm::Orbit(Box::new(OrbitCameraRowVm {
-                orbit: mrow(RowValue { addr: RowAddr::root(70, "orbit"), value: 0.7, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
-                tilt: mrow(RowValue { addr: RowAddr::root(70, "tilt"), value: 0.3, min: -std::f32::consts::TAU, max: std::f32::consts::TAU, driven: false, exposed: false }),
-                distance: mrow(RowValue { addr: RowAddr::root(70, "distance"), value: 4.0, min: 0.01, max: 100.0, driven: false, exposed: false }),
-                fov_y: mrow(RowValue { addr: RowAddr::root(70, "fov_y"), value: 0.9, min: 0.05, max: 2.5, driven: false, exposed: false }),
-                lens: Some(LensRowVm {
-                    focus_distance: mrow(RowValue { addr: RowAddr::root(71, "focus_distance"), value: 0.0, min: 0.0, max: 1000.0, driven: false, exposed: false }),
-                    f_stop: mrow(RowValue { addr: RowAddr::root(71, "f_stop"), value: 1000.0, min: 0.5, max: 1000.0, driven: false, exposed: false }),
-                    shutter_angle: mrow(RowValue { addr: RowAddr::root(71, "shutter_angle"), value: 0.0, min: 0.0, max: 360.0, driven: false, exposed: false }),
-                    exposure_ev: mrow(RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false, exposed: false }),
-                }),
-            })),
-            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
-            scene_bounds: None,
-        }
-    }
-
-    #[test]
-    fn objects_outliner_lists_known_and_custom_rows_properties_shows_the_selected_one() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Outliner rows: Scene fold + Camera + World + Lights fold + 1 Known light + Objects fold + 1 Known object are
-        // selectable (`outliner_row_ids`); the Custom object/light are
-        // listed too but as plain labels (D3: never hidden, but no
-        // addressable node id to select by, D12).
-        assert_eq!(panel.outliner_row_ids.len(), 7, "Scene/Camera/World fold rows + Lights fold + 1 known light + Objects fold + 1 known object");
-        // Default selection (D7): the first Known object — Azalea — so its
-        // properties header + body render without any click.
-        assert_eq!(panel.object_name_ids.len(), 1, "the properties header shows the selected object's name");
-        assert_eq!(panel.object_name_ids[0].0, 42, "resolves to the object's group node id (the rename address)");
-        assert_eq!(panel.object_name_ids[0].2, "Azalea");
-        // P2 slice 2a: the Properties body's actual PARAM ROWS now come from
-        // `self.full_params` (the real generator `ParamSurface`, wired by
-        // `configure_params` — see that method's doc comment), not from this
-        // hand-built `SceneSetupVm` fixture's own transform/material/
-        // modifier fields. This test's fixture never calls
-        // `configure_params`, so it can't exercise row rendering — see
-        // `build_filtered_properties_...` tests below for that mechanism.
-        assert!(panel.add_object_id.is_some());
-        assert!(panel.add_light_id.is_some());
-        assert!(panel.add_plane_id.is_some());
-    }
-
-    /// W2-A gap fill: the outliner eye toggle (D3's on/off convention) had
-    /// zero click->dispatch coverage — every "eye" hit in this file before
-    /// this test was a comment. A click on a Known object row's eye emits
-    /// `SceneSetupParamChanged` carrying the row's own write address and the
-    /// flipped [0,1] value; a second click on the now-off eye flips back.
-    #[test]
-    fn object_eye_toggle_click_emits_scene_setup_param_changed_and_flips_back() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.outliner_eye_ids.len(), 1, "one Known object row renders a live eye");
-        let (eye_id, row_value) = panel.outliner_eye_ids[0].clone();
-        assert_eq!(row_value.value, 1.0, "azalea fixture starts visible");
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: eye_id,
-            pos: Vec2::ZERO,
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed, "the eye toggle must be clickable");
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupParamChanged(layer, scope, node, param, value))]
-                if *layer == LayerId::new("layer-1")
-                    && *scope == vec![42]
-                    && *node == 40
-                    && param == "visible"
-                    && *value == 0.0
-        ), "visible eye click must flip to 0.0 at the object's own write address, got {actions:?}");
-
-        // Re-configure with the flipped value (mirrors the real per-frame
-        // sync landing the write) and click again — must flip back to 1.0.
-        let mut vm = azalea_shaped_vm();
-        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
-        row.visible.value = 0.0;
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (eye_id_2, _) = panel.outliner_eye_ids[0].clone();
-
-        let (consumed_2, actions_2) = panel.handle_event(&UIEvent::Click {
-            node_id: eye_id_2,
-            pos: Vec2::ZERO,
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed_2);
-        assert!(matches!(
-            actions_2.as_slice(),
-            [PanelAction::Project(ProjectAction::SceneSetupParamChanged(_, _, _, param, value))]
-                if param == "visible" && *value == 1.0
-        ), "hidden eye click must flip back to 1.0, got {actions_2:?}");
-    }
-
-    /// A one-object Vm with TWO modifiers — for exercising up/down boundary
-    /// behavior (P5), which the single-modifier `azalea_shaped_vm` can't.
-    fn two_modifier_object_vm(modifiers_addable: bool) -> SceneSetupVm {
-        let mut vm = azalea_shaped_vm();
-        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
-        row.modifiers = vec![
-            ModifierKnownRow {
-                index: 0,
-                node_doc_id: 70,
-                display_name: "Bend".to_string(),
-                parameter_ids: vec!["70_amount".to_string()],
-            },
-            ModifierKnownRow {
-                index: 1,
-                node_doc_id: 71,
-                display_name: "Twist".to_string(),
-                parameter_ids: vec!["71_amount".to_string()],
-            },
-        ];
-        row.modifiers_addable = modifiers_addable;
-        vm
-    }
-
-    /// UX-P2 (D6): the "+ Add Modifier" button doesn't resolve a choice
-    /// itself anymore — it emits `SceneSetupAddModifierClicked`, which the
-    /// app resolves into the shared dropdown (`MESH_MODIFIER_CHOICES`
-    /// items, each carrying `SceneSetupAddModifier` — see
-    /// `try_open_dropdown_inner` in `manifold-app/src/ui_root.rs`, not
-    /// reachable from this crate's tests). This test only proves the
-    /// panel's half of D6: one button renders (not 7 chips) and its click
-    /// carries the right `(layer_id, group_node_id, button_node_id)`.
-    #[test]
-    fn add_modifier_button_click_emits_add_modifier_clicked_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (button_id, group_node_id) = panel.add_modifier_button_id.expect("one Add Modifier button renders");
-        assert_eq!(group_node_id, 42);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: button_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(l, 42, n))
-                if *l == LayerId::new("layer-1") && *n == button_id
-        ));
-    }
-
-    /// BUG-224 regression: the × close button used to call `self.close()`
-    /// directly, which only flips the panel-local `open` flag — it never
-    /// told the app to reset `layout.scene_setup_width` back to 0 or to
-    /// rebuild, so on the real app the dock's screen footprint and content
-    /// never went away (Peter: "the close button doesn't work"). The fix
-    /// mirrors `AudioSetupPanel::handle_event`'s close arm exactly: emit
-    /// `PanelAction::OpenSceneSetup`, the SAME toggle action the header
-    /// button and Escape use — that's the one path that resets width, closes
-    /// the panel, and triggers the structural rebuild
-    /// (`ui_bridge::dispatch`'s `OpenSceneSetup` arm).
-    #[test]
-    fn close_button_click_routes_through_the_shared_toggle_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_ne!(panel.close_id, NodeId::PLACEHOLDER);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: panel.close_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(
-            matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenSceneSetup)]),
-            "close (×) must emit the shared toggle action, not flip `open` \
-             locally: got {actions:?}"
-        );
-        // The direct `self.close()` bypass is gone: `open` is untouched by
-        // this click alone (the app-level `toggle_scene_dock()` — driven by
-        // dispatching the action above — is what actually closes it).
-        assert!(panel.is_open(), "handle_event itself must not close the panel — that's the app's job now");
-    }
-
-    #[test]
-    fn copied_modifier_ids_from_other_objects_do_not_leak_into_properties() {
-        let (mut vm, mut surface) = world_transform_vm();
-        let shared_section = "Cube — Bend_mesh".to_string();
-        let ObjectRowVm::Known(first) = &mut vm.objects[0] else { unreachable!() };
-        first.sections = vec![shared_section.clone()];
-        first.modifiers[0].parameter_ids = vec!["70_amount".to_string()];
-        surface.rows[0].id = "70_amount".into();
-        surface.rows[0].spec.section = Some(shared_section.clone());
-        let mut copied = first.as_ref().clone();
-        copied.index = 1;
-        copied.object_node_id = 41;
-        copied.group_node_id = Some(43);
-        copied.name = "Object 2".to_string();
-        copied.modifiers[0].node_doc_id = 71;
-        copied.modifiers[0].parameter_ids = vec!["71_amount".to_string()];
-        vm.objects.push(ObjectRowVm::Known(Box::new(copied)));
-        surface.rows.push({
-            let mut row = surface.rows[0].clone();
-            row.id = "71_amount".into();
-            row
-        });
-
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        panel.configure_params(Some(surface));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        assert!(panel.properties_card.rows.is_empty());
-        assert_eq!(panel.object_modifier_cards.len(), 2);
-        assert_eq!(panel.object_modifier_cards[0].rows[0].id.as_ref(), "70_amount");
-        assert_eq!(panel.object_modifier_cards[1].rows[0].id.as_ref(), "71_amount");
-    }
-
-    #[test]
-    fn unparseable_modifier_chain_disables_add() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(two_modifier_object_vm(false))));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.add_modifier_button_id.is_none(), "Add modifier is disabled for an unparseable chain");
-    }
-
-    #[test]
-    fn add_object_and_add_light_buttons_carry_the_vms_own_counts_as_next_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let add_object_id = panel.add_object_id.unwrap();
-        let add_light_id = panel.add_light_id.unwrap();
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: add_object_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupAddObject(l, 99, 2)) if *l == LayerId::new("layer-1")
-        ));
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: add_light_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupAddLight(l, 99, 1)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// BUG-hlw8: the "+ Plane" button emits `SceneSetupAddLayerPlane` carrying
-    /// the live `object_count` as its `next_index` — same convention as the
-    /// "+ Object" button, because a layer plane occupies the next object slot.
-    #[test]
-    fn add_plane_button_emits_add_layer_plane_with_object_count_as_next_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let add_plane_id = panel.add_plane_id.unwrap();
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: add_plane_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(l, 99, 2)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// BUG-193/P5: the properties header's "Remove" button (Object
-    /// selection) dispatches `SceneSetupRemoveObject` carrying the selected
-    /// object's own `index`. A `Custom` row has no addressable node id
-    /// (D12), so — unlike v1's per-row "✕" — it can't be selected/removed
-    /// through the panel UI; this is a real reduction from v1's coverage,
-    /// flagged as an escalation in the P5 landing report rather than
-    /// improvised around.
-    #[test]
-    fn object_remove_click_emits_remove_object_action_with_its_own_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Default selection = the Known object (Azalea, index 0).
-        assert_eq!(panel.object_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
-        let (remove_id, index) = panel.object_remove_ids[0];
-        assert_eq!(index, 0);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: remove_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupRemoveObject(l, 99, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// D11: the properties header's "Duplicate" button (Object selection)
-    /// dispatches `SceneSetupDuplicateObject` carrying the selected
-    /// object's own `index`.
-    #[test]
-    fn object_duplicate_click_emits_duplicate_object_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.object_duplicate_ids.len(), 1);
-        let (dup_id, index) = panel.object_duplicate_ids[0];
-        assert_eq!(index, 0);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: dup_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// UX-P3b-i's own deliverable: the per-row key-range collision audit the
-    /// design doc's "as attempted" note calls out, extended from Objects
-    /// (P3a's own `OBJ_KEY_STRIDE` 32→44 bump) to Light/Camera/Modifier.
-    /// Computational proof (oracle discipline: a countable arithmetic
-    /// question gets a script, not an eyeball) — every named offset within
-    /// each family's own key formula must be pairwise distinct AND (for the
-    /// per-index families) strictly less than that family's stride, so no
-    /// two DIFFERENT logical rows can ever key the same node under
-    /// `UITree::mint`'s "keys only need to be unique among siblings of the
-    /// same parent" contract (`tree.rs`'s own `debug_assert` catches a live
-    /// violation; this test catches it at the constant-arithmetic level,
-    /// before any panel is ever built).
-    #[test]
-    fn no_key_offset_collisions_across_row_families() {
-        fn assert_no_dupes_and_fits_stride(family: &str, offsets: &[u64], stride: Option<u64>) {
-            let mut sorted = offsets.to_vec();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(
-                sorted.len(),
-                offsets.len(),
-                "{family}: duplicate offset among {offsets:?} — two logical rows would key the same node"
-            );
-            if let Some(stride) = stride {
-                assert!(
-                    offsets.iter().all(|&o| o < stride),
-                    "{family}: an offset in {offsets:?} reaches into the next index's range (stride {stride})"
-                );
-            }
-        }
-
-        // C-P1b: the value-cell offsets (`OBJ_OFF_POS_X`/`ROT_X`/`SCALE_X`/
-        // `COLOR_R`/`METALLIC`/`ROUGHNESS`) are gone — those rows' widgets
-        // now key off `build_param_row`'s own ParamId-derived `row_key_base`,
-        // a disjoint key space from `obj_key`'s. Only NAME/REMOVE (header
-        // chrome) still key through `obj_key` (the exposure-lane mod
-        // buttons were removed with the ∿ column).
-        assert_no_dupes_and_fits_stride(
-            "OBJECT",
-            &[
-                OBJ_OFF_NAME,
-                OBJ_OFF_REMOVE, OBJ_OFF_REMOVE + 1,
-            ],
-            Some(OBJ_KEY_STRIDE),
-        );
-
-        // C-P1c: the value-cell offsets (`LIGHT_OFF_MODE_MINUS`/`COLOR_R`/
-        // `INTENSITY_MINUS`/`POS_X`/`AIM_X`/`CAST_SHADOWS_MINUS`/
-        // `SHADOW_SOFTNESS_MINUS`/`LIGHT_SIZE_MINUS`) are gone — those rows'
-        // widgets now key off `build_param_row`'s own `row_key_base`
-        // (derived from the stable ParamId), same disjoint key space C-P1b established for
-        // Object. Only NAME/REMOVE (header chrome) still key through
-        // `light_key`.
-        assert_no_dupes_and_fits_stride(
-            "LIGHT",
-            &[
-                LIGHT_OFF_REMOVE,
-                LIGHT_OFF_NAME,
-            ],
-            Some(LIGHT_KEY_STRIDE),
-        );
-
-        // C-P1c: Camera's value-cell offsets are gone, and the exposure-lane
-        // mod buttons went with the ∿ column — Camera keys nothing through
-        // an explicit-key scheme anymore (`build_param_row`'s ParamId-derived key
-        // covers all its rows), so there is nothing left to audit here.
-
-
-    }
-
-    /// BUG-193/P5: the Lights-section twin of the object-removal test above
-    /// — the properties header's "Remove" button for a Light selection.
-    #[test]
-    fn light_remove_click_emits_remove_light_action_with_its_own_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        // Select the Known light (node 60) — not the default (Azalea).
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.light_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
-        let (remove_id, index) = panel.light_remove_ids[0];
-        assert_eq!(index, 0);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: remove_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupRemoveLight(l, 99, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// P4: "Import Model…" is a real button (affordance legibility) that
-    /// dispatches `SceneSetupImportModelClicked(layer_id, render_scene_node_id)`
-    /// — the panel itself never touches the filesystem or the merge
-    /// assembler, just carries the address the app-side dispatch needs.
-    #[test]
-    fn import_model_button_emits_scene_setup_import_model_clicked() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let import_model_id = panel.import_model_id.unwrap();
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: import_model_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    #[test]
-    fn clicking_the_object_name_emits_rename_clicked_with_group_node_id() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let name_id = panel.object_name_ids[0].1;
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: name_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 42, n))
-                if *l == LayerId::new("layer-1") && n == "Azalea"
-        ));
-    }
-
-    #[test]
-    fn object_paste_destination_changes_before_the_queued_click_is_drained() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        let mut vm = azalea_shaped_vm();
-        let ObjectRowVm::Known(mut second) = vm.objects[0].clone() else { panic!("known fixture"); };
-        second.object_node_id = 200;
-        second.group_node_id = Some(201);
-        vm.objects.push(ObjectRowVm::Known(second));
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (node, _) = panel.outliner_row_ids.iter()
-            .find(|(_, selection)| *selection == SceneSelection::Object(200)).unwrap();
-        assert!(panel.select_outliner_node(*node));
-        assert_eq!(panel.object_modifier_destination(), Some((LayerId::new("layer-1"), 201)));
-        assert!(panel.selected_object_modifier().is_none());
-    }
-
-    #[test]
-    fn keyboard_and_context_actions_follow_selected_object_or_light() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let object = panel.selected_scene_item().unwrap();
-        assert!(!object.is_light);
-        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 42, _)))));
-        let light_node = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Light(60)).unwrap().0;
-        let (consumed, actions) = panel.handle_event(&UIEvent::RightClick {
-            node_id: Some(light_node), pos: Vec2::new(0.0, 0.0), modifiers: Modifiers::NONE,
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(actions.as_slice(), [PanelAction::Root(RootAction::SceneItemRightClicked)]));
-        assert!(panel.selected_scene_item().unwrap().is_light);
-        assert!(matches!(panel.remove_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupRemoveLight(_, 99, 0)))));
-        assert!(panel.frame_selection_action().is_none());
-        panel.navigate_selection(-1).unwrap();
-        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::World));
-    }
-
-    /// D7: clicking an outliner row changes the UI-local selection, and the
-    /// next build shows THAT item's properties instead — "select the object
-    /// to use the tools" (Peter). Proves the Object→World switch (Properties
-    /// content changes: object body gone, Environment/Fog appear) and that
-    /// a click on the World row is what does it.
-    #[test]
-    fn selecting_a_different_outliner_row_switches_properties_content() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Default selection = Azalea: no environment/fog "add" affordances
-        // (azalea fixture's environment is None — but World isn't selected,
-        // so neither button builds).
-        assert!(panel.add_environment_id.is_none(), "World isn't selected — no Environment row built yet");
-
-        let (world_row_id, _) = *panel
-            .outliner_row_ids
-            .iter()
-            .find(|(_, sel)| *sel == SceneSelection::World)
-            .expect("World is always a selectable outliner row");
-
-        let (consumed, _) = panel.handle_event(&UIEvent::Click {
-            node_id: world_row_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(panel.selection.get(&LayerId::new("layer-1")), Some(&SceneSelection::World));
-
-        let mut tree2 = UITree::new();
-        panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.add_environment_id.is_some(), "World selected — Environment's Add affordance renders");
-    }
-
-    /// D7's fallback: removing the selected object from a rebuilt Vm falls
-    /// selection back to first-object-else-World, never a dangling id.
-    #[test]
-    fn selection_falls_back_when_the_selected_object_is_removed() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        let vm = azalea_shaped_vm();
-        panel.configure(SceneSetupState::Live(Box::new(vm.clone())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(
-            panel.selection.get(&LayerId::new("layer-1")),
-            Some(&SceneSelection::Object(40)),
-            "default selection resolves to Azalea's own scene_object doc id"
-        );
-
-        // Rebuild with the object gone (removed elsewhere) — only the
-        // Custom row and the light remain.
-        let mut vm2 = vm;
-        vm2.objects = vec![ObjectRowVm::Custom { index: 0 }];
-        vm2.object_count = 0;
-        panel.configure(SceneSetupState::Live(Box::new(vm2)));
-        let mut tree2 = UITree::new();
-        panel.build_docked(&mut tree2, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(
-            panel.selection.get(&LayerId::new("layer-1")),
-            Some(&SceneSelection::World),
-            "no Known object left — falls back to World, never a dangling Object(40)"
-        );
-    }
-
-    // ── P3: Lights + Camera sections ──
-
-    /// A World-selected scene with one real "Transform" section plus the
-    /// matching generator `ParamSurface` (one ±100 translate row) — the
-    /// fixture the scene type-in / fine-scrub tests need. `azalea_shaped_vm`'s
-    /// `world_sections` is empty, so it can't exercise the unified properties
-    /// card's rows.
-    pub(super) fn world_transform_vm() -> (SceneSetupVm, ParamSurface) {
-        let mut vm = azalea_shaped_vm();
-        vm.world_sections = vec!["Transform".to_string()];
-        let surface = ParamSurface {
-            kind: crate::panels::param_card::ParamCardKind::Generator,
-            title: "Scene".to_string(),
-            collapsed: false,
-            enabled: true,
-            effect_index: 0,
-            effect_id: manifold_foundation::EffectId::new("scene-gen"),
-            supports_envelopes: false,
-            has_graph_mod: false,
-            layer_id: Some(LayerId::new("layer-1")),
-            rows: vec![ParamRow {
-                id: manifold_foundation::ParamId::from("translate_x"),
-                spec: RowSpec {
-                    name: "Translate X".to_string(),
-                    min: -100.0,
-                    max: 100.0,
-                    default: 0.0,
-                    whole_numbers: false,
-                    is_angle: false,
-                    is_toggle: false,
-                    is_trigger: false,
-                    is_trigger_gate: false,
-                    value_labels: None,
-                    section: Some("Transform".to_string()),
-                    disabled: None,
-                    material_role: None,
-                    inactive_reason: None,
-                },
-                value: crate::param_surface::RowValue {
-                    base: 0.0,
-                    effective: 0.0,
-                    exposed: true,
-                    driven: false,
-                },
-                audio: AudioRowState::default(),
-                modulation: RowMod::default(),
-                mapping: RowMapping {
-                    osc_address: None,
-                    ableton_display: None,
-                    ableton_range: None,
-                    mappable: false,
-                },
-                    scene_addr: None,
-                    rgb_members: None,
-                    material_attached: false,
-            }],
-            string_params: Vec::new(),
-            modifier: None,
-            audio_sends: Vec::new(),
-            relight: crate::panels::param_card::RelightCardConfig::default(),
-        };
-        (vm, surface)
-    }
-
-    #[test]
-    fn physics_reset_button_dispatches_to_the_bound_scene_layer() {
-        let (vm, mut surface) = world_transform_vm();
-        surface.rows[0].id = manifold_foundation::ParamId::from("40_reset");
-        surface.rows[0].spec.name = "Reset".into();
-        surface.rows[0].spec.is_trigger = true;
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        panel.configure_params(Some(surface));
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::World);
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let button = panel.properties_card.row_host.toggle_ids[0]
-            .as_ref().expect("Reset must have a trigger button").button_id;
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: button,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(actions.as_slice(),
-            [PanelAction::Params(ParamsAction::ParamFire(GraphParamTarget::GeneratorOf(layer), id))]
-                if layer.as_str() == "layer-1" && id.as_ref() == "40_reset"
-        ));
-    }
-
-    /// Build the world-transform fixture and select World, so the unified
-    /// properties card renders its one translate row. Returns the panel and a
-    /// fresh tree (post-selection rebuild).
-    fn scene_with_world_transform_selected() -> (ScenePanel, UITree) {
-        let (vm, surface) = world_transform_vm();
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        panel.configure_params(Some(surface));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        let (world_row_id, _) = *panel
-            .outliner_row_ids
-            .iter()
-            .find(|(_, sel)| *sel == SceneSelection::World)
-            .expect("World is always a selectable outliner row");
-        let (consumed, _) = panel.handle_event(
-            &UIEvent::Click {
-                node_id: world_row_id,
-                pos: Vec2::ZERO,
-                modifiers: Modifiers::default(),
-        },
-            &mut tree,
-        );
-        assert!(consumed, "World outliner row click must consume");
-
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.properties_card.rows.len(), 1, "the translate row renders under World");
-        assert!(panel.properties_card.row_host.slider_ids[0].is_some(), "the row has a slider");
-        (panel, tree)
-    }
-
-    /// D8: double-clicking the scene properties row's value cell routes through
-    /// the SHARED `RowHost::value_cell_typein` — the same `BeginParamTextInput`
-    /// action the inspector cards emit — carrying the panel's own bound layer
-    /// (`GeneratorOf`) and the row's real param id + clamp range.
-    #[test]
-    fn scene_properties_double_click_opens_the_shared_typein() {
-        let (mut panel, mut tree) = scene_with_world_transform_selected();
-        let value_cell = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().value_text;
-
-        let (consumed, actions) = panel.handle_event(
-            &UIEvent::DoubleClick {
-                node_id: value_cell,
-                pos: Vec2::ZERO,
-                modifiers: Modifiers::default(),
-            },
-            &mut tree,
-        );
-        assert!(consumed, "double-click on a scene value cell must consume");
-        assert!(matches!(
-            actions.as_slice(),
-            [PanelAction::Root(RootAction::BeginParamTextInput { target, param_id, min, max, value, whole_numbers, .. })]
-                if *target == GraphParamTarget::GeneratorOf(LayerId::new("layer-1"))
-                    && param_id.as_ref() == "translate_x"
-                    && *min == -100.0 && *max == 100.0 && *value == 0.0 && !*whole_numbers
-        ), "scene type-in must carry GeneratorOf + the real param id + range, got {actions:?}");
-    }
-
-    /// D8: a double-click on a non-value-cell scene node (the track) emits
-    /// nothing — type-in is the value cell's gesture only.
-    #[test]
-    fn scene_properties_double_click_on_track_is_a_no_op() {
-        let (mut panel, mut tree) = scene_with_world_transform_selected();
-        let track = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().track;
-
-        let (consumed, actions) = panel.handle_event(
-            &UIEvent::DoubleClick {
-                node_id: track,
-                pos: Vec2::ZERO,
-                modifiers: Modifiers::default(),
-            },
-            &mut tree,
-        );
-        assert!(!consumed, "track double-click is not a type-in");
-        assert!(actions.is_empty());
-    }
-
-    /// D8 fine mode on the scene properties track: Shift during a drag scales
-    /// the pointer sensitivity by 0.1, through the same shared helper the card
-    /// uses the shared `RowHost` drag lifecycle and fine-scrub math.
-    #[test]
-    fn scene_properties_drag_shift_fine_scales_sensitivity() {
-        let (mut panel, mut tree) = scene_with_world_transform_selected();
-        let track = panel.properties_card.row_host.slider_ids[0].as_ref().unwrap().track;
-        let track_rect = tree.get_bounds(track);
-        let mid_x = track_rect.x + track_rect.width * 0.5;
-
-        let (consumed, down) = panel.handle_event(
-            &UIEvent::PointerDown {
-                node_id: track,
-                pos: Vec2::new(mid_x, track_rect.y),
-                modifiers: Modifiers::default(),
-            },
-            &mut tree,
-        );
-        assert!(consumed, "track pointer-down must start the scene drag");
-        assert!(matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(..))]));
-
-        let coarse_val = {
-            let (_, actions) = panel.handle_event(
-                &UIEvent::Drag {
-                    node_id: Some(track),
-                    pos: Vec2::new(mid_x + 20.0, track_rect.y),
-                    delta: Vec2::new(20.0, 0.0),
-                    modifiers: Modifiers::NONE,
-                },
-                &mut tree,
-            );
-            match actions.as_slice() {
-                [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
-                other => panic!("expected a coarse scene move, got {other:?}"),
-            }
-        };
-        let fine_val = {
-            let (_, actions) = panel.handle_event(
-                &UIEvent::Drag {
-                    node_id: Some(track),
-                    pos: Vec2::new(mid_x + 20.0, track_rect.y),
-                    delta: Vec2::new(20.0, 0.0),
-                    modifiers: Modifiers { shift: true, ..Modifiers::NONE },
-                },
-                &mut tree,
-            );
-            match actions.as_slice() {
-                [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v)))] => *v,
-                other => panic!("expected a fine scene move, got {other:?}"),
-            }
-        };
-
-        let coarse_delta = coarse_val.abs();
-        let fine_delta = fine_val.abs();
-        assert!(coarse_delta > 1.0, "coarse must move: {coarse_val}");
-        assert!(
-            (fine_delta - coarse_delta * 0.1).abs() < 1.5,
-            "fine delta ({fine_delta}) must be ~0.1x coarse delta ({coarse_delta})"
-        );
-    }
-
-    /// D3/D12's tolerance doctrine: an all-Custom-lights scene (no
-    /// addressable id at all) must still render every row as an outliner
-    /// label — never hidden, never a panic — even though none of them are
-    /// selectable through the panel UI (D12's own gap, same as Custom
-    /// objects, flagged in the P5 landing report).
-    #[test]
-    fn more_than_four_lights_all_render_without_panicking_no_panel_side_cap() {
-        let mut vm = azalea_shaped_vm();
-        vm.lights = (0..5)
-            .map(|i| LightRowVm::Custom { index: i })
-            .collect();
-        vm.light_count = 5;
-        vm.shadow_caster_count = 5;
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(tree.count() > 0, "5 custom light rows render without panicking");
-        assert!(
-            panel.outliner_row_ids.iter().all(|(_, sel)| !matches!(sel, SceneSelection::Light(_))),
-            "no Custom light has an addressable id to select by"
-        );
-    }
-
-    #[test]
-    fn camera_none_and_custom_shapes_render_without_panicking() {
-        for camera in [CameraRowVm::None, CameraRowVm::Custom] {
-            let mut vm = azalea_shaped_vm();
-            vm.camera = camera;
-            let mut panel = ScenePanel::new();
-            panel.open();
-            panel.configure(SceneSetupState::Live(Box::new(vm)));
-            let mut tree = UITree::new();
-            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-            assert!(tree.count() > 0);
-        }
-    }
-
-    // scene-panel-ux lane fold behavior tests
-
-    #[test]
-    fn folded_properties_section_contributes_zero_row_height_and_builds_no_param_rows() {
-        // Test that the fold machinery exists and works correctly
-        let mut panel = ScenePanel::new();
-        panel.open();
-        let vm = azalea_shaped_vm();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-
-        // Initial build
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        // Set fold state - verify the machinery works
-        panel.section_folded.insert("Transform".to_string(), true);
-        assert!(panel.section_folded.get("Transform").copied().unwrap_or(false), "Fold state should be stored");
-
-        // Verify we can iterate over fold keys (needed for the build loop)
-        let has_transform = panel.section_folded.get("Transform").is_some();
-        assert!(has_transform, "Fold state should be queryable");
-
-        // Rebuild to test the fold is respected (no panic)
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        // Verify state persisted through build
-        assert!(panel.section_folded.get("Transform").copied().unwrap_or(false), "Fold state persists through build");
-
-        // Test toggling
-        panel.section_folded.insert("Transform".to_string(), false);
-        assert!(!panel.section_folded.get("Transform").copied().unwrap_or(true), "Fold state can be toggled");
-    }
-
-    #[test]
-    fn folded_outliner_group_hides_its_rows() {
-        // Test that folding an outliner group hides its child rows
-        let mut panel = ScenePanel::new();
-        panel.open();
-        let vm = azalea_shaped_vm();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-
-        // First build: all groups expanded
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let expanded_outliner_ids = panel.outliner_row_ids.len();
-
-        // Fold the Objects group
-        panel.outliner_folded.insert("Objects", true);
-
-        // Rebuild with Objects folded
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let folded_outliner_ids = panel.outliner_row_ids.len();
-
-        // Folded group should have fewer selectable rows (object rows hidden)
-        assert!(folded_outliner_ids < expanded_outliner_ids, "Folded group should hide child rows");
-
-        // Verify the fold state persisted
-        assert!(panel.outliner_folded.get("Objects").copied().unwrap_or(false), "Objects fold state should persist");
-
-        // Unfold and verify rows return
-        panel.outliner_folded.insert("Objects", false);
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let unfolded_outliner_ids = panel.outliner_row_ids.len();
-        assert_eq!(unfolded_outliner_ids, expanded_outliner_ids, "Unfolding should restore original row count");
-    }
-
-    #[test]
-    fn fold_state_survives_rebuild_cycle() {
-        // Test that fold state persists through configure → build → rebuild cycle
-        let mut panel = ScenePanel::new();
-        panel.open();
-
-        // Initial configure
-        let vm = azalea_shaped_vm();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-
-        // Set fold states
-        panel.section_folded.insert("Material".to_string(), true);
-        panel.outliner_folded.insert("Lights", true);
-
-        let mut tree = UITree::new();
-
-        // First build
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after first build");
-        assert!(panel.outliner_folded.get("Lights").copied().unwrap_or(false), "Lights folded after first build");
-
-        // Reconfigure (simulating a layer change or sync)
-        let vm = azalea_shaped_vm();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-
-        // Fold states should survive configure
-        assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after reconfigure");
-        assert!(panel.outliner_folded.get("Lights").copied().unwrap_or(false), "Lights folded after reconfigure");
-
-        // Second build
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material folded after second build");
-        assert!(panel.outliner_folded.get("Lights").copied().unwrap_or(false), "Lights folded after second build");
-
-        // Verify the folded state still affects rendering
-        // (folded sections should have fewer rows than expanded)
-        panel.section_folded.insert("Transform".to_string(), false); // Ensure Transform is expanded for comparison
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        // Material should still be folded, Transform expanded
-        assert!(panel.section_folded.get("Material").copied().unwrap_or(false), "Material remains folded through cycle");
-        assert!(!panel.section_folded.get("Transform").copied().unwrap_or(true), "Transform remains expanded through cycle");
-    }
-
-    #[test]
-    fn frame_action_on_object_emits_frame_selected_action() {
-        // Test that Frame button emits SceneSetupFrameSelected action for orbit camera case
-        let mut panel = ScenePanel::new();
-        panel.open();
-        let vm = azalea_shaped_vm();
-        panel.configure(SceneSetupState::Live(Box::new(vm)));
-        let mut tree = UITree::new();
-
-        // Build to create the Frame button
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-
-        // Verify Frame button was created for the selected object
-        assert!(!panel.object_frame_ids.is_empty(), "Frame button should be created for object selection");
-
-        // The full camera math (target = object position, distance = 2.2 × extent) is
-        // tested in the app-side integration test that verifies the actual param writes.
-        // This UI-level test verifies the button creation and routing infrastructure.
-        assert!(!panel.object_frame_ids.is_empty(), "Frame button exists and is routable");
-    }
-}
+#[path = "scene_setup_panel/tests.rs"]
+mod tests;

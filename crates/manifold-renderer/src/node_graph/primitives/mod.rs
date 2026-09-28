@@ -7,6 +7,7 @@
 //! not a structural divide.
 
 mod abs_texture;
+pub(crate) mod fluid_surface;
 mod glyph_atlas;
 mod render_glyph_grid;
 pub(crate) mod terminal_analysis;
@@ -104,6 +105,7 @@ pub(crate) use envelope_beats::{BeatEnvelopeState, BeatEnvelopeDurations};
 mod envelope_follower_ar;
 mod fbm_per_instance;
 mod field_combine;
+mod vector_fields;
 mod film_grain;
 mod filter;
 mod flash;
@@ -141,7 +143,7 @@ mod generate_range;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
 mod gltf_animation_source;
-mod gltf_mesh_source;
+pub(crate) mod gltf_mesh_source;
 mod gltf_morph_deltas_source;
 mod gltf_morph_weights;
 mod gltf_skeleton_pose;
@@ -400,6 +402,10 @@ pub use envelope_decay::{ENVELOPE_DECAY_TYPE_ID, EnvelopeDecay};
 pub use envelope_follower_ar::{ENVELOPE_FOLLOWER_AR_TYPE_ID, EnvelopeFollowerAr};
 pub use fbm_per_instance::FbmPerInstance;
 pub use field_combine::FieldCombine;
+pub use vector_fields::{
+    AddVectorFields, MultiplyVectorFields, RadialVectorField, ScaleVectorField,
+    UniformVectorField, VortexVectorField,
+};
 pub use film_grain::FilmGrain;
 pub use filter::{BLUR_MODES, BLUR_TYPE_ID, Blur, THRESHOLD_TYPE_ID, Threshold};
 pub use flash::{FLASH_MODES, Flash};
@@ -976,6 +982,7 @@ mod tests {
 }
 
 mod rigid_body;
+mod fluid_role_source;
 pub(crate) mod physics_world;
 pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;

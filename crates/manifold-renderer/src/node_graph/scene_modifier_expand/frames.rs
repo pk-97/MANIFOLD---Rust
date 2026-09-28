@@ -44,6 +44,24 @@ pub(super) fn selected_objects(
                     });
                 }
             }
+            // A static import has one authored object with several material
+            // draws. Its shared transform identifies the parts of that object.
+            let roots = selected.clone();
+            for target in &roots {
+                if target.scope.is_empty() {
+                    continue;
+                }
+                let transform = index.input(target, "parent_transform")?.or(index.input(target, "transform")?);
+                for part in &available {
+                    if part.scope == target.scope
+                        && transform.is_some()
+                        && index.input(part, "parent_transform")?.or(index.input(part, "transform")?).map(|w| (w.from_node, &w.from_port))
+                            == transform.map(|w| (w.from_node, &w.from_port))
+                    {
+                        selected.insert(part.clone());
+                    }
+                }
+            }
             selected.into_iter().collect()
         }
     };
@@ -68,7 +86,7 @@ pub(super) fn needs_mesh_frame(instance: &SceneModifierInstanceDef) -> bool {
         .as_ref()
         .and_then(|metadata| metadata.scene_modifier.as_ref())
         .is_some_and(|recipe| {
-            recipe
+            recipe.shatter.is_some() || recipe
                 .stages
                 .iter()
                 .flat_map(|stage| &stage.inputs)
@@ -151,7 +169,16 @@ pub fn resolve_modifier_mesh_frames(
                     "per-part fitted sources require a separately qualified coordinate frame",
                 ));
             }
-            let source_offset = static_offset(&index, &target)?;
+            let source_offset = if instance.graph.preset_metadata.as_ref()
+                .and_then(|m| m.scene_modifier.as_ref()).is_some_and(|r| r.shatter.is_some()) {
+                // Shatter follows the live rigid pose. Only its immutable mesh
+                // selection needs capture; no world-space calibration is used.
+                [scalar(source_node, "translate_x", 0.0)?,
+                 scalar(source_node, "translate_y", 0.0)?,
+                 scalar(source_node, "translate_z", 0.0)?]
+            } else {
+                static_offset(&index, &target)?
+            };
             result.push(SceneMeshReferenceFrame {
                 target,
                 source,
@@ -453,10 +480,12 @@ mod tests {
         graph.nodes.clear();
         graph.wires.clear();
         graph.preset_metadata.as_mut().unwrap().scene_modifier = Some(SceneModifierRecipe {
+            shatter: None,
             schema_version: 1,
             singleton: false,
             enabled_param: "enabled".into(),
             preparation_params: vec![],
+            impulses: vec![],
             initializers: vec![],
             calibrations: vec![],
             stages: vec![SceneModifierStageDef {

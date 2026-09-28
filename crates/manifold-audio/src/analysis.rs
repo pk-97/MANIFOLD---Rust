@@ -43,9 +43,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use ringbuf::HeapRb;
-use ringbuf::traits::{
-    Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split,
+use manifold_core::audio_stream::{
+    audio_stream, AudioStreamConsumer, AudioStreamProducer, AudioStreamRead,
 };
 
 pub use manifold_core::audio_features::SendFeatures;
@@ -121,7 +120,7 @@ impl GainBank {
 /// with audio-layer taps before a *single* analysis ("what you hear is what
 /// modulates"). Lock-free SPSC, no `Arc<Mutex>` on the read path.
 pub struct MonoReader {
-    cons: ringbuf::HeapCons<f32>,
+    cons: AudioStreamConsumer,
     send_count: usize,
     sample_rate: u32,
     /// Reusable drain scratch (a whole number of frames).
@@ -139,31 +138,19 @@ impl MonoReader {
         self.send_count
     }
 
-    /// Drain every complete per-send frame produced since the last call, appending
-    /// each send's mono samples to `per_send[i]` (oldest → newest). `per_send`
-    /// must have at least [`Self::send_count`] entries; callers clear them first.
-    pub fn drain(&mut self, per_send: &mut [Vec<f32>]) {
-        let stride = self.send_count.max(1);
-        loop {
-            let frames = self.cons.occupied_len() / stride;
-            if frames == 0 {
-                break;
-            }
-            let cap_frames = (self.scratch.len() / stride).max(1);
-            let take = frames.min(cap_frames) * stride;
-            let got = self.cons.pop_slice(&mut self.scratch[..take]);
-            for frame in self.scratch[..got].chunks_exact(stride) {
-                for (i, &s) in frame.iter().enumerate() {
-                    if let Some(v) = per_send.get_mut(i) {
-                        v.push(s);
-                    }
-                }
-            }
-            if got < take {
-                break;
-            }
+    /// Drain stamped interleaved send frames. Gaps precede post-gap samples.
+    /// InvalidInput terminates this drain; the owner must replace the source.
+    pub fn drain_stamped(&mut self, mut consume: impl FnMut(AudioStreamRead, &[f32])) {
+        while let Some(read) = self.cons.read(&mut self.scratch) {
+            let samples = match read {
+                AudioStreamRead::Samples { samples, .. } => samples,
+                _ => 0,
+            };
+            consume(read, &self.scratch[..samples]);
+            if read == AudioStreamRead::InvalidInput { break; }
         }
     }
+
 }
 
 /// Spawns and owns the capture downmix worker thread. Stops the thread on
@@ -204,7 +191,7 @@ impl AudioFeatureWorker {
         // Interleaved-by-send mono ring (stride = send count). Whole frames only,
         // so the stride never desyncs.
         let stride = send_count.max(1);
-        let (prod, cons) = HeapRb::<f32>::new((MONO_RING_CAPACITY * stride).max(1)).split();
+        let (prod, cons) = audio_stream(stride, MONO_RING_CAPACITY, 2048, sample_rate);
         let reader = MonoReader {
             cons,
             send_count,
@@ -316,7 +303,7 @@ struct SendState {
 struct MonoWorkerLoop {
     consumer: AudioConsumer,
     /// Interleaved-by-send mono output (stride = send count). Whole frames only.
-    producer: ringbuf::HeapProd<f32>,
+    producer: AudioStreamProducer,
     device_channels: usize,
     /// Per-send device channels to downmix to mono, in send order.
     send_channels: Vec<Vec<u16>>,
@@ -325,10 +312,6 @@ struct MonoWorkerLoop {
     /// Per-send linear gain snapshot, refreshed once per drain (avoids an atomic
     /// load per sample).
     gain_scratch: Vec<f32>,
-    /// Leftover interleaved samples that didn't complete a device frame last drain.
-    carry: Vec<f32>,
-    /// Persistent per-drain work buffer (carry-over + freshly drained samples).
-    work: Vec<f32>,
     /// Reusable device-ring drain buffer.
     drain_buf: Vec<f32>,
     /// Reusable interleaved-by-send mono output buffer.
@@ -338,7 +321,7 @@ struct MonoWorkerLoop {
 impl MonoWorkerLoop {
     fn new(
         consumer: AudioConsumer,
-        producer: ringbuf::HeapProd<f32>,
+        producer: AudioStreamProducer,
         device_channels: usize,
         send_channels: Vec<Vec<u16>>,
         gains: Arc<GainBank>,
@@ -351,10 +334,8 @@ impl MonoWorkerLoop {
             send_channels,
             gains,
             gain_scratch: vec![1.0; send_count],
-            carry: Vec::with_capacity(4096),
-            work: Vec::with_capacity(4096),
-            drain_buf: vec![0.0; 4096],
-            out: Vec::with_capacity(4096),
+            drain_buf: vec![0.0; 4096.max(device_channels)],
+            out: Vec::with_capacity(4096 * send_count.max(1)),
         }
     }
 
@@ -367,69 +348,39 @@ impl MonoWorkerLoop {
         }
     }
 
-    /// Drain the device ring, downmix each complete frame to per-send post-gain
-    /// mono, and push the interleaved result. Returns whether anything was pushed.
+    /// Downmix one stamped source block. Returning after a block bounds each
+    /// drain and preserves the source order through both handoffs.
     fn drain_and_downmix(&mut self) -> bool {
-        let available = self.consumer.occupied_len();
-        if available == 0 && self.carry.is_empty() {
-            return false;
-        }
-
-        // carry-over + freshly drained samples → `work` (a borrowed local).
-        let mut work = std::mem::take(&mut self.work);
-        work.clear();
-        work.extend_from_slice(&self.carry);
-        self.carry.clear();
-
-        let mut remaining = available;
-        while remaining > 0 {
-            let n = remaining.min(self.drain_buf.len());
-            let popped = self.consumer.pop_slice(&mut self.drain_buf[..n]);
-            if popped == 0 {
-                break;
+        let Some(read) = self.consumer.read(&mut self.drain_buf) else { return false; };
+        let (stamp, samples) = match read {
+            AudioStreamRead::Samples { stamp, samples } => (stamp, samples),
+            AudioStreamRead::Gap { first_frame, end_frame } => {
+                self.producer.skip_frames(end_frame - first_frame);
+                return true;
             }
-            work.extend_from_slice(&self.drain_buf[..popped]);
-            remaining -= popped;
+            AudioStreamRead::InvalidInput => {
+                self.producer.invalidate();
+                return false;
+            }
+        };
+        self.producer.set_sample_rate(stamp.sample_rate);
+        for (i, gain) in self.gain_scratch.iter_mut().enumerate() {
+            *gain = self.gains.get_linear(i);
         }
-
-        let ch = self.device_channels;
-        let usable = (work.len() / ch) * ch;
-
-        // Refresh the per-send gain snapshot once per drain (lock-free; a gain
-        // edit lands here without a capture restart).
-        for (i, g) in self.gain_scratch.iter_mut().enumerate() {
-            *g = self.gains.get_linear(i);
-        }
-
-        // Downmix each device frame → one post-gain mono sample per send,
-        // interleaved by send (stride = send count).
         self.out.clear();
-        for frame in work[..usable].chunks_exact(ch) {
-            for (channels, &gain) in self.send_channels.iter().zip(self.gain_scratch.iter()) {
+        for frame in self.drain_buf[..samples].chunks_exact(self.device_channels) {
+            for (channels, &gain) in self.send_channels.iter().zip(&self.gain_scratch) {
                 self.out.push(downmix(frame, channels) * gain);
             }
         }
-
-        // Stash the partial-frame remainder; return the work buffer for reuse.
-        self.carry.extend_from_slice(&work[usable..]);
-        self.work = work;
-
         if self.out.is_empty() {
-            return false;
+            self.producer.skip_frames((samples / self.device_channels) as u64);
+        } else {
+            self.producer.push_interleaved_clocked(&self.out, stamp.clock);
         }
-        // Whole frames only so the stride never desyncs. On overflow (content
-        // thread stalled) drop the OLDEST frames, keeping the newest.
-        let stride = self.send_channels.len().max(1);
-        let vacant_frames = self.producer.vacant_len() / stride;
-        let want_frames = self.out.len() / stride;
-        let push_frames = want_frames.min(vacant_frames);
-        if push_frames == 0 {
-            return false;
-        }
-        let start = (want_frames - push_frames) * stride;
-        self.producer.push_slice(&self.out[start..]);
         true
     }
+
 }
 
 /// Downmix the channels of one interleaved frame to a single mono sample
@@ -872,10 +823,6 @@ const FLUX_ENERGY_GATE: f32 = 1e-4;
 /// minimum inter-onset interval. Debounces one attack's multi-hop rise while
 /// still allowing fast hat runs (≈1/32 at 160 BPM). Caps the rate at ~30/s.
 const ONSET_REFRACTORY_HOPS: u8 = 6;
-/// Hops of rolling-window backlog each send keeps beyond one full window, so a
-/// brief drain stall doesn't drop distinct columns. ~85 ms at hop ≈ 5.3 ms.
-const WINDOW_BACKLOG_HOPS: usize = 16;
-
 /// VQT band edges (bin indices) for the Low/Mid/High split at the given
 /// crossovers. VQT bins are geometric — `bin(f) = bpo·log2(f/fmin)` — so this is
 /// the same mapping the scope draws its divider lines with, which is why the
@@ -2048,6 +1995,16 @@ fn new_send_state(num_bins: usize) -> SendState {
     }
 }
 
+/// One completed streaming-analysis hop, stamped with the exclusive input
+/// sample boundary at which its feature column was produced.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnalyzedHop {
+    /// Mono samples received since analyzer construction. No device/transport
+    /// clock or detector-delay adjustment is implied by this boundary.
+    pub end_sample: u64,
+    pub features: SendFeatures,
+}
+
 /// Streaming per-send analyzer for audio-layer modulation.
 /// Push mono samples as they arrive — e.g. tapped off a kira audio-layer track,
 /// already post-fader (the mixer applied warp + gain) — and read the
@@ -2072,6 +2029,8 @@ pub struct StreamingSendAnalyzer {
     low_bin: usize,
     mid_bin: usize,
     sample_rate: f32,
+    /// Total number of input samples consumed since construction.
+    sample_count: u64,
     vqt_in: Vec<f32>,
     vqt_raw: Vec<f32>,
     state: SendState,
@@ -2114,6 +2073,10 @@ impl StreamingSendAnalyzer {
         let cqt = spec_config.build_transform(sr);
         let tilt_w = tilt_weights(&spec_config, sr, num_bins);
         let (low_bin, mid_bin) = band_edges(&spec_config, sr, num_bins, low_hz, mid_hz);
+        let mut state = new_send_state(num_bins);
+        // The rolling window never grows beyond one FFT window. Reserve it once
+        // here so hop processing stays allocation-free, even for large pushes.
+        state.window = Vec::with_capacity(n_fft);
         Self {
             cqt,
             spec_config,
@@ -2124,9 +2087,10 @@ impl StreamingSendAnalyzer {
             low_bin,
             mid_bin,
             sample_rate: sr,
+            sample_count: 0,
             vqt_in: vec![0.0; n_fft],
             vqt_raw: vec![0.0; num_bins],
-            state: new_send_state(num_bins),
+            state,
             latest: SendFeatures::default(),
             scope: false,
             scope_cols: Vec::new(),
@@ -2222,17 +2186,25 @@ impl StreamingSendAnalyzer {
         self.mid_bin = mid_bin;
     }
 
-    /// Push freshly produced mono samples and run any whole VQT hops the window
-    /// now owes, refreshing [`latest`](Self::latest). Same accumulate-and-emit
-    /// cadence as the live worker's per-send loop.
+    /// Push freshly produced mono samples and run every completed VQT hop,
+    /// refreshing [`latest`](Self::latest) on the fixed input sample grid.
     pub fn push(&mut self, mono: &[f32]) {
-        self.push_with_callback(mono, |_| {});
+        self.push_with_hops(mono, |_, _| {});
     }
 
     /// Push mono samples and invoke `on_hop` once for each newly produced raw,
-    /// floored, untilted VQT column. The callback runs synchronously on the
-    /// caller's thread and must not retain the borrowed column.
+    /// floored, untilted VQT column. The callback runs after that hop's feature
+    /// reductions and optional trackers, synchronously on the caller's thread,
+    /// and must not retain the borrowed column.
     pub fn push_with_callback(&mut self, mono: &[f32], mut on_hop: impl FnMut(&[f32])) {
+        self.push_with_hops(mono, |_, column| on_hop(column));
+    }
+
+    /// Push mono samples and invoke `on_hop` for every completed analysis hop.
+    /// Each callback receives the exclusive input sample boundary and the
+    /// features produced from that hop, followed by its raw floored column.
+    /// Columns are borrowed until the callback returns.
+    pub fn push_with_hops(&mut self, mono: &[f32], mut on_hop: impl FnMut(AnalyzedHop, &[f32])) {
         if mono.is_empty() {
             return;
         }
@@ -2250,6 +2222,7 @@ impl StreamingSendAnalyzer {
             mid_bin,
             vqt_in,
             vqt_raw,
+            sample_count,
             state,
             latest,
             scope,
@@ -2261,30 +2234,6 @@ impl StreamingSendAnalyzer {
         // Hop period in seconds — the D5 presence one-pole's time base.
         let dt = hop as f32 / sample_rate.max(1.0);
 
-        for &s in mono {
-            state.window.push(s);
-            state.since_hop += 1;
-        }
-        // Bound the window to one window plus a small backlog — realloc-free, and
-        // a brief drain stall doesn't lose distinct columns.
-        let cap = n_fft + WINDOW_BACKLOG_HOPS * hop;
-        if state.window.len() > cap {
-            let excess = state.window.len() - cap;
-            state.window.drain(0..excess);
-        }
-
-        let owed = state.since_hop / hop;
-        if owed == 0 {
-            return;
-        }
-        // Distinct columns we can actually form; before the window fills we still
-        // emit one (zero-padded) so features fade in rather than blacking out.
-        let avail = if state.window.len() >= n_fft {
-            1 + (state.window.len() - n_fft) / hop
-        } else {
-            1
-        };
-        let emit = owed.min(avail);
         // `db_min`/`db_max` are the FIXED colour-ramp + amplitude contrast — NOT the
         // floor. The floor is a separate gate that only ZEROS the column below it; it
         // never rescales the colourmap (coupling them made the floor act as a
@@ -2300,17 +2249,38 @@ impl StreamingSendAnalyzer {
         };
         let lin_floor = 10f32.powf(floor_db / 20.0);
 
-        for j in (0..emit).rev() {
-            let end = state.window.len().saturating_sub(j * hop);
-            let start = end.saturating_sub(n_fft);
-            form_tilted_column(
-                &state.window[start..end],
-                cqt,
-                tilt_w,
-                vqt_in,
-                vqt_raw,
-                &mut state.col,
-            );
+        let mut offset = 0;
+        while offset < mono.len() {
+            // Consume only up to the next hop boundary. Each overlapping FFT
+            // window ends at the same sample regardless of push partitioning.
+            let take = (hop - state.since_hop).min(mono.len() - offset);
+            let chunk = &mono[offset..offset + take];
+            if n_fft == 0 || chunk.len() >= n_fft {
+                state.window.clear();
+                let start = chunk.len().saturating_sub(n_fft);
+                state.window.extend_from_slice(&chunk[start..]);
+            } else {
+                let excess = state
+                    .window
+                    .len()
+                    .saturating_add(chunk.len())
+                    .saturating_sub(n_fft);
+                if excess > 0 {
+                    state.window.copy_within(excess.., 0);
+                    state.window.truncate(state.window.len() - excess);
+                }
+                state.window.extend_from_slice(chunk);
+            }
+            state.since_hop += take;
+            *sample_count += take as u64;
+            offset += take;
+
+            if state.since_hop < hop {
+                continue;
+            }
+            state.since_hop = 0;
+
+            form_tilted_column(&state.window, cqt, tilt_w, vqt_in, vqt_raw, &mut state.col);
             // The single floor: zero every bin whose TILTED magnitude is below the
             // floor, in BOTH the scope (`vqt_raw`) and feature (`state.col`) column,
             // so the black the user sees on the spectrogram is exactly the silence
@@ -2326,7 +2296,6 @@ impl StreamingSendAnalyzer {
                     *c = 0.0;
                 }
             }
-            on_hop(vqt_raw);
             reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
             // Same guard `reduce_send` used internally for flux/transients
             // (captured before the has_prev update just below) — the D5
@@ -2365,6 +2334,17 @@ impl StreamingSendAnalyzer {
                 );
             }
 
+            // Publish this hop before invoking the callback so its stamped
+            // feature snapshot is exactly the analyzer's latest value.
+            *latest = state.features;
+            on_hop(
+                AnalyzedHop {
+                    end_sample: *sample_count,
+                    features: state.features,
+                },
+                vqt_raw,
+            );
+
             // Scope capture: buffer the raw (untilted) column + overlay scalars,
             // exactly what the live worker pushes to its scope rings — the shader
             // applies its own display tilt. Drained by the runtime each tick.
@@ -2387,7 +2367,6 @@ impl StreamingSendAnalyzer {
                 });
             }
         }
-        state.since_hop -= owed * hop;
         *latest = state.features;
     }
 
@@ -2406,6 +2385,12 @@ mod tests {
     fn sine(freq: f32, n: usize) -> Vec<f32> {
         (0..n)
             .map(|i| (std::f32::consts::TAU * freq * i as f32 / SR as f32).sin())
+            .collect()
+    }
+
+    fn sine_at(sample_rate: u32, freq: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (std::f32::consts::TAU * freq * i as f32 / sample_rate as f32).sin())
             .collect()
     }
 
@@ -3110,18 +3095,68 @@ mod tests {
     }
 
     #[test]
+    fn downmix_preserves_capture_and_handoff_gaps() {
+        let (mut source, capture) = audio_stream(2, 3, 8, SR);
+        let (mono, mut reader) = audio_stream(2, 2, 8, SR);
+        let gains = Arc::new(GainBank::new(&[1.0, 2.0]));
+        let mut worker = MonoWorkerLoop::new(capture, mono, 2, vec![vec![0], vec![1]], gains);
+        // Capture keeps frames 0..3; the mono handoff only fits frames 0..2.
+        assert_eq!(source.push_interleaved(&[0.5, -0.25, 0.6, -0.3, 0.7, -0.35, 0.8, -0.4]), 6);
+        assert!(worker.drain_and_downmix());
+        assert!(worker.drain_and_downmix()); // forward capture's missing frame 3
+        let mut out = [0.; 8];
+        assert!(matches!(reader.read(&mut out), Some(AudioStreamRead::Samples {
+            stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 0, .. }, samples: 4,
+        })));
+        assert_eq!(&out[..4], &[0.5, -0.5, 0.6, -0.6]);
+        assert_eq!(reader.read(&mut out), Some(AudioStreamRead::Gap { first_frame: 2, end_frame: 4 }));
+        source.push_interleaved(&[0.9, -0.45]);
+        worker.drain_and_downmix();
+        assert!(matches!(reader.read(&mut out), Some(AudioStreamRead::Samples {
+            stamp: manifold_core::audio_stream::AudioBlockStamp { first_frame: 4, .. }, samples: 2,
+        })));
+        assert_eq!(&out[..2], &[0.9, -0.9]);
+        assert_eq!(reader.read(&mut out), None);
+    }
+
+    #[test]
+    fn downmix_preserves_clock_anchor_across_partial_source_drains() {
+        use manifold_core::audio_stream::{AudioBlockStamp, AudioClockAnchor};
+        let (mut source, capture) = audio_stream(2, 5000, 8, SR);
+        let (mono, mut reader) = audio_stream(1, 5000, 8, SR);
+        let clock = AudioClockAnchor { instant: std::time::Instant::now(), frame: 0 };
+        let gains = Arc::new(GainBank::new(&[1.0]));
+        let mut worker = MonoWorkerLoop::new(capture, mono, 2, vec![vec![0, 1]], gains);
+        assert_eq!(source.push_interleaved_clocked(&vec![0.5; 10_000], Some(clock)), 10_000);
+        while worker.drain_and_downmix() {}
+        let mut scratch = [0.; 997];
+        let mut next = 0;
+        while let Some(read) = reader.read(&mut scratch) {
+            let AudioStreamRead::Samples { stamp, samples } = read else { panic!("no missing frames"); };
+            assert_eq!(stamp.first_frame, next);
+            assert_eq!(stamp.clock, Some(clock));
+            assert_eq!(stamp.source_time(), AudioBlockStamp {
+                first_frame: next, clock: Some(clock), generation: 0, sample_rate: SR,
+            }.source_time());
+            assert!(scratch[..samples].iter().all(|sample| *sample == 0.5));
+            next += samples as u64;
+        }
+        assert_eq!(next, 5000);
+    }
+
+    #[test]
     fn downmix_worker_produces_per_send_mono() {
         // Two device channels, two sends (one channel each). Fill the ring with a
         // distinguishable interleaved signal and confirm the worker downmixes each
         // send to mono, interleaved by send, post-gain.
         let frames = 4000;
-        let (mut prod, cons) = HeapRb::<f32>::new(frames * 2 + 8).split();
+        let (mut prod, cons) = audio_stream(2, frames + 4, 8, SR);
         let mut interleaved = Vec::with_capacity(frames * 2);
         for _ in 0..frames {
             interleaved.push(0.5); // channel 0
             interleaved.push(-0.25); // channel 1
         }
-        let pushed = prod.push_slice(&interleaved);
+        let pushed = prod.push_interleaved(&interleaved);
         assert_eq!(pushed, interleaved.len());
 
         let gains = Arc::new(GainBank::new(&[1.0, 2.0]));
@@ -3135,16 +3170,26 @@ mod tests {
         assert_eq!(reader.send_count(), 2);
         assert_eq!(reader.sample_rate(), SR);
 
-        let mut per_send = vec![Vec::new(), Vec::new()];
+        let mut per_send = [Vec::new(), Vec::new()];
         for _ in 0..250 {
-            reader.drain(&mut per_send);
+            reader.drain_stamped(|read, samples| {
+                assert!(matches!(read, AudioStreamRead::Samples { .. }));
+                for frame in samples.chunks_exact(2) {
+                    for (index, value) in frame.iter().enumerate() { per_send[index].push(*value); }
+                }
+            });
             if per_send[0].len() >= frames {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
         }
         worker.stop();
-        reader.drain(&mut per_send);
+        reader.drain_stamped(|read, samples| {
+                assert!(matches!(read, AudioStreamRead::Samples { .. }));
+                for frame in samples.chunks_exact(2) {
+                    for (index, value) in frame.iter().enumerate() { per_send[index].push(*value); }
+                }
+            });
 
         assert!(
             per_send[0].len() >= frames - 64,
@@ -3170,6 +3215,175 @@ mod tests {
     }
 
     // ── Streaming analyzer (audio-layer realtime tap) ──
+
+    fn synthetic_tone_bursts(sample_rate: u32) -> Vec<f32> {
+        let n = sample_rate as usize / 2 + 173;
+        let period = (sample_rate as usize / 8).max(1);
+        let burst = (sample_rate as usize / 32).max(1);
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let env = if i % period < burst { 1.0 } else { 0.25 };
+                env * (0.55 * (std::f32::consts::TAU * 440.0 * t).sin()
+                    + 0.3 * (std::f32::consts::TAU * 1000.0 * t).sin())
+                    + 0.08 * (std::f32::consts::TAU * 60.0 * t).sin()
+            })
+            .collect()
+    }
+
+    fn collect_stream_hops(
+        sample_rate: u32,
+        input: &[f32],
+        chunk_sizes: &[usize],
+    ) -> (StreamingSendAnalyzer, Vec<AnalyzedHop>, Vec<Vec<f32>>) {
+        let mut analyzer = StreamingSendAnalyzer::new(sample_rate, 250.0, 2000.0);
+        let mut hops = Vec::new();
+        let mut columns = Vec::new();
+        let mut offset = 0;
+        let mut pattern = 0;
+        while offset < input.len() {
+            let requested = chunk_sizes[pattern % chunk_sizes.len()].max(1);
+            let end = (offset + requested).min(input.len());
+            analyzer.push_with_hops(&input[offset..end], |hop, column| {
+                hops.push(hop);
+                columns.push(column.to_vec());
+            });
+            offset = end;
+            pattern += 1;
+        }
+        (analyzer, hops, columns)
+    }
+
+    #[test]
+    fn streaming_hops_are_partition_invariant_at_44100_and_48000() {
+        for &sample_rate in &[44_100, 48_000] {
+            let probe = StreamingSendAnalyzer::new(sample_rate, 250.0, 2000.0);
+            let input = synthetic_tone_bursts(sample_rate);
+            assert!(
+                input.len() > probe.n_fft + 17 * probe.hop,
+                "fixture must exceed the former backlog at {sample_rate} Hz"
+            );
+
+            let (baseline_analyzer, baseline_hops, baseline_columns) =
+                collect_stream_hops(sample_rate, &input, &[probe.hop]);
+            let expected = input.len() / probe.hop;
+            assert_eq!(baseline_hops.len(), expected);
+            assert_eq!(baseline_columns.len(), expected);
+            assert!(
+                baseline_columns.iter().flatten().any(|&m| m > 0.0),
+                "synthetic fixture must produce nonzero spectral columns"
+            );
+            assert!(
+                baseline_hops
+                    .iter()
+                    .any(|hop| hop.features != SendFeatures::default()),
+                "synthetic fixture must produce non-default features"
+            );
+            for (i, hop) in baseline_hops.iter().enumerate() {
+                assert_eq!(hop.end_sample, (i + 1) as u64 * probe.hop as u64);
+            }
+
+            let fps_sizes = [
+                (sample_rate as usize / 24).max(1),
+                (sample_rate as usize / 30).max(1),
+                (sample_rate as usize / 60).max(1),
+            ];
+            let patterns = [
+                vec![37, 113, 509, 17],
+                vec![fps_sizes[0]],
+                vec![fps_sizes[1]],
+                vec![fps_sizes[2]],
+                vec![input.len()],
+            ];
+            for pattern in patterns {
+                let (analyzer, hops, columns) = collect_stream_hops(sample_rate, &input, &pattern);
+                assert_eq!(
+                    hops, baseline_hops,
+                    "hop stamps/features differ: {pattern:?}"
+                );
+                assert_eq!(columns, baseline_columns, "raw columns differ: {pattern:?}");
+                assert_eq!(analyzer.latest(), baseline_analyzer.latest());
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_hops_handle_empty_pushes_and_partial_remainders() {
+        let mut analyzer = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let hop = analyzer.hop();
+        let input = synthetic_tone_bursts(SR);
+        let mut observed = Vec::new();
+        analyzer.push_with_hops(&[], |stamp, _| observed.push(stamp));
+        analyzer.push_with_hops(&input[..hop - 1], |stamp, _| observed.push(stamp));
+        analyzer.push(&[]);
+        assert!(observed.is_empty(), "a partial hop must not emit");
+
+        let mut callback_features = None;
+        analyzer.push_with_hops(&input[hop - 1..hop + 2], |stamp, _| {
+            callback_features = Some((stamp.end_sample, stamp.features));
+            observed.push(stamp);
+        });
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].end_sample, hop as u64);
+        assert_eq!(analyzer.latest(), callback_features.unwrap().1);
+
+        analyzer.push(&[]);
+        analyzer.push_with_hops(&input[hop + 2..2 * hop + 4], |stamp, _| {
+            observed.push(stamp)
+        });
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[1].end_sample, 2 * hop as u64);
+        assert_eq!(analyzer.latest(), observed[1].features);
+    }
+
+    #[test]
+    fn streaming_window_stays_bounded_for_large_blocks() {
+        let mut analyzer = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let input = noise(analyzer.n_fft + analyzer.hop * 200 + 31);
+        analyzer.push(&input);
+        assert_eq!(analyzer.state.window.len(), analyzer.n_fft);
+        assert!(analyzer.state.window.capacity() <= analyzer.n_fft);
+    }
+
+    #[test]
+    fn streaming_warmup_does_not_fire_transients() {
+        let mut analyzer = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let mut hops = Vec::new();
+        let input = synthetic_tone_bursts(SR);
+        for chunk in input.chunks(analyzer.hop) {
+            analyzer.push_with_hops(chunk, |stamp, _| hops.push(stamp));
+        }
+        let last_warmup = hops
+            .iter()
+            .position(|stamp| stamp.end_sample >= analyzer.n_fft as u64)
+            .expect("fixture reaches a complete FFT window");
+        assert!(hops[..=last_warmup].iter().all(|stamp| {
+            stamp
+                .features
+                .bands
+                .iter()
+                .all(|band| band.transients == 0.0 && band.kick == 0.0)
+        }));
+    }
+
+    #[test]
+    fn streaming_hop_features_match_latest_with_pitch_tracking() {
+        let mut analyzer = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        analyzer.set_pitch_tracking(true);
+        let input = sine_at(SR, 1000.0, analyzer.n_fft + analyzer.hop * 40);
+        let mut hops = Vec::new();
+        for chunk in input.chunks(113) {
+            analyzer.push_with_hops(chunk, |stamp, _| hops.push(stamp));
+        }
+        let last = hops.last().expect("pitch-tracking fixture emits hops");
+        assert_eq!(analyzer.latest(), last.features);
+        assert!(
+            hops.iter()
+                .skip(1)
+                .any(|stamp| stamp.features.pitch_confidence > 0.0),
+            "enabled pitch tracking should reach a nonzero callback snapshot"
+        );
+    }
 
     #[test]
     fn streaming_analyzer_localizes_a_tone() {

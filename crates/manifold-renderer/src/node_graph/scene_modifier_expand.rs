@@ -3,6 +3,10 @@
 //! The canonical snapshot is never mutated by preparation. Live controls are
 //! ordinary graph bindings; no per-frame attachment work belongs here.
 
+mod acceleration;
+pub(crate) use acceleration::impulse_recipients;
+mod coupling;
+pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
 mod bindings;
 mod buffer_budget;
 mod event_state;
@@ -12,6 +16,8 @@ pub use buffer_budget::{
     admit_candidate_bytes,
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
+pub use impulses::SceneModifierImpulseRoute;
+mod impulses;
 mod compiler;
 pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
@@ -112,4 +118,18 @@ pub(super) fn scene_objects_for_authoring(
     scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
 ) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
     index::FlatSceneIndex::build(owner)?.scene_objects(scene)
+}
+
+/// Physical scene objects available to a force target picker. Material parts
+/// are retained as separate stable refs; the compiler deduplicates shared
+/// physical recipients when expanding a force recipe.
+pub fn force_objects_for_authoring(
+    owner: &manifold_core::effect_graph_def::EffectGraphDef,
+    scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
+) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
+    acceleration::authoring_objects(
+        owner,
+        scene,
+        &crate::node_graph::persistence::PrimitiveRegistry::with_builtin(),
+    )
 }

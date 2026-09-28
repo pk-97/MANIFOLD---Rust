@@ -240,6 +240,9 @@ fn port_type_str(ty: &PortType) -> String {
         PortType::Atmosphere => "Atmosphere".into(),
         PortType::RenderMode => "RenderMode".into(),
         PortType::RigidBody => "RigidBody".into(),
+        PortType::FluidRole => "FluidRole".into(),
+        PortType::MeshSource => "MeshSource".into(),
+        PortType::VectorField => "VectorField".into(),
         PortType::Object => "Object".into(),
     }
 }

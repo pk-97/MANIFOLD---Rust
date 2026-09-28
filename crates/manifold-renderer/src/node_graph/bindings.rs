@@ -13,6 +13,7 @@
 //!   return `None`, which is fine for tests that don't dispatch GPU work.
 
 use ahash::AHashMap;
+use manifold_physics::FieldValue;
 use manifold_gpu::{GpuBuffer, GpuTexture};
 
 use crate::node_graph::backend::Backend;
@@ -26,6 +27,8 @@ use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::physics::RigidBody;
 use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::transform::Transform;
+use crate::node_graph::fluid_role::FluidRole;
+use crate::node_graph::mesh_source::MeshSource;
 
 /// Opaque physical-buffer index handed out by the runtime's resource pool.
 ///
@@ -41,6 +44,10 @@ pub struct Slot(pub u32);
 pub struct NodeInputs<'a> {
     bindings: &'a [(&'static str, Slot)],
     backend: &'a dyn Backend,
+    /// A transient camera supplied by a render-only consumer. The override
+    /// is intentionally scoped to one named port; all other input ports keep
+    /// resolving through the graph backend.
+    camera_override: Option<(&'static str, Camera)>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
     /// generation counters, indexed by `Slot.0`, owned by the [`Executor`]
     /// (see `Executor::slot_generations`). Threaded through so
@@ -81,6 +88,7 @@ impl<'a> NodeInputs<'a> {
         Self {
             bindings,
             backend,
+            camera_override: None,
             generations,
             pending: &[],
             mesh_revisions: &[],
@@ -114,6 +122,17 @@ impl<'a> NodeInputs<'a> {
         content_versions: &'a [Option<ContentVersion>],
     ) -> Self {
         self.content_versions = content_versions;
+        self
+    }
+
+    /// View the same bindings with one camera port replaced for a render-only
+    /// pass. No backend value or slot binding is changed.
+    pub(crate) fn with_camera_override(
+        mut self,
+        port: &'static str,
+        camera: Camera,
+    ) -> Self {
+        self.camera_override = Some((port, camera));
         self
     }
 
@@ -208,6 +227,11 @@ impl<'a> NodeInputs<'a> {
     /// by the executor into the backend's per-slot map before the
     /// consumer runs.
     pub fn camera(&self, port: &str) -> Option<Camera> {
+        if let Some((override_port, camera)) = self.camera_override
+            && override_port == port
+        {
+            return Some(camera);
+        }
         self.backend.camera(self.slot(port)?)
     }
 
@@ -256,6 +280,25 @@ impl<'a> NodeInputs<'a> {
 
     pub fn rigid_body(&self, port: &str) -> Option<RigidBody> {
         self.backend.rigid_body(self.slot(port)?)
+    }
+
+    /// [`FluidRole`] bound to the named [`PortType::FluidRole`] input port.
+    /// `None` if unwired. The prepared geometry remains shared through its
+    /// `Arc`; field access does not clone mesh data.
+    pub fn fluid_role(&self, port: &str) -> Option<FluidRole> {
+        self.backend.fluid_role(self.slot(port)?)
+    }
+
+    /// [`MeshSource`] bound to the named [`PortType::MeshSource`] input port.
+    /// `None` if unwired. Source descriptions contain no prepared or GPU data.
+    pub fn mesh_source(&self, port: &str) -> Option<MeshSource> {
+        self.backend.mesh_source(self.slot(port)?)
+    }
+
+    /// [`FieldValue`] bound to the named [`PortType::VectorField`] input.
+    /// The payload is an owned CPU evaluator used by native physics solvers.
+    pub fn vector_field(&self, port: &str) -> Option<FieldValue> {
+        self.backend.vector_field(self.slot(port)?)
     }
 
     /// [`SceneObject`] bound to the named [`PortType::Object`] input port.
@@ -353,6 +396,21 @@ impl<'a> NodeInputs<'a> {
     pub fn object_slot(&self, slot: Slot) -> Option<SceneObject> {
         self.backend.object(slot)
     }
+
+    /// [`FluidRole`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn fluid_role_slot(&self, slot: Slot) -> Option<FluidRole> {
+        self.backend.fluid_role(slot)
+    }
+
+    /// [`MeshSource`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn mesh_source_slot(&self, slot: Slot) -> Option<MeshSource> {
+        self.backend.mesh_source(slot)
+    }
+
+    /// [`FieldValue`] bound to an already-resolved [`Slot`] — no name scan.
+    pub fn vector_field_slot(&self, slot: Slot) -> Option<FieldValue> {
+        self.backend.vector_field(slot)
+    }
 }
 
 /// View of an [`EffectNode`](crate::node_graph::EffectNode)'s output port
@@ -386,6 +444,9 @@ pub struct NodeOutputs<'a> {
     pending_atmosphere_writes: &'a mut Vec<(Slot, Atmosphere)>,
     /// Sibling scratch for `RenderMode` writes — same shape as atmospheres.
     pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
+    pending_fluid_role_writes: Option<&'a mut Vec<(Slot, FluidRole)>>,
+    pending_mesh_source_writes: Option<&'a mut Vec<(Slot, MeshSource)>>,
+    pending_vector_field_writes: Option<&'a mut Vec<(Slot, FieldValue)>>,
     pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
     pending_object_writes: &'a mut Vec<(Slot, SceneObject)>,
@@ -416,6 +477,9 @@ impl<'a> NodeOutputs<'a> {
             pending_atmosphere_writes,
             pending_render_mode_writes,
             pending_rigid_body_writes: None,
+            pending_fluid_role_writes: None,
+            pending_mesh_source_writes: None,
+            pending_vector_field_writes: None,
             pending_object_writes,
         }
     }
@@ -429,6 +493,63 @@ impl<'a> NodeOutputs<'a> {
         if let Some(slot) = self.slot(port) {
             self.pending_rigid_body_writes.as_mut()
                 .expect("executor must provide rigid-body output scratch").push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_fluid_role_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, FluidRole)>,
+    ) -> Self {
+        self.pending_fluid_role_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`FluidRole`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_fluid_role(&mut self, port: &str, value: FluidRole) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_fluid_role_writes
+                .as_mut()
+                .expect("executor must provide fluid-role output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_mesh_source_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, MeshSource)>,
+    ) -> Self {
+        self.pending_mesh_source_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`MeshSource`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_mesh_source(&mut self, port: &str, value: MeshSource) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_mesh_source_writes
+                .as_mut()
+                .expect("executor must provide mesh-source output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_vector_field_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, FieldValue)>,
+    ) -> Self {
+        self.pending_vector_field_writes = Some(writes);
+        self
+    }
+
+    /// Queue a [`FieldValue`] write to the named output port. Drained by the
+    /// executor into the backend after `evaluate` returns.
+    pub fn set_vector_field(&mut self, port: &str, value: FieldValue) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_vector_field_writes
+                .as_mut()
+                .expect("executor must provide vector-field output scratch")
+                .push((slot, value));
         }
     }
 
@@ -625,5 +746,50 @@ mod array_accessor_tests {
 
         let got = outputs.array("particles_out").expect("should resolve");
         assert_eq!(got.size, expected_size);
+    }
+}
+
+#[cfg(test)]
+mod camera_override_tests {
+    use super::*;
+    use crate::node_graph::backend::Backend;
+    use crate::node_graph::execution_plan::ResourceId;
+    use crate::node_graph::ports::PortType;
+
+    #[test]
+    fn camera_override_is_scoped_to_the_named_port() {
+        let mut backend = crate::node_graph::MockBackend::new();
+        let camera_slot = backend.acquire(
+            ResourceId(0),
+            PortType::Camera,
+            None,
+            (0, 0),
+        );
+        let other_slot = backend.acquire(
+            ResourceId(1),
+            PortType::Camera,
+            None,
+            (0, 0),
+        );
+        let underlying = Camera::default_perspective();
+        let override_camera = Camera::from_pos_euler(
+            [1.0, 2.0, -4.0],
+            0.2,
+            -0.1,
+            0.0,
+            0.8,
+            0.05,
+            200.0,
+        );
+        Backend::set_camera(&mut backend, camera_slot, underlying);
+        Backend::set_camera(&mut backend, other_slot, underlying);
+        let bindings = [("camera", camera_slot), ("other", other_slot)];
+        let inputs = NodeInputs::new(&bindings, &backend, &[])
+            .with_camera_override("camera", override_camera);
+
+        assert_eq!(inputs.camera("camera"), Some(override_camera));
+        assert_eq!(inputs.camera("other"), Some(underlying));
+        assert_eq!(backend.camera(camera_slot), Some(underlying));
+        assert_eq!(inputs.scalar("camera"), None);
     }
 }

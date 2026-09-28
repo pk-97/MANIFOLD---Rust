@@ -19,6 +19,8 @@ use super::animation::*;
 use super::assembly::*;
 use super::cards::*;
 use super::materials::*;
+mod static_compound;
+pub(super) use static_compound::build_static_compound_group;
 
 /// Output of building one object's node group + its wiring into
 /// `render_scene` — the reusable core of the per-object loop, factored out

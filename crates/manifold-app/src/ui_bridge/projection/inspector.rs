@@ -267,6 +267,7 @@ pub fn sync_inspector_data(
         // `ParamSurface`, filled in below only in the `Live` arm — see
         // `ScenePanel::configure_params`'s doc comment.
         let mut full_params: Option<ParamSurface> = None;
+        let mut force_surfaces = Vec::new();
         let state = match layer {
             None => SceneSetupState::NoSelection("Select a layer to set up its scene.".to_string()),
             Some(l) if l.layer_type != LayerType::Generator => SceneSetupState::NoSelection(
@@ -287,6 +288,8 @@ pub fn sync_inspector_data(
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
+                            let fluid_domains = def.as_ref()
+                                .map(|def| super::scene::fluid_domains(def, &vm)).unwrap_or_default();
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
                             // intensity [0,4] / fill [0,2]; `atmosphere`'s
@@ -385,6 +388,22 @@ pub fn sync_inspector_data(
                             // sites further down are unchanged.
                             use manifold_ui::panels::scene_setup_panel::ModulatedRow;
                             let gen_inst = l.gen_params();
+                            let (forces, force_picker) = if let (Some(gp), Some(def)) = (gen_inst, def.as_ref()) {
+                                let mut surfaces = modifier_surfaces(gp, def, &vm, layer_id.as_str(), automation_latched, driver_timing);
+                                surfaces.retain(|surface| super::cards::is_force_surface(surface, def));
+                                attach_audio_sends(&mut surfaces, &project.audio_setup);
+                                if let Some((target, param_id)) = selected_automation(&layer_id) {
+                                    for surface in &mut surfaces {
+                                        mark_selected_automation_row(surface, &layer_id, target, param_id);
+                                    }
+                                }
+                                let rows = surfaces.iter().filter_map(|surface| surface.modifier.as_ref().map(|info|
+                                    manifold_ui::panels::scene_setup_panel::SceneForceRowVm {
+                                        instance_id: info.instance_id.clone(), title: surface.title.clone(),
+                                    })).collect();
+                                force_surfaces = surfaces;
+                                (rows, super::cards::force_picker_entries(def, &vm))
+                            } else { (Vec::new(), Vec::new()) };
                             // BUG-249: modulation facts resolve through the
                             // REAL exposed-param binding id, not the row's
                             // synthesized scene id (which the runtime never
@@ -559,6 +578,8 @@ pub fn sync_inspector_data(
                                             index,
                                             object_node_id,
                                             group_node_id,
+                                            is_group,
+                                            parent_group_id,
                                             name,
                                             visible_addr,
                                             visible_value,
@@ -569,6 +590,8 @@ pub fn sync_inspector_data(
                                             transform_chain_parseable: _,
                                             modifier_chain,
                                             modifier_chain_parseable,
+                                            physics,
+                                            physics_imported,
                                             ..
                                         } = known.as_ref();
                                         // P2 slice 2a: the real P1 section
@@ -585,7 +608,13 @@ pub fn sync_inspector_data(
                                         // different strings for the same
                                         // node kind).
                                         let mut object_doc_ids = vec![*object_node_id];
-                                        if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
+                                        object_doc_ids.extend_from_slice(&known.fluid_node_ids);
+                                        if parent_group_id.is_none() && let Some(def) = def.as_ref() {
+                                            object_doc_ids.extend(super::scene::group_fluid_role_ids(def, *group_node_id));
+                                        }
+                                        if let Some(physics) = physics {
+                                            if physics.enabled { object_doc_ids.push(physics.body_node_id); }
+                                        } else if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
                                             manifold_renderer::node_graph::scene_vm::physics_body_doc_id(def, *object_node_id)) {
                                             object_doc_ids.push(body);
                                         }
@@ -600,6 +629,15 @@ pub fn sync_inspector_data(
                                         object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
                                         object_doc_ids.extend(transform_chain.iter().map(|m| m.node_doc_id));
                                         let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
+                                        let mut parameter_ids = super::scene::parameter_ids_for_doc_ids(
+                                            def.as_ref(), &object_doc_ids,
+                                        );
+                                        super::scene::filter_inactive_physics_parameter_ids(
+                                            def.as_ref(), physics.as_ref(), &mut parameter_ids,
+                                        );
+                                        super::scene::filter_inactive_fluid_role_parameter_ids(
+                                            def.as_ref(), *group_node_id, &mut parameter_ids,
+                                        );
                                         // P4b: every Known object gets a Skin
                                         // row, even when no `node.layer_source`
                                         // exists yet — `source_node_id: None`
@@ -641,6 +679,8 @@ pub fn sync_inspector_data(
                                                 index: *index,
                                                 object_node_id: *object_node_id,
                                                 group_node_id: *group_node_id,
+                                                is_group: *is_group,
+                                                parent_group_id: *parent_group_id,
                                                 name: name.clone(),
                                                 visible: scoped_row(
                                                     visible_addr.scope_path.clone(),
@@ -668,7 +708,24 @@ pub fn sync_inspector_data(
                                                     .collect(),
                                                 modifiers_addable: *modifier_chain_parseable,
                                                 sections,
+                                                parameter_ids,
                                                 skin,
+                                                physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
+                                                physics_available: physics.is_some() || def.as_ref().is_some_and(|def| {
+                                                    manifold_editing::commands::graph::scene_object_physics_eligibility(
+                                                        def, vm.scene_root_node_id, *index as u32,
+                                                    ).is_ok()
+                                                }),
+                                                physics_imported: *physics_imported,
+                                                fluid_roles: if parent_group_id.is_none() {
+                                                    def.as_ref().map(|def| super::scene::fluid_role_rows(def, *group_node_id, &fluid_domains))
+                                                        .unwrap_or_else(|| Ok(Vec::new()))
+                                                } else { Ok(Vec::new()) },
+                                                fluid_role_available: parent_group_id.is_none() && def.as_ref().is_some_and(|def| {
+                                                    manifold_editing::commands::graph::scene_fluid_role_eligibility(
+                                                        def, vm.scene_root_node_id, *index as u32,
+                                                    ).is_ok()
+                                                }),
                                             },
                                         ))
                                     }
@@ -1092,6 +1149,9 @@ pub fn sync_inspector_data(
                                 environment,
                                 atmosphere,
                                 objects,
+                                fluid_domains,
+                                forces,
+                                force_picker,
                                 lights,
                                 camera,
                                 camera_sections,
@@ -1109,6 +1169,7 @@ pub fn sync_inspector_data(
         };
         ui.scene_setup_panel.configure(state);
         ui.scene_setup_panel.configure_params(full_params);
+        ui.scene_setup_panel.configure_force_cards(&force_surfaces);
     }
 
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──
@@ -1312,6 +1373,7 @@ pub fn sync_inspector_data(
                     // SAME def + VM (the UI never reads the graph).
                     let picker = super::cards::modifier_picker_entries(&def, &vm);
                     let mut surfaces = modifier_surfaces(gp, &def, &vm, lid, automation_latched, driver_timing);
+                    surfaces.retain(|surface| !super::cards::is_force_surface(surface, &def));
                     attach_audio_sends(&mut surfaces, &project.audio_setup);
                     if let Some((target, param_id)) = selected_automation(&layer.layer_id) {
                         for surface in &mut surfaces { mark_selected_automation_row(surface, &layer.layer_id, target, param_id); }
@@ -1549,10 +1611,13 @@ pub(crate) fn build_card_modulation(
 /// The projection assigns this scalar by stable parameter id while it builds the
 /// manifest rows, so filtering or reordering a modifier card preserves the
 /// complete audio configuration without a second indexed vector.
-pub(crate) fn audio_row_state(am: &manifold_core::audio_mod::ParameterAudioMod) -> AudioRowState {
+pub(crate) fn audio_row_state(
+    am: &manifold_core::audio_mod::ParameterAudioMod,
+    is_fire: bool,
+) -> AudioRowState {
     let mut row = AudioRowState {
         active: true,
-        send_id: Some(am.source.send_id.clone()),
+        send_id: (!am.source.send_id.is_empty()).then(|| am.source.send_id.clone()),
         range_min: am.shape.range_min,
         range_max: am.shape.range_max,
         invert: am.shape.invert,
@@ -1565,13 +1630,15 @@ pub(crate) fn audio_row_state(am: &manifold_core::audio_mod::ParameterAudioMod) 
         ..AudioRowState::default()
     };
     // PARAM_STEP_ACTIONS D3: an unset `trigger_mode`'s effective default
-    // depends on the mod's action — Continuous defaults to Both, while
-    // Step/Random defaults to Transient, matching the evaluator.
-    let default_mode = if matches!(am.action, manifold_core::audio_mod::TriggerAction::Continuous)
+    // depends on the row and the mod's action — ordinary Fire rows and
+    // Step/Random defaults use audio transients, while gate/continuous rows
+    // retain the evaluator's Both fallback.
+    let default_mode = if is_fire
+        || !matches!(am.action, manifold_core::audio_mod::TriggerAction::Continuous)
     {
-        manifold_core::audio_trigger::TriggerFireMode::Both
-    } else {
         manifold_core::audio_trigger::TriggerFireMode::Transient
+    } else {
+        manifold_core::audio_trigger::TriggerFireMode::Both
     };
     row.trigger_mode_idx = match am.trigger_mode.unwrap_or(default_mode) {
         manifold_core::audio_trigger::TriggerFireMode::ClipEdge => 0,
@@ -1619,12 +1686,16 @@ pub(crate) fn lookup_param_mod_for_id(
     timing: (manifold_core::Bpm, f32),
 ) -> (RowMod, AudioRowState) {
     let resolve = |id: &str| (id == param_id).then_some(0);
+    let is_fire = inst
+        .params
+        .get(param_id)
+        .is_some_and(|param| param.spec.is_trigger && !param.spec.is_trigger_gate);
     let audio = inst
         .audio_mods
         .iter()
         .flatten()
         .rfind(|am| am.enabled && am.param_id.as_ref() == param_id)
-        .map(audio_row_state)
+        .map(|am| audio_row_state(am, is_fire))
         .unwrap_or_default();
     let modulation = build_card_modulation(inst, 1, resolve, automation_latched, timing)
         .pop().expect("one requested modulation row");
@@ -1831,8 +1902,10 @@ mod audio_row_state_trigger_mode_tests {
     use super::*;
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, ParameterAudioMod};
     use manifold_core::audio_trigger::TriggerFireMode;
+    use manifold_core::effect_graph_def::ParamSpecDef;
     use manifold_core::effects::PresetInstance;
     use manifold_core::id::AudioSendId;
+    use manifold_core::params::{Param, ParamManifest};
 
     /// Trigger mode shares the scalar projection used by parameter cards.
     #[test]
@@ -1895,6 +1968,49 @@ mod audio_row_state_trigger_mode_tests {
 
         let (_, row) = lookup_param_mod_for_id(&inst, "clip_trigger", &[], (manifold_core::Bpm::DEFAULT, 60.0));
         assert_eq!(row.trigger_mode_idx, 2); // Both
+    }
+
+    #[test]
+    fn ordinary_fire_missing_trigger_mode_defaults_to_transient() {
+        let mut inst = PresetInstance::new(manifold_core::PresetTypeId::new("FireFixture"));
+        inst.params = ParamManifest::from_params(vec![Param::user_added(ParamSpecDef {
+            id: "fire".into(),
+            name: "Fire".into(),
+            min: 0.0,
+            max: 1.0,
+            default_value: 0.0,
+            is_trigger: true,
+            ..ParamSpecDef::default()
+        })]);
+        let m = ParameterAudioMod::new(
+            "fire".into(),
+            AudioSendId::new("send-kick"),
+            AudioFeature::new(AudioFeatureKind::Transients, AudioBand::Full),
+        );
+        assert_eq!(m.trigger_mode, None);
+        inst.audio_mods = Some(vec![m]);
+
+        // ParameterAudioMod::new starts Continuous. The ordinary Fire row's
+        // projection still defaults to Audio/Transient so its badge matches firing.
+        let (_, row) = lookup_param_mod_for_id(
+            &inst,
+            "fire",
+            &[],
+            (manifold_core::Bpm::DEFAULT, 60.0),
+        );
+        assert_eq!(row.trigger_mode_idx, 1); // Transient
+    }
+
+    #[test]
+    fn unassigned_clip_fire_source_does_not_request_an_audio_scope() {
+        let mut modulation = ParameterAudioMod::new(
+            "fire".into(), AudioSendId::default(), AudioFeature::default(),
+        );
+        modulation.trigger_mode = Some(TriggerFireMode::ClipEdge);
+        let row = audio_row_state(&modulation, true);
+        assert!(row.active);
+        assert_eq!(row.send_id, None);
+        assert_eq!(row.trigger_mode_idx, 0);
     }
 }
 
@@ -2070,7 +2186,7 @@ mod fire_meter_roundtrip_tests {
         bands[AudioBand::Low.index()].transients = 0.8; // (c) Strobe gate
         bands[AudioBand::Low.index()].kick = 0.8; // (d) clip-trigger row (Kick always reads Low)
         manifold_core::audio_features::AudioFeatureSnapshot {
-            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }],
+            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }], ..Default::default()
         }
     }
 

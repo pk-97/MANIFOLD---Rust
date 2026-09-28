@@ -812,6 +812,7 @@ impl ContentThread {
             ContentCommand::Shutdown => return true,
 
             ContentCommand::WatchEffectGraph(effect_id) => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 // One unified watched target; only one canvas active at a time.
                 self.watched_graph_target = effect_id.map(manifold_core::GraphTarget::Effect);
                 // Switching what's watched invalidates any node preview.
@@ -819,16 +820,19 @@ impl ContentThread {
                 self.modifier_preview_context = None;
             }
             ContentCommand::WatchGeneratorGraph(layer_id) => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 self.watched_graph_target = layer_id.map(manifold_core::GraphTarget::Generator);
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }
             ContentCommand::WatchGraphTarget(target) => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 self.watched_graph_target = target.filter(|target|target.host_target().is_some());
                 self.preview_graph_node = None;
                 self.modifier_preview_context = None;
             }
             ContentCommand::SetModifierPreviewContext { scope, object } => {
+                self.content_pipeline.set_scene_viewport_request(None);
                 self.modifier_preview_context = match &self.watched_graph_target {
                     Some(manifold_core::GraphTarget::SceneModifier { modifier_id, .. }) =>
                         Some(std::sync::Arc::new(manifold_renderer::preset_runtime::ModifierPreviewContext {
@@ -838,7 +842,19 @@ impl ContentThread {
                 };
             }
             ContentCommand::SetGraphPreviewNode(node_id) => {
+                if self.preview_graph_node != node_id {
+                    self.content_pipeline.set_scene_viewport_request(None);
+                }
                 self.preview_graph_node = node_id;
+            }
+            ContentCommand::SetSceneViewport(request) => {
+                if request.as_ref().is_none_or(|request|
+                    Some(&request.target) == self.watched_graph_target.as_ref()
+                        && Some(&request.node) == self.preview_graph_node.as_ref()
+                        && request.modifier == self.modifier_preview_context)
+                {
+                    self.content_pipeline.set_scene_viewport_request(request);
+                }
             }
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
@@ -1118,6 +1134,15 @@ impl ContentThread {
                     Err(message) => self.report_graph_edit_rejection(message),
                 }
             }
+            ContentCommand::FluidDomainEdit(drag) => {
+                let result = self.engine.project()
+                    .ok_or_else(|| "Project is no longer available".to_string())
+                    .and_then(|project| crate::fluid_domain_edit::build_action(project, *drag));
+                match result {
+                    Ok(command) => { self.handle_command(ContentCommand::ExecuteOnContent(command)); }
+                    Err(message) => self.report_graph_edit_rejection(message),
+                }
+            }
             ContentCommand::PreviewAutomationLane { target, param_id, points } => {
                 self.engine.set_automation_lane_preview(target, param_id, points);
             }
@@ -1126,6 +1151,45 @@ impl ContentThread {
             }
             ContentCommand::FinishAutomationRecording => {
                 self.commit_automation_recording(true);
+            }
+            ContentCommand::FireParameter { target, param_id } => {
+                let source = manifold_renderer::node_graph::FrameTime {
+                    seconds: self.engine.current_time(),
+                    beats: self.engine.current_beat(),
+                    delta: Seconds::ZERO,
+                    frame_count: 0,
+                };
+                let before = self.engine.project().and_then(|project| project.preset_instance(&target))
+                    .map(|instance| instance.get_base_param(param_id.as_ref()));
+                self.handle_command(ContentCommand::ExecuteOnContent(Box::new(
+                    manifold_editing::commands::effects::FireGraphParamCommand::new(target.clone(), param_id.clone()),
+                )));
+                let accepted = before.is_some_and(|before| {
+                    self.engine.project().and_then(|project| project.preset_instance(&target))
+                        .is_some_and(|instance| instance.get_base_param(param_id.as_ref()) == before + 1.0
+                            && before + 1.0 > before)
+                });
+                if accepted && let manifold_core::GraphTarget::Generator(layer_id) = &target {
+                    let (renderers, mut project) = self.engine.split_renderer_project_mut();
+                    if let Some(project) = project.as_mut() {
+                        project.tempo_map.ensure_sorted();
+                    }
+                    let result = if let Some(layer) = project.as_deref().and_then(|project|
+                        project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)) {
+                        if GeneratorRenderer::has_scene_impulse(layer, param_id.as_ref()) {
+                            let project_tempo = project
+                                .as_deref()
+                                .map(|project| manifold_renderer::preset_context::ProjectTempo::new(
+                                    &project.tempo_map,
+                                    project.settings.bpm,
+                                ));
+                            renderers.iter_mut().find_map(|renderer| renderer.as_any_mut().downcast_mut::<GeneratorRenderer>())
+                                .ok_or_else(|| "Impulse: scene renderer is unavailable".to_string())
+                                .and_then(|renderer| renderer.fire_scene_impulse(layer, param_id.as_ref(), source, project_tempo.as_ref()))
+                        } else { Ok(false) }
+                    } else { Ok(false) };
+                    if let Err(message) = result { self.report_graph_edit_rejection(message); }
+                }
             }
             ContentCommand::Execute(cmd) | ContentCommand::ExecuteOnContent(cmd) => {
                 self.engine.clear_automation_previews();

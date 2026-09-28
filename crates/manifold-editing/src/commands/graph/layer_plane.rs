@@ -16,10 +16,9 @@
 //! The caller (app-side) computes width/height from the canvas aspect; the
 //! command just takes the two f32s.
 //!
-//! `next_index` (the new object's 0-based slot, `k` in `object_k`) is
-//! resolved by the caller from the LIVE `objects` param value shown on the
-//! node face at click time — not re-derived here, same posture
-//! `AddSceneObjectCommand` documents.
+//! `next_index` remains in the constructor for the scene-setup action ABI, but
+//! is only a stale UI hint. The content-owned `render_scene.objects` count is
+//! validated and resolved at execution time, same as `AddSceneObjectCommand`.
 
 use std::collections::BTreeMap;
 
@@ -50,7 +49,6 @@ pub struct AddSceneLayerPlaneCommand {
     target: GraphTarget,
     scope_path: Vec<u32>,
     render_scene_node_id: u32,
-    next_index: u32,
     centroid: (f32, f32),
     /// Plane size in world units. The app-side caller computes these from
     /// the canvas aspect (`width = height * aspect`) so a skinned layer
@@ -75,6 +73,7 @@ pub struct AddSceneLayerPlaneCommand {
         Vec<EffectGraphWire>,
         Option<PresetMetadata>,
     )>,
+    rejection: Option<&'static str>,
 }
 
 impl AddSceneLayerPlaneCommand {
@@ -83,7 +82,7 @@ impl AddSceneLayerPlaneCommand {
         target: GraphTarget,
         scope_path: Vec<u32>,
         render_scene_node_id: u32,
-        next_index: u32,
+        _next_index: u32,
         centroid: (f32, f32),
         width: f32,
         height: f32,
@@ -96,7 +95,6 @@ impl AddSceneLayerPlaneCommand {
             target,
             scope_path,
             render_scene_node_id,
-            next_index,
             centroid,
             width,
             height,
@@ -105,6 +103,7 @@ impl AddSceneLayerPlaneCommand {
             scene_object_metadata,
             catalog_default,
             prev: None,
+            rejection: None,
         }
     }
 }
@@ -120,10 +119,28 @@ fn layer_plane_tint(k: u32) -> manifold_core::Color {
 }
 
 impl Command for AddSceneLayerPlaneCommand {
+    fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
+        targets.push(self.target.clone());
+    }
+
     fn execute(&mut self, project: &mut Project) {
+        self.prev = None;
+        self.rejection = None;
         let scope = self.scope_path.clone();
         let render_id = self.render_scene_node_id;
-        let k = self.next_index;
+        let k = {
+            let Some(def) = project.graph_for_target(&self.target, Some(&self.catalog_default)) else {
+                self.rejection = Some("Add layer plane target is unavailable");
+                return;
+            };
+            match super::scene::scene_object_append_slot_for_scope(def, &scope, render_id) {
+                Ok(k) => k,
+                Err(reason) => {
+                    self.rejection = Some(reason);
+                    return;
+                }
+            }
+        };
         let centroid = self.centroid;
         let width = self.width;
         let height = self.height;
@@ -371,6 +388,14 @@ impl Command for AddSceneLayerPlaneCommand {
     fn description(&self) -> &str {
         "Add Layer Plane"
     }
+
+    fn was_applied(&self) -> bool {
+        self.prev.is_some()
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +462,108 @@ mod tests {
             .graph
             .as_ref()
             .unwrap()
+    }
+
+    #[test]
+    fn scene_physics_append_layer_plane_uses_physical_slot_and_undoes_exactly() {
+        let mut graph = render_scene_graph(2);
+        graph.nodes.extend([
+            scene_build_node(11, "node.scene_object", Some("Existing 1".into()), BTreeMap::new()),
+            scene_build_node(12, "node.scene_object", Some("Existing 2".into()), BTreeMap::new()),
+        ]);
+        graph.wires.extend([
+            EffectGraphWire { from_node: 11, from_port: "object".into(), to_node: 0, to_port: "object_0".into() },
+            EffectGraphWire { from_node: 12, from_port: "object".into(), to_node: 0, to_port: "object_1".into() },
+        ]);
+        let (mut project, lid) = generator_project(graph.clone());
+        let target = GraphTarget::Generator(lid.clone());
+        let mut command = AddSceneLayerPlaneCommand::new(
+            target,
+            vec![],
+            0,
+            1, // stale logical parent count; physical object_0 and object_1 exist
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            mirror_catalog_default(),
+        );
+        command.execute(&mut project);
+        assert!(command.was_applied(), "add rejected: {:?}", command.rejection_reason());
+        let after = def_of(&project, &lid);
+        assert_eq!(
+            after.nodes.iter().find(|node| node.id == 0).unwrap().params.get("objects"),
+            Some(&SerializedParamValue::Float { value: 3.0 })
+        );
+        assert!(after.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_0"));
+        assert!(after.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_1"));
+        assert!(after.wires.iter().any(|wire| wire.to_node == 0 && wire.to_port == "object_2"));
+        command.undo(&mut project);
+        assert_eq!(def_of(&project, &lid), &graph);
+    }
+
+    #[test]
+    fn scene_physics_append_layer_plane_rejects_malformed_count_without_mutation() {
+        let mut graph = render_scene_graph(0);
+        graph.nodes.iter_mut().find(|node| node.id == 0).unwrap().params.insert(
+            "objects".into(),
+            SerializedParamValue::Float { value: f32::NAN },
+        );
+        let (mut project, lid) = generator_project(graph.clone());
+        let target = GraphTarget::Generator(lid.clone());
+        let version = project.graph_target_owner(&target).unwrap().graph_structure_version;
+        let mut command = AddSceneLayerPlaneCommand::new(
+            target,
+            vec![],
+            0,
+            0,
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            mirror_catalog_default(),
+        );
+        command.execute(&mut project);
+        assert!(!command.was_applied());
+        assert_eq!(command.rejection_reason(), Some("Add scene object render scene has an invalid object count"));
+        assert_eq!(serde_json::to_value(def_of(&project, &lid)).unwrap(), serde_json::to_value(&graph).unwrap());
+        assert_eq!(project.graph_target_owner(&GraphTarget::Generator(lid)).unwrap().graph_structure_version, version);
+    }
+
+    #[test]
+    fn scene_physics_append_layer_plane_rejects_occupied_destination_without_mutation() {
+        let mut graph = render_scene_graph(2);
+        graph.wires.push(EffectGraphWire {
+            from_node: 7,
+            from_port: "object".into(),
+            to_node: 0,
+            to_port: "object_2".into(),
+        });
+        let (mut project, lid) = generator_project(graph.clone());
+        let target = GraphTarget::Generator(lid.clone());
+        let version = project.graph_target_owner(&target).unwrap().graph_structure_version;
+        let mut command = AddSceneLayerPlaneCommand::new(
+            target,
+            vec![],
+            0,
+            1,
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            mirror_catalog_default(),
+        );
+        command.execute(&mut project);
+        assert!(!command.was_applied());
+        assert_eq!(command.rejection_reason(), Some("Add scene object destination object slot is occupied"));
+        assert_eq!(def_of(&project, &lid), &graph);
+        assert_eq!(project.graph_target_owner(&GraphTarget::Generator(lid)).unwrap().graph_structure_version, version);
     }
 
     #[test]

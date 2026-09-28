@@ -119,7 +119,7 @@ fn group_mask_layer_source_reaches_dispatch_and_survives_reload() {
             registry.finish_snapshots();
             crate::chain_dispatch::dispatch_chain(&mut cache, &mut gpu, &input.texture,
                 &effects, &groups, &ctx, None, "group-mask-test", false,
-                crate::node_graph::RtQuality::default(), &registry).unwrap().clone()
+                crate::node_graph::RtQuality::default(), &registry, None).unwrap().clone()
         };
         encoder.commit_and_wait_completed();
         let raw = crate::headless_readback::readback_raw_halves(&device, &output, 16, 16);

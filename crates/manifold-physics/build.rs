@@ -1,10 +1,19 @@
 use std::path::PathBuf;
 
+#[path = "../../scripts/native_source_identity.rs"]
+mod native_source_identity;
+
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let native_dir = manifest_dir.join("native/box3d");
     let include_dir = native_dir.join("include");
     let source_dir = native_dir.join("src");
+    native_source_identity::emit_source_identity(
+        &manifest_dir,
+        &["native", "src"],
+        "MANIFOLD_PHYSICS_SOURCE_IDENTITY",
+    )
+    .expect("compute manifold-physics source identity");
     // Include private headers when deliberately updating the pinned native tree.
     println!("cargo:rerun-if-changed={}", native_dir.display());
 

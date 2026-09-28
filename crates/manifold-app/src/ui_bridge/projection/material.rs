@@ -47,6 +47,7 @@ fn colour(value: core::MaterialColour) -> ui::MaterialColour {
         core::MaterialColour::Emission => ui::MaterialColour::Emission,
         core::MaterialColour::Sheen => ui::MaterialColour::Sheen,
         core::MaterialColour::Attenuation => ui::MaterialColour::Attenuation,
+        core::MaterialColour::VolumeScattering => ui::MaterialColour::VolumeScattering,
         core::MaterialColour::Subsurface => ui::MaterialColour::Subsurface,
         core::MaterialColour::Translucency => ui::MaterialColour::Translucency,
     }

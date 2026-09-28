@@ -37,9 +37,9 @@ use kira::{
     sound::static_sound::{StaticSoundData, StaticSoundHandle},
     tween::Tween,
 };
-use ringbuf::HeapRb;
-use ringbuf::traits::{Consumer, Producer, Split};
-
+use manifold_core::audio_stream::{
+    audio_stream, AudioStreamConsumer, AudioStreamProducer, AudioStreamRead,
+};
 use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
@@ -56,12 +56,17 @@ const HARD_RESYNC_SECONDS: f64 = 0.20;
 const PAUSED_SEEK_TOLERANCE_SECONDS: f64 = 0.06;
 /// Short fade for start/stop/volume changes so clip edges and mutes don't click.
 const DECLICK_MS: u64 = 5;
-/// Per-layer tap ring capacity (mono f32 samples). At 48 kHz this is ~0.34 s —
+/// Per-layer tap ring capacity (mono f32 frames). At 48 kHz this is ~0.34 s —
 /// generous headroom over the ~800 samples a 60 Hz content tick consumes, so a
 /// brief content-thread stall doesn't lose audio before the analyzer drains it.
-/// On overflow the audio thread drops the newest sample (non-blocking) rather
-/// than ever blocking the mixer.
-const TAP_RING_CAPACITY: usize = 16_384;
+const TAP_RING_FRAME_CAPACITY: usize = 16_384;
+/// Descriptor capacity for the bounded stream. The tap normally publishes one
+/// descriptor per 64-frame staging flush, so this leaves ample headroom over the
+/// frame ring and keeps descriptor publication allocation-free.
+const TAP_BLOCK_CAPACITY: usize = 512;
+/// Small fixed staging buffer used to amortize descriptor publication on the
+/// realtime thread. A partial buffer is flushed before a sample-rate change.
+const TAP_STAGING_CAPACITY: usize = 64;
 
 /// A short volume/transport tween that declicks an edge (start, stop, seek-jump).
 fn declick() -> Tween {
@@ -132,23 +137,25 @@ fn local_bpm_at_beat(beat: Beats, project: &Project, engine: &PlaybackEngine) ->
 ///
 /// kira requires `Effect: Send + Sync`, but the ring producer is `Send`-only (it
 /// caches an index in a `Cell`). The producer is wrapped in a `Mutex` purely to
-/// satisfy that bound: only the audio thread ever locks it (the content thread
-/// drains the *consumer*, a separate ring end), so the lock is uncontended and
-/// `try_lock` never blocks the mixer.
+/// satisfy that bound. Effect callbacks own `&mut self`, so `get_mut` accesses
+/// the producer exclusively without acquiring the mutex on the audio thread.
 struct LayerTap {
-    prod: Mutex<ringbuf::HeapProd<f32>>,
+    prod: Mutex<AudioStreamProducer>,
     /// Renderer sample rate, learned from [`Effect::init`] and read by the
     /// content thread to build the matching analyzer. 0 until the first init.
     sample_rate: Arc<AtomicU32>,
+    staging: [f32; TAP_STAGING_CAPACITY],
+    staging_len: usize,
+
 }
 
 impl Effect for LayerTap {
     fn init(&mut self, sample_rate: u32) {
-        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+        self.request_sample_rate(sample_rate);
     }
 
     fn on_change_sample_rate(&mut self, sample_rate: u32) {
-        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+        self.request_sample_rate(sample_rate);
     }
 
     fn process(
@@ -158,28 +165,67 @@ impl Effect for LayerTap {
         _clock: &ClockInfoProvider,
         _mods: &ModulatorValueProvider,
     ) -> Frame {
-        // Mono downmix of the stereo bus. On a full ring drop the sample (the
-        // analyzer fell behind); never block the audio thread.
-        let mono = (input.left + input.right) * 0.5;
-        if let Some(mut prod) = self.prod.try_lock() {
-            let _ = prod.try_push(mono);
-        }
+        // Mono downmix of the stereo bus. The frame is returned untouched so
+        // this effect remains a true pass-through tap.
+        self.enqueue_frame(input)
+    }
+}
+
+impl LayerTap {
+    /// Request a producer-rate change. A partial old-rate block is published
+    /// before changing the producer so every descriptor has one rate stamp.
+    fn request_sample_rate(&mut self, sample_rate: u32) {
+        self.flush_staging();
+        self.prod.get_mut().set_sample_rate(sample_rate);
+        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+    }
+
+    /// Add one mono source frame to the fixed staging buffer. The buffer is
+    /// flushed as a whole so the stream publishes one bounded descriptor rather
+    /// than one descriptor per audio frame.
+    fn enqueue_frame(&mut self, input: Frame) -> Frame {
+        self.enqueue_mono((input.left + input.right) * 0.5);
         input
     }
+
+    fn enqueue_mono(&mut self, mono: f32) {
+        self.staging[self.staging_len] = mono;
+        self.staging_len += 1;
+        if self.staging_len == TAP_STAGING_CAPACITY {
+            self.flush_staging();
+        }
+    }
+
+    fn flush_staging(&mut self) {
+        if self.staging_len == 0 { return; }
+        // Capacity loss is reported by the stream at the original source frame
+        // positions. The existing mutex holder is accessed without locking.
+        self.prod.get_mut().push_interleaved(&self.staging[..self.staging_len]);
+        self.staging_len = 0;
+    }
+
 }
 
 /// Builds a [`LayerTap`] when the sub-track is created. The handle is unused —
 /// the content thread reaches the tap through the ring + atomic it was built
 /// with, not through a kira effect handle.
 struct LayerTapBuilder {
-    prod: ringbuf::HeapProd<f32>,
+    prod: AudioStreamProducer,
     sample_rate: Arc<AtomicU32>,
 }
 
 impl EffectBuilder for LayerTapBuilder {
     type Handle = ();
     fn build(self) -> (Box<dyn Effect>, Self::Handle) {
-        (Box::new(LayerTap { prod: Mutex::new(self.prod), sample_rate: self.sample_rate }), ())
+        (
+            Box::new(LayerTap {
+                prod: Mutex::new(self.prod),
+                sample_rate: self.sample_rate,
+                staging: [0.0; TAP_STAGING_CAPACITY],
+                staging_len: 0,
+            }),
+            (),
+        )
     }
 }
 
@@ -188,10 +234,10 @@ struct LayerTrack {
     /// Kept alive to keep the kira track alive (dropping the handle removes it).
     /// Clip voices route here via [`StaticSoundData::output_destination`].
     track: TrackHandle,
-    /// Read end of the tap ring — drained on the content thread each tick and fed
+    /// Read end of the tap stream — drained on the content thread each tick and fed
     /// to the send's `StreamingSendAnalyzer` (the analysis runs inline, no worker
     /// thread; the kira audio thread is the only producer).
-    tap: ringbuf::HeapCons<f32>,
+    tap: AudioStreamConsumer,
     /// Renderer sample rate, written by the tap on init (0 until then).
     sample_rate: Arc<AtomicU32>,
 }
@@ -355,7 +401,7 @@ impl AudioLayerPlayback {
         if self.layer_tracks.contains_key(layer_id) {
             return;
         }
-        let (prod, cons) = HeapRb::<f32>::new(TAP_RING_CAPACITY).split();
+        let (prod, cons) = audio_stream(1, TAP_RING_FRAME_CAPACITY, TAP_BLOCK_CAPACITY, 0);
         let sample_rate = Arc::new(AtomicU32::new(0));
         let mut builder = TrackBuilder::new();
         builder.add_effect(LayerTapBuilder { prod, sample_rate: sample_rate.clone() });
@@ -473,21 +519,51 @@ impl AudioLayerPlayback {
         voices.insert(id.clone(), voice);
     }
 
-    /// Drain the layer's post-fader tap, handing each chunk of mono samples to
-    /// `f` (oldest → newest). No-op for a layer with no sub-track yet. Called once
-    /// per tick by the audio-mod runtime to feed the send analyzer.
-    pub fn drain_layer_tap(&mut self, layer_id: &LayerId, mut f: impl FnMut(&[f32])) {
+    /// Drain the layer's post-fader tap, handing each stamped event and its mono
+    /// samples to `f` (oldest → newest). Gap events carry an empty sample slice;
+    /// invalid streams are reported and stop the drain. No-op for a layer with no
+    /// sub-track yet. Called once per tick by the audio-mod runtime to feed the
+    /// send analyzer.
+    pub fn drain_layer_tap_stamped(
+        &mut self,
+        layer_id: &LayerId,
+        mut f: impl FnMut(AudioStreamRead, &[f32]),
+    ) {
         let Some(lt) = self.layer_tracks.get_mut(layer_id) else {
             return;
         };
         let mut buf = [0.0f32; 2048];
         loop {
-            let n = lt.tap.pop_slice(&mut buf);
-            if n == 0 {
+            let Some(read) = lt.tap.read(&mut buf) else {
                 break;
+            };
+            match read {
+                AudioStreamRead::Samples { samples, .. } => f(read, &buf[..samples]),
+                AudioStreamRead::Gap { .. } => f(read, &[]),
+                AudioStreamRead::InvalidInput => {
+                    log::warn!(
+                        "[AudioLayerPlayback] layer tap stream is invalid; replacing the layer stream is required"
+                    );
+                    f(read, &[]);
+                    break;
+                }
             }
-            f(&buf[..n]);
         }
+    }
+
+    /// Drain the layer's post-fader tap, handing each contiguous sample chunk to
+    /// `f` (oldest → newest). This legacy API omits stream gaps and warns when it
+    /// encounters one; stamped callers should use [`Self::drain_layer_tap_stamped`].
+    pub fn drain_layer_tap(&mut self, layer_id: &LayerId, mut f: impl FnMut(&[f32])) {
+        self.drain_layer_tap_stamped(layer_id, |read, samples| match read {
+            AudioStreamRead::Samples { .. } => f(samples),
+            AudioStreamRead::Gap { first_frame, end_frame } => log::warn!(
+                "[AudioLayerPlayback] legacy layer tap drain omitted source gap [{first_frame}, {end_frame})"
+            ),
+            AudioStreamRead::InvalidInput => log::warn!(
+                "[AudioLayerPlayback] legacy layer tap drain stopped on invalid stream"
+            ),
+        });
     }
 
     /// The renderer sample rate of a layer's tap, or `None` until the tap's first
@@ -566,8 +642,8 @@ impl AudioLayerPlayback {
 mod layer_tap_tests {
     use std::sync::Arc;
 
-    use kira::Frame;
     use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
+    use kira::Frame;
 
     use super::*;
 
@@ -661,6 +737,114 @@ mod layer_tap_tests {
             "tap went silent (peak {peak:.4}) when sub-track muted to master — \
              output volume is applied before the tap; analysis-only needs a different tap point"
         );
+    }
+}
+
+#[cfg(test)]
+mod layer_tap_stream_tests {
+    use super::*;
+
+    fn test_tap(
+        frame_capacity: usize,
+        block_capacity: usize,
+        sample_rate: u32,
+    ) -> (LayerTap, AudioStreamConsumer) {
+        let (prod, cons) = audio_stream(1, frame_capacity, block_capacity, sample_rate);
+        let sample_rate = Arc::new(AtomicU32::new(sample_rate));
+        (
+            LayerTap {
+                prod: Mutex::new(prod),
+                sample_rate,
+                staging: [0.0; TAP_STAGING_CAPACITY],
+                staging_len: 0,
+            },
+            cons,
+        )
+    }
+
+    #[test]
+    fn staging_downmixes_mean_and_preserves_input_frame() {
+        let (mut tap, mut reader) = test_tap(128, 4, 48_000);
+        let input = Frame::new(0.2, 0.6);
+        let returned = tap.enqueue_frame(input);
+        assert_eq!(returned.left, input.left);
+        assert_eq!(returned.right, input.right);
+
+        tap.flush_staging();
+        let mut output = [0.0; 4];
+        assert_eq!(
+            reader.read(&mut output),
+            Some(AudioStreamRead::Samples {
+                stamp: manifold_core::audio_stream::AudioBlockStamp {
+                    first_frame: 0,
+                    sample_rate: 48_000,
+                    clock: None,
+                    generation: 0,
+                },
+                samples: 1,
+            })
+        );
+        assert_eq!(output[0], 0.4);
+    }
+
+    #[test]
+    fn overflow_reports_terminal_gap_after_accepted_prefix() {
+        let (mut tap, mut reader) = test_tap(8, 2, 48_000);
+        for value in 0..128 {
+            tap.enqueue_mono(value as f32);
+        }
+
+        let mut output = [0.0; 128];
+        assert!(matches!(
+            reader.read(&mut output),
+            Some(AudioStreamRead::Samples { samples: 8, .. })
+        ));
+        assert_eq!(
+            reader.read(&mut output),
+            Some(AudioStreamRead::Gap {
+                first_frame: 8,
+                end_frame: 128,
+            })
+        );
+        assert_eq!(reader.read(&mut output), None);
+    }
+
+    #[test]
+    fn rate_change_flushes_partial_block_before_new_stamp() {
+        let (mut tap, mut reader) = test_tap(128, 4, 44_100);
+        tap.enqueue_mono(1.0);
+        tap.enqueue_mono(2.0);
+        tap.request_sample_rate(48_000);
+        tap.enqueue_mono(3.0);
+        tap.flush_staging();
+
+        let mut output = [0.0; 8];
+        assert_eq!(
+            reader.read(&mut output),
+            Some(AudioStreamRead::Samples {
+                stamp: manifold_core::audio_stream::AudioBlockStamp {
+                    first_frame: 0,
+                    sample_rate: 44_100,
+                    clock: None,
+                    generation: 0,
+                },
+                samples: 2,
+            })
+        );
+        assert_eq!(&output[..2], &[1.0, 2.0]);
+        assert_eq!(
+            reader.read(&mut output),
+            Some(AudioStreamRead::Samples {
+                stamp: manifold_core::audio_stream::AudioBlockStamp {
+                    first_frame: 2,
+                    sample_rate: 48_000,
+                    clock: None,
+                    generation: 1,
+                },
+                samples: 1,
+            })
+        );
+        assert_eq!(output[0], 3.0);
     }
 }
 

@@ -751,17 +751,18 @@ impl ParamCardPanel {
     }
 
     /// P7 (`AUDIO_SETUP_DOCK_AND_TRIGGER_UNIFICATION_DESIGN.md` section 7.2 item 5):
-    /// param index of the currently-OPEN fire-mode (`is_trigger_gate`, armed)
+    /// param index of the currently-OPEN fire-mode (`is_trigger` or
+    /// `is_trigger_gate`, armed)
     /// drawer, if any — deliberately narrower than the Amount meter itself
     /// (every open drawer shows a meter, 2026-07-11): only a fire-mode config
     /// re-taps the scope send/band here. A plain continuous mod's open drawer
-    /// never matches. First match wins; a card with two armed trigger-gate
-    /// rows is not a case this app produces today.
+    /// never matches. First match wins; a card with two armed fire rows is not
+    /// a case this app produces today.
     fn open_fire_mode_drawer_row(&self) -> Option<usize> {
         self.row_host.audio_configs.iter().enumerate().find_map(|(pi, cfg)| {
             cfg.as_ref()?;
             let info = self.rows.get(pi)?;
-            info.spec.is_trigger_gate.then_some(pi)
+            (info.spec.is_trigger || info.spec.is_trigger_gate).then_some(pi)
         })
     }
 
@@ -1644,6 +1645,19 @@ mod tests {
         c
     }
 
+    /// Same armed audio drawer as the trigger-gate fixture, but on an ordinary
+    /// momentary Fire row. This keeps the shared drawer/action assertions close
+    /// to the gate coverage while exercising the distinct `is_trigger` path.
+    fn effect_config_with_fire() -> ParamSurface {
+        let mut c = effect_config_with_trigger_gate();
+        let fi = c.rows.len() - 1;
+        c.rows[fi].spec.is_toggle = false;
+        c.rows[fi].spec.is_trigger = true;
+        c.rows[fi].spec.is_trigger_gate = false;
+        c.rows[fi].audio.trigger_mode_idx = 1; // Audio/Transient
+        c
+    }
+
     #[test]
     fn build_effect_trigger_gate_row_and_drawer() {
         let mut tree = UITree::new();
@@ -1662,6 +1676,95 @@ mod tests {
         assert!(panel.row_host.audio_configs[gi].is_some());
         // The collapsed-row mode badge exists (mode = Both, index 2 > 0).
         assert!(panel.row_host.audio_trigger_mode_badge_ids[gi].is_some());
+    }
+
+    #[test]
+    fn build_effect_fire_row_and_drawer_exposes_mode_and_meter() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_fire());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let fi = panel.rows.len() - 1;
+        assert!(panel.row_host.slider_ids[fi].is_none());
+        assert!(panel.row_host.toggle_ids[fi].is_some());
+        assert!(panel.row_host.audio_btn_ids[fi].is_some());
+        assert!(panel.row_host.audio_configs[fi].is_some());
+        // Ordinary Fire defaults to Audio/Transient, so the armed mode badge
+        // is visible even before the drawer is opened.
+        let badge_id = panel.row_host.audio_trigger_mode_badge_ids[fi].expect("Fire mode badge");
+        assert_eq!(tree.get_node(badge_id).and_then(|node| node.text.as_deref()), Some("Audio"));
+        assert_eq!(
+            panel.open_fire_mode_drawer_send(),
+            Some(manifold_foundation::AudioSendId::new("send-kick"))
+        );
+        assert_eq!(panel.open_fire_mode_drawer_band(), Some(crate::types::AudioBand::Low));
+        let (dids, _) = panel.row_host.audio_configs[fi].as_ref().expect("Fire drawer");
+        let mode_buttons = &dids.button_ids()[dids.button_count() - 3..];
+        let mode_labels: Vec<_> = mode_buttons
+            .iter()
+            .map(|id| tree.get_node(*id).and_then(|node| node.text.as_deref()))
+            .collect();
+        assert_eq!(mode_labels, vec![Some("Clip"), Some("Audio"), Some("Both")]);
+        assert_ne!(
+            tree.get_node(mode_buttons[1]).unwrap().style.bg_color,
+            tree.get_node(mode_buttons[0]).unwrap().style.bg_color,
+            "Audio must be the selected Mode button"
+        );
+        let expected_drawer_h = crate::panels::param_slider_shared::audio_config_height(
+            &panel.rows[fi],
+            &panel.state.mod_state,
+            fi,
+        ) + DRAWER_BOTTOM_GAP;
+        assert!((panel.row_drawer_height(fi) - expected_drawer_h).abs() < 0.1);
+
+        // Ordinary Fire also keeps an armed Clip selection visible; the gate
+        // path retains its historical blank Clip badge.
+        let mut clip_cfg = effect_config_with_fire();
+        clip_cfg.rows[fi].audio.trigger_mode_idx = 0;
+        let mut clip_panel = ParamCardPanel::new();
+        clip_panel.configure(&clip_cfg);
+        let mut clip_tree = UITree::new();
+        clip_panel.build(&mut clip_tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let clip_badge = clip_panel.row_host.audio_trigger_mode_badge_ids[fi].expect("Clip badge");
+        assert_eq!(clip_tree.get_node(clip_badge).and_then(|node| node.text.as_deref()), Some("Clip"));
+
+        let mut gate_clip_cfg = effect_config_with_trigger_gate();
+        let mut gate_clip_panel = ParamCardPanel::new();
+        gate_clip_cfg.rows[fi].audio.trigger_mode_idx = 0;
+        gate_clip_panel.configure(&gate_clip_cfg);
+        let mut gate_clip_tree = UITree::new();
+        gate_clip_panel.build(&mut gate_clip_tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let gate_badge = gate_clip_panel.row_host.audio_trigger_mode_badge_ids[fi].expect("gate badge");
+        assert_eq!(gate_clip_tree.get_node(gate_badge).and_then(|node| node.text.as_deref()), Some(""));
+    }
+
+    #[test]
+    fn click_fire_mode_drawer_dispatches_trigger_mode() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_fire());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let fi = panel.rows.len() - 1;
+        let button_id = panel.row_host.audio_configs[fi]
+            .as_ref()
+            .expect("armed Fire drawer")
+            .0
+            .button_ids()
+            .last()
+            .copied()
+            .expect("Mode row's Both button");
+
+        let actions = panel.handle_click(button_id, &tree);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            PanelAction::Modulation(ModulationAction::AudioModSetTriggerMode(target, param_id, mode_idx)) => {
+                assert_eq!(*target, GraphParamTarget::Effect(0));
+                assert_eq!(param_id.as_ref(), "clip_trigger");
+                assert_eq!(*mode_idx, 2);
+            }
+            other => panic!("expected AudioModSetTriggerMode, got {:?}", other),
+        }
     }
 
     #[test]

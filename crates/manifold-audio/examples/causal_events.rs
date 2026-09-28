@@ -186,7 +186,7 @@ fn main() {
         if chunk.len() < hop {
             break;
         }
-        let snapshot = AudioFeatureSnapshot { sends: vec![an.latest()] };
+        let snapshot = AudioFeatureSnapshot { sends: vec![an.latest()], ..Default::default() };
         let fires = trigger.evaluate(
             &snapshot,
             &setup,

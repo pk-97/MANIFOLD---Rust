@@ -11,7 +11,6 @@ manifold-core = { path = "../manifold-core" }
 manifold-spectral = { path = "../manifold-spectral", default-features = false }
 log = { workspace = true }
 cpal = "0.15"
-ringbuf = "0.4"
 rustfft = "6"
 
 # macOS CoreAudio FFI: device directory (channel names, UIDs, hot-plug),

@@ -42,6 +42,8 @@ crate::primitive! {
         weights: Array(f32) optional,
         topology: Array(Vec4Vertex) optional,
         transform: Transform optional,
+        parent_transform: Transform optional,
+        parent_visible: ScalarF32 optional,
         material: Material optional,
         base_color_map: Texture2D optional,
         normal_map: Texture2D optional,
@@ -75,6 +77,14 @@ crate::primitive! {
         ParamDef {
             name: Cow::Borrowed("visible"),
             label: "Visible",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("parent_visible"),
+            label: "Parent Visible",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
@@ -129,6 +139,8 @@ impl Primitive for SceneObjectNode {
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
         let transform = ctx.inputs.transform("transform").unwrap_or_default();
+        let parent_transform = ctx.inputs.transform("parent_transform");
+        let parent_visible = ctx.scalar_or_param("parent_visible", 1.0) > 0.5;
         let material = ctx.inputs.material("material");
         let mesh = ctx.inputs.slot_of("vertices");
         let weights = ctx.inputs.slot_of("weights");
@@ -159,9 +171,10 @@ impl Primitive for SceneObjectNode {
             .and_then(|value| value.as_scalar());
 
         let object = SceneObject {
-            visible,
+            visible: visible && parent_visible,
             cast_shadows,
             transform,
+            parent_transform,
             material,
             mesh,
             weights,

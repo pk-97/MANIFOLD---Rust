@@ -1,5 +1,5 @@
 {
-  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error — the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py.",
+  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flow-name filters (same substring semantics as positional filters). A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
     "crates/manifold-ui/src/interaction_overlay.rs": [
@@ -22,19 +22,30 @@
       "scene-card",
       "scene-panel",
       "scene-skin",
-      "material-inspector"
+      "material-inspector",
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle",
+      "scene-fluid-object-lifecycle",
+      "scene-forces-controls"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
       "scene-skin",
-      "material-inspector"
+      "material-inspector",
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle",
+      "scene-fluid-object-lifecycle",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-setup",
       "scene-card",
-      "scene-panel"
+      "scene-panel",
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle",
+      "scene-fluid-object-lifecycle"
     ],
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
       "scene-setup",
@@ -43,7 +54,8 @@
       "inspector",
       "set-param",
       "envelope-modulation",
-      "calibrated-param"
+      "calibrated-param",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
       "frame-align-lfo",
@@ -51,14 +63,19 @@
       "select-and-inspect",
       "set-param",
       "calibrated-param",
-      "scene-skin"
+      "scene-skin",
+      "scene-fluid-role-assignment",
+      "scene-fluid-role-lifecycle",
+      "scene-fluid-object-lifecycle",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
       "inspector",
-      "set-param"
+      "set-param",
+      "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_translate.rs": [
       "scene-setup",
@@ -121,8 +138,11 @@
     ]
   },
   "flows": {
+    "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-role-assignment": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",
+    "scene-imported-physics": "gltfscene",
     "rt-dynamic-modifier": "mushroomscene",
     "automation-clipboard-shapes": "automation",
     "automation-time-selection": "automation",
@@ -164,6 +184,7 @@
     "scene-setup-modifier-stack": "gltfscene",
     "scene-setup-numeric-typein-box": "gltfscene",
     "scene-setup-select-updates": "gltfscene",
+    "scene-submesh-controls": "gltfscene",
     "scene-setup-modifier": "gltfscene",
     "scene-setup-modifier-trigger": "gltfscene",
     "scene-skin": "gltfscene",
@@ -196,7 +217,10 @@
     "scene-panel-card-convergence-c-p1b-object-scrub": "gltfscene",
     "scene-setup-add-fog-drag": "gltfscene",
     "scene-setup-fog-density-card-row": "gltfscene",
-    "scene-setup-fog-undo-removes-fog": "gltfscene"
+    "scene-setup-fog-undo-removes-fog": "gltfscene",
+    "scene-fluid-role-lifecycle": "fluidauthoring",
+    "scene-fluid-object-lifecycle": "fluidauthoring",
+    "scene-forces-controls": "physicsscene"
   },
   "expected_fail": {},
   "unresolved": {}

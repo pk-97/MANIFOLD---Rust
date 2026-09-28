@@ -16,8 +16,8 @@
 
 /// The `Media/` subfolder a collected asset's family maps to (D2): the video
 /// library and layer video folders differ from the mesh/HDRI/image families in
-/// that the string-param inventory only ever produces `Mesh` / `Hdri` /
-/// `Images` (the library / folder families come from dedicated model fields).
+/// that the string-param inventory produces `Mesh` / `Hdri` / `Images` /
+/// `Physics` (the library / folder families come from dedicated model fields).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssetFamily {
     /// A GLB mesh or anything decoded from a model/GLB file.
@@ -26,6 +26,9 @@ pub enum AssetFamily {
     Hdri,
     /// A folder (or still image) of image files.
     Images,
+    /// A fluid simulation cache directory containing its take journal and
+    /// paired cache files.
+    Physics,
 }
 
 /// What a file-loading node reads: a single file, or a folder tree.
@@ -62,6 +65,8 @@ macro_rules! table {
 table! {
     // GLB model / skinned / morph / animation sources. Mesh family, single file.
     "node.gltf_mesh_source" => NodeFileLoad::File(AssetFamily::Mesh),
+    "node.rigid_body" => NodeFileLoad::File(AssetFamily::Mesh),
+    "node.fluid_role_source" => NodeFileLoad::File(AssetFamily::Mesh),
     "node.gltf_skinned_mesh_source" => NodeFileLoad::File(AssetFamily::Mesh),
     "node.gltf_morph_deltas_source" => NodeFileLoad::File(AssetFamily::Mesh),
     "node.gltf_morph_weights" => NodeFileLoad::File(AssetFamily::Mesh),
@@ -72,6 +77,8 @@ table! {
     "node.hdri_source" => NodeFileLoad::File(AssetFamily::Hdri),
     // A folder of still images, copied as a tree.
     "node.image_folder" => NodeFileLoad::Folder(AssetFamily::Images),
+    // A fluid simulation take/cache directory, copied as a tree.
+    "node.fluid_surface" => NodeFileLoad::Folder(AssetFamily::Physics),
 }
 
 #[cfg(test)]
@@ -91,6 +98,10 @@ mod tests {
         assert_eq!(
             file_loader_kind("node.hdri_source"),
             Some(NodeFileLoad::File(AssetFamily::Hdri))
+        );
+        assert_eq!(
+            file_loader_kind("node.fluid_surface"),
+            Some(NodeFileLoad::Folder(AssetFamily::Physics))
         );
     }
 

@@ -38,6 +38,8 @@ use manifold_core::effect_graph_def::{
 };
 
 use crate::node_graph::FINAL_OUTPUT_TYPE_ID;
+use crate::node_graph::fluid::{FluidDomainLayout, FluidSettings};
+use crate::node_graph::transform::Transform;
 
 /// `node.render_scene`'s own type_id string (curated vocabulary anchor).
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
@@ -178,8 +180,14 @@ pub struct SkinVm {
 /// clippy `large_enum_variant` reason as [`LightRow`]/[`OrbitCameraRow`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneObjectKnownRow {
+    /// A virtual parent for the material draws of one imported static model.
+    pub is_group: bool,
+    /// Children follow their parent in `SceneVm.objects`; indices still refer
+    /// to the physical render slots used by graph editing commands.
+    pub parent_group_id: Option<u32>,
     pub index: usize,
-    /// The `node.scene_object`'s own doc id — the address
+    /// Stable selection identity: the group id for a virtual parent, otherwise
+    /// the `node.scene_object`'s own doc id — the address
     /// `RenameSceneObjectCommand`/the eye-toggle write take, and the same
     /// value `group_node_id` resolved to pre-D12 when an object happened to
     /// be grouped.
@@ -224,6 +232,27 @@ pub struct SceneObjectKnownRow {
     /// wired into `emissive_map` or `base_color_map`. `None` when neither
     /// map has a layer_source producer.
     pub skin: Option<SkinVm>,
+    /// Standard physics discovered on this object. The body is inside the
+    /// object group for imported models and at root for hand-built objects.
+    pub physics: Option<PhysicsVm>,
+    pub physics_imported: bool,
+    /// Fluid domain and source nodes whose ordinary parameters belong to
+    /// this surface. Document IDs remain globally unique across groups.
+    pub fluid_node_ids: Vec<u32>,
+    /// Static domain bounds when the fluid domain is fully authored by
+    /// unwired scalar/transform parameters.
+    pub fluid_domain: Option<FluidDomainLayout>,
+    /// The domain transform's addresses and current values, independent of
+    /// the visible mesh object's ordinary transform.
+    pub fluid_domain_transform: Option<TransformVm>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysicsVm {
+    pub body_node_id: u32,
+    pub body_scope_path: Vec<u32>,
+    pub enabled: bool,
+    pub imported: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -556,7 +585,7 @@ impl SceneVm {
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
         let atmosphere = trace_atmosphere(&root, scene_node);
-        let object_count = objects.len();
+        let object_count = objects.iter().filter(|row| !matches!(row, SceneObjectVm::Known(row) if row.parent_group_id.is_some())).count();
         let light_count = lights.len();
         let shadow_caster_count = lights.iter().filter(|l| light_casts_shadows(&root, l)).count();
 
@@ -620,8 +649,12 @@ impl SceneVm {
 }
 
 fn light_casts_shadows(level: &Level, light: &SceneLightVm) -> bool {
-    let SceneLightVm::Known(row) = light else { return false };
-    let Some(node) = level.node(row.node_doc_id) else { return false };
+    let SceneLightVm::Known(row) = light else {
+        return false;
+    };
+    let Some(node) = level.node(row.node_doc_id) else {
+        return false;
+    };
     param_f32(node, "cast_shadows", 0.0) > 0.5
 }
 
@@ -648,10 +681,11 @@ fn reachable_backward(level: &Level, start: u32) -> HashSet<u32> {
 /// `Custom`, never errors).
 fn find_scene_object_in_group<'a>(
     group: &'a manifold_core::effect_graph_def::GroupDef,
+    output_port: &str,
 ) -> Option<(&'a EffectGraphNode, Level<'a>)> {
     let inner = Level { nodes: &group.nodes, wires: &group.wires };
-    let out_node = inner.nodes.iter().find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
-    let (producer_id, _) = inner.producer(out_node.id, "object")?;
+    let (producer_id, _) = inner.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)
+        .find_map(|out| inner.producer(out.id, output_port))?;
     let node = inner.node(producer_id)?;
     (node.type_id == SCENE_OBJECT_TYPE_ID).then_some((node, inner))
 }
@@ -730,6 +764,7 @@ fn assign_shared_material_counts(objects: &mut [SceneObjectVm]) {
             complete = false;
             continue;
         };
+        if row.is_group { continue; }
         let MaterialVm::Known(material) = &row.material else {
             complete = false;
             continue;
@@ -768,25 +803,28 @@ fn trace_objects(
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
     let mut out = Vec::with_capacity(objects);
+    let mut seen_groups = HashSet::new();
     for k in 0..objects {
         let port = format!("object_{k}");
-        let (row, source_vertex_count) = match level.producer(scene_node.id, &port) {
-            Some((producer_id, _)) => match level.node(producer_id) {
+        let (mut row, source_vertex_count) = match level.producer(scene_node.id, &port) {
+            Some((producer_id, output_port)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
                     trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set)
                 }
                 Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
-                    match producer_node.group.as_deref().and_then(find_scene_object_in_group) {
-                        Some((inner_node, inner_level)) => {
-                            trace_scene_object(
-                                &inner_level,
-                                vec![producer_id],
-                                inner_node,
-                                Some(producer_id),
-                                k,
-                                layer_id_set,
-                            )
-                        }
+                    match producer_node
+                        .group
+                        .as_deref()
+                        .and_then(|group| find_scene_object_in_group(group, output_port))
+                    {
+                        Some((inner_node, inner_level)) => trace_scene_object(
+                            &inner_level,
+                            vec![producer_id],
+                            inner_node,
+                            Some(producer_id),
+                            k,
+                            layer_id_set,
+                        ),
                         None => (SceneObjectVm::Custom { index: k }, None),
                     }
                 }
@@ -798,8 +836,50 @@ fn trace_objects(
             Some(v) => vertex_count += v as u64,
             None => vertex_count_exact = false,
         }
+        if let SceneObjectVm::Known(child) = &mut row
+            && let Some(group_id) = child.group_node_id
+            && let Some(group_node) = level.node(group_id)
+            && let Some(group) = group_node.group.as_ref()
+        {
+            let inner = Level { nodes: &group.nodes, wires: &group.wires };
+            if let Some((parent_source, _)) = inner.producer(child.object_node_id, "parent_transform") {
+                if seen_groups.insert(group_id) {
+                    let mut parent = child.clone();
+                    parent.is_group = true;
+                    parent.object_node_id = group_id;
+                    parent.name = group_node.handle.clone().unwrap_or_else(|| "Model".into());
+                    parent.visible_addr.param_id = "parent_visible".into();
+                    parent.visible_value = inner.node(child.object_node_id)
+                        .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
+                    parent.visible_driven = inner.producer(child.object_node_id, "parent_visible").is_some();
+                    let authored = inner.node(parent_source)
+                        .filter(|node| node.type_id == "node.transform_3d")
+                        .map(|node| node.id)
+                        .or_else(|| group_body_id(&inner).and_then(|body| inner.producer(body, "transform").map(|(id, _)| id)));
+                    parent.transform = authored.map(|id| trace_transform(&inner, vec![group_id], id));
+                    parent.material = MaterialVm::None;
+                    parent.skin = None;
+                    parent.transform_chain.clear();
+                    parent.modifier_chain.clear();
+                    out.push(SceneObjectVm::Known(parent));
+                }
+                child.parent_group_id = Some(group_id);
+                child.physics = None;
+                child.physics_imported = false;
+            }
+        }
         out.push(row);
     }
+    // A duplicated child may occupy a later render slot, after another group.
+    // Keep the outliner in parent/children order without changing physical slots.
+    let group_indices: HashMap<_, _> = out.iter().filter_map(|row| match row {
+        SceneObjectVm::Known(row) if row.is_group => Some((row.object_node_id, row.index)),
+        _ => None,
+    }).collect();
+    out.sort_by_key(|row| match row {
+        SceneObjectVm::Known(row) => (row.parent_group_id.and_then(|id| group_indices.get(&id).copied()).unwrap_or(row.index), row.parent_group_id.is_some(), row.index),
+        SceneObjectVm::Custom { index } => (*index, false, *index),
+    });
     assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)
 }
@@ -856,6 +936,12 @@ fn walk_transform_chain(
             transform_vm = Some(trace_transform(&current_level, sp, n.id));
             break;
         }
+        if n.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID && port == "pose" {
+            cursor = group_body_id(&current_level)
+                .and_then(|id| current_level.producer(id, "transform"));
+            parseable = false;
+            continue;
+        }
         if n.type_id == "node.physics_world" {
             // A pose is paired with one description input. Follow that body's
             // authored transform for editing; the live simulated pose is not a
@@ -892,6 +978,69 @@ pub fn physics_body_doc_id(def: &EffectGraphDef, object_id: u32) -> Option<u32> 
     physics_body_in_level(&level, object_id)
 }
 
+fn physics_vm(
+    level: &Level<'_>,
+    scope_path: &[u32],
+    object_id: u32,
+    group_node_id: Option<u32>,
+) -> Option<PhysicsVm> {
+    let (body_id, body_scope, imported) = if group_node_id.is_some() {
+        let body_id = group_body_id(level)?;
+        (
+            body_id,
+            scope_path.to_vec(),
+            mesh_source_is_gltf(level, object_id),
+        )
+    } else {
+        let (world_id, pose_port) = level.producer(object_id, "transform")?;
+        let world = level.node(world_id)?;
+        if world.type_id != "node.physics_world" {
+            return None;
+        }
+        let slot = pose_port.strip_prefix("pose_")?;
+        let (body_id, _) = level.producer(world_id, &format!("body_{slot}"))?;
+        let body = level.node(body_id)?;
+        if body.type_id != "node.rigid_body" {
+            return None;
+        }
+        (
+            body_id,
+            scope_path.to_vec(),
+            mesh_source_is_gltf(level, object_id),
+        )
+    };
+    Some(PhysicsVm {
+        body_node_id: body_id,
+        body_scope_path: body_scope,
+        enabled: level
+            .node(body_id)
+            .is_none_or(|node| param_bool(node, "enabled", true)),
+        imported,
+    })
+}
+
+fn param_bool(node: &EffectGraphNode, name: &str, default: bool) -> bool {
+    match node.params.get(name) {
+        Some(SerializedParamValue::Bool { value }) => *value,
+        _ => default,
+    }
+}
+
+fn group_body_id(level: &Level<'_>) -> Option<u32> {
+    level.nodes.iter().filter(|n| n.type_id == GROUP_OUTPUT_TYPE_ID).find_map(|output| {
+        let (body, _) = level.producer(output.id, "body")?;
+        (level.node(body)?.type_id == "node.rigid_body").then_some(body)
+    })
+}
+
+fn mesh_source_is_gltf(level: &Level<'_>, object_id: u32) -> bool {
+    // Eligibility matches the command: directly rendered rigid scan geometry.
+    level
+        .producer(object_id, "vertices")
+        .and_then(|(id, _)| level.node(id))
+        .is_some_and(|n| n.type_id == "node.gltf_mesh_source")
+}
+
 fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
     let (world_id, port) = level.producer(object_id, "transform")?;
     let world = level.node(world_id)?;
@@ -903,6 +1052,66 @@ fn physics_body_in_level(level: &Level<'_>, object_id: u32) -> Option<u32> {
 
 pub fn physics_world_doc_ids(def: &EffectGraphDef) -> impl Iterator<Item=u32> + '_ {
     def.nodes.iter().filter(|n| n.type_id == "node.physics_world").map(|n| n.id)
+}
+
+/// Resolve the editable domain transform and derive bounds only from a
+/// completely authored, non-driven domain. A graph-driven transform or
+/// scalar solver setting has no stable editor bounds to expose.
+fn trace_fluid_domain(
+    level: &Level<'_>,
+    scope_path: &[u32],
+    fluid: &EffectGraphNode,
+) -> (Option<FluidDomainLayout>, Option<TransformVm>) {
+    let domain_wire = level.producer(fluid.id, "domain").is_some();
+    let domain_size_driven = level.producer(fluid.id, "domain_size").is_some();
+    let resolution_driven = level.producer(fluid.id, "resolution").is_some();
+    let domain = resolve_producer_through_group(level, fluid.id, "domain")
+        .filter(|(_, _, node, _)| node.type_id == TRANSFORM_3D_TYPE_ID);
+
+    let Some((domain_level, crossed_group, domain_node, _)) = domain else {
+        if domain_wire || domain_size_driven || resolution_driven {
+            return (None, None);
+        }
+        let settings = FluidSettings {
+            resolution: param_f32(fluid, "resolution", 24.0).round() as u32,
+            domain_size: param_f32(fluid, "domain_size", 4.0),
+            ..FluidSettings::default()
+        };
+        return (settings.domain_layout().ok(), None);
+    };
+
+    let mut domain_scope = scope_path.to_vec();
+    if let Some(group_id) = crossed_group {
+        domain_scope.push(group_id);
+    }
+    let transform = trace_transform(&domain_level, domain_scope, domain_node.id);
+    let transform_driven = transform.pos_driven.0
+        || transform.pos_driven.1
+        || transform.pos_driven.2
+        || transform.rot_driven.0
+        || transform.rot_driven.1
+        || transform.rot_driven.2
+        || transform.scale_driven.0
+        || transform.scale_driven.1
+        || transform.scale_driven.2;
+    let billboard = param_bool(domain_node, "billboard", false);
+    let billboard_driven = domain_level.producer(domain_node.id, "billboard").is_some();
+    if resolution_driven || transform_driven || billboard || billboard_driven {
+        return (None, Some(transform));
+    }
+
+    let settings = FluidSettings {
+        resolution: param_f32(fluid, "resolution", 24.0).round() as u32,
+        domain_size: param_f32(fluid, "domain_size", 4.0),
+        domain: Some(Transform {
+            pos: [transform.pos_value.0, transform.pos_value.1, transform.pos_value.2],
+            rot_euler: [transform.rot_value.0, transform.rot_value.1, transform.rot_value.2],
+            scale: [transform.scale_value.0, transform.scale_value.1, transform.scale_value.2],
+            billboard: false,
+        }),
+        ..FluidSettings::default()
+    };
+    (settings.domain_layout().ok(), Some(transform))
 }
 
 /// Traces one `node.scene_object`'s full editable surface (D12): name,
@@ -972,6 +1181,8 @@ fn trace_scene_object(
                     }
                 })
         });
+    let physics_imported = mesh_source_is_gltf(level, object_node_id);
+    let physics = physics_vm(level, &object_scope_path, object_node_id, group_node_id);
 
     // Modifier chain (D6, re-anchored per D12): walk backward from the
     // scene_object's OWN `vertices` input instead of a group output's
@@ -982,8 +1193,12 @@ fn trace_scene_object(
     let mut chain = Vec::new();
     let mut current_level = Level { nodes: level.nodes, wires: level.wires };
     let mut cursor = current_level.producer(object_node_id, "vertices");
+    let mut mesh_scope_path = scope_path.clone();
     let mut parseable = cursor.is_some();
     let mut source_vertex_count: Option<u32> = None;
+    let mut fluid_node_ids = Vec::new();
+    let mut fluid_domain = None;
+    let mut fluid_domain_transform = None;
     let mut guard = 0;
     while let Some((node_id, _port)) = cursor {
         guard += 1;
@@ -1011,10 +1226,48 @@ fn trace_scene_object(
                 break;
             };
             current_level = inner;
+            mesh_scope_path.push(node_id);
             cursor = Some((inner_id, inner_port));
             continue;
         }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
+            if n.type_id == "node.fluid_surface" {
+                (fluid_domain, fluid_domain_transform) =
+                    trace_fluid_domain(&current_level, &mesh_scope_path, n);
+                fluid_node_ids.push(n.id);
+                for port in ["domain", "emitter", "initial_volume"] {
+                    if let Some((_, _, source, _)) =
+                        resolve_producer_through_group(&current_level, n.id, port)
+                        && source.type_id == "node.transform_3d"
+                        && !fluid_node_ids.contains(&source.id)
+                    {
+                        fluid_node_ids.push(source.id);
+                    }
+                }
+                for index in 0..super::fluid_role::MAX_FLUID_ROLES {
+                    let role_port = format!("role_{index}");
+                    let Some((role_level, _, role, _)) =
+                        resolve_producer_through_group(&current_level, n.id, &role_port)
+                    else {
+                        continue;
+                    };
+                    if role.type_id != "node.fluid_role_source"
+                        || fluid_node_ids.contains(&role.id)
+                    {
+                        continue;
+                    }
+                    fluid_node_ids.push(role.id);
+                    for port in ["transform", "source_transform"] {
+                        if let Some((_, _, source, _)) =
+                            resolve_producer_through_group(&role_level, role.id, port)
+                            && source.type_id == "node.transform_3d"
+                            && !fluid_node_ids.contains(&source.id)
+                        {
+                            fluid_node_ids.push(source.id);
+                        }
+                    }
+                }
+            }
             source_vertex_count = node_source_vertex_count(n);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
@@ -1024,6 +1277,8 @@ fn trace_scene_object(
     chain.reverse(); // wire order: source → … → scene_object.
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
+        is_group: false,
+        parent_group_id: None,
         index: k,
         object_node_id,
         group_node_id,
@@ -1038,6 +1293,11 @@ fn trace_scene_object(
         modifier_chain: chain,
         modifier_chain_parseable: parseable,
         skin,
+        physics,
+        physics_imported,
+        fluid_node_ids,
+        fluid_domain,
+        fluid_domain_transform,
     }));
     (row, source_vertex_count)
 }
@@ -1175,7 +1435,9 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
         if guard > 8 {
             break;
         }
-        let Some(node) = level.node(node_id) else { return CameraVm::None };
+        let Some(node) = level.node(node_id) else {
+            return CameraVm::None;
+        };
         if node.type_id == CAMERA_LENS_TYPE_ID {
             lens_node_doc_id = Some(node.id);
             match level.producer(node.id, "camera") {
@@ -1183,27 +1445,41 @@ fn trace_camera(level: &Level, scene_node: &EffectGraphNode) -> CameraVm {
                     node_id = next;
                     continue;
                 }
-                None => return CameraVm::Custom { node_doc_id: node.id, lens: trace_lens(level, node.id) },
+                None => {
+                    return CameraVm::Custom {
+                        node_doc_id: node.id,
+                        lens: trace_lens(level, node.id),
+                    };
+                }
             }
         }
         break;
     }
-    let Some(node) = level.node(node_id) else { return CameraVm::None };
+    let Some(node) = level.node(node_id) else {
+        return CameraVm::None;
+    };
     let lens = lens_node_doc_id.and_then(|id| trace_lens(level, id));
     match node.type_id.as_str() {
-        t if t == ORBIT_CAMERA_TYPE_ID => {
-            CameraVm::Orbit(Box::new(OrbitCameraRow { node_doc_id: node.id, lens }))
-        }
-        t if t == FREE_CAMERA_TYPE_ID => {
-            CameraVm::Free(Box::new(FreeCameraRow { node_doc_id: node.id, lens }))
-        }
-        t if t == LOOK_AT_CAMERA_TYPE_ID => {
-            CameraVm::LookAt(Box::new(LookAtCameraRow { node_doc_id: node.id, lens }))
-        }
-        t if t == LOOP_CAMERA_TYPE_ID => {
-            CameraVm::Loop(Box::new(LoopCameraRow { node_doc_id: node.id, lens }))
-        }
-        _ => CameraVm::Custom { node_doc_id: node.id, lens },
+        t if t == ORBIT_CAMERA_TYPE_ID => CameraVm::Orbit(Box::new(OrbitCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        t if t == FREE_CAMERA_TYPE_ID => CameraVm::Free(Box::new(FreeCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        t if t == LOOK_AT_CAMERA_TYPE_ID => CameraVm::LookAt(Box::new(LookAtCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        t if t == LOOP_CAMERA_TYPE_ID => CameraVm::Loop(Box::new(LoopCameraRow {
+            node_doc_id: node.id,
+            lens,
+        })),
+        _ => CameraVm::Custom {
+            node_doc_id: node.id,
+            lens,
+        },
     }
 }
 
@@ -1211,7 +1487,9 @@ fn trace_environment(level: &Level, scene_node: &EffectGraphNode) -> Environment
     let Some((node_id, _)) = level.producer(scene_node.id, "envmap") else {
         return EnvironmentVm::None;
     };
-    let Some(node) = level.node(node_id) else { return EnvironmentVm::None };
+    let Some(node) = level.node(node_id) else {
+        return EnvironmentVm::None;
+    };
 
     if node.type_id == SWITCH_TEXTURE_TYPE_ID {
         // Importer shape: in_0 = bake_environment, in_1 = exposure(hdri_source).
@@ -1255,7 +1533,9 @@ fn trace_atmosphere(level: &Level, scene_node: &EffectGraphNode) -> AtmosphereVm
     let Some((node_id, _)) = level.producer(scene_node.id, "atmosphere") else {
         return AtmosphereVm::None;
     };
-    let Some(node) = level.node(node_id) else { return AtmosphereVm::None };
+    let Some(node) = level.node(node_id) else {
+        return AtmosphereVm::None;
+    };
     if node.type_id != ATMOSPHERE_TYPE_ID {
         // Some other producer wired into `atmosphere` — D3 has no "custom
         // atmosphere row" concept distinct from None; treat as unwired-shape
@@ -1375,6 +1655,114 @@ mod tests {
     fn empty_def_yields_no_scene() {
         let d = def(vec![node(0, "system.final_output", None)], vec![]);
         assert!(SceneVm::from_def(&d).is_none());
+    }
+
+    #[test]
+    fn scene_physics_fluid_controls_follow_surface_and_shared_source() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let domain = with_param(
+            with_param(
+                with_param(node(6, "node.transform_3d", None), "pos_y",
+                    SerializedParamValue::Float { value: 2.0 }),
+                "scale_x", SerializedParamValue::Float { value: 4.0 }),
+            "scale_y", SerializedParamValue::Float { value: 4.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, "node.scene_object", Some("Fluid")),
+            node(4, "node.fluid_surface", None), node(5, "node.transform_3d", None), domain],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(6, "transform", 4, "domain"),
+                wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter"),
+                wire(5, "transform", 4, "initial_volume")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert_eq!(row.fluid_node_ids, vec![4, 6, 5]);
+        let domain_transform = row.fluid_domain_transform.as_ref().expect("domain transform");
+        assert_eq!(domain_transform.node_doc_id, 6);
+        assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
+        assert_eq!(row.fluid_domain.expect("static domain").size, [4.0, 4.0, 1.0]);
+        assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
+    }
+
+    #[test]
+    fn scene_physics_fluid_roles_resolve_group_controls_and_deduplicate_transforms() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let mut source_group = node(10, GROUP_TYPE_ID, Some("Source"));
+        source_group.group = Some(Box::new(GroupDef {
+            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            nodes: vec![node(11, "node.fluid_role_source", None),
+                node(12, "node.transform_3d", None), node(13, GROUP_OUTPUT_TYPE_ID, None)],
+            wires: vec![wire(12, "transform", 11, "transform"),
+                wire(12, "transform", 11, "source_transform"), wire(11, "role", 13, "role")],
+            tint: None,
+        }));
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, "node.scene_object", Some("Fluid")),
+            node(4, "node.fluid_surface", None), source_group],
+            vec![wire(1, "color", 2, "in"), wire(3, "object", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
+                wire(10, "role", 4, "role_1")]);
+        let restored: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        let vm = SceneVm::from_def(&restored).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert_eq!(row.fluid_node_ids, vec![4, 11, 12]);
+        assert!(row.transform.is_none());
+    }
+
+    #[test]
+    fn scene_physics_fluid_domain_rejects_non_transform_producer() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
+            node(4, "node.fluid_surface", None), node(6, "node.value", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(6, "out", 4, "domain")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert!(row.fluid_domain.is_none());
+        assert!(row.fluid_domain_transform.is_none());
+    }
+
+    #[test]
+    fn scene_physics_fluid_domain_shadows_legacy_domain_size_driver() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let domain = with_param(
+            with_param(
+                with_param(node(6, TRANSFORM_3D_TYPE_ID, None), "pos_y",
+                    SerializedParamValue::Float { value: 2.0 }),
+            "scale_x", SerializedParamValue::Float { value: 4.0 }),
+            "scale_y", SerializedParamValue::Float { value: 4.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
+            node(4, "node.fluid_surface", None), domain,
+            node(7, "node.value", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(6, "transform", 4, "domain"),
+                wire(7, "out", 4, "domain_size")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert!(row.fluid_domain.is_some());
+        assert_eq!(row.fluid_domain_transform.as_ref().unwrap().node_doc_id, 6);
+    }
+
+    #[test]
+    fn scene_physics_fluid_domain_billboard_has_no_static_bounds() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let domain = with_param(node(6, TRANSFORM_3D_TYPE_ID, None), "billboard",
+            SerializedParamValue::Bool { value: true });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
+            node(4, "node.fluid_surface", None), domain],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(6, "transform", 4, "domain")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert!(row.fluid_domain.is_none());
+        assert!(row.fluid_domain_transform.is_some());
     }
 
     #[test]
@@ -1654,11 +2042,15 @@ mod tests {
         let vm = SceneVm::from_def(&d).unwrap();
         assert_eq!(vm.objects.len(), 2);
         match &vm.objects[0] {
-            SceneObjectVm::Known(row) if row.group_node_id == Some(2) => assert_eq!(row.name, "Grouped"),
+            SceneObjectVm::Known(row) if row.group_node_id == Some(2) => {
+                assert_eq!(row.name, "Grouped")
+            }
             other => panic!("expected grouped Known object at index 0, got {other:?}"),
         }
         match &vm.objects[1] {
-            SceneObjectVm::Known(row) if row.group_node_id.is_none() => assert_eq!(row.name, "Bare"),
+            SceneObjectVm::Known(row) if row.group_node_id.is_none() => {
+                assert_eq!(row.name, "Bare")
+            }
             other => panic!("expected ungrouped Known object at index 1, got {other:?}"),
         }
     }

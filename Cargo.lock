@@ -2314,7 +2314,6 @@ dependencies = [
  "manifold-spectral",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
- "ringbuf 0.4.8",
  "rustfft",
 ]
 
@@ -2327,6 +2326,7 @@ dependencies = [
  "inventory",
  "log",
  "manifold-foundation",
+ "ringbuf 0.4.8",
  "serde",
  "serde_json",
  "sha2",
@@ -2341,6 +2341,17 @@ dependencies = [
  "manifold-core",
  "manifold-io",
  "serde_json",
+]
+
+[[package]]
+name = "manifold-fluids"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "manifold-foundation",
+ "manifold-physics",
+ "serde",
+ "sha2",
 ]
 
 [[package]]
@@ -2381,12 +2392,14 @@ name = "manifold-io"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "gltf",
  "log",
  "manifold-core",
  "pathdiff",
  "serde",
  "serde_json",
  "sha2",
+ "urlencoding",
  "zip",
 ]
 
@@ -2429,6 +2442,9 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "manifold-foundation",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2445,7 +2461,6 @@ dependencies = [
  "manifold-io",
  "midir",
  "parking_lot",
- "ringbuf 0.4.8",
  "rosc",
  "rusty_link",
  "serde",
@@ -2470,7 +2485,6 @@ dependencies = [
  "log",
  "manifold-audio",
  "manifold-gpu",
- "ringbuf 0.4.8",
  "serde_json",
 ]
 
@@ -2492,6 +2506,7 @@ dependencies = [
  "log",
  "manifold-core",
  "manifold-editing",
+ "manifold-fluids",
  "manifold-foundation",
  "manifold-gpu",
  "manifold-io",
@@ -2507,6 +2522,7 @@ dependencies = [
  "sha2",
  "syn 2.0.117",
  "tiff 0.9.1",
+ "zstd",
 ]
 
 [[package]]

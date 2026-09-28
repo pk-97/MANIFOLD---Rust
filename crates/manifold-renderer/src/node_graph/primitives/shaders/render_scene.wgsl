@@ -221,6 +221,8 @@ struct Uniforms {
     // ignores it, so Rendered/Solid/Wireframe are byte-identical with any
     // value here). y/z/w reserved.
     render_mode: vec4<f32>,
+    volume_optics: vec4<f32>,
+    volume_scattering_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -267,6 +269,11 @@ struct Uniforms {
 //   lights[i*4+3] = (Spot forward direction, w: 0)
 @group(0) @binding(8) var<storage, read> lights: array<vec4<f32>>;
 const LIGHT_STRIDE: u32 = 4u;
+
+// Optional closed-volume optical paths, embedded bubble density and nearest surface.
+@group(0) @binding(53) var volume_path: texture_2d<f32>;
+@group(0) @binding(54) var volume_density: texture_2d<f32>;
+@group(0) @binding(55) var volume_nearest: texture_depth_2d;
 
 // Same Point meaning as Light::light_dir_at/attenuation_at and shaft_march:
 // return direction toward the light in xyz and distance attenuation in w.
@@ -1408,11 +1415,12 @@ fn transmission_diffuse(
     // mesh's `thickness_factor` (authored in the mesh's own local units)
     // needs this to land in world units, same as the Khronos sample
     // viewer's `getVolumeTransmissionRay`.
-    let model_scale = vec3<f32>(
+    var model_scale = vec3<f32>(
         length(u.model[0].xyz),
         length(u.model[1].xyz),
         length(u.model[2].xyz),
     );
+    if u.volume_optics.x > 0.5 { model_scale = vec3<f32>(1.0); }
 
     let max_mip = f32(textureNumLevels(opaque_scene_color) - 1u);
     let mip_level = clamp(roughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0) * max_mip, 0.0, max_mip);
@@ -1459,7 +1467,21 @@ fn transmission_diffuse(
     let safe_color = max(attenuation_color, vec3<f32>(1e-6));
     let attenuation_coefficient = -log(safe_color) / max(attenuation_distance, 1e-4);
     let tint = exp(-attenuation_coefficient * travelled);
-    let attenuated = transmitted * tint;
+    var attenuated = transmitted * tint;
+    if u.volume_optics.x > 0.5 {
+        let clip = u.view_proj * vec4<f32>(world_pos, 1.0);
+        let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+        let pixel = clamp(vec2<i32>(uv * vec2<f32>(textureDimensions(volume_density))), vec2<i32>(0), vec2<i32>(textureDimensions(volume_density)) - vec2<i32>(1));
+        let embedded = max(textureLoad(volume_density, pixel, 0).r, 0.0);
+        let optical_density = u.volume_optics.y * travelled + embedded;
+        let visibility = exp(-optical_density);
+        // Isotropic single-scattering approximation lit by the existing diffuse
+        // environment. Embedded density is screen-space and assumes particles
+        // belong to this volume; it is not a world-space multiple-scattering solve.
+        let illumination = textureSampleLevel(irradiance_map, envmap_sampler, vec2<f32>(0.5, 1.0), 0.0).rgb;
+        let inscatter = u.volume_scattering_color.rgb * illumination;
+        attenuated = attenuated * visibility + inscatter * (1.0 - visibility);
+    }
 
     // Same specular-reflectance fraction the split-sum IBL above already
     // computes (F0*brdf.x + brdf.y, f90 implicitly 1.0) — the glass's own
@@ -1652,6 +1674,10 @@ fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32
 // and the only well-defined choice when light_count can be 0.
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
+    if u.volume_optics.x > 0.5 {
+        let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);
+        if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }
+    }
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
@@ -2048,7 +2074,10 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     }
     let transmission_factor = resolve_transmission_factor(in.uv);
     if transmission_factor > 0.0 {
-        let volume_thickness = resolve_volume_thickness(in.uv);
+        var volume_thickness = resolve_volume_thickness(in.uv);
+        if u.volume_optics.x > 0.5 {
+            volume_thickness = max(textureLoad(volume_path, vec2<i32>(in.clip_pos.xy), 0).r, 0.0);
+        }
         let transmitted_diffuse = transmission_diffuse(
             N, V, in.world_pos, roughness, ior, albedo.rgb, ibl_f0, base_f90,
             env_brdf, volume_thickness, u.anisotropy_dispersion_params.z

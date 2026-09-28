@@ -8,6 +8,9 @@ use manifold_core::params::Param;
 use manifold_core::project::Project;
 use manifold_core::{EffectGroupId, EffectId, GraphTarget};
 
+mod fire_param;
+pub use fire_param::FireGraphParamCommand;
+
 pub(crate) fn masked_groups_contiguous(
     effects: &[PresetInstance],
     groups: &[manifold_core::effects::EffectGroup],

@@ -36,7 +36,7 @@ impl PresetRuntime {
             return None;
         };
         let backend = self.executor.backend();
-        let source_tex = backend.texture_2d(source_slot);
+        let source_tex = source_slot.and_then(|slot| backend.texture_2d(slot));
         let output_tex = backend.texture_2d(output_slot);
 
         let mut step_outputs = Vec::new();

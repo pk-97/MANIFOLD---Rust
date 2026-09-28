@@ -1,9 +1,8 @@
-//! P5c demo/evidence (`docs/REALTIME_3D_DESIGN.md`): drives the ACTUAL
-//! `viewport_input` classification layer (`classify_mouse_drag` + `apply`,
-//! the exact call `window_input.rs`'s `editor_mouse_input`/
-//! `editor_cursor_moved` make) against a real `ViewportSession`, then dumps
-//! before/after headless PNGs and asserts the pixels actually changed —
-//! the L2 acceptance-demo bar (`docs/DESIGN_DOC_STANDARD.md` section 10).
+//! P5c demo/evidence (`docs/REALTIME_3D_DESIGN.md`): drives the actual
+//! `viewport_input` classification layer against a copied navigation camera,
+//! applies the same classified gesture to an isolated renderer session for
+//! headless evidence, then dumps before/after PNGs and asserts the pixels
+//! actually changed — the L2 acceptance-demo bar (`docs/DESIGN_DOC_STANDARD.md` section 10).
 //!
 //! **Why this lives here instead of a `scripts/ui-flows/*.json` L3 script**
 //! (the preferred bar): the flow driver (`ui_snapshot::script::run`) only
@@ -16,8 +15,8 @@
 //! editor window — out of scope for this plumbing phase; named as the gap
 //! for a follow-up click-script. This test is the best available L2
 //! evidence: it exercises production code (`viewport_input`'s classifiers +
-//! `apply`, `ViewportSession`) end to end, just without the winit event
-//! loop and window dispatch around it.
+//! `apply` plus the isolated `ViewportSession` fixture end to end, just
+//! without the winit event loop and window dispatch around it.
 //!
 //! `#![cfg(test)]` on the whole module (the `journey_proof.rs`/
 //! `bug035_verify.rs` convention) — invisible outside `cargo test`, so it
@@ -33,7 +32,7 @@ use manifold_renderer::headless_readback::encode_rgba8_png;
 use manifold_renderer::node_graph::{PrimitiveRegistry, ViewportOverlayConfig, ViewportSession};
 use manifold_renderer::preset_context::PresetContext;
 
-use crate::viewport_input::{ViewportInputSensitivity, apply, classify_mouse_drag};
+use crate::viewport_input::{ViewportGesture, ViewportInputSensitivity, apply, classify_mouse_drag};
 
 /// Ground plane + one light + a `render_scene` node, wired to a SHOW
 /// `orbit_camera` the viewport never touches (D9's isolation is proven
@@ -114,12 +113,9 @@ fn ctx(width: u32, height: u32, frame_count: i64) -> PresetContext {
     }
 }
 
-/// Drives a left-drag orbit through the SAME `classify_mouse_drag` + `apply`
-/// call `window_input.rs`'s `editor_cursor_moved` makes on every mouse-move
-/// while a viewport drag is armed, then asserts the rendered framing
-/// actually changed — the visible proof that the input→camera wiring, not
-/// just `ViewportSession`'s own mechanics (already proven by
-/// `scene_viewport_session.rs`'s gpu-proofs), moves pixels.
+/// Drives a left-drag orbit through the same `classify_mouse_drag` + `apply`
+/// navigation-camera call production input makes, mirrors that delta into an
+/// isolated renderer session, then asserts the rendered framing changed.
 #[test]
 fn viewport_input_orbit_drag_changes_framing() {
     let device = Arc::new(GpuDevice::new());
@@ -147,14 +143,25 @@ fn viewport_input_orbit_drag_changes_framing() {
     )
     .expect("write /tmp/viewport_p5c_before.png");
 
-    // The exact production call site: a left-drag with no shift held
-    // classifies as Orbit, then `apply` forwards it to
-    // `ViewportSession::orbit` at the wired-in sensitivity default.
+    // The exact production input shape: a left-drag with no shift held
+    // classifies as Orbit, then `apply` updates the navigation camera at the
+    // wired-in sensitivity default. The renderer session below is an
+    // isolated evidence fixture, so mirror the same classified delta into it.
     let sens = ViewportInputSensitivity::default();
     let gesture = classify_mouse_drag(winit::event::MouseButton::Left, false, 220.0, 90.0)
         .expect("a bare left-drag must classify as an Orbit gesture");
-    apply(&mut session, gesture, &sens);
-    assert!(session.is_dirty(), "apply(Orbit) must mark the session dirty");
+    let mut navigation_camera = *session.camera();
+    apply(&mut navigation_camera, gesture, &sens);
+    let ViewportGesture::Orbit { dx, dy } = gesture else {
+        unreachable!("left drag without shift must classify as orbit");
+    };
+    session.orbit(dx, dy, sens.orbit);
+    assert_eq!(
+        navigation_camera,
+        *session.camera(),
+        "production camera navigation and the isolated renderer fixture must agree"
+    );
+    assert!(session.is_dirty(), "mirrored orbit must mark the fixture dirty");
 
     let after = session.render_if_dirty(&ctx(width, height, 2), &overlay_cfg, None, &[], &[]);
     std::fs::write(

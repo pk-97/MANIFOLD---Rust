@@ -128,10 +128,15 @@ fn skin_binding_survives_save_reload_and_missing_source() {
             .expect("layer graph materialized by the edit")
             .clone();
         let vm = SceneVm::from_def_with_layers(&graph, &layer_ids(p)).expect("scene vm");
-        match &vm.objects[0] {
-            SceneObjectVm::Known(row) => row.skin.clone().expect("skin discovered"),
-            SceneObjectVm::Custom { .. } => panic!("object 11 must stay Known"),
-        }
+        let row = vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.object_node_id == 11 => Some(row),
+                _ => None,
+            })
+            .expect("object 11 must stay Known");
+        row.skin.clone().expect("skin discovered")
     };
 
     let skin = skin_of(&project);

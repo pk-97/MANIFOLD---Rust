@@ -153,16 +153,19 @@ fn physics_boxes_render_motion_and_latch_count_until_reset() {
             false,
             std::time::Duration::ZERO,
         );
-        let stalled = render(600, &params);
+        // Keep this visual lag proof inside the bounded authored-history
+        // window (256 samples at 240 Hz). Overflow/latched rejection has a
+        // separate CPU proof; it intentionally stops publishing new output.
+        let stalled = render(215, &params);
         assert_eq!(stalled.body_count, 4_003);
         assert!(
-            stalled.backlog_seconds > 6.0,
+            stalled.backlog_seconds > 0.45,
             "late preview must retain the missed ticks"
         );
-        let next = render(601, &params);
+        let next = render(216, &params);
         assert_eq!(next.body_count, 4_003);
         assert!(
-            next.backlog_seconds > 6.0,
+            next.backlog_seconds > 0.45,
             "preview lag stays visible until worked off"
         );
     }

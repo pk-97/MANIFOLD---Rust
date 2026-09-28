@@ -42,7 +42,11 @@
 //! [`frame_sample_bounds`]).
 
 use manifold_audio::analysis::StreamingSendAnalyzer;
+use manifold_core::audio_features::{
+    AudioFeatureHop, AudioHopError, AudioHopStamp, new_audio_analysis_epoch,
+};
 use manifold_core::AudioSendId;
+use manifold_core::Seconds;
 use manifold_core::SendFeatures;
 use manifold_core::audio_setup::AudioSend;
 use manifold_core::audio_visual::AudioVisualRegistry;
@@ -73,6 +77,7 @@ struct AnalyzedSend {
     send_id: AudioSendId,
     source: SendSource,
     analyzer: StreamingSendAnalyzer,
+    epoch: u64,
 }
 
 /// Sample-index bounds `[start, end)` for frame `frame_idx`, at `rate` Hz,
@@ -149,6 +154,9 @@ pub struct OfflineAudioModDriver<'a> {
     sample_rate: u32,
     pre_roll_samples: usize,
     fps: f64,
+    export_origin: Seconds,
+    last_frame: Option<u32>,
+    failure: Option<AudioHopError>,
 }
 
 impl<'a> OfflineAudioModDriver<'a> {
@@ -158,7 +166,27 @@ impl<'a> OfflineAudioModDriver<'a> {
     /// silent"). Returns `None` when `Project::analysis_consumed_sends()` is
     /// empty — nothing in the project reads audio, so there's nothing for the
     /// export loop to drive.
-    pub fn new(project: &Project, audio: &'a ExportAudio, fps: f64) -> Option<Self> {
+    pub fn new(
+        project: &Project,
+        audio: &'a ExportAudio,
+        fps: f64,
+        export_origin: Seconds,
+    ) -> Option<Self> {
+        if !fps.is_finite() || fps <= 0.0 {
+            log::error!("[OfflineAudioMod] invalid export FPS {fps:?}");
+            return None;
+        }
+        if audio.sample_rate == 0 {
+            log::error!("[OfflineAudioMod] invalid export sample rate 0");
+            return None;
+        }
+        if !export_origin.0.is_finite() {
+            log::error!(
+                "[OfflineAudioMod] invalid export timeline origin {:?}",
+                export_origin.0
+            );
+            return None;
+        }
         let mut consumed = project.analysis_consumed_sends();
         let visual_consumed = crate::audio_visualization::visualizer_consumed_sends(project);
         consumed.extend(visual_consumed.iter().cloned());
@@ -252,6 +280,9 @@ impl<'a> OfflineAudioModDriver<'a> {
             sample_rate: audio.sample_rate,
             pre_roll_samples: audio.pre_roll_samples,
             fps,
+            export_origin,
+            last_frame: None,
+            failure: None,
         })
     }
 
@@ -263,36 +294,130 @@ impl<'a> OfflineAudioModDriver<'a> {
     /// The window is `[floor(f*rate/fps), floor((f+1)*rate/fps))`, offset by
     /// the pre-roll and clamped to the buffer length — see
     /// [`frame_sample_bounds`] for why this can't drift.
-    pub fn feed_frame(&mut self, frame_idx: u32, engine: &mut PlaybackEngine) {
+    pub fn feed_frame(
+        &mut self,
+        frame_idx: u32,
+        engine: &mut PlaybackEngine,
+    ) -> Result<(), AudioHopError> {
+        if let Some(error) = self.failure {
+            self.fault_snapshot(engine, error);
+            return Err(error);
+        }
+        if self.last_frame == Some(frame_idx) {
+            return Ok(());
+        }
+        if self.last_frame.is_none() && frame_idx != 0 {
+            let error = AudioHopError::InvalidInput;
+            self.failure = Some(error);
+            self.fault_snapshot(engine, error);
+            return Err(error);
+        }
+        if let Some(previous) = self.last_frame
+            && frame_idx != previous.saturating_add(1)
+        {
+            let error = AudioHopError::InvalidInput;
+            self.failure = Some(error);
+            self.fault_snapshot(engine, error);
+            return Err(error);
+        }
+
         let (start, end) = frame_sample_bounds(frame_idx, self.sample_rate, self.fps);
         let pre = self.pre_roll_samples;
         let master = self.master_mono;
+        let sample_rate = self.sample_rate;
+        let sample_rate_f64 = sample_rate as f64;
+        let export_origin = self.export_origin;
+        let pre_roll_f64 = pre as f64;
+        let mut feed_error = None;
 
+        {
+            let snap = engine.audio_snapshot_mut();
+            snap.input_discontinuities.clear();
+            snap.sends.clear();
+            snap.sends.resize(self.send_count, SendFeatures::default());
+            snap.hop_batches.resize_with(self.send_count, Default::default);
+            for (index, batch) in snap.hop_batches.iter_mut().enumerate() {
+                if self
+                    .sends
+                    .iter()
+                    .any(|entry| entry.snapshot_index == index)
+                {
+                    let epoch = batch.epoch();
+                    batch.begin(epoch);
+                } else {
+                    batch.begin(0);
+                }
+            }
+
+            for entry in self.sends.iter_mut() {
+                let buf: &[f32] = match &entry.source {
+                    SendSource::Master => master,
+                    SendSource::Own(v) => v.as_slice(),
+                };
+                let lo = pre.saturating_add(start).min(buf.len());
+                let hi = pre.saturating_add(end).min(buf.len());
+                let frame = &buf[lo..hi];
+                let send_id = &entry.send_id;
+                let visual = self.visuals.get(Some(send_id)).is_some();
+                if visual {
+                    self.visuals.feed_waveform(send_id, frame);
+                }
+                let batch = &mut snap.hop_batches[entry.snapshot_index];
+                batch.begin(entry.epoch);
+                let visuals = &mut self.visuals;
+                let epoch = entry.epoch;
+                let hop_size = entry.analyzer.hop();
+                let mut push_error = None;
+                entry.analyzer.push_with_hops(frame, |analyzed, column| {
+                    if visual {
+                        visuals.feed_spectrum(send_id, column);
+                    }
+                    let stamp = AudioHopStamp {
+                        epoch,
+                        end_sample: analyzed.end_sample,
+                        sample_rate,
+                        source_time: None,
+                        timeline_time: Some(Seconds(
+                            export_origin.0
+                                + (analyzed.end_sample as f64 - pre_roll_f64) / sample_rate_f64,
+                        )),
+                    };
+                    let hop = AudioFeatureHop {
+                        stamp,
+                        dt: Seconds(hop_size as f64 / sample_rate_f64),
+                        features: analyzed.features,
+                    };
+                    if push_error.is_none() {
+                        push_error = batch.push(hop).err();
+                    }
+                });
+                if push_error.is_some() {
+                    feed_error = push_error;
+                    break;
+                }
+                if let Some(slot) = snap.sends.get_mut(entry.snapshot_index) {
+                    *slot = entry.analyzer.latest();
+                }
+            }
+        }
+        if let Some(error) = feed_error {
+            self.failure = Some(error);
+            self.fault_snapshot(engine, error);
+            return Err(error);
+        }
+        self.last_frame = Some(frame_idx);
+        Ok(())
+    }
+
+    fn fault_snapshot(&mut self, engine: &mut PlaybackEngine, error: AudioHopError) {
+        self.visuals.clear();
         let snap = engine.audio_snapshot_mut();
+        snap.input_discontinuities.clear();
         snap.sends.clear();
         snap.sends.resize(self.send_count, SendFeatures::default());
-
-        for entry in self.sends.iter_mut() {
-            let buf: &[f32] = match &entry.source {
-                SendSource::Master => master,
-                SendSource::Own(v) => v.as_slice(),
-            };
-            let lo = (pre + start).min(buf.len());
-            let hi = (pre + end).min(buf.len());
-            let frame = &buf[lo..hi];
-            let send_id = &entry.send_id;
-            if self.visuals.get(Some(send_id)).is_some() {
-                self.visuals.feed_waveform(send_id, frame);
-                let visuals = &mut self.visuals;
-                entry.analyzer.push_with_callback(frame, |column| {
-                    visuals.feed_spectrum(send_id, column);
-                });
-            } else {
-                entry.analyzer.push(frame);
-            }
-            if let Some(slot) = snap.sends.get_mut(entry.snapshot_index) {
-                *slot = entry.analyzer.latest();
-            }
+        snap.hop_batches.resize_with(self.send_count, Default::default);
+        for batch in &mut snap.hop_batches {
+            batch.invalidate(error);
         }
     }
 
@@ -313,6 +438,7 @@ fn build_analyzed_send(
     pitch_sends: &ahash::AHashSet<manifold_core::id::AudioSendId>,
 ) -> AnalyzedSend {
     let mut analyzer = StreamingSendAnalyzer::new(audio.sample_rate, low_hz, mid_hz);
+    let epoch = new_audio_analysis_epoch();
     // audio_mod_runtime.rs:342-346 — set_crossovers is redundant with `new`'s
     // own crossover args here (nothing retunes them offline mid-export), kept
     // for parity with the live call sequence and so a future per-frame
@@ -336,6 +462,7 @@ fn build_analyzed_send(
         send_id: send.id.clone(),
         source,
         analyzer,
+        epoch,
     }
 }
 
@@ -347,9 +474,11 @@ mod tests {
     use manifold_core::effects::PresetInstance;
     use manifold_core::AudioSend;
     use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind, AudioModSource};
-    use manifold_core::audio_trigger::LayerClipTrigger;
+    use manifold_core::audio_features::{AudioFeatureHop, AudioHopBatch, AudioHopError, AudioHopStamp};
+    use manifold_core::audio_trigger::{FireMeterCapture, LayerClipTrigger};
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
+    use manifold_playback::live_trigger::LiveTriggerState;
 
     /// Push a send named `label` onto `project`, plus a layer carrying one
     /// enabled `LayerClipTrigger` sourcing it — the simplest way to make a
@@ -449,7 +578,7 @@ mod tests {
     fn new_returns_none_when_no_send_is_consumed() {
         let project = Project::default();
         let audio = empty_export_audio(48_000, vec![0.0; 48_000], 0);
-        assert!(OfflineAudioModDriver::new(&project, &audio, 60.0).is_none());
+        assert!(OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO).is_none());
     }
 
     #[test]
@@ -498,11 +627,11 @@ mod tests {
         let layer = sine_master_mono(rate, 0, 0.0, 2.0);
         let mut audio = empty_export_audio(rate, master, 0);
         audio.per_layer_mono.insert(layer_id, layer);
-        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0)
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO)
             .expect("visualizer source must activate offline analysis");
         let mut engine = PlaybackEngine::new(Vec::new());
         for frame in 0..120 {
-            driver.feed_frame(frame, &mut engine);
+            driver.feed_frame(frame, &mut engine).unwrap();
         }
 
         let history = driver.visuals().get(None).expect("first configured visual send");
@@ -533,6 +662,183 @@ mod tests {
         buf
     }
 
+    fn burst_waveform(rate: u32, pre_roll_samples: usize, seconds: usize) -> Vec<f32> {
+        let range_len = rate as usize * seconds;
+        let mut buf = vec![0.0; pre_roll_samples + range_len];
+        let period = rate as usize / 5;
+        let burst_len = rate as usize / 80;
+        for (index, sample) in buf.iter_mut().enumerate().skip(pre_roll_samples) {
+            let local = index - pre_roll_samples;
+            if local % period < burst_len {
+                let t = local as f32 / rate as f32;
+                *sample = (std::f32::consts::TAU * 440.0 * t).sin()
+                    + 0.35 * (std::f32::consts::TAU * 1_200.0 * t).sin();
+            }
+        }
+        buf
+    }
+
+    fn offline_hop_trace(fps: u32) -> Vec<AudioFeatureHop> {
+        let rate = 48_000u32;
+        let pre_roll = 1_237usize;
+        let audio = empty_export_audio(rate, burst_waveform(rate, pre_roll, 2), pre_roll);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Trace").channels = vec![0];
+        let mut driver = OfflineAudioModDriver::new(
+            &project,
+            &audio,
+            fps as f64,
+            Seconds(17.25),
+        )
+        .unwrap();
+        let mut engine = PlaybackEngine::new(Vec::new());
+        let mut trace = Vec::new();
+        for frame in 0..fps * 2 {
+            driver.feed_frame(frame, &mut engine).unwrap();
+            trace.extend(engine.audio_snapshot().hop_batches[0].hops().iter().copied());
+        }
+        trace
+    }
+
+    #[test]
+    fn offline_hop_trace_is_partition_invariant_with_origin_and_preroll() {
+        let baseline = offline_hop_trace(60);
+        assert!(!baseline.is_empty(), "waveform must produce analyzed hops");
+        for hop in &baseline {
+            assert_eq!(hop.stamp.sample_rate, 48_000);
+            assert_eq!(hop.stamp.timeline_time,
+                Some(Seconds(17.25 + (hop.stamp.end_sample as f64 - 1237.0) / 48_000.0)));
+            assert_eq!(hop.stamp.epoch, baseline[0].stamp.epoch);
+        }
+        for fps in [1, 24, 30, 60] {
+            let trace = offline_hop_trace(fps);
+            assert_eq!(trace.len(), baseline.len(), "hop count differs at {fps} FPS");
+            for (index, (actual, expected)) in trace.iter().zip(&baseline).enumerate() {
+                assert_eq!(actual.stamp.end_sample, expected.stamp.end_sample, "hop {index}");
+                assert_eq!(actual.features, expected.features, "features at hop {index}");
+                assert_eq!(actual.dt, expected.dt, "dt at hop {index}");
+                assert_eq!(actual.stamp.timeline_time, expected.stamp.timeline_time, "time at hop {index}");
+            }
+        }
+    }
+
+    fn trigger_endpoint_trace(fps: u32) -> Vec<u64> {
+        let rate = 48_000u32;
+        let pre_roll = 1_237usize;
+        let audio = empty_export_audio(rate, burst_waveform(rate, pre_roll, 2), pre_roll);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Trigger").channels = vec![0];
+        project.timeline.layers[0].clip_triggers[0].enabled = true;
+        project.timeline.layers[0].clip_triggers[0].source.feature.band = AudioBand::Full;
+        project.timeline.layers[0].clip_triggers[0].shape.attack_ms = 0.0;
+        project.timeline.layers[0].clip_triggers[0].shape.release_ms = 0.0;
+        let mut driver = OfflineAudioModDriver::new(
+            &project,
+            &audio,
+            fps as f64,
+            Seconds(17.25),
+        )
+        .unwrap();
+        let mut engine = PlaybackEngine::new(Vec::new());
+        let mut state = LiveTriggerState::default();
+        let mut endpoints = Vec::new();
+        for frame in 0..fps * 2 {
+            driver.feed_frame(frame, &mut engine).unwrap();
+            let fires = state.evaluate(
+                engine.audio_snapshot(),
+                &project.audio_setup,
+                &project.timeline.layers,
+                Seconds(1.0 / fps as f64),
+                &mut FireMeterCapture::default(),
+            );
+            endpoints.extend(
+                fires
+                    .into_iter()
+                    .filter_map(|fire| fire.audio_stamp.map(|stamp| stamp.end_sample)),
+            );
+        }
+        endpoints
+    }
+
+    #[test]
+    fn live_trigger_fire_endpoints_are_partition_invariant() {
+        let baseline = trigger_endpoint_trace(60);
+        assert!(!baseline.is_empty(), "burst waveform must fire a live trigger");
+        for fps in [1, 24, 30, 60] {
+            assert_eq!(trigger_endpoint_trace(fps), baseline, "fires differ at {fps} FPS");
+        }
+    }
+
+    #[test]
+    fn frame_sequence_rejects_first_skip_and_latches_duplicate_order_errors() {
+        let rate = 48_000u32;
+        let audio = empty_export_audio(rate, burst_waveform(rate, 0, 2), 0);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Sequence").channels = vec![0];
+
+        let mut first_skip = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO).unwrap();
+        let mut engine = PlaybackEngine::new(Vec::new());
+        assert_eq!(first_skip.feed_frame(1, &mut engine), Err(AudioHopError::InvalidInput));
+        assert_eq!(first_skip.feed_frame(0, &mut engine), Err(AudioHopError::InvalidInput));
+
+        let mut order = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO).unwrap();
+        let mut engine = PlaybackEngine::new(Vec::new());
+        order.feed_frame(0, &mut engine).unwrap();
+        let before = engine.audio_snapshot().hop_batches[0].hops().to_vec();
+        order.feed_frame(0, &mut engine).unwrap();
+        assert_eq!(engine.audio_snapshot().hop_batches[0].hops(), before.as_slice());
+        assert_eq!(order.feed_frame(2, &mut engine), Err(AudioHopError::InvalidInput));
+        assert_eq!(order.feed_frame(1, &mut engine), Err(AudioHopError::InvalidInput));
+    }
+
+    #[test]
+    fn unavailable_send_clears_previous_active_batch() {
+        let rate = 48_000u32;
+        let audio = empty_export_audio(rate, burst_waveform(rate, 0, 1), 0);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Active").channels = vec![0];
+        project.audio_setup.sends.push(AudioSend::new("Unavailable"));
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO).unwrap();
+        let mut engine = PlaybackEngine::new(Vec::new());
+        let mut stale = AudioHopBatch::default();
+        stale.begin(99);
+        stale.push(AudioFeatureHop {
+            stamp: AudioHopStamp { epoch: 99, end_sample: 512, sample_rate: rate, source_time: None, timeline_time: None },
+            dt: Seconds(512.0 / rate as f64),
+            features: SendFeatures::default(),
+        }).unwrap();
+        engine.audio_snapshot_mut().hop_batches = vec![AudioHopBatch::default(), stale];
+        driver.feed_frame(0, &mut engine).unwrap();
+        let unavailable = &engine.audio_snapshot().hop_batches[1];
+        assert_eq!(unavailable.epoch(), 0);
+        assert!(unavailable.hops().is_empty());
+        assert_eq!(unavailable.failure(), None);
+    }
+
+    #[test]
+    fn capacity_failure_invalidates_all_batch_outputs_and_visuals() {
+        let rate = 48_000;
+        let audio = empty_export_audio(rate, burst_waveform(rate, 0, 1), 0);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Accepted prefix").channels = vec![0];
+        consumed_send(&mut project, "Overflow").channels = vec![0];
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 1.0, Seconds::ZERO).unwrap();
+        let send_id = project.audio_setup.sends[0].id.clone();
+        driver.visuals.ensure(&send_id, rate, driver.sends[0].analyzer.num_bins(), driver.sends[0].analyzer.hop());
+        let mut engine = PlaybackEngine::new(Vec::new());
+        engine.audio_snapshot_mut().hop_batches = vec![AudioHopBatch::default(), AudioHopBatch::with_capacity(1)];
+        assert_eq!(driver.feed_frame(0, &mut engine), Err(AudioHopError::CapacityExceeded));
+        assert!(engine.audio_snapshot().hop_batches.iter().all(|batch| {
+            batch.hops().is_empty() && batch.failure() == Some(AudioHopError::CapacityExceeded)
+        }));
+        assert!(engine.audio_snapshot().sends.iter().all(|features| *features == SendFeatures::default()));
+        assert_eq!(driver.feed_frame(0, &mut engine), Err(AudioHopError::CapacityExceeded));
+        let history = driver.visuals().get(Some(&send_id)).unwrap();
+        let mut waveform = [1.0; 8];
+        history.waveform_into(&mut waveform, 10.0, false);
+        assert!(waveform.iter().all(|sample| *sample == 0.0));
+    }
+
     #[test]
     fn sine_fixture_full_band_amplitude_silent_before_onset_and_nonzero_after() {
         let rate = 48_000u32;
@@ -549,12 +855,12 @@ mod tests {
         consumed_send(&mut project, "Kick").channels = vec![0, 1]; // capture-fed -> Master source
 
         let fps = 60.0;
-        let mut driver = OfflineAudioModDriver::new(&project, &audio, fps)
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, fps, Seconds::ZERO)
             .expect("a send with an enabled clip trigger must be consumed");
         let mut engine = PlaybackEngine::new(Vec::new());
 
         // Frame 0 == range start == still inside the silent second.
-        driver.feed_frame(0, &mut engine);
+        driver.feed_frame(0, &mut engine).unwrap();
         let silent = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
 
         // Drive forward well past the onset (range frame 60 == t=2.0s ==
@@ -563,7 +869,7 @@ mod tests {
         // transition.
         let mut loud = silent;
         for f in 1..=170u32 {
-            driver.feed_frame(f, &mut engine);
+            driver.feed_frame(f, &mut engine).unwrap();
             loud = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
         }
 
@@ -591,11 +897,11 @@ mod tests {
         let fps = 30.0;
 
         let run = || {
-            let mut driver = OfflineAudioModDriver::new(&project, &audio, fps).unwrap();
+            let mut driver = OfflineAudioModDriver::new(&project, &audio, fps, Seconds::ZERO).unwrap();
             let mut engine = PlaybackEngine::new(Vec::new());
             let mut out = Vec::new();
             for f in 0..120u32 {
-                driver.feed_frame(f, &mut engine);
+                driver.feed_frame(f, &mut engine).unwrap();
                 out.push(engine.audio_snapshot().sends[0]);
             }
             out
@@ -606,6 +912,109 @@ mod tests {
         assert_eq!(a.len(), b.len());
         for (i, (fa, fb)) in a.iter().zip(b.iter()).enumerate() {
             assert_eq!(fa, fb, "frame {i} diverged between two identical runs");
+        }
+    }
+
+    #[test]
+    fn offline_features_match_at_shared_sample_boundaries_across_frame_rates() {
+        // Exercise the actual export driver, including non-hop-aligned pre-roll.
+        // The latest snapshot is compared at matching AUDIO window ends, not at
+        // frame starts: feed_frame intentionally analyzes that frame's interval.
+        // This proves source analysis only; modulation still evaluates per tick.
+        let rate = 44_100u32;
+        let pre_roll = 4_413usize;
+        let mono: Vec<_> = (0..pre_roll + rate as usize)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                let burst = if i % 7_001 < 1_103 { 0.8 } else { 0.05 };
+                burst * ((std::f32::consts::TAU * 180.0 * t).sin()
+                    + 0.25 * (std::f32::consts::TAU * 1_800.0 * t).sin())
+            })
+            .collect();
+        let audio = empty_export_audio(rate, mono, pre_roll);
+        let mut project = Project::default();
+        consumed_send(&mut project, "Physics control source").channels = vec![0];
+
+        let run = |fps: u32| {
+            let mut driver = OfflineAudioModDriver::new(&project, &audio, fps as f64, Seconds::ZERO).unwrap();
+            let mut engine = PlaybackEngine::new(Vec::new());
+            let mut shared = Vec::new();
+            for frame in 0..fps {
+                driver.feed_frame(frame, &mut engine).unwrap();
+                if (frame + 1) % (fps / 6) == 0 {
+                    shared.push(engine.audio_snapshot().sends[0]);
+                }
+            }
+            shared
+        };
+        let expected = run(60);
+        assert!(expected.iter().any(|f| f.bands[0].amplitude > 0.1));
+        assert!(expected.windows(2).any(|pair| pair[0] != pair[1]));
+        assert_eq!(run(24), expected, "24 FPS changed the audio analysis");
+        assert_eq!(run(30), expected, "30 FPS changed the audio analysis");
+    }
+
+    #[test]
+    fn offline_control_observations_preserve_every_hop_across_frame_rates() {
+        use manifold_core::audio_mod::{AudioModContribution, ParameterAudioMod};
+        use manifold_core::params::Param;
+        use manifold_core::{Beats, PresetTypeId};
+        use manifold_playback::modulation::{audio_control_capture_error, evaluate_modulation};
+
+        let rate = 44_100u32;
+        let pre_roll = 4_413usize;
+        let mono = (0..pre_roll + rate as usize).map(|i| {
+            let gain = if i % 7_001 < 1_103 { 0.8 } else { 0.05 };
+            gain * (std::f32::consts::TAU * 180.0 * i as f32 / rate as f32).sin()
+        }).collect();
+        let audio = empty_export_audio(rate, mono, pre_roll);
+        let send = AudioSend::new("Control capture");
+        let mut fx = PresetInstance::new(PresetTypeId::new("ControlCaptureTest"));
+        fx.params.push(Param::bundled(serde_json::from_value(serde_json::json!({
+            "id": "force", "name": "Force", "min": 0.0, "max": 1.0, "defaultValue": 0.0
+        })).unwrap()));
+        let mut modulation = ParameterAudioMod::new("force".into(), send.id.clone(),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full));
+        modulation.shape.attack_ms = 70.0;
+        modulation.shape.release_ms = 180.0;
+        fx.audio_mods = Some(vec![modulation]);
+        let mut original = Project::default();
+        original.audio_setup.sends.push(send);
+        original.audio_setup.sends[0].channels = vec![0];
+        original.settings.master_effects.push(fx);
+
+        let run = |fps: u32| {
+            let mut project = original.clone();
+            let mut driver = OfflineAudioModDriver::new(&project, &audio, fps as f64, Seconds(17.25)).unwrap();
+            let mut engine = PlaybackEngine::new(Vec::new());
+            let mut trace = Vec::new();
+            let mut timing = Vec::new();
+            let mut pulses = Vec::new();
+            let mut meters = FireMeterCapture::default();
+            for frame in 0..fps {
+                driver.feed_frame(frame, &mut engine).unwrap();
+                let current = Seconds(17.25 + frame as f64 / fps as f64);
+                evaluate_modulation(&mut project, Beats(current.0 * 2.0), current,
+                    Seconds(1.0 / fps as f64), engine.audio_snapshot(),
+                    &mut timing, &mut pulses, &[], &mut meters);
+                assert!(audio_control_capture_error(&project).is_none());
+                let m = &project.settings.master_effects[0].audio_mods.as_ref().unwrap()[0];
+                assert_eq!(m.audio_observations.hops().len(), engine.audio_snapshot().hop_batches[0].hops().len());
+                for observation in m.audio_observations.hops() {
+                    assert_eq!(observation.evaluation_time, Some(current));
+                    assert!(!observation.clip_edge);
+                    trace.push((observation.stamp.end_sample, observation.stamp.timeline_time.unwrap(),
+                        observation.dt, observation.contribution));
+                }
+            }
+            trace
+        };
+        let expected = run(60);
+        assert!(expected.len() > 60, "more control updates than display frames");
+        assert!(expected.iter().all(|sample| matches!(sample.3, AudioModContribution::Continuous(_))));
+        assert!(expected.windows(2).any(|pair| pair[0].3 != pair[1].3));
+        for fps in [24, 30, 1] {
+            assert_eq!(run(fps), expected, "{fps} FPS changed retained controls");
         }
     }
 
@@ -620,10 +1029,10 @@ mod tests {
         let mut project = Project::default();
         consumed_send(&mut project, "Master tap").channels = vec![0, 1]; // has_capture() == true, no layers
 
-        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0).unwrap();
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO).unwrap();
         let mut engine = PlaybackEngine::new(Vec::new());
         for f in 0..30u32 {
-            driver.feed_frame(f, &mut engine);
+            driver.feed_frame(f, &mut engine).unwrap();
         }
         let amp = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
         assert!(
@@ -650,10 +1059,10 @@ mod tests {
         send.channels = vec![0, 1];
         send.source.layers.push(layer_id);
 
-        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0).unwrap();
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO).unwrap();
         let mut engine = PlaybackEngine::new(Vec::new());
         for f in 0..30u32 {
-            driver.feed_frame(f, &mut engine);
+            driver.feed_frame(f, &mut engine).unwrap();
         }
         let amp = engine.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
         assert!(
@@ -676,10 +1085,10 @@ mod tests {
         send2.channels = vec![0, 1];
         send2.source.layers.push(layer_id2);
 
-        let mut driver2 = OfflineAudioModDriver::new(&project2, &audio2, 60.0).unwrap();
+        let mut driver2 = OfflineAudioModDriver::new(&project2, &audio2, 60.0, Seconds::ZERO).unwrap();
         let mut engine2 = PlaybackEngine::new(Vec::new());
         for f in 0..30u32 {
-            driver2.feed_frame(f, &mut engine2);
+            driver2.feed_frame(f, &mut engine2).unwrap();
         }
         let amp2 = engine2.audio_snapshot().sends[0].bands[AudioBand::Full.index()].amplitude;
         assert!(
@@ -702,10 +1111,10 @@ mod tests {
         // send now defaults to stereo capture; clear it to keep this unrouted).
         consumed_send(&mut project, "Unrouted").channels.clear();
 
-        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0)
+        let mut driver = OfflineAudioModDriver::new(&project, &audio, 60.0, Seconds::ZERO)
             .expect("driver still builds - the send IS consumed, it just has no source");
         let mut engine = PlaybackEngine::new(Vec::new());
-        driver.feed_frame(0, &mut engine);
+        driver.feed_frame(0, &mut engine).unwrap();
         assert_eq!(
             engine.audio_snapshot().sends[0],
             SendFeatures::default(),

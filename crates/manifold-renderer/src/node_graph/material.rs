@@ -335,6 +335,15 @@ pub struct Material {
     /// `KHR_materials_volume`'s `attenuationColor` (default `[1,1,1]`,
     /// neutral).
     pub volume_attenuation_color: [f32; 3],
+    /// Enables the screen-space geometric-volume approximation for this
+    /// material. Disabled by default so existing materials are unchanged.
+    pub volume_geometry: bool,
+    /// Homogeneous volume extinction/scattering density per world metre.
+    pub volume_scattering_density: f32,
+    /// RGB tint applied by the geometric-volume scattering approximation.
+    pub volume_scattering_color: [f32; 3],
+    /// Additional localized density contributed by embedded particle sources.
+    pub volume_particle_density: f32,
 
     /// Shared subsurface-scattering controls. Inert until a renderer enables
     /// the corresponding transport path.
@@ -407,6 +416,10 @@ impl Material {
             volume_attenuation_distance:
                 crate::node_graph::gltf_load::VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION,
             volume_attenuation_color: [1.0, 1.0, 1.0],
+            volume_geometry: false,
+            volume_scattering_density: 0.0,
+            volume_scattering_color: [1.0, 1.0, 1.0],
+            volume_particle_density: 0.0,
             subsurface: Subsurface::default(),
             base_color_sampler: MapSamplerDesc::default(),
             normal_sampler: MapSamplerDesc::default(),

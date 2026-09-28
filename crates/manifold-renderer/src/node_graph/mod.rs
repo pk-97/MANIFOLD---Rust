@@ -15,6 +15,8 @@ pub mod camera;
 pub mod light;
 pub mod material_inspector;
 pub mod material;
+pub mod mesh_source;
+pub mod source_asset;
 pub mod render_mode;
 pub mod scene_exposure;
 pub mod scene_object;
@@ -24,6 +26,8 @@ pub mod viewport_gizmo;
 pub mod viewport_overlay;
 pub mod viewport_render;
 pub mod viewport_session;
+pub mod scene_viewport;
+pub mod vector_field;
 mod binding_migration;
 pub mod content_revision;
 mod boundary_nodes;
@@ -42,12 +46,19 @@ mod effect_node;
 pub(crate) mod execution;
 mod execution_plan;
 pub mod freeze;
+pub mod fluid;
+pub(crate) mod physics_scene;
+pub mod fluid_role;
+pub(crate) mod fluid_cache;
+pub(crate) mod fluid_mesh_upload;
+pub(crate) mod instance_upload;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod fragment_mask_continuity_tests;
 mod graph;
 mod graph_loader;
 pub mod resource_allocation;
 mod gltf_anim_cache;
+mod gltf_anim_identity;
 pub mod gltf_import;
 mod gltf_load;
 mod loaded_preset_view;
@@ -88,13 +99,15 @@ pub use light::{Light, LightMode, ShadowSoftness};
 pub use material::{Material, MaterialKind};
 pub use scene_object::SceneObject;
 pub use transform::Transform;
+pub use fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry, MAX_FLUID_ROLES};
+pub use mesh_source::MeshSource;
 pub use viewport_camera::ViewportCamera;
 pub use viewport_overlay::{
     ScreenLine, ViewportOverlayConfig, WorldLine, build_overlay_lines, camera_frustum_lines,
     composite_overlay_lines_rgba8, grid_lines, light_billboard_lines, project_lines,
 };
 pub use viewport_gizmo::{
-    GizmoAxis, GizmoMode, GizmoTarget, drag_write, gizmo_lines, gizmo_target_for, move_drag_delta,
+    GizmoAxis, GizmoMode, GizmoTarget, GizmoTargetKind, drag_write, gizmo_lines, gizmo_target_for, move_drag_delta,
     pick_axis, pick_object, rotate_drag_delta, scale_drag_delta,
 };
 pub use viewport_render::{ViewportRenderError, override_camera_def, render_viewport_frame};
@@ -140,7 +153,7 @@ pub(crate) use param_binding::Reshape;
 pub use param_binding::{
     BindingCacheEntry, BindingSource, LastAppliedCache, ParamBinding, ParamConvert, ParamId,
     ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,
-    binding_value, outer_routings_from_bindings,
+    binding_value, convert_param_value, outer_routings_from_bindings,
 };
 pub use parameters::{ParamDef, ParamType, ParamValue};
 pub use persistence::{
@@ -156,6 +169,7 @@ pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
 pub use preview_encoding::{LiveNodeParams, PreviewEncoding, PreviewScalarIo};
 pub use param_doc::{ParamDoc, tooltip_for};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
+pub use physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 pub use snapshot::{
     ArrayMatchMode, ChannelSnapshot, GraphSnapshot, GroupSnapshot, NodeSnapshot, OuterParamRouting,
     OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
@@ -173,5 +187,8 @@ pub use validation::{
     topological_sort, validate,
 };
 
+pub mod mesh_partition;
+pub mod physics_mesh;
 pub mod physics;
+pub mod physics_events;
 pub mod physics_metrics;

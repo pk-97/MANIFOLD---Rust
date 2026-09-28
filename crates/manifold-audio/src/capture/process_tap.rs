@@ -31,6 +31,7 @@ use std::ffi::{c_char, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use core_foundation::array::CFArray;
 use core_foundation::base::TCFType;
@@ -41,10 +42,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::msg_send;
 use objc2_foundation::{NSArray, NSNumber, NSString};
-use ringbuf::HeapRb;
-use ringbuf::traits::{Producer as ProducerTrait, Split};
+use manifold_core::audio_stream::{audio_stream, AudioClockAnchor, AudioStreamProducer};
 
 use super::{AudioConsumer, CaptureBackend};
+use super::clock::CallbackClock;
 use crate::directory::TapHandle;
 
 // ── CoreAudio FFI ────────────────────────────────────────────────────────
@@ -86,15 +87,48 @@ struct AudioBuffer {
     data: *mut c_void,
 }
 
-/// IO proc ABI. Every parameter is a pointer; we only read `in_input_data`
-/// (a `const AudioBufferList*`), so the timestamps and output list are `c_void`.
+// Layout from CoreAudioTypes/CoreAudioBaseTypes.h. Only host_time and flags
+// are read. SMPTETime occupies 24 bytes (sixteen-bit fields plus three u32s).
+#[repr(C)]
+#[derive(Default)]
+struct AudioTimeStamp {
+    sample_time: f64,
+    host_time: u64,
+    rate_scalar: f64,
+    word_clock_time: u64,
+    smpte_time: [u32; 6],
+    flags: u32,
+    reserved: u32,
+}
+
+impl AudioTimeStamp {
+    fn host_time(&self) -> Option<u64> {
+        (self.flags & (1 << 1) != 0).then_some(self.host_time)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct MachTimebase { numer: u32, denom: u32 }
+
+impl MachTimebase {
+    fn duration_since(self, later: u64, earlier: u64) -> Option<Duration> {
+        if self.numer == 0 || self.denom == 0 { return None; }
+        let nanos = u128::from(later.checked_sub(earlier)?) * u128::from(self.numer)
+            / u128::from(self.denom);
+        let seconds = u64::try_from(nanos / 1_000_000_000).ok()?;
+        Some(Duration::new(seconds, (nanos % 1_000_000_000) as u32))
+    }
+}
+
+/// IO proc ABI. The input data and output list remain opaque buffer lists.
 type AudioDeviceIOProc = extern "C" fn(
     in_device: AudioObjectID,
-    in_now: *const c_void,
+    in_now: *const AudioTimeStamp,
     in_input_data: *const c_void,
-    in_input_time: *const c_void,
+    in_input_time: *const AudioTimeStamp,
     out_output_data: *mut c_void,
-    in_output_time: *const c_void,
+    in_output_time: *const AudioTimeStamp,
     in_client_data: *mut c_void,
 ) -> OSStatus;
 
@@ -128,6 +162,7 @@ unsafe extern "C" {
 
 unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn mach_timebase_info(info: *mut MachTimebase) -> i32;
 }
 /// `RTLD_DEFAULT` on macOS — search every loaded image for the symbol.
 const RTLD_DEFAULT: *mut c_void = (-2isize) as *mut c_void;
@@ -191,22 +226,24 @@ pub fn is_supported() -> bool {
 /// the sole writer of `producer`, so the `*mut` aliasing is exclusive in
 /// practice (CoreAudio calls the proc serially).
 struct TapCallbackCtx {
-    producer: ringbuf::HeapProd<f32>,
+    producer: AudioStreamProducer,
     running: Arc<AtomicBool>,
     overflow: Arc<AtomicU64>,
     channels: usize,
     /// Pre-sized interleave staging buffer for planar (non-interleaved) input.
     /// Never resized in the callback.
     scratch: Vec<f32>,
+    clock: CallbackClock<u64>,
+    timebase: MachTimebase,
 }
 
 extern "C" fn tap_ioproc(
     _dev: AudioObjectID,
-    _now: *const c_void,
+    now: *const AudioTimeStamp,
     in_input: *const c_void,
-    _in_time: *const c_void,
+    in_time: *const AudioTimeStamp,
     _out: *mut c_void,
-    _out_time: *const c_void,
+    _out_time: *const AudioTimeStamp,
     client: *mut c_void,
 ) -> OSStatus {
     if client.is_null() || in_input.is_null() {
@@ -218,7 +255,20 @@ extern "C" fn tap_ioproc(
     if !ctx.running.load(Ordering::Relaxed) {
         return 0;
     }
-    unsafe { write_buffers(in_input, ctx) };
+    // SAFETY: CoreAudio supplies these timestamp pointers for this callback.
+    // Missing host-time flags leave the stream explicitly unclocked.
+    let timestamps = unsafe { now.as_ref().and_then(AudioTimeStamp::host_time)
+        .zip(in_time.as_ref().and_then(AudioTimeStamp::host_time)) };
+    let timebase = ctx.timebase;
+    let source_time = timestamps.and_then(|(callback, capture)| {
+        ctx.clock.map(callback, capture, Instant::now(), |later, earlier| {
+            timebase.duration_since(later, earlier)
+        })
+    });
+    let clock = source_time.map(|instant| AudioClockAnchor {
+        instant, frame: ctx.producer.next_frame(),
+    });
+    unsafe { write_buffers(in_input, ctx, clock) };
     0
 }
 
@@ -226,7 +276,7 @@ extern "C" fn tap_ioproc(
 ///
 /// SAFETY: `list_ptr` is a valid `const AudioBufferList*` for the call's
 /// duration, as delivered by CoreAudio.
-unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx) {
+unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx, clock: Option<AudioClockAnchor>) {
     let TapCallbackCtx { producer, overflow, channels, scratch, .. } = ctx;
     let ch = (*channels).max(1);
 
@@ -251,7 +301,7 @@ unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx) {
             return;
         }
         let data = unsafe { std::slice::from_raw_parts(b.data as *const f32, samples) };
-        let written = producer.push_slice(data);
+        let written = producer.push_interleaved_clocked(data, clock);
         if written < data.len() {
             overflow.fetch_add(1, Ordering::Relaxed);
         }
@@ -283,7 +333,7 @@ unsafe fn write_buffers(list_ptr: *const c_void, ctx: &mut TapCallbackCtx) {
             }
         }
         let slice = &scratch[..this * ch];
-        let written = producer.push_slice(slice);
+        let written = producer.push_interleaved_clocked(slice, clock);
         if written < slice.len() {
             overflow.fetch_add(1, Ordering::Relaxed);
         }
@@ -342,19 +392,34 @@ fn build(description: Retained<AnyObject>) -> Result<Box<dyn CaptureBackend>, St
     const MAX_RING_SAMPLES: usize = 4 * 1024 * 1024;
     let want = (sample_rate as usize) * (channels as usize) * 2;
     let floor = ((sample_rate as usize) * (channels as usize)) / 4;
-    let capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
-    let (producer, consumer) = HeapRb::<f32>::new(capacity).split();
+    let sample_capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
+    // The shared stream allocates whole interleaved frames. Rounding down
+    // keeps its sample allocation within the legacy sample budget.
+    let frame_capacity = (sample_capacity / channels as usize).max(1);
+    let (producer, consumer) = audio_stream(
+        channels as usize,
+        frame_capacity,
+        2048,
+        sample_rate,
+    );
 
     let running = Arc::new(AtomicBool::new(false));
     let overflow = Arc::new(AtomicU64::new(0));
     // Scratch large enough for a generous block at this channel count.
     let scratch = vec![0.0f32; 8192.max(channels as usize * 1024)];
+    let mut timebase = MachTimebase::default();
+    // Resolve the conversion once, outside the realtime callback.
+    if unsafe { mach_timebase_info(&mut timebase) } != 0 || timebase.numer == 0 || timebase.denom == 0 {
+        return Err("process tap host clock is unavailable".into());
+    }
     let ctx = Box::into_raw(Box::new(TapCallbackCtx {
         producer,
         running: running.clone(),
         overflow: overflow.clone(),
         channels: channels as usize,
         scratch,
+        clock: CallbackClock::new(),
+        timebase,
     }));
 
     // 5. Register the IO proc on the aggregate.
@@ -580,5 +645,57 @@ struct AggGuard {
 impl Drop for AggGuard {
     fn drop(&mut self) {
         unsafe { AudioHardwareDestroyAggregateDevice(self.agg_id) };
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    use manifold_core::audio_stream::AudioStreamRead;
+
+    #[test]
+    fn host_timestamp_layout_flags_and_tick_conversion_match_core_audio() {
+        assert_eq!(std::mem::size_of::<AudioTimeStamp>(), 64);
+        assert_eq!(std::mem::offset_of!(AudioTimeStamp, host_time), 8);
+        assert_eq!(std::mem::offset_of!(AudioTimeStamp, flags), 56);
+        let mut stamp = AudioTimeStamp { host_time: 123, ..Default::default() };
+        assert_eq!(stamp.host_time(), None);
+        stamp.flags = 1 << 1;
+        assert_eq!(stamp.host_time(), Some(123));
+        let timebase = MachTimebase { numer: 125, denom: 3 };
+        assert_eq!(timebase.duration_since(24_000_003, 3), Some(Duration::from_secs(1)));
+        assert_eq!(timebase.duration_since(2, 3), None);
+        assert_eq!(MachTimebase::default().duration_since(3, 0), None);
+    }
+
+    #[test]
+    fn planar_chunks_keep_original_clock_through_a_dropped_tail() {
+        #[repr(C)]
+        struct BufferList { count: u32, buffers: [AudioBuffer; 2] }
+        let mut left = [1_f32, 2., 3., 4., 5., 6.];
+        let mut right = [-1_f32, -2., -3., -4., -5., -6.];
+        let list = BufferList { count: 2, buffers: [
+            AudioBuffer { number_channels: 1, data_byte_size: 24, data: left.as_mut_ptr().cast() },
+            AudioBuffer { number_channels: 1, data_byte_size: 24, data: right.as_mut_ptr().cast() },
+        ] };
+        let (producer, mut reader) = audio_stream(2, 3, 8, 3);
+        let mut ctx = TapCallbackCtx {
+            producer, running: Arc::new(AtomicBool::new(true)),
+            overflow: Arc::new(AtomicU64::new(0)), channels: 2, scratch: vec![0.; 4],
+            clock: CallbackClock::new(), timebase: MachTimebase { numer: 1, denom: 1 },
+        };
+        let clock = AudioClockAnchor { instant: Instant::now(), frame: 0 };
+        // SAFETY: repr(C) list has two valid mono buffers for the whole call.
+        unsafe { write_buffers((&list as *const BufferList).cast(), &mut ctx, Some(clock)); }
+        assert_eq!(ctx.producer.next_frame(), 6);
+        let mut output = [0.; 4];
+        for (first_frame, expected) in [(0, &[1., -1., 2., -2.][..]), (2, &[3., -3.][..])] {
+            let Some(AudioStreamRead::Samples { stamp, samples }) = reader.read(&mut output)
+                else { panic!("retained prefix"); };
+            assert_eq!(stamp.first_frame, first_frame);
+            assert_eq!(stamp.clock, Some(clock));
+            assert_eq!(&output[..samples], expected);
+        }
+        assert_eq!(reader.read(&mut output), Some(AudioStreamRead::Gap { first_frame: 3, end_frame: 6 }));
     }
 }

@@ -75,8 +75,7 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
     let (effective_tab, effective_active_layer) = super::editor_dispatch_context(ctx.editor_target, &*ctx.project, ctx.ui.inspector.last_effect_tab(), ctx.active_layer);
     let active_layer = &effective_active_layer;
     if let ParamsAction::ParamEnumSet(gpt, param_id, _)
-        | ParamsAction::ParamToggle(gpt, param_id)
-        | ParamsAction::ParamFire(gpt, param_id) = action
+        | ParamsAction::ParamToggle(gpt, param_id) = action
         && let Some(target) = resolve_graph_target(gpt, ctx.editor_target, effective_tab,
             active_layer, ctx.selection, ctx.project)
         && let Some(reason) = crate::scene_modifier_edit::macro_parameter_lock_reason(ctx.project, &target, param_id.as_ref())
@@ -883,27 +882,16 @@ pub(crate) fn dispatch_params(action: &ParamsAction, ctx: &mut super::super::Dis
             DispatchResult::handled()
         }
         ParamsAction::ParamFire(gpt, param_id) => {
-            // Trigger button click: increment the monotonic counter by one.
-            // Mirrors ParamToggle's plumbing exactly except the value
-            // transform is `+1` instead of `0↔1`.
             if let Some(target) =
                 resolve_graph_target(gpt, ctx.editor_target, effective_tab, active_layer, ctx.selection, ctx.project)
             {
-                let old_val = ctx.project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.params
-                            .contains(param_id.as_ref())
-                            .then(|| inst.get_base_param(param_id.as_ref()))
-                    })
-                    .flatten();
-                if let Some(old_val) = old_val {
-                    let new_val = old_val + 1.0;
-                    ctx.project.with_preset_graph_mut(&target, |inst| {
-                        inst.set_base_param(param_id.as_ref(), new_val);
-                    });
-                    let cmd = ChangeGraphParamCommand::new(target, param_id.clone(), old_val, new_val);
-                    ContentCommand::send(ctx.content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
+                ContentCommand::send(
+                    ctx.content_tx,
+                    ContentCommand::FireParameter {
+                        target,
+                        param_id: param_id.clone(),
+                    },
+                );
             }
             DispatchResult::handled()
         }

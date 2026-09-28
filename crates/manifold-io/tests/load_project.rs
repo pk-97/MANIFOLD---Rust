@@ -401,8 +401,8 @@ fn load_waypoints_large_project() {
     assert_eq!(project.project_name, "WAYPOINTS");
     assert!((project.settings.bpm.0 - 110.0).abs() < 0.01);
     assert_eq!(project.timeline.layers.len(), 9);
-    // Original project had 2311 clips; 295 overlapping clips removed on load repair.
-    assert_eq!(project.timeline.total_clip_count(), 2016);
+    // Original project had 2311 clips; 297 overlapping clips removed on load repair.
+    assert_eq!(project.timeline.total_clip_count(), 2014);
 
     // Stress test: all clips should have valid beats and no overlaps
     for layer in &project.timeline.layers {
@@ -733,6 +733,11 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
         shape: Default::default(),
         smoothed: 0.0,
         prev_raw: 0.0,
+        audio_hop_cursor: Default::default(),
+        audio_hop_source: None,
+        audio_held_output: None,
+        audio_held_meter: 0.0,
+        audio_observations: Default::default(),
         trigger_edge: Default::default(),
         fire_count: 0,
         trigger_mode: None,

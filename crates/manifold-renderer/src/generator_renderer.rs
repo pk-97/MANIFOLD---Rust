@@ -1,7 +1,7 @@
 use crate::generators::registry::GeneratorRegistry;
 use crate::preset_runtime::PresetRuntime;
 use crate::gpu_encoder::GpuEncoder;
-use crate::preset_context::PresetContext;
+use crate::preset_context::{PresetContext, ProjectTempo};
 use crate::render_target::RenderTarget;
 use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
@@ -13,6 +13,15 @@ use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
 use std::sync::Arc;
+
+use crate::frame_status::FrameRenderStatus;
+use crate::node_graph::fluid::FluidDomainSnapshot;
+use crate::node_graph::scene_viewport::{
+    SceneViewportConfig, SceneViewportHostError,
+};
+use crate::preset_runtime::ModifierPreviewContext;
+
+mod physics_events;
 
 /// Per-clip active state.
 struct ActiveClip {
@@ -153,6 +162,8 @@ struct ThumbGen {
 }
 
 pub struct GeneratorRenderer {
+    next_physics_event: u64,
+    scene_impulse_diagnostics: crate::preset_runtime::SceneImpulseDiagnostics,
     /// Shared handle to the GpuDevice owned by ContentPipeline. An `Arc`
     /// clone instead of a cached raw pointer means this survives any future
     /// move of `ContentPipeline`/`ContentThread` (BUG-054).
@@ -200,6 +211,12 @@ pub struct GeneratorRenderer {
     /// for this frame. Set by the host before `render_all`; a raw pointer is
     /// used because the renderer's lifetime is independent of the registry.
     layer_skin_registry: Option<crate::layer_skin::LayerSkinPtr>,
+    /// Render-only viewport request forwarded to the matching generator
+    /// runtime. The modifier context is shared with the host and does not
+    /// participate in graph execution.
+    scene_viewport_request: Option<(LayerId, NodeId, SceneViewportConfig)>,
+    scene_viewport_modifier: Option<Arc<ModifierPreviewContext>>,
+    scene_viewport_error: Option<SceneViewportHostError>,
 }
 
 /// This generator's profiled-tag scope: `gen:{layer_id}`.
@@ -228,6 +245,8 @@ impl GeneratorRenderer {
         registry.prewarm_all(&device);
 
         Self {
+            next_physics_event: 0,
+            scene_impulse_diagnostics: Default::default(),
             device,
             width,
             height,
@@ -245,6 +264,9 @@ impl GeneratorRenderer {
             profiling_enabled: false,
             rt_quality: crate::node_graph::RtQuality::default(),
             layer_skin_registry: None,
+            scene_viewport_request: None,
+            scene_viewport_modifier: None,
+            scene_viewport_error: None,
         }
     }
 
@@ -300,9 +322,129 @@ impl GeneratorRenderer {
     /// depending on the unfused→fused executor rebuild to reset it.
     pub fn clear_preview(&mut self) {
         self.preview_layer = None;
+        self.scene_viewport_request = None;
+        self.scene_viewport_modifier = None;
+        self.scene_viewport_error = None;
         for state in self.layer_generators.values_mut() {
             state.generator.set_preview_node(None);
             state.generator.clear_dump_set();
+            state.generator.clear_scene_viewport();
+        }
+    }
+
+    /// Store and immediately apply the render-only scene viewport request to
+    /// currently-live runtimes. Rebuilt runtimes receive it again immediately
+    /// before their generator render in [`Self::render_all`].
+    pub fn set_scene_viewport_request(
+        &mut self,
+        request: Option<(LayerId, NodeId, SceneViewportConfig)>,
+        modifier: Option<Arc<ModifierPreviewContext>>,
+    ) {
+        self.scene_viewport_request = request;
+        self.scene_viewport_modifier = modifier;
+        self.scene_viewport_error = None;
+        self.clear_scene_viewport_runtimes();
+        self.apply_scene_viewport_to_live_runtime();
+    }
+
+    fn clear_scene_viewport_runtimes(&mut self) {
+        let requested_layer = self
+            .scene_viewport_request
+            .as_ref()
+            .map(|(layer_id, _, _)| layer_id);
+        for (layer_id, state) in self.layer_generators.iter_mut() {
+            if requested_layer != Some(layer_id) {
+                state.generator.clear_scene_viewport();
+            }
+        }
+    }
+
+    fn apply_scene_viewport_to_live_runtime(&mut self) {
+        let Some((layer_id, node_id, config)) = self.scene_viewport_request.as_ref() else {
+            return;
+        };
+        let modifier = self.scene_viewport_modifier.clone();
+        let error = {
+            let Some(state) = self.layer_generators.get_mut(layer_id) else {
+                return;
+            };
+            let result = if let Some(context) = modifier.as_deref() {
+                state
+                    .generator
+                    .set_modifier_scene_viewport(context, node_id, *config)
+            } else {
+                state
+                    .generator
+                    .set_scene_viewport_watched(node_id, *config)
+                    .map_err(SceneViewportHostError::InvalidTarget)
+            };
+            let error = result.err();
+            if error.is_some() {
+                state.generator.clear_scene_viewport();
+            }
+            error
+        };
+        if let Some(error) = error {
+            self.scene_viewport_error = Some(error);
+        } else {
+            self.scene_viewport_error = None;
+        }
+    }
+
+    /// The latest valid viewport color for `layer_id`.
+    pub fn scene_viewport_texture(
+        &self,
+        layer_id: &LayerId,
+    ) -> Option<&manifold_gpu::GpuTexture> {
+        if self.scene_viewport_error.is_some()
+            || self.scene_viewport_request.as_ref().is_none_or(|(requested, _, _)| requested != layer_id)
+        {
+            return None;
+        }
+        self.layer_generators
+            .get(layer_id)
+            .and_then(|state| state.generator.scene_viewport_texture())
+    }
+
+    pub fn scene_viewport_status(
+        &self,
+        layer_id: &LayerId,
+    ) -> Result<FrameRenderStatus, SceneViewportHostError> {
+        if let Some(error) = self.scene_viewport_error {
+            return Err(error);
+        }
+        let Some((requested, _, _)) = self.scene_viewport_request.as_ref() else {
+            return Err(SceneViewportHostError::MissingRuntime);
+        };
+        if requested != layer_id {
+            return Err(SceneViewportHostError::MissingRuntime);
+        }
+        let Some(state) = self.layer_generators.get(layer_id) else {
+            return Err(SceneViewportHostError::MissingRuntime);
+        };
+        state
+            .generator
+            .scene_viewport_status()
+            .ok_or(SceneViewportHostError::MissingRuntime)
+    }
+
+    pub fn write_scene_viewport_fluid_domains(
+        &self,
+        layer_id: &LayerId,
+        output: &mut Vec<(NodeId, FluidDomainSnapshot)>,
+    ) {
+        if self.scene_viewport_error.is_some()
+            || self.scene_viewport_request.as_ref().is_none_or(|(requested, _, _)| requested != layer_id)
+        {
+            return;
+        }
+        let Some(state) = self.layer_generators.get(layer_id) else {
+            return;
+        };
+        if let Some(context) = self.scene_viewport_modifier.as_deref() {
+            state.generator.write_modifier_fluid_domains(context, output);
+        } else {
+            state.generator.write_fluid_domains_watched(output);
         }
     }
 
@@ -627,6 +769,7 @@ impl GeneratorRenderer {
         // their sim state simply pauses — safe because the occluder gate lets
         // them resume before they can be seen again. Empty = render everything.
         render_skip: &[i32],
+        project_tempo: Option<&ProjectTempo>,
     ) {
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
@@ -768,6 +911,16 @@ impl GeneratorRenderer {
                 current_relight_params,
             );
         }
+
+        // Captures are valid only for a runtime that is actually rendered on
+        // this frame. Skipped layers must not retain the previous frame's
+        // viewport texture while the matching rebuilt runtime is re-aimed
+        // below immediately before its render.
+        self.clear_scene_viewport_runtimes();
+        // Re-aim the matching runtime even when its layer has no visible clip
+        // this frame; set_scene_viewport invalidates its capture flag without
+        // dropping the pass or its render history.
+        self.apply_scene_viewport_to_live_runtime();
 
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();
@@ -911,6 +1064,8 @@ impl GeneratorRenderer {
                 layer_state
                     .generator
                     .set_layer_skin_registry(self.layer_skin_registry.map(|p| unsafe { p.get() }));
+                layer_state.generator.set_project_tempo(project_tempo);
+                layer_state.generator.set_physics_source_instance(layer.gen_params());
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
@@ -918,6 +1073,15 @@ impl GeneratorRenderer {
                     params,
                 );
                 active.anim_progress = new_progress;
+                // Acknowledge native tick-start receipts every rendered frame;
+                // otherwise completed clicks would fill the bounded event queue.
+                let diagnostics = &mut self.scene_impulse_diagnostics;
+                layer_state.generator.drain_scene_impulses(|_, event| {
+                    diagnostics.started = diagnostics.started.saturating_add(1);
+                    if event.lateness.0 > 0.0 {
+                        diagnostics.late = diagnostics.late.saturating_add(1);
+                    }
+                });
             }
         }
 
@@ -1149,7 +1313,7 @@ impl GeneratorRenderer {
         if let Some(prior) = self.layer_generators.get_mut(&layer_id)
             && prior.generator_type == gen_type
         {
-            generator.carry_modifier_control_state_from(&mut prior.generator);
+            generator.carry_generator_state_from(&mut prior.generator);
         }
         self.layer_generators.insert(
             layer_id.clone(),
@@ -1271,6 +1435,8 @@ impl GeneratorRenderer {
         let t = self.thumb_gens.get_mut(clip_id)?;
         t.ready = false;
         t.runtime.set_string_params(string_params);
+        t.runtime.set_project_tempo(None);
+        t.runtime.set_physics_source_instance(Some(gp));
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
         for _ in 0..frames {
             let frame_count = t.frame_count;
@@ -1568,6 +1734,8 @@ impl ClipRenderer for GeneratorRenderer {
                     ls.generator.set_string_params(Some(&ls.merged_string_params));
                     ls.generator.set_relight_params(&relight_params);
                     ls.generator.set_rt_quality(self.rt_quality);
+                    ls.generator.set_project_tempo(None);
+                    ls.generator.set_physics_source_instance(layer.gen_params());
                     let ctx = PresetContext {
                         time: frame as f64 * DT,
                         beat: 0.0,
@@ -2314,7 +2482,7 @@ mod warmup_tests {
             let mut native_enc = device.create_encoder("warmup_test");
             let mut gpu = GpuEncoder::new(&mut native_enc, &device);
             let time = f as f64 * DT as f64;
-            renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[]);
+            renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[], None);
             native_enc.commit_and_wait_completed();
             renderer.uniform_arena.flush(&device);
         }

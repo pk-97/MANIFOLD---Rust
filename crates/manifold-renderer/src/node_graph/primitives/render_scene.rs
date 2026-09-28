@@ -67,6 +67,8 @@
 //! scene.
 
 mod rt_changes;
+#[path = "volume_optics.rs"]
+mod volume_optics;
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
@@ -651,6 +653,9 @@ struct RenderSceneUniforms {
     /// it, so Rendered/Solid/Wireframe renders are byte-identical whatever
     /// value rides here. `y/z/w` reserved.
     render_mode: [f32; 4],
+    /// Closed volume flag, homogeneous scattering density, embedded particle density, reserved.
+    volume_optics: [f32; 4],
+    volume_scattering_color: [f32; 4],
 }
 
 // 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -672,7 +677,8 @@ struct RenderSceneUniforms {
 // 816 after SCENE_RENDER_MODE_DESIGN.md D8: `render_mode` (+16) — the
 // Points mode point-size slot, appended at the tail so every existing
 // field keeps its offset (appending is the byte-identical contract).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 816);
+// 848 after optional closed-volume optics and scattering colour (+32).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 848);
 
 /// Per-map sampling metadata. Core maps retain hardware anisotropic
 /// samplers; extension maps use these settings within Metal sampler limits.
@@ -1096,6 +1102,7 @@ pub struct RenderScene {
     opaque_depth_snapshot: Option<manifold_gpu::GpuTexture>,
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
+    volume_optics: volume_optics::VolumeOptics,
     /// E2b: per-layer camera depth scratch, seeded from the opaque snapshot
     /// before each transmissive draw. Allocated only when transmission is
     /// present.
@@ -1909,8 +1916,9 @@ impl RenderScene {
     /// caller (evaluate) returns immediately, exactly as the inline code did.
     /// BUG-trh7 stage 2, pass 1: validate every object's required inputs,
     /// compose its model matrix + uniforms, and get-or-compile its pipeline.
-    /// None = abort frame — the three structured-error magenta-clear returns
-    /// and the empty-draws return of the inline code, unchanged.
+    /// None = abort frame — the three structured-error magenta-clear returns.
+    /// An empty draw list is returned for the caller to clear all connected
+    /// outputs and invalidate temporal history.
     fn collect_object_draws<'ctx, 'gpu>(
         &mut self,
         ctx: &mut EffectNodeContext<'ctx, 'gpu>,
@@ -2124,7 +2132,15 @@ impl RenderScene {
             } else {
                 t.rot_euler
             };
-            let model = model_matrix(t.pos, rot_euler, t.scale);
+            let local_model = model_matrix(t.pos, rot_euler, t.scale);
+            let model = object.parent_transform.map_or(local_model, |parent| {
+                let parent_rot = if parent.billboard {
+                    parent.billboard_rot_euler(cam.pos)
+                } else {
+                    parent.rot_euler
+                };
+                mat4_mul(model_matrix(parent.pos, parent_rot, parent.scale), local_model)
+            });
             // GBUFFER_DESIGN.md section 2 D5 (P2): `None` at this slot (no history
             // yet — a brand-new node, or the slot right after a rebuild)
             // seeds prev = current, giving THIS object exactly-zero
@@ -2339,12 +2355,53 @@ impl RenderScene {
             });
         }
 
-        if draws.is_empty() {
-            self.subsurface_pass.reset();
-            return None;
-        }
-
         Some((draws, has_transmission))
+    }
+
+    /// A frame with no visible scene objects still owns every graph output.
+    /// Clear those outputs so a previous frame cannot remain on screen, and
+    /// discard temporal history so the first visible frame starts cold.
+    fn clear_empty_frame<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
+        self.invalidate_temporal_history();
+
+        // Keep these values aligned with the normal MSAA pass: transparent
+        // color, reversed-Z depth, zero motion/denoiser feeds, and full AO
+        // owed for the background.
+        const OUTPUTS: [(&str, [f64; 4]); 10] = [
+            ("color", [0.0, 0.0, 0.0, 0.0]),
+            ("depth", [0.0, 0.0, 0.0, 0.0]),
+            ("velocity", [0.0, 0.0, 0.0, 0.0]),
+            ("ao_mask", [1.0, 1.0, 1.0, 1.0]),
+            ("normals", [0.0, 0.0, 0.0, 0.0]),
+            ("roughness", [0.0, 0.0, 0.0, 0.0]),
+            ("diffuse_albedo", [0.0, 0.0, 0.0, 0.0]),
+            ("specular_albedo", [0.0, 0.0, 0.0, 0.0]),
+            ("specular_hit_distance", [0.0, 0.0, 0.0, 0.0]),
+            ("reactive_mask", [0.0, 0.0, 0.0, 0.0]),
+        ];
+        for (port, clear) in OUTPUTS {
+            if let Some(target) = ctx.outputs.texture_2d(port) {
+                ctx.gpu_encoder()
+                    .native_enc
+                    .clear_texture(target, clear[0], clear[1], clear[2], clear[3]);
+            }
+        }
+    }
+
+    /// Drop all history that can feed a future visible frame. Resources stay
+    /// cached; this is the same invalidation used by `clear_state`, without
+    /// restarting the jitter sequence during a transient empty scene.
+    fn invalidate_temporal_history(&mut self) {
+        self.subsurface_pass.reset();
+        self.rt_history_ping = 0;
+        self.rt_irr_needs_reset = true;
+        self.rt_moments_valid = false;
+        self.rt_prev_accumulating = false;
+        self.prev_temporal_upscale = false;
+        self.prev_model.fill(None);
+        self.prev_view_proj = None;
+        self.prev_cam_state = None;
+        self.prev_jitter_ndc = None;
     }
     /// BUG-trh7 stage 2, pass 3: the ensure-cached-GPU-resources block —
     /// every later pass's immutable self-borrow is ensured here first
@@ -4282,9 +4339,9 @@ impl RenderScene {
         // D11: Pass 2 binds its own identity stub (each pass binds what it
         // needs since the stage-2 carve — the ensure block guarantees it).
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        let binding_sets: Vec<[GpuBinding; 53]> = draws
-            .iter()
-            .map(|draw| {
+        let binding_sets: Vec<[GpuBinding; 56]> = draws
+            .iter().enumerate()
+            .map(|(draw_index, draw)| {
                 [
                     GpuBinding::Bytes {
                         binding: 0,
@@ -4550,6 +4607,9 @@ impl RenderScene {
                         buffer: draw.weights.unwrap_or(draw.vertices),
                         offset: 0,
                     },
+                    GpuBinding::Texture { binding: 53, texture: self.volume_optics.path(draw_index).unwrap_or(dummy) },
+                    GpuBinding::Texture { binding: 54, texture: self.volume_optics.density().unwrap_or(dummy) },
+                    GpuBinding::Texture { binding: 55, texture: self.volume_optics.nearest(draw_index).unwrap_or(dummy_depth) },
                     GpuBinding::Bytes { binding: 51, data: bytemuck::bytes_of(&draw.subsurface_binding) },
                     GpuBinding::Texture { binding: 52, texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy) },
                 ]
@@ -6254,6 +6314,7 @@ impl RenderScene {
             opaque_scene_color_width: 0,
             opaque_scene_color_height: 0,
             opaque_scene_color_format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            volume_optics: volume_optics::VolumeOptics::default(),
             opaque_depth_snapshot: None,
             opaque_depth_snapshot_width: 0,
             opaque_depth_snapshot_height: 0,
@@ -8721,6 +8782,8 @@ fn build_uniforms(
         // uniform field changes no pixel, so Rendered parity holds whatever
         // value rides here.
         render_mode: [point_size, 0.0, 0.0, 0.0],
+        volume_optics: [if material.volume_geometry && material.transmission_factor > 0.0 { 1.0 } else { 0.0 }, material.volume_scattering_density, material.volume_particle_density, 0.0],
+        volume_scattering_color: [material.volume_scattering_color[0], material.volume_scattering_color[1], material.volume_scattering_color[2], 0.0],
     }
 }
 
@@ -8730,15 +8793,8 @@ impl EffectNode for RenderScene {
         // retain prepared geometry/resources, restart sampling and route all
         // temporal consumers through the existing first-frame reset decision.
         self.jitter_frame_index = 0;
-        self.subsurface_pass.reset();
         self.rt_reset_detector = TemporalResetDetector::new();
-        self.rt_history_ping = 0;
-        self.rt_irr_needs_reset = true;
-        self.rt_moments_valid = false;
-        self.prev_model.fill(None);
-        self.prev_view_proj = None;
-        self.prev_cam_state = None;
-        self.prev_jitter_ndc = None;
+        self.invalidate_temporal_history();
     }
 
     fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
@@ -8946,6 +9002,7 @@ impl RenderScene {
             visible: true,
             cast_shadows: true,
             transform: crate::node_graph::transform::Transform::default(),
+            parent_transform: None,
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
             weights: None,
@@ -9026,13 +9083,17 @@ impl RenderScene {
         // ---- Pass 1 (mutable phase): validate every object's required
         // inputs, compose its model matrix + uniforms, and get-or-compile
         // its pipeline (BUG-trh7 stage 2, `collect_object_draws`). None =
-        // abort frame: structured error + magenta clear, or no visible
-        // objects — the inline code's exact early returns.
+        // abort frame: structured error + magenta clear. An empty draw list
+        // is handled below so every connected output is cleared.
         let Some((mut draws, has_transmission)) =
             self.collect_object_draws(ctx, &pre, &port_index, single_object)
         else {
             return;
         };
+        if draws.is_empty() {
+            self.clear_empty_frame(ctx);
+            return;
+        }
 
         let mut has_subsurface = false;
         let mut opaque_index = 0u32;
@@ -9132,6 +9193,16 @@ impl RenderScene {
                 return;
             }
         }
+        if has_transmission {
+            let gpu = ctx.gpu_encoder();
+            if let Err(error) = self.volume_optics.encode(gpu.device, gpu.native_enc, &draws,
+                self.opaque_depth_snapshot.as_ref().expect("transmission depth ensured"),
+                self.identity_instance_stub.as_ref().expect("identity ensured")) {
+                ctx.error(error);
+                return;
+            }
+        }
+
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
         // shadow-ray dispatch + depth-aware upsample, reading the opaque-

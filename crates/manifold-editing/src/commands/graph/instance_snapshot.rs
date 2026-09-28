@@ -6,6 +6,7 @@
 #[derive(Debug, Clone)]
 pub(crate) struct InstanceLayerSnapshot {
     params: manifold_core::params::ParamManifest,
+    base_tracked: bool,
     drivers: Option<Vec<manifold_core::effects::ParameterDriver>>,
     envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
     ableton_mappings: Option<Vec<manifold_core::ableton_mapping::AbletonParamMapping>>,
@@ -17,6 +18,7 @@ impl InstanceLayerSnapshot {
     pub(crate) fn capture(instance: &manifold_core::effects::PresetInstance) -> Self {
         Self {
             params: instance.params.clone(),
+            base_tracked: instance.base_tracked,
             drivers: instance.drivers.clone(),
             envelopes: instance.envelopes.clone(),
             ableton_mappings: instance.ableton_mappings.clone(),
@@ -27,6 +29,7 @@ impl InstanceLayerSnapshot {
 
     pub(crate) fn restore(self, instance: &mut manifold_core::effects::PresetInstance) {
         instance.params = self.params;
+        instance.base_tracked = self.base_tracked;
         instance.drivers = self.drivers;
         instance.envelopes = self.envelopes;
         instance.ableton_mappings = self.ableton_mappings;

@@ -5,8 +5,8 @@
 //! industry-standard navigation (LMB-drag orbit, Shift/MMB-drag pan,
 //! scroll/pinch dolly, trackpad two-finger pan) — no GPU, no graph, no
 //! `EditingService`. It exists ONLY in the editor preview context (D9): the
-//! content thread never constructs one, and nothing here can reach the
-//! `Project` or the live show render. [`ViewportCamera::to_camera`] emits the
+//! UI owns navigation and sends immutable copies to the content renderer.
+//! It never edits the `Project` or show camera. [`ViewportCamera::to_camera`] emits the
 //! same [`Camera`] struct every 3D consumer already reads, using the
 //! `yaw`/`pitch` convention `node.free_camera` uses
 //! (`crate::node_graph::primitives::free_camera`) — `viewport_render`
@@ -57,7 +57,8 @@ impl Default for ViewportCamera {
         Self {
             target: [0.0, 0.0, 0.0],
             yaw: 0.6,
-            pitch: 0.35,
+            // Negative pitch looks down from above the target.
+            pitch: -0.35,
             distance: 8.0,
             fov_y: 0.9,
             near: 0.05,

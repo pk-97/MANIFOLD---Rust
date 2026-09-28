@@ -108,8 +108,49 @@ pub(crate) fn parse_document_and_buffers(
     path: &std::path::Path,
 ) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_document_and_buffers_from_slice(path, &bytes)
+}
 
-    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(&bytes)
+/// The exact document and resolved buffers used by a mesh decode. The
+/// identity includes contents, not the location of the owning model file.
+pub(crate) struct GltfBufferSnapshot {
+    pub document: gltf::Document,
+    pub buffers: Vec<gltf::buffer::Data>,
+    pub identity: [u8; 32],
+}
+
+/// Resolve dependencies through the canonical importer before consulting the
+/// decoded mesh cache. A missing or changed external buffer must not be hidden
+/// by a cache hit. On a miss the caller flattens these same bytes, without
+/// reopening the model or its buffers under the captured identity.
+pub(crate) fn parse_buffer_snapshot(
+    path: &std::path::Path,
+) -> Result<GltfBufferSnapshot, String> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (document, buffers) = parse_document_and_buffers_from_slice(path, &bytes)?;
+    let mut hash = Sha256::new();
+    hash.update(b"manifold.gltf-buffer-snapshot.v1");
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(&bytes);
+    hash.update((buffers.len() as u64).to_le_bytes());
+    for buffer in &buffers {
+        hash.update((buffer.0.len() as u64).to_le_bytes());
+        hash.update(&buffer.0);
+    }
+    Ok(GltfBufferSnapshot {
+        document,
+        buffers,
+        identity: hash.finalize().into(),
+    })
+}
+
+fn parse_document_and_buffers_from_slice(
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>), String> {
+    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice_without_validation(bytes)
         .map_err(|e| format!("{}: gltf parse failed: {e}", path.display()))?;
 
     // Re-run the crate's structural validation, filtering out the
@@ -864,53 +905,59 @@ fn walk_gltf_node(
     Ok(())
 }
 
-/// Parse a `.glb`/`.gltf` file and flatten the selected geometry into a
-/// triangle-list `Vec<MeshVertex>`. See [`GltfMeshSelector`] for the three
-/// selection modes. Returns `Err(String)` on any failure — a missing/
-/// unreadable file, an unsupported required extension, an out-of-range
-/// mesh/primitive index, or a non-Triangles primitive — rather than
-/// panicking, since this runs on a background thread inside
-/// `node.gltf_mesh_source`. A missing default scene no longer errors:
-/// `resolve_import_nodes` falls back per `GLB_XFAIL_BURNDOWN_DESIGN.md` D5.
+/// Uncached fixture entry point. Production mesh loads flatten the snapshot
+/// already read and authenticated by the shared decoded-mesh cache.
+#[cfg(test)]
 pub(crate) fn load_gltf_mesh(
     path: &std::path::Path,
     selector: GltfMeshSelector,
 ) -> Result<Vec<MeshVertex>, String> {
-    let (document, buffers, _images, _image_report_lines) = import_glb(path)?;
+    let (document, buffers) = parse_document_and_buffers(path)?;
+    load_gltf_mesh_from_buffers(&document, &buffers, selector)
+}
 
+/// Flatten the already resolved source used to key a decoded-mesh cache entry.
+/// Mesh vertices depend on document data and buffers, not decoded images.
+/// Invalid selectors or unsupported geometry return an error. A missing
+/// default scene retains the existing `resolve_import_nodes` policy.
+pub(crate) fn load_gltf_mesh_from_buffers(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    selector: GltfMeshSelector,
+) -> Result<Vec<MeshVertex>, String> {
     let mut out = Vec::new();
     match selector {
         GltfMeshSelector::WholeScene => {
-            for node in resolve_import_nodes(&document) {
+            for node in resolve_import_nodes(document) {
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
-                    &document,
-                    &buffers,
+                    document,
+                    buffers,
                     MaterialFilter::All,
                     &mut out,
                 )?;
             }
         }
         GltfMeshSelector::Material { material_index } => {
-            for node in resolve_import_nodes(&document) {
+            for node in resolve_import_nodes(document) {
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
-                    &document,
-                    &buffers,
+                    document,
+                    buffers,
                     MaterialFilter::Material(material_index),
                     &mut out,
                 )?;
             }
         }
         GltfMeshSelector::DefaultMaterial => {
-            for node in resolve_import_nodes(&document) {
+            for node in resolve_import_nodes(document) {
                 walk_gltf_node(
                     &node,
                     MAT4_IDENTITY,
-                    &document,
-                    &buffers,
+                    document,
+                    buffers,
                     MaterialFilter::DefaultOnly,
                     &mut out,
                 )?;
@@ -922,7 +969,7 @@ pub(crate) fn load_gltf_mesh(
                 format!("mesh_index {mesh_index} out of range (document has {} meshes)", meshes.len())
             })?;
             for primitive in mesh.primitives() {
-                flatten_primitive(&primitive, &buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
+                flatten_primitive(&primitive, buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
             }
         }
         GltfMeshSelector::Primitive {
@@ -940,7 +987,7 @@ pub(crate) fn load_gltf_mesh(
                     primitives.len()
                 )
             })?;
-            flatten_primitive(primitive, &buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
+            flatten_primitive(primitive, buffers, &MAT4_IDENTITY, &MAT3_IDENTITY, &mut out)?;
         }
     }
     Ok(out)
@@ -1474,8 +1521,8 @@ pub(crate) struct GltfMaterialInfo {
     pub morph: Option<GltfObjectMorph>,
     /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): this object's resolved
     /// node-slot rigid-animation topology — see
-    /// [`GltfObjectRigidMultiNode`]'s doc for the two cases that set it.
-    /// `None` for a static, single-ancestor-animated single-node, or
+    /// [`GltfObjectRigidMultiNode`]'s doc for the cases that set it.
+    /// `None` for a static or direct-leaf-only animated single-node, or
     /// skinned object. Mutually exclusive with `skin` (a skinned object
     /// never also gets a node-slot palette) but independent of
     /// `animations` (always empty when this is `Some`).
@@ -2302,15 +2349,19 @@ pub(crate) struct GltfObjectSkin {
 /// the sorted scene-node indices contributing its geometry, slot order =
 /// list order (slot `i` = `slot_nodes[i]`). Set when EITHER (a) more than
 /// one mesh-owning node contributes this material's geometry, at least one
-/// animated in some clip, none skinned (the `:2492` case this design
-/// deletes), OR (b) exactly one contributing node whose ancestor chain
-/// animates the SAME TRS channel on more than one ancestor (the `:1700`
-/// case — composing multiple animated ancestors into one TRS track isn't
-/// generally valid, but the whole-hierarchy node-slot palette composes
-/// them correctly via matrix multiplication regardless of how many
-/// ancestors are animated, so a 1-slot palette subsumes it). `None` for a
-/// static or single-ancestor-animated single-node object (those keep the
-/// existing `GltfObjectAnimation` TRS-track path) or a skinned object.
+/// contributor or its ancestor chain is animated in some clip, none skinned
+/// (the `:2492` case this design deletes), OR (b) exactly one contributing
+/// node whose ancestor chain has any animated TRS channel, including a
+/// single ancestor (the node-slot palette preserves static child bind pose
+/// and the animated ancestor's pivot), OR (c) the chain animates the SAME
+/// TRS channel on more than one ancestor (the `:1700` case — composing
+/// multiple animated ancestors into one TRS track isn't generally valid, but
+/// the whole-hierarchy node-slot
+/// palette composes them correctly via matrix multiplication regardless of
+/// how many ancestors are animated, so a 1-slot palette subsumes it).
+/// `None` for a static or direct-leaf-only animated single-node object
+/// (those keep the existing `GltfObjectAnimation` TRS-track path) or a
+/// skinned object.
 /// `gltf_import.rs` wires this the same way as `GltfObjectSkin` — through
 /// `node.gltf_skinned_mesh_source` (its `material_index` selector already
 /// finds these SAME nodes at runtime, sorted the same way — see
@@ -3316,11 +3367,14 @@ fn resolve_morph_for_key(
 /// rigid_multi_node)` — the second slot is `Some` (and the first always
 /// empty) whenever this object needs the node-slot palette instead of the
 /// single-node TRS-track path: geometry contributed by MORE THAN ONE
-/// mesh-owning node with at least one animated in some clip and NONE
-/// skinned (deletes the old `:2492` left-static bail), or exactly one
-/// contributing node whose ancestor chain animates the same TRS channel on
-/// more than one ancestor in any clip (deletes the old `:1700` per-channel
-/// drop — see [`resolve_object_animation`]'s `ambiguous` doc).
+/// mesh-owning node or its ancestor chain with at least one animated node in
+/// some clip and NONE skinned (deletes the old `:2492` left-static bail), or
+/// exactly one contributing node whose ancestor chain has any animated TRS
+/// channel (the node-slot path preserves the full hierarchy transform and
+/// pivot), or
+/// animates the same TRS channel on more than one ancestor in any clip
+/// (deletes the old `:1700` per-channel drop — see
+/// [`resolve_object_animation`]'s `ambiguous` doc).
 #[allow(clippy::too_many_arguments)]
 fn resolve_animations_for_key(
     nodes_by_material: &std::collections::BTreeMap<Option<usize>, std::collections::BTreeSet<usize>>,
@@ -3334,18 +3388,47 @@ fn resolve_animations_for_key(
         Some(nodes) if nodes.len() == 1 => {
             let node_index = *nodes.iter().next().unwrap();
             let chain = chain_by_node.get(&node_index).cloned().unwrap_or_default();
+            // An animated ancestor cannot be folded into the mesh node's
+            // TRS track without baking its bind transform into the geometry.
+            // Keep the raw child vertices and let the node-slot palette
+            // compose the complete hierarchy, including static child bind
+            // pose and the ancestor's animated pivot.
+            let animated_ancestor = chain
+                .iter()
+                .take(chain.len().saturating_sub(1))
+                .any(|ancestor| {
+                    node_anims_by_clip.iter().any(|node_anims| {
+                        node_anims.get(ancestor).is_some_and(|animation| {
+                            animation.translation.is_some()
+                                || animation.rotation.is_some()
+                                || animation.scale.is_some()
+                        })
+                    })
+                });
             let mut ambiguous = false;
             let per_clip: Vec<Option<GltfObjectAnimation>> = node_anims_by_clip
                 .iter()
                 .map(|node_anims| resolve_object_animation(&chain, node_anims, &mut ambiguous))
                 .collect();
-            if ambiguous {
+            if ambiguous || animated_ancestor {
                 (Vec::new(), Some(GltfObjectRigidMultiNode { slot_nodes: vec![node_index as u32] }))
             } else {
                 (per_clip, None)
             }
         }
-        Some(nodes) if nodes.len() > 1 && any_clip_animated_nodes.iter().any(|n| nodes.contains(n)) => {
+        Some(nodes) if nodes.len() > 1 => {
+            // A material may be split across several mesh nodes below one
+            // animated parent. Inspect each contributor's full chain so the
+            // node-slot palette is selected even when no mesh node itself
+            // appears in the animation channel set.
+            let any_hierarchy_animated = nodes.iter().any(|node| {
+                chain_by_node.get(node).is_some_and(|chain| {
+                    chain.iter().any(|ancestor| any_clip_animated_nodes.contains(ancestor))
+                })
+            });
+            if !any_hierarchy_animated {
+                return (Vec::new(), None);
+            }
             let any_skinned = nodes
                 .iter()
                 .any(|n| document.nodes().nth(*n).map(|node| node.skin().is_some()).unwrap_or(false));
@@ -3430,9 +3513,9 @@ pub(crate) fn gltf_import_summary(path: &std::path::Path) -> Result<GltfImportSu
         .iter()
         .map(|a| a.nodes.iter().map(|n| (n.node_index, n.clone())).collect())
         .collect();
-    // Union of every clip's animated node set — used only for the
-    // multi-node-per-material ambiguity check below (unchanged by A4: that
-    // check doesn't need to know WHICH clip animates the ambiguous node).
+    // Union of every clip's animated node set — used for the multi-node
+    // per-material hierarchy-animation check below (unchanged by A4: that
+    // check doesn't need to know WHICH clip animates the contributor chain).
     let any_clip_animated_nodes: std::collections::BTreeSet<usize> =
         node_anims_by_clip.iter().flat_map(|m| m.keys().copied()).collect();
     let mesh_node_chains = collect_mesh_node_chains(&document);
@@ -4322,6 +4405,11 @@ fn unsupported_optional_extension_lines(document: &gltf::Document) -> Vec<String
 mod animation_tests {
     use super::*;
 
+    // Parallel tests in this module can create and remove synthetic GLBs at
+    // the same clock tick. The process-local counter keeps each path unique.
+    static SYNTHETIC_COLOR0_COUNTER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
     fn khronos_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/gltf/khronos")
@@ -4416,8 +4504,9 @@ mod animation_tests {
     /// TWO materials ("inner"/"outer") and its single animated object
     /// splits translation onto an ANCESTOR node (node zero) from rotation
     /// on the mesh's own node (node two), via an intermediate no-op node.
-    /// `resolve_object_animation`'s ancestor-chain walk exists
-    /// specifically because of this asset.
+    /// `resolve_object_animation`'s ancestor-chain walk identifies the
+    /// split channels, while the node-slot palette now carries the final
+    /// hierarchy transform because one channel lives on an ancestor.
     #[test]
     fn box_animated_resolves_split_translation_and_rotation_onto_one_object() {
         let path = khronos_dir().join("BoxAnimated.glb");
@@ -4443,19 +4532,28 @@ mod animation_tests {
             .iter()
             .find(|m| m.name.as_deref() == Some("inner"))
             .expect("inner material present");
-        let anim = inner
-            .animations
-            .first()
-            .and_then(|a| a.as_ref())
-            .expect("inner material resolves an animation in clip 0");
-        assert!(anim.translation.is_some(), "translation lives on inner's ancestor node");
-        assert!(anim.rotation.is_some(), "rotation lives on inner's own mesh node");
-        assert!(anim.scale.is_none(), "BoxAnimated has no scale channel");
         assert!(
-            (anim.duration_s - 3.708_33).abs() < 1e-3,
-            "duration should be the translation track's last keyframe time, got {}",
-            anim.duration_s
+            inner.animations.iter().all(|animation| animation.is_none()),
+            "ancestor animation must use the hierarchy palette instead of a pre-baked TRS track"
         );
+        let rigid = inner
+            .rigid_multi_node
+            .as_ref()
+            .expect("inner material resolves the hierarchy palette");
+        assert_eq!(rigid.slot_nodes.len(), 1, "one mesh node uses one palette slot");
+        // The palette needs original local vertices. Baking the ancestor bind
+        // transform here would apply it twice when the animation is sampled.
+        let (document, buffers, _, _) = import_glb(&path).unwrap();
+        let node = document.nodes().nth(rigid.slot_nodes[0] as usize).unwrap();
+        let mesh = node.mesh().unwrap();
+        let primitive = mesh.primitives().find(|p| p.material().index() == Some(inner.material_index as usize)).unwrap();
+        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+        let source: Vec<_> = reader.read_positions().unwrap().collect();
+        let first_index = reader.read_indices().unwrap().into_u32().next().unwrap() as usize;
+        let (vertices, joints, weights) = load_gltf_skinned_mesh(&path, inner.material_index).unwrap();
+        assert_eq!(vertices[0].position, source[first_index]);
+        assert_eq!(joints[0], [0.0; 4]);
+        assert_eq!(weights[0], [1.0, 0.0, 0.0, 0.0]);
 
         let outer = summary
             .materials
@@ -4659,13 +4757,162 @@ mod animation_tests {
         let path = std::env::temp_dir().join(format!(
             "manifold_synthetic_color0_{}_{}.glb",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+            SYNTHETIC_COLOR0_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::write(&path, &glb).expect("write synthetic glb to temp dir");
         path
+    }
+
+    /// Two local-space triangles share one material and sit below a common
+    /// parent. The parent translates and rotates at t=1, while each child has
+    /// its own bind translation. This exercises the same source/palette shape
+    /// as a multi-node rigid object without depending on a checked-in asset.
+    fn write_synthetic_common_parent_animation_glb() -> std::path::PathBuf {
+        let mut bin = Vec::new();
+        let push_f32 = |bin: &mut Vec<u8>, value: f32| bin.extend_from_slice(&value.to_le_bytes());
+        for position in [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0]] {
+            for component in position {
+                push_f32(&mut bin, component);
+            }
+        }
+        let child_two_offset = bin.len();
+        for position in [[0.0, 0.0, 0.0], [-0.5, 0.0, 0.0], [0.0, -0.5, 0.0]] {
+            for component in position {
+                push_f32(&mut bin, component);
+            }
+        }
+        let time_offset = bin.len();
+        for time in [0.0, 1.0] {
+            push_f32(&mut bin, time);
+        }
+        let translation_offset = bin.len();
+        for translation in [[0.0, 0.0, 0.0], [3.0, 2.0, 0.0]] {
+            for component in translation {
+                push_f32(&mut bin, component);
+            }
+        }
+        let rotation_offset = bin.len();
+        for rotation in [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.70710677, 0.70710677]] {
+            for component in rotation {
+                push_f32(&mut bin, component);
+            }
+        }
+        let doc = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [
+                { "children": [1, 2] },
+                { "mesh": 0, "translation": [1.0, 0.0, 0.0] },
+                { "mesh": 1, "translation": [-1.0, 0.0, 0.0] }
+            ],
+            "meshes": [
+                { "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0 }] },
+                { "primitives": [{ "attributes": { "POSITION": 1 }, "material": 0 }] }
+            ],
+            "materials": [{ "name": "Shared" }],
+            "accessors": [
+                {
+                    "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                    "min": [0.0, 0.0, 0.0], "max": [0.5, 0.5, 0.0]
+                },
+                {
+                    "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3",
+                    "min": [-0.5, -0.5, 0.0], "max": [0.0, 0.0, 0.0]
+                },
+                { "bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR" },
+                { "bufferView": 3, "componentType": 5126, "count": 2, "type": "VEC3" },
+                { "bufferView": 4, "componentType": 5126, "count": 2, "type": "VEC4" }
+            ],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": child_two_offset, "byteLength": 36 },
+                { "buffer": 0, "byteOffset": time_offset, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": translation_offset, "byteLength": 24 },
+                { "buffer": 0, "byteOffset": rotation_offset, "byteLength": 32 }
+            ],
+            "animations": [{
+                "samplers": [
+                    { "input": 2, "output": 3 },
+                    { "input": 2, "output": 4 }
+                ],
+                "channels": [
+                    { "sampler": 0, "target": { "node": 0, "path": "translation" } },
+                    { "sampler": 1, "target": { "node": 0, "path": "rotation" } }
+                ]
+            }],
+            "buffers": [{ "byteLength": bin.len() }]
+        });
+        let json_bytes = serde_json::to_vec(&doc).expect("serialize synthetic hierarchy glTF JSON");
+        let mut json_padded = json_bytes;
+        while !json_padded.len().is_multiple_of(4) {
+            json_padded.push(b' ');
+        }
+        let mut bin_padded = bin;
+        while !bin_padded.len().is_multiple_of(4) {
+            bin_padded.push(0);
+        }
+        let total_len = 12 + 8 + json_padded.len() + 8 + bin_padded.len();
+        let mut glb = Vec::with_capacity(total_len);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json_padded);
+        glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin_padded);
+        let path = std::env::temp_dir().join(format!(
+            "manifold_synthetic_common_parent_{}_{}.glb",
+            std::process::id(),
+            SYNTHETIC_COLOR0_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, &glb).expect("write synthetic hierarchy glb to temp dir");
+        path
+    }
+
+    #[test]
+    fn synthetic_common_parent_material_uses_palette_and_moves_child_vertices() {
+        let path = write_synthetic_common_parent_animation_glb();
+        let summary = gltf_import_summary(&path).expect("parse synthetic hierarchy glb");
+        assert_eq!(summary.materials.len(), 1, "both meshes share one material");
+        let material = &summary.materials[0];
+        assert_eq!(material.material_index, 0);
+        assert!(material.animations.iter().all(|animation| animation.is_none()));
+        assert_eq!(
+            material.rigid_multi_node.as_ref().map(|rigid| rigid.slot_nodes.as_slice()),
+            Some(&[1u32, 2][..]),
+            "both child mesh nodes must become palette slots"
+        );
+
+        let (document, buffers, _, _) = import_glb(&path).expect("import synthetic hierarchy glb");
+        let animations = parse_animations(&document, &buffers);
+        let parent = animations[0]
+            .nodes
+            .iter()
+            .find(|node| node.node_index == 0)
+            .expect("common parent animation");
+        let parent_translation = parent.translation.as_ref().unwrap().values[1];
+        let parent_rotation = parent.rotation.as_ref().unwrap().values[1];
+        let parent_world = mat4_from_trs(parent_translation, parent_rotation, [1.0; 3]);
+        let (vertices, joints, weights) = load_gltf_skinned_mesh(&path, 0).expect("load palette vertices");
+        assert_eq!(vertices.len(), 6, "two triangle contributors stay in local space");
+        assert_eq!(joints[0], [0.0; 4]);
+        assert_eq!(joints[3], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(weights[0], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(weights[3], [1.0, 0.0, 0.0, 0.0]);
+
+        let child_world = |node_index: usize| {
+            let node = document.nodes().nth(node_index).unwrap();
+            let (translation, rotation, scale) = node.transform().decomposed();
+            mat4_mul(&parent_world, &mat4_from_trs(translation, rotation, scale))
+        };
+        let child_one_position = mat4_transform_point(&child_world(1), vertices[0].position);
+        let child_two_position = mat4_transform_point(&child_world(2), vertices[3].position);
+        assert_eq!(child_one_position, [3.0, 3.0, 0.0]);
+        assert_eq!(child_two_position, [3.0, 1.0, 0.0]);
+        std::fs::remove_file(&path).ok();
     }
 
     /// BUG-5mma core case: every vertex on the (sole) primitive sharing this

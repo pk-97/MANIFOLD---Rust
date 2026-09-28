@@ -309,6 +309,7 @@ fn render_two_layer_frame(
             time,
             beat: time * 2.0,
             dt,
+            project_tempo: None,
             frame_count: frame,
             compositor_dirty: false,
             clips: &clips,

@@ -336,6 +336,11 @@ see that design doc for the deletion decision and its measured cost.
   state by chain position) and at least one region actually spanning a seam.
 - **Per-instance user bindings** live off-def; the fused view carries the full
   `fused_retarget` map so the chain builder repoints them at splice time.
+- **Live inner-node writes** use the compiler's numeric uniform representation
+  at fused destinations. Both ordinary and prepared modifier routes convert
+  authored Enum/Bool scalars through `fused_param_value`; surviving nodes keep
+  their typed values. Otherwise an unrelated edit can reset shader controls to
+  zero when the uniform reader receives an Enum/Bool instead of a Float.
 - **Kill switches** (env, read once): `MANIFOLD_FREEZE` (master, default on),
   `MANIFOLD_CHAIN_FUSION`, `MANIFOLD_WGSL_SPECIALIZE`,
   `MANIFOLD_FEEDBACK_PINGPONG`, `MANIFOLD_FREEZE_Q16` (per-fuse-build read).

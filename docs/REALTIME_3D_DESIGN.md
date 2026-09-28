@@ -109,10 +109,12 @@ between this doc and execution.
   P6 entry state: SCENE_BUILD P2 landed; unwired `transform_n` → gizmo offers to
   create the atom (briefed in P6, not in SCENE_BUILD).]** Consequence of gizmos-as-params: anything you can
   grab in the viewport, you can perform from a knob.
-- **D9 — Show path never pays for the viewport.** Editor camera, overlays, and pick
-  passes run only in the editor preview context. The content-thread render is
-  byte-identical with the viewport open or closed. (Watch item: UI-present/content-GPU
-  contention — the viewport is one more editor consumer, not a new clock.)
+- **D9 — Show state and output stay isolated from the viewport.** Editor camera,
+  overlays, pick passes, render history and output storage belong to the editor
+  view. The viewport may borrow the show scene's resolved inputs; it must not
+  evaluate a second simulation or change the show camera, graph or history. The
+  show output remains byte-identical at matching frames with the viewport open or
+  closed. The extra render pass has a GPU cost; it introduces no simulation clock.
 - **D10 — Ease ships as content:** a bundled **Scene starter preset** (mesh + PBR
   material + sun & rim point light + atmosphere haze + orbit camera, good at
   defaults) plus component-library entries once components land. Three clicks: drop
@@ -210,7 +212,7 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   standard orbit/pan/dolly + trackpad, light/camera/grid overlays. Read-back: node
   preview infra, D9. Gate: headless PNG of viewport with overlays; content-thread
   output byte-identical with viewport open (the D9 proof — diff the show render).
-  **As-built:** the read-back audit found the existing node preview infra
+  **Original implementation:** the read-back audit found the existing node preview infra
   (`execution.rs`'s `preview_target`/`set_preview_target`) captures an extra texture
   from the SAME per-frame execution the live show uses — splicing a camera override
   into that shared execution would corrupt the live `camera` port value, directly
@@ -220,8 +222,9 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   target `render_scene` node's `camera` input re-wired to a synthetic
   `node.free_camera` node — see `node_graph::viewport_render`. Two structurally
   separate runtimes on the same `GpuDevice` cannot share execution state, which is
-  what makes the D9 guarantee mechanical (proven, not assumed) in the gpu-proofs
-  test. Overlays (grid/camera-frustum/light-billboard) are drawn on the CPU straight
+  what established show-state isolation in the original gpu-proofs test. This also
+  duplicates stateful sources, so it cannot provide a live view of show physics.
+  Overlays (grid/camera-frustum/light-billboard) are drawn on the CPU straight
   onto the tonemapped readback pixels via `Camera::project_to_pixel` — no new GPU
   pipeline, since overlay chrome is editor-only 2D chrome, never scene geometry.
   Gate: `cargo test -p manifold-renderer --features gpu-proofs scene_viewport_navigate`
@@ -232,7 +235,29 @@ feature is unwired (unwired = zero cost, checked, not assumed).
   isolated render path, and the overlay system are complete, unit-tested, and
   gate-proven; wiring them to live input events is the remaining follow-up before
   the viewport is interactively usable in the running app.
-  **P5b/P5c (2026-07-17, same branch):** the persistent-session architecture
+  **Shared simulation renderer (2026-09-27):** `SceneViewportPass` instead borrows
+  the selected live `render_scene` inputs at its evaluation boundary, before their
+  resources are recycled. A copied `NodeInputs` camera override never writes the
+  graph backend. The pass owns a separate `RenderScene`, texture backend, temporal
+  history and diagnostics; required RT/temporal outputs retain their declared
+  formats and resolution. Missing, pending, failed or pruned views expose no
+  texture. Requests never make a hidden branch live. Runtime reset invalidates the
+  captured image and resets editor history while retaining the camera request.
+  `shared_scene_viewport_*` Metal proofs cover fluid epoch/time preservation,
+  changing camera pixels, resize, hidden branches and matching show frames with
+  RT/temporal rendering. The app now forwards transient camera requests to the
+  primary generator/effect runtime, including the first frame after a chain rebuild.
+  The existing preview surface ring carries frame stamps; matching metadata retains
+  session/owner, camera, status and accepted fluid bounds. The editor painter draws
+  the leased image and overlays; picking uses the displayed camera, including while
+  a newer navigation request is pending. No UI solver or synchronous readback/upload
+  remains. Native content/bridge/painter proofs cover paused liquid navigation and
+  effect rebuild/disable; live window-event acceptance remains open. Compatible
+  watched-generator rebuilds retain native physics and input history, including
+  prepared fluid roles (BUG-vglg.11). Source-independent scene effects also build
+  and render without allocating an external input slot (BUG-vglg.10). Native app
+  proofs cover paused/playing owner switches and both effect input modes.
+  **Original P5b/P5c (2026-07-17; renderer replaced above):** the persistent-session architecture
   (`ViewportSession`, amortizing the rebuild to open/def-change only) and the
   live panel wiring (dock rect in the graph-editor sidebar, `v` toggle,
   `TexturePane`/`blit_texture_pane` present path, real winit mouse/scroll
@@ -280,7 +305,7 @@ use focused tests per the scope rule.
    "8 objects, 4 lights; any light may cast" is dead — see D4.)
 4. Fog/atmosphere is v1, as a port type (D5). Huge scenes are v2.
 5. Gizmos are v1 and are `EditingService` param edits; wired params lock (D8).
-6. Viewport = promoted graph-editor preview; show path never pays (D7/D9).
+6. Viewport = promoted graph-editor preview; show state/output stay isolated (D7/D9).
 7. Industry-standard viewport bindings, trackpad-first; refinement later (Peter).
 8. `render_mesh`/`render_copies` stay; `render_scene` is additive.
 9. MATERIAL_SYSTEM contract unchanged; its section 7 extension points (multi-light, shadow

@@ -40,6 +40,7 @@ pub(crate) use manifold_ui::graph_canvas;
 pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
 mod graph_target;
+mod fluid_domain_edit;
 mod scene_modifier_edit;
 mod scene_modifier_transfer;
 mod scene_item_transfer;
@@ -131,6 +132,9 @@ mod window_input;
 #[cfg(all(feature = "ui-automation", unix))]
 mod live_ui;
 mod viewport_input;
+mod scene_viewport;
+#[cfg(all(test, target_os = "macos", feature = "journey-proofs"))]
+mod scene_viewport_proof;
 // P5c evidence — test-only (`#![cfg(test)]` inside), see its module doc.
 mod viewport_p5c_demo;
 // P6 evidence — test-only (`#![cfg(test)]` inside), see its module doc.

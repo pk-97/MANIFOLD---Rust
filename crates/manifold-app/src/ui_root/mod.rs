@@ -196,6 +196,7 @@ pub struct UIRoot {
     /// bump `data_version`, so this guard keys directly on the content event's
     /// sequence and remains stable across repeated snapshots.
     pub last_graph_edit_diagnostic_sequence: Option<u64>,
+    pub last_trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     pub last_edit_selection_sequence: Option<u64>,
     pub pending_layer_reveal: Option<manifold_core::LayerId>,
     pub last_modifier_selection_sequence: Option<u64>,
@@ -466,6 +467,7 @@ impl UIRoot {
             export_progress: manifold_ui::panels::export_progress::ExportProgressPanel::new(),
             last_undo_redo_toast_key: None,
             last_graph_edit_diagnostic_sequence: None,
+            last_trigger_delivery_failure: None,
             last_edit_selection_sequence: None,
             pending_layer_reveal: None,
             last_modifier_selection_sequence: None,

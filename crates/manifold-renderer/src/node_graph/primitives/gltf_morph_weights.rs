@@ -36,9 +36,10 @@ use std::sync::{Arc, mpsc};
 
 use super::gltf_anim_shared::{LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_weight_slice};
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_anim_cache::{AnimSetLookup, ChannelKind, GltfAnimSet, get_or_spawn_load};
+use crate::node_graph::gltf_anim_cache::{ChannelKind, LoadedAnimSet, spawn_load};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::source_asset::loaded_identity;
 
 /// Maximum morph targets this primitive will sample in one frame —
 /// generous past the spec-typical few-to-a-dozen (`MorphStressTest.glb`,
@@ -176,8 +177,9 @@ crate::primitive! {
         // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: same key-gated background-load
         // shape node.gltf_skeleton_pose's P1 rewire introduced.
         last_path: String = String::new(),
-        anim_set: Option<Arc<GltfAnimSet>> = None,
-        pending_load: Option<mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>> = None,
+        anim_set: Option<Arc<LoadedAnimSet>> = None,
+        pending_load: Option<mpsc::Receiver<Result<Arc<LoadedAnimSet>, String>>> = None,
+        load_error: Option<String> = None,
     },
 }
 
@@ -298,12 +300,10 @@ impl Primitive for GltfMorphWeights {
             self.last_path = path.clone();
             self.anim_set = None;
             self.pending_load = None;
+            self.load_error = None;
         }
-        if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
-            match get_or_spawn_load(std::path::Path::new(&path)) {
-                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
-                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
-            }
+        if self.anim_set.is_none() && self.pending_load.is_none() && self.load_error.is_none() && !path.is_empty() {
+            self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
             match rx.try_recv() {
@@ -313,11 +313,14 @@ impl Primitive for GltfMorphWeights {
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_morph_weights: {e}");
+                    self.load_error = Some(e);
                     self.pending_load = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::error!("node.gltf_morph_weights: background load channel disconnected");
+                    let error = "background load channel disconnected".to_owned();
+                    log::error!("node.gltf_morph_weights: {error}");
+                    self.load_error = Some(error);
                     self.pending_load = None;
                 }
             }
@@ -371,6 +374,22 @@ impl Primitive for GltfMorphWeights {
 
     fn clear_state(&mut self) {
         self.trigger_latch.clear();
+        self.load_error = None;
+    }
+
+    fn warmup_pending(&self) -> bool {
+        self.pending_load.is_some()
+    }
+
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &["path"]
+    }
+
+    fn source_asset_identity(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -381,6 +400,7 @@ impl Primitive for GltfMorphWeights {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_graph::gltf_anim_cache::GltfAnimSet;
     use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
 
@@ -402,6 +422,50 @@ mod tests {
         let prim = GltfMorphWeights::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.gltf_morph_weights");
+    }
+
+    fn identity_params(path: &str) -> crate::node_graph::effect_node::ParamValues {
+        let mut params = crate::node_graph::effect_node::ParamValues::default();
+        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
+        params
+    }
+
+    #[test]
+    fn source_identity_tracks_ready_pending_failed_and_reset_states() {
+        let mut prim = GltfMorphWeights::new();
+        let loaded: Arc<LoadedAnimSet> = Arc::new(GltfAnimSet {
+            clips: Vec::new(),
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: Vec::new(),
+        }
+        .into());
+        let fingerprint = loaded.identity();
+        prim.last_path = "morph-a.glb".to_owned();
+        prim.anim_set = Some(loaded);
+
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+        );
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("morph-b.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Pending
+        );
+
+        prim.load_error = Some("morph load failed".to_owned());
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Failed("morph load failed")
+        );
+
+        Primitive::clear_state(&mut prim);
+        assert!(prim.load_error.is_none());
+        assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("morph-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+        );
     }
 
     fn static_weights_table(rows: Vec<(usize, f32)>) -> TableData {

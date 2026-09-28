@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 302 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 310 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -165,7 +165,7 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (83)
+### 3D Geometry (85)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -188,6 +188,8 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | Facet Normals | `node.facet_normals` | Filter | Recomputes a mesh's normals from its own triangle geometry, giving flat, faceted shading — the exact fix for a mesh whose normals went stale after a heavy defo… |
 | Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
 | Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
+| Fluid Role Source | `node.fluid_role_source` | Source | Prepares one reusable fluid source or collider geometry and emits its typed CPU role wire. |
+| Liquid Surface | `node.fluid_surface` | Source | Simulate liquid and generate its surface. Connect optional sources and colliders to control its motion. |
 | Fold | `node.fold_mesh` | Filter | Mirrors a mesh across a plane through the origin along one axis, with adjustable blend amount — the building block for kaleidoscope geometry. |
 | Free Camera | `node.free_camera` | Source | A free-look camera positioned and aimed directly with Euler angles, instead of orbiting a target. Gizmo- and import-friendly. |
 | Glitch Jitter | `node.glitch_jitter` | Filter | Snaps every vertex to a new random offset on each time step, giving a hard-cut digital glitch look. |
@@ -214,7 +216,7 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
 | Ordered Recon | `node.ordered_recon_mesh` | Filter | Reassembles an incoming mesh in directional bands, with each band settling from a periodic pose blend. |
-| Physics World | `node.physics_world` | Filter | Simulate colliding objects together under gravity, with speed and reset controls. |
+| Physics World | `node.physics_world` | Filter | Simulate colliding objects together under gravity, global and per-body acceleration fields, with speed and reset controls. |
 | Plane Mesh | `node.plane_mesh` | Source | Builds a flat rectangular sheet of mesh ready to skin with another layer's output. The surface for placing live video in a 3D scene. |
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Mesh | `node.platonic_solid_mesh` | Source | Builds a reusable closed triangle mesh for any of the five Platonic solids. |
@@ -399,10 +401,11 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | — | `system.generator_input` | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |
 | — | `system.source` | Source | The incoming image at the start of an effect chain. Wired in automatically. |
 
-### Fields & Coordinates (21)
+### Fields & Coordinates (27)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Add Vector Fields | `node.add_vector_fields` | Map | Adds two vector fields component by component. |
 | Block Displace Field | `node.block_displace_field` | Source | Outputs a grid of random block offsets, the displacement map behind datamosh and block-glitch looks. Feed it into Remap. |
 | Centered UV | `node.centered_uv` | Source | Outputs each pixel's position measured from a centre point, so the middle reads zero and the edges spread out. The base for radial and zoom effects. |
 | Distance to Point | `node.distance_to_point` | Source | Outputs how far each pixel is from a chosen point, bright far away and dark near it. A radial gradient you build circle masks and ripples from. |
@@ -412,17 +415,22 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | Flow Lines (LIC) | `node.flow_lines` | Filter | Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture. |
 | Grid UV Field | `node.grid_uv_field` | Source | Outputs a grid of sample points across the frame as a list, used to drive instanced shapes or sample a field at regular spots. |
 | Hash Field by Seed | `node.hash_field_by_seed` | Map | Scrambles a coordinate field by a seed so the same input gives a different but stable random offset per seed. Used to re-randomise a pattern on a trigger. |
+| Multiply Vector Fields | `node.multiply_vector_fields` | Map | Multiplies two vector fields component by component. |
 | Smooth (neighbors) | `node.neighbor_smooth` | Filter | Averages each point with its neighbours on a grid, smoothing out a bumpy field of values or positions. |
 | Polar Field | `node.polar_field` | Source | Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes. |
+| Radial Vector Field | `node.radial_vector_field` | Source | Outputs vectors pointing away from a world-space center within a radius. |
 | Rotate Coordinates | `node.rotate_coordinates` | Map | Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform. |
 | Rotate Vector | `node.rotate_vector` | Map | Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount. |
+| Scale Vector Field | `node.scale_vector_field` | Map | Scales a vector field by an independent strength control. |
 | Scanline Jitter Field | `node.scanline_jitter_field` | Source | Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap. |
 | Sine Wave (projected) | `node.sine_wave` | Map | Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns. |
 | Slice Volume | `node.slice_volume` | Filter | Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field. |
 | Slope Displace | `node.slope_displace` | Filter | Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks. |
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
+| Uniform Vector Field | `node.uniform_vector_field` | Source | Outputs the same vector at every world-space sample. |
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
+| Vortex Vector Field | `node.vortex_vector_field` | Source | Outputs tangential vectors circling a world-space axis within a radius. |
 | Wave Field 3D | `node.wave_field_3d` | Map | Samples a moving sine wave at every 3D point, producing weights for copy displacement or other maps. |
 
 ### Uncategorized (2)
@@ -432,7 +440,7 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (87)
+### Effect & generator presets (90)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -444,7 +452,7 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | `BlobTrackingV2Colour` | Blob Track V2 — Colour | effect | Stylize | 14 |
 | `BlobTrackingV2Motion` | Blob Track V2 — Motion | effect | Stylize | 11 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
-| `BlossomWire` | Blossom Wire | generator | Geometry | 14 |
+| `BlossomWire` | Blossom Wire | generator | Geometry | 13 |
 | `Caustics` | Caustics | generator | Pattern | 4 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
 | `CodeTerminal` | Code Terminal | effect | Stylize | 7 |
@@ -455,16 +463,17 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | `DataMosh` | Data Mosh | effect | Stylize | 8 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 10 |
 | `DigitalDrift` | Digital Drift | effect | Stylize | 7 |
-| `DigitalPlants` | Digital Plants | generator | Geometry | 21 |
+| `DigitalPlants` | Digital Plants | generator | Geometry | 18 |
 | `Dither` | Dither | effect | Stylize | 2 |
 | `Duocylinder` | Duocylinder | generator | Geometry | 11 |
 | `EdgeDetect` | Edge Detect | effect | Stylize | 2 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
 | `FilmGrain` | Film Grain | effect | Filmic | 2 |
 | `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
-| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 29 |
+| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 26 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
+| `HoneyDamBreak` | Honey — Dam Break | generator | Sim | 2287 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
@@ -486,7 +495,7 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | `LED Strobe` | LED Strobe | generator | LED | 6 |
 | `LED Studio Light` | LED Studio Light | generator | LED | 3 |
 | `LED Studio Mask` | LED Studio Mask | generator | LED | 8 |
-| `Lantern` | Lantern | generator | Geometry | 363 |
+| `Lantern` | Lantern | generator | Geometry | 369 |
 | `Lightning` | Lightning | generator | Pattern | 7 |
 | `Lissajous` | Lissajous | generator | Geometry | 11 |
 | `MaskBlob` | Mask Blob Detector | effect | Spatial | 16 |
@@ -497,7 +506,7 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | `MaskImage` | Mask Image | effect | Spatial | 3 |
 | `MaskLayer` | Mask Layer | effect | Spatial | 3 |
 | `MaskRectangle` | Mask Rectangle | effect | Spatial | 8 |
-| `MetallicGlass` | Metallic Glass | generator | Sim | 348 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 351 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
@@ -505,11 +514,11 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1301 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 1952 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1329 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1994 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `Scene` | Scene | generator | Geometry | 357 |
+| `Scene` | Scene | generator | Geometry | 363 |
 | `SoftFocus` | Soft Focus | effect | Filmic | 2 |
 | `Spectrogram` | Spectrogram | generator | Audio | 6 |
 | `StarField` | Star Field | generator | Pattern | 8 |
@@ -520,8 +529,10 @@ _Generated from the node registry. Do not hand-edit. 302 nodes registered, group
 | `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
+| `WaterBasin` | Water Basin (CPU) | generator | Sim | 1050 |
+| `WaterDamBreak` | Water — Dam Break | generator | Sim | 2290 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
-| `Wireframe` | Wireframe | generator | Geometry | 12 |
+| `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |
 
 <!-- END GENERATED: registered-node-index -->

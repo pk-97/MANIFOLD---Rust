@@ -15,6 +15,7 @@
 //! implementation are designed together.
 
 use ahash::AHashMap;
+use manifold_physics::FieldValue;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 
 use crate::node_graph::bindings::Slot;
@@ -29,6 +30,8 @@ use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::physics::RigidBody;
 use crate::node_graph::transform::Transform;
+use crate::node_graph::fluid_role::FluidRole;
+use crate::node_graph::mesh_source::MeshSource;
 
 /// Abstracts physical resource allocation behind the slot-based runtime.
 pub trait Backend: Send {
@@ -257,6 +260,36 @@ pub trait Backend: Send {
 
     fn set_rigid_body(&mut self, _slot: Slot, _value: RigidBody) {}
 
+    /// [`FluidRole`] value bound to a slot. CPU-only prepared geometry and
+    /// authored controls never carry native simulation state.
+    fn fluid_role(&self, _slot: Slot) -> Option<FluidRole> {
+        None
+    }
+
+    /// Write a [`FluidRole`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as [`Backend::set_rigid_body`].
+    fn set_fluid_role(&mut self, _slot: Slot, _value: FluidRole) {}
+
+    /// [`MeshSource`] value bound to a slot. CPU-only authored source
+    /// geometry description; preparation and GPU resources stay elsewhere.
+    fn mesh_source(&self, _slot: Slot) -> Option<MeshSource> {
+        None
+    }
+
+    /// Write a [`MeshSource`] value into a slot. Drained from the per-step
+    /// scratch by the executor, same shape as [`Backend::set_fluid_role`].
+    fn set_mesh_source(&mut self, _slot: Slot, _value: MeshSource) {}
+
+    /// [`FieldValue`] bound to a slot. CPU-only owned vector-field evaluator
+    /// for native physics inputs.
+    fn vector_field(&self, _slot: Slot) -> Option<FieldValue> {
+        None
+    }
+
+    /// Write a [`FieldValue`] into a slot. Drained from the per-step scratch
+    /// by the executor, same shape as [`Backend::set_mesh_source`].
+    fn set_vector_field(&mut self, _slot: Slot, _value: FieldValue) {}
+
     /// [`SceneObject`] value bound to a slot. Mirrors `atmosphere` for the
     /// [`PortType::Object`] wire shape — CPU-only struct payload set by
     /// `node.scene_object`'s evaluate and drained by the executor before
@@ -369,6 +402,9 @@ pub struct MockBackend {
     /// RenderMode values written via [`Backend::set_render_mode`] — same shape.
     render_modes: AHashMap<Slot, RenderMode>,
     rigid_bodies: AHashMap<Slot, RigidBody>,
+    fluid_roles: AHashMap<Slot, FluidRole>,
+    mesh_sources: AHashMap<Slot, MeshSource>,
+    vector_fields: AHashMap<Slot, FieldValue>,
     /// SceneObject values written via [`Backend::set_object`] — same shape.
     objects: AHashMap<Slot, SceneObject>,
     /// Skip-passthrough aliases installed this frame via
@@ -392,6 +428,9 @@ impl MockBackend {
             atmospheres: AHashMap::default(),
             render_modes: AHashMap::default(),
             rigid_bodies: AHashMap::default(),
+            fluid_roles: AHashMap::default(),
+            mesh_sources: AHashMap::default(),
+            vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
             skip_aliases: Vec::new(),
         }
@@ -440,6 +479,9 @@ impl Backend for MockBackend {
         dims: (u32, u32),
     ) {
         if let Some(slot) = self.bound.remove(&id) {
+            self.fluid_roles.remove(&slot);
+            self.mesh_sources.remove(&slot);
+            self.vector_fields.remove(&slot);
             let key = pool_key(ty, format, dims, false);
             self.free_by_type.entry(key).or_default().push(slot);
         }
@@ -456,6 +498,9 @@ impl Backend for MockBackend {
     fn clear(&mut self) {
         self.bound.clear();
         self.free_by_type.clear();
+        self.fluid_roles.clear();
+        self.mesh_sources.clear();
+        self.vector_fields.clear();
     }
 
     fn texture_2d(&self, _slot: Slot) -> Option<&GpuTexture> {
@@ -519,7 +564,7 @@ impl Backend for MockBackend {
     }
 
     fn rigid_body(&self, slot: Slot) -> Option<RigidBody> {
-        self.rigid_bodies.get(&slot).copied()
+        self.rigid_bodies.get(&slot).cloned()
     }
 
     fn set_render_mode(&mut self, slot: Slot, value: RenderMode) {
@@ -528,6 +573,30 @@ impl Backend for MockBackend {
 
     fn set_rigid_body(&mut self, slot: Slot, value: RigidBody) {
         self.rigid_bodies.insert(slot, value);
+    }
+
+    fn fluid_role(&self, slot: Slot) -> Option<FluidRole> {
+        self.fluid_roles.get(&slot).cloned()
+    }
+
+    fn set_fluid_role(&mut self, slot: Slot, value: FluidRole) {
+        self.fluid_roles.insert(slot, value);
+    }
+
+    fn mesh_source(&self, slot: Slot) -> Option<MeshSource> {
+        self.mesh_sources.get(&slot).cloned()
+    }
+
+    fn set_mesh_source(&mut self, slot: Slot, value: MeshSource) {
+        self.mesh_sources.insert(slot, value);
+    }
+
+    fn vector_field(&self, slot: Slot) -> Option<FieldValue> {
+        self.vector_fields.get(&slot).cloned()
+    }
+
+    fn set_vector_field(&mut self, slot: Slot, value: FieldValue) {
+        self.vector_fields.insert(slot, value);
     }
 
     fn object(&self, slot: Slot) -> Option<SceneObject> {

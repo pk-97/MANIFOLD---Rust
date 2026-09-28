@@ -64,7 +64,7 @@ pub(crate) fn driver_config_height() -> f32 {
 /// PARAM_STEP_ACTIONS D8: a non-toggle, non-trigger param (`show_action`,
 /// mirrors `build_audio_mod_drawer`'s own gate) additionally carries the
 /// Action row, and — while armed to Step — the Amount slider + Wrap row.
-/// The trailing Mode row (section 9 U2) shows for an `is_trigger_gate` target
+/// The trailing Mode row (section 9 U2) shows for a trigger target
 /// unconditionally, or for a slider row armed to Step/Random (D3). The layer
 /// clip-trigger surface reserves its own height via
 /// [`clip_trigger_drawer_height`] — its drawer is a different, smaller row
@@ -96,7 +96,7 @@ pub(crate) fn audio_config_height(info: &ParamRow, mod_state: &ParamModState, i:
             n += 2; // Step-Amount slider + Wrap row
         }
     }
-    if info.spec.is_trigger_gate || (show_action && action_idx != 0) {
+    if info.spec.is_trigger || info.spec.is_trigger_gate || (show_action && action_idx != 0) {
         n += 1; // Mode row
     }
     crate::panels::drawer::uniform_rows_height(n) + crate::panels::drawer::METER_STRIP_H
@@ -1494,11 +1494,10 @@ pub(crate) fn build_audio_mod_drawer(
             });
         }
     }
-    // section 9 U2/D3: the trailing Mode row (Clip/Audio/Both). An `is_trigger_gate`
-    // row always shows it; non-gate Step/Random mods fire from audio transients
-    // only, so the Mode row is no longer shown there (the clip-edge half moved to
-    // the T envelope drawer).
-    let show_mode = info.spec.is_trigger_gate;
+    // section 9 U2/D3: the trailing Mode row (Clip/Audio/Both). Fire rows and
+    // trigger-gate rows always show it; non-trigger Step/Random mods keep their
+    // existing audio-only drawer behaviour.
+    let show_mode = info.spec.is_trigger || info.spec.is_trigger_gate;
     if show_mode {
         let mode_sel = audio.trigger_mode_idx;
         let mode_buttons: Vec<DrawerButton> = audio_trigger_mode_labels()
@@ -1575,12 +1574,13 @@ pub(crate) fn build_toggle_trigger_row(
         });
     }
     let toggle_btn_x = x + slider_w - TOGGLE_BTN_W;
-    // `is_trigger_gate` rows reserve a fixed slot for the collapsed-row mode
+    // Fire rows reserve a fixed slot for the collapsed-row mode
     // badge (D6) just left of the toggle button, regardless of whether the
     // current mode has anything to show there — so the name label's width
     // (and therefore where its text can wrap/clip) never shifts when the
     // mode changes.
-    let name_label_w = if info.spec.is_trigger_gate {
+    let fire_mode_row = info.spec.is_trigger || info.spec.is_trigger_gate;
+    let name_label_w = if fire_mode_row {
         (slider_w - TOGGLE_BTN_W - GAP - TRIGGER_GATE_BADGE_W - GAP).max(0.0)
     } else {
         (slider_w - TOGGLE_BTN_W - GAP).max(0.0)
@@ -1735,19 +1735,20 @@ pub(crate) fn build_toggle_trigger_row(
             audio_config = Some((dids, send_count));
         }
 
-        if info.spec.is_trigger_gate {
+        if fire_mode_row {
             // Collapsed-row mode indicator (section 9, carried over from section 8 D6):
             // "Transient mode silently ignores clip launches... the drawer
             // must show the mode on the collapsed card row" — shown whether
             // or not the drawer itself is open, so a user who never re-opens
-            // the drawer still sees it. Blank for the default `ClipEdge`
-            // (index 0) — the common, unsurprising case gets no badge at
-            // all. A fixed-width slot just left of the toggle button,
-            // reserved on every `is_trigger_gate` row regardless of current
+            // the drawer still sees it. Gate rows keep the blank default
+            // `ClipEdge` (index 0); ordinary Fire rows show Clip explicitly.
+            // A fixed-width slot just left of the toggle button,
+            // reserved on every Fire row regardless of current
             // mode, so the badge appearing/disappearing on a mode change
             // never shifts the toggle button's column.
             let mode_idx = mod_state.audio_rows.get(i).map_or(0, |row| row.trigger_mode_idx);
-            let mode_text = if audio_active && mode_idx > 0 {
+            let ordinary_fire = info.spec.is_trigger && !info.spec.is_trigger_gate;
+            let mode_text = if audio_active && (ordinary_fire || mode_idx > 0) {
                 audio_trigger_mode_labels().get(mode_idx as usize).copied().unwrap_or("")
             } else {
                 ""

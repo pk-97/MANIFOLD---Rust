@@ -32,6 +32,18 @@ fn graph_edit_diagnostic_toast(
         .map(|event| (event.sequence, event.message.as_str()))
 }
 
+fn trigger_delivery_diagnostic_toast(
+    last: &mut Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
+    current: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
+) -> Option<String> {
+    let failure = current?;
+    if *last == Some(failure) {
+        return None;
+    }
+    *last = Some(failure);
+    Some(failure.to_string())
+}
+
 /// Push engine state into UI panels (called once per frame, AFTER build).
 /// Syncs all data-model state into tree nodes so the renderer shows current values.
 pub fn push_state(
@@ -138,8 +150,22 @@ pub fn push_state(
             ui.last_graph_edit_diagnostic_sequence = Some(sequence);
         }
 
+        if let Some(message) = trigger_delivery_diagnostic_toast(
+            &mut ui.last_trigger_delivery_failure,
+            content_state.trigger_delivery_failure,
+        ) {
+            ui.toast.show_with_accent(message, color::RED_BASE);
+        }
+
         if let Some(update) = &content_state.modifier_selection_update {
             if ui.last_modifier_selection_sequence != Some(update.sequence) {
+                if let Some(id) = update.ids.iter().rev().find(|id| {
+                    ui.scene_setup_panel.force_card_info(id)
+                        .is_some_and(|info| info.layer_id == update.layer_id)
+                }) {
+                    ui.scene_setup_panel.set_selection(update.layer_id.clone(),
+                        manifold_ui::panels::scene_setup_panel::SceneSelection::Force(id.clone()));
+                }
                 ui.inspector.select_modifier_ids(&update.layer_id, &update.ids);
                 ui.inspector.apply_selection_visuals(tree);
                 ui.inspector.reveal_pending_selection(tree);
@@ -745,5 +771,21 @@ mod tests {
             graph_edit_diagnostic_toast(Some(4), Some(&newer)),
             Some((5, "Cannot remove connected node"))
         );
+    }
+
+    #[test]
+    fn trigger_delivery_diagnostic_is_shown_once_across_partial_snapshots_and_new_epochs() {
+        use manifold_playback::engine::trigger_delivery::{TriggerDeliveryError, TriggerDeliveryFailure};
+        let failure = TriggerDeliveryFailure { epoch: 4, kind: TriggerDeliveryError::CapacityOverflow };
+        let mut last = None;
+        let message = super::trigger_delivery_diagnostic_toast(&mut last, Some(failure)).unwrap();
+        assert_eq!(message, failure.to_string());
+        assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(failure)).is_none());
+        assert!(super::trigger_delivery_diagnostic_toast(&mut last, None).is_none());
+        assert_eq!(last, Some(failure));
+        assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(failure)).is_none());
+        let newer = TriggerDeliveryFailure { epoch: 5, ..failure };
+        assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(newer)).is_some());
+        assert!(super::trigger_delivery_diagnostic_toast(&mut last, Some(newer)).is_none());
     }
 }

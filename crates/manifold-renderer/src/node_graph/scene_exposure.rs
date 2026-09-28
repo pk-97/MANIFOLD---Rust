@@ -8,6 +8,7 @@
 //!   creation-site commands that cannot depend on `manifold_renderer` directly.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
+mod compound;
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
 use crate::node_graph::parameters::ParamType;
@@ -29,6 +30,8 @@ const UNBOUNDED_ANGLE_EXPOSURE_RANGE: (f32, f32) =
 const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.rigid_body",
     "node.physics_world",
+    "node.fluid_surface",
+    "node.fluid_role_source",
     "node.transform_3d",
     "node.pbr_material",
     "node.unlit_material",
@@ -87,6 +90,19 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 && (type_id != "node.bokeh_gather"
                     || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
         })
+        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
+        .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
+        .filter(|pd| type_id != "node.fluid_surface" || matches!(pd.name.as_ref(),
+            "seed" | "domain_size" | "fill_height" | "liquid_density" | "viscosity" | "surface_tension"
+                | "gravity_x" | "gravity" | "gravity_z"
+                | "emission" | "inflow_speed" | "speed" | "reset" | "surface_subdivisions"
+                | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"
+                | "closed_neg_x" | "closed_pos_x" | "closed_neg_y" | "closed_pos_y"
+                | "closed_neg_z" | "closed_pos_z"))
+        .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
+            "role" | "enabled" | "geometry" | "shape" | "radius"
+                | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
+                | "friction" | "collider_parts"))
         .map(|pd| {
             let (min, max) = pd.range.unwrap_or({
                 if matches!(pd.ty, ParamType::Angle) {
@@ -143,6 +159,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
 /// (non-scene defs are untouched).
 pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
     let material_migrated = manifold_core::phong_migration::migrate_phong_to_pbr(def);
+    let compound = compound::migrate(def);
     let repaired = repair_legacy_lens_f_stop(def);
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
@@ -152,7 +169,7 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
         &provider,
     );
     let bokeh_source_migrated = migrate_bokeh_source_coc(def);
-    material_migrated || repaired || migrated || bokeh_source_migrated
+    compound || material_migrated || repaired || migrated || bokeh_source_migrated
 }
 
 /// The layered gather consumes the original signed CoC and computes its own
@@ -366,6 +383,8 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         .unwrap_or("Scene");
     let category = match node.type_id.as_str() {
         "node.rigid_body" | "node.physics_world" => "Physics".to_string(),
+        "node.fluid_surface" => "Simulation".to_string(),
+        "node.fluid_role_source" => "Source".to_string(),
         "node.transform_3d" => "Transform".to_string(),
         "node.pbr_material" | "node.unlit_material" | "node.cel_material" => {
             "Material".to_string()
@@ -640,6 +659,24 @@ mod tests {
     }
 
     #[test]
+    fn scene_physics_fluid_metadata_exposes_creative_controls_and_trigger() {
+        let metadata = metadata_for_node_type("node.fluid_surface");
+        for name in ["seed", "domain_size", "fill_height", "liquid_density", "viscosity", "surface_tension",
+            "gravity_x", "gravity", "gravity_z", "emission", "inflow_speed", "speed", "surface_subdivisions",
+            "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations",
+            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
+        {
+            assert!(metadata.iter().any(|param| param.name == name), "missing {name}");
+        }
+        assert!(metadata.iter().find(|param| param.name == "reset").unwrap().is_trigger);
+        for name in ["resolution", "transfer", "max_capacity", "cache_mode", "cache_path",
+            "whitewater", "whitewater_capacity"]
+        {
+            assert!(!metadata.iter().any(|param| param.name == name), "internal control {name}");
+        }
+    }
+
+    #[test]
     fn metadata_for_mesh_modifiers_preserves_unbounded_angles_with_degree_presentation() {
         for type_id in ["node.bend_mesh", "node.twist_mesh"] {
             let angle = metadata_for_node_type(type_id)
@@ -674,7 +711,7 @@ mod tests {
     #[test]
     fn material_inspector_metadata_classifies_every_descriptor() {
         let metadata = metadata_for_node_type("node.pbr_material");
-        assert_eq!(metadata.len(), 291);
+        assert_eq!(metadata.len(), 297);
         assert!(metadata.iter().all(|param| param.material_role.is_some()));
         assert_eq!(
             metadata

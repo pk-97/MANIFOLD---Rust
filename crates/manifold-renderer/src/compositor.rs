@@ -1,5 +1,6 @@
 use crate::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
+use crate::preset_context::ProjectTempo;
 use crate::tonemap::TonemapSettings;
 use manifold_core::BlendMode;
 use manifold_core::LayerId;
@@ -47,6 +48,7 @@ pub struct CompositorFrame<'a> {
     pub time: f64,
     pub beat: f64,
     pub dt: f32,
+    pub project_tempo: Option<&'a ProjectTempo>,
     pub frame_count: u64,
     pub compositor_dirty: bool,
     pub clips: &'a [CompositeClipDescriptor<'a>],
@@ -193,6 +195,41 @@ pub trait Compositor: Send {
     /// watched effect preserves the selected node's output texture for the
     /// editor to sample. Default no-op for compositors without effect chains.
     fn set_preview_request(&mut self, _request: Option<(EffectId, Option<NodeId>)>) {}
+
+    /// Set (or clear) the render-only scene viewport request. The request is
+    /// routed through the existing screen effect chains and never evaluates a
+    /// second graph.
+    fn set_scene_viewport_request(
+        &mut self,
+        _request: Option<(
+            EffectId,
+            NodeId,
+            crate::node_graph::scene_viewport::SceneViewportConfig,
+        )>,
+    ) {
+    }
+
+    fn scene_viewport_texture(&self) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
+    fn scene_viewport_status(
+        &self,
+    ) -> Result<
+        crate::frame_status::FrameRenderStatus,
+        crate::node_graph::scene_viewport::SceneViewportHostError,
+    > {
+        Err(crate::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime)
+    }
+
+    fn write_scene_viewport_fluid_domains(
+        &self,
+        _output: &mut Vec<(
+            NodeId,
+            crate::node_graph::fluid::FluidDomainSnapshot,
+        )>,
+    ) {
+    }
 
     /// The captured preview texture from the most recent `render`, if a
     /// preview is active and the watched node produced one. Default `None`.

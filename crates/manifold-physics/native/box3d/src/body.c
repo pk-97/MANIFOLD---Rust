@@ -1796,6 +1796,24 @@ b3Matrix3 b3Body_GetWorldInverseRotationalInertia( b3BodyId bodyId )
 	return sim->invInertiaWorld;
 }
 
+void b3Body_GetExternalAccelerations( b3BodyId bodyId, b3Vec3* linear, b3Vec3* angular )
+{
+	B3_ASSERT( linear != NULL && angular != NULL );
+	*linear = b3Vec3_zero;
+	*angular = b3Vec3_zero;
+
+	b3World* world = b3GetWorld( bodyId.world0 );
+	b3Body* body = b3GetBodyFullId( world, bodyId );
+	if ( body->type != b3_dynamicBody || !b3Body_IsEnabled( bodyId ) )
+	{
+		return;
+	}
+
+	b3BodySim* sim = b3GetBodySim( world, body );
+	*linear = b3Blend2( sim->invMass, sim->force, sim->gravityScale, world->gravity );
+	*angular = b3MulMV( sim->invInertiaWorld, sim->torque );
+}
+
 b3Vec3 b3Body_GetLocalCenterOfMass( b3BodyId bodyId )
 {
 	b3World* world = b3GetWorld( bodyId.world0 );

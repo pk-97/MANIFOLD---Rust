@@ -1,0 +1,374 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene",
+          "type": "Button"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.add_fluid"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.add_fluid"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "+ Object"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Object"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "ON"
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Mass (kg)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Shape"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "TextEquals": "OFF"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.add_fluid_role"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.properties.add_fluid_role"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Inflow"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Inherit Motion"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Builtin Shape"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Radius"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true,
+        "shift": true
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "\u25a0 Object 3"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u25a0 Object 3"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Velocity Y"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Builtin Shape"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Radius"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  "Snapshot"
+]

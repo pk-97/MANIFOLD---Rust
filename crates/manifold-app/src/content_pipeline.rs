@@ -1,3 +1,5 @@
+mod trigger_targets;
+
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -9,6 +11,7 @@ use manifold_core::{ClipId, EffectId, LayerId, NodeId};
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
 use manifold_renderer::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
+use manifold_renderer::preset_context::ProjectTempo;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
@@ -972,6 +975,8 @@ pub struct ContentPipeline {
     /// Pulled into [`ContentState`](crate::content_state::ContentState) each
     /// frame so the editor can show a value inspector for non-image nodes.
     last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
+    scene_viewport_request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>,
+    scene_viewport_observations: crate::scene_viewport::SceneViewportObservations,
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
     /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
@@ -1021,6 +1026,7 @@ pub struct ContentPipeline {
     /// `trigger_count`. Bumped by [`Self::apply_trigger_pulses`], read into
     /// `CompositorFrame.master_trigger_count` each frame.
     master_trigger_count: u32,
+    trigger_targets: trigger_targets::TriggerTargets,
     /// Whether the node-output preview applies its smart (semantic) encoding.
     /// On by default; toggled from the editor's preview pane. Only affects the
     /// node preview pane, never the live render or workspace preview.
@@ -1122,6 +1128,8 @@ impl ContentPipeline {
             node_preview_modifier: None,
             modifier_editor_watched: false,
             last_node_preview_info: None,
+            scene_viewport_request: None,
+            scene_viewport_observations: Default::default(),
             last_live_node_params: Vec::new(),
             hidden_layers_scratch: Vec::new(),
             hidden_layer_indices_scratch: Vec::new(),
@@ -1131,6 +1139,7 @@ impl ContentPipeline {
                 .map(|v| v != "0")
                 .unwrap_or(true),
             master_trigger_count: 0,
+            trigger_targets: Default::default(),
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
             node_preview_textures: [None, None, None],
@@ -1838,6 +1847,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.node_preview_request = request;
     }
 
+    pub fn set_scene_viewport_request(&mut self, request: Option<Arc<crate::scene_viewport::SceneViewportRequest>>) {
+        if request.is_none() {
+            self.scene_viewport_observations.frames.fill(None);
+        }
+        self.scene_viewport_request = request;
+    }
+
+    pub fn scene_viewport_frames(&self) -> &crate::scene_viewport::SceneViewportFrames {
+        &self.scene_viewport_observations.frames
+    }
+
     /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
     #[cfg(target_os = "macos")]
     pub fn set_node_atlas_textures(
@@ -1916,10 +1936,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         Arc::clone(&self.shared_output)
     }
 
-    /// section 8 P2: fold this tick's audio-trigger fires into the renderer's
-    /// per-layer (or master) `audio_count`. `pulses` is
-    /// `PlaybackEngine::take_trigger_pulses`'s output for this tick — pure
-    /// bookkeeping, no GPU work. A `Some(layer_id)` pulse targets its modifier
+    /// Fold retained audio-trigger fires into the legacy renderer counters.
+    /// Source stamps remain available at this handoff; timed physics inputs
+    /// must resolve their fields before entering the native event queues.
+    /// This compatibility counter path does not assign simulation ticks.
+    /// A `Some(layer_id)` pulse targets its modifier
     /// when the firing owner and gate match; legacy gates bump the layer's
     /// `GeneratorRenderer` counter (a no-op if the layer's generator was
     /// deleted the same tick); `None` (D5: master/global chains have no
@@ -1928,7 +1949,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
     /// live borrows of `self` (e.g. `self.texture_pool.as_ref()`).
     fn apply_trigger_pulses(
         master_trigger_count: &mut u32,
-        pulses: &[manifold_playback::modulation::TriggerPulse],
+        targets: &trigger_targets::TriggerTargets,
+        pulses: &[manifold_playback::engine::trigger_delivery::CapturedTriggerPulse],
         renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
     ) {
         if pulses.is_empty() {
@@ -1937,7 +1959,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut gen_renderer = renderers
             .iter_mut()
             .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>());
-        for pulse in pulses {
+        for captured in pulses {
+            let pulse = &captured.pulse;
+            if !targets.accepts(pulse) {
+                continue;
+            }
+            // Named Fire parameters keep their existing parameter-counter
+            // behavior. Their retained events are for explicit target delivery,
+            // never the compatibility gate broadcast below.
+            if pulse.kind != manifold_playback::modulation::TriggerPulseKind::Gate {
+                continue;
+            }
             match &pulse.layer_id {
                 Some(layer_id) => {
                     if let Some(gr) = gen_renderer.as_deref_mut() {
@@ -2143,6 +2175,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Reset the node-preview inspector info; the active preview path below
         // repopulates it for this frame.
         self.last_node_preview_info = None;
+        self.scene_viewport_observations.frames[self.write_surface_index] = None;
         // Reset the editor canvas's live node-param values; the watched effect
         // or generator path below repopulates them post-render so the canvas
         // shows live (modulated) values, not the frozen authoring def. Stays
@@ -2157,26 +2190,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut atlas_filled_this_frame = false;
         let texture_pool = self.texture_pool.as_ref();
 
-        // section 8 P2: drain this tick's audio-trigger fires (P1's evaluator
-        // output) before the split borrow below — `take_trigger_pulses`
-        // needs `&mut engine` in full, same as `split_renderer_project`.
-        let trigger_pulses = engine.take_trigger_pulses();
+        // Consume every accepted fire before generators render. The engine
+        // retains events across skipped renders and keeps its allocated
+        // storage after consumption. A failed queue preserves its prefix;
+        // the content snapshot exposes the failure and export rejects it.
+        engine.with_trigger_pulses(|pulses, renderers, project| {
+            if let Some(first) = pulses.first() {
+                self.trigger_targets.refresh(project, data_version, first.epoch);
+            }
+            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers);
+        });
 
         // Split borrow: get renderers + project from engine simultaneously.
-        let (renderers, project) = engine.split_renderer_project();
+        let (renderers, project) = engine.split_renderer_project_mut();
+        let project = project.map(|project| {
+            project.tempo_map.ensure_sorted();
+            &*project
+        });
         self.sdr_curve = project.and_then(|p| {
             p.settings.tonemap_enabled.then_some(p.settings.tonemap_curve)
         });
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
-
-        // Fold this tick's fires into the renderer's per-layer/master
-        // audio_count BEFORE generators render, so the same frame's
-        // trigger_count already reflects the fire (no one-frame lag).
-        Self::apply_trigger_pulses(
-            &mut self.master_trigger_count,
-            &trigger_pulses,
-            renderers.as_mut_slice(),
-        );
+        let project_tempo = project
+            .map(|p| ProjectTempo::new(&p.tempo_map, p.settings.bpm));
 
         // ── Generators (separate CB, committed first) ─────────────────
         // Generators must commit before the compositor because the parallel
@@ -2312,6 +2348,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             None => gen_renderer.clear_preview(),
                         }
 
+                        let scene_request = self.scene_viewport_request.as_ref().and_then(|request| {
+                            match request.target.host_target() {
+                                Some(manifold_core::GraphTarget::Generator(layer)) =>
+                                    Some((layer.clone(), request.node.clone(), request.config)),
+                                _ => None,
+                            }
+                        });
+                        gen_renderer.set_scene_viewport_request(scene_request,
+                            self.scene_viewport_request.as_ref().and_then(|request| request.modifier.clone()));
                         gen_renderer.render_all(
                             &mut gpu_gen,
                             time_f64,
@@ -2320,6 +2365,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                             layers,
                             data_version,
                             &self.render_skip_scratch,
+                            project_tempo.as_ref(),
                         );
                         break;
                     }
@@ -2340,10 +2386,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 let gen_ref = renderers
                     .iter()
                     .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>());
-                let node_tex = gen_ref.and_then(|gr| gr.preview_texture(layer_id));
-                let encoding = gen_ref
+                let viewport = self.scene_viewport_request.as_ref().filter(|request|
+                    matches!(request.target.host_target(), Some(manifold_core::GraphTarget::Generator(layer)) if layer == layer_id));
+                let node_tex = gen_ref.and_then(|gr| if viewport.is_some() {
+                    gr.scene_viewport_texture(layer_id)
+                } else { gr.preview_texture(layer_id) });
+                if let Some(request) = viewport {
+                    self.scene_viewport_observations.scratch.clear();
+                    if let Some(gr) = gen_ref {
+                        gr.write_scene_viewport_fluid_domains(layer_id, &mut self.scene_viewport_observations.scratch);
+                    }
+                    let status = gen_ref.map(|gr| gr.scene_viewport_status(layer_id))
+                        .unwrap_or(Err(manifold_renderer::node_graph::scene_viewport::SceneViewportHostError::MissingRuntime));
+                    self.scene_viewport_observations.record(self.write_surface_index, frame_count,
+                        self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
+                        request.clone(), status);
+                }
+                let encoding = if viewport.is_some() { Default::default() } else { gen_ref
                     .map(|gr| gr.preview_encoding(layer_id))
-                    .unwrap_or_default();
+                    .unwrap_or_default() };
                 // Value-inspector info for a non-image node: its live scalar I/O.
                 if let Some(node_id) = node_id_opt {
                     let (inputs, outputs) = gen_ref
@@ -2362,7 +2423,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                         &mut gen_enc,
                         node_tex,
                         self.node_preview_textures[self.write_surface_index].as_ref(),
-                        self.node_preview_normalize,
+                        self.node_preview_normalize && viewport.is_none(),
                         encoding,
                         &self.preview_pipelines(),
                         self.preview_sampler.as_ref(),
@@ -2576,6 +2637,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             time: time_f64,
             beat: beat_f64,
             dt: dt as f32,
+            project_tempo: project_tempo.as_ref(),
             frame_count,
             compositor_dirty: tick_result.compositor_dirty,
             clips: &clip_descs,
@@ -2622,6 +2684,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
+            self.compositor.set_scene_viewport_request(self.scene_viewport_request.as_ref().and_then(|request| {
+                match &request.target {
+                    manifold_core::GraphTarget::Effect(effect) => Some((effect.clone(), request.node.clone(), request.config)),
+                    _ => None,
+                }
+            }));
             // Enable a dump on the watched effect's chain this frame. The Cmd+D
             // one-shot dumps the whole graph; the thumbnail atlas dumps only the
             // canvas's visible nodes. Cmd+D takes precedence when both are
@@ -3138,11 +3206,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             // Value-inspector info for a previewed effect node: its live scalar
             // I/O + whether it produced an image. Built whenever a node is
             // watched, image or not.
+            let viewport = self.scene_viewport_request.as_ref()
+                .filter(|request| matches!(request.target, manifold_core::GraphTarget::Effect(_)));
+            if let Some(request) = viewport {
+                self.scene_viewport_observations.scratch.clear();
+                self.compositor.write_scene_viewport_fluid_domains(&mut self.scene_viewport_observations.scratch);
+                self.scene_viewport_observations.record(self.write_surface_index, frame_count,
+                    self.node_preview_bridge.as_ref().map_or(0, |bridge| bridge.generation()),
+                    request.clone(), self.compositor.scene_viewport_status());
+            }
+            let node_tex = if viewport.is_some() { self.compositor.scene_viewport_texture() }
+                else { self.compositor.preview_texture() };
             if let Some((_, Some(node_id))) = &self.node_preview_request {
                 let (inputs, outputs) = self.compositor.preview_scalar_io();
                 self.last_node_preview_info = Some(crate::content_state::NodePreviewInfo {
                     node_id: node_id.clone(),
-                    has_image: self.compositor.preview_texture().is_some(),
+                    has_image: node_tex.is_some(),
                     diagnostic: None,
                     inputs,
                     outputs,
@@ -3155,13 +3234,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if self.node_preview_request.is_some() {
                 self.last_live_node_params = self.compositor.live_node_params();
             }
-            if let Some(node_tex) = self.compositor.preview_texture() {
-                let encoding = self.compositor.preview_encoding();
+            if let Some(node_tex) = node_tex {
+                let encoding = if viewport.is_some() { Default::default() } else { self.compositor.preview_encoding() };
                 Self::update_node_preview(
                     &mut native_enc,
                     node_tex,
                     self.node_preview_textures[self.write_surface_index].as_ref(),
-                    self.node_preview_normalize,
+                    self.node_preview_normalize && viewport.is_none(),
                     encoding,
                     &self.preview_pipelines(),
                     self.preview_sampler.as_ref(),
@@ -4111,6 +4190,68 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         type_id: &manifold_core::PresetTypeId,
     ) -> Vec<manifold_renderer::node_graph::OuterParamRouting> {
         self.compositor.outer_routings_for(type_id)
+    }
+}
+
+#[cfg(test)]
+mod trigger_delivery_tests {
+    use manifold_core::{Beats, PresetTypeId, Seconds};
+    use manifold_playback::engine::trigger_delivery::CapturedTriggerPulse;
+    use manifold_playback::modulation::TriggerPulse;
+
+    #[test]
+    fn trigger_delivery_retained_fires_each_reach_the_master_counter() {
+        let mut project = manifold_core::project::Project::default();
+        let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::BLOOM);
+        instance.params.push(manifold_core::params::Param::bundled(
+            manifold_core::effect_graph_def::ParamSpecDef {
+                id: "gate".into(), is_trigger_gate: true, ..Default::default()
+            }
+        ));
+        instance.params.push(manifold_core::params::Param::bundled(
+            manifold_core::effect_graph_def::ParamSpecDef {
+                id: "fire".into(), is_trigger: true, ..Default::default()
+            }
+        ));
+        let owner_id = instance.id.clone();
+        project.settings.master_effects.push(instance);
+        let mut targets = super::trigger_targets::TriggerTargets::default();
+        targets.refresh(Some(&project), 1, 3);
+        let mut pulses: Vec<_> = [0.25, 0.125, 0.25].into_iter().enumerate().map(|(index, time)| {
+            CapturedTriggerPulse {
+                pulse: TriggerPulse {
+                    kind: manifold_playback::modulation::TriggerPulseKind::Gate,
+                    layer_id: None,
+                    owner_id: owner_id.clone(),
+                    param_key: manifold_core::audio_trigger::fire_meter_key_for_param("", "gate"),
+                    audio_stamp: Some(manifold_core::audio_features::AudioHopStamp {
+                        epoch: 1,
+                        end_sample: (index as u64 + 1) * 256,
+                        sample_rate: 48_000,
+                        source_time: None,
+                        timeline_time: Some(Seconds(time)),
+                    }),
+                },
+                epoch: 3,
+                sequence: index as u64,
+                accepted_time: Seconds(1.0),
+                accepted_beat: Beats(2.0),
+            }
+        }).collect();
+        let mut parameter_event = pulses[0].clone();
+        parameter_event.pulse.kind = manifold_playback::modulation::TriggerPulseKind::Parameter;
+        parameter_event.pulse.param_key = manifold_core::audio_trigger::fire_meter_key_for_param("", "fire");
+        assert!(targets.accepts(&parameter_event.pulse));
+        pulses.insert(1, parameter_event);
+        let mut count = 10;
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        assert_eq!(count, 13);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &[], &mut []);
+        assert_eq!(count, 13);
+        project.settings.master_effects.clear();
+        targets.refresh(Some(&project), 2, 3);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        assert_eq!(count, 13);
     }
 }
 

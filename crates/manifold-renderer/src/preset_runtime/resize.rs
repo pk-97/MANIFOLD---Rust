@@ -77,18 +77,20 @@ impl PresetRuntime {
                     }
                 }
                 PresetIo::Transform { source_slot, .. } => {
-                    let old = self.executor.backend();
-                    let source = (0..self.plan.resource_count())
-                        .map(|id| ResourceId(id as u32))
-                        .find(|&id| old.slot_for(id) == Some(source_slot))
-                        .expect("transform source resource");
+                    let source = source_slot.map(|source_slot| {
+                        let old = self.executor.backend();
+                        (0..self.plan.resource_count())
+                            .map(|id| ResourceId(id as u32))
+                            .find(|&id| old.slot_for(id) == Some(source_slot))
+                            .expect("transform source resource")
+                    });
                     let output = self.plan.steps().iter()
                         .find(|step| self.graph.get_node(step.node)
                             .is_some_and(|node| node.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID))
                         .and_then(|step| step.inputs.first()).map(|(_, id)| *id)
                         .expect("transform final output input");
                     PresetIo::Transform {
-                        source_slot: candidate.slot_for(source).expect("prepared source"),
+                        source_slot: source.map(|source| candidate.slot_for(source).expect("prepared source")),
                         output_slot: candidate.slot_for(output).expect("prepared output"),
                     }
                 }

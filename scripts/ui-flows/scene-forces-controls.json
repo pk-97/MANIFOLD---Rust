@@ -1,0 +1,316 @@
+[
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Scene"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "+ Force"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "Uniform Force"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "\u26a1 Uniform Force"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Strength (m/s\u00b2)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"strength\"].value"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"strength\"].slider"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"strength\"].slider"
+        }
+      },
+      "gesture": {
+        "Drag": {
+          "to": {
+            "Query": {
+              "text": "Strength (m/s\u00b2)"
+            }
+          },
+          "steps": 8
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"strength\"].value",
+          "text": "1.00"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"strength\"].value"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.objects"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u2713 All physics objects"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "No targets"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "\u26a1 Uniform Force"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"strength\"].value"
+        }
+      },
+      "check": {
+        "TextEquals": "1.00"
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "inspector.modifier.objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "All physics objects"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Impulse (m/s)"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"impulse_strength\"].value"
+        }
+      },
+      "check": {
+        "TextEquals": "2.00"
+      }
+    }
+  },
+  {
+    "ScrollTo": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Key": {
+      "key": "Z",
+      "modifiers": {
+        "command": true
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name_suffix": "\"fire\"]"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  "Snapshot"
+]

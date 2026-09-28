@@ -12,6 +12,16 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
+fn scene_object_source_identity(
+    project: &Project, target: &manifold_core::GraphTarget,
+    default: &manifold_core::effect_graph_def::EffectGraphDef, render: u32, index: u32,
+) -> Option<manifold_core::NodeId> {
+    let def = project.graph_for_target(target, Some(default))?;
+    let port = format!("object_{index}");
+    let wire = def.wires.iter().find(|wire| wire.to_node == render && wire.to_port == port)?;
+    def.nodes.iter().find(|node| node.id == wire.from_node).map(|node| node.node_id.clone())
+}
+
 pub(super) fn dispatch_project(
     action: &ProjectAction,
     project: &mut Project,
@@ -534,17 +544,89 @@ pub(super) fn dispatch_project(
                         "node.scene_object",
                     ),
                     default,
-                )
-                .with_physics_world(
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
-                        "node.rigid_body",
-                    ),
-                    manifold_renderer::node_graph::scene_exposure::metadata_for_node_type(
-                        "node.pbr_material",
-                    ),
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
                     Box::new(cmd), crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
+                ));
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupAssignFluidRole {
+            layer_id, render_scene_node_id, object_index, domain_node_id, role,
+        } => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let domain = project.graph_for_target(&target, Some(&default))
+                    .and_then(|def| super::projection::scene::scene_node_ref_for_doc_id(def, *domain_node_id));
+                if let Some(domain) = domain {
+                    let command = manifold_editing::commands::graph::AssignSceneFluidRoleCommand::new(
+                        target, *render_scene_node_id, *object_index, domain, *role,
+                        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.fluid_role_source"),
+                        default,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(command)));
+                } else {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(
+                        "The selected fluid domain is no longer available".into(),
+                    ));
+                }
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupRemoveFluidRole { layer_id, source_node_id }
+        | ProjectAction::SceneSetupRetargetFluidRole { layer_id, source_node_id, .. } => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let def = project.graph_for_target(&target, Some(&default));
+                let source = def.and_then(|def| {
+                    super::projection::scene::scene_node_ref_for_doc_id(def, *source_node_id)
+                });
+                let domain = match action {
+                    ProjectAction::SceneSetupRetargetFluidRole { domain_node_id, .. } => {
+                        def.and_then(|def| {
+                            super::projection::scene::scene_node_ref_for_doc_id(def, *domain_node_id)
+                        })
+                    }
+                    _ => None,
+                };
+                let command: Option<Box<dyn manifold_editing::command::Command>> = match (action, source) {
+                    (ProjectAction::SceneSetupRemoveFluidRole { .. }, Some(source)) => Some(Box::new(
+                        manifold_editing::commands::graph::RemoveSceneFluidRoleCommand::new(target, source, default),
+                    )),
+                    (ProjectAction::SceneSetupRetargetFluidRole { .. }, Some(source)) => {
+                        domain.map(|domain| Box::new(manifold_editing::commands::graph::RetargetSceneFluidRoleCommand::new(
+                                target, source, domain, default,
+                            )) as Box<dyn manifold_editing::command::Command>)
+                    }
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(command));
+                } else {
+                    ContentCommand::send(content_tx, ContentCommand::GraphEditRejected(
+                        "The selected fluid role or target is no longer available".into(),
+                    ));
+                }
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+                let command = manifold_editing::commands::graph::AddSceneFluidCommand::new(
+                    manifold_core::GraphTarget::Generator(layer_id.clone()),
+                    *render_scene_node_id,
+                    metadata_for_node_type("node.fluid_surface"),
+                    metadata_for_node_type("node.transform_3d"),
+                    metadata_for_node_type("node.pbr_material"),
+                    metadata_for_node_type("node.scene_object"),
+                    default,
+                )
+                .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
+                .with_world_metadata(metadata_for_node_type("node.physics_world"));
+                ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
+                    Box::new(command),
+                    crate::edit_selection::SelectAfterEdit::NewObject(layer_id.clone()),
                 ));
             }
             DispatchResult::structural()
@@ -612,11 +694,26 @@ pub(super) fn dispatch_project(
         ProjectAction::SceneSetupRemoveObject(layer_id, render_scene_node_id, object_index) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let Some(source) = scene_object_source_identity(project, &target, &default, *render_scene_node_id, *object_index)
+                else { return DispatchResult::handled(); };
                 let cmd = manifold_editing::commands::graph::RemoveSceneObjectCommand::new(
                     target,
                     Vec::new(),
                     *render_scene_node_id,
                     *object_index,
+                    default,
+                ).with_expected_source(source);
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupRemoveSubmesh(layer_id, render_scene_node_id, physical_index) => {
+            if let Some(default) = generator_catalog_default(project, layer_id) {
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::RemoveSceneSubmeshCommand::new(
+                    target,
+                    *render_scene_node_id,
+                    *physical_index,
                     default,
                 );
                 ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
@@ -700,14 +797,61 @@ pub(super) fn dispatch_project(
             }));
             DispatchResult::structural()
         }
+        ProjectAction::SceneSetupDuplicateSubmesh(layer_id, render_scene_node_id, physical_index) => {
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let cmd = manifold_editing::commands::graph::DuplicateSceneSubmeshCommand::new(
+                    target,
+                    *render_scene_node_id,
+                    *physical_index,
+                    default,
+                );
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(Box::new(cmd)));
+            }
+            DispatchResult::structural()
+        }
+        ProjectAction::SceneSetupEnablePhysics(layer_id, render_scene_node_id, object_index)
+        | ProjectAction::SceneSetupDisablePhysics(layer_id, render_scene_node_id, object_index) => {
+            use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+            let enabled = matches!(action, ProjectAction::SceneSetupEnablePhysics(..));
+            if let Some(mut default) = generator_catalog_default(project, layer_id) {
+                manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut default);
+                let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+                let physics = project.graph_for_target(&target, Some(&default))
+                    .and_then(SceneVm::from_def)
+                    .filter(|vm| vm.scene_root_node_id == *render_scene_node_id)
+                    .and_then(|vm| vm.objects.into_iter().find_map(|object| match object {
+                        SceneObjectVm::Known(row) if row.index == *object_index as usize => row.physics,
+                        _ => None,
+                    }));
+                let cmd: Box<dyn manifold_editing::command::Command + Send> = if let Some(physics) = physics {
+                    Box::new(manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                        target, physics.body_node_id, "enabled".into(),
+                        manifold_core::effect_graph_def::SerializedParamValue::Bool { value: enabled },
+                        default,
+                    ).with_scope(physics.body_scope_path))
+                } else if enabled {
+                    Box::new(manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand::new(
+                        target, *render_scene_node_id, *object_index,
+                        manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.rigid_body"),
+                        default,
+                    ).with_world_metadata(manifold_renderer::node_graph::scene_exposure::metadata_for_node_type("node.physics_world")))
+                } else {
+                    return DispatchResult::handled();
+                };
+                ContentCommand::send(content_tx, ContentCommand::ExecuteOnContent(cmd));
+            }
+            DispatchResult::structural()
+        }
         // scene-panel-ux: "Frame" button (Object selection). Reads the
         // effective def through the SAME SceneVm the panel builds, takes the
         // object's current translate as the focus point, and writes camera
         // params through `apply_scene_param_write` — the one write path every
         // scene-panel control shares (bound → binding slot, else def write).
         // All writes land as ONE CompositeCommand so a frame is one undo.
-        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_index) => {
-            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneObjectVm, SceneVm};
+        ProjectAction::SceneSetupFrameSelected(layer_id, _render_scene_node_id, object_node_id) => {
+            use manifold_renderer::node_graph::scene_vm::{CameraVm, SceneVm};
             let Some(default) = generator_catalog_default(project, layer_id) else {
                 return DispatchResult::handled();
             };
@@ -723,15 +867,11 @@ pub(super) fn dispatch_project(
                 eprintln!("[Scene] frame-selected: no scene in this graph");
                 return DispatchResult::handled();
             };
-            let Some(pos) = vm.objects.iter().find_map(|o| match o {
-                SceneObjectVm::Known(r) if r.index == *object_index => {
-                    r.transform.as_ref().map(|t| t.pos_value)
-                }
-                _ => None,
-            }) else {
-                eprintln!("[Scene] frame-selected: object {object_index} has no transform row");
+            let Some(target) = manifold_renderer::node_graph::gizmo_target_for(&vm, *object_node_id) else {
+                eprintln!("[Scene] frame-selected: object {object_node_id} has no transform target");
                 return DispatchResult::handled();
             };
+            let pos = (target.origin[0], target.origin[1], target.origin[2]);
             // Scene radius from the item-2 bounds chain: half the largest
             // axis extent, floored at 1.0 — the scale the importer framed at.
             let radius = vm
@@ -1562,6 +1702,65 @@ mod tests {
     }
 
     #[test]
+    fn scene_setup_physics_toggle_preserves_body_settings_and_undo() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let (mut project, layer_id, scene_id) = physics_solids_layer_project();
+        let body = |project: &Project| {
+            SceneVm::from_def(&effective_def(project, &layer_id)).unwrap().objects
+                .into_iter().find_map(|object| match object {
+                    SceneObjectVm::Known(row) if row.index == 0 => row.physics,
+                    _ => None,
+                }).unwrap()
+        };
+        let original = body(&project);
+        let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        // A tuned value must survive off/on; the toggle never removes its body.
+        apply_scene_param_write(&project, &layer_id, original.body_scope_path.clone(),
+            original.body_node_id, "friction", 0.73).unwrap().execute(&mut project);
+        let before = effective_def(&project, &layer_id);
+        let friction = |project: &Project| {
+            effective_scene_param_value(project, &layer_id, original.body_node_id, "friction")
+        };
+        for enabled in [false, true] {
+            let before_dispatch = effective_def(&project, &layer_id);
+            let action = if enabled {
+                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), scene_id, 0)
+            } else {
+                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), scene_id, 0)
+            };
+            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                &mut selection, &mut active_layer, &mut prefs);
+            assert!(effective_def(&project, &layer_id) == before_dispatch,
+                "UI dispatch waits for content");
+            let crate::content_command::ContentCommand::ExecuteOnContent(mut cmd) = rx.try_recv().unwrap() else {
+                panic!("toggle must send an undoable edit to content");
+            };
+            cmd.execute(&mut project);
+            let current = body(&project);
+            assert_eq!(current.enabled, enabled);
+            assert_eq!(current.body_node_id, original.body_node_id);
+            let after = effective_def(&project, &layer_id);
+            assert_eq!(after.wires, before.wires);
+            assert_eq!(after.nodes.len(), before.nodes.len());
+            let previous = before.nodes.iter().find(|n| n.id == original.body_node_id).unwrap();
+            let actual = after.nodes.iter().find(|n| n.id == original.body_node_id).unwrap();
+            for (key, value) in &previous.params {
+                if key != "enabled" { assert_eq!(actual.params.get(key), Some(value)); }
+            }
+            let saved = serde_json::to_string(&project).unwrap();
+            let reloaded: Project = serde_json::from_str(&saved).unwrap();
+            assert_eq!(body(&reloaded).enabled, enabled);
+            assert_eq!(friction(&project), 0.73);
+            assert_eq!(friction(&reloaded), 0.73);
+            cmd.undo(&mut project);
+            assert_eq!(body(&project).enabled, !enabled);
+            cmd.execute(&mut project);
+            assert_eq!(body(&project).enabled, enabled);
+        }
+    }
+
+    #[test]
     fn scene_setup_add_object_dispatches_add_scene_object_command() {
         let (mut project, layer_id, render_scene_id) = scene_layer_project();
         let original_metadata = effective_def(&project, &layer_id).preset_metadata.unwrap();
@@ -1603,6 +1802,560 @@ mod tests {
             objects_param(&project, &layer_id, render_scene_id),
             before + 1.0
         );
+    }
+
+    #[test]
+    fn scene_setup_add_object_then_explicit_physics_reuses_world_and_roundtrips() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let (mut project, layer_id, render_scene_id) = physics_solids_layer_project();
+        let original = effective_def(&project, &layer_id);
+        let world_id = original
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.physics_world")
+            .map(|node| node.id)
+            .expect("PhysicsSolids has a shared Physics World");
+        assert_eq!(
+            original
+                .nodes
+                .iter()
+                .filter(|node| node.type_id == "node.physics_world")
+                .count(),
+            1
+        );
+        let object_index = objects_param(&project, &layer_id, render_scene_id) as u32;
+        let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+
+        dispatch_project(
+            &ProjectAction::SceneSetupAddObject(
+                layer_id.clone(),
+                render_scene_id,
+                object_index,
+            ),
+            &mut project,
+            &tx,
+            &state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut prefs,
+        );
+        assert_eq!(
+            effective_def(&project, &layer_id),
+            original,
+            "Add Object waits for content"
+        );
+        let ContentCommand::ExecuteSelecting(mut add, request) = rx.try_recv().unwrap() else {
+            panic!("Add Object must use content-owned editing and selection");
+        };
+        let pending = request.capture(&project);
+        add.execute(&mut project);
+        assert!(add.was_applied(), "add rejected: {:?}", add.rejection_reason());
+        assert!(matches!(
+            pending.resolve(&project),
+            Some(crate::edit_selection::EditSelection::Object { .. })
+        ));
+
+        let added = effective_def(&project, &layer_id);
+        let added_vm = SceneVm::from_def(&added).unwrap();
+        let (object_node_id, group_node_id) = added_vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                    Some((row.object_node_id, row.group_node_id))
+                }
+                _ => None,
+            })
+            .expect("new cube is a known scene object");
+        assert!(
+            added_vm.objects.iter().any(|object| matches!(
+                object,
+                SceneObjectVm::Known(row)
+                    if row.index == object_index as usize && row.physics.is_none()
+            )),
+            "fresh Add Object remains an ordinary mesh"
+        );
+        let group_id = group_node_id.expect("Add Object uses a grouped cube shape");
+        let group = added
+            .nodes
+            .iter()
+            .find(|node| node.id == group_id)
+            .and_then(|node| node.group.as_deref())
+            .expect("new object group");
+        let cube_id = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.cube_mesh")
+            .map(|node| node.id)
+            .expect("new object uses the builtin cube source");
+        assert!(group.wires.iter().any(|wire| {
+            wire.from_node == cube_id
+                && wire.to_node == object_node_id
+                && wire.to_port == "vertices"
+        }));
+
+        // The projection uses the same eligibility helper as dispatch. Build
+        // the real scene panel to keep the Physics property visible for the
+        // fresh cube before it has a body.
+        ui.scene_setup_panel.open();
+        selection.select_layer(layer_id.clone());
+        super::super::projection::inspector::sync_inspector_data(
+            &mut ui,
+            &project,
+            Some(0),
+            &selection,
+            &[],
+            None,
+        );
+        ui.scene_setup_panel.set_selection(
+            layer_id.clone(),
+            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id),
+        );
+        let mut tree = manifold_ui::UITree::new();
+        let rect = manifold_ui::Rect::new(0.0, 0.0, 400.0, 1200.0);
+        let region = tree.begin_region(
+            rect, manifold_ui::ZTier::Base, "scene_setup", manifold_ui::UIFlags::empty(),
+        );
+        let content_start = tree.count();
+        ui.scene_setup_panel
+            .build_docked(&mut tree, rect);
+        tree.end_region(region, content_start);
+        assert!(
+            tree.nodes()
+                .iter()
+                .any(|node| node.text.as_deref() == Some("Physics")),
+            "fresh builtin cube exposes the Physics property"
+        );
+
+        dispatch_project(
+            &ProjectAction::SceneSetupEnablePhysics(
+                layer_id.clone(),
+                render_scene_id,
+                object_index,
+            ),
+            &mut project,
+            &tx,
+            &state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut prefs,
+        );
+        assert_eq!(
+            effective_def(&project, &layer_id),
+            added,
+            "Physics enable waits for content"
+        );
+        let ContentCommand::ExecuteOnContent(mut enable) = rx.try_recv().unwrap() else {
+            panic!("Physics enable must execute on content");
+        };
+        enable.execute(&mut project);
+        assert!(
+            enable.was_applied(),
+            "enable rejected: {:?}",
+            enable.rejection_reason()
+        );
+
+        let enabled = effective_def(&project, &layer_id);
+        assert_eq!(
+            enabled
+                .nodes
+                .iter()
+                .filter(|node| node.type_id == "node.physics_world")
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![world_id],
+            "explicit Physics reuses the existing World"
+        );
+        let enabled_vm = SceneVm::from_def(&enabled).unwrap();
+        let physics = enabled_vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.index == object_index as usize => row.physics.clone(),
+                _ => None,
+            })
+            .expect("enabled cube exposes a Physics body");
+        assert!(!physics.imported, "the explicit Physics body is for the builtin cube");
+        let body_id = physics.body_node_id;
+        let enabled_group = enabled
+            .nodes
+            .iter()
+            .find(|node| node.id == group_id)
+            .and_then(|node| node.group.as_deref())
+            .expect("enabled cube group");
+        assert!(enabled_group.wires.iter().any(|wire| {
+            wire.from_node == cube_id
+                && wire.to_node == body_id
+                && wire.to_port == "source"
+        }), "Physics body must use the actual cube source");
+
+        super::super::projection::inspector::sync_inspector_data(
+            &mut ui,
+            &project,
+            Some(0),
+            &selection,
+            &[],
+            None,
+        );
+        let mut enabled_tree = manifold_ui::UITree::new();
+        let enabled_rect = manifold_ui::Rect::new(0.0, 0.0, 400.0, 1200.0);
+        let enabled_region = enabled_tree.begin_region(
+            enabled_rect,
+            manifold_ui::ZTier::Base,
+            "scene_setup",
+            manifold_ui::UIFlags::empty(),
+        );
+        let enabled_content_start = enabled_tree.count();
+        ui.scene_setup_panel.build_docked(&mut enabled_tree, enabled_rect);
+        enabled_tree.end_region(enabled_region, enabled_content_start);
+        let enabled_texts: Vec<&str> = enabled_tree
+            .nodes()
+            .iter()
+            .filter_map(|node| node.text.as_deref())
+            .collect();
+        assert!(enabled_texts.contains(&"Mass (kg)"));
+        assert!(!enabled_texts.contains(&"Shape"),
+            "source-driven Physics hides the inactive body Shape control");
+
+        // The new enable command itself must undo and redo as one edit before
+        // later control edits are introduced.
+        enable.undo(&mut project);
+        let undone_vm = SceneVm::from_def(&effective_def(&project, &layer_id)).unwrap();
+        assert!(undone_vm.objects.iter().any(|object| matches!(
+            object,
+            SceneObjectVm::Known(row)
+                if row.index == object_index as usize && row.physics.is_none()
+        )));
+        enable.execute(&mut project);
+        assert!(enable.was_applied(), "redo of Physics enable was rejected");
+        let redone = effective_def(&project, &layer_id);
+        let redone_vm = SceneVm::from_def(&redone).unwrap();
+        let redone_body_id = redone_vm
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                    row.physics.as_ref().map(|body| body.body_node_id)
+                }
+                _ => None,
+            })
+            .expect("redo restores the Physics body");
+        assert_eq!(redone_body_id, body_id);
+
+        apply_scene_param_write(
+            &project,
+            &layer_id,
+            vec![group_id],
+            body_id,
+            "friction",
+            0.73,
+        )
+        .expect("Physics friction is exposed").execute(&mut project);
+        assert_eq!(
+            effective_scene_param_value(&project, &layer_id, body_id, "friction"),
+            0.73
+        );
+        let saved = serde_json::to_string(&project).unwrap();
+        let reloaded: Project = serde_json::from_str(&saved).unwrap();
+        let reloaded_vm = SceneVm::from_def(&effective_def(&reloaded, &layer_id)).unwrap();
+        assert_eq!(
+            reloaded_vm
+                .objects
+                .iter()
+                .find_map(|object| match object {
+                    SceneObjectVm::Known(row) if row.index == object_index as usize => {
+                        row.physics.as_ref().map(|body| body.body_node_id)
+                    }
+                    _ => None,
+                }),
+            Some(body_id),
+            "save/reload retains the enabled body"
+        );
+        assert_eq!(
+            effective_scene_param_value(&reloaded, &layer_id, body_id, "friction"),
+            0.73
+        );
+
+        for enabled in [false, true] {
+            let action = if enabled {
+                ProjectAction::SceneSetupEnablePhysics(layer_id.clone(), render_scene_id, object_index)
+            } else {
+                ProjectAction::SceneSetupDisablePhysics(layer_id.clone(), render_scene_id, object_index)
+            };
+            let before_toggle = effective_def(&project, &layer_id);
+            dispatch_project(
+                &action,
+                &mut project,
+                &tx,
+                &state,
+                &mut ui,
+                &mut selection,
+                &mut active_layer,
+                &mut prefs,
+            );
+            assert_eq!(effective_def(&project, &layer_id), before_toggle);
+            let ContentCommand::ExecuteOnContent(mut toggle) = rx.try_recv().unwrap() else {
+                panic!("Physics toggle must execute on content");
+            };
+            toggle.execute(&mut project);
+            assert!(toggle.was_applied(), "toggle rejected: {:?}", toggle.rejection_reason());
+            let toggled_vm = SceneVm::from_def(&effective_def(&project, &layer_id)).unwrap();
+            let toggled = toggled_vm
+                .objects
+                .iter()
+                .find_map(|object| match object {
+                    SceneObjectVm::Known(row) if row.index == object_index as usize => row.physics.clone(),
+                    _ => None,
+                })
+                .expect("toggle preserves the body");
+            assert_eq!(toggled.body_node_id, body_id);
+            assert_eq!(toggled.enabled, enabled);
+            assert_eq!(
+                effective_scene_param_value(&project, &layer_id, body_id, "friction"),
+                0.73
+            );
+        }
+    }
+
+    #[test]
+    fn scene_physics_add_fluid_is_content_owned_selectable_and_reloadable() {
+        use crate::content_command::ContentCommand;
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let original = effective_def(&project, &layer_id);
+        let before = objects_param(&project, &layer_id, render_scene_id);
+        let (_, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let result = dispatch_project(
+            &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        assert!(result.structural_change);
+        assert_eq!(effective_def(&project, &layer_id), original,
+            "UI dispatch must leave the project unchanged until content accepts the edit");
+        let ContentCommand::ExecuteSelecting(mut command, request) =
+            content_rx.try_recv().expect("queued fluid insertion")
+        else { panic!("fluid insertion must use content-owned editing and selection"); };
+        assert!(content_rx.is_empty());
+        let pending = request.capture(&project);
+        command.execute(&mut project);
+        assert!(matches!(pending.resolve(&project),
+            Some(crate::edit_selection::EditSelection::Object { .. })));
+        let added = effective_def(&project, &layer_id);
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+        let vm = SceneVm::from_def(&added).expect("scene with fluid");
+        let row = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => Some(row),
+            _ => None,
+        }).expect("fluid is a selectable scene object");
+        assert_eq!(row.fluid_node_ids.len(), 4, "surface, domain, role source, and source transform controls");
+        assert_eq!(row.fluid_domain.unwrap().size, [4.0; 3]);
+        let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&added), &row.fluid_node_ids,
+        );
+        assert!(sections.iter().any(|section| section.contains("Simulation")));
+        assert!(sections.iter().any(|section| section.contains("Domain")));
+        assert!(sections.iter().any(|section| section.contains("Source")));
+        assert!(row.transform.is_none(), "fluid has no disconnected render-only transform");
+
+        let saved = serde_json::to_string(&project).unwrap();
+        let reloaded: Project = serde_json::from_str(&saved).unwrap();
+        assert_eq!(effective_def(&reloaded, &layer_id), added);
+        let reloaded_def = effective_def(&reloaded, &layer_id);
+        let reloaded_vm = SceneVm::from_def(&reloaded_def).unwrap();
+        assert_eq!(reloaded_vm.objects, vm.objects);
+        let reloaded_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&reloaded_def), &row.fluid_node_ids,
+        );
+        let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
+        let world_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+            Some(&reloaded_def),
+            &manifold_renderer::node_graph::scene_vm::physics_world_doc_ids(&reloaded_def).collect::<Vec<_>>(),
+        );
+        let world = reloaded_def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+        for (param, label, default) in [
+            ("gravity_x", "Gravity X", 0.0),
+            ("gravity", "Gravity Y", -9.81),
+            ("gravity_z", "Gravity Z", 0.0),
+            ("liquid_density", "Liquid Density", 1000.0),
+        ] {
+            let binding = if param == "liquid_density" {
+                metadata.bindings.iter().find(|binding| matches!(
+                    &binding.target,
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                        if name == param && node_id.as_str().starts_with("fluid_surface_")
+                ))
+            } else {
+                let world_param = if param == "gravity" { "gravity_y" } else { param };
+                metadata.bindings.iter().find(|binding| binding.id == format!("{}_{}", world.id, world_param))
+            }.expect("physical control survives reload");
+            let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
+            assert_eq!(spec.name, label);
+            let inspector_sections = if param == "liquid_density" { &reloaded_sections } else { &world_sections };
+            assert!(inspector_sections.contains(spec.section.as_ref().unwrap()),
+                "density belongs to Fluid; shared gravity belongs to World");
+            if param != "liquid_density" {
+                assert!(!reloaded_sections.contains(spec.section.as_ref().unwrap()),
+                    "shared controls must not appear as independent liquid controls");
+            }
+            assert_eq!(reloaded.timeline.layers[0].gen_params().unwrap().get_base_param(&binding.id), default);
+        }
+        let shared_ids: Vec<_> = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset"]
+            .into_iter().map(|param| format!("{}_{}", world.id, param)).collect();
+        let mut migrated = reloaded_def.clone();
+        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated);
+        let once = migrated.clone();
+        assert!(!manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut migrated));
+        assert_eq!(migrated, once);
+        for id in &shared_ids {
+            let before = metadata.params.iter().find(|spec| &spec.id == id).unwrap();
+            let after = migrated.preset_metadata.as_ref().unwrap().params.iter().find(|spec| &spec.id == id).unwrap();
+            assert_eq!(before, after, "reload must preserve shared World control metadata");
+        }
+        for (param, expected_label) in [("velocity_y", "Source"), ("rot_y", "Source Transform")] {
+            let binding = metadata.bindings.iter().find(|binding| matches!(
+                &binding.target,
+                manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
+                    if name == param && (node_id.as_str().starts_with("fluid_role_source_")
+                        || node_id.as_str().starts_with("fluid_source_"))
+            )).expect("fluid source control survives reload");
+            let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
+            let section = spec.section.as_ref().unwrap();
+            assert!(section.contains(expected_label));
+            assert!(reloaded_sections.contains(section), "source control appears in fluid inspector");
+        }
+        command.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), original);
+        command.execute(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), added, "redo keeps stable graph identities");
+    }
+
+    #[test]
+    fn scene_physics_assign_fluid_role_is_content_owned_and_reloadable() {
+        use crate::content_command::ContentCommand;
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut insertions = Vec::new();
+        // Add Fluid before Add Object so the object remains an ordinary mesh
+        // until the explicit Physics toggle is used.
+        for action in [
+            ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, 0),
+        ] {
+            dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                &mut selection, &mut active, &mut prefs);
+            let ContentCommand::ExecuteSelecting(mut command, _) = rx.try_recv().unwrap()
+            else { panic!("insertion must execute on content"); };
+            command.execute(&mut project);
+            assert!(command.was_applied(), "{:?}", command.rejection_reason());
+            insertions.push(command);
+        }
+        let before = effective_def(&project, &layer_id);
+        let vm = SceneVm::from_def(&before).unwrap();
+        let domains = super::super::projection::scene::fluid_domains(&before, &vm);
+        assert_eq!(domains.len(), 1);
+        let object = vm.objects.iter().filter_map(|object| match object {
+            SceneObjectVm::Known(row) if row.group_node_id.is_some()
+                && row.fluid_node_ids.is_empty() => Some(row),
+            _ => None,
+        }).max_by_key(|row| row.index).unwrap();
+        let group_id = object.group_node_id;
+        dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
+            layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
+            object_index: object.index as u32, domain_node_id: domains[0].node_doc_id, role: 1,
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
+        let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
+        else { panic!("role assignment must execute on content"); };
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
+        let after = effective_def(&project, &layer_id);
+        let role_ids = super::super::projection::scene::group_fluid_role_ids(&after, group_id);
+        assert_eq!(role_ids.len(), 1);
+        let group = after.nodes.iter().find(|node| Some(node.id) == group_id)
+            .unwrap().group.as_ref().unwrap();
+        let role = group.nodes.iter().find(|node| node.id == role_ids[0]).unwrap();
+        let sections = super::super::projection::scene::sections_for_doc_ids(Some(&after), &role_ids);
+        let metadata = after.preset_metadata.as_ref().unwrap();
+        for param in ["enabled", "role", "velocity_y", "friction"] {
+            let binding = metadata.bindings.iter().find(|binding| matches!(&binding.target,
+                BindingTarget::Node { node_id, param: name } if node_id == &role.node_id && name == param
+            )).expect("role controls bind the actual source node");
+            let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
+            assert!(sections.contains(spec.section.as_ref().unwrap()), "control appears in object inspector");
+        }
+        let mut tuned = project.clone();
+        let velocity_binding = metadata.bindings.iter().find(|binding| matches!(&binding.target,
+            BindingTarget::Node { node_id, param } if node_id == &role.node_id && param == "velocity_y"
+        )).unwrap();
+        apply_scene_param_write(&tuned, &layer_id, vec![group_id.unwrap()], role.id, "velocity_y", 2.5).unwrap().execute(&mut tuned);
+        let tuned_reload: Project = serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
+        assert_eq!(tuned_reload.timeline.layers[0].gen_params().unwrap().get_base_param(&velocity_binding.id), 2.5,
+            "edited role values must survive save/reload");
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(effective_def(&reloaded, &layer_id), after);
+        command.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), before);
+        command.execute(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), after);
+        command.undo(&mut project);
+        for insertion in insertions.iter_mut().rev() { insertion.undo(&mut project); }
+        for insertion in &mut insertions { insertion.execute(&mut project); }
+        command.execute(&mut project);
+        assert!(command.was_applied(), "role redo after recreating its object: {:?}", command.rejection_reason());
+        assert_eq!(effective_def(&project, &layer_id), after, "redo chain preserves source and domain identity");
+
+        dispatch_project(&ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        let ContentCommand::ExecuteSelecting(mut second_fluid, _) = rx.try_recv().unwrap()
+        else { panic!("second fluid insertion executes on content"); };
+        second_fluid.execute(&mut project);
+        assert!(second_fluid.was_applied());
+        let with_second = effective_def(&project, &layer_id);
+        let domains = super::super::projection::scene::fluid_domains(&with_second, &SceneVm::from_def(&with_second).unwrap());
+        assert_eq!(domains.len(), 2);
+        let new_domain = super::super::projection::scene::scene_node_ref_for_doc_id(&with_second, domains[1].node_doc_id).unwrap();
+        dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
+            layer_id: layer_id.clone(), source_node_id: role.id, domain_node_id: domains[1].node_doc_id,
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
+        let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
+        else { panic!("retarget executes on content"); };
+        retarget.execute(&mut project);
+        assert!(retarget.was_applied(), "{:?}", retarget.rejection_reason());
+        let retargeted = effective_def(&project, &layer_id);
+        let assignments = manifold_editing::commands::graph::scene_fluid_role_assignments(&retargeted, group_id.unwrap()).unwrap();
+        assert_eq!(assignments[0].domains, vec![new_domain]);
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(effective_def(&reloaded, &layer_id), retargeted);
+        dispatch_project(&ProjectAction::SceneSetupRemoveFluidRole {
+            layer_id: layer_id.clone(), source_node_id: role.id,
+        }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+        assert_eq!(effective_def(&project, &layer_id), retargeted, "removal waits for content");
+        let ContentCommand::ExecuteOnContent(mut remove) = rx.try_recv().unwrap()
+        else { panic!("removal executes on content"); };
+        remove.execute(&mut project);
+        assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
+        let removed = effective_def(&project, &layer_id);
+        assert!(super::super::projection::scene::group_fluid_role_ids(&removed, group_id).is_empty());
+        remove.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), retargeted);
+        retarget.undo(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), with_second);
+        retarget.execute(&mut project);
+        remove.execute(&mut project);
+        assert_eq!(effective_def(&project, &layer_id), removed);
     }
 
     #[test]
@@ -1823,12 +2576,12 @@ mod tests {
             CameraVm::Orbit(r) => r.node_doc_id,
             other => panic!("Scene camera should be orbit, got {other:?}"),
         };
-        let obj_pos = vm
+        let (object_node_id, obj_pos) = vm
             .objects
             .iter()
             .find_map(|o| match o {
                 SceneObjectVm::Known(r) if r.index == 0 => {
-                    r.transform.as_ref().map(|t| t.pos_value)
+                    r.transform.as_ref().map(|t| (r.object_node_id, t.pos_value))
                 }
                 _ => None,
             })
@@ -1841,7 +2594,7 @@ mod tests {
             dispatch_harness();
         let (content_tx, content_rx) = crossbeam_channel::unbounded();
 
-        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, 0);
+        let action = ProjectAction::SceneSetupFrameSelected(layer_id.clone(), render_scene_id, object_node_id);
         let result = dispatch_project(
             &action,
             &mut project,
@@ -1918,11 +2671,16 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        apply_queued_scene_edit(&content_rx, &mut project);
         assert!(
             result.structural_change,
             "removing an object is a structural graph edit"
         );
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before,
+            "UI removal waits for content");
+        let ContentCommand::ExecuteOnContent(mut command) = content_rx.try_recv().unwrap()
+        else { panic!("content-owned removal"); };
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
         assert_eq!(
             objects_param(&project, &layer_id, render_scene_id),
             before - 1.0
@@ -1997,6 +2755,20 @@ mod tests {
         assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
 
         let source_index = before;
+        let source_def = effective_def(&project, &layer_id);
+        let source_vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&source_def).unwrap();
+        let source_transform = source_vm.objects.iter().find_map(|object| match object {
+            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
+                if row.index == source_index as usize => row.transform.as_ref(),
+            _ => None,
+        }).unwrap();
+        apply_scene_param_write(&project, &layer_id, source_transform.pos_addr.1.scope_path.clone(),
+            source_transform.node_doc_id, "pos_y", 2.25).unwrap().execute(&mut project);
+        apply_scene_param_write(&project, &layer_id, source_transform.pos_addr.0.scope_path.clone(),
+            source_transform.node_doc_id, "pos_x", 1.25).unwrap().execute(&mut project);
+        // Legacy manifests without saved base values must undo byte-for-byte.
+        project.graph_target_owner_mut(&manifold_core::GraphTarget::Generator(layer_id.clone())).unwrap().base_tracked = false;
+        let before_duplicate = serde_json::to_value(&project).unwrap();
         let duplicate = ProjectAction::SceneSetupDuplicateObject(
             layer_id.clone(),
             render_scene_id,
@@ -2013,11 +2785,20 @@ mod tests {
             &mut user_prefs,
         );
 
-        apply_queued_scene_edit(&content_rx, &mut project);
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), (before + 1) as f32,
+            "UI duplication waits for content");
+        let ContentCommand::SceneItem(action) = content_rx.try_recv().unwrap()
+        else { panic!("content-owned duplicate"); };
+        let request = action.selection_request().expect("duplicate selects new object");
+        let pending = request.capture(&project);
+        let mut command = crate::scene_item_transfer::build_action(&project, action).unwrap();
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
+        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
             .expect("Scene scene VM after duplicate");
-        let transform_id = vm
+        let (transform_id, duplicate_name) = vm
             .objects
             .iter()
             .find_map(|object| match object {
@@ -2026,7 +2807,7 @@ mod tests {
                 {
                     row.transform
                         .as_ref()
-                        .map(|transform| transform.node_doc_id)
+                        .map(|transform| (transform.node_doc_id, row.name.clone()))
                 }
                 _ => None,
             })
@@ -2034,6 +2815,24 @@ mod tests {
         let authored_pos_x = find_node_recursive(&def.nodes, transform_id)
             .and_then(|node| node.params.get("pos_x"))
             .cloned();
+
+        let binding_id = manifold_core::effects::binding_id_for_node_param_in(
+            &def, transform_id, "pos_x",
+        ).expect("duplicate has its own transform binding");
+        let section = def.preset_metadata.as_ref().unwrap().params.iter()
+            .find(|param| param.id == binding_id).unwrap().section.as_deref();
+        assert_ne!(duplicate_name, format!("Object {}", before + 1));
+        assert_eq!(section, Some(format!("{duplicate_name} — Transform").as_str()));
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_y"), 2.25,
+            "the duplicate keeps the source's authored control values");
+        assert_eq!(effective_scene_param_value(&project, &layer_id, transform_id, "pos_x"), 1.25,
+            "the shared scene clipboard duplicates the authored position in place");
+        command.undo(&mut project);
+        assert_eq!(serde_json::to_value(&project).unwrap(), before_duplicate);
+        command.execute(&mut project);
+        assert!(command.was_applied());
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(effective_scene_param_value(&reloaded, &layer_id, transform_id, "pos_y"), 2.25);
 
         let write = ProjectAction::SceneSetupParamChanged(
             layer_id.clone(),
@@ -2107,7 +2906,18 @@ mod tests {
             &mut active_layer,
             &mut user_prefs,
         );
-        apply_queued_scene_edit(&content_rx, &mut project);
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), duplicate_index as f32,
+            "UI duplication waits for content");
+        let ContentCommand::SceneItem(action) = content_rx.try_recv().unwrap()
+        else { panic!("content-owned duplicate"); };
+        let request = action.selection_request().expect("duplicate selects new object");
+        let pending = request.capture(&project);
+        let mut command = crate::scene_item_transfer::build_action(&project, action).unwrap();
+        command.execute(&mut project);
+        assert!(command.was_applied(), "{:?}", command.rejection_reason());
+        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), (duplicate_index + 1) as f32,
+            "content applies the queued duplication");
 
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)

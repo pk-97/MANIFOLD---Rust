@@ -43,6 +43,10 @@ pub struct SceneObject {
     /// Local TRS. Identity ([`Transform::default`]) when the `transform`
     /// input port is unwired.
     pub transform: Transform,
+    /// Optional parent TRS. The renderer composes this before `transform`,
+    /// preserving the full parent matrix (including shear introduced by
+    /// non-uniform scale and a rotated child).
+    pub parent_transform: Option<Transform>,
     /// Shading description. `None` when the `material` input port is
     /// unwired — consumers treat this the same as an unwired `material_k`
     /// port does today (a structured error, per the Material design doc's
@@ -201,6 +205,7 @@ mod tests {
             visible: false,
             cast_shadows: true,
             transform: Transform::default(),
+            parent_transform: None,
             material: None,
             mesh: None,
             weights: None,
@@ -240,6 +245,7 @@ mod tests {
             visible: true,
             cast_shadows: true,
             transform: Transform::default(),
+            parent_transform: None,
             material: None,
             mesh: Some(Slot(0)),
             weights: None,

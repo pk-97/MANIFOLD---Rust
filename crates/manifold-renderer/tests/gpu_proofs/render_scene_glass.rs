@@ -656,8 +656,8 @@ fn closed_mesh_transmission_scene(type_id: &str) -> String {
     material["params"]["alpha_mode"] = json!({"type":"Enum", "value":0});
     let wires = graph["wires"].as_array_mut().unwrap();
     wires.retain(|wire| {
-        !(wire["fromNode"] == 200 && wire["toNode"] == 201)
-            && !(wire["fromNode"] == 201 && wire["toNode"] == 20)
+        !(wire["fromNode"] == 200 && wire["toNode"] == 201
+            || wire["fromNode"] == 201 && wire["toNode"] == 20)
     });
     wires.push(json!({"fromNode":200,"fromPort":"vertices","toNode":20,"toPort":"mesh_1"}));
     graph.to_string()

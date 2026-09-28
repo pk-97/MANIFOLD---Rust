@@ -674,7 +674,16 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
     // plus any caller that builds a graph for its side effects rather
     // than to render) fall back to validating every node — there's no
     // "what does the executor run?" to compute.
-    let has_root = graph.nodes().any(|inst| inst.node.is_liveness_root());
+    for (node, port) in graph.external_outputs() {
+        let inst = graph.get_node(node).ok_or(GraphError::NodeNotFound(node))?;
+        if !inst.node.outputs().iter().any(|output| output.name == port) {
+            return Err(GraphError::PortNotFound {
+                node,
+                port: port.to_string(),
+            });
+        }
+    }
+    let has_root = graph.nodes().any(|inst| graph.is_liveness_root(inst.id));
     for inst in graph.nodes() {
         // Nodes the executor won't run don't have to satisfy required-
         // input rules — skipping them here makes editing-time graphs
@@ -803,12 +812,24 @@ pub(crate) fn reachable_from_liveness_roots(graph: &Graph) -> AHashSet<NodeInsta
     let mut live: AHashSet<NodeInstanceId> = AHashSet::default();
     let mut frontier: Vec<NodeInstanceId> = graph
         .nodes()
-        .filter(|inst| inst.node.is_liveness_root())
+        .filter(|inst| graph.is_liveness_root(inst.id))
         .map(|inst| inst.id)
         .collect();
     while let Some(id) = frontier.pop() {
         if !live.insert(id) {
             continue;
+        }
+        for pair in graph.coupled_scenes() {
+            let sibling = if pair.fluid == id {
+                Some(pair.rigid)
+            } else if pair.rigid == id {
+                Some(pair.fluid)
+            } else {
+                None
+            };
+            if let Some(sibling) = sibling {
+                frontier.push(sibling);
+            }
         }
         for w in graph.wires() {
             if w.to.0 == id {
@@ -1081,6 +1102,76 @@ mod tests {
         ) -> Option<&'static [manifold_gpu::GpuTextureFormat]> {
             self.accepted_inputs.get(port).copied()
         }
+    }
+
+    #[test]
+    fn externally_rooted_node_with_required_input_must_be_wired() {
+        let mut g = Graph::new();
+        let image = g.add_node(Box::new(crate::node_graph::Source::new()));
+        let out = g.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        g.connect((image, "out"), (out, "in")).unwrap();
+        let orphan = g.add_node(Box::new(TestNode::new(
+            "field_source",
+            vec![input("source", PortType::Texture2D, true)],
+            vec![output("field", PortType::VectorField)],
+        )));
+        assert!(validate(&g).is_ok(), "an unconsumed orphan remains inactive");
+        g.add_external_output(orphan, "field").unwrap();
+        assert!(matches!(
+            validate(&g),
+            Err(GraphError::RequiredInputUnwired { node, port })
+                if node == orphan && port == "source"
+        ));
+    }
+
+    #[test]
+    fn live_coupled_partner_required_input_is_validated() {
+        let mut live = Graph::new();
+        let fluid = live.add_node(Box::new(TestNode::new(
+            FINAL_OUTPUT_TYPE_ID,
+            vec![],
+            vec![],
+        )));
+        let rigid = live.add_node(Box::new(TestNode::new(
+            "rigid_world",
+            vec![input("velocity", PortType::Texture2D, true)],
+            vec![],
+        )));
+        live.add_coupled_scene(
+            fluid,
+            rigid,
+            crate::node_graph::physics::RigidImpulseTargets::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            crate::node_graph::execution_plan::compile(&live),
+            Err(GraphError::RequiredInputUnwired { node, port })
+                if node == rigid && port == "velocity"
+        ));
+
+        let mut dead = Graph::new();
+        dead.add_node(Box::new(TestNode::new(
+            FINAL_OUTPUT_TYPE_ID,
+            vec![],
+            vec![],
+        )));
+        let dead_fluid = dead.add_node(Box::new(TestNode::new(
+            "dead_fluid",
+            vec![],
+            vec![],
+        )));
+        let dead_rigid = dead.add_node(Box::new(TestNode::new(
+            "dead_rigid",
+            vec![input("velocity", PortType::Texture2D, true)],
+            vec![],
+        )));
+        dead.add_coupled_scene(
+            dead_fluid,
+            dead_rigid,
+            crate::node_graph::physics::RigidImpulseTargets::default(),
+        )
+        .unwrap();
+        assert!(crate::node_graph::execution_plan::compile(&dead).is_ok());
     }
 
     #[test]

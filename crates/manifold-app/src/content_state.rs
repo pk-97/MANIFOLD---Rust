@@ -262,6 +262,8 @@ pub struct ContentState {
     /// Most recent rejected graph-edit diagnostic. Persistent across snapshots
     /// so the UI can observe it once without relying on `data_version`.
     pub graph_edit_diagnostic: Option<GraphEditDiagnostic>,
+    /// Latched trigger delivery failure; Stop, seek or project load resets it.
+    pub trigger_delivery_failure: Option<manifold_playback::engine::trigger_delivery::TriggerDeliveryFailure>,
     /// Most recent authoritative selection update for newly created scene
     /// modifier cards. Persistent across snapshots for sequence-gated UI use.
     pub edit_selection_update: Option<Arc<crate::edit_selection::EditSelectionUpdate>>,
@@ -302,6 +304,7 @@ pub struct ContentState {
     /// Live node-output preview state for the editor's value inspector. `None`
     /// when no node is being previewed. See [`NodePreviewInfo`].
     pub node_preview_info: Option<NodePreviewInfo>,
+    pub scene_viewport_frames: crate::scene_viewport::SceneViewportFrames,
 
     /// Live (post-modulation) scalar param values for every node of the watched
     /// effect/generator this frame, keyed by stable `NodeId`. The editor canvas
@@ -580,6 +583,7 @@ impl Default for ContentState {
             warmup: None,
             undo_redo_event: None,
             graph_edit_diagnostic: None,
+            trigger_delivery_failure: None,
             edit_selection_update: None,
             modifier_selection_update: None,
             object_modifier_selection_update: None,
@@ -595,6 +599,7 @@ impl Default for ContentState {
             active_graph_snapshot: None,
             active_graph_target: None,
             node_preview_info: None,
+            scene_viewport_frames: std::array::from_fn(|_| None),
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
             clip_atlas_layout: Vec::new(),

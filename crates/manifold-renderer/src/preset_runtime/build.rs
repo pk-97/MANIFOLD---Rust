@@ -87,15 +87,16 @@ pub(super) fn compute_topology_hash(
 
 /// Result of `assign_texture2d_slots`: one physical slot per logical
 /// resource (with sharing for non-overlapping lifetimes), plus the
-/// dedicated source slot and the total slot count.
+/// optional dedicated source slot and the total slot count. A source slot is
+/// absent when the graph compiler prunes an unconsumed external Source output.
 pub(super) struct SlotAssignment {
     pub(super) resource_to_slot: AHashMap<ResourceId, Slot>,
-    /// Dedicated slot for the upstream input texture. Held across the
-    /// frame (the chain `replace_texture_2d`s a clone of the input
-    /// into this slot's `RenderTarget` each frame), never recycled
-    /// for intermediate writes — sharing would corrupt the upstream
-    /// caller's texture when a later effect writes its output.
-    pub(super) source_slot: Slot,
+    /// Dedicated slot for the upstream input texture when the chain consumes
+    /// it. Held across the frame (the chain `replace_texture_2d`s a clone of
+    /// the input into this slot's `RenderTarget` each frame), never recycled
+    /// for intermediate writes — sharing would corrupt the upstream caller's
+    /// texture when a later effect writes its output.
+    pub(super) source_slot: Option<Slot>,
     /// Total physical slots needed = slots actually allocated.
     pub(super) slot_count: u32,
     /// Allocation dims per slot, indexed by `Slot.0`. Canvas-sized for the
@@ -107,8 +108,8 @@ pub(super) struct SlotAssignment {
 
 /// Walk the plan in topological order, mirroring the executor's
 /// acquire/release ordering, to compute the minimum set of physical
-/// slots needed for every `Texture2D` resource. The `source_resource`
-/// is bound to slot 0 up-front and never returned to the free pool
+/// slots needed for every `Texture2D` resource. The `source_resource`, when
+/// consumed, is bound to slot 0 up-front and never returned to the free pool
 /// (so other resources can't write through it later).
 ///
 /// Persistent resources — those identified by
@@ -128,14 +129,21 @@ pub(super) struct SlotAssignment {
 /// real backend slots 1:1 via `allocate_slot`.
 pub(super) fn assign_texture2d_slots(
     plan: &ExecutionPlan,
-    source_resource: ResourceId,
+    source_resource: Option<ResourceId>,
     canvas_dims: (u32, u32),
 ) -> SlotAssignment {
     let mut resource_to_slot: AHashMap<ResourceId, Slot> = AHashMap::default();
-    let source_slot = Slot(0);
-    resource_to_slot.insert(source_resource, source_slot);
-    let mut next_slot: u32 = 1;
-    let mut slot_dims: Vec<(u32, u32)> = vec![canvas_dims];
+    let source_slot = source_resource.map(|source_resource| {
+        let source_slot = Slot(0);
+        resource_to_slot.insert(source_resource, source_slot);
+        source_slot
+    });
+    let mut next_slot: u32 = if source_slot.is_some() { 1 } else { 0 };
+    let mut slot_dims: Vec<(u32, u32)> = if source_slot.is_some() {
+        vec![canvas_dims]
+    } else {
+        Vec::new()
+    };
 
     // Pre-allocate dedicated slots for every persistent AND held
     // Texture2D resource BEFORE the topological walk. These slots stay
@@ -152,7 +160,7 @@ pub(super) fn assign_texture2d_slots(
         .iter()
         .chain(plan.held_resources())
         .filter(|&&res_id| {
-            res_id != source_resource
+            Some(res_id) != source_resource
                 && plan
                     .resource_type(res_id)
                     .map(|ty| ty.is_texture_2d())
@@ -176,7 +184,7 @@ pub(super) fn assign_texture2d_slots(
     for step in plan.steps() {
         // Acquire output slots — pop from free pool or grow.
         for &(_, res_id) in &step.outputs {
-            if res_id == source_resource {
+            if Some(res_id) == source_resource {
                 continue;
             }
             if dedicated_set.contains(&res_id) {
@@ -207,7 +215,7 @@ pub(super) fn assign_texture2d_slots(
         }
         // Release dead resources — return slots to the free pool.
         for &res_id in &step.free_after {
-            if res_id == source_resource {
+            if Some(res_id) == source_resource {
                 // Source slot is dedicated. Never recycled.
                 continue;
             }
@@ -283,6 +291,7 @@ impl PresetRuntime {
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
         mesh_rules: &crate::node_graph::mesh_change::PreparedMeshRules,
+        impulse_routes: &[crate::node_graph::scene_modifier_expand::SceneModifierImpulseRoute],
     ) -> Result<Self, JsonGeneratorLoadError> {
         if doc.version == 0 || doc.version > EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS {
             return Err(JsonGeneratorLoadError::Load(
@@ -419,6 +428,15 @@ impl PresetRuntime {
         }
 
         let mut graph = doc.into_graph(registry, mesh_rules)?;
+        for route in impulse_routes {
+            let node = graph.instance_by_node_id(&route.field_node).ok_or_else(||
+                JsonGeneratorLoadError::SceneModifier(
+                    crate::node_graph::scene_modifier_expand::SceneModifierExpandError::MissingTarget {
+                        path: route.field_node.to_string(),
+                        detail: "impulse field is absent from the render graph".into(),
+                    }))?;
+            graph.add_external_output(node, &route.field_port)?;
+        }
 
         // Re-locate the boundary nodes by runtime id now that we have the live
         // graph.
@@ -548,6 +566,7 @@ impl PresetRuntime {
                 }
             }
         }
+        super::physics_sampling::retain_physics_setup_outputs(&mut graph)?;
         let plan = compile(&graph)?;
         // Walk the plan for the FinalOutput step, pull its `in` input resource —
         // that's what the host pre-binds the target texture to.
@@ -589,6 +608,7 @@ impl PresetRuntime {
         // rehydrate — its host rebuilds on structure change); the live ones are
         // `bound`, `node_map`, `generator_input_node`, and the preview maps.
         let segment = EffectSlot {
+            physics_sources: Default::default(),
             effect_id: EffectId::default(),
             effect_type: type_id.clone(),
             legacy_index: 0,
@@ -599,8 +619,10 @@ impl PresetRuntime {
             applied_graph_version: 0,
             bound,
             user_bindings_version: 0,
-            // Generators rebuild through their own registry lifecycle, not the
-            // chain dispatcher's prior-runtime handoff — no harvest key.
+            // `from_def_for_render_view` supplies the canonical key for
+            // compatible physics handoff; direct low-level construction has
+            // no key. Generators otherwise rebuild through their own registry
+            // lifecycle, not the chain dispatcher's prior-runtime handoff.
             def_content_key: 0,
             generator_input_node: Some(generator_input_id),
             card_prefix: String::new(),
@@ -610,11 +632,18 @@ impl PresetRuntime {
         let seeded_forced_epoch = graph.forced_outputs_epoch();
         let physics_sample_steps = super::core::physics_sample_steps(&graph, &plan)
             .map_err(JsonGeneratorLoadError::PhysicsSamplingUnsupported)?;
+        let physics_input_snapshot = physics_sample_steps.as_ref().map(|steps| {
+            super::physics_sampling::PhysicsInputSnapshot::prepare(&graph, &plan, steps)
+        });
         let mut g = Self {
             graph,
             plan,
             physics_sample_steps,
+            physics_input_snapshot,
             last_physics_frame_time: None,
+            physics_project_tempo: None,
+            impulse_identity: std::sync::Arc::new(()),
+            scene_impulses: Default::default(),
             last_forced_outputs_epoch: seeded_forced_epoch,
             forced_outputs_stale: false,
             executor: Executor::with_mock(),
@@ -653,91 +682,4 @@ impl PresetRuntime {
         Ok(g)
     }
 
-    /// Parse + compile + wire to a real [`MetalBackend`] for production
-    /// rendering. Pre-binds a 1×1 placeholder at the FinalOutput-source slot so
-    /// per-frame `render()` only swaps the borrowed texture (no hot-path alloc).
-    pub fn from_json_str_with_device(
-        json: &str,
-        registry: &PrimitiveRegistry,
-        device: std::sync::Arc<GpuDevice>,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-        manifest: Option<&ParamManifest>,
-    ) -> Result<Self, JsonGeneratorLoadError> {
-        let doc: EffectGraphDef = serde_json::from_str(json)?;
-        Self::from_def_with_device(doc, registry, device, width, height, format, manifest)
-    }
-
-    /// Same as [`Self::from_json_str_with_device`] but skips the JSON parse.
-    /// `manifest` follows the [`Self::from_def`] contract: the live per-instance
-    /// [`ParamManifest`] on a project-generator rebuild, `None` standalone.
-    pub fn from_def_with_device(
-        doc: EffectGraphDef,
-        registry: &PrimitiveRegistry,
-        device: std::sync::Arc<GpuDevice>,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-        manifest: Option<&ParamManifest>,
-    ) -> Result<Self, JsonGeneratorLoadError> {
-        Self::from_def(doc, registry, manifest)?
-            .with_generator_device(device, width, height, format)
-    }
-
-    pub(crate) fn with_generator_device(
-        mut self,
-        device: std::sync::Arc<GpuDevice>,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-    ) -> Result<Self, JsonGeneratorLoadError> {
-        self.install_generator_device(device, width, height, format)?;
-        Ok(self)
-    }
-
-    pub(super) fn install_generator_device(
-        &mut self,
-        device: std::sync::Arc<GpuDevice>,
-        width: u32,
-        height: u32,
-        format: GpuTextureFormat,
-    ) -> Result<(), JsonGeneratorLoadError> {
-        let g = self;
-        g.width = width;
-        g.height = height;
-        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), width, height, format);
-        let PresetIo::Generate {
-            final_output_input_resource,
-            ..
-        } = g.io
-        else {
-            unreachable!("from_def always produces Generate IO");
-        };
-        // Pre-bind a 1×1 placeholder at the FinalOutput-source slot so the slot
-        // exists across frames; `install_target` swaps in the host's real target
-        // via `replace_texture_2d` each render call.
-        let placeholder = RenderTarget::new(&device, 1, 1, format, "preset_runtime_target_owner");
-        let slot = backend.pre_bind_texture_2d(final_output_input_resource, placeholder);
-        if let PresetIo::Generate {
-            final_output_slot, ..
-        } = &mut g.io
-        {
-            *final_output_slot = Some(slot);
-        }
-        g.target_format = Some(format);
-
-        // Pre-allocate every Array<T> buffer + Texture3D volume the compiled
-        // plan declares, then run the post-allocation audit — the same shared
-        // pipeline the effect chain uses.
-        for (resource, buffer) in &g.shared_arrays {
-            backend.pre_bind_array(*resource, buffer.clone());
-        }
-        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
-            .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
-
-        g.executor = Executor::new(Box::new(backend));
-        g.install_math_views(device, width, height, format)?;
-        Ok(())
-    }
 }

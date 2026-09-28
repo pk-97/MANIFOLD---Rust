@@ -46,10 +46,11 @@ use super::gltf_anim_shared::{
 };
 use crate::generators::mesh_common::JointMatrix;
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_anim_cache::{AnimClip, AnimSetLookup, GltfAnimSet, get_or_spawn_load};
+use crate::node_graph::gltf_anim_cache::{AnimClip, GltfAnimSet, LoadedAnimSet, spawn_load};
 use crate::node_graph::gltf_load::{Mat4, MAT4_IDENTITY, mat4_from_trs, mat4_mul};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::source_asset::loaded_identity;
 
 /// Maximum joints this primitive will pose in one frame — generous past
 /// the spec-typical ≤256 (BrainStem is the documented stress case);
@@ -260,12 +261,11 @@ crate::primitive! {
         // `gltf_mesh_source`'s `last_key` uses).
         last_path: String = String::new(),
         // Resident once loaded; `None` while unloaded/loading/failed.
-        anim_set: Option<Arc<GltfAnimSet>> = None,
-        // Background loader channel. `Some` means a load is in flight (or
-        // was resolved from the shared cache without spawning a thread —
-        // see `AnimSetLookup::Ready`); we don't spawn another until it
-        // returns.
-        pending_load: Option<mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>> = None,
+        anim_set: Option<Arc<LoadedAnimSet>> = None,
+        // Background source validation/cache lookup. One request stays in
+        // flight until it returns; successful sampling retains its Arc.
+        pending_load: Option<mpsc::Receiver<Result<Arc<LoadedAnimSet>, String>>> = None,
+        load_error: Option<String> = None,
     },
 }
 
@@ -582,12 +582,10 @@ impl Primitive for GltfSkeletonPose {
             self.last_path = path.clone();
             self.anim_set = None;
             self.pending_load = None;
+            self.load_error = None;
         }
-        if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
-            match get_or_spawn_load(std::path::Path::new(&path)) {
-                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
-                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
-            }
+        if self.anim_set.is_none() && self.pending_load.is_none() && self.load_error.is_none() && !path.is_empty() {
+            self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
             match rx.try_recv() {
@@ -597,11 +595,14 @@ impl Primitive for GltfSkeletonPose {
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_skeleton_pose: {e}");
+                    self.load_error = Some(e);
                     self.pending_load = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::error!("node.gltf_skeleton_pose: background load channel disconnected");
+                    let error = "background load channel disconnected".to_owned();
+                    log::error!("node.gltf_skeleton_pose: {error}");
+                    self.load_error = Some(error);
                     self.pending_load = None;
                 }
             }
@@ -670,6 +671,22 @@ impl Primitive for GltfSkeletonPose {
 
     fn clear_state(&mut self) {
         self.trigger_latch.clear();
+        self.load_error = None;
+    }
+
+    fn warmup_pending(&self) -> bool {
+        self.pending_load.is_some()
+    }
+
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &["path"]
+    }
+
+    fn source_asset_identity(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -702,6 +719,50 @@ mod tests {
         let prim = GltfSkeletonPose::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.gltf_skeleton_pose");
+    }
+
+    fn identity_params(path: &str) -> crate::node_graph::effect_node::ParamValues {
+        let mut params = crate::node_graph::effect_node::ParamValues::default();
+        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
+        params
+    }
+
+    #[test]
+    fn source_identity_tracks_ready_pending_failed_and_reset_states() {
+        let mut prim = GltfSkeletonPose::new();
+        let loaded: Arc<LoadedAnimSet> = Arc::new(GltfAnimSet {
+            clips: Vec::new(),
+            skins: Vec::new(),
+            node_parents: Vec::new(),
+            node_bind_trs: Vec::new(),
+        }
+        .into());
+        let fingerprint = loaded.identity();
+        prim.last_path = "skeleton-a.glb".to_owned();
+        prim.anim_set = Some(loaded);
+
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+        );
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("skeleton-b.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Pending
+        );
+
+        prim.load_error = Some("skeleton load failed".to_owned());
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Failed("skeleton load failed")
+        );
+
+        Primitive::clear_state(&mut prim);
+        assert!(prim.load_error.is_none());
+        assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("skeleton-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+        );
     }
 
     /// Two joints: joint 0 is the root (parent -1, identity root_world),

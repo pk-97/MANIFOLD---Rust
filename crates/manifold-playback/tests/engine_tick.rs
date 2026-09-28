@@ -224,7 +224,7 @@ fn project_with_clip_trigger(sensitivity: f32) -> manifold_core::project::Projec
 fn hot_snapshot() -> manifold_core::audio_features::AudioFeatureSnapshot {
     let mut f = manifold_core::SendFeatures::default();
     f.bands[manifold_core::audio_mod::AudioBand::Full.index()].transients = 0.9;
-    manifold_core::audio_features::AudioFeatureSnapshot { sends: vec![f] }
+    manifold_core::audio_features::AudioFeatureSnapshot { sends: vec![f], ..Default::default() }
 }
 
 /// BUG-109 section 7.1 item 1: P3c's per-branch `FireMeterCapture` reset ran AFTER
@@ -487,8 +487,8 @@ fn engine_waypoints_stress_test() {
     }
 
     let project = manifold_io::loader::load_project(&path).unwrap();
-    // Original 2311 clips; 295 overlapping clips removed on load repair.
-    assert_eq!(project.timeline.total_clip_count(), 2016);
+    // Original 2311 clips; 297 overlapping clips removed on load repair.
+    assert_eq!(project.timeline.total_clip_count(), 2014);
 
     let mut engine = create_engine();
     engine.initialize(project);

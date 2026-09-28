@@ -5,21 +5,6 @@
 use super::*;
 
 impl PresetRuntime {
-    #[cfg(feature = "gpu-proofs")]
-    pub fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
-        self.graph.nodes().find_map(|node| node.node.rt_probe_scene())
-    }
-
-    #[cfg(feature = "gpu-proofs")]
-    pub fn rt_probe_rays(
-        &self,
-        device: &manifold_gpu::GpuDevice,
-        encoder: &mut manifold_gpu::GpuEncoder,
-        rays: &[manifold_gpu::raytrace::DebugRayQueryRay],
-    ) -> Option<manifold_gpu::GpuBuffer> {
-        self.graph.nodes().find_map(|node| node.node.rt_probe_rays(device, encoder, rays))
-    }
-
     /// Aim the authoring-time output preview at `node_id` within effect
     /// `effect_id`, or clear it. Resolves the editor's stable [`NodeId`] to
     /// the runtime node via the owning effect's `node_map`. A `None` node id,
@@ -168,6 +153,35 @@ impl PresetRuntime {
                 self.live_node_params(&eid)
             }
             None => Vec::new(),
+        }
+    }
+
+    /// Append accepted fluid domains from this effect's running nodes. The
+    /// caller owns and reuses the output buffer; reading never polls a worker.
+    pub fn write_fluid_domains(
+        &self,
+        effect_id: &EffectId,
+        output: &mut Vec<(manifold_core::NodeId, crate::node_graph::fluid::FluidDomainSnapshot)>,
+    ) {
+        let Some(slot) = self.effect_nodes.iter().find(|slot| &slot.effect_id == effect_id) else {
+            return;
+        };
+        for (node_id, instance) in &slot.node_map {
+            if let Some(snapshot) = self.graph.get_node(*instance)
+                .and_then(|node| node.node.fluid_domain_snapshot())
+            {
+                output.push((node_id.clone(), snapshot));
+            }
+        }
+    }
+
+    /// Generator convenience for the single effect owned by this runtime.
+    pub fn write_fluid_domains_watched(
+        &self,
+        output: &mut Vec<(manifold_core::NodeId, crate::node_graph::fluid::FluidDomainSnapshot)>,
+    ) {
+        if let Some(slot) = self.effect_nodes.first() {
+            self.write_fluid_domains(&slot.effect_id, output);
         }
     }
 

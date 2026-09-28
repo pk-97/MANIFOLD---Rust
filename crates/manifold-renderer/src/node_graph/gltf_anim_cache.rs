@@ -17,16 +17,25 @@
 //! rather than inventing a second one.
 //!
 //! Parsing itself is NOT reimplemented here: [`load_anim_set`] calls
-//! straight into `gltf_load.rs`'s existing `parse_document_and_buffers`/
+//! straight into `gltf_load.rs`'s existing `parse_buffer_snapshot`/
 //! `parse_animations`/`parse_skins`/`build_parent_map` — the same parse
 //! `gltf_import.rs` uses to build the (still-emitted-this-phase) Table
 //! params. One parse entry point, two destinations.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc};
 
 use super::gltf_load::{self, GltfInterp, Mat4};
+
+pub(crate) type LoadedAnimSet = super::source_asset::LoadedAsset<GltfAnimSet>;
+
+impl From<GltfAnimSet> for LoadedAnimSet {
+    fn from(set: GltfAnimSet) -> Self {
+        let identity = super::gltf_anim_identity::identity(&set);
+        Self::new(set, identity)
+    }
+}
 
 /// One node's static bind-pose local TRS (`node.transform().decomposed()`),
 /// indexed by glTF node index across the WHOLE scene (not just skin
@@ -228,12 +237,23 @@ pub struct GltfAnimSet {
     pub node_bind_trs: Vec<BindTrs>,
 }
 
-/// Parse `path` into a [`GltfAnimSet`] — the sole loader, reusing
-/// `gltf_load.rs`'s existing document/animation/skin parse (never a second
-/// glTF parser). Runs on a background thread (see [`get_or_spawn_load`]);
-/// never called on the content thread.
-fn load_anim_set(path: &Path) -> Result<GltfAnimSet, String> {
-    let (document, buffers) = gltf_load::parse_document_and_buffers(path)?;
+/// Validate the current document and every resolved buffer before cache
+/// lookup. A still-resident payload must not hide same-path replacement or
+/// missing dependencies when a node prepares its source again. File IO stays
+/// on the loader thread; running nodes retain their immutable loaded snapshot.
+fn load_anim_set(path: &Path) -> Result<Arc<LoadedAnimSet>, String> {
+    let snapshot = gltf_load::parse_buffer_snapshot(path)?;
+    if let Some(set) = cached(&snapshot.identity) {
+        return Ok(set);
+    }
+    let identity = snapshot.identity;
+    Ok(insert_cache(identity, Arc::new(decode_anim_set(snapshot).into())))
+}
+
+/// Parse the exact snapshot that produced the cache key, without reopening
+/// its files or maintaining another document/buffer parser.
+fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
+    let gltf_load::GltfBufferSnapshot { document, buffers, .. } = snapshot;
 
     let node_parents: Vec<i32> = gltf_load::build_parent_map(&document)
         .iter()
@@ -293,57 +313,43 @@ fn load_anim_set(path: &Path) -> Result<GltfAnimSet, String> {
         })
         .collect();
 
-    Ok(GltfAnimSet { clips, skins, node_parents, node_bind_trs })
+    GltfAnimSet { clips, skins, node_parents, node_bind_trs }
 }
 
-/// GLTF_ANIM_RUNTIME_V2_DESIGN.md D2's one approved piece of new shared
-/// state — a coarse `Mutex` around a tiny map, touched only at load/drop
-/// (never per-frame), content thread + loader threads only. `Weak`
-/// entries so the cache itself never keeps a `GltfAnimSet` alive.
-static ANIM_CACHE: LazyLock<Mutex<HashMap<PathBuf, Weak<GltfAnimSet>>>> =
+/// Reuse the existing approved cache and lock. Keys cover primary and
+/// resolved buffer contents, and Weak entries never own animation payloads.
+/// Only loader threads touch the map; no file IO or decoding holds its lock.
+static ANIM_CACHE: LazyLock<Mutex<HashMap<[u8; 32], Weak<LoadedAnimSet>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn cached(path: &Path) -> Option<Arc<GltfAnimSet>> {
+fn cached(identity: &[u8; 32]) -> Option<Arc<LoadedAnimSet>> {
     let cache = ANIM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.get(path).and_then(Weak::upgrade)
+    cache.get(identity).and_then(Weak::upgrade)
 }
 
-fn insert_cache(path: PathBuf, weak: Weak<GltfAnimSet>) {
+fn insert_cache(identity: [u8; 32], set: Arc<LoadedAnimSet>) -> Arc<LoadedAnimSet> {
     let mut cache = ANIM_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.insert(path, weak);
-}
-
-/// Result of asking the cache for `path`'s [`GltfAnimSet`] this frame.
-pub(crate) enum AnimSetLookup {
-    /// Already resident (either this is a repeat request, or another
-    /// node/object sharing the same file loaded it first) — no thread
-    /// spawned.
-    Ready(Arc<GltfAnimSet>),
-    /// Not resident; a background thread was just spawned to load and
-    /// insert it. Poll `rx.try_recv()` on subsequent frames.
-    Pending(mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>),
-}
-
-/// Look up `path` in the shared cache; on a miss, spawn a background
-/// thread that parses it and inserts a `Weak` reference before returning
-/// the loaded `Arc` — the same "spawn on key change, poll `try_recv` each
-/// frame" shape `gltf_mesh_source.rs`/`gltf_morph_deltas_source.rs` use,
-/// generalized with an up-front cache check so a SECOND node/object
-/// referencing the same file never re-parses it.
-pub(crate) fn get_or_spawn_load(path: &Path) -> AnimSetLookup {
-    if let Some(set) = cached(path) {
-        return AnimSetLookup::Ready(set);
+    // Concurrent loads may decode the same snapshot. Publish one shared Arc
+    // even when both missed the first lookup; an older load cannot overwrite
+    // a changed file because its contents have a different key.
+    if let Some(resident) = cache.get(&identity).and_then(Weak::upgrade) {
+        return resident;
     }
+    cache.retain(|_, entry| entry.strong_count() != 0);
+    cache.insert(identity, Arc::downgrade(&set));
+    set
+}
+
+/// Begin the existing key-change load/poll lifecycle. Every new request
+/// validates source bytes on its background thread, including warm cache hits.
+/// Nodes keep the resulting Arc, so ordinary frame sampling does no IO.
+pub(crate) fn spawn_load(path: &Path) -> mpsc::Receiver<Result<Arc<LoadedAnimSet>, String>> {
     let path_buf = path.to_path_buf();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = load_anim_set(&path_buf).map(Arc::new);
-        if let Ok(set) = &result {
-            insert_cache(path_buf, Arc::downgrade(set));
-        }
-        let _ = tx.send(result);
+        let _ = tx.send(load_anim_set(&path_buf));
     });
-    AnimSetLookup::Pending(rx)
+    rx
 }
 
 #[cfg(test)]
@@ -382,16 +388,21 @@ mod tests {
     /// cache holds only a `Weak`.
     #[test]
     fn anim_cache_drops_when_last_arc_drops() {
-        let path = PathBuf::from("/synthetic/anim_cache_drops_when_last_arc_drops.glb");
-        let set = Arc::new(GltfAnimSet {
+        let identity = [0xA5; 32];
+        let set = Arc::new(LoadedAnimSet::from(GltfAnimSet {
             clips: Vec::new(),
             skins: Vec::new(),
             node_parents: Vec::new(),
             node_bind_trs: Vec::new(),
-        });
-        insert_cache(path.clone(), Arc::downgrade(&set));
-        assert!(cached(&path).is_some(), "cache hit while the Arc is alive");
+        }));
+        let set = insert_cache(identity, set);
+        assert!(cached(&identity).is_some(), "cache hit while the Arc is alive");
         drop(set);
-        assert!(cached(&path).is_none(), "Weak::upgrade() must be None once every Arc has dropped");
+        assert!(cached(&identity).is_none(), "Weak::upgrade() must be None once every Arc has dropped");
     }
+}
+
+#[cfg(test)]
+mod dependency_tests {
+    include!("gltf_anim_cache_tests.rs");
 }

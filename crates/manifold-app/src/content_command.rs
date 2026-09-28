@@ -22,10 +22,18 @@ pub enum ContentCommand {
     /// An unexecuted command; UI snapshots wait for content publication. Unlike
     /// legacy optimistic Execute producers, headless UI must execute this too.
     ExecuteOnContent(Box<dyn Command + Send>),
+    /// Increment a trigger against the authoritative content project. A UI
+    /// snapshot supplies only its identity, never the next counter value.
+    FireParameter {
+        target: manifold_core::GraphTarget,
+        param_id: manifold_core::effects::ParamId,
+    },
     /// Publish selection only after this insertion succeeds on the content thread.
     ExecuteSelecting(Box<dyn Command + Send>, crate::edit_selection::SelectAfterEdit),
     SceneModifier(crate::scene_modifier_edit::SceneModifierAction),
     ObjectModifier(crate::object_modifier_transfer::ObjectModifierAction),
+    /// Commit one viewport domain gesture against the current content project.
+    FluidDomainEdit(Box<crate::fluid_domain_edit::FluidDomainDrag>),
     SceneItem(crate::scene_item_transfer::SceneItemAction),
     ChangeGeneratorType { layer_id: LayerId, new_type: manifold_core::PresetTypeId },
     GraphEditRejected(String),
@@ -341,6 +349,7 @@ pub enum ContentCommand {
     /// `WatchGeneratorGraph` to drive the per-node output capture. Sent when
     /// the editor's node selection changes.
     SetGraphPreviewNode(Option<manifold_core::NodeId>),
+    SetSceneViewport(Option<std::sync::Arc<crate::scene_viewport::SceneViewportRequest>>),
     SetModifierPreviewContext {
         scope: Vec<manifold_core::NodeId>,
         object: Option<manifold_core::scene_modifier_preset::SceneNodeRef>,

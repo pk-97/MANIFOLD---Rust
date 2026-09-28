@@ -13,6 +13,20 @@
       }
     }
   },
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "name": "scene_setup.objects.group_toggle"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
   "Snapshot",
   {
     "Assert": {

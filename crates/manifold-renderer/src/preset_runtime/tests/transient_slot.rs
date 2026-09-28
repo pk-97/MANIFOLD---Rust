@@ -1,6 +1,6 @@
 //! Fixed-size source textures must retain their dimensions during slot reuse.
 use super::*;
-use crate::node_graph::primitives::{AudioSpectrum, Gain, Mix};
+use crate::node_graph::primitives::{AudioSpectrum, Checkerboard, Gain, Mix};
 use crate::node_graph::{FinalOutput, Graph, Source, compile};
 
 #[test]
@@ -45,7 +45,7 @@ fn chain_reserves_provided_image_without_a_writable_backing() {
     let super::core::PresetIo::Transform { source_slot, output_slot } = runtime.io else {
         panic!("chain must keep host-owned endpoints");
     };
-    assert!(metal.render_target_2d(source_slot).is_some());
+    assert!(metal.render_target_2d(source_slot.expect("source-consuming chain")).is_some());
     assert!(metal.render_target_2d(output_slot).is_some());
 }
 
@@ -84,7 +84,7 @@ fn transient_slots_reuse_only_matching_resolved_dimensions() {
             .expect("node produces an out resource")
     };
 
-    let assignment = assign_texture2d_slots(&plan, source_res, (1080, 1920));
+    let assignment = assign_texture2d_slots(&plan, Some(source_res), (1080, 1920));
     let spectrum_res = resource_for(spectrum);
     let mix_res = resource_for(mix);
     let gain_1_res = resource_for(gain_1);
@@ -104,4 +104,25 @@ fn transient_slots_reuse_only_matching_resolved_dimensions() {
     assert_eq!(slot(gain_2_res), slot(mix_res));
     assert_eq!(slot(gain_3_res), slot(gain_1_res));
     assert_eq!(assignment.slot_count, 4);
+}
+
+#[test]
+fn source_independent_plan_does_not_allocate_external_source_slot() {
+    let mut graph = Graph::new();
+    let source = graph.add_node(Box::new(Source::new()));
+    let checker = graph.add_node(Box::new(Checkerboard::new()));
+    let output = graph.add_node(Box::new(FinalOutput::new()));
+    graph.connect((checker, "out"), (output, "in")).unwrap();
+
+    let plan = compile(&graph).expect("source-independent chain compiles");
+    assert!(plan
+        .steps()
+        .iter()
+        .find(|step| step.node == source)
+        .is_none_or(|step| step.outputs.is_empty()));
+
+    let assignment = assign_texture2d_slots(&plan, None, (64, 64));
+    assert_eq!(assignment.source_slot, None);
+    assert!(!assignment.resource_to_slot.is_empty());
+    assert_eq!(assignment.slot_count as usize, assignment.slot_dims.len());
 }

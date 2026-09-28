@@ -283,6 +283,9 @@ mod custom {
             .chain(
                 custom_abi_cases::CASES
                     .iter()
+                    // Shared helpers outside primitives are checked by the custom
+                    // ABI proof above, but are outside this directory census.
+                    .filter(|c| !c.source.starts_with("../"))
                     .map(|c| (c.source.into(), c.rust_struct.into())),
             )
             .chain(

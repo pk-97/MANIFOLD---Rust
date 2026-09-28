@@ -19,6 +19,7 @@
 //! The runtime resolves a persisted `AudioDeviceRef` to a [`CaptureSource`] and
 //! calls [`open`]; nothing above this module knows which backend it got.
 
+mod clock;
 mod cpal_input;
 
 #[cfg_attr(target_os = "macos", path = "process_tap.rs")]
@@ -29,9 +30,10 @@ pub use cpal_input::{AudioCaptureConfig, AudioCaptureDevice, AudioDeviceInfo};
 
 use crate::directory::TapHandle;
 
-/// Ring buffer consumer type for reading captured audio samples. Interleaved
-/// Float32, `channels`-wide (see [`CaptureBackend::channels`]).
-pub type AudioConsumer = ringbuf::HeapCons<f32>;
+/// Stamped stream consumer for reading captured audio. Interleaved Float32,
+/// `channels`-wide (see [`CaptureBackend::channels`]).
+pub type AudioConsumer = manifold_core::audio_stream::AudioStreamConsumer;
+pub use manifold_core::audio_stream::{AudioStreamProducer, AudioStreamRead, audio_stream};
 
 /// A live audio capture stream, source-agnostic.
 ///

@@ -10,7 +10,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::effect_graph_def::{
-    BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef, SerializedParamValue,
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef, SerializedParamValue,
+    StringBindingDef,
 };
 use crate::id::NodeId;
 
@@ -128,11 +129,34 @@ pub struct SceneModifierRecipe {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preparation_params: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub impulses: Vec<SceneImpulseRecipe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<SceneModifierStageDef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub initializers: Vec<SceneNodeInitializer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calibrations: Vec<SceneParamCalibration>,
+    /// Optional recipe metadata for a modifier that releases static fragments
+    /// on a trigger. Kept optional so existing recipes remain byte-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shatter: Option<SceneShatterRecipe>,
+}
+
+/// Declaration of an event-only parameter captured from a local vector field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneImpulseRecipe {
+    pub param_id: String,
+    pub field: SceneNodeRef,
+    pub port: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneShatterRecipe {
+    pub fragments_param: String,
+    pub trigger_node: NodeId,
+    pub trigger_port: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +230,27 @@ pub enum SceneEndpoint {
     Transform,
     Instances,
     Vertices,
+    Acceleration,
+}
+
+/// True when a recipe writes only physical acceleration endpoints.
+pub fn is_force_recipe(graph: &EffectGraphDef) -> bool {
+    let Some(recipe) = graph
+        .preset_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.scene_modifier.as_ref())
+    else {
+        return false;
+    };
+    let mut has_acceleration = false;
+    for output in recipe.stages.iter().flat_map(|stage| &stage.outputs) {
+        if output.endpoint == SceneEndpoint::Acceleration {
+            has_acceleration = true;
+        } else {
+            return false;
+        }
+    }
+    has_acceleration
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -717,6 +762,10 @@ fn validate_def(
         validate_recipe(
             recipe,
             metadata.map(|meta| meta.params.as_slice()).unwrap_or(&[]),
+            metadata.map(|meta| meta.bindings.as_slice()).unwrap_or(&[]),
+            metadata
+                .map(|meta| meta.string_bindings.as_slice())
+                .unwrap_or(&[]),
             path,
         )?;
     } else if recipe_required {
@@ -825,6 +874,8 @@ fn validate_def(
 fn validate_recipe(
     recipe: &SceneModifierRecipe,
     params: &[ParamSpecDef],
+    bindings: &[BindingDef],
+    string_bindings: &[StringBindingDef],
     path: &str,
 ) -> Result<(), SceneModifierSchemaError> {
     if recipe.schema_version != SCENE_MODIFIER_RECIPE_VERSION {
@@ -863,6 +914,79 @@ fn validate_recipe(
             return Err(SceneModifierSchemaError::InvalidRecipe {
                 path: format!("{path}.presetMetadata.params.{id}"),
                 detail: "parameter default must lie within min/max".into(),
+            });
+        }
+    }
+    if let Some(shatter) = &recipe.shatter {
+        if shatter.fragments_param.is_empty()
+            || !preparation.contains(&shatter.fragments_param)
+            || find_param(params, &shatter.fragments_param).is_none()
+        {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!(
+                    "{path}.presetMetadata.sceneModifier.shatter.fragmentsParam"
+                ),
+                detail: "fragmentsParam must name a declared preparation parameter".into(),
+            });
+        }
+        if !preparation.contains(&recipe.enabled_param) {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{path}.presetMetadata.sceneModifier.enabledParam"),
+                detail: "Shatter enabledParam must be a preparation parameter".into(),
+            });
+        }
+        if shatter.trigger_node.is_empty() || shatter.trigger_port.trim().is_empty() {
+            return Err(SceneModifierSchemaError::InvalidRecipe {
+                path: format!("{path}.presetMetadata.sceneModifier.shatter"),
+                detail: "Shatter trigger node and port must be nonempty".into(),
+            });
+        }
+    }
+    let mut impulse_ids = BTreeSet::new();
+    for (index, impulse) in recipe.impulses.iter().enumerate() {
+        let impulse_path = format!("{path}.presetMetadata.sceneModifier.impulses[{index}]");
+        if impulse.param_id.trim().is_empty() || !impulse_ids.insert(&impulse.param_id) {
+            return Err(SceneModifierSchemaError::DuplicateIdentity {
+                path: format!("{impulse_path}.paramId"),
+                detail: "impulse parameter ids must be nonempty and unique".into(),
+            });
+        }
+        let Some(param) = find_param(params, &impulse.param_id) else {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{impulse_path}.paramId"),
+                detail: "impulse parameter must be declared in preset metadata".into(),
+            });
+        };
+        if !param.is_trigger {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{impulse_path}.paramId"),
+                detail: "impulse parameter must be declared as a trigger".into(),
+            });
+        }
+        if impulse.param_id == recipe.enabled_param || preparation.contains(&impulse.param_id) {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{impulse_path}.paramId"),
+                detail: "impulse parameter cannot be enabled or preparation-only".into(),
+            });
+        }
+        if bindings
+            .iter()
+            .any(|binding| binding.id == impulse.param_id)
+            || string_bindings
+                .iter()
+                .any(|binding| binding.id == impulse.param_id)
+        {
+            return Err(SceneModifierSchemaError::InvalidBinding {
+                path: format!("{impulse_path}.paramId"),
+                detail: "impulse parameter cannot have an ordinary numeric or string binding"
+                    .into(),
+            });
+        }
+        check_ref(&format!("{impulse_path}.field"), &impulse.field)?;
+        if impulse.port.trim().is_empty() {
+            return Err(SceneModifierSchemaError::InvalidRecipe {
+                path: format!("{impulse_path}.port"),
+                detail: "impulse port must be nonempty".into(),
             });
         }
     }
@@ -1005,8 +1129,188 @@ mod tests {
         let wire = serde_json::to_value(&def).expect("scene modifier serializes");
         assert_eq!(wire["version"], 3);
         assert_eq!(wire["presetMetadata"]["sceneModifier"]["schemaVersion"], 1);
+        assert!(
+            !wire["presetMetadata"]["sceneModifier"]
+                .as_object()
+                .unwrap()
+                .contains_key("impulses")
+        );
         let back: EffectGraphDef = serde_json::from_value(wire).expect("scene modifier reparses");
         assert_eq!(def, back);
+    }
+
+    #[test]
+    fn scene_modifier_impulse_round_trips_with_default_compatibility() {
+        let mut recipe = recipe_json();
+        recipe["impulses"] = json!([{
+            "paramId": "fire",
+            "field": {"scope": ["group-id"], "node": "event-field"},
+            "port": "events"
+        }]);
+        let mut raw = graph_json(Some(recipe), json!([]));
+        raw["presetMetadata"]["params"] = json!([
+            {"id": "enabled", "name": "Enabled", "min": 0.0,
+             "max": 1.0, "defaultValue": 1.0},
+            {"id": "fire", "name": "Fire", "min": 0.0,
+             "max": 1.0, "defaultValue": 0.0, "isTrigger": true}
+        ]);
+        let def: EffectGraphDef = serde_json::from_value(raw).expect("impulse fixture parses");
+        validate_scene_modifier_schema(&def).expect("impulse declaration validates");
+        let wire = serde_json::to_value(&def).expect("impulse serializes");
+        assert_eq!(
+            wire["presetMetadata"]["sceneModifier"]["impulses"][0]["paramId"],
+            "fire"
+        );
+        assert_eq!(
+            wire["presetMetadata"]["sceneModifier"]["impulses"][0]["field"]["scope"][0],
+            "group-id"
+        );
+        let back: EffectGraphDef = serde_json::from_value(wire).expect("impulse reparses");
+        assert_eq!(def, back);
+    }
+
+    #[test]
+    fn scene_modifier_impulses_reject_invalid_declarations_and_bindings() {
+        let mut invalid = impulse_fixture();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .impulses[0]
+            .field
+            .node = NodeId::new("");
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::MissingTarget { .. })
+        ));
+
+        let mut invalid = impulse_fixture();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .impulses[0]
+            .port = "  ".into();
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::InvalidRecipe { .. })
+        ));
+
+        let mut invalid = impulse_fixture();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .impulses
+            .push(SceneImpulseRecipe {
+                param_id: "fire".into(),
+                field: SceneNodeRef {
+                    scope: Vec::new(),
+                    node: NodeId::new("other-field"),
+                },
+                port: "events".into(),
+            });
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::DuplicateIdentity { .. })
+        ));
+
+        let mut invalid = impulse_fixture();
+        let metadata = invalid.preset_metadata.as_mut().unwrap();
+        metadata.bindings.push(BindingDef {
+            id: "fire".into(),
+            label: "Fire".into(),
+            default_value: 0.0,
+            target: BindingTarget::Node {
+                node_id: NodeId::new("event-field"),
+                param: "value".into(),
+            },
+            convert: ParamConvert::Float,
+            user_added: false,
+            scale: 1.0,
+            offset: 0.0,
+            default_mirrors_node_param: false,
+        });
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::InvalidBinding { .. })
+        ));
+
+        let mut invalid = impulse_fixture();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .string_bindings
+            .push(crate::effect_graph_def::StringBindingDef {
+                id: "fire".into(),
+                label: "Fire".into(),
+                default_value: String::new(),
+                target: BindingTarget::Node {
+                    node_id: NodeId::new("event-field"),
+                    param: "value".into(),
+                },
+            });
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::InvalidBinding { .. })
+        ));
+
+        let mut invalid = impulse_fixture();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .scene_modifier
+            .as_mut()
+            .unwrap()
+            .preparation_params
+            .push("fire".into());
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::InvalidBinding { .. })
+        ));
+
+        let mut invalid = impulse_fixture();
+        invalid
+            .preset_metadata
+            .as_mut()
+            .unwrap()
+            .params
+            .iter_mut()
+            .find(|param| param.id == "fire")
+            .unwrap()
+            .is_trigger = false;
+        assert!(matches!(
+            validate_scene_modifier_schema(&invalid),
+            Err(SceneModifierSchemaError::InvalidBinding { .. })
+        ));
+    }
+
+    fn impulse_fixture() -> EffectGraphDef {
+        let mut recipe = recipe_json();
+        recipe["impulses"] = json!([{
+            "paramId": "fire",
+            "field": {"node": "event-field"},
+            "port": "events"
+        }]);
+        let mut raw = graph_json(Some(recipe), json!([]));
+        raw["presetMetadata"]["params"] = json!([
+            {"id": "enabled", "name": "Enabled", "min": 0.0,
+             "max": 1.0, "defaultValue": 1.0},
+            {"id": "fire", "name": "Fire", "min": 0.0,
+             "max": 1.0, "defaultValue": 0.0, "isTrigger": true}
+        ]);
+        serde_json::from_value(raw).expect("impulse fixture parses")
     }
 
     #[test]

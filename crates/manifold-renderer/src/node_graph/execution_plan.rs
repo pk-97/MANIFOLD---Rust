@@ -26,6 +26,7 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevisionRule};
+use crate::node_graph::physics_scene::{coupled_execution_order, CoupledSceneSteps};
 use crate::node_graph::ports::{KnownItem, PortType};
 use crate::node_graph::validation::{GraphError, topological_sort, validate};
 
@@ -169,6 +170,8 @@ pub struct ExecutionPlan {
     /// non-stateful nodes here keeps the late pass cost proportional
     /// to the number of feedback / accumulator nodes in the graph.
     late_capture_steps: Vec<usize>,
+    /// Coupled fluid/rigid scene participants in final execution-step order.
+    coupled_scenes: Vec<CoupledSceneSteps>,
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2: plan-compiled mesh revision
     /// rules, indexed by `ResourceId`, parallel to `resource_types`.
     /// `Some` only for outputs with the `MeshVertex` channel layout —
@@ -307,6 +310,10 @@ impl ExecutionPlan {
         &self.late_capture_steps
     }
 
+    pub(crate) fn coupled_scenes(&self) -> &[CoupledSceneSteps] {
+        &self.coupled_scenes
+    }
+
     /// Profiling-only: a sub-plan containing just the first `k` execution
     /// steps. Steps are topologically ordered, so `[0..k]` is always a valid
     /// executable prefix — every dependency of a kept step is also kept.
@@ -323,11 +330,18 @@ impl ExecutionPlan {
     /// steps via the marginal `time[k] - time[k-1]`. NOT used on the live
     /// render path.
     pub fn truncated(&self, k: usize) -> ExecutionPlan {
-        let k = k.min(self.steps.len());
+        let mut k = k.min(self.steps.len());
+        for pair in &self.coupled_scenes {
+            if k > pair.fluid_step && k <= pair.rigid_step {
+                k = pair.fluid_step;
+                break;
+            }
+        }
         let mut p = self.clone();
         p.steps.truncate(k);
         p.hoistable_steps.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
+        p.coupled_scenes.retain(|pair| pair.rigid_step < k);
         p
     }
 }
@@ -383,16 +397,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // applies when at least one root exists — graphs without any
     // (most unit-test fixtures) fall back to running every node.
     let full_order = topological_sort(graph)?;
-    let has_root = graph.nodes().any(|inst| inst.node.is_liveness_root());
-    let order: Vec<NodeInstanceId> = if has_root {
-        let live = crate::node_graph::validation::reachable_from_liveness_roots(graph);
-        full_order
-            .into_iter()
-            .filter(|id| live.contains(id))
-            .collect()
-    } else {
-        full_order
-    };
+    let has_root = graph.nodes().any(|inst| graph.is_liveness_root(inst.id));
+    let (order, coupled_scenes) =
+        coupled_execution_order(graph, &full_order, has_root)?;
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.
@@ -416,6 +423,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         ahash::AHashSet::default();
     for w in graph.wires() {
         consumed_outputs.insert((w.from.0, std::borrow::Cow::Borrowed(w.from.1)));
+    }
+    for (node, port) in graph.external_outputs() {
+        consumed_outputs.insert((node, std::borrow::Cow::Owned(port.to_owned())));
     }
     // RAYTRACING_DESIGN.md D14: fold each node's param-driven forced
     // outputs (RT-enabled `render_scene`'s `depth`/`velocity`) into the
@@ -470,6 +480,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // Non-Texture2D resources always get `None`.
     let mut resource_canvas_scales: Vec<Option<(u32, u32)>> = Vec::new();
     let mut resource_canvas_max_dims: Vec<Option<(u32, u32, u32)>> = Vec::new();
+    let mut external_resources: Vec<ResourceId> = Vec::new();
     for &node_id in &order {
         let inst = graph
             .get_node(node_id)
@@ -553,6 +564,11 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             }
             let id = ResourceId(resource_types.len() as u32);
             output_resources.insert((node_id, output_port.name.clone()), id);
+            if graph.external_outputs().any(|(node, port)| {
+                node == node_id && port == output_port.name.as_ref()
+            }) {
+                external_resources.push(id);
+            }
             resource_types.push(output_port.ty);
             // SCENE_MODIFIER_RT_DESIGN.md §3.1/3.2: compile the producer's
             // mesh revision rule for MeshVertex-layout outputs only; every
@@ -1020,6 +1036,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         }
     }
     provided_texture_resources.sort();
+    held.extend(external_resources);
     for res_id in &held {
         last_reader.remove(res_id);
     }
@@ -1072,6 +1089,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         provided_texture_resources,
         hoistable_steps,
         late_capture_steps,
+        coupled_scenes,
         mesh_rules,
     })
 }
@@ -1244,6 +1262,28 @@ mod tests {
             kind: PortKind::Input,
             required,
         }
+    }
+
+    #[test]
+    fn external_output_is_compiled_and_held_without_a_wire() {
+        let mut graph = Graph::new();
+        let image = graph.add_node(Box::new(crate::node_graph::Source::new()));
+        let out = graph.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        graph.connect((image, "out"), (out, "in")).unwrap();
+        let source = graph.add_node(Box::new(TestNode::new(
+            "field_source",
+            vec![],
+            vec![output("field", PortType::VectorField)],
+        )));
+        assert!(compile(&graph).unwrap().steps().iter().all(|step| step.node != source));
+        graph.add_external_output(source, "field").unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let step = plan.steps().iter().find(|step| step.node == source).unwrap();
+        let resource = step.outputs[0].1;
+        assert_eq!(step.outputs, vec![("field", resource)]);
+        assert!(plan.held_resources().contains(&resource));
+        assert!(plan.steps().iter().all(|step| !step.free_after.contains(&resource)));
     }
 
     #[test]

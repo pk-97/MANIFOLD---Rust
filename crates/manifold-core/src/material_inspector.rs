@@ -88,6 +88,7 @@ pub enum MaterialColour {
     Emission,
     Sheen,
     Attenuation,
+    VolumeScattering,
     Subsurface,
     Translucency,
 }

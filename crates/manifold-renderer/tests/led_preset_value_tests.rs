@@ -161,6 +161,7 @@ impl LedPresetFixture {
             time: ctx.time,
             beat: beats,
             dt: DT,
+            project_tempo: None,
             frame_count: self.frame_count,
             compositor_dirty: true,
             clips: &clips,

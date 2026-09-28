@@ -88,13 +88,17 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
             scale: ["scale_x", "scale_y", "scale_z"].map(|p| scalar(id - 1, p)),
             billboard: false,
         },
+        enabled: true,
         shape: scalar(id, "shape") as u32,
         kind: scalar(id, "motion") as u32,
         mass: scalar(id, "mass"),
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),
+        collider: None,
+        fragment_parent: None,
+        release_count: 0.0,
     };
-    let mut bodies = [None; MAX_BODIES];
+    let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
         bodies[slot] = Some(body(id));
     }
@@ -102,8 +106,8 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
     let mut sim = RigidSimulation::default();
     let advance = |sim: &mut RigidSimulation, frame| {
         sim.advance_with_copy_layout(
-            bodies,
-            prototype,
+            bodies.clone(),
+            prototype.clone(),
             scalar(40, "copy_count"),
             scalar(40, "copy_spacing"),
             scalar(40, "copy_columns"),

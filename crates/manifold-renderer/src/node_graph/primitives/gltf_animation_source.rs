@@ -61,9 +61,10 @@ use super::gltf_anim_shared::{
     LOOP_MODES, LoopMode, TriggerLatch, clip_duration, resolve_progress, sample_quat_slice, sample_vec3_slice,
 };
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::gltf_anim_cache::{AnimSetLookup, GltfAnimSet, get_or_spawn_load};
+use crate::node_graph::gltf_anim_cache::{GltfAnimSet, LoadedAnimSet, spawn_load};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue, TableData};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::source_asset::loaded_identity;
 
 crate::primitive! {
     name: GltfAnimationSource,
@@ -244,8 +245,9 @@ crate::primitive! {
         // GLTF_ANIM_RUNTIME_V2_DESIGN.md P2: same key-gated background-load
         // shape node.gltf_skeleton_pose's P1 rewire introduced.
         last_path: String = String::new(),
-        anim_set: Option<Arc<GltfAnimSet>> = None,
-        pending_load: Option<mpsc::Receiver<Result<Arc<GltfAnimSet>, String>>> = None,
+        anim_set: Option<Arc<LoadedAnimSet>> = None,
+        pending_load: Option<mpsc::Receiver<Result<Arc<LoadedAnimSet>, String>>> = None,
+        load_error: Option<String> = None,
     },
 }
 
@@ -415,12 +417,10 @@ impl Primitive for GltfAnimationSource {
             self.last_path = path.clone();
             self.anim_set = None;
             self.pending_load = None;
+            self.load_error = None;
         }
-        if self.anim_set.is_none() && self.pending_load.is_none() && !path.is_empty() {
-            match get_or_spawn_load(std::path::Path::new(&path)) {
-                AnimSetLookup::Ready(set) => self.anim_set = Some(set),
-                AnimSetLookup::Pending(rx) => self.pending_load = Some(rx),
-            }
+        if self.anim_set.is_none() && self.pending_load.is_none() && self.load_error.is_none() && !path.is_empty() {
+            self.pending_load = Some(spawn_load(std::path::Path::new(&path)));
         }
         if let Some(rx) = &self.pending_load {
             match rx.try_recv() {
@@ -430,11 +430,14 @@ impl Primitive for GltfAnimationSource {
                 }
                 Ok(Err(e)) => {
                     log::error!("node.gltf_animation_source: {e}");
+                    self.load_error = Some(e);
                     self.pending_load = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    log::error!("node.gltf_animation_source: background load channel disconnected");
+                    let error = "background load channel disconnected".to_owned();
+                    log::error!("node.gltf_animation_source: {error}");
+                    self.load_error = Some(error);
                     self.pending_load = None;
                 }
             }
@@ -497,6 +500,22 @@ impl Primitive for GltfAnimationSource {
 
     fn clear_state(&mut self) {
         self.trigger_latch.clear();
+        self.load_error = None;
+    }
+
+    fn warmup_pending(&self) -> bool {
+        self.pending_load.is_some()
+    }
+
+    fn source_asset_paths(&self) -> &'static [&'static str] {
+        &["path"]
+    }
+
+    fn source_asset_identity(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> crate::node_graph::source_asset::SourceAssetIdentity<'_> {
+        loaded_identity(params, "path", &self.last_path, self.anim_set.as_deref(), self.load_error.as_deref())
     }
 
     fn is_trigger_latch(&self) -> bool {
@@ -646,7 +665,7 @@ mod tests {
         // matches `last_path`'s own `String::new()` default, so `run()`'s
         // `path != self.last_path` check never fires and never resets
         // this pre-seeded `anim_set`.
-        prim.anim_set = anim_set.map(Arc::new);
+        prim.anim_set = anim_set.map(|set| Arc::new(set.into()));
 
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
@@ -958,7 +977,7 @@ mod tests {
                 0,
                 &[(0.0, [0.0, 2.52, 0.0]), (0.4, [0.0, 2.52, 0.0]), (1.0, [0.0, 0.0, 0.0])],
             );
-            anim_prim.anim_set = Some(Arc::new(anim_set_one_clip(vec![channel], 1.0, 1)));
+            anim_prim.anim_set = Some(Arc::new(anim_set_one_clip(vec![channel], 1.0, 1).into()));
             let anim = g.add_node(Box::new(anim_prim));
             g.set_param(anim, "duration_s", ParamValue::Float(1.0)).unwrap();
             g.set_param(anim, "translation_node", ParamValue::Float(0.0)).unwrap();
@@ -1017,7 +1036,7 @@ mod tests {
         params.insert(Cow::Borrowed("translation_node"), ParamValue::Float(0.0));
 
         let mut prim = GltfAnimationSource::new();
-        prim.anim_set = Some(Arc::new(anim_set_one_clip(vec![channel], 1.0, 1)));
+        prim.anim_set = Some(Arc::new(anim_set_one_clip(vec![channel], 1.0, 1).into()));
         let run_frame = |prim: &mut GltfAnimationSource, trigger: f32, time: FrameTime| -> f32 {
             let mut backend = MockBackend::new();
             let out_slot = backend.acquire(ResourceId(0), PortType::Scalar(ScalarType::F32), None, (0, 0));
@@ -1146,7 +1165,7 @@ mod tests {
             &mut object_scratch,
         );
         let mut prim = GltfAnimationSource::new();
-        prim.anim_set = Some(Arc::new(anim_set));
+        prim.anim_set = Some(Arc::new(anim_set.into()));
         let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
         Primitive::run(&mut prim, &mut ctx);
         for (slot, value) in scalar_scratch.drain(..) {
@@ -1163,6 +1182,95 @@ mod tests {
         let prim = GltfAnimationSource::new();
         let node: &dyn EffectNode = &prim;
         assert!(node.is_trigger_latch());
+    }
+
+    fn identity_params(path: &str) -> ParamValues {
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
+        params
+    }
+
+    #[test]
+    fn source_identity_tracks_ready_pending_and_failed_states() {
+        let mut prim = GltfAnimationSource::new();
+        let loaded: Arc<LoadedAnimSet> = Arc::new(anim_set_one_clip(Vec::new(), 1.0, 1).into());
+        let fingerprint = loaded.identity();
+        prim.last_path = "asset-a.glb".to_owned();
+        prim.anim_set = Some(loaded);
+
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("asset-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+        );
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("asset-b.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Pending
+        );
+
+        prim.load_error = Some("missing animation asset".to_owned());
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("asset-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Failed("missing animation asset")
+        );
+
+        Primitive::clear_state(&mut prim);
+        assert!(prim.load_error.is_none());
+        assert_eq!(prim.anim_set.as_ref().map(|set| set.identity()), Some(fingerprint));
+        assert_eq!(
+            Primitive::source_asset_identity(&prim, &identity_params("asset-a.glb")),
+            crate::node_graph::source_asset::SourceAssetIdentity::Ready(fingerprint)
+        );
+    }
+
+    fn run_loader_frame(prim: &mut GltfAnimationSource, path: &str) {
+        let backend = MockBackend::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("path"), ParamValue::String(Arc::new(path.to_owned())));
+        params.insert(Cow::Borrowed("duration_s"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("rate"), ParamValue::Float(1.0));
+        params.insert(Cow::Borrowed("translation_node"), ParamValue::Float(0.0));
+        params.insert(Cow::Borrowed("rotation_node"), ParamValue::Float(0.0));
+        params.insert(Cow::Borrowed("scale_node"), ParamValue::Float(0.0));
+        let inputs = NodeInputs::new(&[], &backend, &[]);
+        let mut scalar_scratch = Vec::new();
+        let mut camera_scratch = Vec::new();
+        let mut light_scratch = Vec::new();
+        let mut material_scratch = Vec::new();
+        let mut transform_scratch = Vec::new();
+        let mut atmosphere_scratch = Vec::new();
+        let mut render_mode_scratch = Vec::new();
+        let mut object_scratch = Vec::new();
+        let outputs = NodeOutputs::new(
+            &[],
+            &backend,
+            &mut scalar_scratch,
+            &mut camera_scratch,
+            &mut light_scratch,
+            &mut material_scratch,
+            &mut transform_scratch,
+            &mut atmosphere_scratch,
+            &mut render_mode_scratch,
+            &mut object_scratch,
+        );
+        let mut ctx = EffectNodeContext::new(frame_time(0.0, 0.0), &params, inputs, outputs, None);
+        Primitive::run(prim, &mut ctx);
+    }
+
+    #[test]
+    fn failed_run_is_retained_without_retrying_on_the_next_frame() {
+        let mut prim = GltfAnimationSource::new();
+        let path = "/definitely/missing/manifold-animation-source.glb";
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("injected animation load failure".to_owned())).unwrap();
+        prim.last_path = path.to_owned();
+        prim.pending_load = Some(rx);
+
+        run_loader_frame(&mut prim, path);
+        let error = prim.load_error.clone().expect("the queued load failure should be consumed");
+        assert!(!Primitive::warmup_pending(&prim));
+        run_loader_frame(&mut prim, path);
+        assert_eq!(prim.load_error.as_deref(), Some(error.as_str()));
+        assert!(!Primitive::warmup_pending(&prim), "latched failure must not spawn a replacement load");
     }
 
     #[test]

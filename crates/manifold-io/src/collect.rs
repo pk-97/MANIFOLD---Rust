@@ -25,9 +25,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+mod mesh_bundle;
+
 /// Which media family an asset belongs to — the `Media/` subfolder it collects
 /// into (D2): `Media/Video`, `Media/Audio`, `Media/Meshes`, `Media/HDRIs`,
-/// `Media/Images`.
+/// `Media/Images`, `Media/Physics`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     Video,
@@ -35,6 +37,7 @@ pub enum AssetKind {
     Mesh,
     Hdri,
     Images,
+    Physics,
 }
 
 /// Where a collected asset lives in the project, used to re-point the stored
@@ -52,8 +55,9 @@ pub enum AssetTarget {
     ImageClip { layer_id: LayerId, clip_id: ClipId },
     /// A string param on a generator layer, keyed by param id. The value lives
     /// per-clip (`TimelineClip.string_params`) with a fallback to the
-    /// preset-def default.
-    StringParam { layer_id: LayerId, key: String },
+    /// preset-def default. `load` preserves whether the bound node reads a
+    /// file or a folder when paths are re-linked after a move.
+    StringParam { layer_id: LayerId, key: String, load: NodeFileLoad },
     /// A string param stored in an authored scene-modifier snapshot on a
     /// generator layer. The local default is the source of truth; host
     /// bindings are collected through `StringParam` and take precedence.
@@ -185,6 +189,7 @@ pub fn collect_asset_paths(project: &Project) -> Vec<AssetRef> {
                     target: AssetTarget::StringParam {
                         layer_id: layer.layer_id.clone(),
                         key: key.clone(),
+                        load: *load,
                     },
                 });
             }
@@ -386,14 +391,17 @@ fn kind_of(load: NodeFileLoad) -> AssetKind {
         NodeFileLoad::File(AssetFamily::Images) | NodeFileLoad::Folder(AssetFamily::Images) => {
             AssetKind::Images
         }
+        NodeFileLoad::File(AssetFamily::Physics) | NodeFileLoad::Folder(AssetFamily::Physics) => {
+            AssetKind::Physics
+        }
     }
 }
 
 // ── Collect All and Save (D6) ──────────────────────────────────────
 
 /// What one Collect All and Save pass did (PROJECT_FOLDERS_DESIGN.md D6).
-/// `copied` counts unique files physically written (identical content deduped
-/// by full SHA-256), `already_local` counts refs already inside the project
+/// `copied` counts unique files or asset directories physically written
+/// (file/bundle content deduped by full SHA-256), `already_local` counts refs already inside the project
 /// folder, `re_pointed` counts refs whose stored path was rewritten to the
 /// in-folder form.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -458,8 +466,12 @@ pub fn collect_all_and_save(
     // the first copy landed at. Later refs with the same content re-point to
     // the same file instead of copying it again.
     let mut copied_files: HashMap<(AssetKind, [u8; 32]), PathBuf> = HashMap::new();
-    // Directories (layer video folders) have no content-hash dedup; dedup by
-    // canonical source path so two layers sharing one folder copy it once.
+    // Model dependencies participate in identity: identical glTF JSON can
+    // refer to different buffers or textures in different source directories.
+    let mut copied_meshes: HashMap<[u8; 32], PathBuf> = HashMap::new();
+    // Directories have no content-hash dedup; dedup by canonical source path
+    // so two refs sharing one folder copy it once. Distinct source directories
+    // with the same basename get separate destinations.
     let mut copied_dirs: HashMap<PathBuf, PathBuf> = HashMap::new();
 
     for r in &refs {
@@ -479,7 +491,8 @@ pub fn collect_all_and_save(
                     .file_name()
                     .map(|n| n.to_os_string())
                     .unwrap_or_else(|| "folder".into());
-                let target = media_family_dir(&project_dir, r.kind).join(name);
+                let family_dir = media_family_dir(&project_dir, r.kind);
+                let target = reserve_directory_target(&family_dir, &name)?;
                 let mut bytes = 0u64;
                 copy_dir_recursive(src, &target, &mut bytes)
                     .map_err(|e| CollectError::Io(format!("copy {}: {e}", src.display())))?;
@@ -494,6 +507,29 @@ pub fn collect_all_and_save(
 
         if !src.is_file() {
             report.missing += 1;
+            continue;
+        }
+
+        if r.kind == AssetKind::Mesh
+            && let Some(bundle) = mesh_bundle::MeshBundle::read(src)?
+        {
+            if path_is_inside(src, &project_dir) && bundle.is_portable_in(&project_dir) {
+                report.already_local += 1;
+                continue;
+            }
+            let target = if let Some(existing) = copied_meshes.get(&bundle.hash) {
+                existing.clone()
+            } else {
+                let family_dir = media_family_dir(&project_dir, r.kind);
+                let name = src.file_stem().unwrap_or_else(|| std::ffi::OsStr::new("model"));
+                let directory = reserve_directory_target(&family_dir, name)?;
+                let (target, bytes) = bundle.copy_to(&directory)?;
+                report.copied += 1;
+                report.bytes_copied += bytes;
+                copied_meshes.insert(bundle.hash, target.clone());
+                target
+            };
+            re_point(project, &r.target, src, &target, &project_dir, &mut report);
             continue;
         }
 
@@ -537,6 +573,7 @@ fn media_family_dir(project_dir: &Path, kind: AssetKind) -> PathBuf {
         AssetKind::Mesh => "Meshes",
         AssetKind::Hdri => "HDRIs",
         AssetKind::Images => "Images",
+        AssetKind::Physics => "Physics",
     };
     project_dir.join("Media").join(sub)
 }
@@ -595,6 +632,28 @@ fn resolve_target_path(dir: &Path, name: &std::ffi::OsStr, new_hash: [u8; 32]) -
         Path::new(name).display(),
         dir.display()
     )))
+}
+
+/// Reserve a destination for a directory inside `dir`. A directory already
+/// present there may belong to a different source with the same basename, so
+/// never merge into it. Atomic creation also handles concurrent collectors and
+/// existing dangling symlinks without overwriting their destinations.
+fn reserve_directory_target(dir: &Path, name: &std::ffi::OsStr) -> Result<PathBuf, CollectError> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| CollectError::Io(format!("create {}: {e}", dir.display())))?;
+    for i in 0u32.. {
+        let mut numbered = name.to_os_string();
+        if i != 0 {
+            numbered.push(format!("_{i}"));
+        }
+        let target = dir.join(numbered);
+        match std::fs::create_dir(&target) {
+            Ok(()) => return Ok(target),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+            Err(error) => return Err(CollectError::Io(format!("create {}: {error}", target.display()))),
+        }
+    }
+    Err(CollectError::Io(format!("no free directory name in {}", dir.display())))
 }
 
 /// Copy a directory tree (`src` → `dst`), adding bytes written to `bytes`.
@@ -670,7 +729,7 @@ fn re_point(
                 false
             }
         }
-        AssetTarget::StringParam { layer_id, key } => {
+        AssetTarget::StringParam { layer_id, key, .. } => {
             re_point_string_param(project, layer_id, key, &old_str, &new_str)
         }
         AssetTarget::SceneModifierStringParam { .. } => {
@@ -773,8 +832,8 @@ pub(crate) fn re_point_scene_modifier_asset(
 /// `old` are rewritten to `new`: an existing per-clip override is updated in
 /// place; a value that came only from the preset-def default is materialized
 /// as a per-clip override. A calibrated scene source additionally rewrites its
-/// owned graph snapshot and source hash together; ordinary preset defaults
-/// retain their existing ownership.
+/// owned graph snapshot and source hash together. A layer with no clips gets
+/// an owned graph default, since it has no per-clip override home yet.
 pub(crate) fn re_point_string_param(
     project: &mut Project,
     layer_id: &LayerId,
@@ -813,11 +872,34 @@ pub(crate) fn re_point_string_param(
             .map(|(_, default, _)| default)
     };
 
+    let empty_layer_graph = if def_default.as_deref() == Some(old) {
+        project.timeline.find_layer_by_id(layer_id.as_str())
+            .filter(|(_, layer)| layer.clips.is_empty())
+            .and_then(|(_, layer)| layer.gen_params())
+            .and_then(|inst| resolve_graph_def(project, inst))
+            .cloned()
+            .map(|mut graph| {
+                if let Some(meta) = &mut graph.preset_metadata {
+                    for spec in &mut meta.string_params {
+                        if spec.id == key && spec.default_value == old {
+                            spec.default_value = new.to_owned();
+                        }
+                    }
+                    for binding in &mut meta.string_bindings {
+                        if binding.id == key && binding.default_value == old {
+                            binding.default_value = new.to_owned();
+                        }
+                    }
+                }
+                graph
+            })
+    } else { None };
+
     let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id.as_str()) else {
         return false;
     };
     let mut changed = false;
-    if let Some(graph) = relocated_graph
+    if let Some(graph) = relocated_graph.or(empty_layer_graph)
         && let Some(inst) = layer.gen_params_mut()
     {
         inst.graph = Some(graph);
@@ -872,6 +954,9 @@ mod tests {
     mod scene_modifier_relocation_tests {
         include!("collect/scene_modifier_relocation_tests.rs");
     }
+    mod gltf_dependency_tests {
+        include!("collect/gltf_dependency_tests.rs");
+    }
     use manifold_core::clip::TimelineClip;
     use manifold_core::effect_graph_def::{
         BindingTarget, EffectGraphDef, EffectGraphNode, PresetMetadata, StringBindingDef,
@@ -882,6 +967,14 @@ mod tests {
     use manifold_core::preset_type_id::PresetTypeId;
     use manifold_core::types::LayerType;
     use manifold_core::video::VideoClip;
+
+    fn empty_glb() -> Vec<u8> {
+        gltf::binary::Glb {
+            header: gltf::binary::Header { magic: *b"glTF", version: 2, length: 0 },
+            json: std::borrow::Cow::Borrowed(br#"{"asset":{"version":"2.0"}}"#),
+            bin: None,
+        }.to_vec().expect("valid empty GLB")
+    }
 
     fn sp(id: &str, default: &str, file_path: bool) -> StringParamSpecDef {
         StringParamSpecDef {
@@ -1062,7 +1155,7 @@ mod tests {
         let (project, layer_id, _) = scene_modifier_asset_project(true);
         let refs = collect_asset_paths(&project);
         assert!(refs.iter().any(|asset| {
-            matches!(&asset.target, AssetTarget::StringParam { layer_id: id, key } if id == &layer_id && key == "host_local_images")
+            matches!(&asset.target, AssetTarget::StringParam { layer_id: id, key, .. } if id == &layer_id && key == "host_local_images")
         }));
         assert!(!refs.iter().any(|asset| {
             matches!(&asset.target, AssetTarget::SceneModifierStringParam { .. })
@@ -1501,7 +1594,8 @@ mod tests {
         let glb_src = src_dir.join("azalea.glb");
         std::fs::write(&video_src, b"fake mp4 bytes").unwrap();
         std::fs::write(&audio_src, b"fake wav bytes").unwrap();
-        std::fs::write(&glb_src, b"fake glb bytes").unwrap();
+        let glb_bytes = empty_glb();
+        std::fs::write(&glb_src, &glb_bytes).unwrap();
 
         let video_before = super::sha256_file(&video_src).unwrap();
         let audio_before = super::sha256_file(&audio_src).unwrap();
@@ -1593,7 +1687,7 @@ mod tests {
         assert_eq!(report.re_pointed, 3, "all three refs re-pointed");
         assert_eq!(report.missing, 0);
         assert_eq!(report.already_local, 0);
-        assert_eq!(report.bytes_copied, 42, "sum of the three fixture file sizes");
+        assert_eq!(report.bytes_copied, 28 + glb_bytes.len() as u64, "sum of the three fixture file sizes");
 
         // Copy-only invariant: sources untouched.
         assert_eq!(super::sha256_file(&video_src).unwrap(), video_before);
@@ -1740,6 +1834,240 @@ mod tests {
             "re-pointed folder lives under Media/Images: {stored}"
         );
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn physics_project(cache_paths: &[&str]) -> Project {
+        let bindings = vec![StringBindingDef {
+            id: "cache_path".to_string(),
+            label: "Cache Path".to_string(),
+            default_value: cache_paths[0].to_string(),
+            target: BindingTarget::Node {
+                node_id: NodeId::new("fluid"),
+                param: "cache_path".to_string(),
+            },
+        }];
+        let mut project = Project::default();
+        project.upsert_embedded_preset(path_preset(
+            "physics",
+            vec![sp("cache_path", cache_paths[0], false)],
+            bindings,
+            vec![node("fluid", "node.fluid_surface")],
+        ));
+        let mut layer = Layer::new_generator("Fluid".into(), PresetTypeId::new("physics"), 0);
+        for (index, cache_path) in cache_paths.iter().enumerate() {
+            let mut clip = TimelineClip::new_generator(
+                manifold_core::Beats::from_f32(index as f32 * 8.0),
+                manifold_core::Beats::from_f32(8.0),
+            );
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("cache_path".to_string(), (*cache_path).to_string());
+            clip.string_params = Some(params);
+            layer.clips.push(clip);
+        }
+        project.timeline.layers.push(layer);
+        project
+    }
+
+    #[test]
+    fn physics_cache_collects_save_reload_and_preserves_take_files() {
+        let base = std::env::temp_dir().join(format!("manifold-physics-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let source = base.join("sources").join("take");
+        let project_dir = base.join("Show");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(source.join("take.json"), b"journal").unwrap();
+        std::fs::write(source.join("cache.bin"), b"paired cache").unwrap();
+        let source_path = source.to_string_lossy().to_string();
+        let mut project = physics_project(&[&source_path]);
+        let project_path = project_dir.join("Show.manifold");
+
+        let report = collect_all_and_save(&mut project, &project_path).unwrap();
+        let collected = project_dir.join("Media/Physics/take");
+        assert!(collected.join("take.json").is_file());
+        assert!(collected.join("cache.bin").is_file());
+        assert_eq!(report.copied, 1);
+        assert_eq!(report.re_pointed, 1);
+        assert_eq!(std::fs::read(source.join("take.json")).unwrap(), b"journal");
+        assert_eq!(std::fs::read(source.join("cache.bin")).unwrap(), b"paired cache");
+
+        let loaded = crate::loader::load_project(&project_path).unwrap();
+        let stored = loaded.timeline.layers[0].clips[0]
+            .string_params
+            .as_ref()
+            .unwrap()
+            .get("cache_path")
+            .unwrap();
+        assert!(Path::new(stored).is_dir(), "reloaded cache path: {stored}");
+        assert!(stored.ends_with("Media/Physics/take") || stored.ends_with("Media\\Physics\\take"));
+        crate::saver::save_project_v1(&project, &project_dir.join("Legacy.manifold")).unwrap();
+        // A copied project must use its own collected take even when the old
+        // project and original source are still accessible on this machine.
+        let copied_project = base.join("Copied Show");
+        copy_dir_recursive(&project_dir, &copied_project, &mut 0).unwrap();
+        let copied = crate::loader::load_project(&copied_project.join("Show.manifold")).unwrap();
+        let refs = collect_asset_paths(&copied);
+        assert_eq!(refs.len(), 1);
+        assert!(refs[0].path.starts_with(std::fs::canonicalize(&copied_project).unwrap()), "copied project still uses {:?}", refs[0].path);
+        let legacy = crate::loader::load_project(&copied_project.join("Legacy.manifold")).unwrap();
+        assert_eq!(collect_asset_paths(&legacy)[0].path, refs[0].path);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn physics_cache_empty_layer_collects_an_owned_default() {
+        let base = std::env::temp_dir().join(format!("manifold-physics-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let source = base.join("source/take");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("take-header.zst"), b"inputs").unwrap();
+        let mut project = physics_project(&[source.to_str().unwrap()]);
+        project.timeline.layers[0].clips.clear();
+        let embedded_before = project.embedded_presets[0].def.clone();
+        let original_dir = base.join("Show");
+        let report = collect_all_and_save(&mut project, &original_dir.join("Show.manifold")).unwrap();
+        assert_eq!(report.re_pointed, 1);
+        assert!(project.timeline.layers[0].clips.is_empty());
+        assert_eq!(project.embedded_presets[0].def, embedded_before);
+        let copied_dir = base.join("Copied");
+        copy_dir_recursive(&original_dir, &copied_dir, &mut 0).unwrap();
+        let copied = crate::loader::load_project(&copied_dir.join("Show.manifold")).unwrap();
+        assert!(copied.timeline.layers[0].clips.is_empty());
+        let refs = collect_asset_paths(&copied);
+        assert_eq!(refs.len(), 1);
+        assert!(refs[0].path.starts_with(std::fs::canonicalize(&copied_dir).unwrap()));
+        assert_eq!(std::fs::read(refs[0].path.join("take-header.zst")).unwrap(), b"inputs");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn physics_cache_resolution_handles_moved_and_missing_folders() {
+        let base = std::env::temp_dir().join(format!("manifold-physics-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let moved = base.join("moved").join("take");
+        let project_dir = base.join("Show");
+        std::fs::create_dir_all(&moved).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(moved.join("cache.bin"), b"cache").unwrap();
+        let missing = base.join("gone").join("take").to_string_lossy().to_string();
+        let mut project = physics_project(&[&missing]);
+        let project_path = project_dir.join("Show.manifold");
+        let result = PathResolver::resolve_all(&mut project, &project_path.to_string_lossy());
+        assert_eq!(result.resolved_count, 1, "moved cache folder should resolve: {result:?}");
+        assert_eq!(result.unresolved_count, 0);
+        let stored = project.timeline.layers[0].clips[0]
+            .string_params
+            .as_ref()
+            .unwrap()
+            .get("cache_path")
+            .unwrap();
+        assert_eq!(Path::new(stored), moved);
+
+        let missing = base
+            .join("still-gone")
+            .join("missing-take")
+            .to_string_lossy()
+            .to_string();
+        let mut missing_project = physics_project(&[&missing]);
+        let result = PathResolver::resolve_all(&mut missing_project, &project_path.to_string_lossy());
+        assert_eq!(result.resolved_count, 0);
+        assert_eq!(result.unresolved_count, 1);
+        assert_eq!(result.unresolved, vec![missing]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn physics_cache_modifier_local_and_host_bindings_collect_and_reload() {
+        for host_exposes in [false, true] {
+            let base = std::env::temp_dir().join(format!(
+                "manifold-physics-modifier-{}-{host_exposes}", std::process::id(),
+            ));
+            let _ = std::fs::remove_dir_all(&base);
+            let source = base.join("source/take");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(source.join("take-header.zst"), b"recorded inputs").unwrap();
+            let source_path = source.to_string_lossy().into_owned();
+            let (mut project, _, _) = scene_modifier_asset_project(host_exposes);
+            let host = &mut project.embedded_presets[0].def;
+            let local = &mut host.scene_modifiers[0].graph;
+            local.nodes[0].group.as_mut().unwrap().nodes[0].type_id = "node.fluid_surface".into();
+            let meta = local.preset_metadata.as_mut().unwrap();
+            // Outer parameter IDs are arbitrary: the binding's primitive and
+            // local parameter decide collection, rather than a special UI key.
+            meta.string_params[0].default_value = source_path.clone();
+            meta.string_bindings[0].default_value = source_path.clone();
+            let BindingTarget::Node { param, .. } = &mut meta.string_bindings[0].target else {
+                panic!("local fixture binding")
+            };
+            *param = "cache_path".into();
+            if host_exposes {
+                let meta = host.preset_metadata.as_mut().unwrap();
+                meta.string_params[0].default_value = source_path.clone();
+                meta.string_bindings[0].default_value = source_path;
+            }
+            let refs = collect_asset_paths(&project);
+            assert_eq!(refs.len(), 1);
+            assert_eq!(refs[0].kind, AssetKind::Physics);
+            assert_eq!(matches!(refs[0].target, AssetTarget::StringParam { .. }), host_exposes);
+            let project_path = base.join("Show/Show.manifold");
+            let report = collect_all_and_save(&mut project, &project_path).unwrap();
+            assert_eq!(report.copied, 1);
+            assert_eq!(report.re_pointed, 1);
+            let loaded = crate::loader::load_project(&project_path).unwrap();
+            let refs = collect_asset_paths(&loaded);
+            assert_eq!(refs.len(), 1);
+            assert_eq!(refs[0].kind, AssetKind::Physics);
+            assert_eq!(std::fs::read(refs[0].path.join("take-header.zst")).unwrap(), b"recorded inputs");
+            assert_eq!(std::fs::read(source.join("take-header.zst")).unwrap(), b"recorded inputs");
+            let copied_dir = base.join("Copied");
+            copy_dir_recursive(project_path.parent().unwrap(), &copied_dir, &mut 0).unwrap();
+            let copied = crate::loader::load_project(&copied_dir.join("Show.manifold")).unwrap();
+            let copied_refs = collect_asset_paths(&copied);
+            assert_eq!(copied_refs.len(), 1);
+            assert!(copied_refs[0].path.starts_with(std::fs::canonicalize(&copied_dir).unwrap()));
+            let _ = std::fs::remove_dir_all(base);
+        }
+    }
+
+    #[test]
+    fn physics_cache_same_basename_folders_get_distinct_destinations() {
+        let base = std::env::temp_dir().join(format!("manifold-physics-collision-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let first = base.join("one").join("take");
+        let second = base.join("two").join("take");
+        let project_dir = base.join("Show");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let existing = project_dir.join("Media/Physics/take");
+        std::fs::create_dir_all(&existing).unwrap();
+        std::fs::write(existing.join("existing.bin"), b"keep me").unwrap();
+        std::fs::write(first.join("cache.bin"), b"first").unwrap();
+        std::fs::write(second.join("cache.bin"), b"second").unwrap();
+        let first_path = first.to_string_lossy().to_string();
+        let second_path = second.to_string_lossy().to_string();
+        let mut project = physics_project(&[&first_path, &second_path]);
+        let project_path = project_dir.join("Show.manifold");
+        let report = collect_all_and_save(&mut project, &project_path).unwrap();
+
+        assert_eq!(report.copied, 2);
+        assert_eq!(std::fs::read(existing.join("existing.bin")).unwrap(), b"keep me");
+        assert_eq!(std::fs::read(project_dir.join("Media/Physics/take_1/cache.bin")).unwrap(), b"first");
+        assert_eq!(std::fs::read(project_dir.join("Media/Physics/take_2/cache.bin")).unwrap(), b"second");
+        assert_eq!(std::fs::read(first.join("cache.bin")).unwrap(), b"first");
+        assert_eq!(std::fs::read(second.join("cache.bin")).unwrap(), b"second");
+        let clips = &project.timeline.layers[0].clips;
+        let first_stored = clips[0].string_params.as_ref().unwrap()["cache_path"].clone();
+        let second_stored = clips[1].string_params.as_ref().unwrap()["cache_path"].clone();
+        assert_ne!(first_stored, second_stored);
+        assert!(first_stored.ends_with("Media/Physics/take_1") || first_stored.ends_with("Media\\Physics\\take_1"));
+        assert!(second_stored.ends_with("Media/Physics/take_2") || second_stored.ends_with("Media\\Physics\\take_2"));
+        let loaded = crate::loader::load_project(&project_path).unwrap();
+        for clip in &loaded.timeline.layers[0].clips {
+            let stored = clip.string_params.as_ref().unwrap().get("cache_path").unwrap();
+            assert!(Path::new(stored).is_dir(), "reloaded cache path: {stored}");
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

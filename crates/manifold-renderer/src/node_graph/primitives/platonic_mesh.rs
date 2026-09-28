@@ -13,6 +13,7 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline};
 use crate::generators::mesh_common::{MeshVertex, PLATONIC_SHAPES};
 use crate::generators::platonic_geometry::{platonic_mesh_upload_bytes, PLATONIC_MESH_CAPACITY};
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::mesh_source::MeshSource;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -26,6 +27,7 @@ crate::primitive! {
     },
     outputs: {
         vertices: Array(MeshVertex),
+        source: MeshSource,
     },
     params: [
         ParamDef {
@@ -81,6 +83,8 @@ impl Primitive for PlatonicMesh {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let shape = crate::node_graph::primitives::polytope_vertices::read_shape(ctx);
         let radius = ctx.scalar_or_param("radius", 1.0);
+        ctx.outputs
+            .set_mesh_source("source", MeshSource::Platonic { shape, radius });
         let Some(dst) = ctx.outputs.array("vertices") else {
             log::warn!("node.platonic_solid_mesh: no GpuBuffer bound to output port `vertices`");
             return;
@@ -159,8 +163,10 @@ mod tests {
         assert!(PlatonicMesh::INPUTS
             .iter()
             .all(|port| { !port.required && port.ty == PortType::Scalar(ScalarType::F32) }));
-        assert_eq!(PlatonicMesh::OUTPUTS.len(), 1);
+        assert_eq!(PlatonicMesh::OUTPUTS.len(), 2);
         assert_eq!(PlatonicMesh::OUTPUTS[0].name, "vertices");
+        assert_eq!(PlatonicMesh::OUTPUTS[1].name, "source");
+        assert_eq!(PlatonicMesh::OUTPUTS[1].ty, PortType::MeshSource);
         assert_eq!(PlatonicMesh::OUTPUTS[0].ty, PortType::Array(mesh));
         assert_eq!(
             PlatonicMesh::OUTPUTS[0].kind,

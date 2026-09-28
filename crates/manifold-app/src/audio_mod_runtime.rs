@@ -22,6 +22,9 @@
 //! relabel alone does not restart capture. A missing device leaves capture dark
 //! until the user re-points it (the remappable device policy).
 
+mod input;
+
+use input::InputBatch;
 use std::sync::Arc;
 
 use ahash::AHashMap;
@@ -30,7 +33,9 @@ use manifold_audio::analysis::{
     AudioFeatureWorker, GainBank, LinearResampler, MonoReader, StreamingSendAnalyzer,
 };
 use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
-use manifold_core::SendFeatures;
+use manifold_core::{AudioSend, LayerId, Seconds, SendFeatures};
+use manifold_core::audio_features::{AudioFeatureHop, AudioHopBatch, AudioHopError, AudioHopStamp,
+    AudioInputDiscontinuity, AudioInputProblem, AudioInputSource, new_audio_analysis_epoch};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup, AudioSourceKind};
 use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
@@ -87,18 +92,68 @@ struct AudioModCapture {
 struct SendAnalyzer {
     /// The rate the analyzer (and its features / scope columns) is built for.
     rate: u32,
+    epoch: u64,
     analyzer: StreamingSendAnalyzer,
+    received_frames: u64,
     /// Layer-tap → analyzer-rate resampler, built lazily; `(from_rate, state)`.
     resampler: Option<(u32, LinearResampler)>,
+    capture_generation: Option<u64>,
+    channels: Vec<u16>,
+    layers: Vec<LayerId>,
 }
 
 impl SendAnalyzer {
-    fn new(rate: u32, low_hz: f32, mid_hz: f32) -> Self {
+    fn new(rate: u32, low_hz: f32, mid_hz: f32, send: &AudioSend, capture_generation: Option<u64>) -> Self {
         Self {
             rate,
+            epoch: new_audio_analysis_epoch(),
             analyzer: StreamingSendAnalyzer::new(rate, low_hz, mid_hz),
+            received_frames: 0,
             resampler: None,
+            capture_generation,
+            channels: send.channels.clone(),
+            layers: send.layers().to_vec(),
         }
+    }
+
+    fn analyze_hops(
+        &mut self,
+        mono: &[f32],
+        batch: &mut AudioHopBatch,
+        mut source_time: impl FnMut(usize) -> Option<std::time::Instant>,
+        mut spectrum: impl FnMut(&[f32]),
+    ) -> Result<(), AudioHopError> {
+        batch.begin(self.epoch);
+        if let Some(error) = batch.failure() { return Err(error); }
+        let first_frame = self.received_frames;
+        let Some(end_frame) = first_frame.checked_add(mono.len() as u64) else {
+            batch.invalidate(AudioHopError::InvalidInput);
+            return Err(AudioHopError::InvalidInput);
+        };
+        self.received_frames = end_frame;
+        let dt = Seconds(self.analyzer.hop() as f64 / f64::from(self.rate));
+        let epoch = self.epoch;
+        let sample_rate = self.rate;
+        self.analyzer.push_with_hops(mono, |hop, column| {
+            let Some(offset) = hop.end_sample.checked_sub(first_frame)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .filter(|offset| *offset <= mono.len()) else {
+                batch.invalidate(AudioHopError::InvalidInput);
+                return;
+            };
+            let result = batch.push(AudioFeatureHop {
+                stamp: AudioHopStamp {
+                    epoch, end_sample: hop.end_sample, sample_rate,
+                    // Mixed capture/layer samples have no transport anchor yet.
+                    source_time: source_time(offset),
+                    timeline_time: None,
+                },
+                dt,
+                features: hop.features,
+            });
+            if result.is_ok() { spectrum(column); }
+        });
+        batch.failure().map_or(Ok(()), Err)
     }
 }
 
@@ -162,8 +217,11 @@ pub struct AudioModRuntime {
     /// per-band meters. Resolved each tick.
     tapped_index: Option<usize>,
     // ── Reusable scratch (no per-tick allocation once warmed) ──
-    /// Per-send capture mono, drained from the worker each tick (index = send).
-    capture_mono: Vec<Vec<f32>>,
+    /// Stamped capture mono, interleaved by send, drained once per update.
+    capture_batch: InputBatch,
+    capture_generation: u64,
+    input_update: u64,
+    layer_batches: AHashMap<LayerId, InputBatch>,
     /// Summed layer taps for one send, before resampling.
     layer_mix: Vec<f32>,
     /// One send's final mixed mono (capture + layers), pushed to its analyzer.
@@ -207,7 +265,10 @@ impl Default for AudioModRuntime {
             consumed: ahash::AHashSet::new(),
             visual_consumed: ahash::AHashSet::new(),
             tapped_index: None,
-            capture_mono: Vec::new(),
+            capture_batch: InputBatch::default(),
+            capture_generation: 0,
+            input_update: 0,
+            layer_batches: AHashMap::new(),
             layer_mix: Vec::new(),
             mono_mix: Vec::new(),
             resampled: Vec::new(),
@@ -227,9 +288,16 @@ impl AudioModRuntime {
         data_version: u64,
         mut layer_playback: Option<&mut AudioLayerPlayback>,
     ) {
+        let mut discontinuities = std::mem::take(&mut engine.audio_snapshot_mut().input_discontinuities);
+        discontinuities.clear();
+        self.input_update = self.input_update.wrapping_add(1);
         let transport_epoch = engine.transport_epoch();
         if transport_epoch != self.last_transport_epoch {
             self.visuals.clear();
+            // A seek/export boundary starts a new analysis identity too. In
+            // particular, returning from offline analysis must not resume an
+            // older live epoch that evaluators would correctly reject as stale.
+            self.analyzers.clear();
             self.last_transport_epoch = transport_epoch;
         }
         let hotplugged = self
@@ -317,6 +385,9 @@ impl AudioModRuntime {
                     .map(|send| send.id.clone())
                     .collect();
                 self.visuals.remove_unlisted(&visual_ids);
+                self.layer_batches.retain(|id, _| {
+                    project.audio_setup.sends.iter().any(|send| send.layers().contains(id))
+                });
             }
             self.pitch_sends = engine
                 .project()
@@ -344,18 +415,43 @@ impl AudioModRuntime {
         // any capture-fed send).
         let device_rate = self.capture.as_ref().map(|c| c.mono.sample_rate());
 
-        // Drain the worker's per-send mono for this tick. Taken out so `self` can
-        // be borrowed field-wise below.
-        let mut capture_mono = std::mem::take(&mut self.capture_mono);
-        for v in capture_mono.iter_mut() {
-            v.clear();
-        }
+        self.capture_batch.begin(self.input_update);
         if let Some(cap) = self.capture.as_mut() {
-            let n = cap.mono.send_count();
-            if capture_mono.len() < n {
-                capture_mono.resize_with(n, Vec::new);
+            let channels = cap.mono.send_count().max(1);
+            let batch = &mut self.capture_batch;
+            cap.mono.drain_stamped(|read, samples| {
+                batch.consume(read, samples, channels, |problem| {
+                    discontinuities.push(AudioInputDiscontinuity { source: AudioInputSource::Capture, problem });
+                });
+            });
+        }
+
+        // Drain each physical layer tap once, then share its immutable batch
+        // across every consuming send. Draining inside the send loop starved
+        // the second send when both selected the same layer.
+        if active && let (Some(project), Some(pb)) = (engine.project(), layer_playback.as_deref_mut()) {
+            for send in &project.audio_setup.sends {
+                if self.spec_send.as_ref() != Some(&send.id) && !self.consumed.contains(&send.id) { continue; }
+                for layer_id in send.layers() {
+                    if !self.layer_batches.contains_key(layer_id) {
+                        self.layer_batches.insert(layer_id.clone(), InputBatch::default());
+                    }
+                    let batch = self.layer_batches.get_mut(layer_id).expect("inserted above");
+                    batch.drain_once(self.input_update, |batch| {
+                        if pb.layer_tap_sample_rate(layer_id).is_none() {
+                            batch.unavailable(|problem| {
+                                discontinuities.push(AudioInputDiscontinuity { source: AudioInputSource::Layer(layer_id.clone()), problem });
+                            });
+                            return;
+                        }
+                        pb.drain_layer_tap_stamped(layer_id, |read, samples| {
+                            batch.consume(read, samples, 1, |problem| {
+                                discontinuities.push(AudioInputDiscontinuity { source: AudioInputSource::Layer(layer_id.clone()), problem });
+                            });
+                        });
+                    });
+                }
             }
-            cap.mono.drain(&mut capture_mono);
         }
 
         // ── Per-send analysis: one analyzer per send, fed its whole input ──
@@ -363,7 +459,14 @@ impl AudioModRuntime {
         let mut mono_mix = std::mem::take(&mut self.mono_mix);
         let mut layer_mix = std::mem::take(&mut self.layer_mix);
         let mut resampled = std::mem::take(&mut self.resampled);
-        let mut features: Vec<(usize, SendFeatures)> = Vec::new();
+        let mut features = std::mem::take(&mut engine.audio_snapshot_mut().sends);
+        features.clear();
+        features.resize(send_count, SendFeatures::default());
+        let mut hop_batches = std::mem::take(&mut engine.audio_snapshot_mut().hop_batches);
+        hop_batches.resize_with(send_count, AudioHopBatch::default);
+        for batch in &mut hop_batches {
+            batch.begin(if active { batch.epoch() } else { 0 });
+        }
         let mut tapped_index = None;
 
         if active && let Some(project) = engine.project() {
@@ -377,6 +480,7 @@ impl AudioModRuntime {
                 // consumed set and not the scope-tapped send costs nothing —
                 // no mono push, no analyzer entry. One hash lookup per send.
                 if !is_tapped && !self.consumed.contains(&send.id) {
+                    hop_batches[i].begin(0);
                     continue;
                 }
                 let has_cap = send.has_capture() && device_rate.is_some();
@@ -386,9 +490,12 @@ impl AudioModRuntime {
                 let layer_rate = if layers.is_empty() {
                     None
                 } else {
-                    layer_playback
-                        .as_deref()
-                        .and_then(|pb| layers.iter().find_map(|l| pb.layer_tap_sample_rate(l)))
+                    layers.iter().find_map(|id| {
+                        self.layer_batches.get(id)
+                            .filter(|batch| batch.drained_update == self.input_update)
+                            .and_then(InputBatch::sample_rate)
+                            .or_else(|| layer_playback.as_deref().and_then(|pb| pb.layer_tap_sample_rate(id)))
+                    })
                 };
                 // Analyzer rate: the device rate when capture feeds the send, else
                 // the layer rate. No input this tick → leave the slot at default.
@@ -397,19 +504,28 @@ impl AudioModRuntime {
                 } else if let Some(lr) = layer_rate {
                     lr
                 } else {
+                    hop_batches[i].begin(0);
                     continue;
                 };
 
+                let capture_generation = has_cap.then_some(self.capture_generation);
                 let entry = match analyzers.entry(send.id.clone()) {
                     std::collections::hash_map::Entry::Occupied(e) => {
                         let slot = e.into_mut();
-                        if slot.rate != canonical {
-                            *slot = SendAnalyzer::new(canonical, low_hz, mid_hz);
+                        if slot.rate != canonical || slot.capture_generation != capture_generation
+                            || slot.channels != send.channels || slot.layers != layers
+                        {
+                            discontinuities.push(AudioInputDiscontinuity {
+                                source: AudioInputSource::Send(send.id.clone()),
+                                problem: AudioInputProblem::SourceChanged,
+                            });
+                            *slot = SendAnalyzer::new(canonical, low_hz, mid_hz, send, capture_generation);
+                            if let Some(history) = self.visuals.get_mut(Some(&send.id)) { history.clear(); }
                         }
                         slot
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(SendAnalyzer::new(canonical, low_hz, mid_hz))
+                        e.insert(SendAnalyzer::new(canonical, low_hz, mid_hz, send, capture_generation))
                     }
                 };
                 let visualized = self.visual_consumed.contains(&send.id);
@@ -429,33 +545,23 @@ impl AudioModRuntime {
                 // Pre-analysis squelch: applied live, identical for scope + features.
                 entry.analyzer.set_floor_db(send.floor_db);
 
-                // Build the send's mixed mono for this tick.
+                // Build the send's mixed mono only from uninterrupted batches.
                 mono_mix.clear();
-                if has_cap && let Some(cap_in) = capture_mono.get(i) {
-                    mono_mix.extend_from_slice(cap_in);
+                let mut interrupted = has_cap && self.capture_batch.interrupted;
+                if has_cap && let Some(cap) = self.capture.as_ref() {
+                    for frame in self.capture_batch.samples.chunks_exact(cap.mono.send_count().max(1)) {
+                        if let Some(value) = frame.get(i) { mono_mix.push(*value); }
+                    }
                 }
-                if !layers.is_empty()
-                    && let Some(pb) = layer_playback.as_deref_mut()
-                {
-                    // Sum every feeding layer's post-fader tap.
+                if !layers.is_empty() {
                     layer_mix.clear();
-                    for (li, layer_id) in layers.iter().enumerate() {
-                        if li == 0 {
-                            pb.drain_layer_tap(layer_id, |chunk| {
-                                layer_mix.extend_from_slice(chunk)
-                            });
-                        } else {
-                            let mut idx = 0usize;
-                            pb.drain_layer_tap(layer_id, |chunk| {
-                                for &s in chunk {
-                                    if idx < layer_mix.len() {
-                                        layer_mix[idx] += s;
-                                    } else {
-                                        layer_mix.push(s);
-                                    }
-                                    idx += 1;
-                                }
-                            });
+                    for layer_id in layers {
+                        if let Some(batch) = self.layer_batches.get(layer_id).filter(|batch| batch.drained_update == self.input_update) {
+                            interrupted |= batch.interrupted;
+                            for (index, &sample) in batch.samples.iter().enumerate() {
+                                if index < layer_mix.len() { layer_mix[index] += sample; }
+                                else { layer_mix.push(sample); }
+                            }
                         }
                     }
                     // Align the layer mono to the analyzer rate when capture set a
@@ -484,30 +590,56 @@ impl AudioModRuntime {
                     }
                 }
 
+                if interrupted {
+                    *entry = SendAnalyzer::new(canonical, low_hz, mid_hz, send, capture_generation);
+                    hop_batches[i].begin(entry.epoch);
+                    if let Some(history) = self.visuals.get_mut(Some(&send.id)) { history.clear(); }
+                    continue;
+                }
+
                 if visualized && mono_mix.is_empty() && !has_cap {
                     if let Some(history) = self.visuals.get_mut(Some(&send.id)) {
                         history.clear();
                     }
                 } else if visualized {
                     self.visuals.feed_waveform(&send.id, &mono_mix);
-                    let visuals = &mut self.visuals;
-                    entry.analyzer.push_with_callback(&mono_mix, |column| {
-                        visuals.feed_spectrum(&send.id, column);
-                    });
-                } else {
-                    entry.analyzer.push(&mono_mix);
                 }
-                features.push((i, entry.analyzer.latest()));
+                let visuals = &mut self.visuals;
+                let capture_batch = &self.capture_batch;
+                // The existing mixed-source drain is not time aligned. Only
+                // capture-only sends have a single truthful clock today.
+                let capture_only = has_cap && send.layers().is_empty();
+                if let Err(error) = entry.analyze_hops(&mono_mix, &mut hop_batches[i], |offset| {
+                    if capture_only { capture_batch.source_time_at(offset) } else { None }
+                }, |column| {
+                    if visualized { visuals.feed_spectrum(&send.id, column); }
+                }) {
+                    discontinuities.push(AudioInputDiscontinuity {
+                        source: AudioInputSource::Send(send.id.clone()),
+                        problem: match error {
+                            AudioHopError::CapacityExceeded => AudioInputProblem::AnalysisOverflow,
+                            AudioHopError::InvalidInput => AudioInputProblem::InvalidInput,
+                        },
+                    });
+                    // Publish the failed interval, then start a fresh analyzer
+                    // epoch next update. Never join its prefix/tail or replay it.
+                    *entry = SendAnalyzer::new(canonical, low_hz, mid_hz, send, capture_generation);
+                    if let Some(history) = visuals.get_mut(Some(&send.id)) { history.clear(); }
+                    continue;
+                }
+                features[i] = entry.analyzer.latest();
             }
 
             // P1 gate instrument (AUDIO_SENDS_UX_DESIGN section 4 Phase 1): only runs
             // when `trace` was cached true at construction — zero cost otherwise.
             if self.trace {
-                let ids: Vec<&str> = features
+                let ids: Vec<&str> = hop_batches
                     .iter()
-                    .filter_map(|(i, _)| project.audio_setup.sends.get(*i).map(|s| s.id.as_str()))
+                    .enumerate()
+                    .filter(|(_, batch)| batch.epoch() != 0)
+                    .filter_map(|(i, _)| project.audio_setup.sends.get(i).map(|s| s.id.as_str()))
                     .collect();
-                eprintln!("[AudioMod] analyzed {} send(s): {ids:?}", features.len());
+                eprintln!("[AudioMod] analyzed {} send(s): {ids:?}", ids.len());
             }
         }
 
@@ -515,20 +647,17 @@ impl AudioModRuntime {
         self.mono_mix = mono_mix;
         self.layer_mix = layer_mix;
         self.resampled = resampled;
-        self.capture_mono = capture_mono;
         self.tapped_index = tapped_index;
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
         // allocation once warmed. An empty `sends` disables the audio phase.
-        let snap = engine.audio_snapshot_mut();
-        snap.sends.clear();
-        snap.sends
-            .resize(send_count, manifold_core::SendFeatures::default());
-        for (i, f) in features {
-            if let Some(slot) = snap.sends.get_mut(i) {
-                *slot = f;
-            }
+        for discontinuity in &discontinuities {
+            log::warn!("[AudioMod] input discontinuity: {:?}: {:?}", discontinuity.source, discontinuity.problem);
         }
+        let snap = engine.audio_snapshot_mut();
+        snap.input_discontinuities = discontinuities;
+        snap.sends = features;
+        snap.hop_batches = hop_batches;
     }
 
     /// Visual histories fed by the live analyzer. Readers should use the
@@ -781,6 +910,8 @@ impl AudioModRuntime {
             "[AudioMod] Capture started: source={source_label}, {send_count} sends, \
              {sample_rate}Hz {channels}ch"
         );
+        self.capture_generation = self.capture_generation.wrapping_add(1);
+        self.capture_batch = InputBatch::default();
         self.capture = Some(AudioModCapture {
             _backend: backend,
             _worker: worker,
@@ -799,5 +930,126 @@ impl AudioModRuntime {
 fn sync_gains(gains: &GainBank, setup: &AudioSetup) {
     for (i, send) in setup.sends.iter().enumerate() {
         gains.set_linear(i, send.gain_linear());
+    }
+}
+
+#[cfg(test)]
+mod hop_tests {
+    use super::*;
+
+    #[test]
+    fn live_hops_are_partition_invariant_without_invented_transport_time() {
+        let send = AudioSend::new("Live hop test");
+        let rate = 48_000;
+        let input: Vec<f32> = (0..rate).map(|index| {
+            let envelope = if index % 6000 < 1800 { 0.6 } else { 0.0 };
+            envelope * (index as f32 * 220.0 * std::f32::consts::TAU / rate as f32).sin()
+        }).collect();
+        let run = |chunks: &[usize]| {
+            let mut analyzer = SendAnalyzer::new(rate, 250.0, 2500.0, &send, None);
+            let mut batch = AudioHopBatch::default();
+            let mut offset = 0;
+            let mut output = Vec::new();
+            let mut columns = 0;
+            for size in chunks.iter().cycle() {
+                let end = (offset + size).min(input.len());
+                analyzer.analyze_hops(&input[offset..end], &mut batch, |_| None, |_| columns += 1).unwrap();
+                for hop in batch.hops() {
+                    assert_eq!(hop.stamp.epoch, analyzer.epoch);
+                    assert_eq!(hop.stamp.timeline_time, None);
+                    assert_eq!(hop.stamp.source_time, None);
+                    assert_eq!(hop.stamp.sample_rate, rate);
+                    output.push((hop.stamp.end_sample, hop.dt, hop.features));
+                }
+                offset = end;
+                if offset == input.len() { break; }
+            }
+            assert_eq!(columns, output.len());
+            analyzer.analyze_hops(&[], &mut batch, |_| None, |_| panic!("no input cannot produce a hop")).unwrap();
+            assert!(batch.hops().is_empty());
+            output
+        };
+        let expected = run(&[input.len()]);
+        assert!(expected.len() > 10);
+        assert_eq!(run(&[1, 17, 8192, 31, 1003]), expected);
+    }
+
+    #[test]
+    fn capture_hop_clocks_survive_display_partitions_and_source_block_boundaries() {
+        use manifold_core::audio_stream::{AudioClockAnchor, audio_stream};
+        use std::time::{Duration, Instant};
+
+        let send = AudioSend::new("Clocked capture");
+        let origin = Instant::now();
+        for rate in [44_100, 48_000] {
+            let probe = SendAnalyzer::new(rate, 250.0, 2500.0, &send, None);
+            let hop_size = probe.analyzer.hop();
+            let input: Vec<f32> = (0..rate as usize).map(|index| {
+                0.4 * (index as f32 * 220.0 * std::f32::consts::TAU / rate as f32).sin()
+            }).collect();
+            let run = |chunks: &[usize]| {
+                let (mut source, mut consumer) = audio_stream(1, input.len(), 512, rate);
+                // Clock each source block independently with a small backend
+                // offset. A hop ending exactly on a block boundary must use
+                // the same clock whether the next block has arrived or not.
+                for (index, block) in input.chunks(hop_size).enumerate() {
+                    let frame = (index * hop_size) as u64;
+                    let delta = Duration::from_nanos(frame * 1_000_000_000 / u64::from(rate));
+                    let instant = origin + delta + Duration::from_micros((index % 3) as u64);
+                    source.push_interleaved_clocked(block, Some(AudioClockAnchor { instant, frame }));
+                }
+                let mut analyzer = SendAnalyzer::new(rate, 250.0, 2500.0, &send, None);
+                let mut input_batch = InputBatch::default();
+                let mut hops = AudioHopBatch::default();
+                let mut scratch = vec![0.; input.len()];
+                let mut remaining = input.len();
+                let mut output = Vec::new();
+                for (update, size) in chunks.iter().cycle().enumerate() {
+                    input_batch.begin(update as u64 + 1);
+                    let mut wanted = (*size).min(remaining);
+                    while wanted > 0 {
+                        let read = consumer.read(&mut scratch[..wanted]).unwrap();
+                        let manifold_core::audio_stream::AudioStreamRead::Samples { samples, .. } = read
+                            else { panic!("clocked input must be continuous"); };
+                        input_batch.consume(read, &scratch[..samples], 1, |_| panic!("valid input"));
+                        wanted -= samples;
+                        remaining -= samples;
+                    }
+                    analyzer.analyze_hops(&input_batch.samples, &mut hops,
+                        |offset| input_batch.source_time_at(offset), |_| {}).unwrap();
+                    for hop in hops.hops() {
+                        assert!(hop.stamp.source_time.is_some());
+                        assert_eq!(hop.stamp.timeline_time, None);
+                        output.push((hop.stamp.end_sample, hop.stamp.source_time, hop.features));
+                    }
+                    if remaining == 0 { break; }
+                }
+                output
+            };
+            let expected = run(&[input.len()]); // one-second display stall
+            assert!(expected.len() > 10);
+            assert_eq!(run(&[hop_size]), expected);
+            for fps in [24, 30, 60] { assert_eq!(run(&[rate as usize / fps]), expected); }
+            assert_eq!(run(&[1, 17, 4096, 1003]), expected);
+        }
+    }
+
+    #[test]
+    fn live_overflow_exposes_no_partial_batch_and_new_analyzer_recovers() {
+        let send = AudioSend::new("Overflow");
+        let mut analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);
+        let epoch = analyzer.epoch;
+        let hop = analyzer.analyzer.hop();
+        let mut batch = AudioHopBatch::with_capacity(1);
+        assert_eq!(analyzer.analyze_hops(&vec![0.0; hop * 2], &mut batch, |_| None, |_| {}),
+            Err(AudioHopError::CapacityExceeded));
+        assert!(batch.hops().is_empty());
+        assert_eq!(analyzer.analyze_hops(&[], &mut batch, |_| None, |_| {}),
+            Err(AudioHopError::CapacityExceeded));
+        analyzer = SendAnalyzer::new(48_000, 250.0, 2500.0, &send, None);
+        assert_ne!(analyzer.epoch, epoch);
+        analyzer.analyze_hops(&vec![0.0; hop], &mut batch, |_| None, |_| {}).unwrap();
+        assert_eq!(batch.hops().len(), 1);
+        assert_eq!(batch.hops()[0].stamp.end_sample, hop as u64);
     }
 }
