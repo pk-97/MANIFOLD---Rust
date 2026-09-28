@@ -11,10 +11,7 @@ use manifold_physics::input::AppliedEvent;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{
-    CacheMode, FluidControls, FluidSettings, HISTORY_CAPACITY, Request, Sample, TICK, coupled,
-    roles,
-};
+use super::{CacheMode, FluidControls, FluidSettings, Request, Sample, TICK, coupled, roles};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 
 mod geometry;
@@ -728,7 +725,6 @@ impl Reader {
                 || batch.started_tick < end
                 || end > (1_u64 << 53) - 1
                 || batch.history.is_empty()
-                || batch.history.len() > HISTORY_CAPACITY
                 || batch.role_history.len() != batch.history.len() * self.header.role_setup.len()
                 || batch.impulses.len() > super::impulses::IMPULSE_CAPACITY
                 || (self.next_record + 1 == self.progress.records
@@ -750,7 +746,7 @@ impl Reader {
             let coupled = match (&self.header.coupled_setup, batch.coupled_history.take()) {
                 (None, None) => None,
                 (Some(setup), Some(mut history)) => {
-                    if history.is_empty() || history.len() > HISTORY_CAPACITY {
+                    if history.is_empty() {
                         return Err("Physics take: invalid rigid input history".into());
                     }
                     let mut previous = None;
@@ -877,7 +873,7 @@ fn validate_clock(
             Err("Physics take: timing was added without a project clock origin".into())
         };
     };
-    if points.len() > HISTORY_CAPACITY || points.first() != Some(&previous) {
+    if points.first() != Some(&previous) {
         return Err("Physics take: project clock history is missing its continuity anchor".into());
     }
     for &point in points {

@@ -38,14 +38,15 @@ pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
 pub use domain::FluidDomainLayout;
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;
-pub(super) use take::{PlaybackClock, PreparedGeometry};
 pub use take::{FluidTakeFrame, FluidTakeIdentity, FluidTakeReplay, TakeRange, TakeTime};
+pub(super) use take::{PlaybackClock, PreparedGeometry};
 
 pub const TICK: f64 = 1.0 / 60.0;
 
 pub(super) fn simulation_tick(time: f64) -> u64 {
     (time / TICK + 1e-8).floor() as u64
 }
+// Initial retained-input allocation; histories grow without discarding debt.
 const HISTORY_CAPACITY: usize = 8192;
 const BATCH: usize = 4;
 
@@ -257,7 +258,6 @@ struct Step {
 
 fn request_count(
     cache_mode: CacheMode,
-    blocking: bool,
     due: u64,
     target_tick: u64,
     initialized: bool,
@@ -268,7 +268,9 @@ fn request_count(
     if !initialized {
         return Ok(0);
     }
-    let due = if blocking { due.min(BATCH as u64) } else { due };
+    // Publish progress between short batches even when preview is behind.
+    // The remaining debt stays in target_time; no simulation ticks are dropped.
+    let due = due.min(BATCH as u64);
     usize::try_from(due).map_err(|_| "Water preview catch-up request is too large".to_owned())
 }
 
@@ -494,7 +496,7 @@ impl Default for FluidRuntime {
             recording_project_timing: None,
             worker: None,
             settings: None,
-            history: InputHistory::with_capacity(HISTORY_CAPACITY)
+            history: InputHistory::with_growing_capacity(HISTORY_CAPACITY)
                 .expect("FLIP history capacity must be at least two"),
             timing: take::Capture::new(HISTORY_CAPACITY),
             impulses: impulses::new_queue(),
@@ -1189,13 +1191,7 @@ impl FluidRuntime {
                 return Ok(());
             }
             let initial = self.history.front().expect("observed controls").controls;
-            let count = request_count(
-                self.cache_mode,
-                blocking,
-                due,
-                target_tick,
-                self.initialized,
-            )?;
+            let count = request_count(self.cache_mode, due, target_tick, self.initialized)?;
             let impulses = if self.cache_mode == CacheMode::Live {
                 self.prepare_impulse_batch(self.completed_tick, count)?
             } else {
@@ -1476,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn fluid_preview_scheduler_requests_all_due_ticks_across_display_rates() {
+    fn fluid_preview_publishes_bounded_batches_without_dropping_debt() {
         for display_fps in [5.0, 15.0, 24.0, 30.0, 60.0, 120.0] {
             let (request_sender, request_receiver) = mpsc::sync_channel::<Request>(1);
             let (reply_sender, reply_receiver) = mpsc::sync_channel::<Reply>(1);
@@ -1532,112 +1528,42 @@ mod tests {
                     )
                     .unwrap();
                 runtime.advance(false).unwrap();
-                match request_receiver.try_recv() {
-                    Ok(request) => {
-                        counts.push(request.count);
-                        reply_sender
-                            .send(Reply {
-                                source_identity: None,
-                                timing: Default::default(),
-                                playback: None,
-                                coupled: None,
-                                started_tick: 0,
-                                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
-                                epoch: request.epoch,
-                                tick: request.start_tick + request.count as u64,
-                                history: request.history,
-                                role_history: request.role_history,
-                                vertices: request.recycle,
-                                whitewater: request.recycle_whitewater,
-                                obstacle: request.initial.obstacle,
-                                stats: FrameStats::default(),
-                                error: None,
-                            })
-                            .unwrap();
-                        runtime.advance(false).unwrap();
+                loop {
+                    match request_receiver.try_recv() {
+                        Ok(request) => {
+                            counts.push(request.count);
+                            reply_sender
+                                .send(Reply {
+                                    source_identity: None,
+                                    timing: Default::default(),
+                                    playback: None,
+                                    coupled: None,
+                                    started_tick: 0,
+                                    impulses: Vec::with_capacity(IMPULSE_CAPACITY),
+                                    epoch: request.epoch,
+                                    tick: request.start_tick + request.count as u64,
+                                    history: request.history,
+                                    role_history: request.role_history,
+                                    vertices: request.recycle,
+                                    whitewater: request.recycle_whitewater,
+                                    obstacle: request.initial.obstacle,
+                                    stats: FrameStats::default(),
+                                    error: None,
+                                })
+                                .unwrap();
+                            runtime.advance(false).unwrap();
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => panic!("request channel disconnected"),
                     }
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => panic!("request channel disconnected"),
                 }
             }
             assert_eq!(runtime.completed_tick, 240, "display FPS {display_fps}");
-            assert!(counts.iter().all(|count| *count <= 60));
+            assert!(counts.iter().all(|count| *count <= BATCH));
             if display_fps == 120.0 {
                 assert_eq!(counts.first(), Some(&1));
             }
         }
-
-        let (request_sender, request_receiver) = mpsc::sync_channel::<Request>(1);
-        let (reply_sender, reply_receiver) = mpsc::sync_channel::<Reply>(1);
-        let mut runtime = FluidRuntime::default();
-        runtime
-            .observe(
-                FluidSettings::default(),
-                FluidControls::default(),
-                Seconds(0.0),
-                1.0,
-                0.0,
-            )
-            .unwrap();
-        runtime.worker = Some(Worker {
-            requests: request_sender,
-            replies: reply_receiver,
-            cancel_epoch: Arc::clone(&runtime.cancel_epoch),
-        });
-        runtime.advance(false).unwrap();
-        let init = request_receiver.recv().unwrap();
-        reply_sender
-            .send(Reply {
-                source_identity: None,
-                timing: Default::default(),
-                playback: None,
-                coupled: None,
-                started_tick: 0,
-                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
-                epoch: init.epoch,
-                tick: init.start_tick,
-                history: init.history,
-                role_history: init.role_history,
-                vertices: init.recycle,
-                whitewater: init.recycle_whitewater,
-                obstacle: init.initial.obstacle,
-                stats: FrameStats::default(),
-                error: None,
-            })
-            .unwrap();
-        runtime.advance(false).unwrap();
-        runtime
-            .observe(
-                FluidSettings::default(),
-                FluidControls::default(),
-                Seconds(17.0 * TICK),
-                1.0,
-                0.0,
-            )
-            .unwrap();
-        runtime.advance(false).unwrap();
-        let hitch = request_receiver.recv().unwrap();
-        assert_eq!(hitch.count, 17);
-        reply_sender
-            .send(Reply {
-                source_identity: None,
-                timing: Default::default(),
-                playback: None,
-                coupled: None,
-                started_tick: 0,
-                impulses: Vec::with_capacity(IMPULSE_CAPACITY),
-                epoch: hitch.epoch,
-                tick: hitch.start_tick + hitch.count as u64,
-                history: hitch.history,
-                role_history: hitch.role_history,
-                vertices: hitch.recycle,
-                whitewater: hitch.recycle_whitewater,
-                obstacle: hitch.initial.obstacle,
-                stats: FrameStats::default(),
-                error: None,
-            })
-            .unwrap();
-        runtime.advance(false).unwrap();
     }
 
     #[test]
@@ -1825,18 +1751,38 @@ mod tests {
     #[test]
     fn shallow_liquid_remains_present_at_low_resolution() {
         for resolution in [8, 16] {
-            let settings = FluidSettings { resolution, fill_height: 0.16, ..FluidSettings::default() };
-            let controls = FluidControls { emission: false, obstacle_enabled: false, ..FluidControls::default() };
+            let settings = FluidSettings {
+                resolution,
+                fill_height: 0.16,
+                ..FluidSettings::default()
+            };
+            let controls = FluidControls {
+                emission: false,
+                obstacle_enabled: false,
+                ..FluidControls::default()
+            };
             let mut runtime = FluidRuntime::default();
-            runtime.observe(settings, controls, Seconds::ZERO, 1.0, 0.0).unwrap();
+            runtime
+                .observe(settings, controls, Seconds::ZERO, 1.0, 0.0)
+                .unwrap();
             let mut initial_particles = 0;
             for tick in [1, 30, 120] {
-                runtime.observe(settings, controls, Seconds(tick as f64 * TICK), 1.0, 0.0).unwrap();
+                runtime
+                    .observe(settings, controls, Seconds(tick as f64 * TICK), 1.0, 0.0)
+                    .unwrap();
                 runtime.advance(true).unwrap();
-                if tick == 1 { initial_particles = runtime.stats.particles; }
-                assert!(!runtime.vertices.is_empty(), "empty surface at {resolution} cells, tick {tick}");
-                assert!(runtime.stats.particles > 0 && runtime.stats.particles as f64 >= initial_particles as f64 * 0.95,
-                    "shallow water lost at {resolution} cells, tick {tick}");
+                if tick == 1 {
+                    initial_particles = runtime.stats.particles;
+                }
+                assert!(
+                    !runtime.vertices.is_empty(),
+                    "empty surface at {resolution} cells, tick {tick}"
+                );
+                assert!(
+                    runtime.stats.particles > 0
+                        && runtime.stats.particles as f64 >= initial_particles as f64 * 0.95,
+                    "shallow water lost at {resolution} cells, tick {tick}"
+                );
             }
         }
     }
@@ -2401,63 +2347,25 @@ mod tests {
     }
 
     #[test]
-    fn fluid_history_overflow_latches_until_clear() {
+    fn fluid_lagging_history_grows_without_losing_unread_inputs() {
         let mut runtime = FluidRuntime::default();
         let settings = FluidSettings::default();
         let controls = FluidControls::default();
-        for index in 0..HISTORY_CAPACITY {
+        for index in 0..HISTORY_CAPACITY + 32 {
             runtime
                 .observe(settings, controls, Seconds(index as f64 * TICK), 1.0, 0.0)
                 .unwrap();
         }
-        let target_before = runtime.target_time;
-        let last_transport = runtime.last_transport;
-        let prefix: Vec<_> = runtime.history.iter().map(|sample| sample.time).collect();
-        runtime
-            .observe(
-                settings,
-                controls,
-                Seconds((HISTORY_CAPACITY - 1) as f64 * TICK),
-                1.0,
-                0.0,
-            )
-            .expect("holding identical inputs must not exhaust a full history");
-        assert_eq!(runtime.history.len(), HISTORY_CAPACITY);
-        let error = runtime
-            .observe(
-                settings,
-                controls,
-                Seconds(HISTORY_CAPACITY as f64 * TICK),
-                1.0,
-                0.0,
-            )
-            .unwrap_err();
-        assert!(error.contains("restart the simulation"));
-        assert_eq!(runtime.target_time, target_before);
-        assert_eq!(runtime.last_transport, last_transport);
-        assert_eq!(
-            runtime
-                .history
-                .iter()
-                .map(|sample| sample.time)
-                .collect::<Vec<_>>(),
-            prefix
-        );
-        assert!(
-            runtime.advance(false).is_err(),
-            "overflow must stop scheduling native work"
-        );
-        assert!(
-            runtime
-                .observe(settings, controls, Seconds(200.0), 1.0, 0.0)
-                .is_err()
-        );
+        assert_eq!(runtime.history.len(), HISTORY_CAPACITY + 32);
+        assert_eq!(runtime.history.front().unwrap().time, 0.0);
+        assert_eq!(runtime.target_time, (HISTORY_CAPACITY + 31) as f64 * TICK);
+        assert_eq!(runtime.simulation_time(), 0.0);
+        assert!(runtime.failure.is_none());
         runtime.clear();
-        assert!(
-            runtime
-                .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
-                .is_ok()
-        );
+        runtime
+            .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
+            .unwrap();
+        assert_eq!(runtime.history.len(), 1);
     }
 
     #[test]

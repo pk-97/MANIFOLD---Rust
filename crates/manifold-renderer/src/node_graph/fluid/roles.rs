@@ -657,7 +657,7 @@ impl History {
     }
     pub fn snapshot(&self, destination: &mut Vec<Controls>) {
         destination.clear();
-        // Capacity grows only after topology preparation; ordinary requests reuse it.
+        // Reuse prepared storage; a retained backlog may require additional capacity.
         destination.reserve(HISTORY_CAPACITY * self.stride);
         destination.extend(self.values.iter().copied());
     }
