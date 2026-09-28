@@ -158,6 +158,10 @@ pub trait Backend: Send {
     /// pre-bind time by the chain-build code reading the producing
     /// primitive's `max_capacity` param; primitives observe both the
     /// buffer and the dynamic active-count via the runtime context.
+    /// Replace dedicated array storage without changing its logical slot.
+    /// Previously encoded work retains its original native resource.
+    fn install_array_buffer(&mut self, _slot: Slot, _buffer: GpuBuffer) -> bool { false }
+
     fn array_buffer(&self, _slot: Slot) -> Option<&GpuBuffer> {
         None
     }

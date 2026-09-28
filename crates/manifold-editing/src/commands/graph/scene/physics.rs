@@ -988,7 +988,7 @@ pub(super) fn scene_object_physics_plan(
         let assignments = scene_fluid_role_assignments(def, group_id)?;
         if !assignments.is_empty() {
             return Err(
-                "Enable Physics cannot target an object with assigned fluid roles".into(),
+                "Remove this object's Fluid Role before enabling Physics; physics bodies interact with water automatically".into(),
             );
         }
     }

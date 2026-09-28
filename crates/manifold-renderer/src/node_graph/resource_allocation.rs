@@ -16,6 +16,23 @@ use super::ports::PortType;
 type ReusableKey = (PortType, u64);
 type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
 
+/// Derive growing array lineage once during preparation. All participating
+/// storage remains dedicated so replacement cannot alter an unrelated array.
+pub(crate) fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Vec<bool> {
+    let mut growing = vec![false; plan.resource_count()];
+    for step in plan.steps() {
+        let Some(node) = graph.get_node(step.node) else { continue; };
+        let inherited = step.inputs.iter().any(|(_, id)| growing[id.0 as usize]);
+        for (port, id) in &step.outputs {
+            if matches!(plan.resource_type(*id), Some(PortType::Array(_)))
+                && (inherited || node.node.provides_array_output(port)) {
+                growing[id.0 as usize] = true;
+            }
+        }
+    }
+    growing
+}
+
 fn enqueue_reusable_root(reusable: &mut ReusableBuckets, key: ReusableKey, root: ResourceId) {
     let bucket = reusable.entry(key).or_default();
     if !bucket.contains(&root) {
@@ -191,6 +208,10 @@ pub fn plan_array_allocations(
             if canvas_arrays.len() == previous_count { break; }
         }
         excluded_resources.extend(canvas_arrays);
+    }
+    // Growth must not enlarge an unrelated array sharing the same scratch slot.
+    for (index, dynamic) in growing_array_resources(graph, plan).into_iter().enumerate() {
+        if dynamic { excluded_resources.insert(ResourceId(index as u32)); }
     }
     let mut reusable: ReusableBuckets = AHashMap::default();
 

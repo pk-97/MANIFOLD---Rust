@@ -143,7 +143,7 @@ impl Native {
             None
         } else {
             Some(
-                RigidFluidCoupling::prepare(fluid, world, &bindings, domain.min, setup.density)
+                RigidFluidCoupling::prepare(fluid, world, &bindings, domain.native_origin(), setup.density)
                     .map_err(|error| error.to_string())?,
             )
         };

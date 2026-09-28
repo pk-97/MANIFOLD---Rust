@@ -594,6 +594,20 @@ pub fn sync_inspector_data(
                                             physics_imported,
                                             ..
                                         } = known.as_ref();
+                                        let (physics_available, physics_unavailable_reason) =
+                                            if physics.is_some() {
+                                                (true, None)
+                                            } else {
+                                                match def.as_ref().map(|def| {
+                                                    manifold_editing::commands::graph::scene_object_physics_eligibility(
+                                                        def, vm.scene_root_node_id, *index as u32,
+                                                    )
+                                                }) {
+                                                    Some(Ok(())) => (true, None),
+                                                    Some(Err(reason)) => (false, Some(reason)),
+                                                    None => (false, None),
+                                                }
+                                            };
                                         // P2 slice 2a: the real P1 section
                                         // string(s) covering this object —
                                         // its scene_object node, transform
@@ -711,11 +725,8 @@ pub fn sync_inspector_data(
                                                 parameter_ids,
                                                 skin,
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
-                                                physics_available: physics.is_some() || def.as_ref().is_some_and(|def| {
-                                                    manifold_editing::commands::graph::scene_object_physics_eligibility(
-                                                        def, vm.scene_root_node_id, *index as u32,
-                                                    ).is_ok()
-                                                }),
+                                                physics_available,
+                                                physics_unavailable_reason,
                                                 physics_imported: *physics_imported,
                                                 fluid_roles: if parent_group_id.is_none() {
                                                     def.as_ref().map(|def| super::scene::fluid_role_rows(def, *group_node_id, &fluid_domains))

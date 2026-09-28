@@ -14,14 +14,86 @@
 //! through it, so this one rewrite covers all of them without a separate
 //! call site per producer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use crate::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID};
+use crate::effect_graph_def::{
+    EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
+    GROUP_TYPE_ID,
+};
 use crate::id::NodeId;
 use crate::math::short_id;
 
 const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
+
+const RENDER_SCENE_TYPE_ID_FOR_OWNERSHIP: &str = "node.render_scene";
+const PHYSICS_WORLD_TYPE_ID_FOR_OWNERSHIP: &str = "node.physics_world";
+const FLUID_SURFACE_TYPE_ID_FOR_OWNERSHIP: &str = "node.fluid_surface";
+
+/// Return the exclusive upstream ownership of a loose scene object.
+///
+/// Scene objects and scene/system boundary nodes are shared owners, so the
+/// walk stops at them. Candidates are then pruned to a fixed point: every
+/// candidate other than the root must have all consumers inside the candidate
+/// set. This preserves shared producers and their upstream dependencies.
+pub fn loose_scene_object_owned_ids(
+    nodes: &[EffectGraphNode],
+    wires: &[EffectGraphWire],
+    scene_object_id: u32,
+) -> HashSet<u32> {
+    let Some(root) = nodes.iter().find(|node| node.id == scene_object_id) else {
+        return HashSet::new();
+    };
+    if root.type_id != SCENE_OBJECT_TYPE_ID {
+        return HashSet::new();
+    }
+
+    let mut candidates = HashSet::from([scene_object_id]);
+    let mut stack = vec![scene_object_id];
+    while let Some(to_node) = stack.pop() {
+        for wire in wires.iter().filter(|wire| wire.to_node == to_node) {
+            let Some(source) = nodes.iter().find(|node| node.id == wire.from_node) else {
+                continue;
+            };
+            let boundary = source.type_id.starts_with("system.")
+                || matches!(
+                    source.type_id.as_str(),
+                    SCENE_OBJECT_TYPE_ID
+                        | RENDER_SCENE_TYPE_ID_FOR_OWNERSHIP
+                        | PHYSICS_WORLD_TYPE_ID_FOR_OWNERSHIP
+                        | FLUID_SURFACE_TYPE_ID_FOR_OWNERSHIP
+                        | GROUP_INPUT_TYPE_ID
+                        | GROUP_OUTPUT_TYPE_ID
+                );
+            if source.id != scene_object_id && boundary {
+                continue;
+            }
+            if candidates.insert(source.id) {
+                stack.push(source.id);
+            }
+        }
+    }
+
+    loop {
+        let removable: Vec<u32> = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| *candidate != scene_object_id)
+            .filter(|candidate| {
+                wires.iter().any(|wire| {
+                    wire.from_node == *candidate && !candidates.contains(&wire.to_node)
+                })
+            })
+            .collect();
+        if removable.is_empty() {
+            break;
+        }
+        for id in removable {
+            candidates.remove(&id);
+        }
+    }
+    candidates
+}
 
 /// `(legacy port prefix, scene_object input port name)`. No prefix here is a
 /// prefix of another, so at most one entry ever matches a given port name —

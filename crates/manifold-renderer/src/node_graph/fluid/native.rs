@@ -81,10 +81,11 @@ impl NativeSimulation {
         new.set_boundary_collisions(request.settings.boundary_collisions)
             .map_err(|e| e.to_string())?;
         if request.settings.fill_height > 0.0 {
+            let min = domain.to_native(domain.min);
             new.add_fluid_box(
                 Bounds {
-                    min: [0.0; 3],
-                    max: [domain.size[0], request.settings.fill_height, domain.size[2]],
+                    min,
+                    max: [min[0] + domain.size[0], min[1] + request.settings.fill_height, min[2] + domain.size[2]],
                 },
                 [0.0; 3],
             )
@@ -153,7 +154,7 @@ impl NativeSimulation {
             .partition_point(|event| event.applied.tick <= tick);
         let impulse = ImpulseSum {
             events: &request.impulses[begin..end],
-            origin: domain.min,
+            origin: domain.native_origin(),
         };
         Ok(PreparedTick {
             next_obstacle: step.next.obstacle,
@@ -179,13 +180,11 @@ impl NativeSimulation {
         native
             .surface(&mut self.surface)
             .map_err(|e| e.to_string())?;
-        if self.surface.len() > request.settings.max_vertices {
-            return Err(format!(
-                "Water surface needs {} vertices; capacity is {}. Lower resolution/detail or increase mesh capacity and reset.",
-                self.surface.len(),
-                request.settings.max_vertices
-            ));
+        if self.surface.len() > u32::MAX as usize {
+            return Err("Fluid surface exceeds 32-bit GPU vertex indexing".into());
         }
+        request.recycle.try_reserve(self.surface.len())
+            .map_err(|error| format!("Fluid surface CPU allocation failed: {error}"))?;
         request
             .recycle
             .extend(self.surface.iter().map(|v| MeshVertex {
@@ -194,8 +193,8 @@ impl NativeSimulation {
                 normal: v.normal,
                 _pad1: 0.0,
                 uv: [
-                    v.position[0] / domain.size[0],
-                    v.position[2] / domain.size[2],
+                    (v.position[0] - (1.5 * domain.cell_size) as f32) / domain.size[0],
+                    (v.position[2] - (1.5 * domain.cell_size) as f32) / domain.size[2],
                 ],
                 _pad2: [0.0; 2],
                 tangent: [0.0; 4],

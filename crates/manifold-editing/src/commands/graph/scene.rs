@@ -29,6 +29,7 @@ mod split;
 
 use physics::*;
 use physics_match::*;
+use manifold_core::scene_object_migration::loose_scene_object_owned_ids;
 use split::*;
 pub use physics::{
     scene_object_physics_eligibility, DisableSceneObjectPhysicsCommand,
@@ -964,12 +965,10 @@ fn shift_indexed_ports_down(
 /// `objects`, (3) renumbers every `object_j` wire (`j > k`) down by one so
 /// the slots stay dense. Same whole-level snapshot/restore undo shape as
 /// `AddSceneObjectCommand` — a structural composite edit, not a hand-reversed
-/// sequence of sub-steps. Ungrouped hand-built objects (a loose `scene_object`
-/// whose mesh/transform/material producers are NOT wrapped in a group) are a
-/// known gap shared with the pre-migration version of this command — deleting
-/// only the `scene_object` node leaves those loose producers orphaned rather
-/// than walking the full exclusive-upstream-subgraph D11 describes; tracked
-/// for P3 to handle if a real ungrouped scene needs it.
+/// sequence of sub-steps. Ungrouped hand-built objects (a loose
+/// `scene_object` whose mesh/transform/material producers are not wrapped in
+/// a group) use the same exclusive upstream ownership walk as duplication,
+/// retaining shared producers and their dependencies.
 ///
 /// `object_index` (`k`, the 0-based slot in `object_k`) is resolved by the
 /// caller from the live Vm's own `ObjectKnownRow::index`. This is a delete
@@ -1200,15 +1199,22 @@ impl Command for RemoveSceneObjectCommand {
                         || (wire.to_node == physics.world_id && wire.to_port == field_port))
                 });
             } else {
-                collect_node_ids(std::slice::from_ref(producer), &mut removed_ids);
-                nodes.retain(|n| n.id != producer_id);
-                wires.retain(|w| {
-                    w.from_node != producer_id
-                        && w.to_node != producer_id
-                        && !(w.to_node == render_id
+                let owned = if producer.type_id == "node.scene_object" {
+                    loose_scene_object_owned_ids(nodes, wires, producer_id)
+                } else {
+                    std::collections::HashSet::from([producer_id])
+                };
+                for node in nodes.iter().filter(|node| owned.contains(&node.id)) {
+                    collect_node_ids(std::slice::from_ref(node), &mut removed_ids);
+                }
+                nodes.retain(|node| !owned.contains(&node.id));
+                wires.retain(|wire| {
+                    !(owned.contains(&wire.from_node)
+                        || owned.contains(&wire.to_node)
+                        || (wire.to_node == render_id
                             && removed_indices
                                 .iter()
-                                .any(|index| w.to_port == format!("object_{index}")))
+                                .any(|index| wire.to_port == format!("object_{index}"))))
                 });
             }
 
@@ -2148,12 +2154,8 @@ pub(super) fn prune_scene_object_metadata(
 ///
 /// Ungrouped hand-built objects (a loose `scene_object` whose mesh/
 /// transform/material producers are NOT wrapped in a group) share
-/// [`RemoveSceneObjectCommand`]'s documented one-hop gap: only the bare
-/// `scene_object` node itself is cloned (no upstream producers to walk to —
-/// finding them would require a general graph-reachability search this
-/// command doesn't attempt), so the clone starts fully unwired. Every
-/// object this design's own producers (Add, importer, merge) create is
-/// grouped, so this is the shape that actually ships.
+/// their exclusive upstream chain. Shared producers remain in place and
+/// incoming shared-source wires are copied to the cloned chain.
 #[derive(Debug)]
 pub struct DuplicateSceneObjectCommand {
     target: GraphTarget,
@@ -2317,7 +2319,22 @@ impl Command for DuplicateSceneObjectCommand {
                 .ok_or("Duplicate Object source object is unavailable")?;
             let count = match physics_match.as_ref() {
                 Some(PhysicsSceneObjectMatch::Valid(physics)) => physics.render_indices.len(),
-                _ => group_render_indices(wires, render_id, source).len(),
+                _ => nodes
+                    .iter()
+                    .find(|node| node.id == source)
+                    .filter(|node| node.type_id == "node.scene_object")
+                    .map(|_| {
+                        wires
+                            .iter()
+                            .filter(|wire| {
+                                wire.from_node == source
+                                    && wire.to_node == render_id
+                                    && (wire.to_port == "object"
+                                        || wire.to_port.starts_with("object_"))
+                            })
+                            .count()
+                    })
+                    .unwrap_or_else(|| group_render_indices(wires, render_id, source).len()),
             };
             let count =
                 u32::try_from(count).map_err(|_| "Duplicate Object object count is exhausted")?;
@@ -2377,6 +2394,94 @@ impl Command for DuplicateSceneObjectCommand {
             } else {
                 let source_id = object_producer_id(wires, render_id, src_k)?;
                 let source_node = nodes.iter().find(|n| n.id == source_id)?.clone();
+                if source_node.type_id == "node.scene_object" {
+                    let owned = loose_scene_object_owned_ids(nodes, wires, source_id);
+                    if owned.is_empty() {
+                        return None;
+                    }
+                    let mut source_outputs: Vec<(u32, String)> = wires
+                        .iter()
+                        .filter_map(|wire| {
+                            if wire.from_node != source_id || wire.to_node != render_id {
+                                return None;
+                            }
+                            let index = if wire.to_port == "object" {
+                                0
+                            } else {
+                                wire.to_port.strip_prefix("object_")?.parse().ok()?
+                            };
+                            Some((index, wire.from_port.clone()))
+                        })
+                        .collect();
+                    source_outputs.sort_unstable();
+                    source_outputs.dedup_by_key(|(index, _)| *index);
+                    if source_outputs.is_empty() {
+                        return None;
+                    }
+
+                    let cloned_handle = source_node.handle.as_ref().map(|handle| format!("{handle} 2"));
+                    let mut clones = Vec::new();
+                    let mut numeric_map = std::collections::HashMap::new();
+                    let mut offset_applied = false;
+                    for source in nodes.iter().filter(|node| owned.contains(&node.id)) {
+                        let mut clone = deep_clone_with_fresh_ids(
+                            source,
+                            &mut next_id,
+                            &mut taken,
+                            &mut node_id_map,
+                        );
+                        if source.id == source_id {
+                            clone.handle = cloned_handle.clone();
+                            clone.editor_pos = clone.editor_pos.map(|(x, y)| (x + 40.0, y + 40.0));
+                        }
+                        if clone.type_id == "node.transform_3d" && !offset_applied {
+                            offset_applied = true;
+                            let cur = match clone.params.get("pos_x") {
+                                Some(SerializedParamValue::Float { value }) => *value,
+                                _ => 0.0,
+                            };
+                            clone.params.insert(
+                                "pos_x".to_string(),
+                                SerializedParamValue::Float { value: cur + 0.5 },
+                            );
+                        }
+                        numeric_map.insert(source.id, clone.id);
+                        clones.push(clone);
+                    }
+                    let clone_id = *numeric_map.get(&source_id)?;
+                    let cloned_wires: Vec<_> = wires
+                        .iter()
+                        .filter_map(|wire| {
+                            let to_node = numeric_map.get(&wire.to_node).copied()?;
+                            let from_node = numeric_map
+                                .get(&wire.from_node)
+                                .copied()
+                                .unwrap_or(wire.from_node);
+                            Some(EffectGraphWire {
+                                from_node,
+                                from_port: wire.from_port.clone(),
+                                to_node,
+                                to_port: wire.to_port.clone(),
+                            })
+                        })
+                        .collect();
+                    nodes.extend(clones);
+                    wires.extend(cloned_wires);
+                    for (part, (_, from_port)) in source_outputs.iter().enumerate() {
+                        wires.push(scene_build_wire(
+                            clone_id,
+                            from_port,
+                            render_id,
+                            &format!("object_{}", new_k + part as u32),
+                        ));
+                    }
+                    nodes.iter_mut().find(|n| n.id == render_id)?.params.insert(
+                        "objects".to_string(),
+                        SerializedParamValue::Float {
+                            value: new_count as f32,
+                        },
+                    );
+                } else {
                 let mut source_outputs: Vec<(u32, String)> = wires
                     .iter()
                     .filter_map(|wire| {
@@ -2464,6 +2569,7 @@ impl Command for DuplicateSceneObjectCommand {
                         value: new_count as f32,
                     },
                 );
+                }
             }
 
             Some(())

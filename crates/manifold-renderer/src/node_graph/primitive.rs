@@ -332,6 +332,15 @@ pub trait Primitive: PrimitiveSpec {
     /// Mirror of `EffectNode::provides_texture_output`.
     fn provides_texture_output(&self, _port: &str) -> bool { false }
 
+    /// A CPU producer may publish a larger array after evaluation. Storage is
+    /// dedicated, retained between frames, and installed before consumers run.
+    /// Capacity is an allocation hint, not a limit on the produced geometry.
+    fn provides_array_output(&self, _port: &str) -> bool { false }
+
+    fn provided_array_output(&self, _port: &str) -> Option<&manifold_gpu::GpuBuffer> {
+        None
+    }
+
     /// Mirror of `EffectNode::provided_texture_output`.
     fn provided_texture_output(&self, _port: &str) -> Option<&manifold_gpu::GpuTexture> {
         None
@@ -905,6 +914,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn provides_texture_output(&self, port: &str) -> bool {
         Primitive::provides_texture_output(self, port)
+    }
+    fn provides_array_output(&self, port: &str) -> bool {
+        Primitive::provides_array_output(self, port)
+    }
+    fn provided_array_output(&self, port: &str) -> Option<&manifold_gpu::GpuBuffer> {
+        Primitive::provided_array_output(self, port)
     }
     fn provided_texture_output(&self, port: &str) -> Option<&manifold_gpu::GpuTexture> {
         Primitive::provided_texture_output(self, port)

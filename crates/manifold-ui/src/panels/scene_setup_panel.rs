@@ -450,6 +450,7 @@ pub struct ObjectKnownRow {
     pub skin: Option<SkinRowVm>,
     pub physics_enabled: bool,
     pub physics_available: bool,
+    pub physics_unavailable_reason: Option<String>,
     pub physics_imported: bool,
     pub fluid_role_available: bool,
     pub fluid_roles: Result<Vec<FluidRoleRow>, String>,

@@ -236,8 +236,8 @@ pub struct SceneObjectKnownRow {
     /// object group for imported models and at root for hand-built objects.
     pub physics: Option<PhysicsVm>,
     pub physics_imported: bool,
-    /// Fluid domain and source nodes whose ordinary parameters belong to
-    /// this surface. Document IDs remain globally unique across groups.
+    /// Fluid domain or object-owned role nodes whose ordinary parameters belong
+    /// to this object. Document IDs remain globally unique across groups.
     pub fluid_node_ids: Vec<u32>,
     /// Static domain bounds when the fluid domain is fully authored by
     /// unwired scalar/transform parameters.
@@ -1246,7 +1246,7 @@ fn trace_scene_object(
                 }
                 for index in 0..super::fluid_role::MAX_FLUID_ROLES {
                     let role_port = format!("role_{index}");
-                    let Some((role_level, _, role, _)) =
+                    let Some((role_level, role_group, role, _)) =
                         resolve_producer_through_group(&current_level, n.id, &role_port)
                     else {
                         continue;
@@ -1254,6 +1254,11 @@ fn trace_scene_object(
                     if role.type_id != "node.fluid_role_source"
                         || fluid_node_ids.contains(&role.id)
                     {
+                        continue;
+                    }
+                    // A visible source object owns its role controls. Only
+                    // standalone source groups belong in the liquid's panel.
+                    if role_group.is_some() && role_level.nodes.iter().any(|node| node.type_id == "node.scene_object") {
                         continue;
                     }
                     fluid_node_ids.push(role.id);
@@ -1275,6 +1280,14 @@ fn trace_scene_object(
         cursor = current_level.producer(n.id, "in");
     }
     chain.reverse(); // wire order: source → … → scene_object.
+
+    if group_node_id.is_some() {
+        for role in level.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source") {
+            if !fluid_node_ids.contains(&role.id) {
+                fluid_node_ids.push(role.id);
+            }
+        }
+    }
 
     let row = SceneObjectVm::Known(Box::new(SceneObjectKnownRow {
         is_group: false,

@@ -1049,25 +1049,37 @@ impl ScenePanel {
             self.object_remove_ids.push((remove_id, row.index));
         }
         let mut next_cy = cy + ROW_H + ROW_GAP;
-        if row.physics_available && (row.parent_group_id.is_none() || row.is_group) {
-            let toggle_w = crate::slider::VALUE_BOX_W;
+        if (row.physics_available || row.physics_unavailable_reason.is_some())
+            && (row.parent_group_id.is_none() || row.is_group)
+        {
+            let toggle_w = crate::slider::VALUE_BOX_W.max(64.0);
             tree.add_label(
                 Some(self.content_parent), inner_x, next_cy,
                 inner_w - toggle_w - GAP, ROW_H, "Physics", label_style(),
             );
-            let physics_id = tree.add_button_keyed(
-                Some(self.content_parent), inner_x + inner_w - toggle_w, next_cy,
-                toggle_w, ROW_H, toggle_btn_style(row.physics_enabled),
-                if row.physics_enabled { "ON" } else { "OFF" },
-                obj_key(row.object_node_id as usize, OBJ_OFF_PHYSICS),
-            );
-            tree.set_name(physics_id, "scene_setup.properties.physics");
-            if row.physics_enabled {
-                self.object_disable_physics_ids.push((physics_id, row.index));
-            } else {
-                self.object_enable_physics_ids.push((physics_id, row.index));
+            if row.physics_available {
+                let physics_id = tree.add_button_keyed(
+                    Some(self.content_parent), inner_x + inner_w - toggle_w, next_cy,
+                    toggle_w, ROW_H, toggle_btn_style(row.physics_enabled),
+                    if row.physics_enabled { "Disable" } else { "Enable" },
+                    obj_key(row.object_node_id as usize, OBJ_OFF_PHYSICS),
+                );
+                tree.set_name(physics_id, "scene_setup.properties.physics");
+                if row.physics_enabled {
+                    self.object_disable_physics_ids.push((physics_id, row.index));
+                } else {
+                    self.object_enable_physics_ids.push((physics_id, row.index));
+                }
+                next_cy += ROW_H;
+            } else if let Some(reason) = row.physics_unavailable_reason.as_deref() {
+                next_cy += ROW_H;
+                let max_chars = ((inner_w / 6.5).floor() as usize).max(8);
+                for line in crate::graph_canvas::wrap_text(reason, max_chars) {
+                    tree.add_label(Some(self.content_parent), inner_x, next_cy,
+                        inner_w, ROW_H, &line, label_style());
+                    next_cy += ROW_H;
+                }
             }
-            next_cy += ROW_H;
         }
         self.build_fluid_role_action(tree, inner_x, inner_w, next_cy + ROW_GAP, row)
     }
