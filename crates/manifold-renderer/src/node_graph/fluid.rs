@@ -156,14 +156,13 @@ impl FluidSettings {
                         .into(),
                 );
             }
-            let bounds = domain.bounds(volume);
-            if bounds.min.iter().any(|v| *v < 0.0)
-                || bounds
-                    .max
-                    .iter()
-                    .zip(domain.size)
-                    .any(|(v, size)| *v > size)
-            {
+            // Containment belongs to the authored scene domain. Native bounds
+            // include the solver's padded boundary cells and have another origin.
+            if (0..3).any(|axis| {
+                let half = volume.scale[axis] * 0.5;
+                volume.pos[axis] - half < domain.min[axis]
+                    || volume.pos[axis] + half > domain.min[axis] + domain.size[axis]
+            }) {
                 return Err("Water: initial volume must be fully contained in the domain".into());
             }
         }
@@ -2366,6 +2365,37 @@ mod tests {
             .observe(settings, controls, Seconds(0.0), 1.0, 0.0)
             .unwrap();
         assert_eq!(runtime.history.len(), 1);
+    }
+
+    #[test]
+    fn fluid_initial_volume_containment_is_independent_of_grid_padding() {
+        for resolution in [8, 16, 64] {
+            let domain = Transform {
+                pos: [3.0, -2.0, 7.0],
+                scale: [4.0; 3],
+                ..Transform::default()
+            };
+            let mut settings = FluidSettings {
+                resolution,
+                domain: Some(domain),
+                initial_volume: Some(domain),
+                ..FluidSettings::default()
+            };
+            settings
+                .validate()
+                .expect("a volume touching authored domain faces is valid");
+            for axis in 0..3 {
+                for offset in [-0.01, 0.01] {
+                    let mut outside = domain;
+                    outside.pos[axis] += offset;
+                    settings.initial_volume = Some(outside);
+                    assert!(
+                        settings.validate().unwrap_err().contains("contained"),
+                        "resolution {resolution}, axis {axis}, offset {offset}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
