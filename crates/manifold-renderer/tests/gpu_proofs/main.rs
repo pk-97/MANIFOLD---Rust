@@ -47,6 +47,7 @@ mod physics_solids;
 mod physics_boxes;
 mod water_basin;
 mod physics_takes;
+mod fluid_array_growth;
 mod render_scene_object_visibility;
 mod render_scene_ao_mask;
 mod render_scene_pcss;

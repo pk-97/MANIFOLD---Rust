@@ -695,6 +695,12 @@ impl MetalBackend {
 }
 
 impl Backend for MetalBackend {
+    fn install_array_buffer(&mut self, slot: Slot, buffer: GpuBuffer) -> bool {
+        let Some(current) = self.buffers_array.get_mut(&slot) else { return false; };
+        *current = buffer;
+        true
+    }
+
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }

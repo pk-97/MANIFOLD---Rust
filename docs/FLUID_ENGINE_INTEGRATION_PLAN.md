@@ -60,6 +60,36 @@ Coupling source audit, 2026-09-27: `crates/manifold-fluids/native/flip_engine/fl
 
 **D8 — Separate simulation, meshing and appearance.** Viscosity/surface tension alter simulation; surface reconstruction alters mesh output; absorption/refraction/roughness alter rendering. Water and honey presets set these deliberately but leave them editable. Runtime-mutability is capability metadata, not a promise that every native setting can change safely mid-step.
 
+**D9 — Scene and resource foundations (2026-09-28).** The next delivery covers
+ordinary object ownership and controls, coherent object lifecycle, fluid resource
+growth, exposed quality settings and shallow-water retention. Bake/cache workflow
+design is the next discussion, not part of this delivery. Legacy FLIP obstacle
+objects migrate to the existing grouped object and Collider role representation;
+their authored transform and stable parameter bindings survive. Loose objects
+share an exclusive-upstream ownership walk for deletion and duplication, retaining
+shared inputs. Object-owned fluid role controls belong to their source object.
+Enable Physics explains unsupported configurations; remove an explicit Fluid Role
+before converting its source to a rigid body, which participates in scene coupling
+automatically.
+
+Mesh allocation grows without resetting the simulation or truncating geometry,
+including downstream array consumers and recorded snapshots. `max_capacity`
+remains a compatible initial allocation hint, not an output ceiling. Growth uses
+the GPU's buffer/working-set admission and reports allocation errors. The former
+96-resolution and native 128³-total checks are removed. Resolution has an 8–512
+default authoring range; the exposed Grid Budget defaults to eight million native
+cells and can be increased deliberately. Native indexing and actual memory remain
+constraints. Whitewater retains its separately exposed particle budget. Resolution,
+transfer, whitewater and surface controls use ordinary parameters; changing solver
+setup restarts its epoch. CPU cost grows with grid and meshing detail; these controls
+do not imply real-time operation.
+
+The authored domain describes usable liquid space. Native grids add three cells
+per axis for FLIP's 1.5-cell boundary margins, keeping cell spacing and authored
+bounds consistent. Initial liquid, role geometry, rigid coupling, force sampling,
+surface output and whitewater use that same offset. This corrects shallow fills
+being seeded inside the solver's solid boundary.
+
 ## 3. Architecture and ownership
 
 ```text
@@ -164,7 +194,7 @@ Validate finite, nondegenerate, consistently wound closed volume topology at pre
 
 Rectangular domains use upstream cell counts per axis and one uniform cell size. V1 domain bounds are axis-aligned in scene space, with editable size/position and closed/open faces through `fluidsimulation.h` (`setFluidBoundaryCollisions`). A source outside the domain is visibly flagged; moving the domain requires a new simulation. Separate domains do not exchange liquid or collide with each other's liquid in this version.
 
-The `fluid_surface.domain` Transform is setup-only: position is centre and scale is full XYZ size (0.5–20 metres per axis); rotation and billboarding are rejected. An unwired input preserves the original `domain_size` cube and floor at Y=0. New Add Fluid groups expose a separate ordinary Transform as Domain Position / Width / Height / Depth. `FluidSettings::domain_layout()` is the single grid/bounds oracle for the worker and editor overlay. Cell width is the smaller of longest-side/resolution and shortest-side/8; axis counts round up, expanding around the authored centre by less than one cell per axis. The overlay draws these effective bounds. Native limits become 8–512 cells per axis while retaining the existing total 128³ cap; thin containers gain adequate thickness without increasing the total memory budget. Domain edits reset the epoch; translating only the rendered water is rejected because sources, colliders and whitewater must share the same scene-to-native mapping. Six closed-face controls are setup settings and part of cache identity; v3–v6 caches retain a closed legacy cube.
+The `fluid_surface.domain` Transform is setup-only: position is centre and scale is full XYZ size (0.5–20 metres per axis); rotation and billboarding are rejected. An unwired input preserves the original `domain_size` cube and floor at Y=0. New Add Fluid groups expose a separate ordinary Transform as Domain Position / Width / Height / Depth. `FluidSettings::domain_layout()` is the single grid/bounds oracle for the worker and editor overlay. Cell width is the smaller of longest-side/resolution and shortest-side/8; axis counts round up, expanding around the authored centre by less than one cell per axis. The overlay draws these effective bounds. Native boundary padding lies outside those effective bounds. Grid admission uses the exposed Grid Budget and checked native indexing rather than fixed 96-resolution or 128³-total ceilings. Domain edits reset the epoch; translating only the rendered water is rejected because sources, colliders and whitewater must share the same scene-to-native mapping. Six closed-face controls are setup settings and part of cache identity; v3–v6 caches retain a closed legacy cube.
 
 Expose backend capability metadata to preparation: supported roles, moving geometry, fields, setup-only versus live settings. An unsupported connection is rejected before playback with its reason. Never accept a wire and silently ignore it.
 

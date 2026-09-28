@@ -1048,6 +1048,15 @@ pub trait EffectNode: Send {
     /// ordinary writable contract; the node must support both paths.
     fn provides_texture_output(&self, _port: &str) -> bool { false }
 
+    /// A CPU producer may publish a larger array after evaluation. Storage is
+    /// dedicated, retained between frames, and installed before consumers run.
+    /// Capacity is an allocation hint, not a limit on the produced geometry.
+    fn provides_array_output(&self, _port: &str) -> bool { false }
+
+    fn provided_array_output(&self, _port: &str) -> Option<&manifold_gpu::GpuBuffer> {
+        None
+    }
+
     /// Texture published after evaluate, before downstream consumers. Never
     /// mutate a published texture. Cross-encoder sharing must establish GPU
     /// readiness separately; this hook does not submit or wait for work.

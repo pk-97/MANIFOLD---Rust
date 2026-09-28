@@ -348,7 +348,7 @@ fn fluid_coupled_worker_inactive_fragments_do_not_displace_initial_liquid() {
 }
 
 #[test]
-fn fluid_coupled_worker_mesh_failure_retains_pair_until_reset() {
+fn fluid_coupled_worker_mesh_growth_preserves_pair_and_impulse_receipts() {
     let mut fixture = fixture();
     fixture.0.max_vertices = 3;
     let mut runtime = FluidRuntime::default();
@@ -358,32 +358,26 @@ fn fluid_coupled_worker_mesh_failure_retains_pair_until_reset() {
     let version = runtime.version;
     enqueue_scene(&mut runtime, 1, 0.0, combined_target(), 0.25);
     observe(&mut runtime, &fixture, TICK, 0.0, true);
-    assert!(runtime.advance(true).unwrap_err().contains("capacity"));
-    assert_eq!(runtime.completed_tick, 0);
-    assert_eq!(runtime.version, version);
-    assert_eq!(runtime.coupled_rigid_frame().unwrap().stamp, initial.stamp);
-    assert_eq!(runtime.coupled_rigid_frame().unwrap().poses, initial.poses);
-    assert!(runtime.vertices.is_empty());
+    runtime.advance(true).unwrap();
+    assert_eq!(runtime.completed_tick, 1);
+    assert!(runtime.version > version);
+    assert_eq!(runtime.coupled_rigid_frame().unwrap().stamp.epoch, initial.stamp.epoch);
+    assert_eq!(runtime.coupled_rigid_frame().unwrap().stamp.tick, 1);
+    assert!(runtime.vertices.len() > fixture.0.max_vertices);
     let receipts: Vec<_> = runtime.drain_scene_impulses().collect();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].value.target, combined_target());
     assert_eq!(receipts[0].applied.tick, 0);
-    assert!(runtime.advance(true).is_err());
-    assert_eq!(runtime.drain_scene_impulses().count(), 0);
-    fixture.0.max_vertices = FluidSettings::default().max_vertices;
-    observe(&mut runtime, &fixture, TICK, 0.0, true);
     runtime.advance(true).unwrap();
-    assert_ne!(
-        runtime.coupled_rigid_frame().unwrap().stamp.epoch,
-        initial.stamp.epoch
-    );
+    assert_eq!(runtime.completed_tick, 1);
+    assert_eq!(runtime.drain_scene_impulses().count(), 0);
     observe(&mut runtime, &fixture, 2.0 * TICK, 0.0, true);
     runtime.advance(true).unwrap();
     assert_eq!(
         runtime.coupled_rigid_frame().unwrap().stamp,
         TickStamp {
             epoch: runtime.epoch,
-            tick: 1
+            tick: 2
         }
     );
     assert!(!runtime.vertices.is_empty());

@@ -30,7 +30,8 @@ pub const DEFAULT_SEED: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
-    /// Rectangular uniform grid; each axis is 8..=512, total at most 128^3.
+    /// Rectangular native grid, including boundary cells. Each axis needs at
+    /// least eight cells; expanded grids must fit native signed 32-bit indexing.
     pub cells: [u32; 3],
     pub cell_size: f64,
     pub surface_subdivisions: u32,
@@ -870,19 +871,20 @@ fn validate_config(config: Config) -> Result<(), FluidError> {
     if config
         .cells
         .iter()
-        .any(|&cells| !(8..=512).contains(&cells))
+        .any(|&cells| cells < 8)
     {
-        return Err(FluidError::input("each cell count must be in 8..=512"));
+        return Err(FluidError::input("each native cell count must be at least 8"));
     }
     let total = u64::from(config.cells[0])
         .checked_mul(u64::from(config.cells[1]))
         .and_then(|value| value.checked_mul(u64::from(config.cells[2])))
         .ok_or_else(|| FluidError::input("cell count overflow"))?;
-    if total > 128_u64.pow(3) {
-        return Err(FluidError::input("total cell count must be at most 128^3"));
-    }
-    if config.surface_subdivisions > 2 {
-        return Err(FluidError::input("surface_subdivisions must be in 0..=2"));
+    let subdivision = u64::from(config.surface_subdivisions) + 1;
+    let surface_nodes = config.cells.iter().try_fold(1u64, |total, n| {
+        total.checked_mul((u64::from(*n) * subdivision).checked_add(1)?)
+    });
+    if total > i32::MAX as u64 || surface_nodes.is_none_or(|n| n > i32::MAX as u64) {
+        return Err(FluidError::input("expanded grid exceeds native signed 32-bit indexing"));
     }
     Ok(())
 }
@@ -959,7 +961,8 @@ fn decode_surface(
     if bytes.len().saturating_sub(cursor) < vertex_bytes {
         return Err(FluidError::native("surface vertex data is truncated"));
     }
-    vertices.reserve(vertex_count);
+    vertices.try_reserve(vertex_count)
+        .map_err(|error| FluidError::native(format!("surface vertex allocation failed: {error}")))?;
     for _ in 0..vertex_count {
         let position = [
             read_f32(bytes, &mut cursor, "surface vertex")?,
@@ -986,7 +989,10 @@ fn decode_surface(
     if bytes.len().saturating_sub(cursor) < triangle_bytes {
         return Err(FluidError::native("surface triangle data is truncated"));
     }
-    triangles.reserve(triangle_count);
+    triangles.try_reserve(triangle_count)
+        .map_err(|error| FluidError::native(format!("surface triangle allocation failed: {error}")))?;
+    normals.try_reserve(vertex_count)
+        .map_err(|error| FluidError::native(format!("surface normal allocation failed: {error}")))?;
     normals.resize(vertex_count, [0.0; 3]);
     for _ in 0..triangle_count {
         let indices = [
@@ -1022,7 +1028,8 @@ fn decode_surface(
     if cursor != bytes.len() {
         return Err(FluidError::native("surface data has trailing bytes"));
     }
-    output.reserve(triangle_count.saturating_mul(3));
+    output.try_reserve(triangle_count.saturating_mul(3))
+        .map_err(|error| FluidError::native(format!("surface output allocation failed: {error}")))?;
     for indices in triangles.iter().copied() {
         for index in indices {
             let normal = normalize_normal(normals[index as usize]);
@@ -1487,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_physics_rectangular_cell_limit_retains_total_budget() {
+    fn scene_physics_grid_limits_follow_native_indexing() {
         let config = Config {
             cells: [320, 8, 320],
             cell_size: 0.0625,
@@ -1495,19 +1502,20 @@ mod tests {
             apic: false,
         };
         super::validate_config(config).unwrap();
+        assert!(super::validate_config(Config { cells: [2048; 3], ..config }).is_err());
         assert!(
             super::validate_config(Config {
                 cells: [513, 8, 8],
                 ..config
             })
-            .is_err()
+            .is_ok()
         );
         assert!(
             super::validate_config(Config {
                 cells: [256, 128, 128],
                 ..config
             })
-            .is_err()
+            .is_ok()
         );
         // Exercise an extended axis through the native constructor and solver,
         // while keeping this compatibility probe small (8448 cells).

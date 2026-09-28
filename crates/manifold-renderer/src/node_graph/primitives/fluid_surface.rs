@@ -121,7 +121,8 @@ crate::primitive! {
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(24.0), range: Some((8.0, 96.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(24.0), range: Some((8.0, 512.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("grid_budget_mcells"), label: "Grid Budget (M cells)", ty: ParamType::Float, default: ParamValue::Float(8.0), range: Some((0.01, 512.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Closed −X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Closed +X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -151,7 +152,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("whitewater_max_energy"), label: "Whitewater Max Energy", ty: ParamType::Float, default: ParamValue::Float(60.0), range: Some((0.01, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("whitewater_capacity"), label: "Whitewater Capacity", ty: ParamType::Int, default: ParamValue::Float(100000.0), range: Some((1.0, 250000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("transfer"), label: "Transfer", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["FLIP", "APIC"] },
-        ParamDef { name: Cow::Borrowed("max_capacity"), label: "Mesh Capacity", ty: ParamType::Int, default: ParamValue::Float(786432.0), range: Some((3.0, 3145728.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("max_capacity"), label: "Initial Mesh Allocation", ty: ParamType::Int, default: ParamValue::Float(786432.0), range: Some((3.0, 3145728.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cache_mode"), label: "Cache Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: &["Live", "Record", "Playback"] },
         ParamDef { name: Cow::Borrowed("cache_path"), label: "Cache Path", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
@@ -164,6 +165,7 @@ crate::primitive! {
     aliases: ["water", "liquid", "fluid", "FLIP", "APIC"],
     boundary_reason: IoBridge,
     extra_fields: {
+        surface_buffer: Option<manifold_gpu::GpuBuffer> = None,
         runtime: FluidRuntime = FluidRuntime::default(),
         upload: FluidMeshUpload = FluidMeshUpload::default(),
         foam_upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
@@ -197,6 +199,12 @@ impl FluidSurface {
 }
 
 impl Primitive for FluidSurface {
+    fn provides_array_output(&self, port: &str) -> bool { port == "vertices" }
+
+    fn provided_array_output(&self, port: &str) -> Option<&manifold_gpu::GpuBuffer> {
+        (port == "vertices").then_some(self.surface_buffer.as_ref()).flatten()
+    }
+
     fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
         self.runtime.set_source_identity(identity);
     }
@@ -452,6 +460,17 @@ impl Primitive for FluidSurface {
                 / 3)
                 * 3,
         };
+        let budget = ctx.param_f32("grid_budget_mcells", 8.0);
+        if let Ok(layout) = settings.domain_layout() {
+            let cells = layout.cells.into_iter().map(|n| u64::from(n) + 3).product::<u64>();
+            if !budget.is_finite() || budget <= 0.0 || cells as f64 > f64::from(budget) * 1e6 {
+                Self::report_failure(&mut self.domain_failure, ctx, format!(
+                    "Fluid grid needs {:.3} million cells including boundary padding; Grid Budget is {budget:.3} million. Increase Grid Budget or lower Resolution. CPU time and memory grow with cell count.",
+                    cells as f64 / 1e6,
+                ));
+                return;
+            }
+        }
         let cache_mode = match ctx.params.get("cache_mode") {
             Some(ParamValue::Enum(value)) => CacheMode::from_enum(*value),
             None => Some(CacheMode::Live),
@@ -596,6 +615,29 @@ impl Primitive for FluidSurface {
         };
         let mut uploaded = false;
         if let Some(dst) = ctx.outputs.array("vertices") {
+            let required = self.runtime.vertices.len() as u64 * std::mem::size_of::<MeshVertex>() as u64;
+            if required > dst.size {
+                // Grow only when needed. The current snapshot and solver epoch
+                // survive resource replacement, including during offline export.
+                let stride = std::mem::size_of::<MeshVertex>() as u64 * 3;
+                let bytes = required.max(dst.size.saturating_mul(3) / 2).div_ceil(stride) * stride;
+                let candidate = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    gpu.device.modifier_memory_snapshot(), bytes,
+                ).map_err(|error| error.to_string()).and_then(|()| {
+                    gpu.device.try_create_buffer_shared(bytes)
+                });
+                match candidate {
+                    Ok(buffer) => self.surface_buffer = Some(buffer),
+                    Err(error) => {
+                        Self::report_failure(&mut self.domain_failure, ctx,
+                            format!("Fluid surface needs {bytes} bytes of GPU storage: {error}"));
+                        return;
+                    }
+                }
+            } else {
+                self.surface_buffer = Some(dst.clone());
+            }
+            let dst = self.surface_buffer.as_ref().expect("surface storage prepared");
             match self.upload.upload(
                 gpu,
                 dst,
@@ -1169,6 +1211,22 @@ mod tests {
         assert_eq!(receipt.value.field, field);
         assert_eq!(receipt.value.target, ImpulseTarget::Fluid);
         graph_node.drain_physics_impulses(&mut |_| panic!("receipt drained twice"));
+    }
+
+    #[test]
+    fn fluid_grid_budget_is_explicit_and_can_be_increased() {
+        let mut fluid = FluidSurface::new();
+        let mut params = ParamValues::default();
+        params.insert(Cow::Borrowed("resolution"), ParamValue::Float(8.0));
+        params.insert(Cow::Borrowed("fill_height"), ParamValue::Float(0.0));
+        params.insert(Cow::Borrowed("grid_budget_mcells"), ParamValue::Float(0.001));
+        let mut errors = Vec::new();
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.iter().any(|error| error.contains("Grid Budget")));
+        params.insert(Cow::Borrowed("grid_budget_mcells"), ParamValue::Float(0.01));
+        errors.clear();
+        run_mock(&mut fluid, &params, 0.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]

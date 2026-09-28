@@ -27,6 +27,7 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::physics::PhysicsAuthoredSampleScope;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
 
+
 /// Resolve a resource's slot dims for `Backend::acquire` / `release`.
 ///
 /// Resolution order (matches the planner's compile-time decision):
@@ -92,6 +93,8 @@ struct PhysicsSample<'a> {
 
 #[path = "execution/coupled_physics.rs"]
 mod coupled_physics;
+#[path = "execution/array_growth.rs"]
+mod array_growth;
 
 pub struct Executor {
     backend: Box<dyn Backend>,
@@ -99,6 +102,8 @@ pub struct Executor {
     /// (Per-frame allocation in tight loops is forbidden by CLAUDE.md.)
     input_scratch: Vec<(&'static str, Slot)>,
     output_scratch: Vec<(&'static str, Slot)>,
+    growing_arrays: Vec<bool>,
+    array_capacity_scratch: Vec<(&'static str, u32)>,
     /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
     /// nodes can queue scalar writes. Drained back into the backend after
     /// each node's `evaluate` returns.
@@ -488,6 +493,8 @@ impl Executor {
             backend,
             input_scratch: Vec::new(),
             output_scratch: Vec::new(),
+            growing_arrays: Vec::new(),
+            array_capacity_scratch: Vec::with_capacity(8),
             scalar_write_scratch: Vec::new(),
             camera_write_scratch: Vec::new(),
             light_write_scratch: Vec::new(),
@@ -1421,6 +1428,7 @@ impl Executor {
             self.mesh_revisions
                 .resize(plan.resource_count(), crate::node_graph::mesh_change::MeshRevision::default());
             self.mesh_pending.resize(plan.resource_count(), false);
+            self.growing_arrays = super::resource_allocation::growing_array_resources(graph, plan);
             self.mesh_dep_snapshots.resize_with(plan.resource_count(), || None);
             self.content_shapes.resize(plan.resource_count(), None);
             self.resource_storage_state.resize(plan.resource_count(), None);
@@ -1680,6 +1688,15 @@ impl Executor {
             {
                 g.native_enc
                     .set_profile_tag(&format!("{}:s{idx}", self.profile_scope));
+            }
+
+            // Capacity follows growing upstream arrays before encoding consumers.
+            if let Some(gpu) = gpu.as_deref_mut()
+                && let Err(error) = self.grow_step_arrays(graph, plan, step, gpu.device) {
+                log::error!("[graph] array growth at {:?}: {error}", step.node);
+                gpu.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
+                    crate::frame_status::FrameRenderFailure::SurfaceAllocation));
+                return;
             }
 
             // 1. Acquire output slots.
@@ -2101,6 +2118,11 @@ impl Executor {
                     }
                     // Publish before revision commit and downstream reads.
                     for &(port, slot) in &self.output_scratch {
+                        if let Some(buffer) = inst.node.provided_array_output(port)
+                            && self.backend.array_buffer(slot).is_none_or(|old| old.identity_key() != buffer.identity_key()) {
+                            assert!(self.backend.install_array_buffer(slot, buffer.clone()),
+                                "provided array must have dedicated preallocated storage");
+                        }
                         if self.backend.provided_texture_descriptor(slot).is_some() {
                             if let Some(texture) = inst.node.provided_texture_output(port) {
                                 self.backend.install_provided_texture(slot, texture);

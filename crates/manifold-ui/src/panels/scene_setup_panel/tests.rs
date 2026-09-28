@@ -137,6 +137,7 @@
                     skin: None,
                     physics_enabled: false,
                     physics_available: false,
+                    physics_unavailable_reason: None,
                     physics_imported: false,
                     fluid_role_available: false,
                     fluid_roles: Ok(Vec::new()),
@@ -378,6 +379,8 @@
         let mut vm = azalea_shaped_vm();
         let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
         row.physics_available = true;
+        let expected_layer = vm.layer_id.clone();
+        let expected_scene = vm.scene_root_node_id;
 
         let mut panel = ScenePanel::new();
         panel.open();
@@ -387,7 +390,39 @@
 
         let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
         assert!(texts.contains(&"Physics"), "imported object should expose the Physics property");
+        assert!(texts.contains(&"Enable"), "eligible object should expose an explicit Enable action");
         assert!(!texts.iter().any(|text| text.contains("Split into 8")), "legacy split action must stay out of the Physics property");
+
+        let enable_id = panel.object_enable_physics_ids[0].0;
+        let (_, actions) = panel.handle_event(&UIEvent::Click {
+            node_id: enable_id,
+            pos: Vec2::ZERO,
+            modifiers: Modifiers::default(),
+        }, &mut tree);
+        assert!(matches!(
+            actions.as_slice(),
+            [PanelAction::Project(ProjectAction::SceneSetupEnablePhysics(layer_id, scene_root, index))]
+                if layer_id == &expected_layer && *scene_root == expected_scene && *index == 0
+        ));
+    }
+
+    #[test]
+    fn unavailable_physics_property_shows_reason_without_enable_action() {
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.physics_unavailable_reason = Some("Fluid role objects cannot be rigid bodies".to_string());
+
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        assert!(texts.contains(&"Physics"));
+        assert!(texts.contains(&"Fluid role objects cannot be rigid bodies"));
+        assert!(panel.object_enable_physics_ids.is_empty());
+        assert!(panel.object_disable_physics_ids.is_empty());
     }
 
     #[test]

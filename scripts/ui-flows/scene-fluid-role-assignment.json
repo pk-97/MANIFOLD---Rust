@@ -77,7 +77,7 @@
         }
       },
       "check": {
-        "TextEquals": "OFF"
+        "TextEquals": "Enable"
       }
     }
   },
@@ -103,7 +103,7 @@
         }
       },
       "check": {
-        "TextEquals": "ON"
+        "TextEquals": "Disable"
       }
     }
   },
@@ -145,7 +145,7 @@
         }
       },
       "check": {
-        "TextEquals": "OFF"
+        "TextEquals": "Enable"
       }
     }
   },

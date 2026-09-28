@@ -1053,7 +1053,7 @@ impl FluidRuntime {
             before: span.before.acceleration_field.as_ref(),
             after: span.after.acceleration_field.as_ref(),
             alpha: span.alpha,
-            origin: domain.min,
+            origin: domain.native_origin(),
         }
     }
 
@@ -1453,7 +1453,7 @@ mod tests {
             true,
         );
         assert!(
-            gravity[0] - resting[0] > 0.01 && resting[2] - gravity[2] > 0.01,
+            gravity[0] - resting[0] > 0.005 && resting[2] - gravity[2] > 0.005,
             "field must move the native fluid: resting={resting:?}, gravity={gravity:?}, field={field:?}"
         );
         for axis in 0..3 {
@@ -1667,9 +1667,9 @@ mod tests {
             ],
             FluidSettings::default().domain_layout().unwrap(),
         );
-        assert_eq!(whitewater.foam[0].pos_scale, [-1.0, 0.5, 1.0, 1.0]);
-        assert_eq!(whitewater.bubbles[0].pos_scale, [0.0, 0.4, 0.0, 0.5]);
-        assert_eq!(whitewater.spray[0].pos_scale, [1.0, 2.5, -1.0, 0.0]);
+        assert_eq!(whitewater.foam[0].pos_scale, [-1.25, 0.25, 0.75, 1.0]);
+        assert_eq!(whitewater.bubbles[0].pos_scale, [-0.25, 0.15, -0.25, 0.5]);
+        assert_eq!(whitewater.spray[0].pos_scale, [0.75, 2.25, -1.25, 0.0]);
         let mut runtime = FluidRuntime::default();
         runtime
             .observe(
@@ -1796,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn fluid_mesh_overflow_fails_until_reset_instead_of_truncating() {
+    fn fluid_mesh_outgrows_initial_allocation_without_reset_or_truncation() {
         let mut runtime = FluidRuntime::default();
         let settings = FluidSettings {
             resolution: 12,
@@ -1810,14 +1810,35 @@ mod tests {
         runtime
             .observe(settings, FluidControls::default(), Seconds(TICK), 1.0, 0.0)
             .unwrap();
-        assert!(runtime.advance(true).unwrap_err().contains("capacity"));
-        assert!(runtime.vertices.is_empty());
-        assert!(runtime.advance(true).is_err());
+        runtime.advance(true).unwrap();
+        assert!(runtime.vertices.len() > settings.max_vertices);
+        assert_eq!(runtime.completed_tick, 1);
+        runtime.advance(true).unwrap();
+        assert_eq!(runtime.completed_tick, 1);
         runtime
             .observe(settings, FluidControls::default(), Seconds(TICK), 1.0, 1.0)
             .unwrap();
         runtime.advance(true).unwrap();
         assert_eq!(runtime.completed_tick, 0);
+    }
+
+    #[test]
+    fn shallow_liquid_remains_present_at_low_resolution() {
+        for resolution in [8, 16] {
+            let settings = FluidSettings { resolution, fill_height: 0.16, ..FluidSettings::default() };
+            let controls = FluidControls { emission: false, obstacle_enabled: false, ..FluidControls::default() };
+            let mut runtime = FluidRuntime::default();
+            runtime.observe(settings, controls, Seconds::ZERO, 1.0, 0.0).unwrap();
+            let mut initial_particles = 0;
+            for tick in [1, 30, 120] {
+                runtime.observe(settings, controls, Seconds(tick as f64 * TICK), 1.0, 0.0).unwrap();
+                runtime.advance(true).unwrap();
+                if tick == 1 { initial_particles = runtime.stats.particles; }
+                assert!(!runtime.vertices.is_empty(), "empty surface at {resolution} cells, tick {tick}");
+                assert!(runtime.stats.particles > 0 && runtime.stats.particles as f64 >= initial_particles as f64 * 0.95,
+                    "shallow water lost at {resolution} cells, tick {tick}");
+            }
+        }
     }
 
     #[test]

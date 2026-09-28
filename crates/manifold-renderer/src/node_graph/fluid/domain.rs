@@ -13,8 +13,8 @@ pub struct FluidDomainLayout {
 
 impl FluidSettings {
     pub fn domain_layout(self) -> Result<FluidDomainLayout, String> {
-        if !(8..=96).contains(&self.resolution) {
-            return Err("Fluid: resolution must be between 8 and 96".into());
+        if self.resolution < 8 {
+            return Err("Fluid: resolution must be at least 8 cells".into());
         }
         let pose = self.domain.unwrap_or(Transform {
             pos: [0.0, self.domain_size * 0.5, 0.0],
@@ -51,10 +51,10 @@ impl FluidSettings {
             };
             count as u32
         });
-        if cells.iter().any(|n| !(8..=512).contains(n))
-            || cells.into_iter().map(u64::from).product::<u64>() > 128_u64.pow(3)
-        {
-            return Err("Fluid: domain grid exceeds the supported cell budget".into());
+        if cells.iter().any(|n| *n < 8)
+            || cells.iter().try_fold(1u64, |total, n| total.checked_mul(u64::from(*n) + 4))
+                .is_none_or(|total| total > i32::MAX as u64) {
+            return Err("Fluid: padded grid exceeds the native solver's 32-bit grid indexing".into());
         }
         let size = cells.map(|n| (f64::from(n) * cell_size) as f32);
         let min = std::array::from_fn(|i| pose.pos[i] - size[i] * 0.5);
@@ -86,7 +86,9 @@ impl FluidDomainLayout {
 
     pub(super) fn config(self, settings: FluidSettings) -> Config {
         Config {
-            cells: self.cells,
+            // FLIP reserves 1.5 cells at each closed boundary. They belong
+            // outside the authored domain, not inside its initial fill.
+            cells: self.cells.map(|n| n + 3),
             cell_size: self.cell_size,
             surface_subdivisions: settings.surface_subdivisions,
             apic: settings.apic,
@@ -94,11 +96,17 @@ impl FluidDomainLayout {
     }
 
     pub(super) fn to_native(self, point: [f32; 3]) -> [f32; 3] {
-        std::array::from_fn(|i| point[i] - self.min[i])
+        let origin = self.native_origin();
+        std::array::from_fn(|i| point[i] - origin[i])
     }
 
     pub(super) fn to_scene(self, point: [f32; 3]) -> [f32; 3] {
-        std::array::from_fn(|i| point[i] + self.min[i])
+        let origin = self.native_origin();
+        std::array::from_fn(|i| point[i] + origin[i])
+    }
+
+    pub(super) fn native_origin(self) -> [f32; 3] {
+        self.min.map(|value| value - (1.5 * self.cell_size) as f32)
     }
 
     pub(super) fn bounds(self, pose: Transform) -> Bounds {
@@ -115,12 +123,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scene_physics_domain_legacy_cube_mapping_is_unchanged() {
+    fn scene_physics_domain_padding_preserves_authored_cube_bounds() {
         let layout = FluidSettings::default().domain_layout().unwrap();
         assert_eq!(layout.min, [-2.0, 0.0, -2.0]);
         assert_eq!(layout.size, [4.0; 3]);
         assert_eq!(layout.cells, [24; 3]);
-        assert_eq!(layout.to_native([1.0, 2.0, 3.0]), [3.0, 2.0, 5.0]);
+        assert_eq!(layout.to_native([1.0, 2.0, 3.0]), [3.25, 2.25, 5.25]);
+        assert_eq!(layout.config(FluidSettings::default()).cells, [27; 3]);
+    }
+
+    #[test]
+    fn scene_physics_domain_accepts_resolution_above_old_96_limit() {
+        let settings = FluidSettings { resolution: 128, ..FluidSettings::default() };
+        settings.validate().unwrap();
+        assert_eq!(settings.domain_layout().unwrap().cells, [128; 3]);
     }
 
     #[test]
@@ -150,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_physics_domain_thin_grid_keeps_eight_cells_without_raising_total_budget() {
+    fn scene_physics_domain_thin_grid_keeps_eight_cells() {
         let settings = FluidSettings {
             domain: Some(Transform {
                 scale: [20.0, 0.5, 20.0],

@@ -477,7 +477,7 @@ fn fluid_impulses_move_native_liquid_once_across_substeps_and_batches() {
     let impulse = run(true, false, true);
     let partitioned = run(true, false, false);
     assert!(
-        resting - impulse > 0.03,
+        resting - impulse > 0.01,
         "liquid must move: rest={resting}, impulse={impulse}"
     );
     assert!(

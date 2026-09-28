@@ -30,7 +30,10 @@ const BINDING_PENDING: u8 = 1;
 const BINDING_BOUND: u8 = 2;
 const LEGACY_MESH_VERTEX_SIZE: usize = 64;
 const MANIFEST: &str = "manifest.bin";
-const MAX_VERTICES: usize = 3_145_728;
+/// Mesh counts are serialized as u32 and index GPU vertex arrays with u32
+/// indices. `FluidSettings::max_vertices` is only the GPU allocator's
+/// initial hint; it must not reject a later grown frame.
+const MAX_VERTEX_COUNT: usize = u32::MAX as usize;
 const MAX_WHITEWATER: usize = 250_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,7 +57,6 @@ impl CacheMode {
 pub(crate) struct CacheWriter {
     directory: Arc<PathBuf>,
     settings: FluidSettings,
-    max_vertices: usize,
     max_whitewater: usize,
     binding: CacheManifestBinding,
 }
@@ -104,7 +106,6 @@ impl CacheWriter {
         Ok(Self {
             directory,
             settings,
-            max_vertices: settings.max_vertices,
             max_whitewater: settings.whitewater.max_particles as usize,
             binding,
         })
@@ -156,8 +157,8 @@ impl CacheWriter {
         stats: FrameStats,
         rigid: Option<&CoupledRigidFrame>,
     ) -> Result<(), String> {
-        if vertices.len() > self.max_vertices || vertices.len() > MAX_VERTICES {
-            return Err("Water cache frame exceeds mesh capacity".into());
+        if vertices.len() > MAX_VERTEX_COUNT {
+            return Err("Water cache frame exceeds 32-bit vertex indexing".into());
         }
         if [&whitewater.foam, &whitewater.bubbles, &whitewater.spray]
             .iter()
@@ -205,7 +206,6 @@ pub(crate) struct CacheReader {
     format_version: u32,
     take_identity: Option<FluidTakeIdentity>,
     project_clock: Option<PlaybackClock>,
-    max_vertices: usize,
     max_whitewater: usize,
 }
 
@@ -278,7 +278,6 @@ impl CacheReader {
             format_version,
             take_identity,
             project_clock,
-            max_vertices: settings.max_vertices,
             max_whitewater: settings.whitewater.max_particles as usize,
         })
     }
@@ -343,7 +342,6 @@ impl CacheReader {
             vertices,
             whitewater,
             self.format_version,
-            self.max_vertices,
             self.max_whitewater,
             rigid,
         )
@@ -652,7 +650,7 @@ fn write_frame(
     rigid: Option<&CoupledRigidFrame>,
 ) -> io::Result<()> {
     write_u64(writer, tick)?;
-    write_len(writer, vertices.len(), MAX_VERTICES)?;
+    write_len(writer, vertices.len(), MAX_VERTEX_COUNT)?;
     write_float_records(writer, vertices)?;
     write_instances(writer, &whitewater.foam)?;
     write_instances(writer, &whitewater.bubbles)?;
@@ -675,12 +673,11 @@ fn read_frame(
     vertices: &mut Vec<MeshVertex>,
     whitewater: &mut WhitewaterFrame,
     format_version: u32,
-    max_vertices: usize,
     max_whitewater: usize,
     rigid: Option<&mut CoupledRigidFrame>,
 ) -> io::Result<(u64, Transform, FrameStats, bool)> {
     let tick = read_u64(reader)?;
-    let vertex_count = read_len(reader, max_vertices.min(MAX_VERTICES))?;
+    let vertex_count = read_len(reader, MAX_VERTEX_COUNT)?;
     if !vertex_count.is_multiple_of(3) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -852,23 +849,13 @@ fn read_legacy_mesh_vertices(
     vertices: &mut Vec<MeshVertex>,
     count: usize,
 ) -> io::Result<()> {
-    let zero = MeshVertex {
-        position: [0.0; 3],
-        _pad0: 0.0,
-        normal: [0.0; 3],
-        _pad1: 0.0,
-        uv: [0.0; 2],
-        _pad2: [0.0; 2],
-        tangent: [0.0; 4],
-        color: [1.0; 4],
-    };
-    vertices.resize(count, zero);
-    for vertex in vertices.iter_mut() {
-        let mut bytes = [0; LEGACY_MESH_VERTEX_SIZE];
+    vertices.clear();
+    let mut bytes = [0; LEGACY_MESH_VERTEX_SIZE];
+    for _ in 0..count {
         reader.read_exact(&mut bytes)?;
         let mut words = [0.0; LEGACY_MESH_VERTEX_SIZE / std::mem::size_of::<f32>()];
-        for (word, bytes) in words.iter_mut().zip(bytes.chunks_exact(4)) {
-            *word = f32::from_le_bytes(bytes.try_into().unwrap());
+        for (word, raw) in words.iter_mut().zip(bytes.chunks_exact(4)) {
+            *word = f32::from_le_bytes(raw.try_into().unwrap());
             if !word.is_finite() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -876,7 +863,10 @@ fn read_legacy_mesh_vertices(
                 ));
             }
         }
-        *vertex = MeshVertex {
+        vertices.try_reserve(1).map_err(|error| {
+            io::Error::other(format!("mesh vertex allocation failed: {error}"))
+        })?;
+        vertices.push(MeshVertex {
             position: [words[0], words[1], words[2]],
             _pad0: words[3],
             normal: [words[4], words[5], words[6]],
@@ -885,7 +875,7 @@ fn read_legacy_mesh_vertices(
             _pad2: [words[10], words[11]],
             tangent: [words[12], words[13], words[14], words[15]],
             color: [1.0; 4],
-        };
+        });
     }
     Ok(())
 }
@@ -921,18 +911,37 @@ fn read_float_records<T: bytemuck::Pod>(
     values: &mut Vec<T>,
     count: usize,
 ) -> io::Result<()> {
-    values.resize(count, T::zeroed());
-    let bytes = bytemuck::cast_slice_mut(values);
-    reader.read_exact(bytes)?;
-    for word in bytes.chunks_exact_mut(4) {
-        let value = f32::from_le_bytes(word.try_into().unwrap());
-        if !value.is_finite() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "non-finite frame data",
-            ));
+    const RECORD_CHUNK: usize = 64;
+    let record_size = std::mem::size_of::<T>();
+    if record_size == 0 || !record_size.is_multiple_of(std::mem::size_of::<f32>()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame record size is not a nonzero float multiple",
+        ));
+    }
+    let mut records = [T::zeroed(); RECORD_CHUNK];
+    values.clear();
+
+    let mut remaining = count;
+    while remaining > 0 {
+        let record_count = remaining.min(RECORD_CHUNK);
+        let bytes = bytemuck::cast_slice_mut(&mut records[..record_count]);
+        reader.read_exact(bytes)?;
+        for word in bytes.chunks_exact_mut(4) {
+            let value = f32::from_le_bytes(word.try_into().unwrap());
+            if !value.is_finite() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "non-finite frame data",
+                ));
+            }
+            word.copy_from_slice(&value.to_ne_bytes());
         }
-        word.copy_from_slice(&value.to_ne_bytes());
+        values.try_reserve(record_count).map_err(|error| {
+            io::Error::other(format!("frame record allocation failed: {error}"))
+        })?;
+        values.extend_from_slice(&records[..record_count]);
+        remaining -= record_count;
     }
     Ok(())
 }
@@ -1151,7 +1160,7 @@ mod tests {
     fn write_unpaired_payload(writer: &mut Vec<u8>, tick: u64) {
         let (vertices, whitewater, obstacle, stats) = frame();
         write_u64(writer, tick).unwrap();
-        write_len(writer, vertices.len(), MAX_VERTICES).unwrap();
+        write_len(writer, vertices.len(), MAX_VERTEX_COUNT).unwrap();
         write_float_records(writer, &vertices).unwrap();
         write_instances(writer, &whitewater.foam).unwrap();
         write_instances(writer, &whitewater.bubbles).unwrap();
@@ -1250,6 +1259,35 @@ mod tests {
             reader
                 .read_into(3, &mut decoded_vertices, &mut decoded_whitewater)
                 .is_err()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_round_trip_accepts_mesh_above_initial_allocation_hint() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-fluid-cache-growth-{}",
+            std::process::id()
+        ));
+        let directory = Arc::new(root.clone());
+        let settings = FluidSettings { max_vertices: 3, ..FluidSettings::default() };
+        let (mut vertices, whitewater, obstacle, stats) = frame();
+        let initial = vertices.clone();
+        vertices.extend_from_slice(&initial);
+
+        let writer = CacheWriter::create(directory.clone(), settings).unwrap();
+        writer
+            .append(1, &vertices, &whitewater, obstacle, stats)
+            .unwrap();
+        let reader = CacheReader::open(directory, settings).unwrap();
+        let mut decoded_vertices = Vec::new();
+        let mut decoded_whitewater = WhitewaterFrame::default();
+        reader
+            .read_into(1, &mut decoded_vertices, &mut decoded_whitewater)
+            .unwrap();
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&decoded_vertices),
+            bytemuck::cast_slice::<_, u8>(&vertices)
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -1523,7 +1561,7 @@ mod tests {
         let (vertices, whitewater, obstacle, stats) = frame();
         let mut payload = Vec::new();
         write_u64(&mut payload, 13).unwrap();
-        write_len(&mut payload, vertices.len(), MAX_VERTICES).unwrap();
+        write_len(&mut payload, vertices.len(), MAX_VERTEX_COUNT).unwrap();
         write_float_records(&mut payload, &vertices).unwrap();
         write_instances(&mut payload, &whitewater.foam).unwrap();
         write_instances(&mut payload, &whitewater.bubbles).unwrap();
@@ -1888,7 +1926,9 @@ mod tests {
         assert!(reader.read_into(1, &mut decoded, &mut ww).is_err());
         let mut oversized = Vec::new();
         write_u64(&mut oversized, 1).unwrap();
-        write_u64(&mut oversized, MAX_VERTICES as u64 + 1).unwrap();
+        // A valid triangular count with no payload must not reserve its
+        // advertised allocation before discovering the truncated stream.
+        write_u32(&mut oversized, u32::MAX).unwrap();
         fs::write(
             &path,
             zstd::stream::encode_all(oversized.as_slice(), 1).unwrap(),

@@ -236,7 +236,7 @@ mod tests {
         .domain_layout()
         .unwrap();
         let pose = controls.pose(domain);
-        assert_eq!(pose.position, [4.0, 2.0, 0.0]);
+        assert_eq!(pose.position, [4.375, 2.375, 0.375]);
         let scene_pose = pose_from_transform(controls.transform);
         assert_eq!(pose.rotation, scene_pose.rotation);
     }

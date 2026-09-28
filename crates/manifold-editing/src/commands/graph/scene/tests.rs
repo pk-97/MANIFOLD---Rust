@@ -6,7 +6,7 @@ use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION;
 use manifold_core::effect_graph_def::{
-    BindingDef, BindingTarget, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, GroupParamDef,
+    BindingDef, BindingTarget, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, GroupParamDef,
     InterfacePortDef, ParamSpecDef, PresetMetadata, StringBindingDef,
 };
 use manifold_core::layer::Layer;
@@ -1480,6 +1480,121 @@ fn render_scene_with_objects(count: u32) -> (EffectGraphDef, Vec<u32>) {
         object_ids.push(id);
     }
     (def, object_ids)
+}
+
+fn loose_scene_object_graph() -> EffectGraphDef {
+    let node = |id: u32, type_id: &str, handle: &str| EffectGraphNode {
+        id,
+        node_id: NodeId::new(format!("loose_{id}")),
+        type_id: type_id.to_string(),
+        handle: Some(handle.to_string()),
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    };
+    let mut render = node(0, "node.render_scene", "render");
+    render.params.insert(
+        "objects".to_string(),
+        SerializedParamValue::Float { value: 2.0 },
+    );
+    let mut transform = node(3, "node.transform_3d", "transform");
+    transform.params.insert(
+        "pos_x".to_string(),
+        SerializedParamValue::Float { value: 1.25 },
+    );
+    let mut input = node(6, GROUP_INPUT_TYPE_ID, "shared input");
+    input.handle = None;
+    EffectGraphDef {
+        version: EFFECT_GRAPH_VERSION,
+        name: None,
+        description: None,
+        preset_metadata: None,
+        scene_modifiers: Vec::new(),
+        nodes: vec![
+            render,
+            node(1, "node.scene_object", "Loose Object"),
+            node(2, "node.cube_mesh", "mesh"),
+            transform,
+            node(5, "node.pbr_material", "Shared Material"),
+            input,
+            node(8, "node.scene_object", "Other Object"),
+        ],
+        wires: vec![
+            EffectGraphWire { from_node: 1, from_port: "object".into(), to_node: 0, to_port: "object_0".into() },
+            EffectGraphWire { from_node: 8, from_port: "object".into(), to_node: 0, to_port: "object_1".into() },
+            EffectGraphWire { from_node: 2, from_port: "vertices".into(), to_node: 1, to_port: "vertices".into() },
+            EffectGraphWire { from_node: 3, from_port: "transform".into(), to_node: 1, to_port: "transform".into() },
+            EffectGraphWire { from_node: 5, from_port: "out".into(), to_node: 1, to_port: "material".into() },
+            EffectGraphWire { from_node: 5, from_port: "out".into(), to_node: 8, to_port: "material".into() },
+            EffectGraphWire { from_node: 6, from_port: "source".into(), to_node: 2, to_port: "source".into() },
+        ],
+    }
+}
+
+#[test]
+fn duplicate_loose_scene_object_clones_private_chain_and_keeps_shared_inputs() {
+    let fixture = loose_scene_object_graph();
+    let (mut project, fx) = project_with_graph(fixture.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut command = DuplicateSceneObjectCommand::new(
+        target,
+        vec![],
+        0,
+        0,
+        mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+    let after = graph_of(&project, &fx).clone();
+
+    assert_eq!(after.nodes.iter().filter(|node| node.type_id == "node.scene_object").count(), 3);
+    assert_eq!(after.nodes.iter().filter(|node| node.type_id == "node.pbr_material").count(), 1);
+    let clone = after.nodes.iter().find(|node| node.handle.as_deref() == Some("Loose Object 2")).unwrap();
+    let clone_mesh = after.nodes.iter().find(|node| node.id != 2 && node.type_id == "node.cube_mesh").unwrap();
+    let clone_transform = after.nodes.iter().find(|node| node.id != 3 && node.type_id == "node.transform_3d").unwrap();
+    assert_eq!(clone_transform.params.get("pos_x"), Some(&SerializedParamValue::Float { value: 1.75 }));
+    assert!(after.wires.iter().any(|wire| wire.from_node == 6 && wire.to_node == clone_mesh.id && wire.to_port == "source"));
+    assert!(after.wires.iter().any(|wire| wire.from_node == clone_mesh.id && wire.to_node == clone.id && wire.to_port == "vertices"));
+    assert!(after.wires.iter().any(|wire| wire.from_node == 5 && wire.to_node == clone.id && wire.to_port == "material"));
+    assert!(after.wires.iter().any(|wire| wire.from_node == clone.id && wire.to_node == 0 && wire.to_port == "object_2"));
+
+    command.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &fixture);
+    command.execute(&mut project);
+    assert_eq!(graph_of(&project, &fx), &after);
+}
+
+#[test]
+fn remove_loose_scene_object_deletes_private_chain_and_preserves_shared_chain() {
+    let fixture = loose_scene_object_graph();
+    let (mut project, fx) = project_with_graph(fixture.clone());
+    let mut command = RemoveSceneObjectCommand::new(
+        GraphTarget::Effect(fx.clone()),
+        vec![],
+        0,
+        0,
+        mirror_catalog_default(),
+    );
+    command.execute(&mut project);
+    let after = graph_of(&project, &fx).clone();
+    assert!(!after.nodes.iter().any(|node| (1..=3).contains(&node.id)));
+    assert!(after.nodes.iter().any(|node| node.id == 5));
+    assert!(after.nodes.iter().any(|node| node.id == 6));
+    assert!(after.nodes.iter().any(|node| node.id == 8));
+    assert!(after.wires.iter().any(|wire| wire.from_node == 5 && wire.to_node == 8));
+    assert!(after.wires.iter().any(|wire| wire.from_node == 8 && wire.to_node == 0 && wire.to_port == "object_0"));
+    assert!(!after.wires.iter().any(|wire| {
+        (1..=3).contains(&wire.from_node) || (1..=3).contains(&wire.to_node)
+    }));
+
+    command.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &fixture);
+    command.execute(&mut project);
+    assert_eq!(graph_of(&project, &fx), &after);
 }
 
 #[test]
