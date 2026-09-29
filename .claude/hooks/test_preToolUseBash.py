@@ -373,6 +373,60 @@ def test_cc_fleet_lane_workflow_preapproved():
     )
 
 
+def test_settings_allowed_segments_compose():
+    """BUG-ls9y (Bash hook chain parity): a chain whose every segment is
+    allowed alone by permissions.allow is pre-approved; anything else in the
+    chain still decides."""
+    orig = hook._SETTINGS_ALLOW
+    hook._SETTINGS_ALLOW = [
+        (["cargo", "check"], True),
+        (["cargo", "nextest", "run"], True),
+        (["bd"], True),
+        (["scripts/agent-worktree.py", "list"], False),
+        (["git", "-C"], True),
+    ]
+    try:
+        allowed = [
+            'cargo check --manifest-path "x/Cargo.toml" -p a 2>&1 | tail -5',
+            "cargo nextest run -p a 2>&1 | rg 'FAIL|Summary'",
+            "bd show BUG-x 2>&1 | head -40; bd ready -n 5",
+            "scripts/agent-worktree.py list | head",
+        ]
+        for cmd in allowed:
+            check(f"chain of allowed segments passes: {cmd}", hook.is_preapproved_command(cmd))
+        refused = [
+            "cargo check -p a; rm -rf target",  # rm is not allowed alone
+            "cargo check -p a > crates/out.txt",  # write redirect to repo path
+            "cargo check",  # wildcard rule needs an argument, like the harness
+            "cargo build -p a | tail",  # no rule for cargo build here
+            "scripts/agent-worktree.py list --all | head",  # exact rule, extra arg
+            "ls; git -C x reset --hard",  # git keeps its own classification
+            "bd show X | sh",  # sh is not allowed
+        ]
+        for cmd in refused:
+            check(f"chain with an unallowed part is refused: {cmd}", not hook.is_preapproved_command(cmd))
+    finally:
+        hook._SETTINGS_ALLOW = orig
+
+
+def test_settings_allow_parser_shapes():
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / ".claude").mkdir()
+        (root / ".claude" / "settings.json").write_text(json.dumps({"permissions": {"allow": [
+            "Bash(cargo check *)",
+            "Bash(pkill -f rust-analyzer)",
+            'Bash(pkill -f "zola.*serve")',
+            "Read(//tmp/**)",
+        ]}}))
+        with unittest.mock.patch.object(hook, "_main_checkout_path", return_value=root):
+            rules = hook._load_settings_allow()
+    check("prefix rule parsed", (["cargo", "check"], True) in rules, rules)
+    check("exact rule parsed", (["pkill", "-f", "rust-analyzer"], False) in rules, rules)
+    check("inner-star rule skipped", all("zola" not in " ".join(t) for t, _ in rules), rules)
+    check("non-Bash rule skipped", len(rules) == 2, rules)
+
+
 def test_pipe_deny_active_in_default_mode():
     check("pipey test cmd is not pre-approved", not hook.is_preapproved_command(PIPEY_CMD))
     out = run_hook_main({
@@ -752,6 +806,9 @@ def main():
     test_flow_gate_denies_red_marker()
     test_flow_gate_passes_green_marker_at_tip()
     test_flow_gate_touched_flow_file_is_mapped()
+
+    test_settings_allowed_segments_compose()
+    test_settings_allow_parser_shapes()
 
     test_inline_python_heredoc_denied()
     test_inline_python_dash_c_denied()
