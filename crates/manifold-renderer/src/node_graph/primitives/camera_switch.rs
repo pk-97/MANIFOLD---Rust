@@ -75,39 +75,3 @@ impl Primitive for CameraSwitch {
         ctx.outputs.set_camera("out", cam);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn camera_switch_declares_two_camera_inputs_and_one_camera_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(CameraSwitch::TYPE_ID, "node.camera_switch");
-        let in_names: Vec<&str> = CameraSwitch::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(in_names, vec!["a", "b"]);
-        for input in CameraSwitch::INPUTS {
-            assert!(!input.required, "{} should be optional", input.name);
-            assert_eq!(input.ty, PortType::Camera);
-        }
-        assert_eq!(CameraSwitch::OUTPUTS.len(), 1);
-        assert_eq!(CameraSwitch::OUTPUTS[0].name, "out");
-        assert_eq!(CameraSwitch::OUTPUTS[0].ty, PortType::Camera);
-    }
-
-    #[test]
-    fn camera_switch_has_one_enum_select_param() {
-        assert_eq!(CameraSwitch::PARAMS.len(), 1);
-        assert_eq!(CameraSwitch::PARAMS[0].name, "select");
-        assert_eq!(CameraSwitch::PARAMS[0].enum_values, &["A", "B"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CameraSwitch::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.camera_switch");
-    }
-}

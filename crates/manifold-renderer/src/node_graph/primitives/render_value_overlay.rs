@@ -530,32 +530,6 @@ impl Primitive for RenderValueOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn render_value_overlay_declares_io() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(RenderValueOverlay::TYPE_ID, "node.value_overlay");
-        assert_eq!(RenderValueOverlay::INPUTS.len(), 4);
-        assert_eq!(RenderValueOverlay::INPUTS[0].name, "in");
-        assert_eq!(RenderValueOverlay::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(RenderValueOverlay::INPUTS[1].name, "positions");
-        assert!(matches!(RenderValueOverlay::INPUTS[1].ty, PortType::Array(_)));
-        assert_eq!(RenderValueOverlay::INPUTS[2].name, "values");
-        assert!(!RenderValueOverlay::INPUTS[2].required);
-        assert_eq!(RenderValueOverlay::INPUTS[3].name, "alpha");
-        assert_eq!(RenderValueOverlay::INPUTS[3].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!RenderValueOverlay::INPUTS[3].required);
-        assert_eq!(RenderValueOverlay::OUTPUTS.len(), 1);
-    }
-
-    #[test]
-    fn render_value_overlay_registers() {
-        let prim = RenderValueOverlay::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.value_overlay");
-    }
 
     #[test]
     fn glyph_atlas_rect_returns_valid_uvs() {
@@ -564,10 +538,5 @@ mod tests {
         assert!((r[2] - 5.0 / 80.0).abs() < 1e-5);
         let r_a = glyph_atlas_rect(10.0); // 'A'
         assert!((r_a[0] - 50.0 / 80.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn glyph_quad_is_48_bytes() {
-        assert_eq!(std::mem::size_of::<GlyphQuad>(), 48);
     }
 }

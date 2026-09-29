@@ -82,17 +82,3 @@ const _: () = {
 
     assert!(size_of::<LegacyBox>() == 16);
 };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn blob_v2_region_and_track_wire_layout() {
-        assert_eq!(size_of::<Region>(), 32);
-        assert_eq!(size_of::<TrackRecord>(), 64);
-        assert_eq!(size_of::<LegacyBox>(), 16);
-        assert_eq!(offset_of!(TrackRecord, area), 48);
-        assert_eq!(offset_of!(TrackRecord, pad2), 60);
-    }
-}

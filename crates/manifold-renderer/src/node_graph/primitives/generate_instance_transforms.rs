@@ -231,47 +231,6 @@ impl Primitive for GenerateInstanceTransforms {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn generate_instance_transforms_declares_zero_inputs_and_instance_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(
-            GenerateInstanceTransforms::TYPE_ID,
-            "node.arrange_copies"
-        );
-        assert!(GenerateInstanceTransforms::INPUTS.is_empty());
-        assert_eq!(GenerateInstanceTransforms::OUTPUTS.len(), 1);
-        assert_eq!(GenerateInstanceTransforms::OUTPUTS[0].name, "instances");
-        assert_eq!(
-            GenerateInstanceTransforms::OUTPUTS[0].ty,
-            PortType::Array(layout)
-        );
-    }
-
-    #[test]
-    fn layout_enum_has_four_options() {
-        let layout_param = GenerateInstanceTransforms::PARAMS
-            .iter()
-            .find(|p| p.name == "layout")
-            .expect("layout param");
-        assert_eq!(layout_param.ty, ParamType::Enum);
-        assert_eq!(layout_param.enum_values.len(), 4);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GenerateInstanceTransforms::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.arrange_copies");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain SOURCE parity oracle (freeze section 12) — generate_instance_

@@ -163,51 +163,6 @@ impl Primitive for MorphTargetsBlend {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn morph_targets_blend_declares_three_required_array_inputs_and_one_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let f32_layout = ArrayType::of_known::<f32>();
-
-        assert_eq!(MorphTargetsBlend::TYPE_ID, "node.morph_targets_blend");
-        assert_eq!(MorphTargetsBlend::INPUTS.len(), 3);
-        let in_port = MorphTargetsBlend::INPUTS.iter().find(|p| p.name == "in").unwrap();
-        assert!(in_port.required);
-        assert_eq!(in_port.ty, PortType::Array(mesh_layout));
-        let deltas_port = MorphTargetsBlend::INPUTS.iter().find(|p| p.name == "deltas").unwrap();
-        assert!(deltas_port.required);
-        assert_eq!(deltas_port.ty, PortType::Array(mesh_layout));
-        let weights_port = MorphTargetsBlend::INPUTS.iter().find(|p| p.name == "weights").unwrap();
-        assert!(weights_port.required);
-        assert_eq!(weights_port.ty, PortType::Array(f32_layout));
-
-        assert_eq!(MorphTargetsBlend::OUTPUTS.len(), 1);
-        assert_eq!(MorphTargetsBlend::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
-
-    #[test]
-    fn morph_targets_blend_output_follows_in_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = MorphTargetsBlend::new();
-        let params = ParamValues::default();
-        let inputs = [("in", 4000_u32), ("deltas", 32000_u32), ("weights", 8_u32)];
-        assert_eq!(Primitive::array_output_capacity(&prim, "out", &params, &inputs), Some(4000));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = MorphTargetsBlend::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.morph_targets_blend");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —

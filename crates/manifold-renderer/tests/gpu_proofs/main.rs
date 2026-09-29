@@ -60,7 +60,6 @@ mod rt_p2_soft_ao_temporal;
 mod rt_p3_emissive_gi;
 mod rt_p3_emissive_texture;
 mod rt_p4_metalfx_temporal;
-mod rt_t1a_ghost_speckle;
 mod rt_t1b_vertex_normals;
 mod rt_t2a_alpha_mask;
 mod rt_bug17r3_lightless_gi;

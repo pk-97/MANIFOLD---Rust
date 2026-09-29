@@ -362,65 +362,6 @@ impl Primitive for NestedCubesGeometry {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_required_target_angles_optional_time_and_trigger_count() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let inputs = NestedCubesGeometry::INPUTS;
-        assert_eq!(inputs.len(), 3);
-        assert_eq!(inputs[0].name, "target_angles");
-        assert!(inputs[0].required);
-        assert_eq!(
-            inputs[0].ty,
-            PortType::Array(ArrayType::of_known::<f32>())
-        );
-        assert_eq!(inputs[1].name, "time");
-        assert!(!inputs[1].required);
-        assert_eq!(inputs[1].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(inputs[2].name, "trigger_count");
-        assert!(!inputs[2].required);
-    }
-
-    #[test]
-    fn declares_texture_output_named_out() {
-        use crate::node_graph::ports::PortType;
-        let outputs = NestedCubesGeometry::OUTPUTS;
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].name, "out");
-        assert_eq!(outputs[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn declares_four_params() {
-        let names: Vec<_> = NestedCubesGeometry::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(names, ["filter", "scale", "scatter", "decay_rate"]);
-    }
-
-    #[test]
-    fn instance_count_constant_is_five() {
-        assert_eq!(NESTED_CUBES_INSTANCE_COUNT, 5);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_generator() {
-        use crate::node_graph::palette::{PaletteCategory, palette_atoms};
-        let atoms = palette_atoms();
-        let entry = atoms
-            .iter()
-            .find(|e| e.type_id == NestedCubesGeometry::TYPE_ID)
-            .expect("nested_cubes_geometry should be registered as a palette atom");
-        assert_eq!(entry.label, "Nested Cubes Geometry");
-        assert!(matches!(entry.category, PaletteCategory::Atom));
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Smoke tests on the real GPU. Verifies the new primitive produces

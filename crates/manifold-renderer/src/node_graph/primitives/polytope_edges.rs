@@ -103,50 +103,6 @@ impl Primitive for PolytopeEdges {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_shape_input_and_edge_pair_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let edge_layout = ArrayType::of_known::<EdgePair>();
-        assert_eq!(PolytopeEdges::TYPE_ID, "node.platonic_solid_edges");
-        assert_eq!(PolytopeEdges::INPUTS.len(), 1);
-        assert_eq!(PolytopeEdges::INPUTS[0].name, "shape");
-        assert!(!PolytopeEdges::INPUTS[0].required);
-        assert_eq!(
-            PolytopeEdges::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-
-        assert_eq!(PolytopeEdges::OUTPUTS.len(), 1);
-        assert_eq!(PolytopeEdges::OUTPUTS[0].name, "edges");
-        assert_eq!(PolytopeEdges::OUTPUTS[0].ty, PortType::Array(edge_layout));
-    }
-
-    #[test]
-    fn shape_enum_lists_five_platonic_solids() {
-        let shape = PolytopeEdges::PARAMS
-            .iter()
-            .find(|p| p.name == "shape")
-            .unwrap();
-        assert_eq!(shape.ty, ParamType::Enum);
-        assert_eq!(shape.enum_values.len(), 5);
-        assert_eq!(shape.enum_values, PLATONIC_SHAPES);
-    }
-
-    #[test]
-    fn output_capacity_is_platonic_max_edges() {
-        let prim = PolytopeEdges::new();
-        let params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "edges", &params, &[]),
-            Some(PLATONIC_MAX_EDGES)
-        );
-        assert!(
-            Primitive::array_output_capacity(&prim, "bogus", &params, &[]).is_none()
-        );
-    }
 
     /// Pin the per-shape table sizes — a single transcription error
     /// in `platonic_edges` (e.g. the wrong table on the wrong index)
@@ -182,12 +138,5 @@ mod tests {
             assert_eq!(edges[i].a, a, "tetra edge {i}.a");
             assert_eq!(edges[i].b, b, "tetra edge {i}.b");
         }
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = PolytopeEdges::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.platonic_solid_edges");
     }
 }

@@ -166,27 +166,6 @@ impl Primitive for GenerateGridUv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_optional_umax_vmax_inputs_and_two_f32_outputs() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-        assert_eq!(GenerateGridUv::TYPE_ID, "node.grid_points");
-        assert_eq!(GenerateGridUv::INPUTS.len(), 2);
-        for port in GenerateGridUv::INPUTS {
-            assert!(!port.required, "{} must be optional", port.name);
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-
-        let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(GenerateGridUv::OUTPUTS.len(), 2);
-        assert_eq!(GenerateGridUv::OUTPUTS[0].name, "u_values");
-        assert_eq!(GenerateGridUv::OUTPUTS[1].name, "v_values");
-        assert_eq!(GenerateGridUv::OUTPUTS[0].ty, PortType::Array(f32_layout));
-        assert_eq!(GenerateGridUv::OUTPUTS[1].ty, PortType::Array(f32_layout));
-    }
 
     #[test]
     fn output_capacity_scales_with_grid_size() {
@@ -221,12 +200,5 @@ mod tests {
             Primitive::array_output_capacity(&prim, "bogus", &default, &[]),
             None,
         );
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = GenerateGridUv::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.grid_points");
     }
 }

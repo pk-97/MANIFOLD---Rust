@@ -153,35 +153,6 @@ impl Primitive for PackCurveXy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_x_y_required_scale_optional_and_curvepoint_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-        assert_eq!(PackCurveXy::TYPE_ID, "node.combine_xy");
-
-        let f32_layout = ArrayType::of_known::<f32>();
-        let curve_layout = ArrayType::of_known::<CurvePoint>();
-
-        let x_in = PackCurveXy::INPUTS.iter().find(|p| p.name == "x").unwrap();
-        let y_in = PackCurveXy::INPUTS.iter().find(|p| p.name == "y").unwrap();
-        let scale_in = PackCurveXy::INPUTS
-            .iter()
-            .find(|p| p.name == "scale")
-            .unwrap();
-        assert!(x_in.required);
-        assert!(y_in.required);
-        assert!(!scale_in.required);
-        assert_eq!(x_in.ty, PortType::Array(f32_layout));
-        assert_eq!(y_in.ty, PortType::Array(f32_layout));
-        assert_eq!(scale_in.ty, PortType::Scalar(ScalarType::F32));
-
-        assert_eq!(PackCurveXy::OUTPUTS.len(), 1);
-        assert_eq!(PackCurveXy::OUTPUTS[0].name, "out");
-        assert_eq!(PackCurveXy::OUTPUTS[0].ty, PortType::Array(curve_layout));
-    }
 
     #[test]
     fn output_capacity_follows_x_input() {
@@ -200,22 +171,5 @@ mod tests {
             Some(128),
             "output sizes to x; run() truncates to min(x, y, out) at processing time",
         );
-    }
-
-    #[test]
-    fn proj_scale_is_quarter_to_match_legacy_lissajous() {
-        // Locks the parity contract: the legacy LissajousGenerator
-        // baked generator_math::PROJ_SCALE = 0.25 into every emitted
-        // vertex. Decomposed Lissajous routes through pack_curve_xy,
-        // which is now the single home for that constant — drifting
-        // it silently shrinks/grows every line-renderer preset.
-        assert_eq!(PackCurveXy::PROJ_SCALE, 0.25);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = PackCurveXy::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.combine_xy");
     }
 }

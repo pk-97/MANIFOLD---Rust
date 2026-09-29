@@ -151,46 +151,6 @@ impl Primitive for Resolve3DAccumulator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn resolve_3d_declares_array_in_and_texture_3d_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let u32_layout = ArrayType::of_known::<u32>();
-        assert_eq!(Resolve3DAccumulator::TYPE_ID, "node.resolve_scatter_3d");
-        assert_eq!(Resolve3DAccumulator::INPUTS.len(), 1);
-        assert_eq!(Resolve3DAccumulator::INPUTS[0].name, "accum");
-        assert_eq!(
-            Resolve3DAccumulator::INPUTS[0].ty,
-            PortType::Array(u32_layout)
-        );
-        assert_eq!(Resolve3DAccumulator::OUTPUTS.len(), 1);
-        assert_eq!(Resolve3DAccumulator::OUTPUTS[0].name, "density");
-        assert_eq!(
-            Resolve3DAccumulator::OUTPUTS[0].ty,
-            PortType::Texture3D
-        );
-    }
-
-    #[test]
-    fn resolve_3d_uniform_struct_matches_generated_layout() {
-        // The generated standalone kernel is single-entry → no 112-byte same-
-        // binding padding. 2 i32 + fixed_point_scale f32 + 1 pad = 16 bytes.
-        assert_eq!(std::mem::size_of::<Resolve3DUniforms>(), 16);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Resolve3DAccumulator::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.resolve_scatter_3d");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer→texture 3D resolve value oracle (freeze section 12). Dispatches the

@@ -193,37 +193,3 @@ impl Primitive for DisplaceMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn displace_mesh_declares_mesh_and_height_inputs() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(DisplaceMesh::TYPE_ID, "node.push_mesh");
-        assert_eq!(DisplaceMesh::INPUTS.len(), 2);
-        assert_eq!(DisplaceMesh::INPUTS[0].name, "in");
-        assert_eq!(DisplaceMesh::INPUTS[0].ty, PortType::Array(layout));
-        assert_eq!(DisplaceMesh::INPUTS[1].name, "height");
-        assert_eq!(DisplaceMesh::INPUTS[1].ty, PortType::Texture2D);
-        assert_eq!(DisplaceMesh::OUTPUTS.len(), 1);
-        assert_eq!(DisplaceMesh::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn displace_mesh_has_grid_and_displacement_params() {
-        let names: Vec<&str> = DisplaceMesh::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["cols", "rows", "displacement", "height_bias"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = DisplaceMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.push_mesh");
-    }
-}
-

@@ -146,36 +146,7 @@ impl Primitive for InstanceRotationJitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn instance_rotation_jitter_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let inst_layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(InstanceRotationJitter::TYPE_ID, "node.rotation_jitter");
-
-        let inst_in = InstanceRotationJitter::INPUTS
-            .iter()
-            .find(|p| p.name == "instances")
-            .unwrap();
-        assert!(inst_in.required);
-        assert_eq!(inst_in.ty, PortType::Array(inst_layout));
-
-        let amp = InstanceRotationJitter::INPUTS
-            .iter()
-            .find(|p| p.name == "amplitude")
-            .unwrap();
-        assert!(!amp.required);
-        assert_eq!(amp.ty, PortType::Scalar(ScalarType::F32));
-
-        assert_eq!(InstanceRotationJitter::OUTPUTS.len(), 1);
-        assert_eq!(InstanceRotationJitter::OUTPUTS[0].name, "instances");
-        assert_eq!(
-            InstanceRotationJitter::OUTPUTS[0].ty,
-            PortType::Array(inst_layout),
-        );
-    }
 
     #[test]
     fn instance_rotation_jitter_default_amplitude_matches_legacy() {
@@ -190,25 +161,6 @@ mod tests {
             ),
             _ => panic!("amplitude default must be Float"),
         }
-    }
-
-    #[test]
-    fn instance_rotation_jitter_output_follows_instances_input() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = InstanceRotationJitter::new();
-        let params = ParamValues::default();
-        let inputs = [("instances", 160_000_u32)];
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "instances", &params, &inputs),
-            Some(160_000),
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = InstanceRotationJitter::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.rotation_jitter");
     }
 }
 

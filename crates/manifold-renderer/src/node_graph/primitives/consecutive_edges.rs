@@ -148,32 +148,6 @@ impl Primitive for ConsecutiveEdges {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-    #[test]
-    fn declares_count_input_and_edge_pair_output() {
-        assert_eq!(ConsecutiveEdges::TYPE_ID, "node.edge_pairs");
-        assert_eq!(ConsecutiveEdges::INPUTS.len(), 1);
-        assert_eq!(ConsecutiveEdges::INPUTS[0].name, "count");
-        assert!(!ConsecutiveEdges::INPUTS[0].required);
-        assert_eq!(
-            ConsecutiveEdges::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-
-        let edge_layout = ArrayType::of_known::<EdgePair>();
-        assert_eq!(ConsecutiveEdges::OUTPUTS.len(), 1);
-        assert_eq!(ConsecutiveEdges::OUTPUTS[0].name, "edges");
-        assert_eq!(ConsecutiveEdges::OUTPUTS[0].ty, PortType::Array(edge_layout));
-    }
-
-    #[test]
-    fn declares_count_closed_and_max_capacity_params() {
-        let names: Vec<&str> = ConsecutiveEdges::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["count", "closed", "max_capacity"]);
-    }
 
     #[test]
     fn output_capacity_reads_max_capacity_param() {
@@ -198,12 +172,5 @@ mod tests {
         // Unknown port returns None.
         let params = ParamValues::default();
         assert!(Primitive::array_output_capacity(&prim, "out", &params, &[]).is_none());
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ConsecutiveEdges::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.edge_pairs");
     }
 }

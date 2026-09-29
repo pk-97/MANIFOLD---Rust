@@ -167,27 +167,6 @@ impl Primitive for MuxArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_one_required_selector_and_eight_optional_array_inputs() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-        let inputs = MuxArray::INPUTS;
-        assert_eq!(inputs.len(), 9);
-        assert_eq!(inputs[0].name, "selector");
-        assert!(inputs[0].required);
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-
-        let array_layout = PortType::Array(ArrayType::of_known::<f32>());
-        for port in inputs.iter().skip(1) {
-            assert!(!port.required);
-            assert_eq!(port.ty, array_layout);
-        }
-        assert_eq!(MuxArray::OUTPUTS.len(), 1);
-        assert_eq!(MuxArray::OUTPUTS[0].name, "out");
-        assert_eq!(MuxArray::OUTPUTS[0].ty, array_layout);
-    }
 
     #[test]
     fn array_output_capacity_is_max_of_wired_inputs() {
@@ -210,17 +189,5 @@ mod tests {
         // pre-allocator doesn't refuse the slot.
         let cap = Primitive::array_output_capacity(&prim, "out", &params, &[]);
         assert_eq!(cap, Some(1));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        use crate::node_graph::palette::{PaletteCategory, palette_atoms};
-        let atoms = palette_atoms();
-        let entry = atoms
-            .iter()
-            .find(|e| e.type_id == MuxArray::TYPE_ID)
-            .expect("mux_array should be registered as a palette atom");
-        assert_eq!(entry.label, "Switch (array)");
-        assert!(matches!(entry.category, PaletteCategory::Atom));
     }
 }

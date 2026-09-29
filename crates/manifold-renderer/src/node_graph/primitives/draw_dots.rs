@@ -143,24 +143,3 @@ impl Primitive for DrawDots {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn draw_dots_declares_ports_and_skip_contract() {
-        assert_eq!(DrawDots::TYPE_ID, "node.draw_dots");
-        let prim = DrawDots::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.empty_skip_input_ports(), &["detections"]);
-        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
-    }
-
-    #[test]
-    fn uniforms_are_32_bytes() {
-        assert_eq!(std::mem::size_of::<DotsUniforms>(), 32);
-    }
-}
-

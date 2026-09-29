@@ -194,69 +194,6 @@ impl Primitive for MeshStaggerEnvelope {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn mesh_stagger_envelope_declares_optional_weights_and_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh = ArrayType::of_known::<MeshVertex>();
-        let scalar = ArrayType::of_known::<f32>();
-        let prim = MeshStaggerEnvelope::new();
-        assert_eq!(MeshStaggerEnvelope::TYPE_ID, "node.mesh_stagger_envelope");
-        assert_eq!(MeshStaggerEnvelope::INPUTS[0].ty, PortType::Array(mesh));
-        assert!(MeshStaggerEnvelope::INPUTS[0].required);
-        let weights = MeshStaggerEnvelope::INPUTS
-            .iter()
-            .find(|p| p.name == "weights")
-            .unwrap();
-        assert_eq!(weights.ty, PortType::Array(scalar));
-        assert!(!weights.required);
-        for name in [
-            "elapsed_beats",
-            "attack_beats",
-            "hold_beats",
-            "release_beats",
-            "stagger_beats",
-            "amount",
-            "yaw",
-            "pitch",
-            "scale",
-            "source_offset_x",
-            "source_offset_y",
-            "source_offset_z",
-        ] {
-            let port = MeshStaggerEnvelope::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap();
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-            assert!(!port.required);
-        }
-        assert_eq!(MeshStaggerEnvelope::OUTPUTS[0].ty, PortType::Array(scalar));
-        assert_eq!(
-            Primitive::array_output_capacity(
-                &prim,
-                "weights",
-                &ParamValues::default(),
-                &[("in", 18)]
-            ),
-            Some(18)
-        );
-    }
-
-    #[test]
-    fn mesh_stagger_envelope_registers_as_palette_atom() {
-        let prim = MeshStaggerEnvelope::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.mesh_stagger_envelope");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

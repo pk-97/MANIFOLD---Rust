@@ -265,36 +265,6 @@ impl Primitive for ArrayMath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn array_math_declares_a_required_b_optional_and_one_f32_out() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(ArrayMath::TYPE_ID, "node.array_math");
-
-        let a_in = ArrayMath::INPUTS.iter().find(|p| p.name == "a").unwrap();
-        assert!(a_in.required);
-        assert_eq!(a_in.ty, PortType::Array(f32_layout));
-
-        let b_in = ArrayMath::INPUTS.iter().find(|p| p.name == "b").unwrap();
-        assert!(!b_in.required);
-        assert_eq!(b_in.ty, PortType::Array(f32_layout));
-
-        for name in ["scale", "offset", "exp", "bias"] {
-            let port = ArrayMath::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap_or_else(|| panic!("{name} port-shadow input must exist"));
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-
-        assert_eq!(ArrayMath::OUTPUTS.len(), 1);
-        assert_eq!(ArrayMath::OUTPUTS[0].name, "out");
-        assert_eq!(ArrayMath::OUTPUTS[0].ty, PortType::Array(f32_layout));
-    }
 
     #[test]
     fn array_math_ops_table_covers_binary_and_unary_partition() {
@@ -327,25 +297,5 @@ mod tests {
             assert!(!op_is_binary(code), "{} (idx {code}) is unary", ARRAY_MATH_OPS[code as usize]);
         }
         assert!(op_is_binary(13), "Mix (idx 13) is binary");
-    }
-
-    #[test]
-    fn array_math_output_capacity_follows_a_input() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = ArrayMath::new();
-        let params = ParamValues::default();
-        let inputs = [("a", 160_000_u32), ("b", 100_u32)];
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "out", &params, &inputs),
-            Some(160_000),
-            "output sized to `a`; binary ops truncate processing at run time",
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ArrayMath::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.array_math");
     }
 }

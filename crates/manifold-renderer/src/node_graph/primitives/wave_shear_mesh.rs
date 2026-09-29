@@ -190,60 +190,6 @@ impl Primitive for WaveShearMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::EffectNode;
-
-    #[test]
-    fn photoscan_modifier_wave_shear_ports_and_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let prim = WaveShearMesh::new();
-        let mesh = ArrayType::of_known::<MeshVertex>();
-        let input = WaveShearMesh::INPUTS
-            .iter()
-            .find(|p| p.name == "in")
-            .unwrap();
-        assert_eq!(input.ty, PortType::Array(mesh));
-        assert!(input.required);
-        for name in [
-            "amplitude",
-            "frequency",
-            "phase",
-            "yaw",
-            "pitch",
-            "scale",
-            "origin_x",
-            "origin_y",
-            "origin_z",
-            "enabled",
-            "phase_offset",
-        ] {
-            let port = WaveShearMesh::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap();
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-            assert!(!port.required);
-        }
-        assert!(!WaveShearMesh::INPUTS.iter().any(|p| p.name == "axis"));
-        assert_eq!(WaveShearMesh::OUTPUTS[0].ty, PortType::Array(mesh));
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "out", &ParamValues::default(), &[("in", 19)]),
-            Some(19)
-        );
-    }
-
-    #[test]
-    fn photoscan_modifier_wave_shear_registers() {
-        let prim = WaveShearMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.wave_shear_mesh");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

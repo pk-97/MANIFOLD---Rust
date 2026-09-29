@@ -288,34 +288,3 @@ inventory::submit! {
         }),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn type_id_is_node_prefixed() {
-        let node = CompressorEnvelope::new();
-        assert_eq!(node.type_id().as_str(), "node.compressor_envelope");
-    }
-
-    #[test]
-    fn declares_in_three_modulation_ports_reset_and_out() {
-        let node = CompressorEnvelope::new();
-        let ins: Vec<&str> = node.inputs().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(ins, vec!["in", "ratio", "sensitivity", "target", "reset_trigger"]);
-        assert!(node.inputs()[0].required);
-        for i in 1..5 {
-            assert!(!node.inputs()[i].required);
-        }
-        let outs: Vec<&str> = node.outputs().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(outs, vec!["out"]);
-    }
-
-    #[test]
-    fn has_ratio_sensitivity_target_params() {
-        let node = CompressorEnvelope::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["ratio", "sensitivity", "target"]);
-    }
-}

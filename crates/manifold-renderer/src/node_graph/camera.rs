@@ -881,25 +881,14 @@ mod tests {
     }
 
     #[test]
-    fn default_perspective_lens_defaults_to_pinhole() {
-        assert_eq!(Camera::default_perspective().lens, LensParams::PINHOLE);
-    }
-
-    #[test]
-    fn orbit_perspective_lens_defaults_to_pinhole() {
-        let cam = Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0);
-        assert_eq!(cam.lens, LensParams::PINHOLE);
-    }
-
-    #[test]
-    fn from_pos_euler_lens_defaults_to_pinhole() {
-        let cam = Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0);
-        assert_eq!(cam.lens, LensParams::PINHOLE);
-    }
-
-    #[test]
-    fn look_at_lens_defaults_to_pinhole() {
-        let cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
-        assert_eq!(cam.lens, LensParams::PINHOLE);
+    fn every_constructor_lens_defaults_to_pinhole() {
+        for (label, cam) in [
+            ("default_perspective", Camera::default_perspective()),
+            ("orbit_perspective", Camera::orbit_perspective(0.7, 0.3, 4.0, 0.9, 0.0, 0.0, 0.05, 200.0)),
+            ("from_pos_euler", Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0)),
+            ("look_at", Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0)),
+        ] {
+            assert_eq!(cam.lens, LensParams::PINHOLE, "{label}");
+        }
     }
 }

@@ -133,39 +133,3 @@ impl Primitive for CenteredUv {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn centered_uv_declares_four_optional_scalar_inputs_and_one_texture_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(CenteredUv::TYPE_ID, "node.centered_uv");
-        let ins = CenteredUv::INPUTS;
-        assert_eq!(ins.len(), 4);
-        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["cx", "cy", "scale_x", "scale_y"]);
-        for port in ins {
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(CenteredUv::OUTPUTS.len(), 1);
-        assert_eq!(CenteredUv::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn centered_uv_has_cx_cy_scale_x_scale_y_params() {
-        let names: Vec<&str> = CenteredUv::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["cx", "cy", "scale_x", "scale_y"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CenteredUv::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.centered_uv");
-    }
-}

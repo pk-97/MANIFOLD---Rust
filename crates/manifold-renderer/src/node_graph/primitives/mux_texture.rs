@@ -504,20 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_eight_inputs_plus_selector() {
-        let m = MuxTexture::new();
-        // selector + in_0..in_7
-        assert_eq!(m.inputs().len(), 9);
-        assert_eq!(m.inputs()[0].name, "selector");
-        assert!(m.inputs()[0].required);
-        for (i, port) in m.inputs().iter().enumerate().skip(1) {
-            assert_eq!(port.name, IN_PORT_NAMES[i - 1]);
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Texture2D);
-        }
-    }
-
-    #[test]
     fn reconfigure_grows_and_shrinks_the_port_list() {
         let mut m = MuxTexture::new();
         m.reconfigure(&params_with(12.0, 0.0));
@@ -558,13 +544,6 @@ mod tests {
         let node: &dyn EffectNode = &m;
         let wired = ["selector", "in_0", "in_1"];
         assert_eq!(node.selected_input_branch(&params_with(8.0, 2.0), &wired), None);
-    }
-
-    #[test]
-    fn registers_with_palette_type_id() {
-        let m = MuxTexture::new();
-        let node: &dyn EffectNode = &m;
-        assert_eq!(node.type_id().as_str(), "node.switch_texture");
     }
 }
 

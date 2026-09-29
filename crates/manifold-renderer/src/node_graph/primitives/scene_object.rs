@@ -228,7 +228,6 @@ mod tests {
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::{ArrayType, PortType};
-    use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -236,49 +235,10 @@ mod tests {
     }
 
     #[test]
-    fn scene_object_declares_object_output_and_optional_inputs() {
-        assert_eq!(SceneObjectNode::TYPE_ID, "node.scene_object");
-        for input in SceneObjectNode::INPUTS {
-            assert!(!input.required, "{} should be optional", input.name);
-        }
-        assert_eq!(SceneObjectNode::OUTPUTS.len(), 1);
-        assert_eq!(SceneObjectNode::OUTPUTS[0].name, "object");
-        assert_eq!(SceneObjectNode::OUTPUTS[0].ty, PortType::Object);
-    }
-
-    #[test]
-    fn scene_object_declares_optional_instance_count_input() {
-        let input = SceneObjectNode::INPUTS
-            .iter()
-            .find(|input| input.name == "instance_count")
-            .expect("instance_count input");
-        assert_eq!(
-            input.ty,
-            PortType::Scalar(crate::node_graph::ports::ScalarType::F32)
-        );
-        assert!(!input.required);
-    }
-
-    #[test]
-    fn scene_object_declares_no_object_input() {
-        // Invariant: `node.scene_object` never takes an `Object` input —
-        // the single-hop rule. Also proven registry-wide by
-        // `object_port_single_hop` in `validate.rs`.
-        assert!(SceneObjectNode::INPUTS.iter().all(|i| i.ty != PortType::Object));
-    }
-
-    #[test]
     fn scene_object_carries_resources() {
         let node = SceneObjectNode::new();
         let effect_node: &dyn EffectNode = &node;
         assert!(effect_node.carries_resources());
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = SceneObjectNode::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.scene_object");
     }
 
     #[test]

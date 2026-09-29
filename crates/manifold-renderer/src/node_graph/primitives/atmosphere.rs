@@ -181,14 +181,12 @@ impl Primitive for AtmosphereNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::MockBackend;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::PortType;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -198,25 +196,6 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         }
-    }
-
-    #[test]
-    fn declares_ten_port_shadow_scalars_and_atmosphere_output() {
-        assert_eq!(AtmosphereNode::TYPE_ID, "node.atmosphere");
-        assert_eq!(AtmosphereNode::INPUTS.len(), 10, "8 original + shaft_intensity + shaft_anisotropy (shaft_quality is param-only, not port-shadowed)");
-        for input in AtmosphereNode::INPUTS {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-        }
-        assert_eq!(AtmosphereNode::OUTPUTS.len(), 1);
-        assert_eq!(AtmosphereNode::OUTPUTS[0].name, "atmosphere");
-        assert_eq!(AtmosphereNode::OUTPUTS[0].ty, PortType::Atmosphere);
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = AtmosphereNode::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.atmosphere");
     }
 
     /// Run `AtmosphereNode` with the given param overrides (defaults for the

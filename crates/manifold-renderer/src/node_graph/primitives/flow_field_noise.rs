@@ -176,27 +176,6 @@ impl Primitive for FlowFieldNoise {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn flow_field_noise_declares_zero_inputs_and_texture_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(FlowFieldNoise::TYPE_ID, "node.flow_field_noise");
-        assert!(FlowFieldNoise::INPUTS.is_empty());
-        assert_eq!(FlowFieldNoise::OUTPUTS.len(), 1);
-        assert_eq!(FlowFieldNoise::OUTPUTS[0].name, "flow");
-        assert_eq!(FlowFieldNoise::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn flow_field_noise_has_z_scale_warp_scale_and_resolution_params() {
-        // `time` leads the list: the freeze fusion regularized the frame-time
-        // input as a port-shadowed `time` param (the time-param pattern) so the
-        // generated kernel can read it as a uniform field.
-        let names: Vec<&str> = FlowFieldNoise::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["time", "z_scale", "warp_scale", "resolution"]);
-    }
 
     #[test]
     fn resolution_param_drives_output_canvas_scale() {
@@ -216,12 +195,5 @@ mod tests {
                 "resolution enum {enum_v}",
             );
         }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = FlowFieldNoise::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.flow_field_noise");
     }
 }

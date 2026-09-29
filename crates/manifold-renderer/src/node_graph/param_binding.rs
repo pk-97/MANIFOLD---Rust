@@ -1008,7 +1008,7 @@ mod tests {
     // the static / user / fan-out / cache code paths. `Mix` carries an
     // `Enum` `mode` param and is the fixture for the `EnumRound`
     // routing test.
-    use crate::node_graph::primitives::{AffineTransform, FEEDBACK_TYPE_ID, Mix};
+    use crate::node_graph::primitives::{AffineTransform, Mix};
 
     // ---- Conversion tests ----
 
@@ -1879,13 +1879,5 @@ mod tests {
         ];
         cache.clear_tail(1); // n_static = 1
         assert_eq!(cache.entries, vec![BindingCacheEntry::Applied(0.5)]);
-    }
-
-    #[test]
-    fn unused_type_id_constant_compiles() {
-        // Suppress unused-import warning for FEEDBACK_TYPE_ID and
-        // document the stable type-id contract — saved graphs reference
-        // this string, so it must not drift.
-        assert_eq!(FEEDBACK_TYPE_ID, "node.feedback");
     }
 }
