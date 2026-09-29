@@ -191,6 +191,15 @@ impl KnownItem for f32 {
     }];
 }
 
+impl KnownItem for i32 {
+    // Signed fixed-point accumulators (the MPM grid, GPU_MPM_SOLVER_DESIGN.md
+    // D5): integer atomics are order-independent, so sums are deterministic.
+    const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
+        name: ChannelName::from_str("value"),
+        ty: ChannelElementType::I32,
+    }];
+}
+
 impl KnownItem for [f32; 2] {
     // Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
     // preserves byte parity with the existing `[f32; 2]` layout per

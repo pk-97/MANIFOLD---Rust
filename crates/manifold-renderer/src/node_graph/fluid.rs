@@ -36,7 +36,7 @@ mod playback_tests;
 mod roles;
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
-pub use domain::FluidDomainLayout;
+pub use domain::{FluidDomainLayout, domain_layout};
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;
 pub use take::{FluidTakeFrame, FluidTakeIdentity, FluidTakeReplay, TakeRange, TakeTime};
