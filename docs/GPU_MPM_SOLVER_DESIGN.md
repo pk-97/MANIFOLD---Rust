@@ -1089,10 +1089,24 @@ at the end of the phase.
     `scatter_particles_3d.rs` carries `boundary_reason: Blocked` with no tracked gap,
     now BUG-1ois (atomic scatter atoms declare Blocked). Fused codegen does not
     namespace member helpers, so shared helpers are duplicated with an atom prefix.
-  - Owed under the remaining-deliverables bead: the source test pinning the duplicated
-    helpers equal; A1–A6 and the metrics mode (Martin & Moyce not yet transcribed); the
-    momentum test; both presets and `particles_to_copies`; the `landing_gate.py` scope
-    row (its structure not yet verified); the demo.
+  - Built since: `particles_to_copies` (moved here from the surface design's deferred
+    P3) and `matter_to_particles` (index-keeping records for D6's sort), each with
+    value and fused proofs; `WaterDamBreakMatter.json` and `WaterStillPoolMatter.json` on
+    the Live Matter group (the moving box and whitewater wait for P2a and P6; the pool
+    rounds to whole cells); `matter::look` and the gates in
+    `tests/gpu_proofs/matter_look.rs`; helper-copy source tests.
+  - Verified: `landing_gate.py` scopes GPU proofs by rows of path substrings and test
+    filters, and any uncovered GPU path runs the full suite; the matter row filters
+    `matter_` and `substeps_`. Martin & Moyce 1952 Figure 3, n² = 2, a = 2.25 in,
+    transcribed from PySPH's `db_exp_data.py` into `matter::look`.
+  - Gates after the D5 amendment, Dam Break as the preset: A1 1.02–1.03 (pass); A5 1.44%
+    against FLIP's 1.34% (pass); A6 0.85% against FLIP's 27.3% (fail); A4 11.0% at
+    Liveliness 0 and 2.0% at 0.9, ahead of the experiment by 8–10% from T ≈ 1.3 (fail);
+    free-blob momentum 1.2e-4 against 1e-4 (fail, cause not found). A2, A3, the still
+    pool and headroom fail through BUG-8akp (MPM water J grows without bound): at
+    Cohesion 0, λ·J(J−1)·0 turns NaN near t = 1.9 s.
+  - Owed with BUG-g93n (MPM P1 remaining deliverables): the `fluid_capture` metrics
+    mode, after the surface branch merge; every gate green after the J ruling; the demo.
 
 ### P1b — Profile and optimise
 
