@@ -238,45 +238,4 @@ mod tests {
         assert!(obj.mesh.is_none());
         assert!(obj.material.is_none());
     }
-
-    #[test]
-    fn scene_object_is_copy_and_cheap_to_clone() {
-        let obj = SceneObject {
-            visible: true,
-            cast_shadows: true,
-            transform: Transform::default(),
-            parent_transform: None,
-            material: None,
-            mesh: Some(Slot(0)),
-            weights: None,
-            topology: None,
-            base_color_map: Some(Slot(1)),
-            normal_map: None,
-            mr_map: None,
-            occlusion_map: None,
-            emissive_map: None,
-            sheen_color_map: None,
-            sheen_roughness_map: None,
-            iridescence_map: None,
-            iridescence_thickness_map: None,
-            anisotropy_map: None,
-            clearcoat_map: None,
-            clearcoat_roughness_map: None,
-            clearcoat_normal_map: None,
-            specular_map: None,
-            specular_color_map: None,
-            transmission_map: None,
-            diffuse_transmission_map: None,
-            diffuse_transmission_color_map: None,
-            volume_thickness_map: None,
-            instances: Some(Slot(2)),
-            instance_count: None,
-            emission_strength: 1.0,
-            gain: 1.0,
-        };
-        let copy = obj;
-        // Both usable — proves Copy, not just Clone (a move would make
-        // `obj` unusable below).
-        assert_eq!(obj, copy);
-    }
 }

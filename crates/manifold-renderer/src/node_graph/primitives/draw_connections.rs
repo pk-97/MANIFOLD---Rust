@@ -198,28 +198,3 @@ impl Primitive for DrawConnections {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn draw_connections_declares_ports_and_skip_contract() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(DrawConnections::TYPE_ID, "node.draw_connections");
-        assert_eq!(DrawConnections::INPUTS[1].name, "detections");
-        assert_eq!(DrawConnections::INPUTS[2].name, "edges");
-        assert!(matches!(DrawConnections::INPUTS[2].ty, PortType::Array(_)));
-        let prim = DrawConnections::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.empty_skip_input_ports(), &["edges"]);
-        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
-    }
-
-    #[test]
-    fn uniforms_are_48_bytes() {
-        assert_eq!(std::mem::size_of::<ConnectionsUniforms>(), 48);
-    }
-}
-

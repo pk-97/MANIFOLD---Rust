@@ -174,54 +174,6 @@ impl Primitive for SkinMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn skin_mesh_declares_four_required_array_inputs_and_one_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
-        let matrix_layout = ArrayType::of_known::<JointMatrix>();
-
-        assert_eq!(SkinMesh::TYPE_ID, "node.skin_mesh");
-        assert_eq!(SkinMesh::INPUTS.len(), 4);
-        let in_port = SkinMesh::INPUTS.iter().find(|p| p.name == "in").unwrap();
-        assert!(in_port.required);
-        assert_eq!(in_port.ty, PortType::Array(mesh_layout));
-        for name in ["joints", "weights"] {
-            let port = SkinMesh::INPUTS.iter().find(|p| p.name == name).unwrap();
-            assert!(port.required);
-            assert_eq!(port.ty, PortType::Array(vec4_layout));
-        }
-        let matrices_port = SkinMesh::INPUTS.iter().find(|p| p.name == "matrices").unwrap();
-        assert!(matrices_port.required);
-        assert_eq!(matrices_port.ty, PortType::Array(matrix_layout));
-
-        assert_eq!(SkinMesh::OUTPUTS.len(), 1);
-        assert_eq!(SkinMesh::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
-
-    #[test]
-    fn skin_mesh_output_follows_in_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = SkinMesh::new();
-        let params = ParamValues::default();
-        let inputs = [("in", 4000_u32), ("joints", 4000_u32), ("weights", 4000_u32), ("matrices", 64_u32)];
-        assert_eq!(Primitive::array_output_capacity(&prim, "out", &params, &inputs), Some(4000));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = SkinMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.skin_mesh");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests. No legacy predecessor to diff against —

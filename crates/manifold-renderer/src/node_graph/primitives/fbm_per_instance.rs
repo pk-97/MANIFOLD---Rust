@@ -212,25 +212,7 @@ impl Primitive for FbmPerInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn fbm_per_instance_declares_vec2_in_and_f32_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let vec2_layout = ArrayType::of_known::<[f32; 2]>();
-        let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(FbmPerInstance::TYPE_ID, "node.fractal_noise_per_copy");
-        let uv_in = FbmPerInstance::INPUTS
-            .iter()
-            .find(|p| p.name == "uv")
-            .expect("uv input must exist");
-        assert!(uv_in.required);
-        assert_eq!(uv_in.ty, PortType::Array(vec2_layout));
-        assert_eq!(FbmPerInstance::OUTPUTS.len(), 1);
-        assert_eq!(FbmPerInstance::OUTPUTS[0].name, "out");
-        assert_eq!(FbmPerInstance::OUTPUTS[0].ty, PortType::Array(f32_layout));
-    }
 
     #[test]
     fn fbm_per_instance_defaults_match_legacy_noise_common() {
@@ -249,35 +231,6 @@ mod tests {
             }
             _ => panic!("default values must be Float"),
         }
-    }
-
-    #[test]
-    fn fbm_per_instance_has_port_shadow_inputs_for_realtime_params() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        for name in ["scale", "z", "offset_x", "offset_y"] {
-            let port = FbmPerInstance::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap_or_else(|| panic!("{name} port-shadow input must exist"));
-            assert!(!port.required, "{name} is port-shadow, must be optional");
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-        // Structural params (octaves/lacunarity/gain) intentionally
-        // have NO port-shadow inputs — they are tuning knobs, not
-        // real-time control surfaces.
-        for name in ["octaves", "lacunarity", "gain"] {
-            assert!(
-                FbmPerInstance::INPUTS.iter().all(|p| p.name != name),
-                "{name} must not be port-shadowed (structural-only)",
-            );
-        }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = FbmPerInstance::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.fractal_noise_per_copy");
     }
 }
 

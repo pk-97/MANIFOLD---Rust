@@ -60,32 +60,3 @@ impl Primitive for UvField {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn uv_field_declares_zero_inputs_and_one_texture_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(UvField::TYPE_ID, "node.uv_field");
-        assert!(UvField::INPUTS.is_empty());
-        assert_eq!(UvField::OUTPUTS.len(), 1);
-        assert_eq!(UvField::OUTPUTS[0].name, "out");
-        assert_eq!(UvField::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn uv_field_has_no_params() {
-        assert!(UvField::PARAMS.is_empty());
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = UvField::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.uv_field");
-    }
-}

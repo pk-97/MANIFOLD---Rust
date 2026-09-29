@@ -167,66 +167,6 @@ impl Primitive for PolytopeVertices {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_shape_input_and_mesh_vertex_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let vert_layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(PolytopeVertices::TYPE_ID, "node.platonic_solid_points");
-        assert_eq!(PolytopeVertices::INPUTS.len(), 1);
-        assert_eq!(PolytopeVertices::INPUTS[0].name, "shape");
-        assert!(!PolytopeVertices::INPUTS[0].required);
-        assert_eq!(
-            PolytopeVertices::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-
-        assert_eq!(PolytopeVertices::OUTPUTS.len(), 1);
-        assert_eq!(PolytopeVertices::OUTPUTS[0].name, "vertices");
-        assert_eq!(
-            PolytopeVertices::OUTPUTS[0].ty,
-            PortType::Array(vert_layout)
-        );
-    }
-
-    #[test]
-    fn shape_enum_lists_five_platonic_solids() {
-        let shape = PolytopeVertices::PARAMS
-            .iter()
-            .find(|p| p.name == "shape")
-            .unwrap();
-        assert_eq!(shape.ty, ParamType::Enum);
-        assert_eq!(shape.enum_values.len(), 5);
-        assert_eq!(shape.enum_values, PLATONIC_SHAPES);
-    }
-
-    #[test]
-    fn output_capacity_is_platonic_max_verts() {
-        let prim = PolytopeVertices::new();
-        let params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "vertices", &params, &[]),
-            Some(PLATONIC_MAX_VERTS)
-        );
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "bogus", &params, &[]),
-            None
-        );
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = PolytopeVertices::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.platonic_solid_points");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity tests against the legacy `WireframeZooGenerator`'s

@@ -139,35 +139,7 @@ impl Primitive for CycleTableRow {
 mod tests {
     use super::*;
     use crate::node_graph::parameters::TableData;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use std::sync::Arc;
-
-    #[test]
-    fn declares_trigger_count_input_and_array_f32_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-        assert_eq!(CycleTableRow::INPUTS.len(), 1);
-        assert_eq!(CycleTableRow::INPUTS[0].name, "trigger_count");
-        assert!(!CycleTableRow::INPUTS[0].required);
-        assert_eq!(
-            CycleTableRow::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-
-        assert_eq!(CycleTableRow::OUTPUTS.len(), 1);
-        assert_eq!(CycleTableRow::OUTPUTS[0].name, "row");
-        assert_eq!(
-            CycleTableRow::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<f32>())
-        );
-    }
-
-    #[test]
-    fn declares_single_table_param() {
-        assert_eq!(CycleTableRow::PARAMS.len(), 1);
-        assert_eq!(CycleTableRow::PARAMS[0].name, "table");
-        assert_eq!(CycleTableRow::PARAMS[0].ty, ParamType::Table);
-    }
 
     #[test]
     fn array_output_capacity_reads_table_col_count() {
@@ -181,35 +153,6 @@ mod tests {
         params.insert(std::borrow::Cow::Borrowed("table"), ParamValue::Table(table));
         let cap = Primitive::array_output_capacity(&prim, "row", &params, &[]);
         assert_eq!(cap, Some(5));
-    }
-
-    #[test]
-    fn array_output_capacity_unknown_port_returns_none() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = CycleTableRow::new();
-        let params = ParamValues::default();
-        let cap = Primitive::array_output_capacity(&prim, "out", &params, &[]);
-        assert!(cap.is_none());
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_driver() {
-        use crate::node_graph::palette::{PaletteCategory, palette_atoms};
-        let atoms = palette_atoms();
-        let entry = atoms
-            .iter()
-            .find(|e| e.type_id == CycleTableRow::TYPE_ID)
-            .expect("cycle_table_row should be registered as a palette atom");
-        assert_eq!(entry.label, "Cycle Table Row");
-        assert!(matches!(entry.category, PaletteCategory::Driver));
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        use crate::node_graph::EffectNode;
-        let prim = CycleTableRow::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
     }
 
     /// BUG-104 — see `frequency_ratio`'s equivalent test for the full

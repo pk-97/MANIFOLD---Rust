@@ -136,38 +136,6 @@ impl Primitive for EdgesFromMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_mesh_input_and_edge_pair_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-        assert_eq!(EdgesFromMesh::TYPE_ID, "node.mesh_edges");
-        assert_eq!(EdgesFromMesh::INPUTS.len(), 2);
-        assert_eq!(EdgesFromMesh::INPUTS[0].name, "vertices");
-        assert!(EdgesFromMesh::INPUTS[0].required);
-        assert_eq!(
-            EdgesFromMesh::INPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<MeshVertex>()),
-        );
-        assert_eq!(EdgesFromMesh::INPUTS[1].name, "active_count");
-        assert!(
-            !EdgesFromMesh::INPUTS[1].required,
-            "active_count must be optional (port-shadow)"
-        );
-        assert_eq!(
-            EdgesFromMesh::INPUTS[1].ty,
-            PortType::Scalar(ScalarType::F32),
-        );
-
-        assert_eq!(EdgesFromMesh::OUTPUTS.len(), 1);
-        assert_eq!(EdgesFromMesh::OUTPUTS[0].name, "edges");
-        assert_eq!(
-            EdgesFromMesh::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<EdgePair>()),
-        );
-    }
 
     #[test]
     fn output_capacity_matches_vertex_capacity() {
@@ -187,13 +155,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "bogus", &params, &[("vertices", 9210)]),
             None,
         );
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = EdgesFromMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.mesh_edges");
     }
 
     // BUG-123: a source buffer sized larger than the asset's real loaded

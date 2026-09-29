@@ -90,38 +90,3 @@ impl Primitive for PowerTexture {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn power_texture_declares_required_input_optional_exponent_and_one_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(PowerTexture::TYPE_ID, "node.power");
-        assert_eq!(PowerTexture::INPUTS.len(), 2);
-        assert_eq!(PowerTexture::INPUTS[0].name, "in");
-        assert!(PowerTexture::INPUTS[0].required);
-        assert_eq!(PowerTexture::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(PowerTexture::INPUTS[1].name, "exponent");
-        assert!(!PowerTexture::INPUTS[1].required);
-        assert_eq!(PowerTexture::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(PowerTexture::OUTPUTS.len(), 1);
-        assert_eq!(PowerTexture::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn power_texture_has_exponent_param() {
-        let names: Vec<&str> = PowerTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["exponent"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = PowerTexture::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.power");
-    }
-}

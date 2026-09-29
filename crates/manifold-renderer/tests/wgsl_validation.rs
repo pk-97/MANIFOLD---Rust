@@ -32,13 +32,6 @@ const PARTIAL_SHADERS: &[&str] = &[
     "particle_common.wgsl",
     "oily_fluid.wgsl",
     "noise_common.wgsl",
-    // Per-instance noise / jitter primitives prepend noise_common
-    // at pipeline-creation time; each has a dedicated composed
-    // validator below.
-    "simplex_per_instance.wgsl",
-    "fbm_per_instance.wgsl",
-    "instance_position_jitter.wgsl",
-    "instance_rotation_jitter.wgsl",
     // Specialization templates whose missing symbols are injected at
     // pipeline creation: `gaussian_blur_variable_width` has its
     // QUALITY_LEVEL / WEIGHTING_MODE consts replaced by the preprocessor;
@@ -47,12 +40,27 @@ const PARTIAL_SHADERS: &[&str] = &[
     // exercised by the bundled-preset execute tests.
     "gaussian_blur_variable_width.wgsl",
     "radial_burst_force_field.wgsl",
-    // IMPORT_FIDELITY_DESIGN.md D2/F-P1: prepend pbr_brdf.wgsl at
-    // pipeline-creation time (Hammersley / GGX importance sample / equirect
-    // direction helpers). Composed validators below.
-    "ibl_prefilter_specular.wgsl",
-    "ibl_irradiance.wgsl",
-    "ibl_brdf_lut.wgsl",
+];
+
+const NOISE_COMMON: &str = include_str!("../src/generators/shaders/noise_common.wgsl");
+const PBR_BRDF: &str = include_str!("../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
+const TONEMAP_COMMON: &str = include_str!("../src/effects/shaders/tonemap_common.wgsl");
+const SAMPLE_FACE_COMMON: &str =
+    include_str!("../src/node_graph/primitives/shaders/sample_face_common.wgsl");
+
+/// Shaders whose pipeline prepends a shared helper file at creation time.
+/// Each validates in that composed form, the way production builds it.
+const COMPOSED_SHADERS: &[(&str, &str)] = &[
+    ("render_mesh_diagram.wgsl", SAMPLE_FACE_COMMON),
+    ("aces_tonemap_compute.wgsl", TONEMAP_COMMON),
+    ("presentation.wgsl", TONEMAP_COMMON),
+    ("simplex_per_instance.wgsl", NOISE_COMMON),
+    ("fbm_per_instance.wgsl", NOISE_COMMON),
+    ("instance_position_jitter.wgsl", NOISE_COMMON),
+    ("instance_rotation_jitter.wgsl", NOISE_COMMON),
+    ("ibl_prefilter_specular.wgsl", PBR_BRDF),
+    ("ibl_irradiance.wgsl", PBR_BRDF),
+    ("ibl_brdf_lut.wgsl", PBR_BRDF),
 ];
 
 fn is_partial(path: &std::path::Path) -> bool {
@@ -89,15 +97,14 @@ fn all_wgsl_shaders_validate() {
 
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
-        // Match the production diagram's composed source; validate the shared
-        // face-index helper with its consumer rather than skipping the shader.
-        let source = if path.file_name().is_some_and(|name| name == "render_mesh_diagram.wgsl") {
-            format!("{}\n{source}", include_str!("../src/node_graph/primitives/shaders/sample_face_common.wgsl"))
-        } else if path.file_name().is_some_and(|name| {
-            name == "aces_tonemap_compute.wgsl" || name == "presentation.wgsl"
-        }) {
-            format!("{}\n{source}", include_str!("../src/effects/shaders/tonemap_common.wgsl"))
-        } else { source };
+        let prefix = COMPOSED_SHADERS
+            .iter()
+            .find(|(name, _)| path.file_name().is_some_and(|n| n == *name))
+            .map(|(_, prefix)| *prefix);
+        let source = match prefix {
+            Some(prefix) => format!("{prefix}\n{source}"),
+            None => source,
+        };
 
         let relative = path.strip_prefix(shader_dir()).unwrap_or(path);
 
@@ -140,106 +147,3 @@ fn all_wgsl_shaders_validate() {
 
     eprintln!("Validated {validated} shaders, skipped {skipped} partials");
 }
-
-/// Composed-source validators for shaders that prepend noise_common.wgsl
-/// at pipeline-creation time (simplex3d / fbm / hash_u32 live there).
-fn validate_composed_with_noise_common(label: &str, main_src: &str) {
-    let noise = include_str!("../src/generators/shaders/noise_common.wgsl");
-    let composed = format!("{noise}\n{main_src}");
-    let module = naga::front::wgsl::parse_str(&composed)
-        .unwrap_or_else(|e| panic!("{label} composed parse error: {e}"));
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    );
-    validator
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("{label} composed validation error: {e}"));
-}
-
-#[test]
-fn simplex_per_instance_composed_validates() {
-    validate_composed_with_noise_common(
-        "simplex_per_instance",
-        include_str!(
-            "../src/node_graph/primitives/shaders/simplex_per_instance.wgsl"
-        ),
-    );
-}
-
-#[test]
-fn fbm_per_instance_composed_validates() {
-    validate_composed_with_noise_common(
-        "fbm_per_instance",
-        include_str!(
-            "../src/node_graph/primitives/shaders/fbm_per_instance.wgsl"
-        ),
-    );
-}
-
-#[test]
-fn instance_position_jitter_composed_validates() {
-    validate_composed_with_noise_common(
-        "instance_position_jitter",
-        include_str!(
-            "../src/node_graph/primitives/shaders/instance_position_jitter.wgsl"
-        ),
-    );
-}
-
-#[test]
-fn instance_rotation_jitter_composed_validates() {
-    validate_composed_with_noise_common(
-        "instance_rotation_jitter",
-        include_str!(
-            "../src/node_graph/primitives/shaders/instance_rotation_jitter.wgsl"
-        ),
-    );
-}
-
-/// Composed-source validators for the split-sum IBL convolution passes
-/// (IMPORT_FIDELITY_DESIGN.md D2/F-P1), which prepend `pbr_brdf.wgsl` at
-/// pipeline-creation time — same "partial + composed validator" idiom as
-/// the noise_common consumers above, just against a different shared file.
-fn validate_composed_with_pbr_brdf(label: &str, main_src: &str) {
-    let brdf = include_str!("../src/node_graph/primitives/shaders/pbr_brdf.wgsl");
-    let composed = format!("{brdf}\n{main_src}");
-    let module = naga::front::wgsl::parse_str(&composed)
-        .unwrap_or_else(|e| panic!("{label} composed parse error: {e}"));
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    );
-    validator
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("{label} composed validation error: {e}"));
-}
-
-#[test]
-fn ibl_prefilter_specular_composed_validates() {
-    validate_composed_with_pbr_brdf(
-        "ibl_prefilter_specular",
-        include_str!("../src/node_graph/primitives/shaders/ibl_prefilter_specular.wgsl"),
-    );
-}
-
-#[test]
-fn ibl_irradiance_composed_validates() {
-    validate_composed_with_pbr_brdf(
-        "ibl_irradiance",
-        include_str!("../src/node_graph/primitives/shaders/ibl_irradiance.wgsl"),
-    );
-}
-
-#[test]
-fn ibl_brdf_lut_composed_validates() {
-    validate_composed_with_pbr_brdf(
-        "ibl_brdf_lut",
-        include_str!("../src/node_graph/primitives/shaders/ibl_brdf_lut.wgsl"),
-    );
-}
-
-// `oily_fluid` was decomposed into atomic primitives; the all-in-one
-// shader composition no longer exists. The component primitives
-// (simplex_field_2d, gradient_central_diff, texture_advect, etc.) are
-// each validated by the all-WGSL sweep above.

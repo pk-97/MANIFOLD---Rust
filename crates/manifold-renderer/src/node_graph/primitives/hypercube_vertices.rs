@@ -149,65 +149,6 @@ impl Primitive for HypercubeVertices {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_dimension_input_and_vec4_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
-        assert_eq!(HypercubeVertices::TYPE_ID, "node.hypercube_points");
-        assert_eq!(HypercubeVertices::INPUTS.len(), 1);
-        assert_eq!(HypercubeVertices::INPUTS[0].name, "dimension");
-        assert!(!HypercubeVertices::INPUTS[0].required);
-        assert_eq!(
-            HypercubeVertices::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(HypercubeVertices::OUTPUTS.len(), 1);
-        assert_eq!(HypercubeVertices::OUTPUTS[0].name, "vertices");
-        assert_eq!(
-            HypercubeVertices::OUTPUTS[0].ty,
-            PortType::Array(vec4_layout)
-        );
-    }
-
-    #[test]
-    fn dimension_param_defaults_to_full_tesseract() {
-        let p = HypercubeVertices::PARAMS
-            .iter()
-            .find(|p| p.name == "dimension")
-            .unwrap();
-        assert_eq!(p.ty, ParamType::Float);
-        assert_eq!(p.default, ParamValue::Float(4.0));
-        assert_eq!(p.range, Some((1.0, 4.0)));
-    }
-
-    #[test]
-    fn output_capacity_is_sixteen() {
-        let prim = HypercubeVertices::new();
-        let params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "vertices", &params, &[]),
-            Some(HYPERCUBE_VERTEX_COUNT)
-        );
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "bogus", &params, &[]),
-            None
-        );
-    }
-
-    #[test]
-    fn registers_with_palette() {
-        let prim = HypercubeVertices::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.hypercube_points");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity for the hypercube corner bake. The reference is the

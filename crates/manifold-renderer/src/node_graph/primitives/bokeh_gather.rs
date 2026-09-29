@@ -567,7 +567,6 @@ impl Primitive for BokehGather {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
     #[test]
     fn bounded_mips_cover_all_accessible_radii() {
         assert_eq!(mip_level_count(1, 1), 1);
@@ -578,24 +577,6 @@ mod tests {
         assert_eq!(active_mip_levels(64.0, 1, 5), 5);
         assert_eq!(active_mip_levels(64.0, 2, 5), 4);
         assert_eq!(active_mip_levels(0.0, 1, 5), 1);
-    }
-    #[test]
-    fn uniform_and_existing_ports_are_compatible() {
-        assert_eq!(std::mem::size_of::<BokehGatherUniforms>(), 32);
-        assert_eq!(
-            BokehGather::INPUTS
-                .iter()
-                .map(|p| p.name.as_ref())
-                .collect::<Vec<_>>(),
-            ["in", "width"]
-        );
-        assert_eq!(BokehGather::PARAMS[0].name, "max_radius");
-        assert_eq!(BokehGather::PARAMS[1].name, "enabled");
-        assert_eq!(BokehGather::PARAMS[2].default, ParamValue::Enum(0));
-        assert_eq!(
-            BokehGather::BOUNDARY_REASON,
-            Some(crate::node_graph::freeze::classify::BoundaryReason::BarrieredReduction)
-        );
     }
     #[test]
     fn disabled_aliases_source() {

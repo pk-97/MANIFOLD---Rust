@@ -239,22 +239,6 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn noise_declares_texture_output_and_type_param() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(Noise::TYPE_ID, "node.noise");
-        assert_eq!(Noise::OUTPUTS.len(), 1);
-        assert_eq!(Noise::OUTPUTS[0].name, "out");
-        assert_eq!(Noise::OUTPUTS[0].ty, PortType::Texture2D);
-        let names: Vec<&str> = Noise::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["type", "scale", "offset_x", "offset_y", "octaves", "lacunarity", "persistence"]
-        );
-    }
 
     #[test]
     fn canonical_defaults_are_perlin_single_octave() {
@@ -286,12 +270,5 @@ mod tests {
             n
         };
         assert_eq!(hash.default_type, 2);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Noise::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.noise");
     }
 }

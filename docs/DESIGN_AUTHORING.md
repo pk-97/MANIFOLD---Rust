@@ -348,8 +348,8 @@ Opus inherits — bug hunts and complex tasks run the same skeleton, cheaper:
   every component-level audit returns "symmetric, correct" and every theory feels
   plausible. The method that worked, in order: (1) build a *quantified* observable
   first — a deterministic headless harness with a number (quadrant shares, drift
-  rate), not a look; rerun must be seconds-to-minutes (BUG-066's is
-  `tests/fluid3d_bias.rs`, ~12s/scenario). (2) Bisect by nulling contributors via
+  rate), not a look; rerun must be seconds-to-minutes (BUG-066's was a
+  ~12s/scenario harness, `tests/fluid3d_bias.rs` in git history before 2026-09-29). (2) Bisect by nulling contributors via
   params — inject past UI ranges from the harness; find the minimal configuration
   that still shows the bug. (3) Characterize the bug's *invariances* before
   theorizing: flip a sign (does it mirror?), scale a parameter (does it grow?),

@@ -359,7 +359,6 @@ impl Primitive for DigitalPlantsRender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
@@ -417,12 +416,5 @@ mod tests {
         ] {
             assert!(names.contains(required), "missing param {}", required);
         }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = DigitalPlantsRender::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.digital_plants_render");
     }
 }

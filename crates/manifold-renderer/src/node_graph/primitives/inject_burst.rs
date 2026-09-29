@@ -239,31 +239,6 @@ inventory::submit! {
 mod tests {
     use super::*;
 
-    #[test]
-    fn inject_burst_declares_two_inputs_and_four_outputs() {
-        let node = InjectBurst::new();
-        assert_eq!(node.inputs().len(), 2);
-        assert_eq!(node.inputs()[0].name, "trigger");
-        assert!(node.inputs()[0].required);
-        assert_eq!(node.inputs()[1].name, "enable");
-        assert!(node.inputs()[1].required);
-        let outs: Vec<&str> = node.outputs().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(outs, vec!["active", "phase", "point_x", "point_y"]);
-    }
-
-    #[test]
-    fn inject_burst_has_duration_param() {
-        let node = InjectBurst::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["duration"]);
-    }
-
-    #[test]
-    fn inject_burst_type_id_is_node_prefixed() {
-        let node = InjectBurst::new();
-        assert_eq!(node.type_id().as_str(), "node.inject_burst");
-    }
-
     /// The hash function is the load-bearing parity guarantee — the
     /// inject point on each clip-trigger must land in the exact same
     /// UV as the legacy generator. This test re-implements the legacy

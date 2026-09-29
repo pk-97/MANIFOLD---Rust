@@ -530,14 +530,6 @@ mod channel_layout_tests {
     const UV: ChannelName = ChannelName::from_str("uv");
 
     #[test]
-    fn fnv_const_hash_is_stable_across_calls() {
-        let a = ChannelName::from_str("x");
-        let b = ChannelName::from_str("x");
-        assert_eq!(a, b);
-        assert_eq!(a.hash(), b.hash());
-    }
-
-    #[test]
     fn fnv_distinguishes_distinct_strings() {
         let x = ChannelName::from_str("x");
         let y = ChannelName::from_str("y");

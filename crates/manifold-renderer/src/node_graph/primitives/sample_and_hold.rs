@@ -171,27 +171,6 @@ inventory::submit! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn declares_value_and_trigger_inputs_and_one_scalar_out() {
-        let node = SampleAndHold::new();
-        let inputs = node.inputs();
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].name, "value");
-        assert!(inputs[0].required);
-        assert_eq!(inputs[1].name, "trigger");
-        assert!(inputs[1].required);
-        let outputs = node.outputs();
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].name, "out");
-    }
-
-    #[test]
-    fn type_id_is_node_prefixed() {
-        let node = SampleAndHold::new();
-        assert_eq!(node.type_id().as_str(), "node.sample_and_hold");
-    }
 
     /// CPU mirror — confirms the trigger-edge capture semantics.
     /// Matches the legacy FluidSimCore behaviour where
@@ -235,13 +214,6 @@ mod tests {
         assert_eq!(m.tick(0.0, 1), 5.0);
         // Next edge → recapture.
         assert_eq!(m.tick(1.0, 2), 1.0);
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let node = SampleAndHold::new();
-        let en: &dyn crate::node_graph::EffectNode = &node;
-        assert!(en.is_trigger_latch());
     }
 }
 

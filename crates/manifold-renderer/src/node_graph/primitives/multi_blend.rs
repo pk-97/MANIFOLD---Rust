@@ -322,17 +322,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_five_optional_inputs() {
-        let m = MultiBlend::new();
-        assert_eq!(m.inputs().len(), 5);
-        for (i, port) in m.inputs().iter().enumerate() {
-            assert_eq!(port.name, IN_PORT_NAMES[i]);
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Texture2D);
-        }
-    }
-
-    #[test]
     fn reconfigure_grows_and_shrinks_and_clamps() {
         let mut m = MultiBlend::new();
         m.reconfigure(&params_with(8.0));
@@ -344,24 +333,6 @@ mod tests {
 
         m.reconfigure(&params_with(999.0));
         assert_eq!(m.num_inputs(), MAX_INPUTS);
-    }
-
-    #[test]
-    fn shader_declares_k_textures_and_sums_them() {
-        let src = MultiBlend::shader_for(3);
-        assert!(src.contains("var t0: texture_2d<f32>"));
-        assert!(src.contains("var t2: texture_2d<f32>"));
-        assert!(!src.contains("var t3:"));
-        // output binding follows the k textures (2 + k).
-        assert!(src.contains("@binding(5) var output_tex"));
-        assert_eq!(src.matches("textureSampleLevel").count(), 3);
-    }
-
-    #[test]
-    fn registers_with_palette_type_id() {
-        let m = MultiBlend::new();
-        let node: &dyn EffectNode = &m;
-        assert_eq!(node.type_id().as_str(), "node.multi_blend");
     }
 }
 

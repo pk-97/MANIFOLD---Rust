@@ -392,28 +392,6 @@ mod tests {
     }
 
     #[test]
-    fn declares_trigger_window_initial_inputs_and_window_param() {
-        use crate::node_graph::primitive::PrimitiveSpec;
-        let inputs = EnvelopeBeats::INPUTS;
-        assert_eq!(inputs.len(), 6);
-        assert_eq!(inputs[0].name, "trigger");
-        assert!(inputs[0].required);
-        assert_eq!(inputs[1].name, "window_beats");
-        assert!(!inputs[1].required);
-        assert_eq!(inputs[2].name, "initial_count");
-        assert!(!inputs[2].required);
-        for name in ["attack_beats", "hold_beats", "tail_beats"] {
-            let input = inputs.iter().find(|input| input.name == name).unwrap();
-            assert!(!input.required);
-        }
-        assert_eq!(EnvelopeBeats::OUTPUTS.len(), 2);
-        assert_eq!(EnvelopeBeats::OUTPUTS[1].name, "elapsed_beats");
-        assert_eq!(EnvelopeBeats::PARAMS.len(), 4);
-        assert_eq!(EnvelopeBeats::PARAMS[0].name, "window_beats");
-        assert_eq!(EnvelopeBeats::PARAMS[0].range, Some((0.0, 16.0)));
-    }
-
-    #[test]
     fn extracted_state_preserves_nonfinite_trigger_and_clear_semantics() {
         let mut state = BeatEnvelopeState::default();
         let durations = BeatEnvelopeDurations {

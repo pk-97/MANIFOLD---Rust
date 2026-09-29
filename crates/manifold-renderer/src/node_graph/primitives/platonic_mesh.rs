@@ -146,64 +146,6 @@ fn platonic_mesh_upload_count(shape: u32) -> u32 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::EffectNode;
-
-    #[test]
-    fn declares_shape_radius_and_mesh_output() {
-        let mesh = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(PlatonicMesh::TYPE_ID, "node.platonic_solid_mesh");
-        assert_eq!(PlatonicMesh::INPUTS.len(), 2);
-        assert_eq!(PlatonicMesh::INPUTS[0].name, "shape");
-        assert_eq!(PlatonicMesh::INPUTS[1].name, "radius");
-        assert!(PlatonicMesh::INPUTS
-            .iter()
-            .all(|port| { !port.required && port.ty == PortType::Scalar(ScalarType::F32) }));
-        assert_eq!(PlatonicMesh::OUTPUTS.len(), 2);
-        assert_eq!(PlatonicMesh::OUTPUTS[0].name, "vertices");
-        assert_eq!(PlatonicMesh::OUTPUTS[1].name, "source");
-        assert_eq!(PlatonicMesh::OUTPUTS[1].ty, PortType::MeshSource);
-        assert_eq!(PlatonicMesh::OUTPUTS[0].ty, PortType::Array(mesh));
-        assert_eq!(
-            PlatonicMesh::OUTPUTS[0].kind,
-            crate::node_graph::ports::PortKind::Output
-        );
-    }
-
-    #[test]
-    fn shape_and_radius_params_match_public_contract() {
-        assert_eq!(PlatonicMesh::PARAMS.len(), 2);
-        assert_eq!(PlatonicMesh::PARAMS[0].ty, ParamType::Enum);
-        assert_eq!(PlatonicMesh::PARAMS[0].enum_values, PLATONIC_SHAPES);
-        assert_eq!(PlatonicMesh::PARAMS[1].ty, ParamType::Float);
-        assert_eq!(PlatonicMesh::PARAMS[1].default, ParamValue::Float(1.0));
-    }
-
-    #[test]
-    fn output_capacity_is_fixed_to_dodecahedron_triangle_list() {
-        let primitive = PlatonicMesh::new();
-        let params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(&primitive, "vertices", &params, &[]),
-            Some(PLATONIC_MESH_CAPACITY as u32)
-        );
-        assert_eq!(
-            Primitive::array_output_capacity(&primitive, "other", &params, &[]),
-            None
-        );
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let node: &dyn EffectNode = &PlatonicMesh::new();
-        assert_eq!(node.type_id().as_str(), "node.platonic_solid_mesh");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

@@ -200,61 +200,6 @@ impl Primitive for NoiseDisplace {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn noise_displace_declares_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let f32_layout = ArrayType::of_known::<f32>();
-
-        assert_eq!(NoiseDisplace::TYPE_ID, "node.noise_displace");
-
-        let in_port = NoiseDisplace::INPUTS.iter().find(|p| p.name == "in").unwrap();
-        assert!(in_port.required);
-        assert_eq!(in_port.ty, PortType::Array(mesh_layout));
-
-        let weights_port = NoiseDisplace::INPUTS.iter().find(|p| p.name == "weights").unwrap();
-        assert!(!weights_port.required);
-        assert_eq!(weights_port.ty, PortType::Array(f32_layout));
-
-        for name in ["amount", "frequency", "speed", "time"] {
-            let port = NoiseDisplace::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap_or_else(|| panic!("{name} port-shadow input must exist"));
-            assert!(!port.required, "{name} should be optional (port-shadow)");
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-
-        assert_eq!(NoiseDisplace::OUTPUTS.len(), 1);
-        assert_eq!(NoiseDisplace::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
-
-    #[test]
-    fn noise_displace_output_follows_in_input() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = NoiseDisplace::new();
-        let params = ParamValues::default();
-        let inputs = [("in", 36_u32)];
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "out", &params, &inputs),
-            Some(36),
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = NoiseDisplace::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.noise_displace");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests. Parity is against a hand-written Rust

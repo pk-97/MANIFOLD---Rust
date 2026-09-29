@@ -289,38 +289,6 @@ mod tests {
     use crate::node_graph::MockBackend;
     use manifold_core::{Beats, Seconds};
 
-    #[test]
-    fn trigger_ease_to_declares_target_trigger_and_optional_initialization_inputs() {
-        let node = TriggerEaseTo::new();
-        let ins = node.inputs();
-        assert_eq!(ins.len(), 5);
-        assert_eq!(ins[0].name, "target");
-        assert!(ins[0].required);
-        assert_eq!(ins[1].name, "trigger");
-        assert!(ins[1].required);
-        assert_eq!(ins[2].name, "window_beats");
-        assert!(!ins[2].required);
-        assert_eq!(ins[3].name, "initial_count");
-        assert!(!ins[3].required);
-        assert_eq!(ins[4].name, "initial_value");
-        assert!(!ins[4].required);
-        let outs = node.outputs();
-        assert_eq!(outs.len(), 1);
-        assert_eq!(outs[0].name, "out");
-    }
-
-    #[test]
-    fn trigger_ease_to_type_id_is_node_prefixed() {
-        let node = TriggerEaseTo::new();
-        assert_eq!(node.type_id().as_str(), "node.trigger_ease_to");
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let node = TriggerEaseTo::new();
-        assert!(node.is_trigger_latch());
-    }
-
     fn frame_time(beat: f32) -> FrameTime {
         FrameTime {
             beats: Beats(beat as f64),

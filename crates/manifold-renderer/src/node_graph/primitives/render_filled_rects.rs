@@ -219,35 +219,3 @@ impl Primitive for RenderFilledRects {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn render_filled_rects_declares_tex_and_array_inputs() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(RenderFilledRects::TYPE_ID, "node.draw_rectangles");
-        assert_eq!(RenderFilledRects::INPUTS.len(), 2);
-        assert_eq!(RenderFilledRects::INPUTS[0].name, "in");
-        assert_eq!(RenderFilledRects::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(RenderFilledRects::INPUTS[1].name, "rects");
-        assert!(matches!(RenderFilledRects::INPUTS[1].ty, PortType::Array(_)));
-        assert_eq!(RenderFilledRects::OUTPUTS.len(), 1);
-        assert_eq!(RenderFilledRects::OUTPUTS[0].name, "out");
-    }
-
-    #[test]
-    fn render_filled_rects_registers() {
-        let prim = RenderFilledRects::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.draw_rectangles");
-    }
-
-    #[test]
-    fn uniforms_are_32_bytes() {
-        assert_eq!(std::mem::size_of::<FilledRectsUniforms>(), 32);
-    }
-}

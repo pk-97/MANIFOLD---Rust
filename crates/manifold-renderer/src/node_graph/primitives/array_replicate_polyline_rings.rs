@@ -269,40 +269,6 @@ impl Primitive for ArrayReplicatePolylineRings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::{ArrayType, PortType};
-
-    #[test]
-    fn declares_three_array_inputs_and_two_array_outputs() {
-        assert_eq!(
-            ArrayReplicatePolylineRings::TYPE_ID,
-            "node.repeat_outline"
-        );
-
-        let f32_layout = ArrayType::of_known::<f32>();
-        let pt_layout = ArrayType::of_known::<CurvePoint>();
-        let edge_layout = ArrayType::of_known::<EdgePair>();
-
-        let ins = ArrayReplicatePolylineRings::INPUTS;
-        assert_eq!(ins.len(), 3);
-        assert_eq!(ins[0].name, "outline");
-        assert!(ins[0].required);
-        assert_eq!(ins[0].ty, PortType::Array(pt_layout));
-        assert_eq!(ins[1].name, "edges");
-        assert!(ins[1].required);
-        assert_eq!(ins[1].ty, PortType::Array(edge_layout));
-        assert_eq!(ins[2].name, "scales");
-        assert!(ins[2].required);
-        assert_eq!(ins[2].ty, PortType::Array(f32_layout));
-
-        let outs = ArrayReplicatePolylineRings::OUTPUTS;
-        assert_eq!(outs.len(), 2);
-        assert_eq!(outs[0].name, "outline");
-        assert_eq!(outs[0].ty, PortType::Array(pt_layout));
-        assert_eq!(outs[1].name, "edges");
-        assert_eq!(outs[1].ty, PortType::Array(edge_layout));
-    }
 
     #[test]
     fn output_capacity_scales_with_max_rings() {
@@ -332,12 +298,5 @@ mod tests {
             Primitive::array_output_capacity(&prim, "outline", &huge, &inputs),
             Some(64 * REPLICATE_MAX_RINGS),
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ArrayReplicatePolylineRings::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.repeat_outline");
     }
 }

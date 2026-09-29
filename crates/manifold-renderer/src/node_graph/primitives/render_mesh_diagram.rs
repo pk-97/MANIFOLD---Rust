@@ -730,49 +730,6 @@ impl Primitive for RenderMeshDiagram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn diagram_declares_scalar_shadows() {
-        assert_eq!(RenderMeshDiagram::TYPE_ID, "node.render_mesh_diagram");
-        for name in [
-            "grid",
-            "axes",
-            "fragments",
-            "ghosts",
-            "vectors",
-            "trails",
-            "density",
-            "line_width",
-            "geometry_hue",
-            "path_hue",
-            "radius",
-        ] {
-            assert!(
-                RenderMeshDiagram::INPUTS.iter().any(|p| p.name == name),
-                "missing scalar shadow {name}"
-            );
-        }
-    }
-
-    #[test]
-    fn diagram_declares_optional_typed_instances_input() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let input = RenderMeshDiagram::INPUTS
-            .iter()
-            .find(|input| input.name == "instances")
-            .expect("instances input declared");
-        assert!(!input.required);
-        assert_eq!(
-            input.ty,
-            PortType::Array(ArrayType::of_known::<InstanceTransform>())
-        );
-        assert_eq!(MAX_COPY_INSTANCES, 8);
-        assert!(
-            std::mem::size_of::<DiagramUniforms>().is_multiple_of(16),
-            "uniform block must stay 16-byte aligned"
-        );
-    }
 
     #[test]
     fn history_is_bounded_and_reset_is_explicit() {

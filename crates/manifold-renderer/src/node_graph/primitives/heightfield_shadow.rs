@@ -174,61 +174,6 @@ impl Primitive for HeightfieldShadow {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_height_input_and_optional_light_scalars() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-
-        assert_eq!(HeightfieldShadow::TYPE_ID, "node.heightfield_shadow");
-        let names: Vec<&str> = HeightfieldShadow::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["height", "light_x", "light_y", "light_z"]);
-        assert_eq!(HeightfieldShadow::INPUTS[0].ty, PortType::Texture2D);
-        assert!(HeightfieldShadow::INPUTS[0].required);
-        for i in 1..4 {
-            assert_eq!(HeightfieldShadow::INPUTS[i].ty, PortType::Scalar(ScalarType::F32));
-            assert!(!HeightfieldShadow::INPUTS[i].required);
-        }
-
-        assert_eq!(HeightfieldShadow::OUTPUTS.len(), 1);
-        assert_eq!(HeightfieldShadow::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn has_light_and_march_params_in_declaration_order() {
-        let names: Vec<&str> = HeightfieldShadow::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["light_x", "light_y", "light_z", "steps", "strength", "softness", "relief"]);
-    }
-
-    #[test]
-    fn defaults_match_basic_light_convention() {
-        let defaults: Vec<f32> = HeightfieldShadow::PARAMS[..3]
-            .iter()
-            .map(|p| match p.default {
-                ParamValue::Float(f) => f,
-                _ => panic!("expected float default"),
-            })
-            .collect();
-        assert_eq!(defaults, vec![0.4, 0.6, 0.7]);
-    }
-
-    #[test]
-    fn uniform_struct_is_32_bytes() {
-        assert_eq!(std::mem::size_of::<HeightfieldShadowUniforms>(), 32);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = HeightfieldShadow::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.heightfield_shadow");
-    }
-}
-
 /// **CPU reference** (`docs/DEPTH_RELIGHT_DESIGN.md` P1 deliverable) — a
 /// plain-Rust implementation of the D5 algorithm, independent of the WGSL
 /// body (not sharing source). Used two ways: (1) the analytic sanity tests

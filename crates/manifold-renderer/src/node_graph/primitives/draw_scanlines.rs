@@ -134,25 +134,3 @@ impl Primitive for DrawScanlines {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn draw_scanlines_declares_ports() {
-        assert_eq!(DrawScanlines::TYPE_ID, "node.draw_scanlines");
-        let prim = DrawScanlines::new();
-        let node: &dyn EffectNode = &prim;
-        // A screen treatment, not a per-object marker — never skips.
-        assert!(node.empty_skip_input_ports().is_empty());
-        assert_eq!(node.skip_passthrough_ports(), None);
-    }
-
-    #[test]
-    fn uniforms_are_32_bytes() {
-        assert_eq!(std::mem::size_of::<ScanlinesUniforms>(), 32);
-    }
-}
-

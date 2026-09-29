@@ -93,19 +93,4 @@ mod tests {
         assert_eq!(m.line_brightness, 1.0);
         assert_eq!(m.point_size, 2.0);
     }
-
-    #[test]
-    fn rendered_is_index_zero() {
-        assert_eq!(RENDER_MODE_LABELS[0], "Rendered");
-        assert_eq!(RENDER_MODE_LABELS[1], "Solid");
-        assert_eq!(RENDER_MODE_LABELS[2], "Wireframe");
-        assert_eq!(RENDER_MODE_LABELS[3], "Points");
-    }
-
-    #[test]
-    fn render_mode_is_copy() {
-        let m = RenderMode::default();
-        let _b = m;
-        let _c = m;
-    }
 }

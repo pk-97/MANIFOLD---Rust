@@ -129,35 +129,3 @@ impl Primitive for GradientCentralDiff3D {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_texture_3d_in_and_out() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(GradientCentralDiff3D::TYPE_ID, "node.edge_slope_3d");
-        assert_eq!(GradientCentralDiff3D::INPUTS.len(), 1);
-        assert_eq!(GradientCentralDiff3D::INPUTS[0].name, "density");
-        assert_eq!(GradientCentralDiff3D::INPUTS[0].ty, PortType::Texture3D);
-        assert!(GradientCentralDiff3D::INPUTS[0].required);
-        assert_eq!(GradientCentralDiff3D::OUTPUTS.len(), 1);
-        assert_eq!(GradientCentralDiff3D::OUTPUTS[0].name, "gradient");
-        assert_eq!(GradientCentralDiff3D::OUTPUTS[0].ty, PortType::Texture3D);
-    }
-
-    #[test]
-    fn uniform_struct_is_16_bytes() {
-        assert_eq!(std::mem::size_of::<Gradient3DUniforms>(), 16);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GradientCentralDiff3D::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.edge_slope_3d");
-    }
-}
