@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 329 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 331 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 329 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (27)
+### Particles 3D (29)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -307,6 +307,8 @@ _Generated from the node registry. Do not hand-edit. 329 nodes registered, group
 | Matter Fill | `node.matter_fill` | Source | Places the liquid's starting particles in the domain: a pool on the floor plus one box. |
 | Matter Frame | `node.matter_frame` | Filter | Hands the simulated liquid particles to the liquid surface, one frame per simulation tick. |
 | Matter Grid Update | `node.matter_grid_update` | Filter | Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls. |
+| Matter Move Bodies | `node.matter_move_bodies` | Filter | Moves the solid objects in a liquid to where they are at this instant of the simulation. |
+| Matter Solid Distance | `node.matter_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
 | Matter State | `node.matter_state` | Filter | Keeps the liquid's particles between frames and runs its simulation steps. |
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |

@@ -7,7 +7,8 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::matter::{MatterGridNode, momentum_unit_fits};
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+use crate::node_graph::matter::{MatterBody, MatterGridNode, MatterShape, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::matter_common::read_lattice;
@@ -26,6 +27,10 @@ struct GridUpdateUniforms {
     gravity_z: f32,
     closed_faces: i32,
     momentum_unit: f32,
+    lattice_min_x: f32,
+    lattice_min_y: f32,
+    lattice_min_z: f32,
+    body_count: i32,
     dispatch_count: u32,
     _pad0: u32,
 }
@@ -33,16 +38,21 @@ struct GridUpdateUniforms {
 crate::primitive! {
     name: MatterGridUpdate,
     type_id: "node.matter_grid_update",
-    purpose: "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity, stop velocity into closed domain walls on the outer three nodes, and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
+    purpose: "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity, stop velocity into closed domain walls on the outer three nodes, project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
     inputs: {
         accum: Array(i32) required,
         grid: Array(MatterGridNode) required,
+        bodies: Array(MatterBody) optional,
+        shapes: Array(MatterShape) optional,
+        atlas: Array(u32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
         momentum_unit: ScalarF32 optional,
+        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        body_count: ScalarF32 optional,
     },
     outputs: {
         grid_out: Array(MatterGridNode),
@@ -58,9 +68,13 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lattice_min_x"), label: "Lattice Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, step_dt from the substep boundary.",
+    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces, the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt from the substep boundary. With bodies unwired no collider is read.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Grid Update", category: Atom },
     summary: "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",
@@ -69,7 +83,7 @@ crate::primitive! {
     aliases: ["grid update", "mpm grid", "resolve grid"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
-    input_access: [BufferGather, Coincident],
+    input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather],
 }
 
 impl Primitive for MatterGridUpdate {
@@ -98,9 +112,11 @@ impl Primitive for MatterGridUpdate {
         ];
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
+        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         // In place on the grid input; the GPU is touched on every path.
         let accum = ctx.inputs.array("accum");
         let grid = ctx.inputs.array("grid");
+        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
         let gpu = ctx.gpu_encoder();
         let (Some(accum), Some(grid)) = (accum, grid) else {
             return;
@@ -118,6 +134,15 @@ impl Primitive for MatterGridUpdate {
             ));
             return;
         }
+        // Without all three collider arrays the body loop runs zero times over
+        // the grid buffer bound in their slots.
+        let (bodies, shapes, atlas, body_count) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas)) => {
+                let rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64) as i32;
+                (bodies, shapes, atlas, body_count.min(rows))
+            }
+            _ => (grid, grid, grid, 0),
+        };
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = GridUpdateUniforms {
             nodes_x: lattice.nodes[0] as i32,
@@ -130,6 +155,10 @@ impl Primitive for MatterGridUpdate {
             gravity_z: gravity[2],
             closed_faces,
             momentum_unit,
+            lattice_min_x: lattice.min[0],
+            lattice_min_y: lattice.min[1],
+            lattice_min_z: lattice.min[2],
+            body_count,
             dispatch_count: nodes,
             _pad0: 0,
         };
@@ -139,7 +168,10 @@ impl Primitive for MatterGridUpdate {
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: accum, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: grid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: grid, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: bodies, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: shapes, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: atlas, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: grid, offset: 0 },
             ],
             [nodes.div_ceil(256), 1, 1],
             "node.matter_grid_update",
@@ -155,9 +187,16 @@ mod tests {
     fn matter_grid_update_generates_a_gathering_node_kernel() {
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MatterGridUpdate>()
             .expect("matter_grid_update codegen");
+        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         assert!(wgsl.contains("var<storage, read> buf_accum: array<i32>"), "{wgsl}");
         assert!(wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
-        assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 48);
+        assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 64);
+        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>"] {
+            assert!(wgsl.contains(binding), "{binding}: {wgsl}");
+        }
         let body = include_str!("shaders/matter_grid_update_body.wgsl");
         assert_eq!(crate::node_graph::matter::MASS_SCALE, 65_536.0);
         assert_eq!(crate::node_graph::matter::MOMENTUM_SCALE, 134_217_728.0);

@@ -25,14 +25,14 @@ use manifold_renderer::node_graph::{
 use crate::harness;
 
 /// An array the test fills after pre-allocation, sized by `max_capacity`.
-struct HostArray {
+pub(crate) struct HostArray {
     type_id: EffectNodeType,
     outputs: Vec<NodeOutput>,
     params: Vec<ParamDef>,
 }
 
 impl HostArray {
-    fn new<T: KnownItem>(capacity: u32) -> Self {
+    pub(crate) fn new<T: KnownItem>(capacity: u32) -> Self {
         Self {
             type_id: EffectNodeType::new("test.host_array"),
             outputs: vec![NodePort {
@@ -85,13 +85,13 @@ pub(crate) struct Chain {
     frame: u32,
 }
 
-fn set(graph: &mut Graph, node: NodeInstanceId, name: &str, value: f32) {
+pub(crate) fn set(graph: &mut Graph, node: NodeInstanceId, name: &str, value: f32) {
     graph
         .set_param(node, name, ParamValue::Float(value))
         .unwrap_or_else(|e| panic!("set {name}: {e:?}"));
 }
 
-fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+pub(crate) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
     plan.steps()
         .iter()
         .find(|s| s.node == node)

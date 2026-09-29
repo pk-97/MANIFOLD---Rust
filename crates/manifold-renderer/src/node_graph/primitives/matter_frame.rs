@@ -65,10 +65,11 @@ pub(crate) fn wall_distance_lattice(lattice: &MatterLattice, closed_faces: u32) 
 crate::primitive! {
     name: MatterFrame,
     type_id: "node.matter_frame",
-    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the walls as the solid lattice. A tick with non-finite values is never published.",
+    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.matter_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick with non-finite values is never published.",
     inputs: {
         points: Array(MatterPoint) required,
         stats: Array(u32) required,
+        solid: Array(f32) optional,
         count: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -108,6 +109,8 @@ crate::primitive! {
         epoch: Option<u32> = None,
         solid: Option<GpuBuffer> = None,
         solid_key: Option<([u32; 7], u32)> = None,
+        solid_slots: Vec<GpuBuffer> = Vec::new(),
+        solid_wired: bool = false,
     },
 }
 
@@ -120,6 +123,8 @@ impl Primitive for MatterFrame {
         match port {
             "particles_a" => self.slots.get(self.a),
             "particles_b" => self.slots.get(self.b),
+            "solid_a" if self.solid_wired => self.solid_slots.get(self.a),
+            "solid_b" if self.solid_wired => self.solid_slots.get(self.b),
             "solid_a" | "solid_b" => self.solid.as_ref(),
             _ => None,
         }
@@ -144,6 +149,8 @@ impl Primitive for MatterFrame {
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
         let points = ctx.inputs.array("points");
         let stats = ctx.inputs.array("stats");
+        let solid_in = ctx.inputs.array("solid");
+        self.solid_wired = solid_in.is_some();
 
         let solid_key = (
             [
@@ -200,6 +207,20 @@ impl Primitive for MatterFrame {
                     [params.count.div_ceil(256), 1, 1],
                     "node.matter_frame",
                 );
+            }
+            if let Some(solid_in) = solid_in {
+                // Each tick's solid lattice sits beside its frame, so A and B
+                // each carry the bodies where their particles were.
+                let bytes = u64::from(lattice.node_count()) * 4;
+                let fresh = self.solid_slots.len() < RING || self.solid_slots.iter().any(|s| s.size < bytes);
+                if fresh {
+                    self.solid_slots = (0..RING).map(|_| gpu.device.create_buffer_shared(bytes.max(4))).collect();
+                }
+                let bytes = bytes.min(solid_in.size);
+                let targets = if fresh { 0..RING } else { write..write + 1 };
+                for slot in targets {
+                    gpu.native_enc.copy_buffer_to_buffer(solid_in, &self.solid_slots[slot], bytes);
+                }
             }
             self.slot_count[write] = params.count;
             if restarted || grown {
