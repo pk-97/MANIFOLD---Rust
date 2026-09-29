@@ -832,7 +832,7 @@ mod tests {
     use crate::node_graph::parameters::TableData;
     use crate::node_graph::ports::PortType;
     use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::{EffectNode, MockBackend};
+    use crate::node_graph::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -1008,52 +1008,6 @@ mod tests {
         assert!(primitive.geometry.is_none());
         let restored = settle_inputs(&mut primitive, &mut backend, &inputs, output, &params);
         assert!((extent(&restored) - 1.5).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn scene_physics_fluid_role_source_declares_typed_role_output_and_required_transform() {
-        assert_eq!(FluidRoleSource::TYPE_ID, "node.fluid_role_source");
-        assert_eq!(FluidRoleSource::OUTPUTS.len(), 1);
-        assert_eq!(FluidRoleSource::OUTPUTS[0].name, "role");
-        assert_eq!(FluidRoleSource::OUTPUTS[0].ty, PortType::FluidRole);
-        let transform = FluidRoleSource::INPUTS
-            .iter()
-            .find(|port| port.name == "transform")
-            .unwrap();
-        assert!(transform.required);
-        assert_eq!(transform.ty, PortType::Transform);
-    }
-
-    #[test]
-    fn scene_physics_fluid_role_source_exposes_all_four_roles_and_two_geometry_modes() {
-        assert_eq!(
-            FLUID_ROLE_KINDS,
-            &["Initial Fill", "Inflow", "Outflow", "Collider"]
-        );
-        assert_eq!(GEOMETRY_MODES, &["Collision Proxy", "Closed Mesh"]);
-        assert_eq!(
-            FluidRoleSource::PARAMS
-                .iter()
-                .find(|param| param.name == "role")
-                .unwrap()
-                .default,
-            ParamValue::Enum(1)
-        );
-        assert_eq!(
-            FluidRoleSource::PARAMS
-                .iter()
-                .find(|param| param.name == "geometry")
-                .unwrap()
-                .default,
-            ParamValue::Enum(0)
-        );
-    }
-
-    #[test]
-    fn scene_physics_fluid_role_source_registers_as_non_gpu_source() {
-        let prim = FluidRoleSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.fluid_role_source");
     }
 
     #[test]

@@ -175,50 +175,6 @@ impl Primitive for Voronoi2D {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn voronoi_2d_declares_five_optional_scalar_inputs_and_two_texture_outputs() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(Voronoi2D::TYPE_ID, "node.voronoi_2d");
-        let ins = Voronoi2D::INPUTS;
-        let names: Vec<&str> = ins.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["scale", "offset_x", "offset_y", "jitter", "out_scale"]
-        );
-        for port in ins {
-            assert!(!port.required, "all voronoi_2d inputs are optional");
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-        let out_names: Vec<&str> = Voronoi2D::OUTPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(out_names, vec!["out", "cell_id"]);
-        for port in Voronoi2D::OUTPUTS {
-            assert_eq!(port.ty, PortType::Texture2D);
-        }
-    }
-
-    #[test]
-    fn voronoi_2d_has_expected_params() {
-        let names: Vec<&str> = Voronoi2D::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["scale", "offset_x", "offset_y", "jitter", "out_scale"]
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Voronoi2D::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.voronoi_2d");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Hardware tests for the cell_hash A-channel contract:

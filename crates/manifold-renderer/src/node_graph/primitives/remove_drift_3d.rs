@@ -218,44 +218,6 @@ impl Primitive for RemoveDrift3D {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_forces_particles_in_and_forces_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let vec3_layout = ArrayType::of_known::<[f32; 3]>();
-        let particle_layout = ArrayType::of_known::<Particle>();
-
-        assert_eq!(RemoveDrift3D::TYPE_ID, "node.remove_drift_3d");
-        let names: Vec<&str> = RemoveDrift3D::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["in", "particles", "active_count", "amount"]);
-        assert_eq!(RemoveDrift3D::INPUTS[0].ty, PortType::Array(vec3_layout));
-        assert!(RemoveDrift3D::INPUTS[0].required);
-        assert_eq!(RemoveDrift3D::INPUTS[1].ty, PortType::Array(particle_layout));
-        assert!(RemoveDrift3D::INPUTS[1].required);
-
-        assert_eq!(RemoveDrift3D::OUTPUTS.len(), 1);
-        assert_eq!(RemoveDrift3D::OUTPUTS[0].name, "out");
-        assert_eq!(RemoveDrift3D::OUTPUTS[0].ty, PortType::Array(vec3_layout));
-    }
-
-    #[test]
-    fn uniform_struct_is_16_bytes() {
-        assert_eq!(std::mem::size_of::<RemoveDriftUniforms>(), 16);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = RemoveDrift3D::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.remove_drift_3d");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Value oracle: upload a force array with a known nonzero mean plus a

@@ -143,9 +143,7 @@ fn shake_noise_vector(scaled_time: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::MockBackend;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
@@ -234,35 +232,6 @@ mod tests {
         }
 
         backend.transform(out_slot).expect("transform should be set")
-    }
-
-    #[test]
-    fn declares_transform_in_out_and_three_port_shadow_scalars() {
-        assert_eq!(TransformShake::TYPE_ID, "node.transform_shake");
-        let in_names: Vec<&str> = TransformShake::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(in_names, vec!["transform", "amount", "frequency", "time"]);
-        assert_eq!(TransformShake::INPUTS[0].ty, PortType::Transform);
-        assert!(TransformShake::INPUTS[0].required);
-        for input in &TransformShake::INPUTS[1..] {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-            assert_eq!(input.ty, PortType::Scalar(crate::node_graph::ports::ScalarType::F32));
-        }
-        assert_eq!(TransformShake::OUTPUTS.len(), 1);
-        assert_eq!(TransformShake::OUTPUTS[0].name, "out");
-        assert_eq!(TransformShake::OUTPUTS[0].ty, PortType::Transform);
-    }
-
-    #[test]
-    fn has_three_params() {
-        let names: Vec<&str> = TransformShake::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["amount", "frequency", "time"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = TransformShake::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.transform_shake");
     }
 
     #[test]

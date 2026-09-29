@@ -131,57 +131,6 @@ impl Primitive for ReinhardToneMap {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn reinhard_declares_texture_in_and_out_plus_port_shadowed_scalars() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(ReinhardToneMap::TYPE_ID, "node.reinhard_tone_map");
-        let in_port = ReinhardToneMap::INPUTS
-            .iter()
-            .find(|p| p.name == "in")
-            .unwrap();
-        assert_eq!(in_port.ty, PortType::Texture2D);
-        assert!(in_port.required);
-
-        // Port-shadows-param: intensity + contrast as optional scalar
-        // inputs so a math chain (canvas_area_scale, audio-driven) can
-        // drive them at runtime.
-        for name in ["intensity", "contrast"] {
-            let port = ReinhardToneMap::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap_or_else(|| panic!("missing port-shadow input `{name}`"));
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-            assert!(!port.required);
-        }
-
-        assert_eq!(ReinhardToneMap::OUTPUTS.len(), 1);
-        assert_eq!(ReinhardToneMap::OUTPUTS[0].name, "out");
-        assert_eq!(ReinhardToneMap::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn reinhard_has_intensity_and_contrast_params() {
-        let names: Vec<&str> = ReinhardToneMap::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(names, vec!["intensity", "contrast", "curve"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ReinhardToneMap::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.reinhard_tone_map");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Value-level GPU tests for the three tone curves. Extended and

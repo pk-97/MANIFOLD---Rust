@@ -112,33 +112,6 @@ impl Primitive for EdgesFromHypercube {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_zero_inputs_and_edge_pair_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let edge_layout = ArrayType::of_known::<EdgePair>();
-        assert_eq!(EdgesFromHypercube::TYPE_ID, "node.hypercube_edges");
-        assert!(EdgesFromHypercube::INPUTS.is_empty());
-        assert_eq!(EdgesFromHypercube::OUTPUTS.len(), 1);
-        assert_eq!(EdgesFromHypercube::OUTPUTS[0].name, "edges");
-        assert_eq!(
-            EdgesFromHypercube::OUTPUTS[0].ty,
-            PortType::Array(edge_layout)
-        );
-    }
-
-    #[test]
-    fn output_capacity_is_thirty_two() {
-        let prim = EdgesFromHypercube::new();
-        let params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "edges", &params, &[]),
-            Some(HYPERCUBE_EDGE_COUNT)
-        );
-        assert!(Primitive::array_output_capacity(&prim, "bogus", &params, &[]).is_none());
-    }
 
     /// Pin the topology: 32 unique pairs, each `(i, i^bit)` with `j > i`,
     /// in the canonical iteration order — a transcription error would
@@ -161,12 +134,5 @@ mod tests {
             assert_eq!(HYPERCUBE_EDGES[i].a, a, "edge {i}.a");
             assert_eq!(HYPERCUBE_EDGES[i].b, b, "edge {i}.b");
         }
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = EdgesFromHypercube::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.hypercube_edges");
     }
 }

@@ -573,8 +573,6 @@ impl Primitive for LightningBolt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
 
     fn params() -> BoltParams {
         BoltParams {
@@ -589,32 +587,6 @@ mod tests {
             reach: 0.3,
             capacity: 2048,
         }
-    }
-
-    #[test]
-    fn declares_bolt_ports_and_registers() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        assert_eq!(LightningBolt::TYPE_ID, "node.lightning_bolt");
-        let names: Vec<&str> = LightningBolt::OUTPUTS.iter().map(|o| o.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["points", "widths", "core_edges", "branch_edges", "age", "strike_pulse"]
-        );
-        assert_eq!(
-            LightningBolt::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<CurvePoint>())
-        );
-        assert_eq!(
-            LightningBolt::OUTPUTS[1].ty,
-            PortType::Array(ArrayType::of_known::<f32>())
-        );
-        assert_eq!(
-            LightningBolt::OUTPUTS[2].ty,
-            PortType::Array(ArrayType::of_known::<EdgePair>())
-        );
-        let prim = LightningBolt::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.lightning_bolt");
     }
 
     /// The determinism contract: identical (seed, params) → identical

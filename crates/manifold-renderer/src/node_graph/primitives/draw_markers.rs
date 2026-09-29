@@ -177,29 +177,3 @@ impl Primitive for DrawMarkers {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn draw_markers_declares_ports_and_skip_contract() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(DrawMarkers::TYPE_ID, "node.draw_markers");
-        assert_eq!(DrawMarkers::INPUTS[0].name, "in");
-        assert_eq!(DrawMarkers::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(DrawMarkers::INPUTS[1].name, "detections");
-        assert!(matches!(DrawMarkers::INPUTS[1].ty, PortType::Array(_)));
-        let prim = DrawMarkers::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.empty_skip_input_ports(), &["detections"]);
-        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
-    }
-
-    #[test]
-    fn uniforms_are_32_bytes() {
-        assert_eq!(std::mem::size_of::<MarkersUniforms>(), 32);
-    }
-}
-

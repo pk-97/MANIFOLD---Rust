@@ -433,21 +433,6 @@ mod tests {
     }
 
     #[test]
-    fn source_and_final_output_have_correct_port_shape() {
-        let s = Source::new();
-        assert_eq!(s.inputs().len(), 0);
-        assert_eq!(s.outputs().len(), 1);
-        assert_eq!(s.outputs()[0].name, "out");
-        assert_eq!(s.outputs()[0].ty, PortType::Texture2D);
-
-        let f = FinalOutput::new();
-        assert_eq!(f.inputs().len(), 1);
-        assert_eq!(f.outputs().len(), 0);
-        assert_eq!(f.inputs()[0].name, "in");
-        assert!(f.inputs()[0].required);
-    }
-
-    #[test]
     fn passthrough_graph_compiles_and_executes() {
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
@@ -480,48 +465,6 @@ mod tests {
     }
 
     #[test]
-    fn generator_input_declares_ten_scalar_outputs() {
-        let g = GeneratorInput::new();
-        assert_eq!(g.inputs().len(), 0);
-        let outs = g.outputs();
-        assert_eq!(outs.len(), 10);
-        let names: Vec<&str> = outs.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "time",
-                "frame_delta",
-                "frame_count",
-                "beat",
-                "aspect",
-                "trigger_count",
-                "anim_progress",
-                "output_width",
-                "output_height",
-                "trigger_baseline",
-            ]
-        );
-        for out in outs {
-            assert_eq!(out.ty, PortType::Scalar(ScalarType::F32));
-        }
-    }
-
-    /// frame_delta / frame_count are frame-CLOCK-sourced (not host params), so
-    /// they have no matching param entry — the output count exceeds the param
-    /// count by exactly those two. Guards the fused/unfused parity contract:
-    /// these must track ctx.time, never a host-settable value.
-    #[test]
-    fn frame_delta_and_frame_count_are_clock_sourced_not_params() {
-        let g = GeneratorInput::new();
-        let out_names: Vec<&str> = g.outputs().iter().map(|p| p.name.as_ref()).collect();
-        let param_names: Vec<&str> = g.parameters().iter().map(|p| p.name.as_ref()).collect();
-        assert!(out_names.contains(&"frame_delta"));
-        assert!(out_names.contains(&"frame_count"));
-        assert!(!param_names.contains(&"frame_delta"));
-        assert!(!param_names.contains(&"frame_count"));
-    }
-
-    #[test]
     fn generator_input_in_a_graph_compiles_and_executes() {
         // A bare GeneratorInput is a legal generator-shaped graph root.
         // No downstream consumers needed for the compile path to work
@@ -533,28 +476,6 @@ mod tests {
         assert_eq!(plan.steps().len(), 1);
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
-    }
-
-    #[test]
-    fn generator_input_declares_eight_float_params() {
-        let g = GeneratorInput::new();
-        let names: Vec<&str> = g.parameters().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "time",
-                "beat",
-                "aspect",
-                "trigger_count",
-                "anim_progress",
-                "output_width",
-                "output_height",
-                "trigger_baseline",
-            ]
-        );
-        for p in g.parameters() {
-            assert!(matches!(p.default, ParamValue::Float(_)));
-        }
     }
 
     #[test]

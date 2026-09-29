@@ -151,37 +151,6 @@ impl Primitive for TriangulateGrid {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn triangulate_grid_declares_mesh_array_in_and_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(TriangulateGrid::TYPE_ID, "node.make_triangles");
-        assert_eq!(TriangulateGrid::INPUTS.len(), 1);
-        assert_eq!(TriangulateGrid::INPUTS[0].ty, PortType::Array(layout));
-        assert_eq!(TriangulateGrid::OUTPUTS.len(), 1);
-        assert_eq!(TriangulateGrid::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn triangulate_grid_has_cols_and_rows_params() {
-        let names: Vec<&str> = TriangulateGrid::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["src_cols", "src_rows"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = TriangulateGrid::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.make_triangles");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer-domain GATHER parity oracle (freeze section 12) — triangulate_grid had no

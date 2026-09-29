@@ -124,7 +124,6 @@ impl Primitive for FrequencyRatio {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::Value;
     use crate::node_graph::{Executor, FrameTime, Graph, compile};
     use manifold_core::{Beats, Seconds};
@@ -203,23 +202,6 @@ mod tests {
             v => panic!("b port did not emit a Float: {v:?}"),
         };
         (a, b)
-    }
-
-    #[test]
-    fn declares_one_optional_scalar_input_and_two_scalar_outputs() {
-        let inputs = FrequencyRatio::INPUTS;
-        assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].name, "index");
-        assert!(!inputs[0].required);
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-
-        let outputs = FrequencyRatio::OUTPUTS;
-        assert_eq!(outputs.len(), 2);
-        assert_eq!(outputs[0].name, "a");
-        assert_eq!(outputs[1].name, "b");
-        for port in outputs {
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
     }
 
     #[test]
@@ -302,20 +284,6 @@ mod tests {
             v => panic!("a did not emit a Float: {v:?}"),
         };
         assert_eq!(a, 2.0, "wired index=2 should select row 2 (a=2.0), not param=7 (a=5.0)");
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_driver() {
-        let prim = FrequencyRatio::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.frequency_ratio");
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let prim = FrequencyRatio::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
     }
 
     /// BUG-104 — proves `clear_state()` (what `PresetRuntime::

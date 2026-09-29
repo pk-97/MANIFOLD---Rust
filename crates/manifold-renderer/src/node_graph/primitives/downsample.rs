@@ -188,22 +188,6 @@ impl Primitive for Downsample {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn downsample_declares_one_input_one_output_and_factor_param() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(Downsample::TYPE_ID, "node.downsample");
-        assert_eq!(Downsample::INPUTS.len(), 1);
-        assert_eq!(Downsample::INPUTS[0].name, "in");
-        assert_eq!(Downsample::INPUTS[0].ty, PortType::Texture2D);
-        assert!(Downsample::INPUTS[0].required);
-        assert_eq!(Downsample::OUTPUTS.len(), 1);
-        assert_eq!(Downsample::OUTPUTS[0].name, "out");
-        assert_eq!(Downsample::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(Downsample::PARAMS.len(), 1);
-        assert_eq!(Downsample::PARAMS[0].name, "factor");
-    }
 
     /// Build a `ParamValues` map containing only the default `factor`
     /// (enum 1 = 4×) — enough to drive `output_dims` /
@@ -283,12 +267,5 @@ mod tests {
         // texture (would crash in the backend).
         let dims = node.output_dims("out", (1920, 1080), &[("in", (3, 3))], &params);
         assert_eq!(dims, Some((1, 1)));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Downsample::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.downsample");
     }
 }

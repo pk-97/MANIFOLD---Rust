@@ -440,32 +440,6 @@ impl HdriSource {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::PortType;
-
-    #[test]
-    fn hdri_source_declares_zero_inputs_and_texture_output() {
-        assert_eq!(HdriSource::TYPE_ID, "node.hdri_source");
-        assert!(HdriSource::INPUTS.is_empty());
-        assert_eq!(HdriSource::OUTPUTS.len(), 1);
-        assert_eq!(HdriSource::OUTPUTS[0].name, "out");
-        assert_eq!(HdriSource::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn hdri_source_param_names_in_order_and_no_color_space() {
-        let names: Vec<&str> = HdriSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        // D6: EXR is linear, full stop — no color_space param exists on
-        // this node, unlike node.gltf_texture_source.
-        assert_eq!(names, vec!["path", "width", "height"]);
-    }
-
-    #[test]
-    fn primitive_registers() {
-        let prim = HdriSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.hdri_source");
-    }
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();

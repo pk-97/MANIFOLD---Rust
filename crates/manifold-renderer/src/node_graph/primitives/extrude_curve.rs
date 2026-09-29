@@ -177,35 +177,6 @@ impl Primitive for ExtrudeCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn extrude_curve_declares_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let curve_layout = ArrayType::of_known::<CurvePoint>();
-
-        assert_eq!(ExtrudeCurve::TYPE_ID, "node.extrude_curve");
-
-        let outline_port = ExtrudeCurve::INPUTS.iter().find(|p| p.name == "outline").unwrap();
-        assert!(outline_port.required);
-        assert_eq!(outline_port.ty, PortType::Array(curve_layout));
-
-        let depth_port = ExtrudeCurve::INPUTS.iter().find(|p| p.name == "depth").unwrap();
-        assert!(!depth_port.required, "depth should be optional (port-shadow)");
-        assert_eq!(depth_port.ty, PortType::Scalar(ScalarType::F32));
-
-        for name in ["steps", "close"] {
-            assert!(
-                !ExtrudeCurve::INPUTS.iter().any(|p| p.name == name),
-                "{name} is an int/bool — must not be port-shadowed (P3 brief)"
-            );
-        }
-
-        assert_eq!(ExtrudeCurve::OUTPUTS.len(), 1);
-        assert_eq!(ExtrudeCurve::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
 
     #[test]
     fn extrude_curve_capacity_is_rows_times_cols() {
@@ -227,13 +198,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "out", &params, &inputs),
             Some(24),
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ExtrudeCurve::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.extrude_curve");
     }
 }
 

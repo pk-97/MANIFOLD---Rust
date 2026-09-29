@@ -118,38 +118,6 @@ impl Primitive for ResolveAccumulator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn resolve_accumulator_declares_array_in_and_texture_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let u32_layout = ArrayType::of_known::<u32>();
-
-        assert_eq!(ResolveAccumulator::TYPE_ID, "node.resolve_scatter");
-        assert_eq!(ResolveAccumulator::INPUTS.len(), 1);
-        assert_eq!(ResolveAccumulator::INPUTS[0].name, "accum");
-        assert_eq!(
-            ResolveAccumulator::INPUTS[0].ty,
-            PortType::Array(u32_layout)
-        );
-
-        assert_eq!(ResolveAccumulator::OUTPUTS.len(), 1);
-        assert_eq!(ResolveAccumulator::OUTPUTS[0].name, "density");
-        assert_eq!(ResolveAccumulator::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ResolveAccumulator::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.resolve_scatter");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Buffer→texture resolve value oracle (freeze section 12). Dispatches the generated

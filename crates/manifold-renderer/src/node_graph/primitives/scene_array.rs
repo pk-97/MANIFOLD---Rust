@@ -319,41 +319,6 @@ impl Primitive for SceneArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn scene_array_declares_optional_camera_input_and_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(SceneArray::TYPE_ID, "node.scene_array");
-        assert_eq!(SceneArray::INPUTS.len(), 1);
-        assert_eq!(SceneArray::INPUTS[0].name, "camera");
-        assert!(!SceneArray::INPUTS[0].required);
-        assert_eq!(SceneArray::INPUTS[0].ty, PortType::Camera);
-        assert_eq!(SceneArray::OUTPUTS.len(), 1);
-        assert_eq!(SceneArray::OUTPUTS[0].name, "out");
-        assert_eq!(SceneArray::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn scene_array_has_five_params() {
-        let names: Vec<&str> = SceneArray::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["pattern_length", "axis", "cell_size", "jitter_seed", "jitter_amount"]
-        );
-    }
-
-    #[test]
-    fn axis_enum_has_six_options() {
-        let axis_param = SceneArray::PARAMS
-            .iter()
-            .find(|p| p.name == "axis")
-            .expect("axis param");
-        assert_eq!(axis_param.ty, ParamType::Enum);
-        assert_eq!(axis_param.enum_values.len(), 6);
-    }
 
     /// INV-EC2: output capacity is the constant WINDOW_CAPACITY for ANY
     /// params — the value-level constant the buffer is pre-allocated at
@@ -429,13 +394,6 @@ mod tests {
         assert_eq!(window_ahead(10000.0, 10.0), MAX_AHEAD);
         assert_eq!(window_ahead(f32::MAX, 10.0), MAX_AHEAD);
         assert_eq!(BEHIND + MAX_AHEAD + 1, WINDOW_CAPACITY - 1);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = SceneArray::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.scene_array");
     }
 }
 

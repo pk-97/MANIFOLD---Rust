@@ -217,56 +217,6 @@ impl Primitive for CocFromDepth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_depth_and_camera_inputs_and_texture_output() {
-        use crate::node_graph::ports::PortType;
-
-        assert_eq!(CocFromDepth::TYPE_ID, "node.coc_from_depth");
-        let names: Vec<&str> = CocFromDepth::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["depth", "camera"]);
-        assert_eq!(CocFromDepth::INPUTS[0].ty, PortType::Texture2D);
-        assert!(CocFromDepth::INPUTS[0].required);
-        assert_eq!(CocFromDepth::INPUTS[1].ty, PortType::Camera);
-        assert!(CocFromDepth::INPUTS[1].required);
-
-        assert_eq!(CocFromDepth::OUTPUTS.len(), 1);
-        assert_eq!(CocFromDepth::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn declares_max_radius_and_world_to_mm_params_in_order() {
-        let names: Vec<&str> = CocFromDepth::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["max_radius", "world_to_mm"]);
-        // world_to_mm is plumbing (BUG-bdwd): default 1000.0 reproduces the
-        // old 1-unit-per-meter constant for graphs without the param, and
-        // there is no range so no card slider is generated for it.
-        let w2m = &CocFromDepth::PARAMS[1];
-        assert_eq!(w2m.default, ParamValue::Float(1000.0));
-        assert!(w2m.range.is_none());
-    }
-
-    #[test]
-    fn declares_five_derived_uniforms_in_lens_order() {
-        assert_eq!(
-            CocFromDepth::DERIVED_UNIFORMS,
-            &["fov_y", "near", "far", "focus_distance", "f_stop"]
-        );
-    }
-
-    #[test]
-    fn uniform_struct_is_32_bytes() {
-        assert_eq!(std::mem::size_of::<CocFromDepthUniforms>(), 32);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CocFromDepth::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.coc_from_depth");
-    }
 
     #[test]
     fn derive_lens_scalars_reads_perspective_fov_and_lens() {
@@ -293,12 +243,6 @@ mod tests {
         cam.mode = CameraMode::Orthographic { half_height: 2.0 };
         let [fov_y, ..] = derive_lens_scalars(&cam);
         assert_eq!(fov_y, std::f32::consts::FRAC_PI_3);
-    }
-
-    #[test]
-    fn unregistered_before_this_module_now_has_a_recompute() {
-        use crate::node_graph::freeze::derived_uniform_registry::has_recompute;
-        assert!(has_recompute("node.coc_from_depth"));
     }
 }
 

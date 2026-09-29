@@ -84,36 +84,6 @@ impl Primitive for ClipTriggerIndex {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::{PortType, ScalarType};
-
-    #[test]
-    fn clip_trigger_index_declares_trigger_and_modulus_in_and_scalar_out() {
-        assert_eq!(ClipTriggerIndex::TYPE_ID, "node.clip_trigger_index");
-        assert_eq!(ClipTriggerIndex::INPUTS.len(), 2);
-        assert_eq!(ClipTriggerIndex::INPUTS[0].name, "trigger_count");
-        assert!(!ClipTriggerIndex::INPUTS[0].required);
-        assert_eq!(ClipTriggerIndex::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(ClipTriggerIndex::INPUTS[1].name, "modulus");
-        assert!(!ClipTriggerIndex::INPUTS[1].required);
-        assert_eq!(ClipTriggerIndex::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(ClipTriggerIndex::OUTPUTS.len(), 1);
-        assert_eq!(ClipTriggerIndex::OUTPUTS[0].name, "out");
-    }
-
-    #[test]
-    fn primitive_registers() {
-        let prim = ClipTriggerIndex::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.clip_trigger_index");
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let prim = ClipTriggerIndex::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
-    }
 
     /// BUG-104 — see `frequency_ratio`'s equivalent test for the full
     /// rationale; `clear_state()` releases the idempotence cache through

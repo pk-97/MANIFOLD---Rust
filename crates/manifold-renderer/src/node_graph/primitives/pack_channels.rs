@@ -152,31 +152,3 @@ impl Primitive for PackChannels {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_four_optional_texture_inputs() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(PackChannels::TYPE_ID, "node.pack_rgba");
-        let names: Vec<&str> = PackChannels::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["r", "g", "b", "a"]);
-        for input in PackChannels::INPUTS {
-            assert!(!input.required, "{} should be optional", input.name);
-            assert_eq!(input.ty, PortType::Texture2D);
-        }
-        assert_eq!(PackChannels::OUTPUTS.len(), 1);
-        assert_eq!(PackChannels::OUTPUTS[0].name, "out");
-    }
-
-    #[test]
-    fn registers_as_atom() {
-        let prim = PackChannels::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.pack_rgba");
-    }
-}

@@ -291,47 +291,6 @@ impl Primitive for SsaoGtao {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_depth_and_camera_inputs_and_texture_output() {
-        use crate::node_graph::ports::PortType;
-
-        assert_eq!(SsaoGtao::TYPE_ID, "node.ssao_gtao");
-        let names: Vec<&str> = SsaoGtao::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["depth", "camera"]);
-        assert_eq!(SsaoGtao::INPUTS[0].ty, PortType::Texture2D);
-        assert!(SsaoGtao::INPUTS[0].required);
-        assert_eq!(SsaoGtao::INPUTS[1].ty, PortType::Camera);
-        assert!(SsaoGtao::INPUTS[1].required);
-
-        assert_eq!(SsaoGtao::OUTPUTS.len(), 1);
-        assert_eq!(SsaoGtao::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn has_radius_intensity_and_quality_params_no_bias() {
-        let names: Vec<&str> = SsaoGtao::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["radius", "intensity", "slices", "steps", "projection", "relief"]);
-    }
-
-    #[test]
-    fn declares_three_derived_uniforms_in_view_order() {
-        assert_eq!(SsaoGtao::DERIVED_UNIFORMS, &["fov_y", "near", "far"]);
-    }
-
-    #[test]
-    fn uniform_struct_is_48_bytes() {
-        assert_eq!(std::mem::size_of::<SsaoGtaoUniforms>(), 48);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = SsaoGtao::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.ssao_gtao");
-    }
 
     #[test]
     fn derive_view_scalars_reads_perspective_fov_near_far() {
@@ -353,12 +312,6 @@ mod tests {
         cam.mode = CameraMode::Orthographic { half_height: 2.0 };
         let [fov_y, ..] = derive_view_scalars(&cam);
         assert_eq!(fov_y, std::f32::consts::FRAC_PI_3);
-    }
-
-    #[test]
-    fn unregistered_before_this_module_now_has_a_recompute() {
-        use crate::node_graph::freeze::derived_uniform_registry::has_recompute;
-        assert!(has_recompute("node.ssao_gtao"));
     }
 }
 

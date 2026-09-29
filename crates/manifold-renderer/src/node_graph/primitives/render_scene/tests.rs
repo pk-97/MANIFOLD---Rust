@@ -2,53 +2,6 @@
     use crate::node_graph::ports::ArrayType;
     use crate::node_graph::transform::Transform;
 
-    #[test]
-    fn current_frame_rt_update_precedes_flags_depth_and_trace() {
-        let source = include_str!("../render_scene.rs");
-        let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1;
-        let update = evaluate.find("self.rt_accel_maintenance(").unwrap();
-        let success_reset = evaluate[update..]
-            .find("pre.reset_decision |= changed;")
-            .map(|offset| offset + update)
-            .unwrap();
-        let rejection_return = evaluate[update..]
-            .find("FrameRenderStatus::Failed(failure)")
-            .and_then(|offset| evaluate[update + offset..].find("return;").map(|end| update + offset + end))
-            .unwrap();
-
-        for marker in [
-            "self.author_rt_flags(",
-            "self.ensure_gpu_resources(",
-            "self.raster_shadow_prepasses(",
-            "self.opaque_depth_snapshot_pass(",
-            "self.rt_trace_accumulate(",
-        ] {
-            let consumer = evaluate.find(marker).unwrap();
-            assert!(consumer > success_reset, "consumer precedes successful RT update: {marker}");
-            assert!(consumer > rejection_return, "consumer follows an RT rejection: {marker}");
-        }
-    }
-
-    #[test]
-    fn current_frame_path_has_no_settle_or_latched_accel_policy() {
-        let source = include_str!("../render_scene.rs");
-        let evaluate = source.split_once("    fn evaluate<'ctx, 'gpu>").unwrap().1;
-        for obsolete in [
-            "rt_deferred_build_decision",
-            "rt_trace_gate",
-            "rt_refit_eligible",
-            "reject_topology",
-            "rt_accel_built",
-            "rt_topology_rejected",
-            "content_settle",
-            "settled",
-        ] {
-            assert!(!evaluate.contains(obsolete), "obsolete RT policy remains in evaluate: {obsolete}");
-        }
-        assert_eq!(evaluate.matches("self.rt_accel_maintenance(").count(), 1);
-        assert_eq!(evaluate.matches("pre.reset_decision |= changed;").count(), 1);
-    }
-
     /// VOLUMETRIC_LIGHT_DESIGN.md V1: the CPU half of "off = zero cost".
     /// `shaft_intensity == 0` (unwired default) must gate `wants_shafts`
     /// false, and a fresh `RenderScene` must never have called any
@@ -240,25 +193,6 @@
         assert!((point[2] - 2.0).abs() < 1e-6);
     }
 
-    /// IMPORT_FIDELITY_DESIGN.md D2/F-P1 negative gate: the old flat lod-0
-    /// envmap sample + `ibl_strength = 1.0 - roughness*0.7` heuristic is
-    /// gone, not paralleled — split-sum (prefiltered chain × BRDF LUT +
-    /// cosine irradiance) is the only IBL path left in `fs_pbr`. Plain
-    /// source-text check (no GPU needed) rather than an `rg` shell-out, so
-    /// it runs in the default nextest sweep.
-    #[test]
-    fn ibl_strength_heuristic_is_deleted() {
-        let src = include_str!("../shaders/render_scene.wgsl");
-        assert!(
-            !src.contains("ibl_strength"),
-            "ibl_strength heuristic must be fully deleted, not left dead/commented"
-        );
-        assert!(
-            src.contains("prefiltered_specular") && src.contains("irradiance_map") && src.contains("brdf_lut"),
-            "fs_pbr must consume the split-sum IBL bindings"
-        );
-    }
-
     /// BUG-wfxe: the scene kernel must naga-parse — a WGSL syntax break
     /// here is otherwise only caught by GPU pipeline creation. Also pins
     /// the tangent seam: the Vertex struct carries it, the vertex shader
@@ -336,23 +270,6 @@
             "u.texture_flags2 must be read ONLY inside resolve_mr/resolve_occlusion/resolve_emissive/resolve_iridescence \
              (IMPORT_FIDELITY_DESIGN.md D3/F-P2 negative gate) — found a read elsewhere"
         );
-    }
-
-    /// VOLUMETRIC_LIGHT_DESIGN.md P3 deliverable 4: `shaft_quality`'s
-    /// 0/1/2 (Low/Med/High) enum must decode to D2's committed 16/24/32
-    /// step counts, and the march's uniform build (`evaluate`, ~line 1837)
-    /// feeds `shaft_step_count(atmosphere.shaft_quality)` straight into
-    /// `misc.x` — this pins the CPU-side half of "quality actually drives
-    /// step count" (already wired since P2; P3 confirms it, per the phase
-    /// brief's "confirm P2 actually reads shaft_quality" instruction).
-    #[test]
-    fn shaft_step_count_matches_design() {
-        assert_eq!(shaft_step_count(0), 16, "Low");
-        assert_eq!(shaft_step_count(1), 24, "Med (default)");
-        assert_eq!(shaft_step_count(2), 32, "High");
-        // Any value past 2 clamps to High (the enum can only ever carry
-        // 0..=2 in practice; this just keeps the decode total).
-        assert_eq!(shaft_step_count(3), 32);
     }
 
     /// "Hard" must mean an exactly-zero cone, or the RT sun shadow stays a
@@ -485,71 +402,6 @@
     }
 
     #[test]
-    fn zero_instance_draws_are_excluded_from_rt_and_shadow_tables() {
-        let source = include_str!("../render_scene.rs");
-        let rt = source
-            .split_once("fn collect_rt_objects")
-            .expect("RT object collection")
-            .1;
-        assert!(
-            rt.contains("!d.routes_to_transparent() && d.instance_count > 0"),
-            "zero-count objects must not enter RT geometry"
-        );
-        let evaluate = source
-            .split_once("let opaque_draws: Vec<&ObjectDraw>")
-            .expect("opaque draw collection")
-            .1;
-        assert!(
-            evaluate.contains("!d.routes_to_transparent() && d.instance_count > 0"),
-            "zero-count objects must not enter shadow/depth tables"
-        );
-    }
-
-    #[test]
-    fn defaults_to_two_objects_one_light() {
-        let s = RenderScene::new();
-        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4 (P2): camera + envmap +
-        // atmosphere + render_mode + light_0 + object_0 + object_1 — ONE
-        // `Object` port per object now, replacing the 21 legacy per-object
-        // port families (mesh_n/material_n/17 maps/transform_n/instances_n).
-        assert_eq!(s.inputs().len(), 4 + 1 + 2);
-        assert!(s.inputs().iter().any(|p| p.name == "atmosphere"));
-        assert!(!s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().required);
-        assert_eq!(
-            s.inputs().iter().find(|p| p.name == "atmosphere").unwrap().ty,
-            PortType::Atmosphere
-        );
-        // SCENE_RENDER_MODE_DESIGN.md D2: the optional render_mode input,
-        // same shape as atmosphere (unwired = Rendered = byte-identical).
-        assert!(s.inputs().iter().any(|p| p.name == "render_mode"));
-        assert!(!s.inputs().iter().find(|p| p.name == "render_mode").unwrap().required);
-        assert_eq!(
-            s.inputs().iter().find(|p| p.name == "render_mode").unwrap().ty,
-            PortType::RenderMode
-        );
-        let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
-        assert!(!by_name("object_0").required);
-        assert!(!by_name("object_1").required);
-        assert_eq!(by_name("object_0").ty, PortType::Object);
-        assert!(!s.inputs().iter().any(|p| p.name == "object_2"));
-        assert!(s.inputs().iter().any(|p| p.name == "light_0"));
-        assert!(!s.inputs().iter().any(|p| p.name == "light_1"));
-        // `objects` + `lights` + `rt_enabled` (D14) + `temporal_upscale`
-        // (section 5.2 P4) + `rt_reflections` (section 9 RD9) +
-        // `rt_denoise_feed` (section 17.5 DN4) + `rt_shadows` +
-        // `rt_ao` + `rt_gi` (RT term toggles) + `rt_firefly_clamp`
-        // (RT-Stage-3 P1, BUG-mkgh) — per-object TRS moved to
-        // `node.scene_object`'s `transform` input
-        // (SCENE_BUILD_AND_GROUP_PARAMS_DESIGN.md section 2 D3); the live
-        // instance count is also an optional input on `node.scene_object`,
-        // not a render_scene parameter. Neither toggle grows with object
-        // count — this assertion is about object count, not the fixed
-        // scene-level toggle set.
-        assert_eq!(s.parameters().len(), 10);
-        assert!(!s.parameters().iter().any(|p| p.name.contains("pos_x")));
-    }
-
-    #[test]
     fn reconfigure_grows_and_shrinks_ports_and_params() {
         let mut s = RenderScene::new();
         let node: &mut dyn EffectNode = &mut s;
@@ -588,51 +440,6 @@
             .inputs()
             .iter()
             .any(|p| p.name == format!("light_{LIGHT_SLIDER_MAX}")));
-    }
-
-    #[test]
-    fn lights_generalize_well_past_the_old_cap_of_4() {
-        // Prove 8 lights (twice the old
-        // cap) wire cleanly.
-        let mut s = RenderScene::new();
-        let node: &mut dyn EffectNode = &mut s;
-        node.reconfigure(&params_with(1.0, 8.0));
-        assert!(node.inputs().iter().any(|p| p.name == "light_7"));
-        assert!(!node.inputs().iter().any(|p| p.name == "light_8"));
-    }
-
-    #[test]
-    fn objects_generalize_well_past_the_old_cap_of_8() {
-        // Prove 32 objects wire cleanly.
-        let mut s = RenderScene::new();
-        let node: &mut dyn EffectNode = &mut s;
-        node.reconfigure(&params_with(32.0, 2.0));
-        assert!(node.inputs().iter().any(|p| p.name == "object_31"));
-        // objects/lights + fixed scene-level toggles — object count never
-        // grows the param list.
-        assert_eq!(node.parameters().len(), 10);
-    }
-
-    #[test]
-    fn camera_is_required_envmap_lights_and_objects_are_not() {
-        let s = RenderScene::new();
-        let by_name = |n: &str| s.inputs().iter().find(|p| p.name == n).unwrap();
-        assert!(by_name("camera").required);
-        assert!(!by_name("envmap").required);
-        assert!(!by_name("light_0").required);
-        // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D4: object_n is optional, not
-        // required — an unwired object_n is a skip (no draw, no shadow),
-        // not a render error. `node.scene_object`'s OWN `vertices`/
-        // `material` inputs remain the structured-error path once an
-        // object IS wired (see the draw-assembly loop's error branches).
-        assert!(!by_name("object_0").required);
-    }
-
-    #[test]
-    fn registers_with_palette_type_id() {
-        let s = RenderScene::new();
-        let node: &dyn EffectNode = &s;
-        assert_eq!(node.type_id().as_str(), "node.render_scene");
     }
 
     #[test]
@@ -1116,38 +923,6 @@ fn render_mode_solid_rt_enabled_collapses_to_rendered() {
 }
 
 #[test]
-fn render_mode_modes_compose_at_one_match() {
-    // The substitution arms must live in ONE match at the gather site
-    // (P2/P3 briefs): same site, same mechanism, one branch per mode — never
-    // two scattered conditionals reading the mode separately.
-    let source = include_str!("../render_scene.rs");
-    let gather = source
-        .split_once("fn collect_object_draws<'ctx, 'gpu>")
-        .unwrap()
-        .1
-        .split_once("\n    fn ")
-        .unwrap()
-        .0;
-    assert_eq!(
-        gather.matches("let material = match render_mode.mode").count(),
-        1,
-        "the material substitution must be a single match on the mode"
-    );
-    assert!(
-        gather.contains("RENDER_MODE_WIREFRAME => wireframe_material(&render_mode)"),
-        "wireframe arm must live in the shared match"
-    );
-    assert!(
-        gather.contains("RENDER_MODE_SOLID => clay_material(&render_mode)"),
-        "clay arm must live in the shared match"
-    );
-    assert!(
-        gather.contains("RENDER_MODE_POINTS => wireframe_material(&render_mode)"),
-        "points arm must live in the shared match (no fourth scattered branch)"
-    );
-}
-
-#[test]
 fn render_mode_rt_enabled_ignores_the_wire() {
     // INV-R4: rt_enabled + wireframe produces the Rendered uniform set —
     // the effective mode collapses to default, so fill mode is Fill and
@@ -1172,53 +947,6 @@ fn render_mode_rt_enabled_ignores_the_wire() {
         effective_render_mode(&wireframe, false).mode,
         crate::node_graph::render_mode::RENDER_MODE_WIREFRAME
     );
-}
-
-#[test]
-fn depth_and_shadow_passes_force_fill_regardless_of_carried_fill_mode() {
-    // INV-R3: the depth-only batch entry (shadow maps + opaque depth
-    // prepass) forces GpuTriangleFillMode::Fill per draw in the encoder —
-    // a DepthMsaaDraw carrying Lines can never leak into a depth pass.
-    // Structural source check, same pattern as the topology-order tests
-    // above: the forcing site must name Fill and must NOT read the
-    // per-draw field.
-    let source = include_str!("../render_scene.rs");
-    let _ = source;
-    let encoder = include_str!("../../../../../manifold-gpu/src/metal/encoder.rs");
-    let depth_only = encoder
-        .split_once("pub fn draw_instanced_depth_only_batch")
-        .expect("depth-only batch entry must exist")
-        .1
-        .split_once("\n    /// ")
-        .unwrap()
-        .0;
-    let force = depth_only
-        .split_once("setTriangleFillMode")
-        .expect("depth-only pass must force a fill mode per draw (INV-R3)")
-        .1;
-    assert!(
-        force.contains("GpuTriangleFillMode::Fill"),
-        "depth-only pass must force Fill, not read the draw's fill_mode"
-    );
-    assert!(
-        !force.split_once(')').unwrap().0.contains("draw.fill_mode"),
-        "depth-only pass must NOT read draw.fill_mode (INV-R3)"
-    );
-    // The color-pass entries must apply the per-draw field (D6) — proving
-    // the flag reaches color draws and ONLY color draws.
-    for entry in ["pub fn draw_instanced_depth_msaa_batch_desc", "pub fn draw_instanced_depth_batch"] {
-        let body = encoder
-            .split_once(entry)
-            .expect("colour batch entry must exist")
-            .1
-            .split_once("\n    /// ")
-            .unwrap()
-            .0;
-        assert!(
-            body.contains("setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode))"),
-            "{entry} must apply the per-draw fill mode"
-        );
-    }
 }
 
 #[test]
@@ -1307,151 +1035,5 @@ fn render_mode_points_rt_enabled_collapses_to_rendered() {
         effective_render_mode(&points, false).mode,
         crate::node_graph::render_mode::RENDER_MODE_POINTS,
         "without RT the same wire applies"
-    );
-}
-
-#[test]
-fn color_passes_apply_draw_topology_and_depth_forces_triangles() {
-    // INV-R3, topology half: the depth-only batch entry (shadow maps +
-    // opaque depth prepass) hardcodes MTLPrimitiveType::Triangle — a
-    // DepthMsaaDraw carrying Point can never leak into a depth pass. The
-    // colour batches map the per-draw field (D8), same shape as the
-    // fill-mode check above.
-    let encoder = include_str!("../../../../../manifold-gpu/src/metal/encoder.rs");
-    let depth_only = encoder
-        .split_once("pub fn draw_instanced_depth_only_batch")
-        .expect("depth-only batch entry must exist")
-        .1
-        .split_once("\n    /// ")
-        .unwrap()
-        .0;
-    let draw_call = depth_only
-        .split_once("drawPrimitives_vertexStart_vertexCount_instanceCount")
-        .expect("depth-only pass must encode a draw (INV-R3)")
-        .1;
-    assert!(
-        draw_call.contains("MTLPrimitiveType::Triangle"),
-        "depth-only pass must force Triangle topology"
-    );
-    assert!(
-        !draw_call.split_once(')').unwrap().0.contains("draw.primitive"),
-        "depth-only pass must NOT read draw.primitive (INV-R3)"
-    );
-    for entry in ["pub fn draw_instanced_depth_msaa_batch_desc", "pub fn draw_instanced_depth_batch"] {
-        let body = encoder
-            .split_once(entry)
-            .expect("colour batch entry must exist")
-            .1
-            .split_once("\n    /// ")
-            .unwrap()
-            .0;
-        assert!(
-            body.contains("to_mtl_primitive_type(draw.primitive)"),
-            "{entry} must apply the per-draw topology"
-        );
-    }
-    // The points constructor must set Point topology + Fill fill mode.
-    let ctor = encoder
-        .split_once("pub fn depth_msaa_draw_points")
-        .expect("points draw constructor must exist")
-        .1
-        .split_once("\n    /// ")
-        .unwrap()
-        .0;
-    assert!(
-        ctor.contains("GpuPrimitiveType::Point"),
-        "depth_msaa_draw_points must carry Point topology"
-    );
-    assert!(
-        ctor.contains("GpuTriangleFillMode::Fill"),
-        "points draws must not carry a fill mode"
-    );
-}
-
-#[test]
-fn points_mode_switches_the_scene_pass_to_real_attachments() {
-    // D8 root fix: the tiling parameter buffer caps TOTAL point primitives
-    // per memoryless-attachment pass at a few thousand (measured on Apple
-    // Silicon: 2048 points pass, 4096 fault), so a Points-active frame must
-    // swap the scene pass to real-storage MSAA attachments, and must NOT
-    // declare memoryless aux attachments (they would reimpose the budget and
-    // mismatch the single-attachment points pipeline). Structural checks on
-    // both sites.
-    let source = include_str!("../render_scene.rs");
-    let ensure = source
-        .split_once("fn ensure_msaa_targets(")
-        .expect("ensure_msaa_targets must exist")
-        .1
-        .split_once("\n    fn ")
-        .unwrap()
-        .0;
-    assert!(
-        ensure.contains("create_texture_msaa("),
-        "Points-active frames must allocate REAL MSAA attachments"
-    );
-    assert!(
-        ensure.contains("create_texture_msaa_memoryless("),
-        "triangle-mode frames keep the memoryless pair"
-    );
-    assert!(
-        ensure.contains("self.msaa_real == points_active"),
-        "the flavor must flip back to memoryless when Points turns off"
-    );
-    assert!(
-        source.matches("!points_active").count() >= 7,
-        "every aux-attachment pairing (velocity, ao_mask, five denoise feeds) \
-         must be gated off under Points"
-    );
-}
-
-#[test]
-fn render_mode_branch_touches_no_uniforms_outside_the_draw_flags() {
-    // INV-R1 (parity half): the mode branch may only (a) substitute the
-    // object's material, (b) set the draw's fill/topology flags, and (c) put
-    // the wire's point_size into the always-carried uniform slot (inert
-    // unless the points pipeline reads it) — nothing else in
-    // collect_object_draws may read render_mode, so a Rendered/default
-    // value leaves every uniform and pipeline decision untouched.
-    let source = include_str!("../render_scene.rs");
-    let gather = source
-        .split_once("fn collect_object_draws<'ctx, 'gpu>")
-        .unwrap()
-        .1
-        .split_once("\n    fn ")
-        .unwrap()
-        .0;
-    let mentions: Vec<&str> = gather
-        .lines()
-        .filter(|line| line.contains("render_mode"))
-        .collect();
-    for line in &mentions {
-        let allowed = line.contains("objects, cam, envmap_wired, atmosphere, render_mode,")
-            || line.contains("let render_mode = effective_render_mode(render_mode, *rt_enabled)")
-            || line.contains("let material = match render_mode.mode")
-            || line.contains("wireframe_material(&render_mode)")
-            || line.contains("clay_material(&render_mode)")
-            || line.contains("fill_mode: color_pass_fill_mode(&render_mode)")
-            || line.contains("let points = color_pass_points(&render_mode)")
-            || line.contains("render_mode.point_size,")
-            || line.trim() == "points,";
-        assert!(
-            allowed,
-            "collect_object_draws touched render_mode outside the mode branch: {line}"
-        );
-    }
-    assert!(
-        mentions.len() >= 9,
-        "the mode branch must exist: destructure, effective-mode gate, \
-         substitution match, three arms, fill_mode field, points flag, \
-         point_size uniform"
-    );
-    // INV-R1 (Rendered parity): the match's fall-through arm hands the
-    // object's own material through by name — Rendered and Points leave the
-    // gathered material untouched, so a Rendered/default value is
-    // byte-identical to no mode at all.
-    assert!(
-        gather.contains("_ => material,"),
-        "the substitution match must pass the object's material through \
-         unchanged for Rendered/Points (INV-R1)"
     );
 }

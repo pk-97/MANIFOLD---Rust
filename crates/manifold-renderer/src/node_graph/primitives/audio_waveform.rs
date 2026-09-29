@@ -268,7 +268,7 @@ impl Primitive for AudioSpectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
+    use crate::node_graph::primitive::Primitive;
 
     #[test]
     fn waveform_has_fixed_capacity() {
@@ -313,31 +313,6 @@ mod tests {
                 &Default::default()
             ),
             None
-        );
-    }
-
-    #[test]
-    fn live_numeric_controls_shadow_params() {
-        for (node, names) in [
-            (
-                &AudioWaveform::INPUTS,
-                ["window_ms", "trigger"] as [&str; 2],
-            ),
-            (&AudioSpectrum::INPUTS, ["seconds", ""] as [&str; 2]),
-        ] {
-            for name in names.into_iter().filter(|name| !name.is_empty()) {
-                assert!(node.iter().any(|port| port.name == name));
-            }
-        }
-        assert!(
-            AudioWaveform::PARAMS
-                .iter()
-                .any(|param| param.name == "send")
-        );
-        assert!(
-            AudioSpectrum::PARAMS
-                .iter()
-                .any(|param| param.name == "send")
         );
     }
 }

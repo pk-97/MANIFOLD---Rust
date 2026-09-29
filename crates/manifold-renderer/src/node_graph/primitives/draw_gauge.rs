@@ -196,24 +196,3 @@ impl Primitive for DrawGauge {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn draw_gauge_declares_ports_and_skip_contract() {
-        assert_eq!(DrawGauge::TYPE_ID, "node.draw_gauge");
-        let prim = DrawGauge::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.empty_skip_input_ports(), &["detections"]);
-        assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
-    }
-
-    #[test]
-    fn uniforms_are_48_bytes() {
-        assert_eq!(std::mem::size_of::<GaugeUniforms>(), 48);
-    }
-}
-

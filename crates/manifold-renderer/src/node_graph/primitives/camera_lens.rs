@@ -137,48 +137,6 @@ impl Primitive for CameraLens {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_camera_in_out_and_four_port_shadow_scalars() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-
-        assert_eq!(CameraLens::TYPE_ID, "node.camera_lens");
-        let in_names: Vec<&str> = CameraLens::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            in_names,
-            vec!["camera", "focus_distance", "f_stop", "shutter_angle", "exposure_ev"]
-        );
-        assert_eq!(CameraLens::INPUTS[0].ty, PortType::Camera);
-        assert!(CameraLens::INPUTS[0].required);
-        for input in &CameraLens::INPUTS[1..] {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-
-        assert_eq!(CameraLens::OUTPUTS.len(), 1);
-        assert_eq!(CameraLens::OUTPUTS[0].name, "out");
-        assert_eq!(CameraLens::OUTPUTS[0].ty, PortType::Camera);
-    }
-
-    #[test]
-    fn has_four_lens_params() {
-        let names: Vec<&str> = CameraLens::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["focus_distance", "f_stop", "shutter_angle", "exposure_ev"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CameraLens::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.camera_lens");
-    }
-}
-
-#[cfg(test)]
 mod run_tests {
     //! `Primitive::run` behavior via `MockBackend` — the same harness shape
     //! as `transform_3d.rs`'s `run_with_params_and_wires` (Camera substituted

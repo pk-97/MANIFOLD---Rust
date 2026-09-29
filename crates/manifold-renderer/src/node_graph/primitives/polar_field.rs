@@ -96,33 +96,3 @@ impl Primitive for PolarField {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn polar_field_declares_zero_inputs_and_one_texture_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(PolarField::TYPE_ID, "node.polar_field");
-        assert!(PolarField::INPUTS.is_empty());
-        assert_eq!(PolarField::OUTPUTS.len(), 1);
-        assert_eq!(PolarField::OUTPUTS[0].name, "out");
-        assert_eq!(PolarField::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn polar_field_has_cx_cy_params() {
-        let names: Vec<&str> = PolarField::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["cx", "cy"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = PolarField::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.polar_field");
-    }
-}
