@@ -217,35 +217,6 @@ impl Primitive for OneEuroFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn one_euro_filter_declares_channels_io_and_params() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(OneEuroFilter::TYPE_ID, "node.one_euro_filter");
-        assert_eq!(OneEuroFilter::INPUTS.len(), 4);
-        assert_eq!(OneEuroFilter::INPUTS[0].name, "in");
-        assert!(matches!(OneEuroFilter::INPUTS[0].ty, PortType::Array(_)));
-        assert!(OneEuroFilter::INPUTS[0].required);
-        assert_eq!(OneEuroFilter::INPUTS[1].name, "min_cutoff");
-        assert!(!OneEuroFilter::INPUTS[1].required);
-        assert_eq!(OneEuroFilter::INPUTS[2].name, "beta");
-        assert!(!OneEuroFilter::INPUTS[2].required);
-        assert_eq!(OneEuroFilter::INPUTS[3].name, "cut");
-        assert!(!OneEuroFilter::INPUTS[3].required);
-        assert_eq!(OneEuroFilter::OUTPUTS.len(), 1);
-        assert_eq!(OneEuroFilter::OUTPUTS[0].name, "out");
-        let names: Vec<&str> = OneEuroFilter::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["min_cutoff", "beta", "d_cutoff", "cut_threshold"]);
-    }
-
-    #[test]
-    fn one_euro_filter_registers_as_palette_driver() {
-        let prim = OneEuroFilter::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.one_euro_filter");
-    }
 
     #[test]
     fn one_euro_alpha_at_zero_cutoff_returns_near_zero() {

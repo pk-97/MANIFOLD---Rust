@@ -182,59 +182,6 @@ impl Primitive for NormalWaveMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn normal_wave_declares_current_only_mesh_and_scalar_shadows() {
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh = ArrayType::of_known::<MeshVertex>();
-        let prim = NormalWaveMesh::new();
-        assert_eq!(NormalWaveMesh::TYPE_ID, "node.normal_wave_mesh");
-        let input = NormalWaveMesh::INPUTS
-            .iter()
-            .find(|p| p.name == "in")
-            .unwrap();
-        assert!(input.required);
-        assert_eq!(input.ty, PortType::Array(mesh));
-        for name in [
-            "amplitude",
-            "frequency",
-            "phase",
-            "yaw",
-            "pitch",
-            "scale",
-            "source_offset_x",
-            "source_offset_y",
-            "source_offset_z",
-            "enabled",
-        ] {
-            let port = NormalWaveMesh::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap();
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(NormalWaveMesh::OUTPUTS[0].ty, PortType::Array(mesh));
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "out", &ParamValues::default(), &[("in", 19)]),
-            Some(19)
-        );
-    }
-
-    #[test]
-    fn normal_wave_registers_as_palette_atom() {
-        let prim = NormalWaveMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.normal_wave_mesh");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

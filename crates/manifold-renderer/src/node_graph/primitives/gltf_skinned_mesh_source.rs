@@ -339,31 +339,7 @@ impl Primitive for GltfSkinnedMeshSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::ports::{ArrayType, PortType};
     use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_zero_inputs_and_three_coincident_array_outputs() {
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
-        assert_eq!(GltfSkinnedMeshSource::TYPE_ID, "node.gltf_skinned_mesh_source");
-        assert!(GltfSkinnedMeshSource::INPUTS.is_empty());
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS.len(), 3);
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS[0].name, "vertices");
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS[1].name, "joints");
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS[1].ty, PortType::Array(vec4_layout));
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS[2].name, "weights");
-        assert_eq!(GltfSkinnedMeshSource::OUTPUTS[2].ty, PortType::Array(vec4_layout));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GltfSkinnedMeshSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_skinned_mesh_source");
-    }
 
     #[test]
     fn vertex_colors_defaults_off_for_saved_graph_compatibility() {

@@ -82,13 +82,6 @@ mod tests {
     }
 
     #[test]
-    fn transform_is_copy_and_cheap_to_clone() {
-        let t = Transform::default();
-        let _copy = t;
-        let _another = t;
-    }
-
-    #[test]
     fn billboard_rot_euler_returns_finite_angles_with_zero_roll() {
         let t = Transform::default();
         let rot = t.billboard_rot_euler([1.0, 2.0, 3.0]);

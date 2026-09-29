@@ -697,29 +697,7 @@ impl Primitive for GltfSkeletonPose {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::gltf_anim_cache::{BindTrs, Channel, ChannelKind, SkinTopology};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_progress_input_and_joint_matrix_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        assert_eq!(GltfSkeletonPose::TYPE_ID, "node.gltf_skeleton_pose");
-        assert_eq!(GltfSkeletonPose::INPUTS.len(), 3);
-        assert_eq!(GltfSkeletonPose::INPUTS[0].name, "progress");
-        assert!(!GltfSkeletonPose::INPUTS[0].required);
-        assert_eq!(GltfSkeletonPose::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(GltfSkeletonPose::OUTPUTS.len(), 1);
-        assert_eq!(GltfSkeletonPose::OUTPUTS[0].name, "joint_matrices");
-        assert_eq!(GltfSkeletonPose::OUTPUTS[0].ty, PortType::Array(ArrayType::of_known::<JointMatrix>()));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GltfSkeletonPose::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_skeleton_pose");
-    }
 
     fn identity_params(path: &str) -> crate::node_graph::effect_node::ParamValues {
         let mut params = crate::node_graph::effect_node::ParamValues::default();

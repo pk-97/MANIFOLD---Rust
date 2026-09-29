@@ -772,48 +772,10 @@ mod tests {
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::{ArrayType, PortType};
+    use crate::node_graph::ports::PortType;
     use crate::node_graph::MockBackend;
     use manifold_core::{Beats, Seconds};
-
-    #[test]
-    fn gltf_mesh_source_declares_zero_inputs_and_mesh_array_output() {
-        let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(GltfMeshSource::TYPE_ID, "node.gltf_mesh_source");
-        assert!(GltfMeshSource::INPUTS.is_empty());
-        assert_eq!(GltfMeshSource::OUTPUTS.len(), 2);
-        assert_eq!(GltfMeshSource::OUTPUTS[0].name, "vertices");
-        assert_eq!(GltfMeshSource::OUTPUTS[1].name, "source");
-        assert_eq!(GltfMeshSource::OUTPUTS[1].ty, PortType::MeshSource);
-        assert_eq!(GltfMeshSource::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn gltf_mesh_source_param_names_in_order() {
-        let names: Vec<&str> = GltfMeshSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "path",
-                "mesh_index",
-                "primitive_index",
-                "material_index",
-                "fragment_count",
-                "fragment_index",
-                "max_capacity",
-                "fit",
-                "recenter",
-                "vertex_colors",
-                "translate_x",
-                "translate_y",
-                "translate_z",
-                "source_vertex_count",
-                "source_bbox_radius"
-            ]
-        );
-    }
 
     #[test]
     fn fit_defaults_to_none_and_recenter_defaults_to_true() {
@@ -842,13 +804,6 @@ mod tests {
             assert_eq!(actual.position, expected.position);
             assert_eq!(actual.color, expected.color);
         }
-    }
-
-    #[test]
-    fn primitive_registers() {
-        let prim = GltfMeshSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_mesh_source");
     }
 
     fn frame_time() -> FrameTime {

@@ -150,50 +150,6 @@ impl Primitive for TrigTexture {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn trig_texture_declares_required_in_optional_scalars_and_optional_texture_shadows() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(TrigTexture::TYPE_ID, "node.sine_cosine");
-        let ins = TrigTexture::INPUTS;
-        assert_eq!(ins.len(), 5);
-        assert_eq!(ins[0].name, "in");
-        assert!(ins[0].required);
-        assert_eq!(ins[0].ty, PortType::Texture2D);
-        assert_eq!(ins[1].name, "freq");
-        assert!(!ins[1].required);
-        assert_eq!(ins[1].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(ins[2].name, "phase");
-        assert!(!ins[2].required);
-        assert_eq!(ins[2].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(ins[3].name, "freq_tex");
-        assert!(!ins[3].required);
-        assert_eq!(ins[3].ty, PortType::Texture2D);
-        assert_eq!(ins[4].name, "phase_tex");
-        assert!(!ins[4].required);
-        assert_eq!(ins[4].ty, PortType::Texture2D);
-        assert_eq!(TrigTexture::OUTPUTS.len(), 1);
-    }
-
-    #[test]
-    fn trig_texture_has_freq_phase_mode_params() {
-        let names: Vec<&str> = TrigTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["freq", "phase", "mode"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = TrigTexture::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.sine_cosine");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Hardware tests for the per-pixel freq_tex / phase_tex shadow

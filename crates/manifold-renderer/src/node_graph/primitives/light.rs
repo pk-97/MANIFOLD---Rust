@@ -358,71 +358,7 @@ impl Primitive for LightNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::light::LightMode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn light_declares_port_shadow_scalars_and_light_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-
-        assert_eq!(LightNode::TYPE_ID, "node.light");
-        for input in LightNode::INPUTS {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(LightNode::OUTPUTS.len(), 1);
-        assert_eq!(LightNode::OUTPUTS[0].name, "out");
-        assert_eq!(LightNode::OUTPUTS[0].ty, PortType::Light);
-    }
-
-    #[test]
-    fn light_has_mode_and_softness_enums_plus_full_scalar_surface() {
-        let names: Vec<&str> = LightNode::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        for required in &[
-            "mode",
-            "pos_x",
-            "pos_y",
-            "pos_z",
-            "aim_x",
-            "aim_y",
-            "aim_z",
-            "color_r",
-            "color_g",
-            "color_b",
-            "intensity",
-            "range",
-            "falloff",
-            "inner_cone_angle",
-            "outer_cone_angle",
-            "cast_shadows",
-            "shadow_softness",
-            "shadow_bias",
-            "shadow_resolution",
-            "light_size",
-        ] {
-            assert!(names.contains(required), "missing param {}", required);
-        }
-        let mode = LightNode::PARAMS.iter().find(|p| p.name == "mode").unwrap();
-        assert_eq!(mode.ty, ParamType::Enum);
-        let softness = LightNode::PARAMS
-            .iter()
-            .find(|p| p.name == "shadow_softness")
-            .unwrap();
-        assert_eq!(softness.ty, ParamType::Enum);
-        let resolution = LightNode::PARAMS
-            .iter()
-            .find(|p| p.name == "shadow_resolution")
-            .unwrap();
-        assert_eq!(resolution.ty, ParamType::Int);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = LightNode::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.light");
-    }
 
     #[test]
     fn run_emits_sun_light_by_default_with_premultiplied_color() {

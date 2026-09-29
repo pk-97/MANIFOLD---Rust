@@ -2,8 +2,8 @@
 """One-command landing gate (GIT_TREE_DISCIPLINE.md section 2 (Landing protocol)).
 
 Gates only what the branch touched; the workspace-wide sweep lives in
-scripts/trunk_health.py (nightly). Run from the worktree being landed, after
-merging origin/main into it. Stop at the first failed check; preserve its
+scripts/trunk_health.py (nightly). Pass --repo <worktree path> of the branch
+being landed, after merging origin/main into it. Stop at the first failed check; preserve its
 transcript and timings. Exit 0 iff all required checks pass.
 """
 
@@ -254,6 +254,12 @@ def reverse_deps(repo, packages):
         return []
 
 
+def skip(results, label, reason):
+    """Record a SKIP; the reason travels to the live line and the summary."""
+    results.append(("SKIP", label, None, [reason]))
+    print(f"[SKIP] {label} ({reason})", flush=True)
+
+
 def print_result(label, status, duration=None, tail=None):
     """Print [PASS]/[FAIL]/[SKIP] with optional tail."""
     if duration is not None:
@@ -268,7 +274,7 @@ def print_result(label, status, duration=None, tail=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=Path.cwd(),
-                        help="repo path (default: cwd)")
+                        help="worktree of the branch being landed (default: cwd)")
     parser.add_argument("--base", default="origin/main",
                         help="base ref for merge-base (default: origin/main)")
     parser.add_argument("--skip-gpu", default=None, metavar="REASON",
@@ -282,6 +288,14 @@ def main():
                        cwd=repo, timeout=300)[1].strip()
     if not base_sha:
         print("[FAIL] merge-base returned empty")
+        return 1
+    # Agents cannot cd, so a bare run lands in the main checkout where HEAD is
+    # the base: nothing is touched, every check skips, exit 0. Two landings on
+    # 2026-09-29 merged on that fully-skipped gate.
+    head_sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=repo, timeout=30)[1].strip()
+    if head_sha == base_sha:
+        print(f"[FAIL] HEAD == {args.base} at {repo}: nothing to gate. "
+              "Pass --repo <worktree path> of the branch being landed.")
         return 1
 
     packages = get_touched_packages(repo, base_sha)
@@ -338,8 +352,7 @@ def main():
         if status == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     else:
-        results.append(("SKIP", "docs-index", None, None))
-        print_result("docs-index", "SKIP", None, None)
+        skip(results, "docs-index", "no docs added or renamed")
 
     # d. deny
     exit_, out, err, duration = run_check("deny",
@@ -389,8 +402,7 @@ def main():
         if status == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     else:
-        results.append(("SKIP", "clippy", None, None))
-        print_result("clippy", "SKIP", None, None)
+        skip(results, "clippy", "no touched packages")
 
     # c. flow-gate
     exit_, out, err, duration = run_check("flow-gate",
@@ -417,14 +429,12 @@ def main():
         if status == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     else:
-        results.append(("SKIP", "tests", None, None))
-        print_result("tests", "SKIP", None, None)
+        skip(results, "tests", "no touched packages")
 
     # g. gpu-proofs
     if touches_gpu:
         if args.skip_gpu:
-            results.append(("SKIP", "gpu-proofs", None, None))
-            print(f"[SKIP] gpu-proofs — SKIPPED BY FLAG: {args.skip_gpu}")
+            skip(results, "gpu-proofs", f"skipped by flag: {args.skip_gpu}")
         else:
             changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
                               cwd=repo, timeout=300)[1]
@@ -473,8 +483,7 @@ def main():
             if status == "FAIL" and not args.keep_going:
                 return finish(repo, base_sha, results)
     else:
-        results.append(("SKIP", "gpu-proofs", None, None))
-        print_result("gpu-proofs", "SKIP", None, None)
+        skip(results, "gpu-proofs", "no GPU paths touched")
 
     return finish(repo, base_sha, results)
 
@@ -484,9 +493,11 @@ def finish(repo, base_sha, results):
     passed = sum(1 for s, _, _, _ in results if s == "PASS")
     failed = sum(1 for s, _, _, _ in results if s == "FAIL")
     skipped = sum(1 for s, _, _, _ in results if s == "SKIP")
-    for status, label, duration, _ in results:
+    for status, label, duration, tail in results:
         if duration:
             print(f"{status} {label} ({duration:.0f}s)")
+        elif status == "SKIP" and tail:
+            print(f"{status} {label} ({tail[0]})")
         else:
             print(f"{status} {label}")
     print(f"landing gate: {passed} passed, {failed} failed, {skipped} skipped")

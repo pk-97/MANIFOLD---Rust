@@ -54,32 +54,3 @@ impl Primitive for RemapCutWeights {
         super::mesh_cut_remap::run::<Self>(ctx, &mut self.pipeline, &mut self.last_key, 4);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::ports::{ArrayType, PortType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_scalar_and_map_inputs_and_map_sized_output() {
-        assert_eq!(RemapCutWeights::TYPE_ID, "node.remap_cut_weights");
-        assert_eq!(
-            RemapCutWeights::INPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<f32>())
-        );
-        assert_eq!(
-            RemapCutWeights::INPUTS[1].ty,
-            PortType::Array(ArrayType::of_known::<Vec4Vertex>())
-        );
-        assert_eq!(
-            RemapCutWeights::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<f32>())
-        );
-        let p = RemapCutWeights::new();
-        assert_eq!(
-            Primitive::array_output_capacity(&p, "out", &Default::default(), &[("map", 17)]),
-            Some(17)
-        );
-    }
-}

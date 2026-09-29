@@ -768,8 +768,8 @@ over the wired flags. If the spike shows dynamic ports can't square with the sta
 dynamic-arity codegen support becomes a design decision for Peter — flag it, don't improvise.
 
 **Spike (2026-07-14)** — done, half-day scope, no landing. Evidence:
-`crates/manifold-renderer/tests/bug115_dynamic_arity_spike.rs` (two `#[ignore]`d tests, run with
-`cargo test -p manifold-renderer --test bug115_dynamic_arity_spike -- --ignored --nocapture`).
+`crates/manifold-renderer/tests/bug115_dynamic_arity_spike.rs`, deleted in the 2026-09-29 test
+prune; recover it from git history before that date.
 
 *Spike verdict: yes-with-caveats.* The static-max-arity + optional-`Coincident` + `0u` use-flag
 shape is not a new mechanism to invent — it already ships in production for `node.pack_rgba`

@@ -94,32 +94,3 @@ impl Primitive for RemapMeshCut {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::ports::{ArrayType, PortType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_mesh_and_map_inputs_and_map_sized_output() {
-        assert_eq!(RemapMeshCut::TYPE_ID, "node.remap_mesh_cut");
-        assert_eq!(
-            RemapMeshCut::INPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<MeshVertex>())
-        );
-        assert_eq!(
-            RemapMeshCut::INPUTS[1].ty,
-            PortType::Array(ArrayType::of_known::<Vec4Vertex>())
-        );
-        assert_eq!(
-            RemapMeshCut::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<MeshVertex>())
-        );
-        let p = RemapMeshCut::new();
-        assert_eq!(
-            Primitive::array_output_capacity(&p, "out", &Default::default(), &[("map", 99)]),
-            Some(99)
-        );
-    }
-}

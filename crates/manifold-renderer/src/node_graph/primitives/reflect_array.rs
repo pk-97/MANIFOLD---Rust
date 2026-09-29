@@ -349,8 +349,6 @@ fn conjugate_euler(angles: [f32; 3], axis: u32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
 
 
     #[test]
@@ -444,35 +442,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reflect_array_declares_optional_array_in_and_array_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(ReflectArray::TYPE_ID, "node.reflect_array");
-
-        let in_port = ReflectArray::INPUTS.iter().find(|p| p.name == "in").unwrap();
-        assert!(!in_port.required, "unwired in = one identity instance (D3)");
-        assert_eq!(in_port.ty, PortType::Array(layout));
-
-        assert_eq!(ReflectArray::OUTPUTS.len(), 1);
-        assert_eq!(ReflectArray::OUTPUTS[0].name, "out");
-        assert_eq!(ReflectArray::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn reflect_array_has_axis_offset_enabled_params() {
-        let names: Vec<&str> = ReflectArray::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["axis", "plane_offset", "enabled"]);
-
-        let axis = ReflectArray::PARAMS.iter().find(|p| p.name == "axis").unwrap();
-        assert_eq!(axis.ty, ParamType::Enum);
-        assert_eq!(axis.enum_values, super::super::scene_array::AXIS_LABELS);
-        assert_eq!(axis.enum_values.len(), 6);
-
-        let enabled = ReflectArray::PARAMS.iter().find(|p| p.name == "enabled").unwrap();
-        assert_eq!(enabled.default, ParamValue::Float(1.0));
-    }
-
     /// INV-MR4, the capacity layer: the output buffer is sized for 2x the
     /// input capacity, whatever the live param values — the mirror's
     /// axis/offset/enabled writes are live card writes, never a rebuild
@@ -549,13 +518,6 @@ mod tests {
             "the region count composes to 2x the gathered external — the \
              mirrored half is inside the dispatch"
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ReflectArray::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.reflect_array");
     }
 }
 

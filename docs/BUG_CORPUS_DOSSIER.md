@@ -93,7 +93,7 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-063 (silent-load-repairs) | manifold-io/loader.rs | missing-invariant-enforcement | open (P3 partial) | non-blocking toast only | :293 | B1 |
 | BUG-064 (save-rename-before-fsync) | manifold-io/archive.rs | resource-lifecycle | patch | 2 sync_all negative-gate | :1651 | B1 |
 | BUG-065 (save-dedup-history-identity-key-6-hex-chars) | manifold-io/archive.rs | structural-design-flaw | patch | none named | :1671 | B1 |
-| BUG-066 (fluid3d-corner-drift) | manifold-renderer node_graph FluidSim3D | one-off | open | fluid3d_bias.rs (--ignored) | :182 | none |
+| BUG-066 (fluid3d-corner-drift) | manifold-renderer node_graph FluidSim3D | one-off | open | fluid3d_bias.rs (deleted 2026-09-29; git history) | :182 | none |
 | BUG-067 (ui-snapshot-dead-blit-pipeline) | manifold-app/ui_snapshot/render.rs | process-failure | open | none | :161 | A7 |
 | BUG-068 (inspector-scene-cliphit-overlap) | manifold-app ui_snapshot fixtures | one-off | open | none | :172 | none |
 | BUG-069 | licensing (deps: madmom/ADTOF, rusty_link, ffmpeg) | other: dependency-licensing | open | rg zero-hit gate (planned) | :115 | none |

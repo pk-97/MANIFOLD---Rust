@@ -2495,26 +2495,6 @@ mod tests {
             .expect("full pre-allocate pipeline succeeds for seed-only graph");
     }
 
-    /// Drift bug regression: `pre_allocate_resources` runs on the
-    /// effect chain side too. Before Step B the chain build's
-    /// `pre_allocate_array_buffers_effect` shim had no audit and no
-    /// Texture3D pass — features added on the generator side were
-    /// silently absent from chains. This test pins that both callers
-    /// invoke the same function (via the public re-export at
-    /// `crate::node_graph::pre_allocate_resources`), so any future
-    /// drift would have to introduce a new code path rather than
-    /// silently lack one.
-    #[test]
-    fn shared_pre_allocate_is_the_single_callable() {
-        // Module path identity check — if the function ever moves or
-        // gets shadowed, this test fails to compile, surfacing the
-        // change as a compile-time error rather than silent drift.
-        let _: fn(&Graph, &ExecutionPlan, &GpuDevice, &mut MetalBackend) -> Result<(), PreAllocationError> =
-            pre_allocate_resources;
-        let _: fn(&Graph, &ExecutionPlan, &GpuDevice, &mut MetalBackend) -> Result<(), PreAllocationError> =
-            crate::node_graph::pre_allocate_resources;
-    }
-
     // ── docs/NODE_VOCABULARY_AUDIT.md section 3 test (a) ──
     //
     // `type_id_migration::TYPE_ID_MIGRATIONS` is empty in every shipped

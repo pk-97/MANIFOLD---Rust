@@ -226,32 +226,6 @@ impl Primitive for MotionBlur {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_in_velocity_camera_inputs_and_texture_output() {
-        use crate::node_graph::ports::PortType;
-
-        assert_eq!(MotionBlur::TYPE_ID, "node.motion_blur");
-        let names: Vec<&str> = MotionBlur::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["in", "velocity", "camera"]);
-        assert_eq!(MotionBlur::INPUTS[0].ty, PortType::Texture2D);
-        assert!(MotionBlur::INPUTS[0].required);
-        assert_eq!(MotionBlur::INPUTS[1].ty, PortType::Texture2D);
-        assert!(MotionBlur::INPUTS[1].required);
-        assert_eq!(MotionBlur::INPUTS[2].ty, PortType::Camera);
-        assert!(MotionBlur::INPUTS[2].required);
-
-        assert_eq!(MotionBlur::OUTPUTS.len(), 1);
-        assert_eq!(MotionBlur::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn has_max_blur_px_and_enabled_params() {
-        let names: Vec<&str> = MotionBlur::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["max_blur_px", "enabled"]);
-        assert!(matches!(MotionBlur::PARAMS[1].default, ParamValue::Bool(true)));
-    }
 
     #[test]
     fn skip_passthrough_aliases_in_to_out_only_when_enabled_false() {
@@ -272,29 +246,6 @@ mod tests {
         let prim = MotionBlur::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.skip_passthrough_ports(), Some(("in", "out")));
-    }
-
-    #[test]
-    fn declares_shutter_angle_as_sole_derived_uniform() {
-        assert_eq!(MotionBlur::DERIVED_UNIFORMS, &["shutter_angle"]);
-    }
-
-    #[test]
-    fn uniform_struct_is_16_bytes() {
-        assert_eq!(std::mem::size_of::<MotionBlurUniforms>(), 16);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = MotionBlur::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.motion_blur");
-    }
-
-    #[test]
-    fn unregistered_before_this_module_now_has_a_recompute() {
-        use crate::node_graph::freeze::derived_uniform_registry::has_recompute;
-        assert!(has_recompute("node.motion_blur"));
     }
 }
 

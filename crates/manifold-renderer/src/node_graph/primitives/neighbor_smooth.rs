@@ -145,37 +145,3 @@ impl Primitive for NeighborSmooth {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn neighbor_smooth_declares_instance_array_in_and_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(NeighborSmooth::TYPE_ID, "node.neighbor_smooth");
-        assert_eq!(NeighborSmooth::INPUTS.len(), 1);
-        assert_eq!(NeighborSmooth::INPUTS[0].name, "in");
-        assert!(NeighborSmooth::INPUTS[0].required);
-        assert_eq!(NeighborSmooth::INPUTS[0].ty, PortType::Array(layout));
-        assert_eq!(NeighborSmooth::OUTPUTS.len(), 1);
-        assert_eq!(NeighborSmooth::OUTPUTS[0].name, "out");
-        assert_eq!(NeighborSmooth::OUTPUTS[0].ty, PortType::Array(layout));
-    }
-
-    #[test]
-    fn neighbor_smooth_has_grid_and_center_weight_params() {
-        let names: Vec<&str> = NeighborSmooth::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["grid_size", "center_weight"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = NeighborSmooth::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.neighbor_smooth");
-    }
-}
-

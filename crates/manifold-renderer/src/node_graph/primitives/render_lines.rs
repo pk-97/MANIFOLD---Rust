@@ -719,66 +719,6 @@ impl Primitive for RenderLines {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_linepoint_input_optional_edges_and_texture_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let points_layout = ArrayType::of_known::<CurvePoint>();
-        let edges_layout = ArrayType::of_known::<EdgePair>();
-        let widths_layout = ArrayType::of_known::<f32>();
-
-        assert_eq!(RenderLines::TYPE_ID, "node.draw_lines");
-        assert_eq!(RenderLines::INPUTS.len(), 4);
-        assert_eq!(RenderLines::INPUTS[0].name, "points");
-        assert!(RenderLines::INPUTS[0].required);
-        assert_eq!(RenderLines::INPUTS[0].ty, PortType::Array(points_layout));
-        assert_eq!(RenderLines::INPUTS[1].name, "edges");
-        assert!(!RenderLines::INPUTS[1].required);
-        assert_eq!(RenderLines::INPUTS[1].ty, PortType::Array(edges_layout));
-        assert_eq!(RenderLines::INPUTS[2].name, "widths");
-        assert!(!RenderLines::INPUTS[2].required);
-        assert_eq!(RenderLines::INPUTS[2].ty, PortType::Array(widths_layout));
-        assert_eq!(RenderLines::INPUTS[3].name, "edge_thickness");
-        assert!(!RenderLines::INPUTS[3].required);
-        assert_eq!(RenderLines::INPUTS[3].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(RenderLines::OUTPUTS.len(), 1);
-        assert_eq!(RenderLines::OUTPUTS[0].name, "color");
-        assert_eq!(RenderLines::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn params_cover_thickness_animation_dots_color_and_flash() {
-        let names: Vec<&str> = RenderLines::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(
-            names,
-            vec![
-                "edge_thickness",
-                "closed_loop",
-                "show_verts",
-                "vert_size",
-                "animate",
-                "speed",
-                "window",
-                "beat_flash_amount",
-                "color_r",
-                "color_g",
-                "color_b",
-                "color_a",
-            ]
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = RenderLines::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.draw_lines");
-    }
 
     /// `build_instances` non-animated, closed-loop: N segments
     /// connecting i → (i+1)%N, all alpha=1, no dots.

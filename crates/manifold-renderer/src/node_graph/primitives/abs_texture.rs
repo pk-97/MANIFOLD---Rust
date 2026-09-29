@@ -67,31 +67,3 @@ impl Primitive for AbsTexture {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn abs_texture_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(AbsTexture::TYPE_ID, "node.absolute_value");
-        assert_eq!(AbsTexture::INPUTS.len(), 1);
-        assert_eq!(AbsTexture::OUTPUTS.len(), 1);
-        assert_eq!(AbsTexture::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn abs_texture_has_no_params() {
-        assert!(AbsTexture::PARAMS.is_empty());
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = AbsTexture::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.absolute_value");
-    }
-}

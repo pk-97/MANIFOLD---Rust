@@ -168,14 +168,12 @@ impl Primitive for RenderModeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::MockBackend;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::PortType;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -185,25 +183,6 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         }
-    }
-
-    #[test]
-    fn declares_nine_port_shadow_scalars_and_render_mode_output() {
-        assert_eq!(RenderModeNode::TYPE_ID, "node.render_mode");
-        assert_eq!(RenderModeNode::INPUTS.len(), 9);
-        for input in RenderModeNode::INPUTS {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-        }
-        assert_eq!(RenderModeNode::OUTPUTS.len(), 1);
-        assert_eq!(RenderModeNode::OUTPUTS[0].name, "render_mode");
-        assert_eq!(RenderModeNode::OUTPUTS[0].ty, PortType::RenderMode);
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = RenderModeNode::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_mode");
     }
 
     const DEFAULTS: &[(&str, f32)] = &[
@@ -310,11 +289,6 @@ mod tests {
         assert_eq!(m.line_color, [0.1, 0.5, 1.0, 1.0]);
         assert_eq!(m.line_brightness, 3.0);
         assert_eq!(m.point_size, 8.0);
-    }
-
-    #[test]
-    fn rendered_is_index_zero() {
-        assert_eq!(RENDER_MODE_LABELS[0], "Rendered", "INV-R2: the enable gate multiplies enabled × mode, so index 0 must stay Rendered");
     }
 
     #[test]

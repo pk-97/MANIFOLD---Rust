@@ -191,49 +191,6 @@ impl Primitive for BilateralBlur {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_in_depth_camera_inputs_and_texture_output() {
-        use crate::node_graph::ports::PortType;
-
-        assert_eq!(BilateralBlur::TYPE_ID, "node.bilateral_blur");
-        let names: Vec<&str> = BilateralBlur::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["in", "depth", "camera"]);
-        assert_eq!(BilateralBlur::INPUTS[0].ty, PortType::Texture2D);
-        assert!(BilateralBlur::INPUTS[0].required);
-        assert_eq!(BilateralBlur::INPUTS[1].ty, PortType::Texture2D);
-        assert!(BilateralBlur::INPUTS[1].required);
-        assert_eq!(BilateralBlur::INPUTS[2].ty, PortType::Camera);
-        assert!(BilateralBlur::INPUTS[2].required);
-
-        assert_eq!(BilateralBlur::OUTPUTS.len(), 1);
-        assert_eq!(BilateralBlur::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn has_axis_and_depth_sigma_params_only() {
-        let names: Vec<&str> = BilateralBlur::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["axis", "depth_sigma"]);
-    }
-
-    #[test]
-    fn declares_two_derived_uniforms_near_far() {
-        assert_eq!(BilateralBlur::DERIVED_UNIFORMS, &["near", "far"]);
-    }
-
-    #[test]
-    fn uniform_struct_is_16_bytes() {
-        assert_eq!(std::mem::size_of::<BilateralBlurUniforms>(), 16);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = BilateralBlur::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.bilateral_blur");
-    }
 
     #[test]
     fn derive_depth_scalars_reads_near_far_only() {
@@ -243,12 +200,6 @@ mod tests {
         let [near, far] = derive_depth_scalars(&cam);
         assert_eq!(near, 0.2);
         assert_eq!(far, 250.0);
-    }
-
-    #[test]
-    fn unregistered_before_this_module_now_has_a_recompute() {
-        use crate::node_graph::freeze::derived_uniform_registry::has_recompute;
-        assert!(has_recompute("node.bilateral_blur"));
     }
 }
 

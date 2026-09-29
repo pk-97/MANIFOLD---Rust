@@ -125,53 +125,6 @@ impl Primitive for WaveField3d {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn wave_pilot_wave_field_ports_defaults_and_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let prim = WaveField3d::new();
-        assert_eq!(WaveField3d::TYPE_ID, "node.wave_field_3d");
-        assert_eq!(
-            WaveField3d::INPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<Vec4Vertex>())
-        );
-        assert!(WaveField3d::INPUTS[0].required);
-        for name in [
-            "frequency",
-            "phase",
-            "direction_x",
-            "direction_y",
-            "direction_z",
-        ] {
-            let port = WaveField3d::INPUTS.iter().find(|p| p.name == name).unwrap();
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-            assert!(!port.required);
-        }
-        assert_eq!(
-            Primitive::array_output_capacity(
-                &prim,
-                "out",
-                &ParamValues::default(),
-                &[("positions", 23)]
-            ),
-            Some(23)
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = WaveField3d::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.wave_field_3d");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

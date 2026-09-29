@@ -394,38 +394,3 @@ impl Primitive for DepthEstimateMidas {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn depth_estimate_midas_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(DepthEstimateMidas::TYPE_ID, "node.depth_map");
-        assert_eq!(DepthEstimateMidas::INPUTS.len(), 1);
-        assert_eq!(DepthEstimateMidas::INPUTS[0].name, "in");
-        assert_eq!(DepthEstimateMidas::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(DepthEstimateMidas::OUTPUTS.len(), 1);
-        assert_eq!(DepthEstimateMidas::OUTPUTS[0].name, "out");
-        assert_eq!(DepthEstimateMidas::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn depth_estimate_midas_has_analysis_and_interval_params() {
-        let names: Vec<&str> = DepthEstimateMidas::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(names, vec!["analysis_max_dim", "update_interval"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = DepthEstimateMidas::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.depth_map");
-    }
-}

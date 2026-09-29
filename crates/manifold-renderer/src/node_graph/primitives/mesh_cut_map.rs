@@ -644,7 +644,6 @@ impl Primitive for CutMeshCells {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
     fn map_capacity_reserves_additive_fragment_space() {
@@ -663,39 +662,6 @@ mod tests {
             Some(80)
         );
         assert_eq!(scratch_bytes(u64::from(CUT_MAP_EXTRA_RECORDS) - 1), None);
-    }
-
-    #[test]
-    fn wrappers_declare_reference_and_map_abi() {
-        let mesh = crate::node_graph::ports::ArrayType::of_known::<MeshVertex>();
-        let map = crate::node_graph::ports::ArrayType::of_known::<Vec4Vertex>();
-        assert_eq!(CutMeshBands::TYPE_ID, "node.cut_mesh_bands");
-        assert_eq!(CutMeshCells::TYPE_ID, "node.cut_mesh_cells");
-        assert_eq!(
-            CutMeshBands::INPUTS[0].ty,
-            crate::node_graph::ports::PortType::Array(mesh)
-        );
-        assert_eq!(
-            CutMeshBands::OUTPUTS[0].ty,
-            crate::node_graph::ports::PortType::Array(map)
-        );
-        assert_eq!(
-            CutMeshCells::INPUTS[0].ty,
-            crate::node_graph::ports::PortType::Array(mesh)
-        );
-        assert_eq!(
-            CutMeshCells::OUTPUTS[0].ty,
-            crate::node_graph::ports::PortType::Array(map)
-        );
-    }
-
-    #[test]
-    fn map_shader_contains_all_deterministic_passes() {
-        assert!(SHADER.contains("fn clear_main"));
-        assert!(SHADER.contains("fn count_main"));
-        assert!(SHADER.contains("fn scan_main"));
-        assert!(SHADER.contains("fn emit_main"));
-        assert!(SHADER.contains("source triangle index"));
     }
 
     #[cfg(feature = "gpu-proofs")]

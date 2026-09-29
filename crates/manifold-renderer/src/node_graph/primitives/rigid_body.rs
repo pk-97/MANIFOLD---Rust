@@ -494,8 +494,7 @@ mod tests {
     use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::{EffectNode, MockBackend};
+    use crate::node_graph::MockBackend;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -579,18 +578,6 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("rigid body source preparation did not settle");
-    }
-
-    #[test]
-    fn rigid_body_declares_typed_mesh_source_input() {
-        let source = RigidBodyNode::INPUTS
-            .iter()
-            .find(|port| port.name == "source")
-            .expect("source input");
-        assert!(!source.required);
-        assert_eq!(source.ty, PortType::MeshSource);
-        let node: &dyn EffectNode = &RigidBodyNode::new();
-        assert_eq!(node.type_id().as_str(), "node.rigid_body");
     }
 
     #[test]

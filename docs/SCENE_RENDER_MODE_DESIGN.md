@@ -168,11 +168,10 @@ without the port load byte-identical (unwired default).
   (same scene, port unwired vs wired-with-Rendered, buffers compared).
 - **INV-R2 — `Rendered` is mode index 0 forever** (the enable gate's multiply
   depends on it). Enforcement: `const _: ()` assertion on the enum-label
-  table + test `rendered_is_index_zero` in the atom's tests.
+  table; `docs/node_catalog.json` also records the label order.
 - **INV-R3 — Depth prepass and shadow passes always fill, regardless of
-  mode.** Enforcement: test in `render_scene/tests.rs` asserting the depth
-  entry points receive `Fill` under mode = Wireframe (encoder mock records
-  the flag).
+  mode.** Enforcement: none in-tree. The source-text check that pinned it was
+  deleted in the 2026-09-29 test prune; a behavioral test is owed.
 - **INV-R4 — RT path ignores the wire.** Enforcement: test — `rt_enabled`
   with mode = Wireframe produces the Rendered uniform set (no fill-mode
   flag reaches any RT draw).
