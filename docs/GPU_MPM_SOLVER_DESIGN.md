@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); stopped on BUG-8akp (MPM water J grows without bound), a J-handling ruling · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P1b–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); J bounded for BUG-8akp (MPM water J grows without bound); A2, A4, A6 and the still pool fail as look findings for Peter · P1b in progress (L1 built) · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P2–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1139,6 +1139,40 @@ at the end of the phase.
 - **Demo:** none — L1, plus the profile table.
 - **Forbidden:** reordering `MatterPoint`; subgroup operations; changing Stiffness,
   Points per Cell, resolution or any threshold for speed.
+- **Phase notes (in progress, 2026-09-30, Opus 5.5 worker):** started on the lead's call
+  after P1's kill check fired (the entry state's "kill check passed" does not hold).
+  - L1: `node.matter_to_grid` is hand WGSL (exclusion 1) with one entry point: per-point
+    global atomics, or, with `order`/`ranges`, one workgroup per 4³ block of stencil base
+    nodes into a 6³-node workgroup tile. One call into the contribution code serves both
+    modes; two entry points differed in 5 of 1370 words under fast math.
+    `node.matter_to_particles` feeds the surface's `node.sort_particles_into_cells`, boxed
+    by `node.matter_domain`'s block bins. `matter_block_p2g_bit_identical` passes with
+    points in and out of their sorted blocks. Owed: the sort needs a gate on the tick
+    start (it runs every substep today) and must run with `sorted` unwired (asked of the
+    surface worker through the lead); the Live Matter group and presets wait for that.
+  - L2 built and measured slower, reverted: G2P at 524k points went from 7.6 ms per frame
+    (codegen) to 11.5 ms (hand kernel, per point) and 14.8 ms (tiled), bound by point
+    traffic.
+  - L3 not built: its acceptance needs every P1 gate green, and A2, A4, A6 and the still
+    pool fail today; it would also change `MatterPoint` across every atom. L4 holds
+    (`matter_substeps_follow_stiffness_live`). L5: `graph-tool fusion` finds no fusable
+    neighbours in the matter graph.
+  - Probe, M4 Max, 64³, ms per frame at 524,288 points (sort ungated; gated it costs
+    about a 34th of the shown sort time):
+
+    | Stiffness | n | P2G path | Clear | Sort | P2G | Grid | G2P | Stats | Production | ns/point-substep |
+    |---|---|---|---|---|---|---|---|---|---|---|
+    | 1 | 34 | per point | 1.40 | 0 | 47.18 | 1.00 | 7.88 | 0.55 | 57.13 | 3.09 |
+    | 1 | 34 | block | 1.64 | 13.22 | 19.57 | 1.21 | 8.40 | 0.55 | 42.72 | 1.57 |
+    | 0.5 | 21 | per point | 0.87 | 0 | 29.53 | 0.58 | 4.79 | 0.60 | 35.50 | 3.12 |
+    | 0.5 | 21 | block | 1.02 | 7.76 | 11.90 | 0.69 | 4.71 | 0.54 | 26.19 | 1.51 |
+
+    With the sort gated, Stiffness 1 projects to about 30 ms and 0.5 to about 19 ms. The
+    rest of P2G's cost is workgroup-atomic contention: 256 threads add into one 216-node
+    tile. A candidate beyond D6: sort by stencil base cell and sum each cell's points in
+    registers, one tile add per node per cell (8× fewer atomics at 8 points per cell).
+  - Owed: `tests/gpu_proofs/matter_solver_perf.rs` behind `matter-perf-proofs` (its
+    out-of-tile fraction needs the gated sort).
 
 ### P2a — Colliders
 
