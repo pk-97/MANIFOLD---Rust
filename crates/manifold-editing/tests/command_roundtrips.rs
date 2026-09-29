@@ -1282,9 +1282,7 @@ fn group_effects_undo_roundtrip() {
         project
             .settings
             .master_effect_groups
-            .as_ref()
-            .unwrap()
-            .is_empty()
+            .is_none()
     );
 }
 
@@ -1309,9 +1307,7 @@ fn ungroup_effects_undo_roundtrip() {
         project
             .settings
             .master_effect_groups
-            .as_ref()
-            .unwrap()
-            .is_empty()
+            .is_none()
     );
 
     cmd.undo(&mut project);
