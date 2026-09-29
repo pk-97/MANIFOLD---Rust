@@ -144,6 +144,56 @@ impl RetireMark {
     }
 }
 
+impl RetireMark {
+    /// Read-only view of this mark's frame-completion clock.
+    pub fn frame_clock(&self) -> FrameClock {
+        FrameClock::new(&self.event)
+    }
+}
+
+/// Read-only view of the content frame-completion clock: the same event the
+/// retirement mark stamps drops with and the texture pool recycles by. A
+/// CPU-written GPU-read ring stamps a slot with [`Self::stamp`] when a frame
+/// reads it and reuses the slot once [`Self::is_complete`] says that frame
+/// retired. Stamp 0 means never read and is always complete.
+pub struct FrameClock {
+    event: GpuEvent,
+}
+
+impl Clone for FrameClock {
+    fn clone(&self) -> Self {
+        Self { event: self.event.second_handle() }
+    }
+}
+
+impl FrameClock {
+    /// Observe `event` without owning the encoder's handle.
+    pub fn new(event: &GpuEvent) -> Self {
+        Self { event: event.second_handle() }
+    }
+
+    /// The signal value the frame now being encoded will reach at commit.
+    pub fn stamp(&self) -> u64 {
+        self.event.current_value().saturating_add(1)
+    }
+
+    /// Whether every GPU read stamped `stamp` has retired. Non-blocking.
+    pub fn is_complete(&self, stamp: u64) -> bool {
+        stamp == 0 || self.event.signaled_value() >= stamp
+    }
+
+    /// Offline paths only: block until `stamp` retires, up to five seconds.
+    /// Live callers check [`Self::is_complete`] and skip instead. `stamp` must
+    /// come from an earlier, committed frame; a stamp past the last commit
+    /// never signals, so it is clamped to that commit.
+    pub fn wait(&self, stamp: u64) -> bool {
+        stamp == 0
+            || self
+                .event
+                .wait_until_done_timeout(stamp.min(self.event.current_value()), 5000)
+    }
+}
+
 /// Receiver half. Lives on the content thread (inside `ContentPipeline`);
 /// drained once per frame, flushed at teardown.
 pub struct RetireQueue {

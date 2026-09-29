@@ -19,6 +19,8 @@ mod frame;
 pub use frame::FluidFrame;
 mod surface;
 pub use surface::SurfaceFrame;
+mod particles;
+pub use particles::{CaptureError, ParticleFrameInfo, ParticleRecord};
 mod coupling;
 pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidReaction};
 

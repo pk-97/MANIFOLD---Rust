@@ -42,7 +42,7 @@ pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;
 pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind};
 pub use residency::{GpuResidencyManager, GpuResidencyStats};
-pub use retire::{RetireMark, RetireQueue, RetireSender};
+pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 pub use surface::{GpuDrawable, GpuSurface};
 pub use texture_pool::TexturePool;
 pub use types::{
