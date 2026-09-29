@@ -93,6 +93,13 @@ impl FluidRuntime {
                 .ok_or("Water: rigid impulses require a connected rigid world")?
                 .validate_impulse_targets(targets)?;
         }
+        // Pause and Simulation Speed 0 discard incoming events, so resume never
+        // bursts (WATER_SIMULATION_DESIGN.md "Transport pause / water speed
+        // zero"). Admission succeeds so the producer rearms; no receipt will
+        // ever name the returned tick.
+        if self.held {
+            return Ok(self.impulses.next_tick());
+        }
         // Includes the worker-owned batch and undrained delivery receipts.
         // Neither a busy worker nor a slow recorder can grow memory silently.
         if self.impulse_outstanding == IMPULSE_CAPACITY {

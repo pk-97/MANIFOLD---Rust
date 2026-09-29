@@ -2034,7 +2034,8 @@ mod tests {
 
     /// WATER_SIMULATION_DESIGN.md "Transport pause / water speed zero": a held
     /// target publishes nothing new, even with preview time debt and a batch
-    /// in flight; moving again resumes from the held tick without a jump.
+    /// in flight, and discards impulses; moving again resumes from the held
+    /// tick without a jump.
     #[test]
     fn fluid_held_transport_freezes_live_water_with_time_debt() {
         let settings = FluidSettings::default();
@@ -2065,17 +2066,36 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         };
+        // Held water discards incoming events instead of bursting on resume.
+        let strike = |runtime: &mut FluidRuntime, transport: f64, sequence: u64| {
+            let stamp = runtime.impulse_stamp(Seconds(transport), sequence).unwrap();
+            let field = manifold_physics::FieldValue::uniform([4.0, 0.0, 0.0]).unwrap();
+            runtime.enqueue_impulse(stamp, field).unwrap();
+        };
         hold(&mut runtime, 1.0, 1.0);
         assert!(before == held(&runtime), "paused water moved");
+        strike(&mut runtime, 1.0, 0);
         // Simulation Speed 0 holds while the transport keeps running.
         hold(&mut runtime, 2.0, 0.0);
         assert!(before == held(&runtime), "speed-zero water moved");
         assert!((runtime.target_time - 1.0).abs() < 1e-9, "held time adds no debt");
+        strike(&mut runtime, 2.0, 1);
+        assert_eq!(runtime.impulse_outstanding, 0, "held impulses are discarded");
 
         runtime
             .observe(settings, controls, Seconds(2.0 + TICK), 1.0, 0.0)
             .unwrap();
-        runtime.advance(false).unwrap();
+        // The in-flight batch may still be running under load; wait for its
+        // reply rather than assuming the hold outlasted it.
+        let started = std::time::Instant::now();
+        while runtime.completed_tick == before.1 {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(120),
+                "in-flight batch never replied"
+            );
+            runtime.advance(false).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert_eq!(
             runtime.completed_tick,
             before.1 + BATCH as u64,
@@ -2083,6 +2103,7 @@ mod tests {
         );
         runtime.advance(true).unwrap();
         assert_eq!(runtime.completed_tick, simulation_tick(1.0 + TICK), "debt is retained");
+        assert_eq!(runtime.drain_applied_impulses().count(), 0, "no discarded impulse ran");
     }
 
     #[test]
