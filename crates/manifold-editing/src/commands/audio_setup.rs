@@ -313,7 +313,8 @@ impl Command for SetAudioSendAnalysisCommand {
 /// additively: the target send keeps its capture flag and other layers, so a
 /// default send becomes a capture+layer mix. Layer-centric because that's how the
 /// layer header edits routing ("this layer → which send"). Undo restores the
-/// layer to its prior send.
+/// layer to its prior send. A missing destination rejects the edit without
+/// changing the current routing or recording an undo step.
 #[derive(Debug)]
 pub struct SetLayerAudioSendCommand {
     layer: LayerId,
@@ -321,17 +322,34 @@ pub struct SetLayerAudioSendCommand {
     /// The send this layer fed before (captured on first execute), for undo.
     old_send: Option<AudioSendId>,
     captured: bool,
+    applied: bool,
+    rejection: Option<&'static str>,
 }
 
 impl SetLayerAudioSendCommand {
     pub fn new(layer: LayerId, new_send: Option<AudioSendId>) -> Self {
-        Self { layer, new_send, old_send: None, captured: false }
+        Self {
+            layer,
+            new_send,
+            old_send: None,
+            captured: false,
+            applied: false,
+            rejection: None,
+        }
     }
 }
 
 impl Command for SetLayerAudioSendCommand {
     fn execute(&mut self, project: &mut Project) {
+        self.applied = false;
+        self.rejection = None;
         let setup = &mut project.audio_setup;
+        if let Some(send) = &self.new_send
+            && setup.find_send(send).is_none()
+        {
+            self.rejection = Some("The selected audio send no longer exists.");
+            return;
+        }
         if !self.captured {
             self.old_send = setup.send_for_layer(&self.layer).map(|s| s.id.clone());
             self.captured = true;
@@ -339,13 +357,20 @@ impl Command for SetLayerAudioSendCommand {
         match &self.new_send {
             // bind_send_to_layer already detaches the layer from any other send.
             Some(send) => {
-                setup.bind_send_to_layer(send, self.layer.clone());
+                if !setup.bind_send_to_layer(send, self.layer.clone()) {
+                    self.rejection = Some("The selected audio send no longer exists.");
+                    return;
+                }
             }
             None => setup.unbind_layer(&self.layer),
         }
+        self.applied = true;
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if !self.applied {
+            return;
+        }
         let setup = &mut project.audio_setup;
         match &self.old_send {
             Some(send) => {
@@ -353,10 +378,19 @@ impl Command for SetLayerAudioSendCommand {
             }
             None => setup.unbind_layer(&self.layer),
         }
+        self.applied = false;
     }
 
     fn description(&self) -> &str {
         "Set Layer Audio Send"
+    }
+
+    fn rejection_reason(&self) -> Option<&str> {
+        self.rejection
+    }
+
+    fn was_applied(&self) -> bool {
+        self.applied
     }
 }
 
@@ -459,6 +493,159 @@ mod tests {
         assert!(project.audio_setup.send_for_layer(&layer).is_none());
     }
 
+    #[test]
+    fn missing_send_rejects_without_capturing_or_mutating() {
+        use manifold_core::id::LayerId;
+        let mut project = Project::default();
+        let send = AudioSend::new("A");
+        let send_id = send.id.clone();
+        let missing = AudioSendId::new("missing");
+        let layer = LayerId::new("L1");
+        project.audio_setup.sends.push(send);
+        project.audio_setup.bind_send_to_layer(&send_id, layer.clone());
+        let before = project.audio_setup.clone();
+
+        let mut command = SetLayerAudioSendCommand::new(layer.clone(), Some(missing));
+        command.execute(&mut project);
+        assert_eq!(project.audio_setup, before);
+        assert!(!command.was_applied());
+        assert!(command.rejection_reason().is_some());
+
+        command.undo(&mut project);
+        assert_eq!(project.audio_setup, before);
+    }
+
+    #[test]
+    fn failed_route_redo_can_retry_after_destination_returns() {
+        use crate::service::EditingService;
+        let mut project = Project::default();
+        let a = AudioSend::new("A");
+        let b = AudioSend::new("B");
+        let a_id = a.id.clone();
+        let b_id = b.id.clone();
+        let layer = LayerId::new("L1");
+        project.audio_setup.sends = vec![a, b];
+        project.audio_setup.bind_send_to_layer(&a_id, layer.clone());
+        let mut editing = EditingService::new();
+        editing.execute(
+            Box::new(SetLayerAudioSendCommand::new(layer.clone(), Some(b_id.clone()))),
+            &mut project,
+        );
+        assert!(editing.undo(&mut project));
+        let removed = project.audio_setup.sends.pop().unwrap();
+        let before = project.audio_setup.clone();
+        let version = editing.data_version();
+
+        assert!(!editing.redo(&mut project));
+        assert_eq!(project.audio_setup, before);
+        assert_eq!(editing.data_version(), version);
+        assert!(editing.take_rejection().is_some());
+        assert!(!editing.can_undo());
+        assert!(editing.can_redo());
+
+        project.audio_setup.sends.push(removed);
+        for _ in 0..2 {
+            assert!(editing.redo(&mut project));
+            assert!(editing.take_rejection().is_none());
+            assert_eq!(project.audio_setup.send_for_layer(&layer).unwrap().id, b_id);
+            assert!(editing.undo(&mut project));
+            assert_eq!(project.audio_setup.send_for_layer(&layer).unwrap().id, a_id);
+        }
+    }
+
+    #[test]
+    fn rejected_route_preserves_editing_version_and_both_history_stacks() {
+        use crate::service::EditingService;
+        let mut project = Project::default();
+        let send = AudioSend::new("A");
+        let send_id = send.id.clone();
+        let layer = LayerId::new("L1");
+        project.audio_setup.sends.push(send);
+        project.audio_setup.bind_send_to_layer(&send_id, layer.clone());
+        let mut editing = EditingService::new();
+        editing.execute(
+            Box::new(RenameAudioSendCommand::new(send_id.clone(), "A".into(), "Renamed".into())),
+            &mut project,
+        );
+        editing.execute(
+            Box::new(SetAudioSendGainCommand::new(send_id.clone(), 0.0, 6.0)),
+            &mut project,
+        );
+        assert!(editing.undo(&mut project));
+        let before = project.audio_setup.clone();
+        let version = editing.data_version();
+
+        editing.execute(
+            Box::new(SetLayerAudioSendCommand::new(layer, Some(AudioSendId::new("missing")))),
+            &mut project,
+        );
+        assert_eq!(project.audio_setup, before);
+        assert_eq!(editing.data_version(), version);
+        assert!(editing.take_rejection().is_some());
+        assert_eq!(editing.peek_undo_description(), Some("Rename Audio Send"));
+        assert_eq!(editing.peek_redo_description(), Some("Set Audio Send Gain"));
+        assert!(editing.redo(&mut project));
+        assert_eq!(project.audio_setup.find_send(&send_id).unwrap().gain_db, 6.0);
+        assert!(editing.undo(&mut project));
+        assert!(editing.undo(&mut project));
+        assert!(!editing.can_undo());
+        assert_eq!(project.audio_setup.find_send(&send_id).unwrap().label, "A");
+    }
+
+    #[test]
+    fn routing_supports_snapshot_execution_and_recorded_unbind() {
+        use crate::service::EditingService;
+        let mut project = Project::default();
+        let a = AudioSend::new("A");
+        let b = AudioSend::new("B");
+        let a_id = a.id.clone();
+        let b_id = b.id.clone();
+        let layer = LayerId::new("L1");
+        project.audio_setup.sends = vec![a, b];
+        project.audio_setup.bind_send_to_layer(&a_id, layer.clone());
+        let mut snapshot = project.clone();
+        let mut command = SetLayerAudioSendCommand::new(layer.clone(), Some(b_id.clone()));
+        command.execute(&mut snapshot);
+        let mut editing = EditingService::new();
+        editing.execute(Box::new(command), &mut project);
+        assert_eq!(project.audio_setup, snapshot.audio_setup);
+        assert!(editing.undo(&mut project));
+        assert_eq!(project.audio_setup.send_for_layer(&layer).unwrap().id, a_id);
+        assert!(editing.redo(&mut project));
+        assert_eq!(project.audio_setup.send_for_layer(&layer).unwrap().id, b_id);
+
+        let mut unbind = SetLayerAudioSendCommand::new(layer.clone(), None);
+        unbind.execute(&mut project);
+        editing.record(Box::new(unbind));
+        assert!(project.audio_setup.send_for_layer(&layer).is_none());
+        assert!(editing.undo(&mut project));
+        assert_eq!(project.audio_setup.send_for_layer(&layer).unwrap().id, b_id);
+        assert!(editing.redo(&mut project));
+        assert!(project.audio_setup.send_for_layer(&layer).is_none());
+    }
+
+    #[test]
+    fn composite_missing_route_rolls_back_prior_route() {
+        use crate::command::{Command, CompositeCommand};
+        use manifold_core::id::LayerId;
+        let mut project = Project::default();
+        let send = AudioSend::new("A");
+        let send_id = send.id.clone();
+        let layer = LayerId::new("L1");
+        project.audio_setup.sends.push(send);
+        let first = SetLayerAudioSendCommand::new(layer.clone(), Some(send_id));
+        let second =
+            SetLayerAudioSendCommand::new(layer.clone(), Some(AudioSendId::new("missing")));
+        let mut composite = CompositeCommand::new(
+            vec![Box::new(first), Box::new(second)],
+            "Route layer".into(),
+        );
+
+        composite.execute(&mut project);
+        assert!(project.audio_setup.send_for_layer(&layer).is_none());
+        assert!(!composite.was_applied());
+        assert!(composite.rejection_reason().is_some());
+    }
 
     // `triggers_round_trip` (the deleted matrix-editing command's test) is
     // deleted with the command (P3, D2). Clip-trigger round-trip coverage

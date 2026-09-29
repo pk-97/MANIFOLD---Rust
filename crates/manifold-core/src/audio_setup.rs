@@ -434,8 +434,12 @@ impl AudioSetup {
     /// Route `layer` to feed `send`, removing it from any other send first (one
     /// layer → one send). Additive: the send's existing capture flag and other
     /// layers are kept — so a default send becomes capture+layer (a live mix).
-    /// Returns `true` if a matching send existed and was (re)routed.
+    /// Returns `true` if a matching send existed and was (re)routed. A missing
+    /// destination returns `false` without changing any existing routes.
     pub fn bind_send_to_layer(&mut self, send: &AudioSendId, layer: LayerId) -> bool {
+        if self.find_send(send).is_none() {
+            return false;
+        }
         for s in &mut self.sends {
             if &s.id != send {
                 s.source.layers.retain(|l| l != &layer);
@@ -713,6 +717,23 @@ mod tests {
         // Unbinding the layer detaches B too.
         setup.unbind_layer(&layer);
         assert!(setup.send_for_layer(&layer).is_none());
+    }
+
+    #[test]
+    fn bind_send_to_missing_preserves_existing_routes() {
+        use crate::id::LayerId;
+        let mut setup = AudioSetup {
+            sends: vec![AudioSend::new("A"), AudioSend::new("B")],
+            ..Default::default()
+        };
+        let existing = setup.sends[0].id.clone();
+        let missing = AudioSendId::new("missing");
+        let layer = LayerId::new("L1");
+        setup.bind_send_to_layer(&existing, layer.clone());
+        let before = setup.clone();
+
+        assert!(!setup.bind_send_to_layer(&missing, layer));
+        assert_eq!(setup, before);
     }
 
     #[test]
