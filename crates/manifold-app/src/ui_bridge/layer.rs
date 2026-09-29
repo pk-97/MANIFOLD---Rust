@@ -319,7 +319,6 @@ pub(super) fn dispatch_layer(
         }
         LayerAction::NewClipClicked(id) => {
             let beat = content_state.current_beat;
-            let spb = 60.0 / project.settings.bpm.0.max(1.0);
             // create_clip_at_position takes a positional index; resolve the
             // stable id to its current row against the live model.
             if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
@@ -328,7 +327,6 @@ pub(super) fn dispatch_layer(
                     beat,
                     layer_idx,
                     Beats(4.0),
-                    spb,
                 )
             {
                 ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
@@ -337,14 +335,12 @@ pub(super) fn dispatch_layer(
         }
         LayerAction::AddGenClipClicked(id) => {
             let beat = content_state.current_beat;
-            let spb = 60.0 / project.settings.bpm.0.max(1.0);
             if let Some((layer_idx, _)) = project.timeline.find_layer_by_id(id)
                 && let Some((cmd, _)) = EditingService::create_clip_at_position(
                     project,
                     beat,
                     layer_idx,
                     Beats(4.0),
-                    spb,
                 )
             {
                 ContentCommand::send(content_tx, ContentCommand::Execute(cmd));

@@ -329,7 +329,11 @@ impl Command for CaptureRangeToSceneCommand {
         self.created_scene_id = None;
         self.touched_slots.clear();
 
-        let spb = project.settings.seconds_per_beat();
+        let clock = manifold_core::tempo::SourceClock::new(
+            &project.tempo_map,
+            project.settings.bpm,
+            project.recording_provenance.project_bpm(),
+        );
         let region = SelectionRegion {
             start_beat: self.start_beat,
             end_beat: self.end_beat,
@@ -369,7 +373,7 @@ impl Command for CaptureRangeToSceneCommand {
                     // Reuse the existing region-trim math verbatim (head/tail
                     // clamp + in_point advance for video clips) — see
                     // `EditingService::trim_clip_to_region`.
-                    let mut trimmed = EditingService::trim_clip_to_region(c, &region, spb);
+                    let mut trimmed = EditingService::trim_clip_to_region(c, &region, &clock);
                     // Rebase from timeline-absolute to sequence-relative.
                     trimmed.start_beat -= self.start_beat;
                     trimmed
@@ -472,7 +476,11 @@ impl PasteSlotToTimelineCommand {
 impl Command for PasteSlotToTimelineCommand {
     fn execute(&mut self, project: &mut Project) {
         self.pasted.clear();
-        let spb = project.settings.seconds_per_beat();
+        let clock = manifold_core::tempo::SourceClock::new(
+            &project.tempo_map,
+            project.settings.bpm,
+            project.recording_provenance.project_bpm(),
+        );
 
         let sequence_clips: Vec<TimelineClip> =
             match project.session.get_slot(&self.layer_id, &self.scene_id) {
@@ -492,7 +500,7 @@ impl Command for PasteSlotToTimelineCommand {
             let new_id = new_clip.id.clone();
 
             if let Some(layer) = project.timeline.layers.get_mut(li) {
-                let actions = layer.add_clip(new_clip, &std::collections::HashSet::new(), spb);
+                let actions = layer.add_clip(new_clip, &std::collections::HashSet::new(), &clock);
                 self.pasted.push((new_id, actions));
             }
         }

@@ -224,6 +224,19 @@ impl TimelineClip {
         }
     }
 
+    /// The tempo playback warps this clip's media to, 0 = unwarped. Clips
+    /// without their own recorded tempo fall back to the project's recorded
+    /// tempo, a legacy path for live recordings made before each clip was
+    /// stamped. Audio never falls back: its 0 means "Auto, no warp".
+    /// `project_recorded_bpm` is `RecordingProvenance::project_bpm()`.
+    pub fn resolve_recorded_bpm(&self, project_recorded_bpm: Option<crate::units::Bpm>) -> f32 {
+        let own = self.recorded_bpm_resolved();
+        match project_recorded_bpm {
+            Some(bpm) if own <= 0.0 && !self.is_audio() => bpm.0.clamp(20.0, 300.0),
+            _ => own,
+        }
+    }
+
     /// Warp ratio for this clip at `project_bpm` (Audio Layer section 4.1): how much
     /// faster than 1× the source must play to lock the clip's recorded tempo to
     /// the project. `project_bpm / recorded_bpm`, or **1.0 when the clip has no

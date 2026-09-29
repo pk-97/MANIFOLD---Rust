@@ -7,7 +7,7 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::LayerType;
-use manifold_core::{Beats, ClipId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, LayerId};
 use std::collections::{HashMap, HashSet};
 
 /// Host trait for EditingService — replaces C#'s UIState/CoordinateMapper/PlaybackController.
@@ -27,12 +27,9 @@ struct ClipboardEntry {
     source_clip: TimelineClip,
     beat_offset: Beats,
     layer_offset: i32,
-    is_generator: bool,
-    /// D9 (docs/TIMELINE_INGEST_DESIGN.md section 2): the clip's source layer was
-    /// `Audio` at copy time. Symmetric with `is_generator` — `paste_clips`
-    /// skips an audio clip pasted onto a non-audio layer the same way it
-    /// skips a generator/video mismatch.
-    is_audio: bool,
+    /// The clip's layer type at copy time; paste admits the clip only onto a
+    /// layer that `accepts_clips_from` it.
+    source_layer_type: LayerType,
 }
 
 /// Result of a paste operation.
@@ -286,13 +283,11 @@ impl EditingService {
 
     /// Enforce non-overlapping clips on a layer.
     /// Returns commands that fix overlaps caused by `placed_clip`.
-    /// `spb` = seconds per beat (60.0 / bpm).
     pub fn enforce_non_overlap(
         project: &Project,
         placed_clip: &TimelineClip,
         layer_index: usize,
         ignore_ids: &HashSet<ClipId>,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
         let layer = match project.timeline.layers.get(layer_index) {
@@ -328,7 +323,7 @@ impl EditingService {
             // Case 2: placed clip covers the start -> trim start of existing
             if placed_start <= clip_start && placed_end < clip_end {
                 let trim_beats = placed_end - clip_start;
-                let trim_seconds = Seconds(trim_beats.0 * spb as f64);
+                let trim_seconds = project.source_clock().source_seconds(clip, clip_start, placed_end);
                 let new_in_point = clip.in_point + trim_seconds;
                 let new_start = placed_end;
                 let new_duration = clip.duration_beats - trim_beats;
@@ -366,8 +361,8 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;
                 tail.duration_beats = clip_end - placed_end;
-                let beats_elapsed = placed_end - clip_start;
-                tail.in_point = clip.in_point + Seconds(beats_elapsed.0 * spb as f64);
+                tail.in_point =
+                    clip.in_point + project.source_clock().source_seconds(clip, clip_start, placed_end);
 
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
@@ -381,7 +376,6 @@ impl EditingService {
                 commands.push(Box::new(AddClipCommand::new_with_ignore_ids(
                     tail,
                     layer.layer_id.clone(),
-                    spb,
                     ignore_ids.clone(),
                 )));
             }
@@ -402,7 +396,6 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
-        spb: f32,
     ) {
         self.clipboard.clear();
 
@@ -437,16 +430,12 @@ impl EditingService {
                 .unwrap_or((0, 0));
 
             for (clip, clip_layer_idx) in overlapping {
-                let trimmed = Self::trim_clip_to_region(clip, region, spb);
-                let source_layer = project.timeline.layers.get(clip_layer_idx);
-                let is_gen = source_layer.is_some_and(|l| l.layer_type == LayerType::Generator);
-                let is_audio = source_layer.is_some_and(|l| l.layer_type == LayerType::Audio);
+                let trimmed = Self::trim_clip_to_region(clip, region, &project.source_clock());
                 self.clipboard.push(ClipboardEntry {
                     beat_offset: trimmed.start_beat - origin_beat,
                     layer_offset: clip_layer_idx as i32 - min_layer as i32,
                     source_clip: trimmed,
-                    is_generator: is_gen,
-                    is_audio,
+                    source_layer_type: project.timeline.layers[clip_layer_idx].layer_type,
                 });
             }
             return;
@@ -481,15 +470,11 @@ impl EditingService {
             .unwrap_or(0);
 
         for (clip, li) in clips_with_layer {
-            let source_layer = project.timeline.layers.get(li);
-            let is_gen = source_layer.is_some_and(|l| l.layer_type == LayerType::Generator);
-            let is_audio = source_layer.is_some_and(|l| l.layer_type == LayerType::Audio);
             self.clipboard.push(ClipboardEntry {
                 beat_offset: clip.start_beat - min_beat,
                 layer_offset: li as i32 - min_layer_idx,
                 source_clip: clip,
-                is_generator: is_gen,
-                is_audio,
+                source_layer_type: project.timeline.layers[li].layer_type,
             });
         }
     }
@@ -502,7 +487,6 @@ impl EditingService {
         project: &mut Project,
         target_beat: Beats,
         target_layer: i32,
-        spb: f32,
     ) -> PasteResult {
         let mut pasted_ids = Vec::new();
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -523,19 +507,9 @@ impl EditingService {
                 }
             };
 
-            let clip_is_gen = entry.is_generator;
-            let layer_is_gen = layer.layer_type == LayerType::Generator;
-
-            // Gen<->video mismatch: skip
-            if clip_is_gen != layer_is_gen {
-                skipped += 1;
-                continue;
-            }
-
-            // D9: audio clip onto a non-audio layer: skip. Symmetric with
-            // the gen/video guard above — `paste_clips` never creates a
-            // typed lane to make an entry fit.
-            if entry.is_audio && layer.layer_type != LayerType::Audio {
+            // Never creates a typed lane to make an entry fit (D9,
+            // docs/TIMELINE_INGEST_DESIGN.md section 2).
+            if !layer.layer_type.accepts_clips_from(entry.source_layer_type) {
                 skipped += 1;
                 continue;
             }
@@ -546,14 +520,17 @@ impl EditingService {
             let paste_layer_id = layer.layer_id.clone();
             pasted_ids.push(new_clip.id.clone());
             // AddClipCommand enforces non-overlap internally.
-            commands.push(Box::new(AddClipCommand::new(new_clip, paste_layer_id, spb)));
+            commands.push(Box::new(AddClipCommand::new(new_clip, paste_layer_id)));
         }
 
         PasteResult {
             pasted_clip_ids: pasted_ids,
             skipped_count: skipped,
             skip_reason: if skipped > 0 {
-                Some("generator/video type mismatch".to_string())
+                Some(format!(
+                    "{skipped} clip{} skipped: target layer holds a different clip type",
+                    if skipped == 1 { "" } else { "s" }
+                ))
             } else {
                 None
             },
@@ -569,12 +546,10 @@ impl EditingService {
     // ─── Region helpers ───
 
     /// Split a clip at a given beat, returning the command (if split point is valid).
-    /// `spb` = seconds per beat (60.0 / bpm).
     pub fn split_clip_at_beat(
         project: &Project,
         clip_id: &str,
         split_beat: Beats,
-        spb: f32,
     ) -> Option<SplitClipCommand> {
         for layer in &project.timeline.layers {
             if let Some(clip) = layer.find_clip(clip_id) {
@@ -590,7 +565,8 @@ impl EditingService {
                 tail.start_beat = tail_start;
                 tail.duration_beats = tail_duration;
                 if clip.is_source_media() && clip.duration_beats > Beats::ZERO {
-                    tail.in_point = clip.in_point + Seconds(new_duration.0 * spb as f64);
+                    tail.in_point = clip.in_point
+                        + project.source_clock().source_seconds(clip, clip.start_beat, split_beat);
                 }
                 return Some(SplitClipCommand::new(
                     clip.id.clone(),
@@ -610,9 +586,8 @@ impl EditingService {
     pub fn split_clips_at_region_boundaries(
         project: &Project,
         region: &SelectionRegion,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
-        Self::split_clips_at_region_boundaries_with_interior(project, region, spb).0
+        Self::split_clips_at_region_boundaries_with_interior(project, region).0
     }
 
     /// Split clips at region boundaries AND return the post-split interior clip IDs.
@@ -627,7 +602,6 @@ impl EditingService {
     pub fn split_clips_at_region_boundaries_with_interior(
         project: &Project,
         region: &SelectionRegion,
-        spb: f32,
     ) -> (Vec<Box<dyn Command>>, Vec<(usize, ClipId)>) {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
         let mut interior_ids: Vec<(usize, ClipId)> = Vec::new();
@@ -670,14 +644,14 @@ impl EditingService {
                 // Split at region end FIRST (so the original's EndBeat is still valid
                 // when we split at region start)
                 if straddles_end
-                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end, spb)
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end)
                 {
                     commands.push(Box::new(cmd));
                 }
 
                 // Split at region start
                 let start_split_tail_id = if straddles_start
-                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_start, spb)
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_start)
                 {
                     // The tail from this split IS the interior piece
                     let tail_id = cmd.tail_clip_id().clone();
@@ -707,7 +681,7 @@ impl EditingService {
     pub fn trim_clip_to_region(
         clip: &TimelineClip,
         region: &SelectionRegion,
-        spb: f32,
+        clock: &manifold_core::tempo::SourceClock<'_>,
     ) -> TimelineClip {
         let region_start = region.start_beat;
         let region_end = region.end_beat;
@@ -723,7 +697,7 @@ impl EditingService {
         // Adjust in_point for source-media clips (video/audio)
         if clip.is_source_media() {
             trimmed.in_point =
-                clip.in_point + Seconds((new_start - clip.start_beat).0 * spb as f64);
+                clip.in_point + clock.source_seconds(clip, clip.start_beat, new_start);
         }
 
         trimmed
@@ -739,13 +713,12 @@ impl EditingService {
         beat: Beats,
         layer_index: usize,
         duration_beats: Beats,
-        spb: f32,
     ) -> Option<(Box<dyn Command>, ClipId)> {
         let layer = project.timeline.layers.get(layer_index)?;
         if layer.is_group() {
             return None;
         }
-        let is_generator = layer.layer_type == LayerType::Generator;
+        let is_generator = layer.hosts_generator();
         let layer_id = layer.layer_id.clone();
 
         let clip = if is_generator {
@@ -759,7 +732,7 @@ impl EditingService {
         };
 
         let clip_id = clip.id.clone();
-        Some((Box::new(AddClipCommand::new(clip, layer_id, spb)), clip_id))
+        Some((Box::new(AddClipCommand::new(clip, layer_id)), clip_id))
     }
 
     // ─── Duplicate ───
@@ -772,7 +745,6 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         region: &SelectionRegion,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
@@ -795,7 +767,7 @@ impl EditingService {
                     if clip.end_beat() <= region_start || clip.start_beat >= region_end {
                         continue;
                     }
-                    let trimmed = Self::trim_clip_to_region(clip, region, spb);
+                    let trimmed = Self::trim_clip_to_region(clip, region, &project.source_clock());
                     let mut new_clip = trimmed;
                     new_clip.start_beat += offset;
 
@@ -803,7 +775,6 @@ impl EditingService {
                     commands.push(Box::new(AddClipCommand::new(
                         new_clip,
                         layer.layer_id.clone(),
-                        spb,
                     )));
                 }
             }
@@ -835,7 +806,6 @@ impl EditingService {
                         commands.push(Box::new(AddClipCommand::new(
                             new_clip,
                             layer.layer_id.clone(),
-                            spb,
                         )));
                     }
                 }
@@ -855,7 +825,6 @@ impl EditingService {
         src_clip_id: &ClipId,
         target_beat: Beats,
         target_layer: usize,
-        spb: f32,
     ) -> Option<Box<dyn Command>> {
         let src = project
             .timeline
@@ -866,7 +835,7 @@ impl EditingService {
         let target_layer_id = project.timeline.layers.get(target_layer)?.layer_id.clone();
         let mut new_clip = src.clone_with_new_id();
         new_clip.start_beat = target_beat;
-        Some(Box::new(AddClipCommand::new(new_clip, target_layer_id, spb)))
+        Some(Box::new(AddClipCommand::new(new_clip, target_layer_id)))
     }
 
     // ─── Delete ───
@@ -878,7 +847,6 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
@@ -890,7 +858,7 @@ impl EditingService {
             // the pre-split project), because splits change which ID maps to
             // which segment.
             let (split_cmds, interior_ids) =
-                Self::split_clips_at_region_boundaries_with_interior(project, region, spb);
+                Self::split_clips_at_region_boundaries_with_interior(project, region);
             commands.extend(split_cmds);
 
             // Build delete commands for the interior clips.
@@ -928,8 +896,8 @@ impl EditingService {
                         interior_clip.start_beat = region_start;
                         interior_clip.duration_beats = tail_end - region_start;
                         if orig.is_source_media() && orig.duration_beats > Beats::ZERO {
-                            let offset = region_start - orig.start_beat;
-                            interior_clip.in_point = orig.in_point + Seconds(offset.0 * spb as f64);
+                            interior_clip.in_point = orig.in_point
+                                + project.source_clock().source_seconds(orig, orig.start_beat, region_start);
                         }
                         commands.push(Box::new(DeleteClipCommand::new(interior_clip, lid)));
                     }
@@ -963,7 +931,6 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         beat_delta: Beats,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
         let mut nudged_ids: HashSet<ClipId> = HashSet::new();
@@ -1017,7 +984,6 @@ impl EditingService {
                 &nudged.clip,
                 nudged.layer_index,
                 &nudged_ids,
-                spb,
             );
             commands.extend(overlap_cmds);
         }
@@ -1177,7 +1143,6 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         layer_delta: i32,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         if layer_delta == 0 || clip_ids.is_empty() {
             return Vec::new();
@@ -1230,7 +1195,7 @@ impl EditingService {
             // is unchanged by a cross-layer move, so `clip` itself is already
             // the correct post-move shape.
             let overlap_cmds =
-                Self::enforce_non_overlap(project, clip, dest as usize, &moved_ids, spb);
+                Self::enforce_non_overlap(project, clip, dest as usize, &moved_ids);
             commands.extend(overlap_cmds);
         }
         commands
@@ -1356,13 +1321,12 @@ impl EditingService {
         project: &mut Project,
         clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
-        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         // Copy to clipboard first
-        self.copy_clips(project, clip_ids, region, spb);
+        self.copy_clips(project, clip_ids, region);
 
         // Delete the clips
-        Self::delete_clips(project, clip_ids, region, spb)
+        Self::delete_clips(project, clip_ids, region)
     }
 
     /// Split clips at region boundaries and return the split commands + interior clip IDs.
@@ -1371,9 +1335,8 @@ impl EditingService {
     pub fn split_clips_for_region_move(
         project: &Project,
         region: &SelectionRegion,
-        spb: f32,
     ) -> (Vec<Box<dyn Command>>, Vec<(usize, ClipId)>) {
-        Self::split_clips_at_region_boundaries_with_interior(project, region, spb)
+        Self::split_clips_at_region_boundaries_with_interior(project, region)
     }
 
     /// Split selected clips at a given beat (playhead).
@@ -1383,7 +1346,6 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         split_beat: Beats,
-        spb: f32,
     ) -> (Vec<Box<dyn Command>>, Vec<ClipId>) {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
         let mut tail_clip_ids: Vec<ClipId> = Vec::new();
@@ -1393,7 +1355,7 @@ impl EditingService {
                 if !clip_ids.contains(&clip.id) {
                     continue;
                 }
-                if let Some(cmd) = Self::split_clip_at_beat(project, &clip.id, split_beat, spb) {
+                if let Some(cmd) = Self::split_clip_at_beat(project, &clip.id, split_beat) {
                     tail_clip_ids.push(cmd.tail_clip_id().clone());
                     commands.push(Box::new(cmd));
                 }
@@ -1448,9 +1410,8 @@ impl EditingService {
         project: &Project,
         clip_ids: &[ClipId],
         region: &SelectionRegion,
-        spb: f32,
     ) -> (Vec<Box<dyn Command>>, Option<SelectionRegion>) {
-        let commands = Self::duplicate_clips(project, clip_ids, region, spb);
+        let commands = Self::duplicate_clips(project, clip_ids, region);
 
         let new_region = if region.is_active && !commands.is_empty() {
             let duration = region.duration_beats();
@@ -1545,6 +1506,7 @@ mod paste_type_guard_tests {
     // video mismatch guard in `paste_clips`.
     use super::*;
     use manifold_core::project::Project;
+    use manifold_core::Seconds;
 
     fn make_project() -> Project {
         let mut project = Project::default();
@@ -1579,10 +1541,10 @@ mod paste_type_guard_tests {
         let id = add_audio_clip(&mut project, 0, 0.0, 4.0);
 
         let mut service = EditingService::new();
-        service.copy_clips(&project, &[id], None, 0.5);
+        service.copy_clips(&project, &[id], None);
         assert!(service.has_clipboard());
 
-        let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
+        let result = service.paste_clips(&mut project, Beats(10.0), 0);
         assert_eq!(result.pasted_clip_ids.len(), 1, "audio-onto-audio pastes");
         assert_eq!(result.skipped_count, 0);
     }
@@ -1593,15 +1555,60 @@ mod paste_type_guard_tests {
         let id = add_audio_clip(&mut project, 0, 0.0, 4.0);
 
         let mut service = EditingService::new();
-        service.copy_clips(&project, &[id], None, 0.5);
+        service.copy_clips(&project, &[id], None);
 
         // Target layer 1 is Video — D9 skips the audio entry rather than
         // pasting it or auto-creating a new audio lane.
-        let result = service.paste_clips(&mut project, Beats(10.0), 1, 0.5);
+        let result = service.paste_clips(&mut project, Beats(10.0), 1);
         assert!(
             result.pasted_clip_ids.is_empty(),
             "audio clip must not land on a video layer"
         );
         assert_eq!(result.skipped_count, 1);
+    }
+
+    #[test]
+    fn paste_video_clip_onto_audio_group_or_dmx_layer_is_skipped() {
+        let mut project = make_project();
+        project
+            .timeline
+            .insert_layer(2, Layer::new("Group".into(), LayerType::Group, 2));
+        project
+            .timeline
+            .insert_layer(3, Layer::new("LED".into(), LayerType::Dmx, 3));
+        let clip = TimelineClip {
+            start_beat: Beats(0.0),
+            duration_beats: Beats(4.0),
+            ..Default::default()
+        };
+        let id = clip.id.clone();
+        project.timeline.layers[1].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let mut service = EditingService::new();
+        service.copy_clips(&project, &[id], None);
+        for target in [0, 2, 3] {
+            let result = service.paste_clips(&mut project, Beats(10.0), target);
+            assert!(result.pasted_clip_ids.is_empty(), "video clip landed on layer {target}");
+            assert_eq!(result.skipped_count, 1);
+            assert!(result.skip_reason.is_some(), "a skip must be reported");
+        }
+    }
+
+    #[test]
+    fn splitting_warped_audio_starts_the_tail_at_the_recorded_tempo() {
+        // Project runs at 120 BPM; the clip was recorded at 100 BPM, so
+        // playback advances its source 0.6 s per beat, not 0.5 s.
+        let mut project = make_project();
+        let id = add_audio_clip(&mut project, 0, 0.0, 8.0);
+        project.timeline.layers[0].clips[0].recorded_bpm = 100.0;
+
+        let cmd = EditingService::split_clip_at_beat(&project, id.as_str(), Beats(4.0))
+            .expect("split inside the clip");
+        let tail_id = cmd.tail_clip_id().clone();
+        let mut cmd = cmd;
+        cmd.execute(&mut project);
+        let tail = project.timeline.find_clip_by_id(tail_id.as_str()).unwrap();
+        assert!((tail.in_point.0 - 2.4).abs() < 1e-6, "tail in_point {}", tail.in_point.0);
     }
 }

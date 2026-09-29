@@ -71,6 +71,11 @@ pub struct RecordingProvenance {
 }
 
 impl RecordingProvenance {
+    /// The project tempo when live recording started, if one was captured.
+    pub fn project_bpm(&self) -> Option<Bpm> {
+        self.has_recorded_project_bpm.then_some(self.recorded_project_bpm)
+    }
+
     /// Post-deserialization validation.
     /// Unity RecordingProvenance.cs EnsureValid lines 142-166.
     pub fn ensure_valid(&mut self) {

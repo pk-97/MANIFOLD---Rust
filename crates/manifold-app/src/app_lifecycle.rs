@@ -85,7 +85,7 @@ fn build_video_import_batch(
         );
 
         commands.push(ContentCommand::Execute(Box::new(
-            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone(), spb),
+            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone()),
         )));
 
         log::warn!(
@@ -637,7 +637,6 @@ impl Application {
             }
         };
 
-        let spb = 60.0 / self.local_project.settings.bpm.0;
         let path_str = path.to_string_lossy().to_string();
         let file_name = path
             .file_name()
@@ -651,7 +650,7 @@ impl Application {
         log::warn!("[Import] Added image '{file_name}' at beat {drop_beat:.1}");
 
         let cmd = ContentCommand::Execute(Box::new(
-            manifold_editing::commands::clip::AddClipCommand::new(clip, target_layer_id, spb),
+            manifold_editing::commands::clip::AddClipCommand::new(clip, target_layer_id),
         ));
         let _ = content_tx.send(cmd);
     }
@@ -909,13 +908,12 @@ impl Application {
         //    pixels (a generator clip carries no generator of its own). Sent
         //    after the layer on the same ordered channel, so the layer exists
         //    on the content thread before the clip targets it.
-        let spb = 60.0 / self.local_project.settings.bpm.0;
         let clip = manifold_core::clip::TimelineClip::new_generator(
             manifold_core::Beats::from_f32(drop_beat.max(0.0)),
             manifold_core::Beats::from_f32(DEFAULT_MODEL_DURATION_BEATS),
         );
         let mut clip_cmd =
-            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id, spb);
+            manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id);
         clip_cmd.execute(&mut self.local_project);
         let clip_boxed: Box<dyn Command + Send> = Box::new(clip_cmd);
         let _ = content_tx.send(ContentCommand::Execute(clip_boxed));
