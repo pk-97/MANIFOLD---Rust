@@ -25,9 +25,9 @@ struct ToMatterUniforms {
     nodes_z: i32,
     step_dt: f32,
     liveliness: f32,
+    cohesion: f32,
     active_count: i32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 crate::primitive! {
@@ -42,6 +42,7 @@ crate::primitive! {
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         liveliness: ScalarF32 optional,
+        cohesion: ScalarF32 optional,
         active_count: ScalarF32 optional,
     },
     outputs: {
@@ -57,6 +58,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("step_dt"), label: "Substep (s)", ty: ParamType::Float, default: ParamValue::Float(4.9e-4), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
@@ -96,6 +98,7 @@ impl Primitive for GridToMatter {
         let lattice = read_lattice(ctx);
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
+        let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
         // In place: the point buffer is mutated whether or not `points_out`
         // is consumed, so the GPU is touched on every path.
@@ -120,9 +123,9 @@ impl Primitive for GridToMatter {
             nodes_z: lattice.nodes[2] as i32,
             step_dt,
             liveliness,
+            cohesion,
             active_count: active as i32,
             dispatch_count: active,
-            _pad0: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -149,5 +152,14 @@ mod tests {
         assert!(wgsl.contains("var<storage, read> buf_grid: array<Element2>"), "{wgsl}");
         assert!(wgsl.contains("buf_points_out[idx] = body(idx, params.dispatch_count, e_points,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<ToMatterUniforms>(), 48);
+    }
+
+    /// The body inlines D3's J bound; it must equal the shared constant the
+    /// f64 reference uses.
+    #[test]
+    fn grid_to_matter_body_pins_the_j_bound() {
+        let body = include_str!("shaders/grid_to_matter_body.wgsl");
+        assert_eq!(crate::node_graph::matter::COHESIVE_J_MAX, 2.0);
+        assert!(body.contains("select(2.0, 1.0, cohesion <= 0.0)"), "{body}");
     }
 }

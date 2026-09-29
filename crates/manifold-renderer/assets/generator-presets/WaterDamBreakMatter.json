@@ -1393,6 +1393,12 @@
             "toPort": "liveliness"
           },
           {
+            "fromNode": 1,
+            "fromPort": "cohesion",
+            "toNode": 7,
+            "toPort": "cohesion"
+          },
+          {
             "fromNode": 2,
             "fromPort": "points",
             "toNode": 3,

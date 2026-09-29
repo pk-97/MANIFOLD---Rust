@@ -125,6 +125,7 @@ impl MatterScene {
             wire(&mut graph, (domain, port), (stats, port));
         }
         wire(&mut graph, (domain, "liveliness"), (g2p, "liveliness"));
+        wire(&mut graph, (domain, "cohesion"), (g2p, "cohesion"));
 
         wire(&mut graph, (fill, "points"), (state, "seed"));
         for (node, port) in [(state, "count"), (p2g, "active_count"), (g2p, "active_count"), (stats, "active_count"), (frame, "count")] {

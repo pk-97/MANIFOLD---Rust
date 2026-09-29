@@ -139,6 +139,7 @@ impl Chain {
         let faces = p.closed.iter().enumerate().fold(0u32, |m, (i, &c)| m | (u32::from(c) << i));
         set(&mut graph, update, "closed_faces", faces as f32);
         set(&mut graph, g2p, "liveliness", p.liveliness as f32);
+        set(&mut graph, g2p, "cohesion", p.cohesion as f32);
 
         let plan = compile(&graph).expect("matter chain compiles");
         let harness = harness::shared();

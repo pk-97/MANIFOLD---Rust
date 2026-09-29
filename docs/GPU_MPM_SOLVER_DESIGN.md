@@ -174,6 +174,17 @@ The dials, all port-shadowed params on `node.matter_domain`:
   before P1). The default stays 0 until Peter picks it at P4 from the side-by-side.
 Rejected: Tait EOS on density recomputed from grid mass (the prototype and WebGPU-Ocean) —
 a second scatter pass and noisier density.
+**J is bounded after every update:** `J ← min(J·(1 + dt·tr C), J_max)` with J_max = 1 at
+Cohesion 0 (water without tension stores no expansion; the usual no-negative-pressure
+treatment) and J_max = 2 at Cohesion > 0 (the tension κ·λ·J(J − 1) pulls a stretched
+point back; one stretched to twice its rest volume is torn, and the bound keeps
+λ·J(J − 1) finite). A point whose scatter inputs are not finite contributes nothing, and
+`matter_stats` counts it, so D14 halts the publish; it never reaches the integer cast.
+**Amended 2026-09-30 for BUG-8akp (MPM water J grows without bound).** With J unbounded,
+the Dam Break's largest J was 2.2 at tick 20, 100 at tick 65 and 8.7e17 at tick 115,
+where λ·J(J − 1) overflowed f32 and the Cohesion-0 product inf·0 became NaN. The NaN
+momentum was cast to i32::MIN, a finite garbage velocity, so D14 never saw it and the
+water exploded about 1.9 s in.
 **Consequences:** J drifts slowly because particle and grid divergence disagree; the
 volume-drift gate measures it (D19). A hydrostatic pool compresses by ρgH/λ (1.8% at 2 m
 depth), so the surface sits about 2 cm lower than FLIP's at that depth.

@@ -130,12 +130,18 @@ fn point_partial(pt: MatterPoint) -> Partial {
         return p;
     }
     let j = pt.volume_ratio;
-    if !(finite3(pt.position) && finite3(pt.velocity) && finite(j)
+    let v0 = pt.affine_y.w;
+    var tau = params.lambda * j * (j - 1.0);
+    if j >= 1.0 {
+        tau = tau * params.cohesion;
+    }
+    // node.matter_to_grid skips exactly these points; counting them here is
+    // how D14 learns of them.
+    if !(finite3(pt.position) && finite3(pt.velocity) && finite(j) && finite(v0) && finite(tau)
         && finite3(pt.affine_x.xyz) && finite3(pt.affine_y.xyz) && finite3(pt.affine_z.xyz)) {
         p.nonfinite = 1u;
         return p;
     }
-    let v0 = pt.affine_y.w;
     let m = v0 * params.density;
     let v = pt.velocity;
     let rel = pt.position - vec3<f32>(params.lattice_min_x, params.lattice_min_y, params.lattice_min_z);

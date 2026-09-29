@@ -78,6 +78,14 @@ fn body(
     if j >= 1.0 {
         tau = tau * cohesion;
     }
+    // A non-finite contribution never reaches the integer cast (it would land
+    // as i32::MIN, a finite garbage velocity). matter_stats counts these same
+    // points as non-finite, so D14 halts the publish.
+    if !(m2g_finite3(e_points.velocity) && m2g_finite3(e_points.affine_x.xyz)
+        && m2g_finite3(e_points.affine_y.xyz) && m2g_finite3(e_points.affine_z.xyz)
+        && m2g_finite3(vec3<f32>(j, v0, tau))) {
+        return;
+    }
     let stress = step_dt * v0 * 4.0 * inv_dx * inv_dx * tau;
     // Affine rows: m·C − stress·I.
     let a0 = mass * e_points.affine_x.xyz - vec3<f32>(stress, 0.0, 0.0);

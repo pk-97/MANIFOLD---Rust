@@ -26,6 +26,7 @@ fn body(
     nodes_z: i32,
     step_dt: f32,
     liveliness: f32,
+    cohesion: f32,
     active_count: i32,
 ) -> Element {
     var p = e_points;
@@ -81,7 +82,10 @@ fn body(
     let c2 = k * b2;
     p.velocity = liveliness * (p.velocity + flip_delta) + (1.0 - liveliness) * v_pic;
     p.position = p.position + step_dt * v_pic;
-    p.volume_ratio = p.volume_ratio * (1.0 + step_dt * (c0.x + c1.y + c2.z));
+    // D3: tension-free water (Cohesion 0) stores no expansion; cohesive water
+    // tears at twice its rest volume.
+    let j_max = select(2.0, 1.0, cohesion <= 0.0);
+    p.volume_ratio = min(p.volume_ratio * (1.0 + step_dt * (c0.x + c1.y + c2.z)), j_max);
     p.affine_x = vec4<f32>(c0, p.affine_x.w);
     p.affine_y = vec4<f32>(c1, p.affine_y.w);
     p.affine_z = vec4<f32>(c2, 0.0);

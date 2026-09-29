@@ -12652,6 +12652,11 @@
           "type": "f32"
         },
         {
+          "name": "cohesion",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "active_count",
           "required": false,
           "type": "f32"
@@ -12750,6 +12755,16 @@
           "default": "0",
           "label": "Liveliness",
           "name": "liveliness",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Cohesion",
+          "name": "cohesion",
           "range": [
             "0",
             "1"

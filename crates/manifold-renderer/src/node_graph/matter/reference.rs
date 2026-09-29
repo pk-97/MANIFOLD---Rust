@@ -240,7 +240,7 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
             pt.v[r] = beta * (pt.v[r] + flip_delta[r]) + (1.0 - beta) * v_pic[r];
             pt.x[r] += p.dt * v_pic[r];
         }
-        pt.j *= 1.0 + p.dt * trace;
+        pt.j = (pt.j * (1.0 + p.dt * trace)).min(f64::from(super::j_max(p.cohesion as f32)));
         if base_of(lat, pt.x).is_none() {
             pt.id = 0;
             pt.v = [0.0; 3];

@@ -167,6 +167,17 @@ pub fn encode_fixed(x: f64, point_key: u32, slot: u32) -> i64 {
     whole as i64 + i64::from(carry)
 }
 
+/// Largest J cohesive water keeps (D3): the Cohesion tension κ·λ·J·(J − 1)
+/// pulls a stretched point back; a point stretched to twice its rest volume
+/// is torn, and the cap keeps λ·J·(J − 1) finite. Tension-free water
+/// (Cohesion 0) keeps J ≤ 1.
+pub const COHESIVE_J_MAX: f32 = 2.0;
+
+/// The largest J a point keeps after each update, for a Cohesion (D3).
+pub fn j_max(cohesion: f32) -> f32 {
+    if cohesion <= 0.0 { 1.0 } else { COHESIVE_J_MAX }
+}
+
 /// Rest density of water, kg/m³ (taichi_elements `p_rho`).
 pub const WATER_DENSITY: f32 = 1000.0;
 
