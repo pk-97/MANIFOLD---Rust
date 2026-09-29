@@ -19,7 +19,8 @@ pub use interaction::{
     VectorField, VortexField,
 };
 mod mesh;
-pub use mesh::{cook_hull_mesh, TriangleMesh};
+pub use mesh::{cook_hull_mesh, validate_closed_mesh, TriangleMesh};
+pub mod sdf;
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
