@@ -1,10 +1,10 @@
 //! The P1b solver budget report (`docs/GPU_MPM_SOLVER_DESIGN.md` P1b, D20,
 //! section 8 (speed)): the Dam Break at 64³ (4 m, the preset's column) at
-//! two operating points, the column alone (about 262k points) and the pool
+//! two operating points, the column alone (241,920 points) and the pool
 //! deepened until at least 500,000 points are live, each at Stiffness 1 and
 //! 0.5 on the block path; 16 warm-up and 120 measured frames of production
 //! GPU time, p50/p95 against D20's 6 ms; a profiled pass for per-kernel time
-//! and the dispatch count; how far points drift from their sorted cell; the
+//! and the dispatch count; how many points leave their sorted block's tile; the
 //! per-point P2G baseline; and the 128³ / 30 Hz stretch. It reports; P4 is
 //! the gate. Opt in with `--features matter-perf-proofs`.
 
@@ -19,7 +19,7 @@ const WARMUP_FRAMES: u32 = 16;
 const MEASURED_FRAMES: u32 = 120;
 const PROFILED_FRAMES: u32 = 20;
 const BUDGET_MS: f64 = 6.0;
-/// Pool depths (m): none, leaving the column's ~262k points, and deep
+/// Pool depths (m): none, leaving the column's 241,920 points, and deep
 /// enough for at least 500k.
 const SMALL_POOL: f32 = 0.0;
 const DEEP_POOL: f32 = 0.625;
@@ -61,9 +61,9 @@ struct Report {
     frame_ms: Vec<f64>,
     kernels: BTreeMap<&'static str, f64>,
     dispatches: usize,
-    /// Mean over the measured frames of `MatterScene::cell_drift`, on the
+    /// Mean over the measured frames of `MatterScene::tile_drift`, on the
     /// block path.
-    drift: Option<(f64, f64)>,
+    drift: Option<f64>,
 }
 
 fn measure(settings: &SceneSettings, frame_interval: f64, warmup: u32, measured: u32, profiled: u32) -> Report {
@@ -72,13 +72,12 @@ fn measure(settings: &SceneSettings, frame_interval: f64, warmup: u32, measured:
     for _ in 0..warmup {
         scene.tick();
     }
-    let mut drift = (0.0, 0.0);
+    let mut drift = 0.0;
     let mut frame_ms: Vec<f64> = (0..measured)
         .map(|_| {
             let ms = scene.tick_timed(None).total_ms;
             if settings.block_p2g {
-                let (cell, tile) = scene.cell_drift();
-                drift = (drift.0 + cell, drift.1 + tile);
+                drift += scene.tile_drift();
             }
             ms
         })
@@ -106,7 +105,7 @@ fn measure(settings: &SceneSettings, frame_interval: f64, warmup: u32, measured:
         frame_ms,
         kernels,
         dispatches,
-        drift: settings.block_p2g.then_some((drift.0 / n, drift.1 / n)),
+        drift: settings.block_p2g.then_some(drift / n),
     }
 }
 
@@ -117,7 +116,7 @@ fn print(name: &str, report: &Report) {
     let ns = p95 * 1e6 / (report.points as f64 * f64::from(report.substeps));
     let drift = report
         .drift
-        .map_or("-".to_string(), |(cell, tile)| format!("left cell {:.3}, left tile {:.4}", cell, tile));
+        .map_or("-".to_string(), |tile| format!("left tile {tile:.4}"));
     eprintln!(
         "  {name}: {} points, n {} | p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms (budget {BUDGET_MS} ms) | {ns:.2} ns/point-substep | {drift} | {} dispatches | clear {:.2} as particles {:.2} sort {:.2} P2G {:.2} grid {:.2} G2P {:.2} stats {:.2} frame {:.2} other {:.2} (profiled means)",
         report.points,
@@ -147,9 +146,9 @@ fn matter_solver_perf() {
             .unwrap_or_default()
     };
     eprintln!("matter_solver_perf: Dam Break at 64³; {}", load());
-    eprintln!("  drift: mean over measured frames, at tick end, of the points out of the cell the tick's sort put them in and out of its block tile");
+    eprintln!("  drift: mean over measured frames, at tick end, of the points out of the tile of the block the tick's sort put them in");
     let mut rows = Vec::new();
-    for (label, fill_height) in [("262k", SMALL_POOL), ("524k", DEEP_POOL)] {
+    for (label, fill_height) in [("242k", SMALL_POOL), ("524k", DEEP_POOL)] {
         for stiffness in [1.0, 0.5] {
             let report = measure(&dam_break(64, fill_height, stiffness, true), 1.0 / 60.0, WARMUP_FRAMES, MEASURED_FRAMES, PROFILED_FRAMES);
             print(&format!("{label}, Stiffness {stiffness}, block P2G"), &report);

@@ -258,15 +258,12 @@ order-dependent). Rejected: Metal float atomics (not portable).
 **D6 — P2G is one atom; P1 builds the plain global-atomic scatter, P1b replaces its
 interior with cell-sorted block-local accumulation.** One thread per particle adding to
 27 nodes with global atomics is the prototype's proven path and the correctness
-baseline. P1b sorts particles by stencil base cell once per tick (the surface design's
-`node.sort_particles_into_cells`, D17 there, gaining an `order: Array(u32)` output;
-amended 2026-09-30 from 4³-cell block bins, lever L1b), and `node.matter_to_grid` runs one
-workgroup per 4³ block of base cells: one thread per (base cell, stencil x slice) sums
-the cell's particles' fixed-point words in registers and adds them once into
-`var<workgroup>` atomics over the block's 6³-node tile, which is flushed once per node. A
-particle that has left its sorted cell since the sort adds node by node, into the tile
-when the node is in it and otherwise with global atomics. Integer sums make every path
-bit-identical. Core WGSL only. **The `MatterPoint` storage order
+baseline. P1b sorts particles by 4³-cell block once per tick (the surface design's
+`node.sort_particles_into_cells`, D17 there, gaining an `order: Array(u32)` output), and
+`node.matter_to_grid` then accumulates each block's particles into `var<workgroup>`
+atomics over the block's 6³-node tile and flushes each tile node once; a particle that
+has drifted out of its tile since the sort adds directly with global atomics. Integer
+sums make the two paths bit-identical. Core WGSL only. **The `MatterPoint` storage order
 is never changed** — ids must stay sorted for the seam (D9). Rejected for now: subgroup
 (warp) reductions — an optional WGSL feature whose naga → SPIR-V → MSL and Vulkan support
 is unverified (Deferred).
@@ -794,15 +791,14 @@ frame at a timestep its author reports as occasionally unstable) and Zhao et al.
 on M-series" was not found in any source (section 16, R1).
 
 **P1b's per-kernel profile** reports GPU time per frame for clear, sort, P2G, grid update,
-G2P, stats and the per-tick bookkeeping, plus dispatch count and the fractions of points
-out of their sorted cell and out of its tile.
+G2P, stats and the per-tick bookkeeping, plus dispatch count and the out-of-tile fraction.
 
 **Levers, in P1b's order, with expected wins (estimates; P1b measures each):**
 
 | Lever | Look | Expected win | Basis |
 |---|---|---|---|
 | L1 Cell-sorted block-local P2G (D6), sort once per tick | none (bit-identical) | global atomics fall from 108 to about 2 per point (864 tile flushes for 512 points per block); P2G 2–4× faster if atomics dominate | arithmetic; Gao et al. 2018 for the scheme |
-| L1b Sort by stencil base cell; sum each cell's words in registers, one tile add per node per cell | none (bit-identical) | tile atomics fall about 8× at 8 points per cell, for points still in their sorted cell | the P1b probe: block P2G's remaining cost is workgroup-atomic contention |
+| L1b Sort by stencil base cell; sum each cell's words in registers, one tile add per node per cell | none (bit-identical) | expected: tile atomics fall about 8×. Measured: P2G about 2× slower; reverted (P1b notes) | the P1b probe's guess that block P2G is bound by workgroup-atomic contention |
 | L2 Shared-memory grid tiles in G2P | none (bit-identical) | 1.2–1.5× on G2P; the 27-node gather mostly hits cache already | arithmetic |
 | L3 Half-precision C storage (D21) | none if gates hold | −18% point traffic (176 → 144 B) | arithmetic; accepted only if every P1 gate passes unchanged |
 | L4 Substeps from the rule (D4) | — | a calm or soft setting pays for what it needs (Stiffness 0.5 → 21 substeps) | already the rule; P1b verifies it tracks Stiffness live |
@@ -1186,16 +1182,32 @@ at the end of the phase.
     | 0.5 | 21 | per point | 0.87 | 0 | 29.53 | 0.58 | 4.79 | 0.60 | 35.50 | 3.12 |
     | 0.5 | 21 | block | 1.02 | 7.76 | 11.90 | 0.69 | 4.71 | 0.54 | 26.19 | 1.51 |
 
-    With the sort gated, Stiffness 1 projects to about 30 ms and 0.5 to about 19 ms. The
-    rest of P2G's cost is workgroup-atomic contention: 256 threads add into one 216-node
-    tile. A candidate beyond D6: sort by stencil base cell and sum each cell's points in
-    registers, one tile add per node per cell (8× fewer atomics at 8 points per cell).
+  - L1b built and measured slower, reverted: sorting by stencil base cell and summing each
+    cell's words in registers (one thread per cell and stencil x slice) made P2G at 524k
+    points, Stiffness 1, 36.5 ms per frame against L1's 19.5 ms in the same harness and
+    load (a register-switch variant of the sums: 46.8 ms). The probe's guess that tile
+    atomics bound block P2G was wrong: per-cell sums serialise each cell's points in one
+    thread and idle lanes on uneven and empty cells. It stayed bit-identical on all three
+    of its paths. The code is in the branch history.
   - `tests/gpu_proofs/matter_solver_perf.rs` behind `matter-perf-proofs` (in
-    `scripts/feature_matrix.py`): Dam Break with a 0.625 m pool, 513,152 live points,
-    n = 34, 120 measured frames. Per-point P2G p95 65.2 ms, 141 dispatches; block P2G
-    p95 41.7 ms, 447 dispatches, 11.9 ms of it the ungated sort. 128³ at 30 Hz (4.2M
-    points, 68 substeps a frame) p95 1327 ms. D20's 6 ms is missed; the miss carries to
-    P4. Owed: its out-of-tile fraction, which needs the gated sort.
+    `scripts/feature_matrix.py`): the P4 operating points, L1 with the sort gated to once
+    per tick, 120 measured frames, M4 Max, load average 5.4–6.1. "Left tile" is the mean
+    fraction of points outside their sorted block's tile at tick end (the last substep's
+    out-of-tile fraction; earlier substeps see less). ms are per frame, one 60 Hz tick.
+
+    | Points | Stiffness | n | p95 frame | ns/point-substep | Left tile | As particles | Sort | P2G | G2P |
+    |---|---|---|---|---|---|---|---|---|---|
+    | 241,920 (column, no pool) | 1 | 34 | 21.2 | 2.58 | 0.18 | 1.48 | 1.12 | 11.4 | 4.14 |
+    | 241,920 | 0.5 | 21 | 13.8 | 2.71 | 0.18 | 0.91 | 1.12 | 7.08 | 2.65 |
+    | 513,152 (0.625 m pool) | 1 | 34 | 37.1 | 2.13 | 0.086 | 6.54 | 1.21 | 19.6 | 7.55 |
+    | 513,152 | 0.5 | 21 | 23.9 | 2.21 | 0.088 | 4.05 | 1.24 | 12.1 | 4.65 |
+
+    Per-point P2G at 513,152, Stiffness 1: p95 65.2 ms. 128³ at 30 Hz (4.2M points, 68
+    substeps a frame): p95 1140 ms. D20's 6 ms is missed at every point; the miss carries
+    to P4. `node.matter_to_particles` runs every substep over the whole point capacity
+    though only the tick-start sort reads it: 6.5 ms of the 37.1 at 513k. Gating it needs
+    a decision, because it is a fusable pointwise atom:
+    BUG-0pmv (matter_to_particles runs every substep; gate it to the tick-start sort).
 
 ### P2a — Colliders
 

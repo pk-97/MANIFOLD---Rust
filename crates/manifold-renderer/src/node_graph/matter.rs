@@ -308,23 +308,18 @@ impl MatterLattice {
         self.nodes.map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
     }
 
-    /// Stencil base cells per axis the cell sort bins into: the blocks'
-    /// cells, x fastest, as `node.matter_to_grid` indexes its ranges.
-    pub fn cell_bins(&self) -> [u32; 3] {
-        self.blocks().map(|b| b * BLOCK_NODES)
-    }
-
-    /// The cell-sort box, with bins `cell_size` wide, whose bins are the
-    /// stencil base nodes: a point's bin is floor(q − 1/2) with q in cells.
-    /// Returns (centre, size) for `node.sort_particles_into_cells`. The size
-    /// stops half a cell short of the last bin's far edge, so the sort's
-    /// ceil(size / cell_size) is exactly [`Self::cell_bins`] despite f32
-    /// rounding; points beyond it clamp into the last bin.
-    pub fn cell_sort_box(&self) -> ([f32; 3], [f32; 3]) {
-        let bins = self.cell_bins();
-        let size: [f32; 3] = std::array::from_fn(|i| (bins[i] as f32 - 0.5) * self.cell_size);
+    /// The cell-sort box whose bins are the D6 blocks: a point's bin is its
+    /// stencil base node's block, floor((q − 1/2) / 4) with q in cells.
+    /// Returns (centre, size, bin size) for `node.sort_particles_into_cells`.
+    /// The size stops half a cell short of the last block's far edge, so the
+    /// sort's ceil(size / bin) is exactly [`Self::blocks`] despite f32
+    /// rounding; points beyond it clamp into the last block.
+    pub fn block_sort_box(&self) -> ([f32; 3], [f32; 3], f32) {
+        let bin = BLOCK_NODES as f32 * self.cell_size;
+        let blocks = self.blocks();
+        let size: [f32; 3] = std::array::from_fn(|i| blocks[i] as f32 * bin - 0.5 * self.cell_size);
         let centre = std::array::from_fn(|i| self.min[i] + 0.5 * self.cell_size + 0.5 * size[i]);
-        (centre, size)
+        (centre, size, bin)
     }
 
     /// Scene AABB of the lattice nodes (the seam's `grid_bounds`).
@@ -533,28 +528,27 @@ mod tests {
         }
     }
 
-    /// The sort makes exactly `cell_bins` bins per axis at every resolution,
-    /// and a point's bin (floor((p − box_min) · (1 / dx)), as the sort atom
-    /// computes it) is its stencil base node.
+    /// The sort makes exactly `blocks` bins per axis at every resolution, and
+    /// a point's bin (floor((p − box_min) · (1 / bin)), as the sort atom
+    /// computes it) is the block of its stencil base node, floor(base / 4).
     #[test]
-    fn matter_cell_bins_are_base_nodes() {
+    fn matter_block_bins_are_base_node_blocks() {
         for domain in [0.5f32, 1.0, 4.0, 20.0] {
             for resolution in [8u32, 32, 63, 64, 100, 128, 512] {
                 let layout = crate::node_graph::fluid::domain_layout(None, domain, resolution).unwrap();
                 let lattice = MatterLattice::from_layout(&layout);
-                let (_, size) = lattice.cell_sort_box();
+                let (_, size, bin) = lattice.block_sort_box();
                 assert_eq!(
-                    crate::node_graph::fluid_particles::bin_counts(size, lattice.cell_size),
-                    lattice.cell_bins(),
+                    crate::node_graph::fluid_particles::bin_counts(size, bin),
+                    lattice.blocks(),
                     "domain {domain} resolution {resolution}"
                 );
-                assert!(lattice.cell_bins().iter().zip(lattice.nodes).all(|(&b, n)| b + 2 >= n));
             }
         }
         let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 64).unwrap();
         let lattice = MatterLattice::from_layout(&layout);
         assert_eq!(lattice.blocks(), [18; 3]);
-        let (centre, size) = lattice.cell_sort_box();
+        let (centre, size, bin) = lattice.block_sort_box();
         let dx = lattice.cell_size;
         let mut seed = 0x1234_5678u32;
         for _ in 0..10_000 {
@@ -562,11 +556,11 @@ mod tests {
             let q = 1.5 + (seed >> 8) as f32 / 16_777_216.0 * 66.0;
             let p = lattice.min[0] + q * dx;
             let base = (q - 0.5).floor() as i64;
-            let sorted = ((p - (centre[0] - 0.5 * size[0])) * (1.0 / dx)).floor() as i64;
-            // f32 may put a point within an ulp of a cell edge in the
-            // neighbour; P2G then adds it node by node, still correctly.
-            let near_edge = ((q - 0.5) - (q - 0.5).round()).abs() < 1e-4;
-            assert!(near_edge || sorted == base, "q {q}: bin {sorted}, base {base}");
+            let sorted = ((p - (centre[0] - 0.5 * size[0])) * (1.0 / bin)).floor() as i64;
+            // f32 may put a point within an ulp of a block edge in the
+            // neighbour; P2G then adds it globally, still correctly.
+            let near_edge = ((q - 0.5) / 4.0 - ((q - 0.5) / 4.0).round()).abs() < 1e-4;
+            assert!(near_edge || sorted == base.div_euclid(4), "q {q}: bin {sorted}, base {base}");
         }
     }
 

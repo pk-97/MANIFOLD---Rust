@@ -11,14 +11,12 @@
 // contribution floor(x + u) with u hashed from the point id and the word's
 // global slot (D5), so every path adds the same integers.
 //
-// Unsorted: one thread per point and x slice, global atomics (the plain
-// path). Sorted (D6): one workgroup per 4³ block of stencil base nodes; one
-// thread per base cell and x slice, over the points `order`/`ranges` sorted
-// into that cell at tick start. A thread sums its cell's words in registers
-// and adds them once into a 6³-node tile in workgroup memory, flushed once
-// per nonzero word. A point that has left its cell since the sort adds each
-// node itself, to the tile or, outside it, globally. Integer sums make every
-// path bit-identical.
+// Unsorted: one thread per point, global atomics (the plain path). Sorted
+// (D6): one workgroup per 4³ block of stencil base nodes, over the points
+// `order`/`ranges` sorted into that block at tick start. They add into a
+// 6³-node tile in workgroup memory, flushed once per nonzero word; a point that
+// has left its block since the sort adds globally. Integer sums make the two
+// modes bit-identical.
 //
 // A point whose scatter inputs are not finite is skipped; node.matter_stats
 // counts the same points, so D14 halts the publish.
@@ -72,7 +70,6 @@ const BLOCK: i32 = 4;
 const TILE: i32 = 6;
 const TILE_WORDS: u32 = 864u; // 6³ nodes × 4 words
 const NO_RANK: u32 = 0xffffffffu;
-const BLOCK_CELLS: u32 = 64u; // 4³ stencil base cells per block
 
 var<workgroup> tile: array<atomic<i32>, 864>;
 
@@ -109,20 +106,10 @@ fn global_slot(node: vec3<i32>) -> u32 {
     return u32((node.z * n.y + node.y) * n.x + node.x) * 4u;
 }
 
-// Adds x slice `a` of one point's stencil (the 9 nodes base + (a, ·, ·)).
-// A point whose stencil base node is `cell` (with `pool`) adds its words to
-// `sums`, which the caller adds to the tile once for the cell's points. Any
-// other point adds each node itself: to the tile when the node lies in it
-// (with `use_tile`), otherwise to the global accumulator.
-fn add_slice(
-    pt: MatterPoint,
-    a: i32,
-    cell: vec3<i32>,
-    pool: bool,
-    use_tile: bool,
-    tile_origin: vec3<i32>,
-    sums: ptr<function, array<vec4<i32>, 9>>,
-) {
+// Adds one point to the grid: to the workgroup tile when its whole stencil
+// lies in the tile at `tile_origin` (and `use_tile`), otherwise to the global
+// accumulator.
+fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
     if pt.id == 0u || !finite3(pt.position) {
         return;
     }
@@ -165,54 +152,52 @@ fn add_slice(
     let to_mass = 65536.0 * inv_mass_unit;
     let to_momentum = 134217728.0 / params.momentum_unit * inv_mass_unit;
     let key = hash(pt.id ^ hash(params.tick_index * 4096u + params.substep_in_tick));
-    let pooled = pool && all(base_i == cell);
+    let local_base = base_i - tile_origin;
+    let in_tile = use_tile && all(local_base >= vec3<i32>(0)) && all(local_base + vec3<i32>(2) < vec3<i32>(TILE));
 
-    var wx = w0.x;
-    if a == 1 { wx = w1.x; } else if a == 2 { wx = w2.x; }
-    for (var b = 0; b < 3; b = b + 1) {
-        var wy = w0.y;
-        if b == 1 { wy = w1.y; } else if b == 2 { wy = w2.y; }
-        for (var c = 0; c < 3; c = c + 1) {
-            var wz = w0.z;
-            if c == 1 { wz = w1.z; } else if c == 2 { wz = w2.z; }
-            let weight = wx * wy * wz;
-            let d = (vec3<f32>(f32(a), f32(b), f32(c)) - f) * cell_size;
-            let momentum = weight * (mv + vec3<f32>(dot(a0, d), dot(a1, d), dot(a2, d)));
-            let node = base_i + vec3<i32>(a, b, c);
-            let slot = global_slot(node);
-            let words = vec4<i32>(
-                encode(momentum.x * to_momentum, key, slot),
-                encode(momentum.y * to_momentum, key, slot + 1u),
-                encode(momentum.z * to_momentum, key, slot + 2u),
-                encode(weight * mass * to_mass, key, slot + 3u),
-            );
-            let l = node - tile_origin;
-            if pooled {
-                (*sums)[b * 3 + c] = (*sums)[b * 3 + c] + words;
-            } else if use_tile && all(l >= vec3<i32>(0)) && all(l < vec3<i32>(TILE)) {
-                let t = u32((l.z * TILE + l.y) * TILE + l.x) * 4u;
-                atomicAdd(&tile[t], words.x);
-                atomicAdd(&tile[t + 1u], words.y);
-                atomicAdd(&tile[t + 2u], words.z);
-                atomicAdd(&tile[t + 3u], words.w);
-            } else {
-                atomicAdd(&accum[slot], words.x);
-                atomicAdd(&accum[slot + 1u], words.y);
-                atomicAdd(&accum[slot + 2u], words.z);
-                atomicAdd(&accum[slot + 3u], words.w);
+    for (var a = 0; a < 3; a = a + 1) {
+        var wx = w0.x;
+        if a == 1 { wx = w1.x; } else if a == 2 { wx = w2.x; }
+        for (var b = 0; b < 3; b = b + 1) {
+            var wy = w0.y;
+            if b == 1 { wy = w1.y; } else if b == 2 { wy = w2.y; }
+            for (var c = 0; c < 3; c = c + 1) {
+                var wz = w0.z;
+                if c == 1 { wz = w1.z; } else if c == 2 { wz = w2.z; }
+                let weight = wx * wy * wz;
+                let d = (vec3<f32>(f32(a), f32(b), f32(c)) - f) * cell_size;
+                let momentum = weight * (mv + vec3<f32>(dot(a0, d), dot(a1, d), dot(a2, d)));
+                let node = base_i + vec3<i32>(a, b, c);
+                let slot = global_slot(node);
+                let words = vec4<i32>(
+                    encode(momentum.x * to_momentum, key, slot),
+                    encode(momentum.y * to_momentum, key, slot + 1u),
+                    encode(momentum.z * to_momentum, key, slot + 2u),
+                    encode(weight * mass * to_mass, key, slot + 3u),
+                );
+                if in_tile {
+                    let l = local_base + vec3<i32>(a, b, c);
+                    let t = u32((l.z * TILE + l.y) * TILE + l.x) * 4u;
+                    atomicAdd(&tile[t], words.x);
+                    atomicAdd(&tile[t + 1u], words.y);
+                    atomicAdd(&tile[t + 2u], words.z);
+                    atomicAdd(&tile[t + 3u], words.w);
+                } else {
+                    atomicAdd(&accum[slot], words.x);
+                    atomicAdd(&accum[slot + 1u], words.y);
+                    atomicAdd(&accum[slot + 2u], words.z);
+                    atomicAdd(&accum[slot + 3u], words.w);
+                }
             }
         }
     }
 }
 
-// One entry for both modes, with one `add_slice` call, so the two modes run
-// the same float code and add the same integers (a second entry point may
-// contract the momentum arithmetic differently under fast math). Work items
-// are (points, x slice) pairs.
-// `params.sorted` 0: workgroup w takes points 256·w.. with global atomics,
-// one point per item.
-// 1: workgroup w is block w; an item is one of its 4³ stencil base cells,
-// over the points `order`/`ranges` sorted into that cell at tick start.
+// One entry for both modes, with one `scatter` call, so the two modes run the
+// same float code and add the same integers (a second entry point may
+// contract the momentum arithmetic differently under fast math).
+// `params.sorted` 0: workgroup w takes points 256·w.. with global atomics.
+// 1: workgroup w is block w, over the points `order`/`ranges` put there.
 @compute @workgroup_size(256)
 fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
     let sorted = params.sorted != 0u;
@@ -229,47 +214,20 @@ fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
         }
     }
     workgroupBarrier();
-    // Cell bins cover the blocks, x fastest.
-    let bins = vec3<u32>(params.blocks_x, params.blocks_y, params.blocks_z) * u32(BLOCK);
-    var items = 3u * GROUP;
+    var begin = block * GROUP;
+    var end = min(begin + GROUP, params.active_count);
     if sorted {
-        items = 3u * BLOCK_CELLS;
+        let range = ranges[block];
+        begin = range.start;
+        end = range.start + range.count;
     }
-    for (var item = lid; item < items; item = item + GROUP) {
-        var a = i32(item / GROUP);
-        var begin = block * GROUP + item % GROUP;
-        var end = min(begin + 1u, params.active_count);
-        var cell = vec3<i32>(0);
+    for (var s = begin + lid; s < end; s = s + GROUP) {
+        var index = s;
         if sorted {
-            let local = item / 3u;
-            a = i32(item % 3u);
-            cell = tile_origin + vec3<i32>(i32(local % 4u), i32((local / 4u) % 4u), i32(local / 16u));
-            let range = ranges[(u32(cell.z) * bins.y + u32(cell.y)) * bins.x + u32(cell.x)];
-            begin = range.start;
-            end = range.start + range.count;
+            index = order[s];
         }
-        var sums: array<vec4<i32>, 9>;
-        for (var s = begin; s < end; s = s + 1u) {
-            var index = s;
-            if sorted {
-                index = order[s];
-            }
-            if index != NO_RANK && index < params.active_count {
-                add_slice(points[index], a, cell, sorted, sorted, tile_origin, &sums);
-            }
-        }
-        if sorted {
-            for (var k = 0; k < 9; k = k + 1) {
-                let words = sums[k];
-                if any(words != vec4<i32>(0)) {
-                    let l = cell - tile_origin + vec3<i32>(a, k / 3, k % 3);
-                    let t = u32((l.z * TILE + l.y) * TILE + l.x) * 4u;
-                    atomicAdd(&tile[t], words.x);
-                    atomicAdd(&tile[t + 1u], words.y);
-                    atomicAdd(&tile[t + 2u], words.z);
-                    atomicAdd(&tile[t + 3u], words.w);
-                }
-            }
+        if index != NO_RANK && index < params.active_count {
+            scatter(points[index], sorted, tile_origin);
         }
     }
     workgroupBarrier();
