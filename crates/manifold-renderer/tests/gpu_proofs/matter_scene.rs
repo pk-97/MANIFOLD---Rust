@@ -4,7 +4,7 @@
 //! per-tick stats and the published frames back.
 
 use manifold_core::{Beats, Seconds};
-use manifold_gpu::GpuTextureFormat;
+use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::TICK;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
@@ -219,6 +219,12 @@ impl MatterScene {
 
     /// Run one display frame one fixed tick after the last.
     pub(crate) fn tick(&mut self) {
+        self.tick_timed(None);
+    }
+
+    /// [`Self::tick`], returning the frame's GPU time; with a sampler, every
+    /// dispatch is timed in its own encoder.
+    pub(crate) fn tick_timed(&mut self, sampler: Option<&GpuTimestampSampler>) -> GpuFrameProfile {
         let device = &harness::shared().device;
         let time = FrameTime {
             beats: Beats(0.0),
@@ -227,13 +233,16 @@ impl MatterScene {
             frame_count: i64::from(self.frame_count),
         };
         let mut enc = device.create_encoder("matter-scene");
+        if let Some(sampler) = sampler {
+            enc.enable_dispatch_profiling(sampler.clone(), device);
+        }
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
             self.executor
                 .execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
         }
-        enc.commit_and_wait_completed();
         self.frame_count += 1;
+        enc.commit_and_wait_profiled(device)
     }
 
     fn read<T: bytemuck::Pod>(&self, res: ResourceId) -> Vec<T> {
