@@ -29,25 +29,50 @@ pub(crate) struct CoupledSceneSteps {
 struct ContractedGroup {
     members: Vec<NodeInstanceId>,
     first_position: usize,
+    /// A substep region wires its own members together; a coupled pair must not.
+    internal_wires_allowed: bool,
 }
 
-/// Filter liveness, contract each active pair, and expand pair groups as
-/// adjacent fluid-then-rigid nodes. The input order is the ordinary graph
-/// topological order, so the result preserves its stable relative ordering
-/// wherever contraction permits.
-pub(crate) fn coupled_execution_order(
+/// The liveness-filtered topological order: every node when the graph has no
+/// liveness root, otherwise the nodes reachable from one.
+pub(crate) fn active_execution_order(
     graph: &Graph,
     full_order: &[NodeInstanceId],
     has_liveness_root: bool,
-) -> Result<(Vec<NodeInstanceId>, Vec<CoupledSceneSteps>), GraphError> {
+) -> Vec<NodeInstanceId> {
     let active = active_nodes(graph, full_order, has_liveness_root);
-    let active_order: Vec<_> = full_order
+    full_order
         .iter()
         .copied()
         .filter(|id| active.contains(id))
-        .collect();
-    if graph.coupled_scenes().is_empty() {
+        .collect()
+}
+
+/// Contract each active coupled pair and each substep region block into one
+/// vertex, then expand them in place: a pair as adjacent fluid-then-rigid
+/// nodes, a block (`blocks`, boundary first, body in topological order) as
+/// its contiguous run. `active_order` is the liveness-filtered topological
+/// order, so the result keeps its stable relative ordering wherever
+/// contraction permits.
+pub(crate) fn contracted_execution_order(
+    graph: &Graph,
+    active_order: &[NodeInstanceId],
+    blocks: &[Vec<NodeInstanceId>],
+) -> Result<(Vec<NodeInstanceId>, Vec<CoupledSceneSteps>), GraphError> {
+    let active_order = active_order.to_vec();
+    if graph.coupled_scenes().is_empty() && blocks.is_empty() {
         return Ok((active_order, Vec::new()));
+    }
+    let active: AHashSet<NodeInstanceId> = active_order.iter().copied().collect();
+    let mut block_for = AHashMap::<NodeInstanceId, usize>::default();
+    for (block_index, block) in blocks.iter().enumerate() {
+        for &node in block {
+            if block_for.insert(node, block_index).is_some() {
+                return Err(GraphError::CycleDetected {
+                    involves: block.clone(),
+                });
+            }
+        }
     }
 
     let mut pair_for = AHashMap::<NodeInstanceId, usize>::default();
@@ -56,7 +81,7 @@ pub(crate) fn coupled_execution_order(
             continue;
         }
         for node in [pair.fluid, pair.rigid] {
-            if pair_for.insert(node, pair_index).is_some() {
+            if pair_for.insert(node, pair_index).is_some() || block_for.contains_key(&node) {
                 return Err(GraphError::CycleDetected {
                     involves: vec![pair.fluid, pair.rigid],
                 });
@@ -70,24 +95,35 @@ pub(crate) fn coupled_execution_order(
         if group_for.contains_key(&node) {
             continue;
         }
-        if let Some(&pair_index) = pair_for.get(&node) {
+        let group_index = groups.len();
+        if let Some(&block_index) = block_for.get(&node) {
+            let block = &blocks[block_index];
+            for &member in block {
+                group_for.insert(member, group_index);
+            }
+            groups.push(ContractedGroup {
+                members: block.clone(),
+                first_position: position,
+                internal_wires_allowed: true,
+            });
+        } else if let Some(&pair_index) = pair_for.get(&node) {
             let pair = graph.coupled_scenes()[pair_index];
             let first_position = active_order
                 .iter()
                 .position(|&candidate| candidate == pair.fluid || candidate == pair.rigid)
                 .unwrap_or(position);
-            let group_index = groups.len();
             groups.push(ContractedGroup {
                 members: vec![pair.fluid, pair.rigid],
                 first_position,
+                internal_wires_allowed: false,
             });
             group_for.insert(pair.fluid, group_index);
             group_for.insert(pair.rigid, group_index);
         } else {
-            let group_index = groups.len();
             groups.push(ContractedGroup {
                 members: vec![node],
                 first_position: position,
+                internal_wires_allowed: false,
             });
             group_for.insert(node, group_index);
         }
@@ -103,6 +139,9 @@ pub(crate) fn coupled_execution_order(
         let from = group_for[&wire.from.0];
         let to = group_for[&wire.to.0];
         if from == to {
+            if groups[from].internal_wires_allowed {
+                continue;
+            }
             return Err(GraphError::CycleDetected {
                 involves: groups[from].members.clone(),
             });
@@ -272,6 +311,15 @@ mod tests {
         graph.add_node(Box::new(node))
     }
 
+    fn execution_order(
+        graph: &Graph,
+        full: &[NodeInstanceId],
+        has_liveness_root: bool,
+    ) -> Result<(Vec<NodeInstanceId>, Vec<CoupledSceneSteps>), GraphError> {
+        let active = active_execution_order(graph, full, has_liveness_root);
+        contracted_execution_order(graph, &active, &[])
+    }
+
     fn pair(graph: &mut Graph, fluid: NodeInstanceId, rigid: NodeInstanceId) {
         graph
             .add_coupled_scene(
@@ -304,7 +352,7 @@ mod tests {
         pair(&mut graph, fluid, rigid);
 
         let full = crate::node_graph::validation::topological_sort(&graph).unwrap();
-        let (order, scenes) = coupled_execution_order(&graph, &full, false).unwrap();
+        let (order, scenes) = execution_order(&graph, &full, false).unwrap();
         let fluid_step = order.iter().position(|&id| id == fluid).unwrap();
         let rigid_step = order.iter().position(|&id| id == rigid).unwrap();
         assert_eq!(rigid_step, fluid_step + 1);
@@ -358,7 +406,7 @@ mod tests {
         pair(&mut graph, fluid, rigid);
         let full = crate::node_graph::validation::topological_sort(&graph).unwrap();
         assert!(matches!(
-            coupled_execution_order(&graph, &full, false),
+            execution_order(&graph, &full, false),
             Err(GraphError::CycleDetected { .. })
         ));
     }
@@ -374,7 +422,7 @@ mod tests {
         pair(&mut graph, fluid, rigid);
         let full = crate::node_graph::validation::topological_sort(&graph).unwrap();
         assert!(matches!(
-            coupled_execution_order(&graph, &full, false),
+            execution_order(&graph, &full, false),
             Err(GraphError::CycleDetected { .. })
         ));
     }
@@ -389,7 +437,7 @@ mod tests {
         pair(&mut graph, fluid_a, rigid_a);
         pair(&mut graph, fluid_b, rigid_b);
         let full = crate::node_graph::validation::topological_sort(&graph).unwrap();
-        let (order, scenes) = coupled_execution_order(&graph, &full, false).unwrap();
+        let (order, scenes) = execution_order(&graph, &full, false).unwrap();
         assert_eq!(scenes.len(), 2);
         for scene in scenes {
             assert_eq!(scene.rigid_step, scene.fluid_step + 1);
@@ -415,7 +463,7 @@ mod tests {
         pair(&mut graph, dead_fluid, dead_rigid);
 
         let full = crate::node_graph::validation::topological_sort(&graph).unwrap();
-        let (order, scenes) = coupled_execution_order(&graph, &full, true).unwrap();
+        let (order, scenes) = execution_order(&graph, &full, true).unwrap();
         assert!(order.contains(&ancestor));
         assert!(order.contains(&fluid));
         assert!(order.contains(&rigid));

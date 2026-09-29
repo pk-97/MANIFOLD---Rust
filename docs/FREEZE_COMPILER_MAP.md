@@ -207,7 +207,11 @@ gathered producer stays an external the body samples); same element space
 (texture only); and the merge keeps the *collapsed* forward graph acyclic
 (convexity — Watercolor's out-through-a-blur-and-back shape). State-capture
 wires are excluded from the forward graph, matching the planner, or legal
-feedback loops would read as cycles.
+feedback loops would read as cycles. Both endpoints must also sit on the same
+side of every substep region border (`substep_sides`, computed with the plan
+compiler's own `substeps::region_body`); stencil absorption obeys the same
+border. A kernel spanning it would repeat outside work per iteration or leak a
+body intermediate.
 
 **Region gates (`build_region`):** members topo-sort (cycle ⇒ refuse);
 required/gather/buffer inputs must be wired (optional coincident unwired is OK
@@ -386,12 +390,12 @@ invariant a fused def must respect:
    The plan's propagation (concrete / canvas-scaled / canvas, mixed-input ⇒
    canvas fallback) is the single source of truth; `fused_def_builds`
    round-trips the fused def through it and rejects drift.
-7. **In-place buffer loops** — an `array_feedback` loop buffer is written IN
-   PLACE by the fused kernel (`in_place_alias`: consumers rewired off `src_k`),
-   because a fresh `dst` would demote the loop to a one-frame-delayed copy.
-   Only taken when the output provably threads through `aliased_array_io`
-   members back to a verified loop external; forward-produced regions
-   (DigitalPlants) keep fresh-dst.
+7. **In-place buffer loops** — an `array_feedback` loop buffer, or a substep
+   boundary's state port, is written IN PLACE by the fused kernel
+   (`in_place_alias`: consumers rewired off `src_k`), because a fresh `dst`
+   would demote the loop to a delayed copy. Only taken when the output provably
+   threads through `aliased_array_io` members back to a verified loop head;
+   forward-produced regions (DigitalPlants) keep fresh-dst.
 8. **arrayLength buffer-size index** — SPIRV-Cross's buffer-size buffer must be
    pinned to the slot actually bound (`manifold-gpu`), or every
    `arrayLength()` guard silently returns 0 and kills all threads. Historical
@@ -413,6 +417,11 @@ invariant a fused def must respect:
     A pending `temporal_upscale` change must not resize the render beneath
     existing attachments, in either direction. Merely checking that outputs
     exist is insufficient; native and reduced attachments can both be present.
+12. **Substep regions** (`docs/GPU_MPM_SOLVER_DESIGN.md` D7) — the executor
+    runs a boundary once, then its contracted body N times per frame through
+    the same step evaluator the frame pass uses, capturing after each
+    iteration. Fused body kernels run per iteration and read that iteration's
+    scalars; they never contain a node from outside the body (section 4).
 
 ## 10. Test surface & how to debug
 

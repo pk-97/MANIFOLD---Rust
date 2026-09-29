@@ -1471,10 +1471,10 @@ fn region_output_aliases_external(
     None
 }
 
-/// Is `region.externals[ext_idx]` the buffer of a `node.array_feedback` IN-PLACE
-/// loop? Walks the producer chain backward through `aliased_array_io` nodes: an
-/// `array_feedback` head ⇒ yes (a true loop buffer, safe to alias as the fused
-/// output); a forward (non-aliased) producer ⇒ no (aliasing it would reintroduce
+/// Is `region.externals[ext_idx]` the buffer of an IN-PLACE loop? Walks the
+/// producer chain backward through `aliased_array_io` nodes: an `array_feedback`
+/// head or a substep boundary's state port ⇒ yes (a true loop buffer, safe to
+/// alias as the fused output); a forward (non-aliased) producer ⇒ no (aliasing it would reintroduce
 /// the ordering bug the fresh-`dst` model avoids — the input has a producer that
 /// must run first). A producer already fused away ⇒ conservatively no.
 fn external_is_inplace_loop(
@@ -1502,6 +1502,11 @@ fn external_is_inplace_loop(
         let Some(prim) = registry.construct(&n.type_id) else {
             return false;
         };
+        // A substep boundary's state port is the same kind of loop buffer:
+        // its region body mutates it in place every iteration, unfused.
+        if prim.substep_boundary().is_some_and(|ports| ports.state == port) {
+            return true;
+        }
         // Follow the aliased pair whose OUTPUT is the port we arrived on, back to
         // its INPUT's producer. A non-aliased producer ends the walk (not a loop).
         let aliasing = prim.aliased_array_io();
