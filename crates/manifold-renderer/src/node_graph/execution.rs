@@ -91,10 +91,54 @@ struct PhysicsSample<'a> {
     params: &'a [Option<ParamValues>],
 }
 
+/// Per-frame values every step evaluation reads.
+#[derive(Clone, Copy)]
+struct StepEnv<'a> {
+    time: FrameTime,
+    owner_key: OwnerKey,
+    sample: Option<PhysicsSample<'a>>,
+    canvas_dims: (u32, u32),
+    layer_skin_registry: Option<&'a LayerSkinRegistry>,
+}
+
+/// Frame-wide counters the step evaluator accumulates for the post-loop
+/// preview and zero-work diagnostics.
+#[derive(Default)]
+struct FrameTally {
+    preview_matched: bool,
+    preview_tex_count: usize,
+    evaluated_steps: u32,
+}
+
+/// Which pass is evaluating a step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StepPass {
+    /// The ordinary frame pass, including a substep boundary's own evaluate.
+    Frame,
+    /// Iteration `n` of a substep region body.
+    Iteration(u32),
+}
+
+impl StepPass {
+    /// Per-frame diagnostics record a step once per frame, not per iteration.
+    fn first_visit(self) -> bool {
+        matches!(self, Self::Frame | Self::Iteration(0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StepFlow {
+    Next,
+    /// The frame cannot continue (array growth failed); the status is set.
+    Abort,
+}
+
 #[path = "execution/coupled_physics.rs"]
 mod coupled_physics;
 #[path = "execution/array_growth.rs"]
 mod array_growth;
+#[path = "execution/substep_region.rs"]
+mod substep_region;
 
 pub struct Executor {
     backend: Box<dyn Backend>,
@@ -104,6 +148,10 @@ pub struct Executor {
     output_scratch: Vec<(&'static str, Slot)>,
     growing_arrays: Vec<bool>,
     array_capacity_scratch: Vec<(&'static str, u32)>,
+    /// A running substep region's per-iteration scalar output slots and the
+    /// values the boundary serves for the next iteration (reused scratch).
+    substep_scalar_slots: Vec<Option<Slot>>,
+    substep_scalar_values: Vec<f32>,
     /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
     /// nodes can queue scalar writes. Drained back into the backend after
     /// each node's `evaluate` returns.
@@ -495,6 +543,8 @@ impl Executor {
             output_scratch: Vec::new(),
             growing_arrays: Vec::new(),
             array_capacity_scratch: Vec::with_capacity(8),
+            substep_scalar_slots: Vec::new(),
+            substep_scalar_values: Vec::new(),
             scalar_write_scratch: Vec::new(),
             camera_write_scratch: Vec::new(),
             light_write_scratch: Vec::new(),
@@ -1523,22 +1573,143 @@ impl Executor {
             }
         }
 
-        // Node-output-preview diagnostic accumulators. `matched` flips true if
-        // the preview target named a live step this frame; `tex_count` records
-        // how many Texture2D outputs that step had. Distinguishes the two
-        // preview-black failure modes (no step matched = identity problem;
-        // matched but black = resource recycled) in the post-loop log below.
-        let mut preview_matched = false;
-        let mut preview_tex_count = 0usize;
+        let env = StepEnv {
+            time,
+            owner_key,
+            sample,
+            canvas_dims,
+            layer_skin_registry,
+        };
+        let mut tally = FrameTally::default();
+        let mut idx = 0;
+        while idx < plan.steps().len() {
+            // A substep region is one contiguous block, boundary first
+            // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7); its driver runs the whole
+            // block. A physics sample never advances a simulation region.
+            let flow = if let Some(region) =
+                plan.substep_regions().iter().find(|region| region.steps[0] == idx)
+            {
+                idx = region.steps[region.steps.len() - 1] + 1;
+                if partial_sample {
+                    StepFlow::Next
+                } else {
+                    self.run_substep_region(graph, plan, region, env, &mut tally, &mut gpu, &mut state)
+                }
+            } else {
+                idx += 1;
+                self.run_step(graph, plan, idx - 1, StepPass::Frame, env, &mut tally, &mut gpu, &mut state)
+            };
+            if flow == StepFlow::Abort {
+                return;
+            }
+        }
+        let FrameTally {
+            preview_matched,
+            preview_tex_count,
+            evaluated_steps,
+        } = tally;
 
-        let mut evaluated_steps = 0u32;
-        for (idx, step) in plan.steps().iter().enumerate() {
+        if evaluated_steps == 0
+            && gpu.is_some()
+            && std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok()
+        {
+            eprintln!(
+                "[rebuild] scope=executor reason=zero-steps-evaluated steps={}",
+                plan.steps().len(),
+            );
+        }
+
+        // Node-output-preview diagnostic. Fires once per retarget (deduped) when
+        // a preview is active, so the terminal reveals which failure mode a
+        // black preview is: `matched=false` means the target id named no live
+        // step (an identity problem — the node is a group container or a
+        // pruned/multi-pass node whose previewable id differs); `matched=true`
+        // with `resource=None` means the step ran but had no Texture2D output;
+        // `matched=true` with a resource that still reads black points at
+        // resource recycling. Grep `[preview]`.
+        if self.preview_target.is_some() {
+            let key = (
+                self.preview_target,
+                preview_matched,
+                preview_tex_count,
+                self.preview_resource,
+            );
+            if self.preview_debug_last != Some(key) {
+                self.preview_debug_last = Some(key);
+                eprintln!(
+                    "[preview] target={:?} matched_live_step={} texture2d_outputs={} \
+                     captured_resource={:?}",
+                    self.preview_target, preview_matched, preview_tex_count, self.preview_resource,
+                );
+            }
+        } else if self.preview_debug_last.is_some() {
+            self.preview_debug_last = None;
+        }
+
+        // ===== Late-capture pass =====
+        //
+        // Runs AFTER every node's `evaluate` for the frame has been
+        // encoded. At this point the producer feeding any state-capture
+        // input port has already written THIS frame's output into the
+        // persistent back-edge slot — `late_capture` reads that fresh
+        // value and snapshots it into the node's StateStore entry, so
+        // next frame's `evaluate` emits a true 1-frame-delayed value
+        // (matching ping-pong + end-of-frame swap).
+        //
+        // Doing the capture here instead of inside `evaluate` is the
+        // structural fix for the 2-frame-delay bug class that produced
+        // the OilyFluid per-frame flicker: state-capture nodes run
+        // FIRST in topo, so an in-`evaluate` capture would read the
+        // PREVIOUS frame's producer output, decoupling the simulation
+        // into independent even/odd streams driven by per-frame noise.
+        // No new primitive that declares `state_capture_input_ports`
+        // can recreate that bug as long as it uses `late_capture` for
+        // its snapshot. Substep boundaries capture per iteration inside
+        // their region instead and are never in this list.
+        for &step_idx in plan.late_capture_step_indices().iter().filter(|_| !partial_sample) {
+            if !self.live_steps[step_idx] {
+                continue;
+            }
+            self.capture_step(graph, plan, step_idx, env, &mut gpu, &mut state);
+        }
+    }
+
+    /// Evaluate one plan step: the live-wire tap, the liveness, memo and
+    /// data-driven skips, output acquire, evaluate or skip-passthrough alias,
+    /// typed-write drain, revision commit, diagnostics and `free_after`
+    /// release. The ordinary frame pass and the substep region repeat both
+    /// run steps through here, so the two can never drift. `pass` says which
+    /// one is asking: per-frame diagnostics (the wire tap, preview scalars,
+    /// dumps) record only on a step's first visit of the frame.
+    #[allow(clippy::too_many_arguments)]
+    fn run_step(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        idx: usize,
+        pass: StepPass,
+        env: StepEnv<'_>,
+        tally: &mut FrameTally,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+        state: &mut Option<&mut StateStore>,
+    ) -> StepFlow {
+        let StepEnv {
+            time,
+            owner_key,
+            sample,
+            canvas_dims,
+            layer_skin_registry,
+        } = env;
+        let partial_sample = sample.is_some();
+        let first_visit = pass.first_visit();
+        let step = &plan.steps()[idx];
+        {
             // Live wire-value tap (see `live_scalar_inputs` field doc):
             // snapshot this step's wired scalar inputs before any skip
-            // branch below can `continue` past it. The step's own
+            // branch below can return past it. The step's own
             // declared inputs are always bound at this point, live-step,
             // memo-skipped, or mux-pruned alike.
-            if !partial_sample || self.live_steps[idx] {
+            if first_visit && (!partial_sample || self.live_steps[idx]) {
                 for &(port, res) in &step.inputs {
                     if let Some(v) = self.read_scalar_resource(plan, res) {
                         self.live_scalar_inputs.push((step.node, port, v));
@@ -1551,7 +1722,7 @@ impl Executor {
                 // unselected branch. Skip acquire / evaluate /
                 // free_after entirely — slots stay bound from last
                 // frame so re-selection picks up the prior state.
-                continue;
+                return StepFlow::Next;
             }
 
             if let Some(pair) = plan.coupled_scenes().iter().find(|pair| pair.fluid_step == idx) {
@@ -1618,7 +1789,7 @@ impl Executor {
                 // consumers will read. The authority remains unchanged, but
                 // pool rebinding must never expose a stale occupant token.
                 self.commit_mesh_revisions(plan, step, true, None);
-                continue;
+                return StepFlow::Next;
             }
 
             // Data-driven skip (zero blobs / zero spawned particles): a step
@@ -1669,11 +1840,11 @@ impl Executor {
                         // start skipping. No explicit slot-bound check is needed
                         // — if one were somehow unbound, record_dump_outputs
                         // reads None (a blank cell), never a panic.
-                        if self.should_dump(step.node) {
+                        if first_visit && self.should_dump(step.node) {
                             self.record_dump_outputs(plan, step);
                         }
                         self.commit_mesh_revisions(plan, step, true, None);
-                        continue;
+                        return StepFlow::Next;
                     }
                 }
             }
@@ -1696,7 +1867,7 @@ impl Executor {
                 log::error!("[graph] array growth at {:?}: {error}", step.node);
                 gpu.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
                     crate::frame_status::FrameRenderFailure::SurfaceAllocation));
-                return;
+                return StepFlow::Abort;
             }
 
             // 1. Acquire output slots.
@@ -2064,7 +2235,7 @@ impl Executor {
                             "node `{}` declared physical outputs unchanged without retained output storage",
                             inst.node.type_id().as_str(),
                         );
-                        evaluated_steps += 1;
+                        tally.evaluated_steps += 1;
                         // Aliased-output contract: a primitive that
                         // declares `aliased_array_io = [(in, out)]`
                         // promises its dispatch writes to the aliased
@@ -2290,16 +2461,16 @@ impl Executor {
             // its first Texture2D output so the release loop below keeps that
             // slot bound past the frame. The integration layer reads it after
             // `execute_frame_*` and downscales it into the preview surface.
-            if self.preview_target == Some(step.node) {
-                preview_matched = true;
-                preview_tex_count = 0;
+            if first_visit && self.preview_target == Some(step.node) {
+                tally.preview_matched = true;
+                tally.preview_tex_count = 0;
                 let mut first_texture: Option<ResourceId> = None;
                 for &(_, res) in &step.outputs {
                     if plan.resource_type(res).is_some_and(|t| t.is_texture_2d()) {
                         if first_texture.is_none() {
                             first_texture = Some(res);
                         }
-                        preview_tex_count += 1;
+                        tally.preview_tex_count += 1;
                     }
                 }
                 self.preview_resource = first_texture;
@@ -2325,7 +2496,7 @@ impl Executor {
             // in the dump scope (Cmd+D everything, or the atlas's visible set).
             // The identity is pinned NOW, before the end-of-frame feedback swap
             // rebinds slots — see record_dump_outputs / dump_resources.
-            if self.should_dump(step.node) {
+            if first_visit && self.should_dump(step.node) {
                 self.record_dump_outputs(plan, step);
             }
 
@@ -2357,72 +2528,32 @@ impl Executor {
                 self.backend.release(res_id, ty, fmt, dims);
             }
         }
+        StepFlow::Next
+    }
 
-        if evaluated_steps == 0
-            && gpu.is_some()
-            && std::env::var("MANIFOLD_LOG_REBUILD_REASON").is_ok()
+    /// Run one state-capture node's `late_capture`: the frame-end pass for
+    /// feedback nodes, and once per iteration for a substep boundary.
+    /// Output slots may have been freed by `step.free_after` — the context
+    /// carries only this node's PERSISTENT outputs, so `late_capture` reads
+    /// inputs and writes state or persistent outputs, never a pooled slot.
+    /// Typed writes drain exactly as after `evaluate`: a boundary's accept
+    /// may land a scalar on its persistent state port.
+    fn capture_step(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        step_idx: usize,
+        env: StepEnv<'_>,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+        state: &mut Option<&mut StateStore>,
+    ) {
+        let StepEnv {
+            time,
+            owner_key,
+            layer_skin_registry,
+            ..
+        } = env;
         {
-            eprintln!(
-                "[rebuild] scope=executor reason=zero-steps-evaluated steps={}",
-                plan.steps().len(),
-            );
-        }
-
-        // Node-output-preview diagnostic. Fires once per retarget (deduped) when
-        // a preview is active, so the terminal reveals which failure mode a
-        // black preview is: `matched=false` means the target id named no live
-        // step (an identity problem — the node is a group container or a
-        // pruned/multi-pass node whose previewable id differs); `matched=true`
-        // with `resource=None` means the step ran but had no Texture2D output;
-        // `matched=true` with a resource that still reads black points at
-        // resource recycling. Grep `[preview]`.
-        if self.preview_target.is_some() {
-            let key = (
-                self.preview_target,
-                preview_matched,
-                preview_tex_count,
-                self.preview_resource,
-            );
-            if self.preview_debug_last != Some(key) {
-                self.preview_debug_last = Some(key);
-                eprintln!(
-                    "[preview] target={:?} matched_live_step={} texture2d_outputs={} \
-                     captured_resource={:?}",
-                    self.preview_target, preview_matched, preview_tex_count, self.preview_resource,
-                );
-            }
-        } else if self.preview_debug_last.is_some() {
-            self.preview_debug_last = None;
-        }
-
-        // ===== Late-capture pass =====
-        //
-        // Runs AFTER every node's `evaluate` for the frame has been
-        // encoded. At this point the producer feeding any state-capture
-        // input port has already written THIS frame's output into the
-        // persistent back-edge slot — `late_capture` reads that fresh
-        // value and snapshots it into the node's StateStore entry, so
-        // next frame's `evaluate` emits a true 1-frame-delayed value
-        // (matching ping-pong + end-of-frame swap).
-        //
-        // Doing the capture here instead of inside `evaluate` is the
-        // structural fix for the 2-frame-delay bug class that produced
-        // the OilyFluid per-frame flicker: state-capture nodes run
-        // FIRST in topo, so an in-`evaluate` capture would read the
-        // PREVIOUS frame's producer output, decoupling the simulation
-        // into independent even/odd streams driven by per-frame noise.
-        // No new primitive that declares `state_capture_input_ports`
-        // can recreate that bug as long as it uses `late_capture` for
-        // its snapshot.
-        //
-        // Output slots may have been freed by `step.free_after` above —
-        // we deliberately build the context with an EMPTY output
-        // scratch. `late_capture` implementations must read only inputs
-        // and write to state, never to outputs.
-        for &step_idx in plan.late_capture_step_indices().iter().filter(|_| !partial_sample) {
-            if !self.live_steps[step_idx] {
-                continue;
-            }
             let step = &plan.steps()[step_idx];
             // Attribution profiling: late-capture GPU work (a feedback node's
             // state-snapshot blit) belongs to ITS node's row, not whichever
@@ -2504,6 +2635,30 @@ impl Executor {
                 .with_outputs_retained(capture_outputs_retained);
                 inst.node.late_capture(&mut ctx);
                 let swap_request = ctx.texture_swap_request.take();
+                for (slot, value) in self.scalar_write_scratch.drain(..) {
+                    self.backend.set_scalar(slot, value);
+                }
+                for (slot, value) in self.camera_write_scratch.drain(..) {
+                    self.backend.set_camera(slot, value);
+                }
+                for (slot, value) in self.light_write_scratch.drain(..) {
+                    self.backend.set_light(slot, value);
+                }
+                for (slot, value) in self.material_write_scratch.drain(..) {
+                    self.backend.set_material(slot, value);
+                }
+                for (slot, value) in self.transform_write_scratch.drain(..) {
+                    self.backend.set_transform(slot, value);
+                }
+                for (slot, value) in self.atmosphere_write_scratch.drain(..) {
+                    self.backend.set_atmosphere(slot, value);
+                }
+                for (slot, value) in self.render_mode_write_scratch.drain(..) {
+                    self.backend.set_render_mode(slot, value);
+                }
+                for (slot, value) in self.object_write_scratch.drain(..) {
+                    self.backend.set_object(slot, value);
+                }
                 for msg in self.error_scratch.drain(..) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",

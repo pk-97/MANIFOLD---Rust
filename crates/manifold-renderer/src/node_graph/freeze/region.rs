@@ -285,12 +285,18 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
         .filter(|w| !is_state_capture_wire(def, registry, w))
         .map(|w| (w.from_node, w.to_node))
         .collect();
+    // A substep region repeats its body inside one frame
+    // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7). A kernel spanning its border would
+    // repeat outside work per iteration or leak a body intermediate, so nodes
+    // on different sides never union.
+    let substep_side = substep_sides(def, registry, &forward);
     let mut candidates: Vec<(u32, u32)> = def
         .wires
         .iter()
         .filter(|w| {
             eligible.contains(&w.from_node)
                 && eligible.contains(&w.to_node)
+                && substep_side.get(&w.from_node) == substep_side.get(&w.to_node)
                 // Union over coincident wires of EITHER domain: a texture (pixel)
                 // chain OR an Array (particle / instance) chain. A texture wire
                 // into a BUFFER atom (a force-sampler's flow field, anti_clump's
@@ -414,7 +420,14 @@ pub fn partition_regions(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> 
 
     // ── Stencil tier: absorb producer chains into stencil members' gather
     // reads (recomputed per tap corner — no canvas round-trip). ──
-    absorb_virtual_chains(def, registry, &mut regions, &comp_list, spaces.as_ref(), &forward,
+    absorb_virtual_chains(
+        def,
+        registry,
+        &mut regions,
+        &comp_list,
+        spaces.as_ref(),
+        &forward,
+        &substep_side,
     );
 
     // A single-member region only pays once a chain folded into it (fusing one
@@ -460,6 +473,7 @@ fn absorb_virtual_chains(
     comps: &[(u32, Vec<u32>)],
     spaces: Option<&AHashMap<(u32, String), ElementSpace>>,
     forward: &[(u32, u32)],
+    substep_side: &AHashMap<u32, u32>,
 ) {
     let comp_of: AHashMap<u32, u32> = comps
         .iter()
@@ -513,7 +527,11 @@ fn absorb_virtual_chains(
                     continue;
                 }
                 let nodes = comp_nodes[&rep];
-                if nodes.len() > MAX_VIRTUAL_CHAIN {
+                if nodes.len() > MAX_VIRTUAL_CHAIN
+                    || nodes
+                        .iter()
+                        .any(|n| substep_side.get(n) != substep_side.get(&member.doc_id))
+                {
                     continue;
                 }
                 if !chain_is_absorbable(def, registry, nodes, member.doc_id, region_space, spaces)
@@ -2459,6 +2477,49 @@ fn is_state_capture_wire(
         return false;
     };
     node.state_capture_input_ports().contains(&w.to_port.as_str())
+}
+
+/// Which substep region each node belongs to: boundary and body nodes map to
+/// the boundary's doc id, every other node is absent. Membership is the plan
+/// compiler's own rule ([`crate::node_graph::substeps::region_body`]) over the
+/// same forward wires, so the finder and the executor agree on the border.
+fn substep_sides(
+    def: &EffectGraphDef,
+    registry: &PrimitiveRegistry,
+    forward: &[(u32, u32)],
+) -> AHashMap<u32, u32> {
+    let mut sides = AHashMap::default();
+    let boundaries: Vec<(u32, crate::node_graph::substeps::SubstepBoundaryPorts)> = def
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            configured_construct(registry, n)
+                .and_then(|node| node.substep_boundary())
+                .map(|ports| (n.id, ports))
+        })
+        .collect();
+    if boundaries.is_empty() {
+        return sides;
+    }
+    let mut fwd: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    let mut rev: AHashMap<u32, Vec<u32>> = AHashMap::default();
+    for &(from, to) in forward {
+        fwd.entry(from).or_default().push(to);
+        rev.entry(to).or_default().push(from);
+    }
+    for (boundary, ports) in boundaries {
+        let producers: Vec<u32> = def
+            .wires
+            .iter()
+            .filter(|w| w.to_node == boundary && ports.capture_ports().any(|p| p == w.to_port))
+            .map(|w| w.from_node)
+            .collect();
+        sides.insert(boundary, boundary);
+        for node in crate::node_graph::substeps::region_body(boundary, &producers, &fwd, &rev) {
+            sides.insert(node, boundary);
+        }
+    }
+    sides
 }
 
 /// Whether the collapsed forward graph has a directed cycle. `key` maps each def

@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a built on `feat/gpu-mpm-build-b` (not on main) · P0b–P8 not built · phase notes under each brief in section 11.
+**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -973,6 +973,33 @@ at the end of the phase.
 - **Demo:** none — L1.
 - **Forbidden:** a second executor; changing `node.feedback` or `node.array_feedback`
   semantics; dynamic pipeline builds.
+- **Phase notes (built 2026-09-30, Opus 5.5 worker):**
+  - One step evaluator: the frame loop body became `Executor::run_step`; the frame
+    pass and the region driver (`R/execution/substep_region.rs`) both call it.
+    `capture_step` serves the frame-end late pass and each iteration's capture, and
+    now drains typed writes like `evaluate` does (no existing `late_capture` writes
+    one, so feedback behaviour is unchanged).
+  - Deviation: `substep_iteration(iteration, scalars: &mut [f32]) -> bool` fills one
+    value per declared iteration scalar, matching P0a's list, instead of the
+    historical fixed triple. The boundary resolves its count in `evaluate`.
+  - Per-iteration uniforms: primitives pass uniforms as `GpuBinding::Bytes`, which
+    Metal copies at encode time (`setBytes`), so every iteration's dispatch already
+    owns its bytes; there is no shared arena to slice. The Vulkan backend must keep
+    that per-dispatch copy (push constants or a per-dispatch ring).
+  - Per-frame diagnostics (the wire tap, preview scalars, dumps) record a step on its
+    first visit only. A physics sample never runs a region. A boundary asking for
+    more than 4,096 iterations in a frame stops with a graph error.
+  - Freeze: `partition_regions` refuses unions and stencil absorption across a
+    substep border, using the plan compiler's own `substeps::region_body`, and the
+    in-place loop test accepts a boundary's state port as a loop head, so a fused
+    body writes the state in place exactly as the unfused one does.
+  - Tests: `substeps_count_order_and_zero_steps`, `substeps_final_state_escapes`,
+    `substeps_no_recycle_between_iterations`, `substeps_execute_post_once`,
+    `substeps_physics_sample_never_advances_region`,
+    `substeps_freeze_never_fuses_across_border` (with a no-boundary control); GPU
+    `substeps_uniforms_distinct_per_iteration` and `substeps_frozen_unfrozen_match`
+    (bit-identical, both in place) in `tests/gpu_proofs/substeps.rs`, over the
+    shared fixtures in `substeps::test_nodes`.
 
 ### P1 — Water kernel, look gates and the cost probe
 
@@ -1299,6 +1326,7 @@ or in section 15.
 | More than one coupled tick per frame (30 fps projects) | A coupled scene is needed at a project rate below 60 fps |
 | Particle-level collider push-out | `matter_collider_penetration_bounded` fails at grid resolution |
 | Sparse or adaptive grids, 128³ live | P4's stretch report and a named scene need it |
+| Sparse volume tiles (Wu et al. 2018; NVIDIA GVDB) | Domains beyond 128³ are wanted |
 | Multiple matter domains exchanging material | A scene needs two interacting domains |
 | Quality tiers for matter | P4b lands and Peter asks for tiers |
 | GPU mesh-to-SDF | Deformable (skinned) colliders are needed |

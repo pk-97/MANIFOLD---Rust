@@ -168,24 +168,11 @@ pub(crate) fn derive_regions(
             producers.push(wire.from.0);
         }
 
-        let forward = reach(boundary, &fwd);
-        let backward = {
-            let mut seen = AHashSet::default();
-            let mut stack = producers.clone();
-            while let Some(n) = stack.pop() {
-                if n == boundary || !seen.insert(n) {
-                    continue;
-                }
-                if let Some(prev) = rev.get(&n) {
-                    stack.extend(prev.iter().copied());
-                }
-            }
-            seen
-        };
+        let members = region_body(boundary, &producers, &fwd, &rev);
         let body: Vec<NodeInstanceId> = active_order
             .iter()
             .copied()
-            .filter(|id| *id != boundary && forward.contains(id) && backward.contains(id))
+            .filter(|id| members.contains(id))
             .collect();
 
         for &producer in &producers {
@@ -299,12 +286,42 @@ fn malformed(boundary: NodeInstanceId, node: NodeInstanceId, reason: String) -> 
     }
 }
 
-fn reach(
-    from: NodeInstanceId,
-    edges: &AHashMap<NodeInstanceId, Vec<NodeInstanceId>>,
-) -> AHashSet<NodeInstanceId> {
+/// A region's body: every node that is both a forward descendant of
+/// `boundary` and a forward ancestor of one of `producers` (the nodes wired
+/// into its capture ports), boundary excluded. `fwd`/`rev` carry forward
+/// wires only — state-capture back edges excluded. The plan compiler and the
+/// freeze finder both call this, so a fused kernel and the executor always
+/// agree on which side of the border a node sits.
+pub(crate) fn region_body<N>(
+    boundary: N,
+    producers: &[N],
+    fwd: &AHashMap<N, Vec<N>>,
+    rev: &AHashMap<N, Vec<N>>,
+) -> AHashSet<N>
+where
+    N: Copy + Eq + std::hash::Hash,
+{
+    let forward = reach(&[boundary], fwd);
+    let mut body = AHashSet::default();
+    let mut stack = producers.to_vec();
+    while let Some(n) = stack.pop() {
+        if n == boundary || !body.insert(n) {
+            continue;
+        }
+        if let Some(prev) = rev.get(&n) {
+            stack.extend(prev.iter().copied());
+        }
+    }
+    body.retain(|n| forward.contains(n));
+    body
+}
+
+fn reach<N>(from: &[N], edges: &AHashMap<N, Vec<N>>) -> AHashSet<N>
+where
+    N: Copy + Eq + std::hash::Hash,
+{
     let mut seen = AHashSet::default();
-    let mut stack = vec![from];
+    let mut stack = from.to_vec();
     while let Some(n) = stack.pop() {
         if !seen.insert(n) {
             continue;
@@ -314,6 +331,252 @@ fn reach(
         }
     }
     seen
+}
+
+/// Test-only nodes for region proofs that go through the registry (the
+/// freeze finder and the `gpu_proofs` binary build graphs from definitions):
+/// array sources, a particle substep boundary and a texture sink that makes
+/// the region live. Compiled for unit tests and the `gpu-proofs` feature only.
+#[cfg(any(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+pub mod test_nodes {
+    use std::borrow::Cow;
+
+    use crate::generators::compute_common::Particle;
+    use crate::node_graph::PrimitiveRegistry;
+    use crate::node_graph::effect_node::{
+        EffectNode, EffectNodeContext, EffectNodeType, NodeRequires, ParamValues,
+    };
+    use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+    use crate::node_graph::ports::{
+        ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
+    };
+
+    use super::SubstepBoundaryPorts;
+
+    pub const PARTICLE_BOUNDARY_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        seed: "seed",
+        capture: "in",
+        state: "out",
+        iteration_scalars: &["step_dt", "step_index"],
+        results: &[],
+    };
+
+    /// The `step_dt` the particle boundary serves at iteration `i`: distinct
+    /// per iteration so a shared uniform would be visible in the result.
+    pub fn particle_step_dt(iteration: u32) -> f32 {
+        0.25 * (iteration + 1) as f32
+    }
+
+    fn port(name: &'static str, ty: PortType, kind: PortKind, required: bool) -> NodePort {
+        NodePort {
+            name: Cow::Borrowed(name),
+            ty,
+            kind,
+            required,
+        }
+    }
+
+    fn int_param(name: &'static str, default: f32) -> ParamDef {
+        ParamDef {
+            name: Cow::Borrowed(name),
+            label: name,
+            ty: ParamType::Int,
+            default: ParamValue::Float(default),
+            range: Some((0.0, 1.0e6)),
+            enum_values: &[],
+        }
+    }
+
+    macro_rules! node_basics {
+        () => {
+            fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+                crate::node_graph::depth_rule::DepthRule::Terminal
+            }
+            fn type_id(&self) -> &EffectNodeType {
+                &self.type_id
+            }
+            fn inputs(&self) -> &[NodeInput] {
+                &self.inputs
+            }
+            fn outputs(&self) -> &[NodeOutput] {
+                &self.outputs
+            }
+            fn parameters(&self) -> &[ParamDef] {
+                &self.params
+            }
+        };
+    }
+
+    /// An array whose contents the test writes after pre-allocation;
+    /// sized by `max_capacity`.
+    struct ArraySource {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+    }
+
+    impl ArraySource {
+        fn new(type_id: &'static str, item: ArrayType) -> Self {
+            Self {
+                type_id: EffectNodeType::new(type_id),
+                inputs: Vec::new(),
+                outputs: vec![port("out", PortType::Array(item), PortKind::Output, false)],
+                params: vec![int_param("max_capacity", 256.0)],
+            }
+        }
+    }
+
+    impl EffectNode for ArraySource {
+        node_basics!();
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    /// A particle substep boundary with the same shape the MPM state node
+    /// takes: `seed` copied in once, `out` the persistent state the body
+    /// mutates, `in` the capture. `iterations` per frame, `step_dt` from
+    /// [`particle_step_dt`], `step_index` the iteration.
+    struct ParticleBoundary {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+        seeded: bool,
+        pending: u32,
+    }
+
+    impl ParticleBoundary {
+        fn new() -> Self {
+            let particles = PortType::Array(ArrayType::of_known::<Particle>());
+            let f32_ty = PortType::Scalar(ScalarType::F32);
+            Self {
+                type_id: EffectNodeType::new("test.particle_boundary"),
+                inputs: vec![
+                    port("seed", particles, PortKind::Input, true),
+                    port("in", particles, PortKind::Input, true),
+                ],
+                outputs: vec![
+                    port("out", particles, PortKind::Output, false),
+                    port("step_dt", f32_ty, PortKind::Output, false),
+                    port("step_index", f32_ty, PortKind::Output, false),
+                ],
+                params: vec![int_param("iterations", 4.0)],
+                seeded: false,
+                pending: 0,
+            }
+        }
+    }
+
+    impl EffectNode for ParticleBoundary {
+        node_basics!();
+        fn requires(&self) -> NodeRequires {
+            NodeRequires {
+                gpu_encoder: true,
+                state_store: false,
+            }
+        }
+        fn array_output_capacity(
+            &self,
+            port_name: &str,
+            _params: &ParamValues,
+            input_capacities: &[(&str, u32)],
+        ) -> Option<u32> {
+            (port_name == "out")
+                .then(|| input_capacities.iter().find(|(p, _)| *p == "seed").map(|&(_, n)| n))
+                .flatten()
+        }
+        fn state_capture_input_ports(&self) -> &[&str] {
+            &["in"]
+        }
+        fn persistent_output_ports(&self) -> &[&str] {
+            &["out"]
+        }
+        fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
+            Some(PARTICLE_BOUNDARY_PORTS)
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            self.pending = ctx
+                .params
+                .get("iterations")
+                .and_then(|v| v.as_u32_clamped(0))
+                .unwrap_or(0);
+            let (Some(seed), Some(out)) = (ctx.inputs.array("seed"), ctx.outputs.array("out"))
+            else {
+                return;
+            };
+            if !self.seeded {
+                self.seeded = true;
+                let size = seed.size.min(out.size);
+                let gpu = ctx.gpu.as_deref_mut().expect("particle boundary needs a GpuEncoder");
+                gpu.native_enc.copy_buffer_to_buffer(seed, out, size);
+            }
+        }
+        fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
+            if iteration >= self.pending {
+                return false;
+            }
+            scalars[0] = particle_step_dt(iteration);
+            scalars[1] = iteration as f32;
+            true
+        }
+        fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            // An in-place body already wrote `out`; a fresh-output body is
+            // accepted by copy.
+            let (Some(candidate), Some(out)) = (ctx.inputs.array("in"), ctx.outputs.array("out"))
+            else {
+                return;
+            };
+            if !candidate.ptr_eq(out) {
+                let size = candidate.size.min(out.size);
+                let gpu = ctx.gpu.as_deref_mut().expect("particle boundary needs a GpuEncoder");
+                gpu.native_enc.copy_buffer_to_buffer(candidate, out, size);
+            }
+        }
+    }
+
+    /// Consumes particles and yields a texture so the region reaches a final
+    /// output; draws nothing.
+    struct ParticleSink {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+    }
+
+    impl EffectNode for ParticleSink {
+        node_basics!();
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+    }
+
+    pub fn register_substep_test_nodes(registry: &mut PrimitiveRegistry) {
+        registry.register("test.particle_source", || {
+            Box::new(ArraySource::new(
+                "test.particle_source",
+                ArrayType::of_known::<Particle>(),
+            ))
+        });
+        registry.register("test.force_source", || {
+            Box::new(ArraySource::new(
+                "test.force_source",
+                ArrayType::of_known::<[f32; 3]>(),
+            ))
+        });
+        registry.register("test.particle_boundary", || Box::new(ParticleBoundary::new()));
+        registry.register("test.particle_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.particle_sink"),
+                inputs: vec![port(
+                    "particles",
+                    PortType::Array(ArrayType::of_known::<Particle>()),
+                    PortKind::Input,
+                    true,
+                )],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
+    }
 }
 
 #[cfg(test)]
@@ -923,5 +1186,468 @@ mod tests {
         assert_eq!(plan.truncated(4).substep_regions()[0].steps, vec![1, 2, 3]);
         assert!(plan.truncated(3).substep_regions().is_empty());
         assert!(plan.truncated(2).substep_regions().is_empty());
+    }
+
+    // ─── Executor repeat proofs ───
+    //
+    // The real `Executor` over `MockBackend`, which stores scalars
+    // observably, so state is one scalar moving through slots:
+    //
+    // ```text
+    // src ──▶ boundary.seed
+    // boundary.out ──▶ add_dt.a ──▶ add_index.a ──▶ (capture) boundary.in
+    // boundary.step_dt ──▶ add_dt.b      boundary.step_index ──▶ add_index.b
+    // aux ──▶ add_index.c                boundary.out ──▶ consumer.a
+    // ```
+    //
+    // Per iteration i the body computes `state + 0.5 + i`; the boundary's
+    // `late_capture` accepts it onto its persistent `out`.
+
+    use std::sync::{Arc, Mutex};
+
+    use manifold_core::{Beats, Seconds};
+
+    use crate::node_graph::effect_node::FrameTime;
+    use crate::node_graph::execution::Executor;
+    use crate::node_graph::parameters::ParamValue;
+
+    type Log = Arc<Mutex<Vec<String>>>;
+
+    const SIM_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        seed: "seed",
+        capture: "in",
+        state: "out",
+        iteration_scalars: &["step_dt", "step_index"],
+        results: &[],
+    };
+
+    fn scalar_in(ctx: &EffectNodeContext<'_, '_>, port: &str) -> Option<f32> {
+        match ctx.inputs.scalar(port) {
+            Some(ParamValue::Float(v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    struct SimBoundary {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        log: Log,
+        /// Iterations the next frame runs.
+        count: Arc<Mutex<u32>>,
+        pending: u32,
+        accepted: f32,
+        seeded: bool,
+    }
+
+    impl SimBoundary {
+        fn new(log: Log, count: Arc<Mutex<u32>>) -> Self {
+            let f32_ty = PortType::Scalar(ScalarType::F32);
+            Self {
+                type_id: EffectNodeType::new("test.sim_boundary"),
+                inputs: vec![input("seed", f32_ty, true), input("in", f32_ty, true)],
+                outputs: vec![
+                    output("out", f32_ty),
+                    output("step_dt", f32_ty),
+                    output("step_index", f32_ty),
+                ],
+                log,
+                count,
+                pending: 0,
+                accepted: 0.0,
+                seeded: false,
+            }
+        }
+    }
+
+    impl EffectNode for SimBoundary {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            self.log.lock().unwrap().push("boundary".into());
+            if !self.seeded {
+                self.seeded = true;
+                self.accepted = scalar_in(ctx, "seed").unwrap_or(0.0);
+            }
+            self.pending = *self.count.lock().unwrap();
+            ctx.outputs.set_scalar("out", ParamValue::Float(self.accepted));
+        }
+        fn state_capture_input_ports(&self) -> &[&str] {
+            &["in"]
+        }
+        fn persistent_output_ports(&self) -> &[&str] {
+            &["out"]
+        }
+        fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
+            Some(SIM_PORTS)
+        }
+        fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
+            if iteration >= self.pending {
+                return false;
+            }
+            scalars[0] = 0.5;
+            scalars[1] = iteration as f32;
+            true
+        }
+        fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            let candidate = scalar_in(ctx, "in").expect("capture slot bound");
+            self.log.lock().unwrap().push(format!("capture {candidate}"));
+            self.accepted = candidate;
+            ctx.outputs.set_scalar("out", ParamValue::Float(candidate));
+        }
+    }
+
+    /// `out = a + b + c`, logging what it read; `c` unbound logs `c=none`.
+    struct Adder {
+        type_id: EffectNodeType,
+        name: &'static str,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        log: Log,
+        root: bool,
+        value: Option<f32>,
+    }
+
+    impl Adder {
+        fn new(name: &'static str, log: Log) -> Self {
+            let f32_ty = PortType::Scalar(ScalarType::F32);
+            Self {
+                type_id: EffectNodeType::new("test.adder"),
+                name,
+                inputs: vec![
+                    input("a", f32_ty, false),
+                    input("b", f32_ty, false),
+                    input("c", f32_ty, false),
+                ],
+                outputs: vec![output("out", f32_ty)],
+                log,
+                root: false,
+                value: None,
+            }
+        }
+
+        fn constant(name: &'static str, log: Log, value: f32) -> Self {
+            Self {
+                value: Some(value),
+                ..Self::new(name, log)
+            }
+        }
+
+        fn root(name: &'static str, log: Log) -> Self {
+            Self {
+                root: true,
+                ..Self::new(name, log)
+            }
+        }
+    }
+
+    impl EffectNode for Adder {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn is_liveness_root(&self) -> bool {
+            self.root
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            let out = if let Some(v) = self.value {
+                self.log.lock().unwrap().push(self.name.to_string());
+                v
+            } else {
+                let a = scalar_in(ctx, "a").unwrap_or(0.0);
+                let b = scalar_in(ctx, "b").unwrap_or(0.0);
+                let c = scalar_in(ctx, "c");
+                let c_text = c.map_or("none".to_string(), |c| c.to_string());
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("{} a={a} b={b} c={c_text}", self.name));
+                a + b + c.unwrap_or(0.0)
+            };
+            ctx.outputs.set_scalar("out", ParamValue::Float(out));
+        }
+    }
+
+    struct SimFixture {
+        graph: Graph,
+        plan: crate::node_graph::ExecutionPlan,
+        log: Log,
+        count: Arc<Mutex<u32>>,
+        aux: NodeInstanceId,
+    }
+
+    fn sim_fixture() -> SimFixture {
+        let log: Log = Arc::default();
+        let count = Arc::new(Mutex::new(3));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
+        let aux = graph.add_node(Box::new(Adder::constant("aux", log.clone(), 0.0)));
+        let boundary =
+            graph.add_node(Box::new(SimBoundary::new(log.clone(), count.clone())));
+        let add_dt = graph.add_node(Box::new(Adder::new("add_dt", log.clone())));
+        let add_index = graph.add_node(Box::new(Adder::new("add_index", log.clone())));
+        let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (add_dt, "a")).unwrap();
+        graph.connect((boundary, "step_dt"), (add_dt, "b")).unwrap();
+        graph.connect((add_dt, "out"), (add_index, "a")).unwrap();
+        graph.connect((boundary, "step_index"), (add_index, "b")).unwrap();
+        graph.connect((aux, "out"), (add_index, "c")).unwrap();
+        graph.connect((add_index, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "a")).unwrap();
+        let plan = compile(&graph).unwrap();
+        assert_eq!(plan.substep_regions().len(), 1);
+        SimFixture {
+            graph,
+            plan,
+            log,
+            count,
+            aux,
+        }
+    }
+
+    fn frame_time() -> FrameTime {
+        FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        }
+    }
+
+    fn run_frame(fx: &mut SimFixture, exec: &mut Executor, count: u32) -> Vec<String> {
+        *fx.count.lock().unwrap() = count;
+        fx.log.lock().unwrap().clear();
+        exec.execute_frame(&mut fx.graph, &fx.plan, frame_time());
+        fx.log.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn substeps_count_order_and_zero_steps() {
+        let mut fx = sim_fixture();
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        let body: Vec<&str> = log
+            .iter()
+            .map(String::as_str)
+            .filter(|e| !matches!(*e, "src" | "aux"))
+            .collect();
+        assert_eq!(
+            body,
+            vec![
+                "boundary",
+                "add_dt a=1 b=0.5 c=none",
+                "add_index a=1.5 b=0 c=0",
+                "capture 1.5",
+                "add_dt a=1.5 b=0.5 c=none",
+                "add_index a=2 b=1 c=0",
+                "capture 3",
+                "add_dt a=3 b=0.5 c=none",
+                "add_index a=3.5 b=2 c=0",
+                "capture 5.5",
+                "consumer a=5.5 b=0 c=none",
+            ]
+        );
+
+        // Zero iterations: the body never runs and the boundary's own
+        // publication of the accepted state reaches the consumer.
+        let log = run_frame(&mut fx, &mut exec, 0);
+        let body: Vec<&str> = log
+            .iter()
+            .map(String::as_str)
+            .filter(|e| !matches!(*e, "src" | "aux"))
+            .collect();
+        assert_eq!(body, vec!["boundary", "consumer a=5.5 b=0 c=none"]);
+    }
+
+    #[test]
+    fn substeps_final_state_escapes() {
+        let mut fx = sim_fixture();
+        let mut exec = Executor::with_mock();
+        let first = run_frame(&mut fx, &mut exec, 3);
+        assert_eq!(first.last().unwrap(), "consumer a=5.5 b=0 c=none");
+        // The next frame starts from the accepted final state:
+        // 5.5 → 6.0 → 7.5 → 10.0.
+        let second = run_frame(&mut fx, &mut exec, 3);
+        assert_eq!(second.last().unwrap(), "consumer a=10 b=0 c=none");
+    }
+
+    #[test]
+    fn substeps_no_recycle_between_iterations() {
+        let mut fx = sim_fixture();
+        let mut exec = Executor::with_mock();
+        let aux_out = fx
+            .plan
+            .steps()
+            .iter()
+            .find(|s| s.node == fx.aux)
+            .and_then(|s| s.outputs.first())
+            .map(|&(_, r)| r)
+            .unwrap();
+        let region = fx.plan.substep_regions()[0].clone();
+        assert!(region.held_resources.contains(&aux_out));
+        let mut slot_counts = Vec::new();
+        for _ in 0..3 {
+            let log = run_frame(&mut fx, &mut exec, 4);
+            // An outside input read inside the body stays bound for every
+            // iteration: a mid-region free would unbind it (`c=none`).
+            let reads: Vec<&String> =
+                log.iter().filter(|e| e.starts_with("add_index")).collect();
+            assert_eq!(reads.len(), 4);
+            assert!(reads.iter().all(|e| e.ends_with("c=0")), "{reads:?}");
+            // Released once the region ends.
+            assert!(exec.backend().slot_for(aux_out).is_none());
+            slot_counts.push(exec.backend().slot_count());
+        }
+        assert!(
+            slot_counts.windows(2).all(|w| w[0] == w[1]),
+            "slot count grew across frames: {slot_counts:?}"
+        );
+    }
+
+    #[test]
+    fn substeps_execute_post_once() {
+        let mut fx = sim_fixture();
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 5);
+        let count = |prefix: &str| log.iter().filter(|e| e.starts_with(prefix)).count();
+        assert_eq!(count("boundary"), 1);
+        assert_eq!(count("consumer"), 1);
+        assert_eq!(count("src"), 1);
+        assert_eq!(count("aux"), 1);
+        assert_eq!(count("add_dt"), 5);
+        assert_eq!(count("add_index"), 5);
+        assert_eq!(count("capture"), 5);
+    }
+
+    #[test]
+    fn substeps_physics_sample_never_advances_region() {
+        let mut fx = sim_fixture();
+        let mut exec = Executor::with_mock();
+        run_frame(&mut fx, &mut exec, 3);
+        fx.log.lock().unwrap().clear();
+        let n = fx.plan.steps().len();
+        let params: Vec<Option<crate::node_graph::effect_node::ParamValues>> =
+            (0..n).map(|_| Some(Default::default())).collect();
+        exec.execute_physics_sample_frame(
+            &mut fx.graph,
+            &fx.plan,
+            frame_time(),
+            &vec![true; n],
+            &params,
+        );
+        let log = fx.log.lock().unwrap().clone();
+        assert!(
+            log.iter()
+                .all(|e| !e.starts_with("boundary") && !e.starts_with("add_") && !e.starts_with("capture")),
+            "{log:?}"
+        );
+        // The live state is untouched by the sample.
+        let next = run_frame(&mut fx, &mut exec, 0);
+        assert_eq!(next.last().unwrap(), "consumer a=5.5 b=0 c=none");
+    }
+
+    // ─── Freeze never fuses across the border ───
+
+    #[test]
+    fn substeps_freeze_never_fuses_across_border() {
+        use crate::node_graph::PrimitiveRegistry;
+        use crate::node_graph::freeze::region::partition_regions;
+        use super::test_nodes::register_substep_test_nodes;
+
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        // `outside` (a force atom on the seed particles) feeds `inner_a`'s
+        // forces through a coincident array wire; both are fusable and the
+        // merge is convex, so only the border gate keeps them apart.
+        // `inner_a → inner_b` is inside the body.
+        let def: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_value(serde_json::json!({
+                "version": 3,
+                "nodes": [
+                    {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
+                    {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                    {"id": 2, "nodeId": "boundary", "typeId": "test.particle_boundary"},
+                    {"id": 3, "nodeId": "inner_a", "typeId": "node.move_particles_3d"},
+                    {"id": 4, "nodeId": "inner_b", "typeId": "node.move_particles_3d"},
+                    {"id": 5, "nodeId": "outside", "typeId": "node.push_from_walls_3d"},
+                    {"id": 6, "nodeId": "sink", "typeId": "test.particle_sink"},
+                    {"id": 7, "nodeId": "output", "typeId": "system.final_output"}
+                ],
+                "wires": [
+                    {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "seed"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "in"},
+                    {"fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "particles"},
+                    {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
+                    {"fromNode": 5, "fromPort": "out", "toNode": 3, "toPort": "forces"},
+                    {"fromNode": 2, "fromPort": "step_dt", "toNode": 3, "toPort": "speed"},
+                    {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "forces"},
+                    {"fromNode": 2, "fromPort": "step_index", "toNode": 4, "toPort": "speed"},
+                    {"fromNode": 4, "fromPort": "out", "toNode": 2, "toPort": "in"},
+                    {"fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+                    {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in"}
+                ]
+            }))
+            .unwrap();
+        let regions = partition_regions(&def, &registry);
+        let region_of = |id: u32| regions.iter().position(|r| r.members.iter().any(|m| m.doc_id == id));
+        // The body pair fuses; the outside atom never joins it.
+        assert!(region_of(3).is_some(), "the body pair should fuse");
+        assert_eq!(region_of(3), region_of(4));
+        assert_ne!(region_of(5), region_of(3));
+
+        // Control: the same force atom → mover wire with no boundary fuses,
+        // so the border gate is what kept them apart above.
+        let control: manifold_core::effect_graph_def::EffectGraphDef =
+            serde_json::from_value(serde_json::json!({
+                "version": 3,
+                "nodes": [
+                    {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
+                    {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                    {"id": 3, "nodeId": "mover", "typeId": "node.move_particles_3d"},
+                    {"id": 5, "nodeId": "outside", "typeId": "node.push_from_walls_3d"},
+                    {"id": 6, "nodeId": "sink", "typeId": "test.particle_sink"},
+                    {"id": 7, "nodeId": "output", "typeId": "system.final_output"}
+                ],
+                "wires": [
+                    {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "in"},
+                    {"fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "particles"},
+                    {"fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in"},
+                    {"fromNode": 5, "fromPort": "out", "toNode": 3, "toPort": "forces"},
+                    {"fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+                    {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in"}
+                ]
+            }))
+            .unwrap();
+        let regions = partition_regions(&control, &registry);
+        let fused_together = regions.iter().any(|r| {
+            r.members.iter().any(|m| m.doc_id == 3) && r.members.iter().any(|m| m.doc_id == 5)
+        });
+        assert!(fused_together, "control: the force atom and mover should fuse");
     }
 }
