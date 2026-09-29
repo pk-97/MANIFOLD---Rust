@@ -1,6 +1,7 @@
 //! f64 CPU reference of one water substep, the oracle the GPU matter atoms
 //! are proven against (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 (One
-//! substep) and section 12 (Invariants and enforcement)). Test-only.
+//! substep) and section 12 (Invariants and enforcement)). Built for unit
+//! tests and the `gpu-proofs` binary only.
 //! Accumulation is continuous here; the GPU's Q = 2^20 fixed point stays
 //! inside the section 12 tolerances.
 // Row/column indices mirror the section 4.1 formulas term for term.
@@ -9,10 +10,10 @@
 use super::{MatterLattice, MatterPoint, PADDING_NODES, VELOCITY_CLAMP_CFL};
 
 /// A point's stencil: base node, per-axis weights, per-axis fraction.
-pub(crate) type Stencil = ([i64; 3], [[f64; 3]; 3], [f64; 3]);
+pub type Stencil = ([i64; 3], [[f64; 3]; 3], [f64; 3]);
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Params {
+pub struct Params {
     pub dt: f64,
     pub gravity: [f64; 3],
     pub lambda: f64,
@@ -21,10 +22,13 @@ pub(crate) struct Params {
     pub liveliness: f64,
     /// Closed faces: −X, +X, −Y, +Y, −Z, +Z.
     pub closed: [bool; 6],
+    /// Round every grid contribution to the GPU's Q = 2^20 fixed point
+    /// (D5), isolating f32-versus-f64 error from quantization error.
+    pub fixed_point: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Point {
+pub struct Point {
     pub x: [f64; 3],
     pub v: [f64; 3],
     /// Affine velocity C, row-major.
@@ -48,7 +52,7 @@ impl From<&MatterPoint> for Point {
     }
 }
 
-pub(crate) struct Grid {
+pub struct Grid {
     pub mass: Vec<f64>,
     pub momentum: Vec<[f64; 3]>,
     pub velocity: Vec<[f64; 3]>,
@@ -58,7 +62,7 @@ pub(crate) struct Grid {
 
 /// Quadratic B-spline stencil along one axis: the base node and its three
 /// weights (section 4.1).
-pub(crate) fn stencil(q: f64) -> (i64, [f64; 3], f64) {
+pub fn stencil(q: f64) -> (i64, [f64; 3], f64) {
     let base = (q - 0.5).floor();
     let f = q - base;
     let w = [
@@ -76,7 +80,7 @@ fn node_index(lat: &MatterLattice, i: [i64; 3]) -> usize {
 
 /// Stencil base of a point, or `None` when its 3×3×3 stencil leaves the
 /// lattice.
-pub(crate) fn base_of(lat: &MatterLattice, x: [f64; 3]) -> Option<Stencil> {
+pub fn base_of(lat: &MatterLattice, x: [f64; 3]) -> Option<Stencil> {
     let mut base = [0i64; 3];
     let mut w = [[0.0; 3]; 3];
     let mut f = [0.0; 3];
@@ -95,14 +99,14 @@ pub(crate) fn base_of(lat: &MatterLattice, x: [f64; 3]) -> Option<Stencil> {
 
 /// Kirchhoff pressure of the water branch (D3): full for compression,
 /// scaled by Cohesion for tension.
-pub(crate) fn water_stress(p: &Params, j: f64) -> f64 {
+pub fn water_stress(p: &Params, j: f64) -> f64 {
     let tau = p.lambda * j * (j - 1.0);
     if j >= 1.0 { tau * p.cohesion } else { tau }
 }
 
 /// Clear, P2G, grid update and G2P over `points` (section 4.1 steps 1, 3, 4
 /// and 6). Points leaving the lattice are removed (id 0), as the GPU does.
-pub(crate) fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
+pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
     let count = lat.node_count() as usize;
     let dx = f64::from(lat.cell_size);
     let inv_dx = 1.0 / dx;
@@ -114,6 +118,11 @@ pub(crate) fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> 
         clamped: vec![false; count],
     };
 
+    let to_mass = f64::from(super::FIXED_POINT_SCALE) / f64::from(super::mass_unit(lat.cell_size));
+    let to_momentum = to_mass * p.dt / dx;
+    let quantize = |value: f64, scale: f64| {
+        if p.fixed_point { (value * scale).round() / scale } else { value }
+    };
     for pt in points.iter().filter(|pt| pt.id != 0) {
         let Some((base, w, f)) = base_of(lat, pt.x) else { continue };
         let mass = pt.v0 * p.density;
@@ -134,10 +143,10 @@ pub(crate) fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> 
                         (cc as f64 - f[2]) * dx,
                     ];
                     let idx = node_index(lat, [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64]);
-                    grid.mass[idx] += weight * mass;
+                    grid.mass[idx] += quantize(weight * mass, to_mass);
                     for r in 0..3 {
                         let ad = affine[r][0] * d[0] + affine[r][1] * d[1] + affine[r][2] * d[2];
-                        grid.momentum[idx][r] += weight * (mass * pt.v[r] + ad);
+                        grid.momentum[idx][r] += quantize(weight * (mass * pt.v[r] + ad), to_momentum);
                     }
                 }
             }
@@ -280,6 +289,7 @@ mod tests {
             density: 1000.0,
             liveliness: 0.0,
             closed: [true; 6],
+            fixed_point: false,
         }
     }
 

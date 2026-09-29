@@ -103,5 +103,6 @@ mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
 mod scene_viewport_navigate;
 mod scene_viewport_session;
+mod matter_transfer;
 mod smoke;
 mod substeps;

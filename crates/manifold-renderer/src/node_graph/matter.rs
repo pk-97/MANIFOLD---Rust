@@ -5,11 +5,13 @@
 
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::fluid::{FluidDomainLayout, TICK};
-use crate::node_graph::ports::{ChannelElementType, ChannelName, ChannelSpec, KnownItem};
+use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use crate::node_graph::transform::Transform;
 
-#[cfg(test)]
-pub(crate) mod reference;
+/// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
+#[cfg(any(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+pub mod reference;
 
 /// One material point. 80 bytes. Storage order is id order and never changes
 /// (D9): the published frame must be id-sorted.
@@ -36,12 +38,12 @@ pub struct MatterPoint {
 /// the three affine rows at 32, 48, 64. Stride 80.
 pub const MATTER_POINT_SPECS: &[ChannelSpec] = &[
     ChannelSpec { name: well_known::POSITION, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: ChannelName::from_str("id"), ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::ID, ty: ChannelElementType::U32 },
     ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: ChannelName::from_str("volume_ratio"), ty: ChannelElementType::F32 },
-    ChannelSpec { name: ChannelName::from_str("affine_x"), ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: ChannelName::from_str("affine_y"), ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: ChannelName::from_str("affine_z"), ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::VOLUME_RATIO, ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::AFFINE_X, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::AFFINE_Y, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::AFFINE_Z, ty: ChannelElementType::Vec4F },
 ];
 
 impl KnownItem for MatterPoint {
@@ -60,8 +62,8 @@ pub struct MatterGridNode {
 }
 
 pub const MATTER_GRID_NODE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: ChannelName::from_str("velocity_mass"), ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: ChannelName::from_str("velocity_before"), ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::VELOCITY_MASS, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::VELOCITY_BEFORE, ty: ChannelElementType::Vec4F },
 ];
 
 impl KnownItem for MatterGridNode {

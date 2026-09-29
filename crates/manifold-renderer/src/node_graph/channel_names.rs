@@ -179,6 +179,16 @@ pub mod well_known {
         MASK = "mask";
         DEPTH = "depth";
 
+        // ─── Liquid particle frames and matter (GPU_FLUID_SURFACE_DESIGN.md,
+        // GPU_MPM_SOLVER_DESIGN.md) — named so generated kernels keep them ─
+        POSITION_RADIUS = "position_radius";
+        VOLUME_RATIO    = "volume_ratio";
+        AFFINE_X        = "affine_x";
+        AFFINE_Y        = "affine_y";
+        AFFINE_Z        = "affine_z";
+        VELOCITY_MASS   = "velocity_mass";
+        VELOCITY_BEFORE = "velocity_before";
+
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's
         // Array(JointMatrix) output — one skin matrix per joint, column-
