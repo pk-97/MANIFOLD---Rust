@@ -100,7 +100,8 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   "Last-known-good" is now a property of the gate (clippy + tests before any
   merge), not of linearity.
 - **To land a workstream:** fetch → merge current `origin/main` into your
-  branch → run the worktree's `scripts/landing_gate.py` → `git merge
+  branch → run `scripts/landing_gate.py --repo <worktree path>` (agents
+  cannot cd, and a run on main's checkout refuses) → `git merge
   --no-ff` into main → push → if the push is rejected because someone landed
   first, repeat. **`scripts/land_branch.py` runs this whole ceremony in one
   command (Peter, 2026-07-31)** — the lead reviews and makes the named-red
