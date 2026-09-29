@@ -921,6 +921,16 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// `Some` makes this node a substep boundary: the plan compiler contracts
+    /// the nodes between its outputs and its capture producers into a
+    /// [`SubstepRegion`](crate::node_graph::substeps::SubstepRegion) that the
+    /// executor repeats inside one frame. Every declared capture port must
+    /// also be listed in [`state_capture_input_ports`](Self::state_capture_input_ports).
+    /// Default: `None`.
+    fn substep_boundary(&self) -> Option<crate::node_graph::substeps::SubstepBoundaryPorts> {
+        None
+    }
+
     /// If `Some(port_name)`, this node is a branch-selector: only the
     /// upstream subgraph feeding the named input port needs to run
     /// this frame. The executor uses this to prune unselected branches

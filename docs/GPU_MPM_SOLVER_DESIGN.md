@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; two-way Box3D coupling; material zoo, whitewater and particle-frame bake as later phases. -->
 
-**Status:** PROPOSED · 2026-09-29 · Opus 5.5 (worker) for Fable (lead) · awaiting Peter. P0a–P7 not built.
+**Status:** IN PROGRESS · P0a built on `feat/gpu-mpm-build` (not on main) · P0b–P7 not built · phase notes under each brief in section 11.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P3 (particle records) before P1; its P1–P2, P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -776,6 +776,22 @@ at the end of the phase.
 - **Demo:** none — L1.
 - **Forbidden:** cherry-picking from `wave/live-water`; executor changes (P0b); nested
   regions.
+- **Phase notes (built 2026-09-29, Opus 5.5 worker):**
+  - Plan-consumer inventory at `f892fb846`: 57 files. Lifetime deciders are
+    `execution_plan.rs` (78 hits), `execution.rs` (39), `resource_allocation.rs` (12),
+    `preset_runtime/build.rs` (3). Array scratch reuse and the chain slot planner
+    both return storage only through `free_after`, so region resources stay
+    dedicated there. The rest read steps for lookup, profiling or physics carry.
+  - Deviation: the historical `count`/`delta`/`time`/`index` fields became
+    `iteration_scalars: &'static [&'static str]`, because `node.matter_state` sets
+    six per-iteration scalars. The capture list is `capture` plus `results`, and
+    each capture port must also be a declared state-capture input.
+  - Regions contract through the coupled-scene group contraction
+    (`physics_scene.rs`, now `contracted_execution_order`), not a second reorder,
+    so coupled step indices stay valid. Region steps are never hoistable.
+  - The render/IO rule rejects draw calls and the final output. It cannot reject
+    `IoBridge`: fused region kernels are `node.wgsl_compute` nodes that report it.
+    Coupled-scene participants inside a body are rejected.
 
 ### P0b — Substep regions: executor repeat and freeze
 
