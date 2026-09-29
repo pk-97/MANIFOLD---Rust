@@ -298,6 +298,13 @@ public:
     int getCurrentFrame();
     // Geometry-only copy of an accepted frame; never advances the solver.
     void captureSurfaceFrame(FluidSurfaceFrame &frame);
+    // MANIFOLD: the prepared solid distances captureSurfaceFrame meshes
+    // against, written into caller scratch. Allocation-free once `solid`
+    // has this world's lattice. Never advances the solver.
+    void captureParticleFrameSolid(MeshLevelSet &solid);
+    // MANIFOLD: physical marker radius in simulation units, before the
+    // surface particle scale.
+    double getMarkerParticleRadius();
     void setCurrentFrame(int frameno);
     void setTimelineFrameStart(int frameno);
     void setTimelineFrameEnd(int frameno);
