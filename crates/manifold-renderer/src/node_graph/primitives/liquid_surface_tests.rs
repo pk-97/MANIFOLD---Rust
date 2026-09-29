@@ -329,6 +329,51 @@ fn fluid_sort_particles_into_cells_rejects_too_many_cells() {
     assert!(errors.iter().any(|e| e.contains("512 cells") && e.contains("Max Cells")), "{errors:?}");
 }
 
+/// Determinism is an invariant (bakes, bit-reproducible export): runs on the same
+/// input give byte-identical outputs, and each bin lists its particles in input
+/// order. Half-bin cells give crowded bins (the heapsort path), quarter-bin
+/// cells sparse ones (insertion sort).
+#[test]
+fn fluid_sort_particles_into_cells_is_deterministic() {
+    let mut harness = Harness::new();
+    let mut rng = Rng(31);
+    let particles: Vec<FluidParticle> = (0..4000u32)
+        .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.9), if i % 11 == 0 { 0.0 } else { 0.02 }, i + 1))
+        .collect();
+    let (input, _) = harness.array(&particles, particles.len());
+    for cell in [0.5f32, 0.25] {
+        let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell };
+        let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
+        let mut runs = Vec::new();
+        for _ in 0..3 {
+            let (sorted, sorted_buf) = harness.array::<FluidParticle>(&[], particles.len());
+            let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+            let (order, order_buf) = harness.array::<u32>(&[], particles.len());
+            let (_, errors) = harness.run(
+                &mut SortParticlesIntoCells::new(),
+                &[("particles", input)],
+                &[("sorted", sorted), ("cell_ranges", ranges), ("order", order)],
+                &lattice.params(&[]),
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+            runs.push((
+                read::<u8>(&sorted_buf, sorted_buf.size as usize),
+                read::<u8>(&order_buf, order_buf.size as usize),
+                read::<CellRange>(&ranges_buf, bins),
+            ));
+        }
+        let (sorted, order, ranges) = &runs[0];
+        assert!(runs.iter().all(|run| run.0 == *sorted && run.1 == *order), "cell {cell}: every run is byte-identical");
+        let order: &[u32] = bytemuck::cast_slice(order);
+        let crowded = ranges.iter().map(|r| r.count).max().unwrap_or(0);
+        assert!(if cell == 0.5 { crowded > 32 } else { crowded <= 32 }, "cell {cell}: largest bin {crowded}");
+        for range in ranges {
+            let members = &order[range.start as usize..(range.start + range.count) as usize];
+            assert!(members.windows(2).all(|w| w[0] < w[1]), "cell {cell}: a bin lists its particles in input order");
+        }
+    }
+}
+
 /// A consumer that wires only `order` and `cell_ranges` gets the same ranges and
 /// the same members per bin as one that also wires `sorted`. Order within a bin
 /// follows atomic ranks, so it may differ between any two runs.
