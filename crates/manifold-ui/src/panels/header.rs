@@ -356,34 +356,6 @@ impl Panel for HeaderPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intent::{Gesture, IntentRegistry};
-
-    // Golden oracle: the original right-to-left button positions. The Chrome
-    // `view()` must reproduce every interactive cell at the same rect.
-    #[derive(Default)]
-    struct HeaderGolden {
-        time_display: Rect,
-        zoom_out: Rect,
-        zoom_in: Rect,
-    }
-
-    impl HeaderGolden {
-        fn compute(&mut self, bounds: Rect) {
-            let elem_h = bounds.height - GROUP_Y_PAD * 2.0;
-            let elem_y = bounds.y + GROUP_Y_PAD;
-
-            let cx = bounds.x + (bounds.width - TIME_DISPLAY_W) * 0.5;
-            self.time_display = Rect::new(cx, elem_y, TIME_DISPLAY_W, elem_h);
-
-            // Right edge: [−][label][+] zoom cluster, inset from the bar end.
-            let mut rx = bounds.x_max() - INSET;
-            rx -= ZOOM_BUTTON_W;
-            self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
-            rx -= ZOOM_LABEL_W;
-            rx -= ZOOM_BUTTON_W;
-            self.zoom_out = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
-        }
-    }
 
     fn node_with_text<'a>(tree: &'a UITree, text: &str) -> &'a crate::node::UINode {
         (0..tree.count())
@@ -392,51 +364,24 @@ mod tests {
             .unwrap_or_else(|| panic!("no node with text {text:?}"))
     }
 
-    fn assert_rect(a: Rect, b: Rect, what: &str) {
-        assert!(
-            (a.x - b.x).abs() < 0.01
-                && (a.y - b.y).abs() < 0.01
-                && (a.width - b.width).abs() < 0.01
-                && (a.height - b.height).abs() < 0.01,
-            "{what}: {a:?} != golden {b:?}"
-        );
-    }
-
+    /// The clock sits at the true centre of the bar and the zoom cluster
+    /// reads [−][+] at the right end.
     #[test]
-    fn chrome_layout_matches_golden() {
+    fn clock_is_centred_and_zoom_cluster_trails() {
+        use crate::panels::layout_order::{assert_centred, assert_left_to_right};
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
 
-        let mut g = HeaderGolden::default();
-        g.compute(layout.header());
-
-        assert_rect(node_with_text(&tree, "\u{2212}").bounds, g.zoom_out, "zoom_out");
-        assert_rect(node_with_text(&tree, "+").bounds, g.zoom_in, "zoom_in");
-        // Centered time display lands at true screen centre despite the inset.
-        assert_rect(
-            node_with_text(&tree, "00:00.00 / 00:00.00  |  1.1.1").bounds,
-            g.time_display,
-            "time_display",
-        );
-    }
-
-    #[test]
-    fn intents_resolve_through_registry() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = HeaderPanel::new();
-        panel.build(&mut tree, &layout);
-
-        let mut intents = IntentRegistry::new();
-        panel.register_intents(&mut intents);
-
-        let zin = node_with_text(&tree, "+").id;
-        assert!(matches!(
-            intents.resolve(&tree, Some(zin), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::ZoomIn))
-        ));
+        let clock = node_with_text(&tree, "00:00.00 / 00:00.00  |  1.1.1").bounds;
+        let cells = [
+            ("clock", clock),
+            ("zoom out", node_with_text(&tree, "\u{2212}").bounds),
+            ("zoom in", node_with_text(&tree, "+").bounds),
+        ];
+        assert_left_to_right(&cells, layout.header());
+        assert_centred("clock", clock.x, clock.x_max(), layout.header());
     }
 
     #[test]

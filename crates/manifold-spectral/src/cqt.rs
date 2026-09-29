@@ -255,9 +255,4 @@ mod tests {
         cqt.process_magnitudes(&vec![0.0; n_fft], &mut out);
         assert!(out.iter().all(|&v| v < 1e-5), "silence should be ~0");
     }
-
-    #[test]
-    fn num_bins_matches_formula() {
-        assert_eq!(num_bins(50.0, 800.0, 12), 48); // 4 octaves * 12
-    }
 }

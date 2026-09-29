@@ -16,6 +16,11 @@ pub enum EffectTarget {
 
 /// Execute a closure with mutable access to a target's effects and groups.
 /// Returns None if the target doesn't exist.
+///
+/// An empty optional list is stored as `None`: an absent list is handed to `f`
+/// as an empty one and collapsed back if `f` leaves it empty. Without this an
+/// add/remove undo leaves `Some(vec![])` where the project had `None`, and a
+/// saved file gains empty `effects` / `effectGroups` arrays.
 pub fn with_effects_mut<F, R>(project: &mut Project, target: &EffectTarget, f: F) -> Option<R>
 where
     F: FnOnce(&mut Vec<PresetInstance>, &mut Vec<EffectGroup>) -> R,
@@ -23,16 +28,29 @@ where
     match target {
         EffectTarget::Layer { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
-            let effects = layer.effects_mut() as *mut Vec<PresetInstance>;
-            let groups = layer.effect_groups_mut() as *mut Vec<EffectGroup>;
-            Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
+            let result = f(
+                layer.effects.get_or_insert_with(Vec::new),
+                layer.effect_groups.get_or_insert_with(Vec::new),
+            );
+            collapse_empty(&mut layer.effects);
+            collapse_empty(&mut layer.effect_groups);
+            Some(result)
         }
         EffectTarget::Master => {
             let settings = &mut project.settings;
-            let effects = &mut settings.master_effects as *mut Vec<PresetInstance>;
-            let groups = settings.master_effect_groups_mut() as *mut Vec<EffectGroup>;
-            Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
+            let result = f(
+                &mut settings.master_effects,
+                settings.master_effect_groups.get_or_insert_with(Vec::new),
+            );
+            collapse_empty(&mut settings.master_effect_groups);
+            Some(result)
         }
+    }
+}
+
+fn collapse_empty<T>(list: &mut Option<Vec<T>>) {
+    if list.as_ref().is_some_and(Vec::is_empty) {
+        *list = None;
     }
 }
 

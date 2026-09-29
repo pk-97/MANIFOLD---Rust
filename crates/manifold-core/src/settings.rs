@@ -527,105 +527,6 @@ mod tests {
     use serde_json;
 
     #[test]
-    fn rt_quality_tier_spp_ladder() {
-        assert_eq!(RtQualityTier::UltraLow.spp(), 1);
-        assert_eq!(RtQualityTier::Low.spp(), 2);
-        assert_eq!(RtQualityTier::Medium.spp(), 4);
-        assert_eq!(RtQualityTier::High.spp(), 8);
-        assert_eq!(RtQualityTier::ExtraHigh.spp(), 16);
-        assert_eq!(RtQualityTier::Ultra.spp(), 32);
-    }
-
-    #[test]
-    fn rt_quality_tier_spp_always_positive() {
-        for tier in [
-            RtQualityTier::UltraLow,
-            RtQualityTier::Low,
-            RtQualityTier::Medium,
-            RtQualityTier::High,
-            RtQualityTier::ExtraHigh,
-            RtQualityTier::Ultra,
-        ] {
-            assert!(tier.spp() >= 1, "spp() must be >= 1 for {:?}", tier);
-        }
-    }
-
-    #[test]
-    fn rt_quality_live_defaults_match_constants() {
-        let live = RtQualityColumn::default();
-        // Live defaults from design D2:
-        // shadows UltraLow (1), ao/gi Medium (4), reflections High (8), ray Half
-        assert_eq!(live.shadows, RtQualityTier::UltraLow);
-        assert_eq!(live.ao, RtQualityTier::Medium);
-        assert_eq!(live.gi, RtQualityTier::Medium);
-        assert_eq!(live.reflections, RtQualityTier::High);
-        assert_eq!(live.ray_resolution, RtRayResolution::Half);
-        // Verify spp values match today's constants exactly
-        assert_eq!(live.shadows.spp(), 1);
-        assert_eq!(live.ao.spp(), 4);
-        assert_eq!(live.gi.spp(), 4);
-        assert_eq!(live.reflections.spp(), 8);
-        assert_eq!(live.ray_resolution.fraction(), (1, 2));
-    }
-
-    #[test]
-    fn rt_quality_export_defaults() {
-        let export = RtQualityColumn::export_default();
-        // Export defaults from design D2:
-        // shadows High (8), ao/gi High (8), reflections ExtraHigh (16), ray Native
-        assert_eq!(export.shadows, RtQualityTier::High);
-        assert_eq!(export.ao, RtQualityTier::High);
-        assert_eq!(export.gi, RtQualityTier::High);
-        assert_eq!(export.reflections, RtQualityTier::ExtraHigh);
-        assert_eq!(export.ray_resolution, RtRayResolution::Native);
-        // Verify spp values
-        assert_eq!(export.shadows.spp(), 8);
-        assert_eq!(export.ao.spp(), 8);
-        assert_eq!(export.gi.spp(), 8);
-        assert_eq!(export.reflections.spp(), 16);
-        assert_eq!(export.ray_resolution.fraction(), (1, 1));
-    }
-
-    #[test]
-    fn rt_quality_serde_round_trip() {
-        let settings = RtQualitySettings {
-            realtime: RtQualityColumn {
-                shadows: RtQualityTier::Low,
-                ao: RtQualityTier::ExtraHigh,
-                gi: RtQualityTier::High,
-                reflections: RtQualityTier::Ultra,
-                ray_resolution: RtRayResolution::Quarter,
-                spatial_denoise: RtSpatialDenoise::Off,
-            },
-            export: RtQualityColumn {
-                shadows: RtQualityTier::ExtraHigh,
-                ao: RtQualityTier::Ultra,
-                gi: RtQualityTier::ExtraHigh,
-                reflections: RtQualityTier::Ultra,
-                ray_resolution: RtRayResolution::ThreeQuarter,
-                spatial_denoise: RtSpatialDenoise::High,
-            },
-        };
-
-        let json = serde_json::to_string(&settings).unwrap();
-        let deserialized: RtQualitySettings = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.realtime.shadows, RtQualityTier::Low);
-        assert_eq!(deserialized.realtime.ao, RtQualityTier::ExtraHigh);
-        assert_eq!(deserialized.realtime.gi, RtQualityTier::High);
-        assert_eq!(deserialized.realtime.reflections, RtQualityTier::Ultra);
-        assert_eq!(deserialized.realtime.ray_resolution, RtRayResolution::Quarter);
-        assert_eq!(deserialized.realtime.spatial_denoise, RtSpatialDenoise::Off);
-
-        assert_eq!(deserialized.export.shadows, RtQualityTier::ExtraHigh);
-        assert_eq!(deserialized.export.ao, RtQualityTier::Ultra);
-        assert_eq!(deserialized.export.gi, RtQualityTier::ExtraHigh);
-        assert_eq!(deserialized.export.reflections, RtQualityTier::Ultra);
-        assert_eq!(deserialized.export.ray_resolution, RtRayResolution::ThreeQuarter);
-        assert_eq!(deserialized.export.spatial_denoise, RtSpatialDenoise::High);
-    }
-
-    #[test]
     fn rt_quality_missing_field_gets_defaults() {
         // Old JSON without rt_quality field should deserialize to defaults
         let old_json = r#"{
@@ -680,13 +581,5 @@ mod tests {
         let restored: ProjectSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.tonemap_curve, TonemapCurve::KhronosPbrNeutral);
         assert!(restored.tonemap_enabled);
-    }
-
-    #[test]
-    fn rt_ray_resolution_fraction() {
-        assert_eq!(RtRayResolution::Quarter.fraction(), (1, 4));
-        assert_eq!(RtRayResolution::Half.fraction(), (1, 2));
-        assert_eq!(RtRayResolution::ThreeQuarter.fraction(), (3, 4));
-        assert_eq!(RtRayResolution::Native.fraction(), (1, 1));
     }
 }

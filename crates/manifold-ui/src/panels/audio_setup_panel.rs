@@ -2047,7 +2047,7 @@ fn dropdown_trigger_style() -> UIStyle {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     /// The docked column rect for a 1280×720 screen with the default inspector
@@ -2388,37 +2388,6 @@ mod tests {
         assert!(p.is_open(), "panel must not self-close on outside click");
     }
 
-    /// BUG-070's remainder (P2: now sourced from `Stepper::intent_for`
-    /// instead of a bare id match) — a right-click on any of the three
-    /// stepper zones (minus / value / plus) replays the drag trio at 0.0 dB,
-    /// undoable as one drag to unity, same as every other `slider_reset`
-    /// site. No pre-existing test pinned this path directly before P2;
-    /// added here as part of converting it onto the contract.
-    #[test]
-    fn right_click_any_stepper_zone_resets_gain_to_unity() {
-        let mut p = panel_with_two_sends();
-        let mut tree = UITree::new();
-        p.build_docked(&mut tree, test_dock_rect());
-        for id in [p.send_ids[0].gain_minus, p.send_ids[0].gain_value, p.send_ids[0].gain_plus] {
-            let (consumed, actions) = p.handle_event(&UIEvent::RightClick {
-                node_id: Some(id),
-                pos: Vec2::new(100.0, 50.0),
-                modifiers: Modifiers::default(),
-            });
-            assert!(consumed, "right-click on a stepper zone must be consumed");
-            match actions.as_slice() {
-                [PanelAction::Root(RootAction::SliderReset { changed, .. })] => match changed.as_ref() {
-                    PanelAction::Scrub(ValueRef::AudioSendGain(sid), ScrubPhase::Move(ScrubValue::Scalar(db))) => {
-                        assert_eq!(sid.as_str(), "s1");
-                        assert!((db - 0.0).abs() < 1e-6, "reset must target unity (0 dB), got {db}");
-                    }
-                    other => panic!("expected AudioSendGain scrub move, got {other:?}"),
-                },
-                other => panic!("expected a SliderReset trio, got {other:?}"),
-            }
-        }
-    }
-
     #[test]
     fn gain_drag_begin_changed_commit_sequence() {
         let mut p = panel_with_two_sends();
@@ -2700,5 +2669,33 @@ mod tests {
             row0_delete_2, row1_delete_2,
             "still distinct after rebuild — stability didn't collapse the rows together"
         );
+    }
+
+    /// Every zone of the send-gain stepper (minus / value / plus) resets to
+    /// unity through `handle_event`, and the click is consumed.
+    pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build_docked(&mut tree, test_dock_rect());
+        let ids = &p.send_ids[0];
+        let zones = [("gain minus", ids.gain_minus), ("gain value", ids.gain_value), ("gain plus", ids.gain_plus)];
+        zones
+            .into_iter()
+            .map(|(label, id)| {
+                let (consumed, mut actions) = p.handle_event(&UIEvent::RightClick {
+                    node_id: Some(id),
+                    pos: Vec2::new(100.0, 50.0),
+                    modifiers: Modifiers::default(),
+                });
+                assert!(consumed, "right-click on {label} must be consumed");
+                assert!(actions.len() <= 1, "{label}: one reset, got {actions:?}");
+                crate::panels::contract_tests::ResetCase {
+                    label: label.into(),
+                    got: actions.pop(),
+                    target: |v| matches!(v, ValueRef::AudioSendGain(sid) if sid.as_str() == "s1"),
+                    default: 0.0,
+                }
+            })
+            .collect()
     }
 }

@@ -487,7 +487,7 @@ impl MacrosPanel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn rect() -> Rect {
@@ -518,45 +518,28 @@ mod tests {
         }
     }
 
+    /// Slider slots stack in macro order, one per row, all the same width.
     #[test]
-    fn slider_slots_match_golden_layout() {
-        // Each slider slot lands at the old constant cy-tracked rect.
+    fn slider_slots_stack_in_macro_order() {
         let mut tree = UITree::new();
         let mut panel = MacrosPanel::new();
         panel.set_collapsed(false);
         let r = rect();
         panel.build(&mut tree, r);
 
-        let inner_x = r.x + PAD_H;
-        let inner_w = r.width - PAD_H * 2.0;
-        let mut cy = r.y + PAD_TOP + HEADER_ROW_H;
-        for i in 0..MACRO_COUNT {
-            let slot = tree.get_bounds(panel.host.node_id_for_key(KEY_SLIDER_BASE + i as u64).unwrap());
-            let want = Rect::new(inner_x, cy, inner_w, ROW_HEIGHT);
-            assert!(
-                (slot.x - want.x).abs() < 0.01
-                    && (slot.y - want.y).abs() < 0.01
-                    && (slot.width - want.width).abs() < 0.01
-                    && (slot.height - want.height).abs() < 0.01,
-                "macro {i} slot {slot:?} != {want:?}"
-            );
-            cy += ROW_HEIGHT;
-            if i + 1 < MACRO_COUNT {
-                cy += ROW_SPACING;
-            }
+        let names: Vec<String> = (1..=MACRO_COUNT).map(|i| format!("macro {i}")).collect();
+        let cells: Vec<(&str, Rect)> = (0..MACRO_COUNT)
+            .map(|i| {
+                let id = panel.host.node_id_for_key(KEY_SLIDER_BASE + i as u64).unwrap();
+                (names[i].as_str(), tree.get_bounds(id))
+            })
+            .collect();
+        let panel_rect = Rect::new(r.x, r.y, r.width, panel.height());
+        crate::panels::layout_order::assert_top_to_bottom(&cells, panel_rect);
+        for (name, slot) in &cells {
+            assert_eq!(slot.x, cells[0].1.x, "{name} left edge");
+            assert_eq!(slot.width, cells[0].1.width, "{name} width");
         }
-    }
-
-    #[test]
-    fn chevron_click_toggles_collapse() {
-        let mut tree = UITree::new();
-        let mut panel = MacrosPanel::new();
-        panel.build(&mut tree, rect());
-        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
-        assert!(matches!(
-            panel.handle_click(chev).as_slice(),
-            [PanelAction::Params(ParamsAction::MacrosCollapseToggle)]
-        ));
     }
 
     #[test]
@@ -686,24 +669,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn right_click_on_macro_track_resolves_to_slider_reset_with_zero_default() {
-        // the per-macro reset now rides the generic SliderReset trio,
-        // carrying the macro's own default of 0.0.
+    pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {
         let mut tree = UITree::new();
         let mut panel = MacrosPanel::new();
         panel.set_collapsed(false);
         panel.build(&mut tree, rect());
-
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
+        let got = reg.resolve(&tree, panel.sliders[0].track_id(), crate::intent::Gesture::RightClick);
+        vec![crate::panels::contract_tests::ResetCase {
+            label: "macro 1".into(),
+            got,
+            target: |v| matches!(v, ValueRef::Macro(0)),
+            default: 0.0,
+        }]
+    }
 
-        let track = panel.sliders[0].track_id().unwrap();
-        match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::Macro(0), ScrubPhase::Move(ScrubValue::Scalar(v))) if v.abs() < f32::EPSILON));
-            }
-            other => panic!("expected SliderReset, got {other:?}"),
-        }
+    pub(crate) fn chevron_click() -> Vec<PanelAction> {
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.build(&mut tree, rect());
+        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
+        panel.handle_click(chev)
     }
 }

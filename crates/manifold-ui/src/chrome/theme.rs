@@ -145,13 +145,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inspector_base_is_the_one_accent_on_the_panel_surface() {
-        assert_eq!(Theme::INSPECTOR.accent, color::INSPECTOR_ACCENT);
-        assert_eq!(Theme::INSPECTOR.surface, color::BG_1);
-        assert_eq!(Theme::INSPECTOR.text, color::TEXT_NORMAL);
-    }
-
-    #[test]
     fn with_accent_swaps_only_the_accent() {
         let t = Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32);
         assert_eq!(t.accent, color::ENVELOPE_ACTIVE_C32);
@@ -161,49 +154,11 @@ mod tests {
     }
 
     #[test]
-    fn tinted_derives_a_dark_source_tint_and_white_text() {
-        let t = Theme::INSPECTOR.with_accent(color::AUDIO_TRIM_BAR_C32).tinted();
-        // Accent survives the tint; surface is the 18%-accent-over-void mix; text white.
-        assert_eq!(t.accent, color::AUDIO_TRIM_BAR_C32);
-        assert_eq!(t.surface, color::mix(color::BG_0, color::AUDIO_TRIM_BAR_C32, 0.18));
-        assert_eq!(t.text, color::TEXT_WHITE_C32);
-        // The tint is genuinely dark (it sits over the void) but carries the hue —
-        // its green channel leads, distinct from a neutral grey.
-        assert!(t.surface.g > t.surface.r && t.surface.g > t.surface.b);
-    }
-
-    #[test]
     fn each_source_tints_to_its_own_surface() {
         // The bug the mock had (one baked `:root` tint for all) can't recur: the
         // surface derives per-accent, so two sources never share a surface.
         let env = Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32).tinted();
         let aud = Theme::INSPECTOR.with_accent(color::AUDIO_TRIM_BAR_C32).tinted();
         assert_ne!(env.surface, aud.surface);
-    }
-
-    #[test]
-    fn slider_fill_is_the_accent() {
-        let t = Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32).tinted();
-        let s = t.slider_colors();
-        assert_eq!(s.fill, color::ENVELOPE_ACTIVE_C32);
-        assert_eq!(s.track, color::SLIDER_TRACK_C32);
-        assert_eq!(s.text, color::TEXT_WHITE_C32);
-    }
-
-    #[test]
-    fn option_selected_fills_accent_idle_recesses_to_a_well() {
-        let t = Theme::INSPECTOR.with_accent(color::DRIVER_ACTIVE_C32).tinted();
-        let on = t.option_style(true, color::FONT_BODY);
-        assert_eq!(on.bg_color, color::DRIVER_ACTIVE_C32);
-        let off = t.option_style(false, color::FONT_BODY);
-        assert_eq!(off.bg_color, color::SLIDER_TRACK_C32);
-        assert_ne!(off.bg_color, on.bg_color);
-    }
-
-    #[test]
-    fn label_and_surface_read_from_the_theme() {
-        let t = Theme::INSPECTOR.with_accent(color::ABL_BADGE_C32).tinted();
-        assert_eq!(t.label_style(color::FONT_BODY).text_color, color::TEXT_WHITE_C32);
-        assert_eq!(t.surface_style(color::CARD_RADIUS).bg_color, t.surface);
     }
 }

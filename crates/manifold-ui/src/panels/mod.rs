@@ -3,6 +3,8 @@ pub mod actions;
 pub mod audio_setup_panel;
 pub mod audio_trigger_section;
 pub mod browser_popup;
+#[cfg(test)]
+mod contract_tests;
 pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
 pub mod drawer;
@@ -15,6 +17,8 @@ pub mod header;
 pub mod inspector;
 pub mod layer_chrome;
 pub mod layer_header;
+#[cfg(test)]
+mod layout_order;
 pub mod macros_panel;
 pub mod master_chrome;
 pub mod overlay;

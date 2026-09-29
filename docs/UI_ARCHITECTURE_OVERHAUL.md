@@ -852,7 +852,7 @@ pass (see section 0).
   accepts the UI `SelectionRegion`.
 - [x] **5.3** `manifold-ui` builds + tests standalone — compiles with no
   `manifold-core` dependency. The engine-registry parity tests moved to
-  `manifold-core/tests/generator_param_counts.rs` (they test the registry, not
+  `manifold-core/tests/generator_registry_invariants.rs` (they test the registry, not
   the UI).
 
 > **Phases 6–8 below** are the three moves Phase 5 unblocked. They are

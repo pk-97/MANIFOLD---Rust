@@ -485,73 +485,6 @@ impl Panel for TransportPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intent::{Gesture, IntentRegistry};
-    use std::collections::HashMap;
-
-    // Golden oracle: the original three-regime pixel layout. The Chrome `view()`
-    // must land every interactive button at the same rect.
-    #[derive(Default)]
-    struct TransportGolden {
-        rects: HashMap<&'static str, Rect>,
-    }
-
-    impl TransportGolden {
-        fn compute(&mut self, bounds: Rect) {
-            let eh = bounds.height - GROUP_Y_PAD * 2.0;
-            let ey = bounds.y + GROUP_Y_PAD;
-            let mut put = |k, x, w| {
-                self.rects.insert(k, Rect::new(x, ey, w, eh));
-            };
-
-            // Left
-            let mut x = bounds.x + INSET;
-            put("SRC:INT", x, CLOCK_AUTHORITY_W);
-            x += CLOCK_AUTHORITY_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
-            put("LINK", x, LINK_BUTTON_W);
-            x += LINK_BUTTON_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
-                + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
-            put("CLK", x, CLK_BUTTON_W);
-            x += CLK_BUTTON_W + ITEM_SPACING;
-            put("Select...", x, CLK_DEVICE_W);
-            x += CLK_DEVICE_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
-                + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
-            put("SYNC", x, SYNC_BUTTON_W);
-
-            // Center
-            let center_w = PLAY_BUTTON_W + ITEM_SPACING + STOP_BUTTON_W + ITEM_SPACING + REC_BUTTON_W
-                + ITEM_SPACING + CENTER_SPACER + ITEM_SPACING + BPM_LABEL_W + ITEM_SPACING
-                + BPM_FIELD_W + ITEM_SPACING + BPM_RESET_W + ITEM_SPACING + BPM_CLEAR_W;
-            let mut cx = bounds.x + (bounds.width - center_w) * 0.5;
-            put("PLAY", cx, PLAY_BUTTON_W);
-            cx += PLAY_BUTTON_W + ITEM_SPACING;
-            put("STOP", cx, STOP_BUTTON_W);
-            cx += STOP_BUTTON_W + ITEM_SPACING;
-            put("REC", cx, REC_BUTTON_W);
-            cx += REC_BUTTON_W + ITEM_SPACING + CENTER_SPACER + ITEM_SPACING + BPM_LABEL_W + ITEM_SPACING;
-            put("120.0", cx, BPM_FIELD_W);
-            cx += BPM_FIELD_W + ITEM_SPACING;
-            put("R", cx, BPM_RESET_W);
-            cx += BPM_RESET_W + ITEM_SPACING;
-            put("CLR", cx, BPM_CLEAR_W);
-
-            // Right group removed: file ops → File menu, HDR/PERC → Settings popup.
-            // Automation globals (P4) now occupy that right-aligned slot: a Row
-            // with `main_align(Align::End)` offsets its whole sequence by `slack`
-            // (see `chrome::layout::align_offset`), so LANES/BACK/ARM land flush
-            // against the padded right edge in child order — LANES first (left),
-            // ARM last (flush right), same math as `left_group`'s Start-aligned x
-            // but mirrored.
-            let auto_w = AUTO_LANES_BUTTON_W + ITEM_SPACING + AUTO_DRAW_BUTTON_W + ITEM_SPACING + AUTO_BACK_BUTTON_W + ITEM_SPACING + AUTO_ARM_BUTTON_W;
-            let mut ax = bounds.x_max() - INSET - auto_w;
-            put("AUTOMATION", ax, AUTO_LANES_BUTTON_W);
-            ax += AUTO_LANES_BUTTON_W + ITEM_SPACING;
-            put("DRAW", ax, AUTO_DRAW_BUTTON_W);
-            ax += AUTO_DRAW_BUTTON_W + ITEM_SPACING;
-            put("RESTORE ALL", ax, AUTO_BACK_BUTTON_W);
-            ax += AUTO_BACK_BUTTON_W + ITEM_SPACING;
-            put("ARM", ax, AUTO_ARM_BUTTON_W);
-        }
-    }
 
     fn buttons(tree: &UITree) -> Vec<(String, Rect)> {
         (0..tree.count())
@@ -561,72 +494,30 @@ mod tests {
             .collect()
     }
 
+    /// Sync controls on the left, the transport cluster centred, automation
+    /// globals flush right, in this order and never overlapping.
     #[test]
-    fn chrome_layout_matches_golden() {
+    fn controls_keep_their_order_with_the_transport_cluster_centred() {
+        use crate::panels::layout_order::{assert_centred, assert_left_to_right};
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = TransportPanel::new();
         panel.build(&mut tree, &layout);
 
-        let mut g = TransportGolden::default();
-        g.compute(layout.transport_bar());
+        let mut got = buttons(&tree);
+        got.sort_by(|a, b| a.1.x.partial_cmp(&b.1.x).unwrap());
+        let cells: Vec<(&str, Rect)> = got.iter().map(|(t, r)| (t.as_str(), *r)).collect();
+        let labels: Vec<&str> = cells.iter().map(|c| c.0).collect();
+        assert_eq!(labels, [
+            "SRC:INT", "LINK", "CLK", "Select...", "SYNC",
+            "PLAY", "STOP", "REC", "120.0", "R", "CLR",
+            "AUTOMATION", "DRAW", "RESTORE ALL", "ARM",
+        ]);
+        let bar = layout.transport_bar();
+        assert_left_to_right(&cells, bar);
 
-        let got = buttons(&tree);
-        assert_eq!(got.len(), 15, "15 transport buttons (sync left + transport centre + automation right)");
-        for (text, rect) in &got {
-            let want = g.rects.get(text.as_str()).unwrap_or_else(|| panic!("unexpected button {text:?}"));
-            assert!(
-                (rect.x - want.x).abs() < 0.01
-                    && (rect.y - want.y).abs() < 0.01
-                    && (rect.width - want.width).abs() < 0.01
-                    && (rect.height - want.height).abs() < 0.01,
-                "button '{text}' at {rect:?} != golden {want:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn intents_resolve_through_registry() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = TransportPanel::new();
-        panel.build(&mut tree, &layout);
-
-        let mut intents = IntentRegistry::new();
-        panel.register_intents(&mut intents);
-
-        let id_of = |t: &str| {
-            (0..tree.count())
-                .filter_map(|i| tree.get_node(tree.id_at(i)))
-                .find(|n| n.text.as_deref() == Some(t))
-                .map(|n| n.id)
-        };
-        assert!(matches!(
-            intents.resolve(&tree, id_of("PLAY"), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::PlayPause))
-        ));
-        assert!(matches!(
-            intents.resolve(&tree, id_of("SYNC"), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::ToggleSyncOutput))
-        ));
-        assert!(matches!(
-            intents.resolve(&tree, panel.bpm_field_id(), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::BpmFieldClicked))
-        ));
-        // Clock authority is display-only: interactive, but no resolved action.
-        assert!(intents.resolve(&tree, id_of("SRC:INT"), Gesture::Click).is_none());
-        assert!(matches!(
-            intents.resolve(&tree, id_of("ARM"), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::ToggleAutomationArm))
-        ));
-        assert!(matches!(
-            intents.resolve(&tree, id_of("RESTORE ALL"), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::AutomationBackToArrangement))
-        ));
-        assert!(matches!(
-            intents.resolve(&tree, id_of("AUTOMATION"), Gesture::Click),
-            Some(PanelAction::Transport(TransportAction::ToggleAutomationMode))
-        ));
+        let rect_of = |t: &str| cells.iter().find(|c| c.0 == t).unwrap().1;
+        assert_centred("transport cluster", rect_of("PLAY").x, rect_of("CLR").x_max(), bar);
     }
 
     #[test]

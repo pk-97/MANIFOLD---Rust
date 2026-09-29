@@ -407,146 +407,66 @@ mod tests {
         assert_eq!(project.settings.stage_layout.placements[1].id, b_id);
     }
 
-    #[test]
-    fn rename_round_trips() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
+    const ID: OutputId = OutputId(0);
 
-        let mut cmd =
-            RenameDisplayPlacementCommand::new(id, "Totem 0".into(), "Totem L".into());
-        cmd.execute(&mut project);
-        assert_eq!(project.settings.stage_layout.find(id).unwrap().name, "Totem L");
-        cmd.undo(&mut project);
-        assert_eq!(project.settings.stage_layout.find(id).unwrap().name, "Totem 0");
+    fn one_placement() -> Project {
+        let mut project = Project::default();
+        project.settings.stage_layout.placements.push(sample_placement(0));
+        project
+    }
+
+    fn placement(project: &Project) -> &DisplayPlacement {
+        project.settings.stage_layout.find(ID).unwrap()
     }
 
     #[test]
-    fn transform_round_trips() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
-
-        let mut cmd = SetDisplayPlacementTransformCommand::new(
-            id,
-            [0.0, 0.0],
-            Rotation::R0,
-            [3500.0, 0.0],
-            Rotation::R90,
-        );
-        cmd.execute(&mut project);
-        let p = project.settings.stage_layout.find(id).unwrap();
-        assert_eq!(p.position_mm, [3500.0, 0.0]);
-        assert_eq!(p.rotation, Rotation::R90);
-
-        cmd.undo(&mut project);
-        let p = project.settings.stage_layout.find(id).unwrap();
-        assert_eq!(p.position_mm, [0.0, 0.0]);
-        assert_eq!(p.rotation, Rotation::R0);
-    }
-
-    #[test]
-    fn physical_size_round_trips() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
-
-        let mut cmd =
-            SetDisplayPhysicalSizeCommand::new(id, [500.0, 1000.0], [540.0, 960.0]);
-        cmd.execute(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().physical_size_mm,
-            [540.0, 960.0]
-        );
-        cmd.undo(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().physical_size_mm,
-            [500.0, 1000.0]
-        );
-    }
-
-    #[test]
-    fn native_resolution_round_trips() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
-
-        let mut cmd =
-            SetDisplayNativeResolutionCommand::new(id, [1080, 1920], [2160, 3840]);
-        cmd.execute(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().native_resolution,
-            [2160, 3840]
-        );
-        cmd.undo(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().native_resolution,
-            [1080, 1920]
-        );
-    }
-
-    #[test]
-    fn enabled_toggle_round_trips() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
-
-        let mut cmd = SetDisplayEnabledCommand::new(id, true, false);
-        cmd.execute(&mut project);
-        assert!(!project.settings.stage_layout.find(id).unwrap().enabled);
-        cmd.undo(&mut project);
-        assert!(project.settings.stage_layout.find(id).unwrap().enabled);
-    }
-
-    #[test]
-    fn identity_assign_and_clear_round_trip() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
-
-        let identity = DisplayIdentity {
-            uuid: Some("ABC-123".into()),
-            name: "Totem L".into(),
-        };
-        let mut cmd = SetDisplayIdentityCommand::new(id, None, Some(identity.clone()));
-        cmd.execute(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().identity,
-            Some(identity)
-        );
-        cmd.undo(&mut project);
-        assert_eq!(project.settings.stage_layout.find(id).unwrap().identity, None);
-    }
-
-    #[test]
-    fn advanced_settings_round_trip() {
-        let mut project = Project::default();
-        let placement = sample_placement(0);
-        let id = placement.id;
-        project.settings.stage_layout.placements.push(placement);
-
-        let old = OutputAdvanced::default();
-        let new = OutputAdvanced {
-            density_cap_px_per_mm: Some(2.0),
-            ..Default::default()
-        };
-
-        let mut cmd = SetDisplayAdvancedCommand::new(id, old.clone(), new.clone());
-        cmd.execute(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().advanced.density_cap_px_per_mm,
-            Some(2.0)
-        );
-        cmd.undo(&mut project);
-        assert_eq!(
-            project.settings.stage_layout.find(id).unwrap().advanced.density_cap_px_per_mm,
-            None
-        );
+    fn placement_setters_undo_and_redo_restore_the_whole_project() {
+        use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
+        assert_setter_cases(one_placement, &[
+            SetterCase {
+                name: "rename",
+                build: |_| Box::new(RenameDisplayPlacementCommand::new(ID, "Totem 0".into(), "Totem L".into())),
+                applied: |p| placement(p).name == "Totem L",
+            },
+            SetterCase {
+                name: "transform",
+                build: |_| Box::new(SetDisplayPlacementTransformCommand::new(
+                    ID, [0.0, 0.0], Rotation::R0, [3500.0, 0.0], Rotation::R90,
+                )),
+                applied: |p| placement(p).position_mm == [3500.0, 0.0] && placement(p).rotation == Rotation::R90,
+            },
+            SetterCase {
+                name: "physical size",
+                build: |_| Box::new(SetDisplayPhysicalSizeCommand::new(ID, [500.0, 1000.0], [540.0, 960.0])),
+                applied: |p| placement(p).physical_size_mm == [540.0, 960.0],
+            },
+            SetterCase {
+                name: "native resolution",
+                build: |_| Box::new(SetDisplayNativeResolutionCommand::new(ID, [1080, 1920], [2160, 3840])),
+                applied: |p| placement(p).native_resolution == [2160, 3840],
+            },
+            SetterCase {
+                name: "enabled",
+                build: |_| Box::new(SetDisplayEnabledCommand::new(ID, true, false)),
+                applied: |p| !placement(p).enabled,
+            },
+            SetterCase {
+                name: "identity",
+                build: |_| Box::new(SetDisplayIdentityCommand::new(ID, None, Some(DisplayIdentity {
+                    uuid: Some("ABC-123".into()),
+                    name: "Totem L".into(),
+                }))),
+                applied: |p| placement(p).identity.as_ref().is_some_and(|i| i.name == "Totem L"),
+            },
+            SetterCase {
+                name: "advanced",
+                build: |_| Box::new(SetDisplayAdvancedCommand::new(
+                    ID,
+                    OutputAdvanced::default(),
+                    OutputAdvanced { density_cap_px_per_mm: Some(2.0), ..Default::default() },
+                )),
+                applied: |p| placement(p).advanced.density_cap_px_per_mm == Some(2.0),
+            },
+        ]);
     }
 }

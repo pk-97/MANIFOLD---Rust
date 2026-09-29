@@ -51,8 +51,8 @@ inventory::submit! {
 // via the JSON's paramAliases.
 
 // Concentric Tunnel: twin RETAINED (BUG-eiur) — manifold-core's
-// generator_param_count_concentric_tunnel resolves CONCENTRIC_TUNNEL through
-// the core-only inventory (renderer-less binaries), so this submission is
+// registry tests and renderer-less binaries resolve CONCENTRIC_TUNNEL through
+// the core-only inventory, so this submission is
 // still load-bearing unlike the five deleted below. JSON stays canonical;
 // this must match it field-for-field.
 

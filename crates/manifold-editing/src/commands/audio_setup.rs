@@ -396,20 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn gain_round_trips() {
-        let mut project = Project::default();
-        let send = AudioSend::new("Bass");
-        let id = send.id.clone();
-        project.audio_setup.sends.push(send);
-
-        let mut cmd = SetAudioSendGainCommand::new(id.clone(), 0.0, 6.0);
-        cmd.execute(&mut project);
-        assert_eq!(project.audio_setup.find_send(&id).unwrap().gain_db, 6.0);
-        cmd.undo(&mut project);
-        assert_eq!(project.audio_setup.find_send(&id).unwrap().gain_db, 0.0);
-    }
-
-    #[test]
     fn crossovers_round_trip() {
         let mut project = Project::default();
         // Defaults.
@@ -459,23 +445,30 @@ mod tests {
         assert!(project.audio_setup.send_for_layer(&layer).is_none());
     }
 
+    fn one_send() -> Project {
+        let mut project = Project::default();
+        project.audio_setup.sends.push(AudioSend::new("Old"));
+        project
+    }
 
-    // `triggers_round_trip` (the deleted matrix-editing command's test) is
-    // deleted with the command (P3, D2). Clip-trigger round-trip coverage
-    // lives in `manifold-editing::commands::layer` (P2) and
-    // `manifold-io`/`manifold-playback`'s migration + evaluator tests.
+    fn send(project: &Project) -> &AudioSend {
+        &project.audio_setup.sends[0]
+    }
 
     #[test]
-    fn rename_round_trips() {
-        let mut project = Project::default();
-        let send = AudioSend::new("Old");
-        let id = send.id.clone();
-        project.audio_setup.sends.push(send);
-
-        let mut cmd = RenameAudioSendCommand::new(id.clone(), "Old".into(), "New".into());
-        cmd.execute(&mut project);
-        assert_eq!(project.audio_setup.find_send(&id).unwrap().label, "New");
-        cmd.undo(&mut project);
-        assert_eq!(project.audio_setup.find_send(&id).unwrap().label, "Old");
+    fn send_setters_undo_and_redo_restore_the_whole_project() {
+        use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
+        assert_setter_cases(one_send, &[
+            SetterCase {
+                name: "gain",
+                build: |p| Box::new(SetAudioSendGainCommand::new(send(p).id.clone(), 0.0, 6.0)),
+                applied: |p| send(p).gain_db == 6.0,
+            },
+            SetterCase {
+                name: "rename",
+                build: |p| Box::new(RenameAudioSendCommand::new(send(p).id.clone(), "Old".into(), "New".into())),
+                applied: |p| send(p).label == "New",
+            },
+        ]);
     }
 }

@@ -147,7 +147,7 @@ mod tests {
         // Different time signature
         assert_eq!(grid_interval_for_zoom(3.0, 3.0), 3.0);
 
-        // Zero beats_per_bar clamps to 1.0 (Unity Mathf.Max guard, line 244)
+        // Zero beats_per_bar clamps to 1.0
         assert_eq!(grid_interval_for_zoom(3.0, 0.0), 1.0);
     }
 

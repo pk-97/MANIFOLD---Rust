@@ -3155,13 +3155,6 @@ mod tests {
     }
 
     #[test]
-    fn bridge_default_state() {
-        let bridge = AbletonBridge::new();
-        assert!(!bridge.is_connected());
-        assert!(bridge.session().tracks.is_empty());
-    }
-
-    #[test]
     fn osc_arg_extraction() {
         assert_eq!(osc_arg_int(&rosc::OscType::Int(42)), Some(42));
         assert_eq!(osc_arg_int(&rosc::OscType::Float(3.7)), Some(3));

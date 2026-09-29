@@ -423,10 +423,4 @@ mod tests {
         assert_eq!(back.as_str(), "SomeFuturePreset");
         assert!(!back.is_unknown());
     }
-
-    #[test]
-    fn display() {
-        assert_eq!(format!("{}", PresetTypeId::BLOOM), "Bloom");
-        assert_eq!(format!("{}", PresetTypeId::OILY_FLUID), "OilyFluid");
-    }
 }

@@ -1435,56 +1435,6 @@ mod tests {
         layout
     }
 
-    fn close(a: Rect, b: Rect) -> bool {
-        (a.x - b.x).abs() < 0.01
-            && (a.y - b.y).abs() < 0.01
-            && (a.width - b.width).abs() < 0.01
-            && (a.height - b.height).abs() < 0.01
-    }
-
-    #[test]
-    fn section_card_view_matches_old_pixel_math() {
-        // The typed section-card view must materialise to the exact two panels
-        // the old hand-rolled border+bg add_panel pair produced.
-        let mut tree = UITree::new();
-        let before = tree.count() as u32;
-        let rect = Rect::new(10.0, 20.0, 200.0, 100.0);
-        chrome::materialize(&mut tree, &section_card_view(), rect);
-
-        assert_eq!(tree.count() as u32, before + 2, "border + inner-bg panels");
-        let border = tree.get_node(tree.id_at(before as usize)).unwrap();
-        assert!(close(border.bounds, rect), "border at the card rect");
-        assert_eq!(border.style.bg_color, SECTION_CARD_BORDER);
-        assert_eq!(border.style.corner_radius, SECTION_CARD_RADIUS);
-        let bg = tree.get_node(tree.id_at(before as usize + 1)).unwrap();
-        assert!(
-            close(bg.bounds, Rect::new(11.0, 21.0, 198.0, 98.0)),
-            "inner bg inset 1px: {:?}",
-            bg.bounds
-        );
-        assert_eq!(bg.style.bg_color, SECTION_CARD_BG);
-        assert_eq!(bg.style.corner_radius, SECTION_CARD_RADIUS - 1.0);
-    }
-
-    #[test]
-    fn add_effect_button_view_matches_old_pixel_math() {
-        let mut tree = UITree::new();
-        let rect = Rect::new(5.0, 5.0, 150.0, ADD_EFFECT_BTN_H);
-        let ids = chrome::materialize(&mut tree, &add_effect_button_view(), rect);
-
-        let btn_id = ids
-            .iter()
-            .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
-            .map(|(_, id)| *id)
-            .expect("button id recovered by key");
-        let btn = tree.get_node(btn_id).unwrap();
-        assert!(close(btn.bounds, rect), "button at the given rect");
-        assert_eq!(btn.text.as_deref(), Some("+ Add Effect"));
-        assert_eq!(btn.node_type, UINodeType::Button);
-        assert!(btn.flags.contains(UIFlags::INTERACTIVE));
-        assert_eq!(btn.style.bg_color, chrome::components::button_secondary_style().bg_color);
-    }
-
     #[test]
     fn build_empty_inspector() {
         let mut tree = UITree::new();
@@ -3138,27 +3088,6 @@ mod tests {
         if panel.master_chrome.node_count() > 0 {
             let target = panel.find_target_for_node(tree.id_at(first));
             assert!(matches!(target, Some(PressedTarget::MasterChrome)));
-        }
-    }
-
-    #[test]
-    fn click_chevron_returns_toggle() {
-        let mut tree = UITree::new();
-        let mut panel = InspectorCompositePanel::new();
-        let layout = inspector_layout();
-        panel.build(&mut tree, &layout);
-
-        // Find the master chrome's chevron button and simulate click
-        // We can test via route_click
-        let actions = panel.route_click(
-            tree.id_at(panel.master_chrome.first_node() + 1),
-            Modifiers::NONE,
-            &tree,
-        );
-        // Node at first_node+1 is the chevron button in master chrome build order
-        // This should return MasterCollapseToggle
-        if !actions.is_empty() {
-            assert!(matches!(actions[0], PanelAction::Params(ParamsAction::MasterCollapseToggle)));
         }
     }
 

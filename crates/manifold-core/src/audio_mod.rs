@@ -688,14 +688,6 @@ mod tests {
     }
 
     #[test]
-    fn amplitude_full_is_the_default_feature() {
-        assert_eq!(
-            AudioFeature::default(),
-            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full)
-        );
-    }
-
-    #[test]
     fn legacy_flat_feature_migrates_to_matrix() {
         // Old flat-enum JSON forms must load onto the { kind, band } matrix.
         let cases = [

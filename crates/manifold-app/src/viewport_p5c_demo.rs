@@ -18,8 +18,8 @@
 //! `apply` plus the isolated `ViewportSession` fixture end to end, just
 //! without the winit event loop and window dispatch around it.
 //!
-//! `#![cfg(test)]` on the whole module (the `journey_proof.rs`/
-//! `bug035_verify.rs` convention) — invisible outside `cargo test`, so it
+//! `#![cfg(test)]` on the whole module (the `journey_proof.rs` convention) —
+//! invisible outside `cargo test`, so it
 //! never needs a `#[allow(dead_code)]`.
 #![cfg(test)]
 
