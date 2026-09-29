@@ -49,6 +49,7 @@ struct ParticleMesherParameters {
     double previewdx = 0.0;
     
     std::vector<vmath::vec3> *particles;
+    const std::vector<float> *particleRadii = nullptr;
     MeshLevelSet *solidSDF;
 };
 
@@ -101,11 +102,13 @@ private:
         BlockArray3d<float> scalarField;
         ScalarField fieldValues;
         std::vector<vmath::vec3> particles;
+        std::vector<float> particleRadii;
     };
 
     struct ComputeBlock {
         GridBlock<float> gridBlock;
         vmath::vec3 *particleData;
+        const float *particleRadii = nullptr;
         int numParticles = 0;
     };
 
@@ -148,6 +151,7 @@ private:
     void _sortParticlesIntoBlocks(ScalarFieldData &fieldData, 
                                   ParticleGridCountData &gridCountData,
                                   std::vector<vmath::vec3> &sortedParticles,
+                                  std::vector<float> &sortedParticleRadii,
                                   std::vector<int> &blockToParticleIndex);
     void _scalarFieldProducerThread(BoundedBuffer<ComputeBlock> *computeBlockQueue,
                                     BoundedBuffer<ComputeBlock> *finishedComputeBlockQueue);
@@ -183,6 +187,7 @@ private:
     ScalarField _pfield;
 
     std::vector<vmath::vec3> *_particles;
+    const std::vector<float> *_particleRadii = nullptr;
     MeshLevelSet *_solidSDF;
 
     // Internal Parameters

@@ -20,5 +20,12 @@ struct FluidSurfaceFrame {
     MeshLevelSet solid;
 
     TriangleMesh mesh(int subdivisions, double particleScale,
-                      double smoothing, int iterations);
+                      double smoothing, int iterations, double isolatedScale = 1.0);
+
+private:
+    std::vector<float> _particleRadii;
+    std::vector<float> _isolationWeights;
+    double _isolationRadius = 0.0;
+    double _radiiScale = 0.0;
+    void _prepareIsolatedRadii(double radius, double isolatedScale);
 };

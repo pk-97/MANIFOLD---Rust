@@ -9619,31 +9619,6 @@ void FluidSimulation::captureSurfaceFrame(FluidSurfaceFrame &frame) {
     }
 }
 
-TriangleMesh FluidSurfaceFrame::mesh(int subdivisions, double particleScale,
-                                   double smoothing, int iterations) {
-    TriangleMesh surface;
-    if (particles.empty()) {
-        return surface;
-    }
-    ParticleMesherParameters params;
-    params.isize = isize;
-    params.jsize = jsize;
-    params.ksize = ksize;
-    params.dx = dx;
-    params.subdivisions = subdivisions;
-    params.computechunks = chunks;
-    params.radius = particleRadius * particleScale;
-    params.particles = &particles;
-    params.solidSDF = &solid;
-    ParticleMesher mesher;
-    surface = mesher.meshParticles(params);
-    surface.removeMinimumTriangleCountPolyhedra(minimumTriangles);
-    surface.smooth(smoothing, iterations);
-    surface.scale(vmath::vec3(domainScale, domainScale, domainScale));
-    surface.translate(domainOffset);
-    return surface;
-}
-
 void FluidSimulation::_updateMeshingVolumeSDF() {
     if (!_isMeshingVolumeSet || _currentFrameTimeStepNumber != 0) {
         return;

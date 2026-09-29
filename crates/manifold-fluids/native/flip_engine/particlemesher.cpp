@@ -29,6 +29,9 @@ SOFTWARE.
 #include "threadutils.h"
 #include "gridutils.h"
 
+#include <cmath>
+#include <stdexcept>
+
 
 ParticleMesher::ParticleMesher() {
 }
@@ -77,12 +80,24 @@ void ParticleMesher::_initialize(ParticleMesherParameters params) {
     _computechunks = params.computechunks;
     _radius = params.radius;
 
+    _particles = params.particles;
+    _particleRadii = params.particleRadii;
+    if (_particleRadii != nullptr) {
+        if (_particleRadii->size() != _particles->size()) {
+            throw std::invalid_argument("Particle radii must match particle count");
+        }
+        for (float radius : *_particleRadii) {
+            if (!std::isfinite(radius) || radius <= 0.0f || radius > static_cast<float>(_radius)) {
+                throw std::invalid_argument("Particle radii must be finite, positive, and no greater than the mesher radius");
+            }
+        }
+    }
+
     _isPreviewMesherEnabled = params.isPreviewMesherEnabled;
     if (_isPreviewMesherEnabled) {
         _initializePreviewMesher(params.previewdx);
     }
 
-    _particles = params.particles;
     _solidSDF = params.solidSDF;
 
     _subisize = _isize * _subdivisions + 1;
@@ -318,10 +333,16 @@ void ParticleMesher::_initializeScalarFieldData(MesherComputeChunk chunk,
     }
 
     fieldData.particles.reserve(count);
+    if (_particleRadii != nullptr) {
+        fieldData.particleRadii.reserve(count);
+    }
     for (size_t i = 0; i < _particles->size(); i++) {
         vmath::vec3 p = _particles->at(i);
         if (bbox.isPointInside(p)) {
             fieldData.particles.push_back(p - chunk.positionOffset);
+            if (_particleRadii != nullptr) {
+                fieldData.particleRadii.push_back(_particleRadii->at(i));
+            }
         }
     }
 
@@ -363,8 +384,10 @@ void ParticleMesher::_computeScalarField(ScalarFieldData &fieldData) {
     _computeGridCountData(fieldData, gridCountData);
 
     std::vector<vmath::vec3> sortedParticles;
+    std::vector<float> sortedParticleRadii;
     std::vector<int> blockToParticleIndex;
-    _sortParticlesIntoBlocks(fieldData, gridCountData, sortedParticles, blockToParticleIndex);
+    _sortParticlesIntoBlocks(fieldData, gridCountData, sortedParticles, sortedParticleRadii,
+                             blockToParticleIndex);
 
     std::vector<GridBlock<float> > gridBlocks;
     fieldData.scalarField.getActiveGridBlocks(gridBlocks);
@@ -380,6 +403,9 @@ void ParticleMesher::_computeScalarField(ScalarFieldData &fieldData) {
         ComputeBlock computeBlock;
         computeBlock.gridBlock = b;
         computeBlock.particleData = &(sortedParticles[blockToParticleIndex[b.id]]);
+        if (!sortedParticleRadii.empty()) {
+            computeBlock.particleRadii = &(sortedParticleRadii[blockToParticleIndex[b.id]]);
+        }
         computeBlock.numParticles = gridCountData.totalGridCount[b.id];
         computeBlockQueue.push(computeBlock);
         numComputeBlocks++;
@@ -538,6 +564,7 @@ void ParticleMesher::_computeGridCountDataThread(int startidx, int endidx,
 void ParticleMesher::_sortParticlesIntoBlocks(ScalarFieldData &fieldData, 
                                               ParticleGridCountData &gridCountData,
                                               std::vector<vmath::vec3> &sortedParticles,
+                                              std::vector<float> &sortedParticleRadii,
                                               std::vector<int> &blockToParticleIndex) {
 
     blockToParticleIndex = std::vector<int>(gridCountData.gridsize, 0);
@@ -550,6 +577,9 @@ void ParticleMesher::_sortParticlesIntoBlocks(ScalarFieldData &fieldData,
     int totalParticleCount = currentIndex;
 
     sortedParticles = std::vector<vmath::vec3>(totalParticleCount);
+    if (!fieldData.particleRadii.empty()) {
+        sortedParticleRadii.resize(totalParticleCount);
+    }
     for (int tidx = 0; tidx < gridCountData.numthreads; tidx++) {
         GridCountData *countData = &(gridCountData.threadGridCountData[tidx]);
 
@@ -561,10 +591,17 @@ void ParticleMesher::_sortParticlesIntoBlocks(ScalarFieldData &fieldData,
             }
 
             vmath::vec3 p = fieldData.particles[i + indexOffset];
+            float radius = 0.0f;
+            if (!fieldData.particleRadii.empty()) {
+                radius = fieldData.particleRadii[i + indexOffset];
+            }
             if (countData->simpleGridIndices[i] >= 0) {
                 int blockid = countData->simpleGridIndices[i];
                 int sortedIndex = blockToParticleIndexCurrent[blockid];
                 sortedParticles[sortedIndex] = p;
+                if (!fieldData.particleRadii.empty()) {
+                    sortedParticleRadii[sortedIndex] = radius;
+                }
                 blockToParticleIndexCurrent[blockid]++;
             } else {
                 int numblocks = -(countData->simpleGridIndices[i]);
@@ -574,6 +611,9 @@ void ParticleMesher::_sortParticlesIntoBlocks(ScalarFieldData &fieldData,
 
                     int sortedIndex = blockToParticleIndexCurrent[blockid];
                     sortedParticles[sortedIndex] = p;
+                    if (!fieldData.particleRadii.empty()) {
+                        sortedParticleRadii[sortedIndex] = radius;
+                    }
                     blockToParticleIndexCurrent[blockid]++;
                 }
             }
@@ -584,9 +624,6 @@ void ParticleMesher::_sortParticlesIntoBlocks(ScalarFieldData &fieldData,
 void ParticleMesher::_scalarFieldProducerThread(BoundedBuffer<ComputeBlock> *computeBlockQueue,
                                                 BoundedBuffer<ComputeBlock> *finishedComputeBlockQueue) {
     
-    float r = _radius;
-    float sr = _searchRadiusFactor * r;
-
     while (computeBlockQueue->size() > 0) {
         std::vector<ComputeBlock> computeBlocks;
         int numBlocks = computeBlockQueue->pop(_numComputeBlocksPerJob, computeBlocks);
@@ -601,6 +638,8 @@ void ParticleMesher::_scalarFieldProducerThread(BoundedBuffer<ComputeBlock> *com
 
             for (int pidx = 0; pidx < block.numParticles; pidx++) {
                 vmath::vec3 p = block.particleData[pidx];
+                float r = block.particleRadii == nullptr ? _radius : block.particleRadii[pidx];
+                float sr = _searchRadiusFactor * r;
                 p -= blockPositionOffset;
 
                 vmath::vec3 pmin(p.x - sr, p.y - sr, p.z - sr);

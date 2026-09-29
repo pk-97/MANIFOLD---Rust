@@ -1575,7 +1575,8 @@ extern "C" void manifold_fluids_surface_frame_destroy(void *frame) {
 
 extern "C" int manifold_fluids_surface_frame_mesh(void *frame, uint32_t subdivisions,
                                                    double particle_scale, double smoothing,
-                                                   uint32_t iterations, const uint8_t **data_out,
+                                                   uint32_t iterations, double isolated_scale,
+                                                   const uint8_t **data_out,
                                                    size_t *len_out) {
     return guarded([&] {
         if (frame == nullptr || data_out == nullptr || len_out == nullptr) {
@@ -1585,6 +1586,9 @@ extern "C" int manifold_fluids_surface_frame_mesh(void *frame, uint32_t subdivis
             throw std::invalid_argument("surface subdivisions must be in 0..=2");
         }
         validate_surface_options(particle_scale, smoothing, iterations);
+        if (!std::isfinite(isolated_scale) || isolated_scale < 0.25 || isolated_scale > 1.0) {
+            throw std::invalid_argument("isolated particle scale must be finite and in 0.25..=1");
+        }
         auto *native = static_cast<NativeSurfaceFrame *>(frame);
         // A frame captured at low mesh detail must not bypass the grid-index
         // admission used when creating a higher-detail simulation world.
@@ -1598,10 +1602,41 @@ extern "C" int manifold_fluids_surface_frame_mesh(void *frame, uint32_t subdivis
             nodes *= axis_nodes;
         }
         auto mesh = native->inputs.mesh(static_cast<int>(subdivisions) + 1,
-                                       particle_scale, smoothing, static_cast<int>(iterations));
+                                       particle_scale, smoothing, static_cast<int>(iterations), isolated_scale);
         mesh.getMeshFileDataBOBJ(native->mesh_data);
         *data_out = reinterpret_cast<const uint8_t *>(native->mesh_data.data());
         *len_out = native->mesh_data.size();
+    });
+}
+
+// Bounded synthetic reconstruction fixture: a dense patch and two isolated
+// particles, across block/chunk boundaries. Only Rust tests call this entry.
+extern "C" int manifold_fluids_surface_frame_fixture(double scale, uint32_t chunks, void **frame_out) {
+    return guarded([&] {
+        if (frame_out == nullptr || !std::isfinite(scale) || scale < 0.5 || scale > 2.0 ||
+            chunks < 1 || chunks > 3) {
+            throw std::invalid_argument("invalid bounded surface fixture options");
+        }
+        *frame_out = nullptr;
+        auto native = std::make_unique<NativeSurfaceFrame>();
+        auto &frame = native->inputs;
+        frame.isize = frame.jsize = frame.ksize = 16;
+        frame.dx = 0.2 * scale;
+        frame.particleRadius = 0.15 * scale;
+        frame.chunks = static_cast<int>(chunks);
+        frame.solid.constructMinimalLevelSet(16, 16, 16, frame.dx);
+        for (int z = 0; z < 4; ++z) {
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    frame.particles.emplace_back((0.7 + x * 0.12) * scale,
+                                                 (0.7 + y * 0.12) * scale,
+                                                 (0.7 + z * 0.12) * scale);
+                }
+            }
+        }
+        frame.particles.emplace_back(2.03 * scale, 1.97 * scale, 2.03 * scale);
+        frame.particles.emplace_back(2.73 * scale, 1.97 * scale, 2.03 * scale);
+        *frame_out = native.release();
     });
 }
 

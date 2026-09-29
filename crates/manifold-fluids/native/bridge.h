@@ -109,7 +109,8 @@ int manifold_fluids_world_capture_surface_frame(void *world, void **frame_out);
 void manifold_fluids_surface_frame_destroy(void *frame);
 int manifold_fluids_surface_frame_mesh(void *frame, uint32_t subdivisions,
                                      double particle_scale, double smoothing,
-                                     uint32_t iterations, const uint8_t **data_out,
+                                     uint32_t iterations, double isolated_scale,
+                                     const uint8_t **data_out,
                                      size_t *len_out);
 int manifold_fluids_world_whitewater_count(void *world, size_t *count_out);
 int manifold_fluids_world_whitewater(void *world, ManifoldFluidsWhitewaterParticle *particles,

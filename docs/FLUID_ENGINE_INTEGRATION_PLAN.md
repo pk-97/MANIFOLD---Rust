@@ -101,6 +101,16 @@ resolution changes, no computer use, and no GPU-compute rewrite are permitted in
 this scope. Batch focused checks at meaningful checkpoints; inspect stills before
 short motion renders, and do not repeat passed checks without new evidence.
 
+The captured-frame API now has an experimental isolated-particle scale
+(0.25–1, default 1). Particles with overlapping reconstruction spheres keep
+their main radius; the scale blends in as nearest-neighbour distance increases
+from two to three main radii. This preserves connected water and keeps the
+control relative to cell size, independently of mesh detail. It does not resize
+detached multi-particle clusters, guarantee identical fluid behaviour across
+resolutions, or preserve droplets smaller than the selected meshing grid.
+Classification is retained while tuning the same snapshot. The control remains
+outside application UI/live playback until bounded visual qualification.
+
 The authored domain describes usable liquid space. Native grids add three cells
 per axis for FLIP's 1.5-cell boundary margins, keeping cell spacing and authored
 bounds consistent. Initial liquid, role geometry, rigid coupling, force sampling,

@@ -77,6 +77,7 @@ public:
     void queryPointReferencesInsideSphere(GridPointReference ref, double r, 
                                           std::vector<bool> &exclusions,
                                           std::vector<GridPointReference> &refs);
+    bool hasPointWithinSphere(GridPointReference ref, double radius);
 
     void queryPointsInsideAABB(AABB bbox, std::vector<vmath::vec3> &points);
     void queryPointReferencesInsideAABB(AABB bbox, std::vector<GridPointReference> &refs);
