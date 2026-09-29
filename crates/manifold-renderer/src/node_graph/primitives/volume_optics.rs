@@ -3,7 +3,7 @@
 //! escapes: both passes use manifold-gpu and WGSL.
 use manifold_gpu::*;
 
-use super::{ObjectDraw, mat4_inverse, mesh_vertex_count};
+use super::{ObjectDraw, mat4_inverse};
 
 const SHADER: &str = include_str!("shaders/volume_optics.wgsl");
 
@@ -147,17 +147,16 @@ impl VolumeOptics {
                     self.pipeline.as_ref().expect("ensured"),
                     &targets.path,
                     &b,
-                    mesh_vertex_count(draw.vertices),
-                    draw.instance_count,
+                    draw.draw_count(),
                     GpuLoadAction::Clear,
                     "volume signed path",
                 );
-                let call = GpuEncoder::depth_msaa_draw(
+                let call = draw.live(GpuEncoder::depth_msaa_draw(
                     self.nearest_pipeline.as_ref().expect("ensured"),
                     &b,
-                    mesh_vertex_count(draw.vertices),
+                    draw.vertex_count,
                     draw.instance_count,
-                );
+                ));
                 encoder.draw_instanced_depth_only_batch(
                     &targets.nearest,
                     self.depth_state.as_ref().expect("ensured"),
@@ -171,8 +170,7 @@ impl VolumeOptics {
                     self.pipeline.as_ref().expect("ensured"),
                     self.density.as_ref().expect("ensured"),
                     &bindings(&u, draw, opaque_depth, identity),
-                    mesh_vertex_count(draw.vertices),
-                    draw.instance_count,
+                    draw.draw_count(),
                     GpuLoadAction::Load,
                     "volume embedded density",
                 );

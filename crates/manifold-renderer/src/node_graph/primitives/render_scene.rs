@@ -69,6 +69,8 @@
 mod rt_changes;
 #[path = "volume_optics.rs"]
 mod volume_optics;
+#[path = "live_draw_args.rs"]
+mod live_draw_args;
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
@@ -1103,6 +1105,7 @@ pub struct RenderScene {
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
     volume_optics: volume_optics::VolumeOptics,
+    live_draw_args: live_draw_args::LiveDrawArgs,
     /// E2b: per-layer camera depth scratch, seeded from the opaque snapshot
     /// before each transmissive draw. Allocated only when transmission is
     /// present.
@@ -1665,6 +1668,16 @@ struct ObjectDraw<'ctx> {
     /// Requested live count clamped to `buffer_size / 32` when wired, else 1
     /// (identity stub). An unwired count preserves the capacity behavior.
     instance_count: u32,
+    /// Whole-triangle vertex count for passes that need a CPU count: the
+    /// buffer's, or its live extent's bound (GPU_FLUID_SURFACE_DESIGN.md P6b).
+    vertex_count: u32,
+    /// Points-mode count: every vertex the buffer holds, or the bound.
+    point_count: u32,
+    /// The mesh's live extent, when its producer publishes one.
+    live_extent: Option<crate::node_graph::live_extent::LiveExtent>,
+    /// This frame's GPU-written draw arguments (buffer, byte offset) for an
+    /// object with a live extent: raster passes draw indirectly with them.
+    live_args: Option<(manifold_gpu::GpuBuffer, u64)>,
     /// Logical content stamps remain stable when identical data moves storage.
     vertices_content: Option<ContentVersion>,
     mesh_revision: Option<MeshRevision>,
@@ -1731,11 +1744,28 @@ impl ObjectDraw<'_> {
     fn routes_to_transparent(&self) -> bool {
         self.alpha_mode == AlphaMode::Blend || self.is_transmissive
     }
+
+    /// `draw`, switched to this object's GPU-written arguments when its mesh
+    /// has a live extent.
+    fn live<'a>(&'a self, draw: manifold_gpu::DepthMsaaDraw<'a>) -> manifold_gpu::DepthMsaaDraw<'a> {
+        match &self.live_args {
+            Some((args, offset)) => draw.indirect(args, *offset),
+            None => draw,
+        }
+    }
+
+    /// Triangle-list draw count: GPU-written with a live extent, else the
+    /// whole buffer.
+    fn draw_count(&self) -> manifold_gpu::DrawCount<'_> {
+        match &self.live_args {
+            Some((args, offset)) => manifold_gpu::DrawCount::Indirect { args, offset: *offset },
+            None => manifold_gpu::DrawCount::Direct { vertices: self.vertex_count, instances: self.instance_count },
+        }
+    }
 }
 
-/// Whole-triangle vertex count of a MeshVertex buffer (the prepass draw
-/// calls' shared count — was the `vcount` closure inside evaluate()).
-fn mesh_vertex_count(buf: &manifold_gpu::GpuBuffer) -> u32 {
+/// Whole triangles in a MeshVertex buffer.
+fn whole_triangle_vertices(buf: &manifold_gpu::GpuBuffer) -> u32 {
     ((buf.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3) * 3
 }
 
@@ -2007,6 +2037,17 @@ impl RenderScene {
             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
             // `mesh_n` write generation, feeds the shadow cache key below.
             let vertices_content = mesh_slot.and_then(|s| ctx.inputs.content_version_of(s));
+            let live_extent = mesh_slot.and_then(|s| ctx.inputs.live_extent_slot(s));
+            let (object_vertex_count, point_count) = match &live_extent {
+                Some(extent) => {
+                    let bound = extent.bound.min(whole_triangle_vertices(vertices));
+                    (bound, bound)
+                }
+                None => (
+                    whole_triangle_vertices(vertices),
+                    (vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32,
+                ),
+            };
             let weights_slot = object.weights;
             if weights_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
                 // §5.4 (P5): same pending contract as the mesh slot above.
@@ -2333,6 +2374,10 @@ impl RenderScene {
                 sampler_descs,
                 instances,
                 instance_count,
+                vertex_count: object_vertex_count,
+                point_count,
+                live_extent,
+                live_args: None,
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
                 topology_hint: object.topology.and_then(|slot| inputs.content_version_of(slot)),
@@ -2355,6 +2400,16 @@ impl RenderScene {
             });
         }
 
+        let live = draws.iter().filter(|d| d.live_extent.is_some()).count();
+        if live > 0 {
+            let gpu = ctx.gpu_encoder();
+            let args = self.live_draw_args.prepare(gpu.device, live);
+            for (slot, draw) in draws.iter_mut().filter(|d| d.live_extent.is_some()).enumerate() {
+                let extent = draw.live_extent.as_ref().expect("filtered on live_extent");
+                self.live_draw_args.write(gpu.native_enc, slot, extent, draw.vertices, draw.instance_count);
+                draw.live_args = Some((args.clone(), slot as u64 * live_draw_args::ARGS_BYTES));
+            }
+        }
         Some((draws, has_transmission))
     }
 
@@ -2794,7 +2849,7 @@ impl RenderScene {
                     hasher.write(bytemuck::bytes_of(&ShadowUniforms::for_draw(vp, d)));
                     d.rt_texture_content[0].hash(&mut hasher);
                     hasher.write_u32(Self::sampler_cache_key(d.sampler_descs[0]));
-                    hasher.write_u32(mesh_vertex_count(d.vertices));
+                    hasher.write_u32(d.vertex_count);
                     hasher.write_u32(d.instance_count);
                 }
                 // D6: the rebuild-epoch term — guards against a topology
@@ -2858,12 +2913,12 @@ impl RenderScene {
                     .iter()
                     .zip(&shadow_bindings)
                     .map(|(d, b)| {
-                        manifold_gpu::GpuEncoder::depth_msaa_draw(
+                        d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
                             &shadow_pipeline,
                             b,
-                            mesh_vertex_count(d.vertices),
+                            d.vertex_count,
                             d.instance_count,
-                        )
+                        ))
                     })
                     .collect();
                 ctx.gpu_encoder()
@@ -2934,12 +2989,12 @@ impl RenderScene {
                 .iter()
                 .zip(&cam_bindings)
                 .map(|(d, b)| {
-                    manifold_gpu::GpuEncoder::depth_msaa_draw(
+                    d.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
                         &opaque_depth_pipeline,
                         b,
-                        mesh_vertex_count(d.vertices),
+                        d.vertex_count,
                         d.instance_count,
-                    )
+                    ))
                 })
                 .collect();
             ctx.gpu_encoder()
@@ -4262,10 +4317,7 @@ impl RenderScene {
         let shadow_2 = shadow_tex(2);
         let shadow_3 = shadow_tex(3);
 
-        let vertex_size = std::mem::size_of::<MeshVertex>() as u64;
-        let vertex_count = |draw: &ObjectDraw| ((draw.vertices.size / vertex_size) as u32 / 3) * 3;
-
-        if !draws.iter().any(|d| vertex_count(d) > 0) {
+        if !draws.iter().any(|d| d.vertex_count > 0) {
             // Every object had zero drawable vertices — clear so stale
             // pool contents don't leak through (matches render_mesh's
             // vertex_count == 0 fallback).
@@ -4632,21 +4684,20 @@ impl RenderScene {
                 // D8: points draw EVERY vertex in the buffer (one dot per
                 // vertex), not the triangle-multiple-of-3 count — the
                 // trailing-vertex truncation must not drop dots.
-                let vc = (draw.vertices.size / vertex_size) as u32;
-                manifold_gpu::GpuEncoder::depth_msaa_draw_points(
+                draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw_points(
                     &draw.pipeline,
                     bindings,
-                    vc,
+                    draw.point_count,
                     draw.instance_count,
-                )
+                ))
             } else {
-                manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
+                draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw_fill_mode(
                     &draw.pipeline,
                     bindings,
-                    vertex_count(draw),
+                    draw.vertex_count,
                     draw.instance_count,
                     draw.fill_mode,
-                )
+                ))
             };
             if draw.routes_to_transparent() {
                 blend_entries.push((draw.sort_depth, draw_index, call));
@@ -4901,12 +4952,12 @@ impl RenderScene {
                         sampler: &self.material_samplers[&Self::sampler_cache_key(draw.sampler_descs[0])],
                     },
                 ];
-                let depth_draw = manifold_gpu::GpuEncoder::depth_msaa_draw(
+                let depth_draw = draw.live(manifold_gpu::GpuEncoder::depth_msaa_draw(
                     &shadow_pipeline,
                     &shadow_bindings,
-                    mesh_vertex_count(draw.vertices),
+                    draw.vertex_count,
                     draw.instance_count,
-                );
+                ));
                 let gpu = ctx.gpu_encoder();
                 // The layer prepass starts from opaque depth, so a solid mesh
                 // cannot reveal a triangle behind an opaque surface and depth
@@ -5100,8 +5151,7 @@ impl RenderScene {
                     GpuBinding::Texture { binding: 2, texture: half_depth },
                     GpuBinding::Texture { binding: 3, texture: full_depth },
                 ],
-                3,
-                1,
+                manifold_gpu::DrawCount::Direct { vertices: 3, instances: 1 },
                 manifold_gpu::GpuLoadAction::Load,
                 "node.render_scene shaft composite",
             );
@@ -5503,7 +5553,7 @@ impl RenderScene {
                     vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
                     vertex_offset: 0,
                     index_buffer: None,
-                    triangle_count: (d.vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32 / 3,
+                    triangle_count: d.vertex_count / 3,
                     transform: d.uniforms.model,
                     // RT-T1-B: `MeshVertex`'s normal field offset (position
                     // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
@@ -6315,6 +6365,7 @@ impl RenderScene {
             opaque_scene_color_height: 0,
             opaque_scene_color_format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             volume_optics: volume_optics::VolumeOptics::default(),
+            live_draw_args: live_draw_args::LiveDrawArgs::default(),
             opaque_depth_snapshot: None,
             opaque_depth_snapshot_width: 0,
             opaque_depth_snapshot_height: 0,

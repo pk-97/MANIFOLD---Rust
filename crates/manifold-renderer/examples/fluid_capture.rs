@@ -14,7 +14,10 @@
 //!
 //! Run with one output directory and optional `--preset`, `--width`, `--height`,
 //! `--frames`, `--fps`, `--offline-only`, `--max-seconds`, `--stills-every`,
-//! `--linear`, `--cinematic`, and `--supersample` flags. Defaults preserve the
+//! `--linear`, `--cinematic`, `--supersample` and `--gpu-surface` flags. `--gpu-surface`
+//! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
+//! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
+//! surface, and reports its live vertices as `vertex_count`. Defaults preserve the
 //! shipped Water Basin workflow.
 
 use std::error::Error;
@@ -29,6 +32,7 @@ use manifold_core::NodeId;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::frame_status::FrameRenderStatus;
+use manifold_renderer::generators::mesh_common::MeshVertex;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::headless_readback::{
     encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8,
@@ -82,6 +86,9 @@ struct CaptureOptions {
     linear: bool,
     cinematic: bool,
     supersample: u32,
+    /// The preset meshes on the GPU (the Liquid Surface group): the fluid node
+    /// publishes particle frames and its CPU mesh is off by design.
+    gpu_surface: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -550,6 +557,40 @@ fn render_frame(
     Ok((timings, fluid))
 }
 
+/// Live vertices of the Liquid Surface mesh on the last dumped frame. Slots past
+/// the live triangles are zero, so a live vertex is one with a nonzero normal.
+fn gpu_surface_vertices(runtime: &PresetRuntime, device: &GpuDevice, frame: u32) -> CaptureResult<u64> {
+    let arrays = runtime.dump_arrays_all();
+    let mesh = arrays
+        .iter()
+        .find(|array| array.type_id == "node.volume_surface_mesh" && array.port == "vertices")
+        .ok_or_else(|| io::Error::other("--gpu-surface: the preset has no node.volume_surface_mesh"))?;
+    let size = mesh.buffer.size();
+    let staging = device.create_buffer_shared(size);
+    let mut encoder = device.create_encoder("gpu-surface-readback");
+    encoder.copy_buffer_to_buffer(mesh.buffer, &staging, size);
+    encoder.commit_and_wait_completed();
+    let ptr = staging.mapped_ptr().expect("shared staging buffer");
+    // SAFETY: the copy has completed and nothing else writes the staging buffer.
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
+    let mut live = 0u64;
+    for (index, chunk) in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()).enumerate() {
+        let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
+        let values = vertex.position.iter().chain(&vertex.normal).chain(&vertex.uv);
+        if values.clone().any(|value| !value.is_finite()) {
+            return Err(io::Error::other(format!(
+                "offline frame {frame}: Liquid Surface vertex {index} is non-finite: {:?} {:?} {:?}",
+                vertex.position, vertex.normal, vertex.uv
+            ))
+            .into());
+        }
+        if vertex.normal != [0.0; 3] {
+            live += 1;
+        }
+    }
+    Ok(live)
+}
+
 fn render_output_frame(
     runtime: &mut PresetRuntime,
     target: &RenderTarget,
@@ -723,6 +764,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         linear: false,
         cinematic: false,
         supersample: 1,
+        gpu_surface: false,
     };
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| -> CaptureResult<String> {
@@ -748,6 +790,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--offline-only" => options.offline_only = true,
             "--linear" => options.linear = true,
             "--cinematic" => options.cinematic = true,
+            "--gpu-surface" => options.gpu_surface = true,
             "--supersample" => {
                 options.supersample = parse_u32(&value("--supersample")?, "--supersample")?
             }
@@ -764,7 +807,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface]",
         )
     })?;
     if options.width == 0
@@ -870,7 +913,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_dimensions(options.width, options.height, options.supersample);
     let mut offline_runtime =
         build_runtime(&instrumented_json, &device, render_width, render_height)?;
-    offline_runtime.set_dump_all(options.cinematic);
+    offline_runtime.set_dump_all(options.cinematic || options.gpu_surface);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
         &offline_target,
@@ -889,7 +932,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     )?;
     if options.cinematic {
         verify_cinematic_dimensions(&offline_runtime, options)?;
-        offline_runtime.set_dump_all(false);
+        offline_runtime.set_dump_all(options.gpu_surface);
     }
     if initial_fluid.simulation_time.abs() > 1e-4 {
         return Err(io::Error::other(format!(
@@ -914,7 +957,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     for frame in 1..=options.frames {
         ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
         let authored_time = f64::from(frame) * frame_dt;
-        let (timings, fluid) = render_output_frame(
+        let (timings, mut fluid) = render_output_frame(
             &mut offline_runtime,
             &offline_target,
             &device,
@@ -923,7 +966,27 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             frame_dt,
             options,
         )?;
-        if fluid.vertex_count < 3.0 {
+        if options.gpu_surface {
+            if fluid.particle_count < 1.0 {
+                return Err(io::Error::other(format!(
+                    "offline frame {frame} published no liquid particles"
+                ))
+                .into());
+            }
+            fluid.vertex_count = gpu_surface_vertices(&offline_runtime, &device, frame)? as f64;
+            if fluid.vertex_count < 3.0 {
+                let arrays: Vec<String> = offline_runtime
+                    .dump_arrays_all()
+                    .iter()
+                    .map(|array| format!("{}.{} ({} bytes)", array.type_id, array.port, array.buffer.size()))
+                    .collect();
+                return Err(io::Error::other(format!(
+                    "offline frame {frame}: the Liquid Surface mesh is empty; arrays this frame: {}",
+                    arrays.join(", ")
+                ))
+                .into());
+            }
+        } else if fluid.vertex_count < 3.0 {
             return Err(io::Error::other(format!(
                 "offline frame {frame} produced an empty fluid mesh"
             ))

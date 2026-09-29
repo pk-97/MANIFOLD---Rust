@@ -418,6 +418,8 @@ mod gpu_tests {
     /// resource, not about dispatching a mesh-generation kernel.
     struct MeshSourceNode {
         type_id: EffectNodeType,
+        /// Published on `out` when set, as a GPU-counted producer does.
+        live: Option<crate::node_graph::live_extent::LiveExtent>,
     }
 
     impl EffectNode for MeshSourceNode {
@@ -440,7 +442,11 @@ mod gpu_tests {
         fn parameters(&self) -> &[ParamDef] {
             &[]
         }
-        fn evaluate(&mut self, _ctx: &mut EffectNodeContext<'_, '_>) {}
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if let Some(live) = &self.live {
+                ctx.outputs.set_live_extent("out", live.clone());
+            }
+        }
     }
 
     /// Test consumer: declares an `Object` input (standing in for
@@ -451,6 +457,8 @@ mod gpu_tests {
         type_id: EffectNodeType,
         seen: Arc<Mutex<Option<SceneObject>>>,
         resolved_mesh: Arc<Mutex<Option<Vec<[f32; 3]>>>>,
+        /// (count word offset, per item, bound) of the mesh slot's live extent.
+        live: Arc<Mutex<Option<(u64, u32, u32)>>>,
     }
 
     impl EffectNode for ObjectConsumerNode {
@@ -476,6 +484,10 @@ mod gpu_tests {
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             let Some(object) = ctx.inputs.object("in") else { return };
             *self.seen.lock().unwrap() = Some(object);
+            *self.live.lock().unwrap() = object
+                .mesh
+                .and_then(|slot| ctx.inputs.live_extent_slot(slot))
+                .map(|extent| (extent.offset, extent.per_item, extent.bound));
             if let Some(mesh_slot) = object.mesh
                 && let Some(buf) = ctx.inputs.array_slot(mesh_slot)
             {
@@ -494,7 +506,7 @@ mod gpu_tests {
         let format = GpuTextureFormat::Rgba16Float;
 
         let mut g = Graph::new();
-        let mesh_src = g.add_node(Box::new(MeshSourceNode { type_id: EffectNodeType::new("mesh_src") }));
+        let mesh_src = g.add_node(Box::new(MeshSourceNode { type_id: EffectNodeType::new("mesh_src"), live: None }));
         let scene_object = g.add_node(Box::new(SceneObjectNode::new()));
         let seen = Arc::new(Mutex::new(None));
         let resolved_mesh = Arc::new(Mutex::new(None));
@@ -502,6 +514,7 @@ mod gpu_tests {
             type_id: EffectNodeType::new("object_consumer"),
             seen: seen.clone(),
             resolved_mesh: resolved_mesh.clone(),
+            live: Arc::new(Mutex::new(None)),
         }));
         g.connect((mesh_src, "out"), (scene_object, "vertices")).unwrap();
         g.connect((scene_object, "object"), (consumer, "in")).unwrap();
@@ -538,5 +551,47 @@ mod gpu_tests {
         let resolved = resolved_mesh.lock().unwrap().clone().expect("mesh must resolve through the forwarded slot");
         let expected_positions: Vec<[f32; 3]> = expected.iter().map(|v| v.position).collect();
         assert_eq!(resolved, expected_positions, "mesh vertices must round-trip through the Object wire's forwarded Slot");
+    }
+
+    /// GPU_FLUID_SURFACE_DESIGN.md P6b: a producer's published live extent
+    /// reaches the object's consumer through the forwarded mesh slot, and a
+    /// producer that publishes none leaves the whole array live.
+    #[test]
+    fn object_wire_carries_the_mesh_live_extent() {
+        let device = crate::test_device();
+        for publish in [true, false] {
+            let mut g = Graph::new();
+            let live = publish.then(|| crate::node_graph::live_extent::LiveExtent {
+                counts: device.create_buffer_shared(16),
+                offset: 8,
+                per_item: 3,
+                bound: 6,
+            });
+            let mesh_src = g.add_node(Box::new(MeshSourceNode { type_id: EffectNodeType::new("mesh_src"), live }));
+            let scene_object = g.add_node(Box::new(SceneObjectNode::new()));
+            let seen_live = Arc::new(Mutex::new(None));
+            let consumer = g.add_node(Box::new(ObjectConsumerNode {
+                type_id: EffectNodeType::new("object_consumer"),
+                seen: Arc::new(Mutex::new(None)),
+                resolved_mesh: Arc::new(Mutex::new(None)),
+                live: seen_live.clone(),
+            }));
+            g.connect((mesh_src, "out"), (scene_object, "vertices")).unwrap();
+            g.connect((scene_object, "object"), (consumer, "in")).unwrap();
+            let plan = compile(&g).unwrap();
+            let r_mesh_out = plan
+                .steps()
+                .iter()
+                .find(|s| s.node == mesh_src)
+                .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
+                .map(|&(_, r)| r)
+                .expect("mesh_src's out resource is bound");
+            let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
+            backend.pre_bind_array(r_mesh_out, device.create_buffer_shared(9 * std::mem::size_of::<MeshVertex>() as u64));
+            let mut exec = Executor::new(Box::new(backend));
+            exec.execute_frame(&mut g, &plan, frame_time());
+            let expected = publish.then_some((8, 3, 6));
+            assert_eq!(*seen_live.lock().unwrap(), expected, "publish={publish}");
+        }
     }
 }

@@ -189,6 +189,8 @@ pub struct MetalBackend {
     /// CPU-only authored [`MeshSource`](crate::node_graph::mesh_source::MeshSource) values written via
     /// [`Backend::set_mesh_source`].
     mesh_sources: AHashMap<Slot, crate::node_graph::mesh_source::MeshSource>,
+    /// Live extents of GPU-counted arrays, written via [`Backend::set_live_extent`].
+    live_extents: AHashMap<Slot, crate::node_graph::live_extent::LiveExtent>,
     /// CPU-only owned vector fields written via [`Backend::set_vector_field`].
     vector_fields: AHashMap<Slot, manifold_physics::FieldValue>,
     /// CPU-only [`SceneObject`] values written via [`Backend::set_object`].
@@ -256,6 +258,7 @@ impl MetalBackend {
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
             mesh_sources: AHashMap::default(),
+            live_extents: AHashMap::default(),
             vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
         }
@@ -295,6 +298,7 @@ impl MetalBackend {
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
             mesh_sources: AHashMap::default(),
+            live_extents: AHashMap::default(),
             vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
         }
@@ -534,6 +538,7 @@ impl MetalBackend {
         self.textures_3d.clear();
         self.fluid_roles.clear();
         self.mesh_sources.clear();
+        self.live_extents.clear();
         self.vector_fields.clear();
         self.bound.clear();
         self.free_by_type.clear();
@@ -599,6 +604,7 @@ impl MetalBackend {
             rigid_bodies: AHashMap::default(),
             fluid_roles: AHashMap::default(),
             mesh_sources: AHashMap::default(),
+            live_extents: AHashMap::default(),
             vector_fields: AHashMap::default(),
             objects: AHashMap::default(),
         };
@@ -824,6 +830,7 @@ impl Backend for MetalBackend {
         if let Some(slot) = self.bound.remove(&id) {
             self.fluid_roles.remove(&slot);
             self.mesh_sources.remove(&slot);
+            self.live_extents.remove(&slot);
             self.vector_fields.remove(&slot);
             let mipmapped = ty.is_texture_2d() && self.mipmapped_ids.contains(&id);
             let key = crate::node_graph::backend::pool_key(ty, format, dims, mipmapped);
@@ -861,6 +868,7 @@ impl Backend for MetalBackend {
         self.provided_2d.clear();
         self.fluid_roles.clear();
         self.mesh_sources.clear();
+        self.live_extents.clear();
         self.vector_fields.clear();
     }
 
@@ -979,6 +987,14 @@ impl Backend for MetalBackend {
         value: crate::node_graph::mesh_source::MeshSource,
     ) {
         self.mesh_sources.insert(slot, value);
+    }
+
+    fn live_extent(&self, slot: Slot) -> Option<crate::node_graph::live_extent::LiveExtent> {
+        self.live_extents.get(&slot).cloned()
+    }
+
+    fn set_live_extent(&mut self, slot: Slot, value: crate::node_graph::live_extent::LiveExtent) {
+        self.live_extents.insert(slot, value);
     }
 
     fn vector_field(&self, slot: Slot) -> Option<manifold_physics::FieldValue> {

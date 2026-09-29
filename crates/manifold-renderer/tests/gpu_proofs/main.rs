@@ -82,6 +82,8 @@ mod rt_dynamic_refit;
 mod rt_dynamic_catalog;
 #[cfg(feature = "rt-perf-proofs")]
 mod rt_dynamic_perf;
+#[cfg(feature = "fluid-perf-proofs")]
+mod fluid_surface_perf;
 mod rt_dynamic_fusion;
 mod rt_dynamic_shading;
 mod rt_normal_tangent_mirror;

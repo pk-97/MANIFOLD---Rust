@@ -316,8 +316,7 @@ fn render_path_with_camera(
         &pipeline,
         &path,
         &bindings,
-        vertices.len() as u32,
-        1,
+        manifold_gpu::DrawCount::Direct { vertices: vertices.len() as u32, instances: 1 },
         GpuLoadAction::Clear,
         "volume optics path",
     );

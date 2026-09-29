@@ -503,6 +503,10 @@ const NON_STANDALONE: &[&str] = &[
     "node.spawn_from_image",
     "node.spawn_from_mesh",
     "node.spawn_particles",
+    // Barriered multi-pass kernels (count, scan levels, scatter, total read);
+    // their Params are reflected against the hand shaders in uniform_layout_extended.
+    "node.running_total",
+    "node.sort_particles_into_cells",
     "node.torus_wrap_field",
     // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
     "system.mesh_input",
