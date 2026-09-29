@@ -173,17 +173,18 @@ def case_settings_parsing(tmp):
 
 
 def case_extract_hook_name():
-    """_extract_hook_name handles various command patterns."""
+    """_extract_hook_names handles various command patterns."""
     print("7. hook name extraction")
     cases = [
-        ('python3 "...hook_telemetry.py" preToolUseBash.py', "preToolUseBash.py"),
-        ('python3 "...hook_telemetry.py" guard.py "/tmp/x"', "guard.py"),
-        ('python3 direct.py', "direct.py"),
-        ('python3 "..."', None),
-        ("", None),
+        ('python3 "...hook_telemetry.py" preToolUseBash.py', ["preToolUseBash.py"]),
+        ('python3 "...hook_telemetry.py" guard.py "/tmp/x"', ["guard.py"]),
+        ('python3 "...hook_telemetry.py" a.py b.py', ["a.py", "b.py"]),
+        ('python3 direct.py', ["direct.py"]),
+        ('python3 "..."', []),
+        ("", []),
     ]
     for cmd, want in cases:
-        got = hook_census._extract_hook_name(cmd)
+        got = hook_census._extract_hook_names(cmd)
         check(f"extract from {cmd!r}", got, want)
 
 
@@ -191,10 +192,12 @@ def case_malformed_log_lines(tmp):
     """load_records skips lines that are not valid JSON."""
     print("8. malformed log line tolerance")
     path = tmp / "hook-fires.jsonl"
+    # Relative to now: a fixed date ages out of the 14-day window and fails the test.
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with open(path, "w") as f:
-        f.write('{"hook": "good.py", "out": 0, "exit": 0, "ts": "2026-07-30T12:00:00Z"}\n')
+        f.write(json.dumps({"hook": "good.py", "out": 0, "exit": 0, "ts": ts}) + "\n")
         f.write("not valid json\n")
-        f.write('{"hook": "also-good.py", "out": 0, "exit": 0, "ts": "2026-07-30T12:00:00Z"}\n')
+        f.write(json.dumps({"hook": "also-good.py", "out": 0, "exit": 0, "ts": ts}) + "\n")
         f.write("\n")
         f.write('garbage\n')
     records, total = hook_census.load_records(path, 14)
