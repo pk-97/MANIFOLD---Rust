@@ -15946,31 +15946,27 @@
           "type": "f32"
         },
         {
-          "name": "block_center_x",
+          "name": "sort_center_x",
           "type": "f32"
         },
         {
-          "name": "block_center_y",
+          "name": "sort_center_y",
           "type": "f32"
         },
         {
-          "name": "block_center_z",
+          "name": "sort_center_z",
           "type": "f32"
         },
         {
-          "name": "block_size_x",
+          "name": "sort_size_x",
           "type": "f32"
         },
         {
-          "name": "block_size_y",
+          "name": "sort_size_y",
           "type": "f32"
         },
         {
-          "name": "block_size_z",
-          "type": "f32"
-        },
-        {
-          "name": "block_cell_size",
+          "name": "sort_size_z",
           "type": "f32"
         },
         {
@@ -17512,7 +17508,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Transfer material points to the matter grid (MLS-MPM particle-to-grid). Each live point adds mass and momentum, including its water pressure as the affine stress term, to the 27 nodes of its quadratic B-spline stencil, as signed fixed point through integer atomics. With a cell sort's order and ranges it accumulates each 4³ block of nodes in fast workgroup memory first.",
+      "purpose": "Transfer material points to the matter grid (MLS-MPM particle-to-grid). Each live point adds mass and momentum, including its water pressure as the affine stress term, to the 27 nodes of its quadratic B-spline stencil, as signed fixed point through integer atomics. With a cell sort's order and ranges over the stencil base cells it sums each cell's points in registers and accumulates each 4³ block of nodes in fast workgroup memory first.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Spreads each liquid particle's weight and motion onto the simulation grid around it.",

@@ -47,7 +47,7 @@ pub(crate) struct P2gParams {
 crate::primitive! {
     name: MatterToGrid,
     type_id: "node.matter_to_grid",
-    purpose: "Transfer material points to the matter grid (MLS-MPM particle-to-grid). Each live point adds mass and momentum, including its water pressure as the affine stress term, to the 27 nodes of its quadratic B-spline stencil, as signed fixed point through integer atomics. With a cell sort's order and ranges it accumulates each 4³ block of nodes in fast workgroup memory first.",
+    purpose: "Transfer material points to the matter grid (MLS-MPM particle-to-grid). Each live point adds mass and momentum, including its water pressure as the affine stress term, to the 27 nodes of its quadratic B-spline stencil, as signed fixed point through integer atomics. With a cell sort's order and ranges over the stencil base cells it sums each cell's points in registers and accumulates each 4³ block of nodes in fast workgroup memory first.",
     inputs: {
         points: Array(MatterPoint) required,
         accum: Array(i32) required,
@@ -90,7 +90,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("blocks_z"), label: "Blocks Z", ty: ParamType::Int, default: ParamValue::Float(18.0), range: Some((1.0, 4096.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.zero_array clears the accumulator and before node.matter_grid_update resolves it. accum/accum_out alias one Array(i32) of 4 words per lattice node (momentum xyz, mass), provided by node.matter_state. Lattice, material, the block counts and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Wire order and ranges from node.sort_particles_into_cells over node.matter_to_particles, sorted once per tick into node.matter_domain's block bins, for the block path. Points with id 0 are skipped.",
+    composition_notes: "Region body of the Live Matter group, after node.zero_array clears the accumulator and before node.matter_grid_update resolves it. accum/accum_out alias one Array(i32) of 4 words per lattice node (momentum xyz, mass), provided by node.matter_state. Lattice, material, the block counts and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Wire order and ranges from node.sort_particles_into_cells over node.matter_to_particles, sorted once per tick into one bin per stencil base cell (node.matter_domain's sort box, cell_size bins), for the block path. Points with id 0 are skipped.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter to Grid", category: Atom },
     summary: "Spreads each liquid particle's weight and motion onto the simulation grid around it.",
@@ -175,13 +175,14 @@ impl Primitive for MatterToGrid {
             _pad1: 0,
         };
         let block_total = uniforms.blocks_x * uniforms.blocks_y * uniforms.blocks_z;
+        let cell_total = u64::from(block_total) * 64;
         // Unsorted, the kernel never reads order or ranges; the accumulator
         // keeps their slots bound.
         let (order, ranges, groups) = match sorted {
             Some((order, ranges)) => {
-                if ranges.size < u64::from(block_total) * std::mem::size_of::<CellRange>() as u64 {
+                if ranges.size < cell_total * std::mem::size_of::<CellRange>() as u64 {
                     ctx.error(format!(
-                        "Matter to Grid: the ranges cover fewer than the {block_total} blocks of this lattice; sort into node.matter_domain's block bins"
+                        "Matter to Grid: the ranges cover fewer than the {cell_total} stencil base cells of this lattice; sort into node.matter_domain's sort box with cell_size bins"
                     ));
                     return;
                 }

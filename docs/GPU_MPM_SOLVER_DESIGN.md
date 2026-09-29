@@ -258,12 +258,15 @@ order-dependent). Rejected: Metal float atomics (not portable).
 **D6 — P2G is one atom; P1 builds the plain global-atomic scatter, P1b replaces its
 interior with cell-sorted block-local accumulation.** One thread per particle adding to
 27 nodes with global atomics is the prototype's proven path and the correctness
-baseline. P1b sorts particles by 4³-cell block once per tick (the surface design's
-`node.sort_particles_into_cells`, D17 there, gaining an `order: Array(u32)` output), and
-`node.matter_to_grid` then accumulates each block's particles into `var<workgroup>`
-atomics over the block's 6³-node tile and flushes each tile node once; a particle that
-has drifted out of its tile since the sort adds directly with global atomics. Integer
-sums make the two paths bit-identical. Core WGSL only. **The `MatterPoint` storage order
+baseline. P1b sorts particles by stencil base cell once per tick (the surface design's
+`node.sort_particles_into_cells`, D17 there, gaining an `order: Array(u32)` output;
+amended 2026-09-30 from 4³-cell block bins, lever L1b), and `node.matter_to_grid` runs one
+workgroup per 4³ block of base cells: one thread per (base cell, stencil x slice) sums
+the cell's particles' fixed-point words in registers and adds them once into
+`var<workgroup>` atomics over the block's 6³-node tile, which is flushed once per node. A
+particle that has left its sorted cell since the sort adds node by node, into the tile
+when the node is in it and otherwise with global atomics. Integer sums make every path
+bit-identical. Core WGSL only. **The `MatterPoint` storage order
 is never changed** — ids must stay sorted for the seam (D9). Rejected for now: subgroup
 (warp) reductions — an optional WGSL feature whose naga → SPIR-V → MSL and Vulkan support
 is unverified (Deferred).
@@ -791,13 +794,15 @@ frame at a timestep its author reports as occasionally unstable) and Zhao et al.
 on M-series" was not found in any source (section 16, R1).
 
 **P1b's per-kernel profile** reports GPU time per frame for clear, sort, P2G, grid update,
-G2P, stats and the per-tick bookkeeping, plus dispatch count and the out-of-tile fraction.
+G2P, stats and the per-tick bookkeeping, plus dispatch count and the fractions of points
+out of their sorted cell and out of its tile.
 
 **Levers, in P1b's order, with expected wins (estimates; P1b measures each):**
 
 | Lever | Look | Expected win | Basis |
 |---|---|---|---|
 | L1 Cell-sorted block-local P2G (D6), sort once per tick | none (bit-identical) | global atomics fall from 108 to about 2 per point (864 tile flushes for 512 points per block); P2G 2–4× faster if atomics dominate | arithmetic; Gao et al. 2018 for the scheme |
+| L1b Sort by stencil base cell; sum each cell's words in registers, one tile add per node per cell | none (bit-identical) | tile atomics fall about 8× at 8 points per cell, for points still in their sorted cell | the P1b probe: block P2G's remaining cost is workgroup-atomic contention |
 | L2 Shared-memory grid tiles in G2P | none (bit-identical) | 1.2–1.5× on G2P; the 27-node gather mostly hits cache already | arithmetic |
 | L3 Half-precision C storage (D21) | none if gates hold | −18% point traffic (176 → 144 B) | arithmetic; accepted only if every P1 gate passes unchanged |
 | L4 Substeps from the rule (D4) | — | a calm or soft setting pays for what it needs (Stiffness 0.5 → 21 substeps) | already the rule; P1b verifies it tracks Stiffness live |

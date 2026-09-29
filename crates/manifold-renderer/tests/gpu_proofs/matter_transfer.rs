@@ -13,7 +13,7 @@ use manifold_renderer::node_graph::fluid::domain_layout;
 use manifold_renderer::node_graph::matter::reference::{self, Params, Point};
 use manifold_renderer::node_graph::matter::{
     MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterLattice, MatterPoint, mass_unit, momentum_unit,
-    water_lambda,
+    rounding_hash, water_lambda,
 };
 use manifold_renderer::node_graph::{
     ArrayType, Backend, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor,
@@ -106,8 +106,8 @@ impl Chain {
 
     /// With `sort_source`, P2G takes the block path: the source points go
     /// through node.matter_to_particles and node.sort_particles_into_cells
-    /// into the lattice's D6 block bins, and P2G reads `order` and `ranges`.
-    /// A source other than `points` leaves points outside their sorted block.
+    /// into one bin per stencil base cell, and P2G reads `order` and `ranges`.
+    /// A source other than `points` leaves points outside their sorted cell.
     pub(crate) fn build(
         lat: &MatterLattice,
         points: &[MatterPoint],
@@ -133,13 +133,13 @@ impl Chain {
             graph.connect((m2p, "particles"), (sort, "particles")).unwrap();
             graph.connect((sort, "order"), (p2g, "order")).unwrap();
             graph.connect((sort, "cell_ranges"), (p2g, "ranges")).unwrap();
-            let (centre, size, bin) = lat.block_bins();
+            let (centre, size) = lat.cell_sort_box();
             for (axis, name) in ["x", "y", "z"].iter().enumerate() {
                 set(&mut graph, sort, &format!("center_{name}"), centre[axis]);
                 set(&mut graph, sort, &format!("size_{name}"), size[axis]);
                 set(&mut graph, p2g, &format!("blocks_{name}"), lat.blocks()[axis] as f32);
             }
-            set(&mut graph, sort, "cell_size", bin);
+            set(&mut graph, sort, "cell_size", lat.cell_size);
             (src, sort)
         });
         graph.connect((acc, "out"), (zero, "in")).unwrap();
@@ -408,9 +408,12 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
     assert!(worst_large <= 256.0, "large words differ by {worst_large} LSB");
 }
 
-/// D6: block-local P2G adds the same integers as one thread per point,
-/// whether every point sits in its sorted block or many have left it (their
-/// sort source shifted 1.5 and 0.75 cells) and add globally.
+/// D6: block-local P2G adds the same integers as one thread per point on
+/// every path a point can take: summed with its sorted cell's points, added
+/// node by node into its block's tile after leaving its cell, or added
+/// globally after leaving the tile. The sort sources shift the points by
+/// nothing, by 1.5 and 0.75 cells (every point leaves its cell), and by a
+/// hashed amount within ±0.6 cells per axis (a mix of all three).
 #[test]
 fn matter_block_p2g_bit_identical() {
     let lat = lattice();
@@ -427,14 +430,37 @@ fn matter_block_p2g_bit_identical() {
     };
     let (plain, plain_points, _, _) = step(None);
     let dx = lat.cell_size;
-    let shifted: Vec<MatterPoint> = points
-        .iter()
-        .map(|pt| MatterPoint { position: [pt.position[0] + 1.5 * dx, pt.position[1] + 0.75 * dx, pt.position[2]], ..*pt })
-        .collect();
+    let base = |position: [f32; 3]| -> [i64; 3] {
+        std::array::from_fn(|axis| ((position[axis] - lat.min[axis]) / dx - 0.5).floor() as i64)
+    };
+    // (summed in its cell, node by node in the tile, global) for a source.
+    let paths = |source: &[MatterPoint]| {
+        let mut tally = [0usize; 3];
+        for (point, from) in points.iter().zip(source) {
+            let (cell, now) = (base(from.position), base(point.position));
+            let in_tile = (0..3).all(|axis| (0..=3).contains(&(now[axis] - cell[axis].div_euclid(4) * 4)));
+            tally[if now == cell { 0 } else if in_tile { 1 } else { 2 }] += 1;
+        }
+        tally
+    };
+    let shift = |offset: &dyn Fn(u32, usize) -> f32| -> Vec<MatterPoint> {
+        points
+            .iter()
+            .map(|pt| MatterPoint {
+                position: std::array::from_fn(|axis| pt.position[axis] + offset(pt.id, axis) * dx),
+                ..*pt
+            })
+            .collect()
+    };
+    let drifted = shift(&|_, axis| [1.5, 0.75, 0.0][axis]);
+    let jittered = shift(&|id, axis| {
+        (rounding_hash(id.wrapping_mul(3).wrapping_add(axis as u32)) >> 8) as f32 / 16_777_216.0 * 1.2 - 0.6
+    });
     let nonzero = plain.iter().filter(|&&w| w != 0).count();
     eprintln!("matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks", lat.blocks().iter().product::<u32>());
     assert!(nonzero > 1000, "the fixture touches few nodes: {nonzero}");
-    for (name, source) in [("sorted", &points), ("drifted", &shifted)] {
+    for (name, source) in [("sorted", &points), ("drifted", &drifted), ("jittered", &jittered)] {
+        let tally = paths(source);
         let (words, moved, ranked, covered) = step(Some(source));
         let differ = plain.iter().zip(&words).filter(|(a, b)| a != b).count();
         let points_differ = plain_points
@@ -442,10 +468,16 @@ fn matter_block_p2g_bit_identical() {
             .zip(&moved)
             .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
             .count();
-        eprintln!("  {name}: sort ranked {ranked}, ranges cover {covered}; {differ} words and {points_differ} points differ");
+        eprintln!(
+            "  {name}: sort ranked {ranked}, ranges cover {covered}; points summed in cell {}, node by node in tile {}, global {}; {differ} words and {points_differ} points differ",
+            tally[0], tally[1], tally[2]
+        );
         assert_eq!(covered as usize, points.len(), "{name}: the sort covered every point");
         assert_eq!(differ, 0, "{name}: block P2G differs from the per-point path");
         assert_eq!(points_differ, 0, "{name}: the points after the step differ from the per-point path");
+        if name == "jittered" {
+            assert!(tally.iter().all(|&n| n >= 20), "{name} exercises every path: {tally:?}");
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Water — Dam Break (Live GPU)",
-  "description": "GPU MLS-MPM dam break: the Water — Dam Break column and basin simulated live on the GPU, one fixed 60 Hz tick per frame. The solver is one group, Live Matter: the domain sets the lattice, walls, gravity and clock; the fill seeds points; Point State repeats Clear Grid, Points To Grid, Grid Update and Grid To Points once per substep; at each tick's first substep Sort Into Blocks orders the points by grid block so Points To Grid adds each block in fast memory; Tick Stats checks each tick; Frame publishes the particles. The group flattens to the same graph as its wired atoms. Particles are drawn as small spheres until the liquid surface lands.",
+  "description": "GPU MLS-MPM dam break: the Water — Dam Break column and basin simulated live on the GPU, one fixed 60 Hz tick per frame. The solver is one group, Live Matter: the domain sets the lattice, walls, gravity and clock; the fill seeds points; Point State repeats Clear Grid, Points To Grid, Grid Update and Grid To Points once per substep; at each tick's first substep Sort Into Cells orders the points by grid cell so Points To Grid sums each cell's points before adding them to its block in fast memory; Tick Stats checks each tick; Frame publishes the particles. The group flattens to the same graph as its wired atoms. Particles are drawn as small spheres until the liquid surface lands.",
   "presetMetadata": {
     "id": "WaterDamBreakMatter",
     "displayName": "Water — Dam Break (Live GPU)",
@@ -973,8 +973,14 @@
           {
             "id": 12,
             "typeId": "node.sort_particles_into_cells",
-            "handle": "Sort Into Blocks",
-            "nodeId": "matter_sort_into_blocks"
+            "handle": "Sort Into Cells",
+            "nodeId": "matter_sort_into_cells",
+            "params": {
+              "max_cells": {
+                "type": "Float",
+                "value": 4194304.0
+              }
+            }
           }
         ],
         "wires": [
@@ -1604,43 +1610,43 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "block_center_x",
+            "fromPort": "sort_center_x",
             "toNode": 12,
             "toPort": "center_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "block_center_y",
+            "fromPort": "sort_center_y",
             "toNode": 12,
             "toPort": "center_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "block_center_z",
+            "fromPort": "sort_center_z",
             "toNode": 12,
             "toPort": "center_z"
           },
           {
             "fromNode": 1,
-            "fromPort": "block_size_x",
+            "fromPort": "sort_size_x",
             "toNode": 12,
             "toPort": "size_x"
           },
           {
             "fromNode": 1,
-            "fromPort": "block_size_y",
+            "fromPort": "sort_size_y",
             "toNode": 12,
             "toPort": "size_y"
           },
           {
             "fromNode": 1,
-            "fromPort": "block_size_z",
+            "fromPort": "sort_size_z",
             "toNode": 12,
             "toPort": "size_z"
           },
           {
             "fromNode": 1,
-            "fromPort": "block_cell_size",
+            "fromPort": "cell_size",
             "toNode": 12,
             "toPort": "cell_size"
           },

@@ -6,9 +6,9 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::fluid::TICK;
-use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS};
+use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
+use manifold_renderer::node_graph::fluid_particles::{CellRange, FluidParticle};
+use manifold_renderer::node_graph::matter::{MatterLattice, MatterPoint, MatterTickStats, STATS_WORDS};
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
     ParamValue, PrimitiveRegistry, ResourceId, StateStore, Transform, compile,
@@ -31,8 +31,8 @@ pub(crate) struct SceneSettings {
     pub seed: u32,
     pub points_per_cell_27: bool,
     pub closed: [bool; 6],
-    /// P2G takes D6's block path: the region sorts the points into the
-    /// domain's block bins once per tick and P2G reads the order and ranges.
+    /// P2G takes D6's block path: the region sorts the points into one bin
+    /// per stencil base cell once per tick and P2G reads the order and ranges.
     pub block_p2g: bool,
 }
 
@@ -66,6 +66,9 @@ pub(crate) struct MatterScene {
     points: ResourceId,
     stats: ResourceId,
     frame_b: ResourceId,
+    /// The cell sort's `order` and `cell_ranges`, on the block path.
+    sorted: Option<(ResourceId, ResourceId)>,
+    lattice: MatterLattice,
     frame_count: u32,
     /// Seconds per display frame; one fixed tick unless set.
     frame_interval: f64,
@@ -159,18 +162,20 @@ impl MatterScene {
         wire(&mut graph, (state, "tick_index"), (stats, "tick_index"));
         wire(&mut graph, (state, "tick_index"), (p2g, "tick_index"));
         wire(&mut graph, (state, "substep_in_tick"), (p2g, "substep_in_tick"));
-        if settings.block_p2g {
+        let sort_node = settings.block_p2g.then(|| add(&mut graph, "node.sort_particles_into_cells"));
+        if let Some(sort) = sort_node {
             let m2p = add(&mut graph, "node.matter_to_particles");
-            let sort = add(&mut graph, "node.sort_particles_into_cells");
+            // One bin per stencil base cell up to 128³ lattices, as the presets.
+            graph.set_param(sort, "max_cells", ParamValue::Float(4_194_304.0)).expect("max_cells");
             wire(&mut graph, (state, "out"), (m2p, "points"));
             wire(&mut graph, (m2p, "particles"), (sort, "particles"));
             wire(&mut graph, (fill, "count"), (sort, "count"));
             // Sort once per tick; later substeps reuse its order and ranges.
             wire(&mut graph, (state, "tick_start"), (sort, "enabled"));
             for (from, to) in [
-                ("block_center_x", "center_x"), ("block_center_y", "center_y"), ("block_center_z", "center_z"),
-                ("block_size_x", "size_x"), ("block_size_y", "size_y"), ("block_size_z", "size_z"),
-                ("block_cell_size", "cell_size"),
+                ("sort_center_x", "center_x"), ("sort_center_y", "center_y"), ("sort_center_z", "center_z"),
+                ("sort_size_x", "size_x"), ("sort_size_y", "size_y"), ("sort_size_z", "size_z"),
+                ("cell_size", "cell_size"),
             ] {
                 wire(&mut graph, (domain, from), (sort, to));
             }
@@ -228,6 +233,10 @@ impl MatterScene {
         let points = output(state, "out");
         let stats_res = output(state, "stats");
         let frame_b = output(frame, "particles_b");
+        let sorted = sort_node.map(|sort| (output(sort, "order"), output(sort, "cell_ranges")));
+        let lattice = MatterLattice::from_layout(
+            &domain_layout(None, settings.domain_size, settings.resolution).expect("scene layout"),
+        );
         Self {
             graph,
             plan,
@@ -239,6 +248,8 @@ impl MatterScene {
             points,
             stats: stats_res,
             frame_b,
+            sorted,
+            lattice,
             frame_count: 0,
             frame_interval: TICK,
         }
@@ -352,6 +363,36 @@ impl MatterScene {
         self.executor
             .live_scalar_input(self.state_node, name)
             .unwrap_or_else(|| panic!("the state node read no `{name}`"))
+    }
+
+    /// On the block path, after a frame: the fractions of live points whose
+    /// stencil base node is no longer the cell the tick's sort put them in
+    /// (they add node by node instead of into the cell's sums), and whose
+    /// stencil has left that cell's block tile (they add globally). The last
+    /// substep sees about this much drift; earlier substeps see less.
+    pub(crate) fn cell_drift(&self) -> (f64, f64) {
+        let (order, ranges) = self.sorted.expect("the block path");
+        let points = self.points();
+        let order: Vec<u32> = self.read(order);
+        let ranges: Vec<CellRange> = self.read(ranges);
+        let bins = self.lattice.cell_bins();
+        let (mut live, mut moved, mut left) = (0u64, 0u64, 0u64);
+        for (bin, range) in ranges.iter().take(bins.iter().product::<u32>() as usize).enumerate() {
+            let bin = bin as u32;
+            let cell = [bin % bins[0], (bin / bins[0]) % bins[1], bin / (bins[0] * bins[1])].map(i64::from);
+            for &index in &order[range.start as usize..(range.start + range.count) as usize] {
+                let Some(point) = points.get(index as usize).filter(|p| p.id != 0) else {
+                    continue;
+                };
+                let base: [i64; 3] = std::array::from_fn(|axis| {
+                    ((point.position[axis] - self.lattice.min[axis]) / self.lattice.cell_size - 0.5).floor() as i64
+                });
+                live += 1;
+                moved += u64::from(base != cell);
+                left += u64::from((0..3).any(|axis| !(0..=3).contains(&(base[axis] - cell[axis].div_euclid(4) * 4))));
+            }
+        }
+        (moved as f64 / live.max(1) as f64, left as f64 / live.max(1) as f64)
     }
 }
 
@@ -468,20 +509,28 @@ fn matter_deterministic_under_seed() {
 }
 
 /// D6's block path sorts once per tick and reuses that order for every
-/// substep, so points drift out of their block's tile; the integer
-/// accumulator still makes the whole run bit-identical to the per-point path.
+/// substep, so points drift out of their sorted cell and some out of its
+/// block's tile; the integer accumulator still makes the whole run
+/// bit-identical to the per-point path.
 #[test]
 fn matter_block_path_matches_per_point() {
     let run = |block_p2g: bool| {
         let mut scene = MatterScene::new(&SceneSettings { block_p2g, ..small_dam_break() });
+        let mut drift = (0.0f64, 0.0f64);
         for _ in 0..120 {
             scene.tick();
+            if block_p2g {
+                let (cell, tile) = scene.cell_drift();
+                drift = (drift.0.max(cell), drift.1.max(tile));
+            }
         }
         assert_eq!(scene.stats().nonfinite, 0);
-        scene.points()
+        (scene.points(), drift)
     };
-    let point = run(false);
-    let block = run(true);
+    let (point, _) = run(false);
+    let (block, (left_cell, left_tile)) = run(true);
+    eprintln!("  at tick end, at most {left_cell:.4} of points had left their sorted cell and {left_tile:.4} its tile");
+    assert!(left_cell > 0.0 && left_tile > 0.0, "the scene never took the node-by-node paths");
     assert_eq!(point.len(), block.len());
     let differ = point
         .iter()
