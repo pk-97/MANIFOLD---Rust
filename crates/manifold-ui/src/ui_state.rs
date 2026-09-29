@@ -660,8 +660,12 @@ impl UIState {
         self.primary_selected_layer_id = None;
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
-        // Build the region, then install it as the sole selection.
-        let mut region = SelectionRegion::active(start_beat, end_beat);
+        // Build the region, then install it as the sole selection. The sole
+        // floor at beat 0: copy measures offsets from the region start and
+        // duplicate shifts by its length, so a start before 0 would push
+        // pasted and duplicated clips late.
+        let mut region =
+            SelectionRegion::active(start_beat.max(Beats::ZERO), end_beat.max(Beats::ZERO));
         let min = start_layer.min(end_layer).max(0) as usize;
         let max = start_layer.max(end_layer).max(0) as usize;
         let upper = max.min(layers.len().saturating_sub(1));
@@ -999,6 +1003,16 @@ impl UIState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_dragged_past_the_left_edge_starts_at_beat_zero() {
+        let mut s = UIState::new();
+        let layers = [crate::view::UiLayer::default()];
+        s.set_region(Beats(-1.5), Beats(8.0), 0, 0, &layers);
+        let region = s.current_region().unwrap();
+        assert_eq!(region.start_beat, Beats::ZERO);
+        assert_eq!(region.end_beat, Beats(8.0));
+    }
 
     #[test]
     fn scope_pin_sets_and_self_clears_on_selection() {

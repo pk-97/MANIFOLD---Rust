@@ -810,8 +810,7 @@ impl LiveClipManager {
 
             // AddClipCommand enforces non-overlap internally (trims/deletes
             // existing clips that collide with the committed clip).
-            let spb = 60.0 / host.get_bpm_at_beat(committed.start_beat).max(1.0);
-            let mut add_cmd = AddClipCommand::new(committed.clone(), layer_lid, spb);
+            let mut add_cmd = AddClipCommand::new(committed.clone(), layer_lid);
             add_cmd.execute(project);
 
             host.register_clip_lookup(&committed.id, &committed);

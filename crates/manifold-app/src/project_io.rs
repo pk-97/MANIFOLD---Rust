@@ -1144,7 +1144,7 @@ impl ProjectIOService {
             let layer_idx = drop_layer_index as usize;
             if layer_idx < project.timeline.layers.len() {
                 let mut add_cmd =
-                    AddClipCommand::new(timeline_clip, drop_layer_id, seconds_per_beat);
+                    AddClipCommand::new(timeline_clip, drop_layer_id);
                 add_cmd.execute(project);
                 drop_commands.push(Box::new(add_cmd));
             }
@@ -1221,7 +1221,7 @@ impl ProjectIOService {
                 manifold_core::Seconds::ZERO,
                 source_duration,
             );
-            let mut add_clip = AddClipCommand::new(clip, layer_id, seconds_per_beat);
+            let mut add_clip = AddClipCommand::new(clip, layer_id);
             add_clip.execute(project);
 
             // One undo step per file: a new lane removes clip + lane; a join removes

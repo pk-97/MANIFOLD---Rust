@@ -78,8 +78,7 @@ fn overlap_covers_both_deletes() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
     assert_eq!(cmds.len(), 1);
 
     // Execute the delete command
@@ -101,8 +100,7 @@ fn overlap_covers_start_trims() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -126,8 +124,7 @@ fn overlap_covers_end_trims() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -151,8 +148,7 @@ fn overlap_splits_middle() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
     assert_eq!(cmds.len(), 2); // trim + add tail
 
     let mut service = EditingService::new();
@@ -183,10 +179,10 @@ fn copy_paste_roundtrip() {
     let id2 = add_clip(&mut project, 0, 4.0, 4.0);
 
     let mut service = EditingService::new();
-    service.copy_clips(&project, &[id1.clone(), id2.clone()], None, 0.5);
+    service.copy_clips(&project, &[id1.clone(), id2.clone()], None);
     assert!(service.has_clipboard());
 
-    let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
+    let result = service.paste_clips(&mut project, Beats(10.0), 0);
     assert_eq!(result.pasted_clip_ids.len(), 2);
 
     // Execute all paste commands
@@ -217,9 +213,9 @@ fn paste_preserves_relative_offsets() {
     let id3 = add_clip(&mut project, 1, 2.0, 2.0);
 
     let mut service = EditingService::new();
-    service.copy_clips(&project, &[id1, id2, id3], None, 0.5);
+    service.copy_clips(&project, &[id1, id2, id3], None);
 
-    let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
+    let result = service.paste_clips(&mut project, Beats(10.0), 0);
     for mut cmd in result.commands {
         cmd.execute(&mut project);
     }
@@ -262,7 +258,7 @@ fn duplicate_region_shifts_forward() {
 
     let region = make_region(&project, 0.0, 4.0, 0, 0);
 
-    let cmds = EditingService::duplicate_clips(&project, std::slice::from_ref(&id1), &region, 0.5);
+    let cmds = EditingService::duplicate_clips(&project, std::slice::from_ref(&id1), &region);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -286,7 +282,7 @@ fn delete_clips_removes() {
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
     let _id2 = add_clip(&mut project, 0, 4.0, 4.0);
 
-    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), None, 0.5);
+    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), None);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -304,7 +300,7 @@ fn create_clip_at_position() {
     let initial = project.timeline.layers[0].clips.len();
 
     let (mut cmd, _clip_id) =
-        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0), 0.5)
+        EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0))
             .expect("should create clip on non-group layer");
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
@@ -322,7 +318,7 @@ fn nudge_selected_clips() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 2.0, 4.0);
 
-    let cmds = EditingService::nudge_clips(&project, std::slice::from_ref(&id1), Beats(1.0), 0.5);
+    let cmds = EditingService::nudge_clips(&project, std::slice::from_ref(&id1), Beats(1.0));
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -357,7 +353,6 @@ fn nudge_selected_clips() {
 #[test]
 fn s5_multi_clip_move_onto_occupied_lane_preserves_all_moved_clips() {
     let mut project = make_project();
-    let spb = 0.5;
     let layer_index = 0;
 
     // Live-drag already wrote the post-drag positions into the model (D5:
@@ -385,7 +380,6 @@ fn s5_multi_clip_move_onto_occupied_lane_preserves_all_moved_clips() {
             &moved_clip,
             layer_index,
             &ignore_ids,
-            spb,
         );
         for mut cmd in cmds {
             cmd.execute(&mut project);
@@ -423,7 +417,6 @@ fn multi_step_undo_redo() {
             Beats(i as f64 * 4.0),
             0,
             Beats(4.0),
-            0.5,
         )
         .unwrap();
         service.execute(cmd, &mut project);
@@ -452,7 +445,7 @@ fn data_version_increments() {
     assert_eq!(service.data_version(), 0);
 
     let (cmd, _) =
-        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5)
+        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0))
             .unwrap();
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
@@ -472,7 +465,7 @@ fn dirty_flag_tracks_saves() {
     assert!(!service.is_dirty());
 
     let (cmd, _) =
-        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0), 0.5)
+        EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0))
             .unwrap();
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
@@ -491,8 +484,7 @@ fn split_at_beat() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmd = EditingService::split_clip_at_beat(&project, &id1, Beats(4.0), spb);
+    let cmd = EditingService::split_clip_at_beat(&project, &id1, Beats(4.0));
     assert!(cmd.is_some());
 
     let mut cmd = cmd.unwrap();
@@ -517,11 +509,10 @@ fn split_at_boundary_returns_none() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
-    let spb = 60.0 / project.settings.bpm.0;
     // Split at start — invalid
-    assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(0.0), spb).is_none());
+    assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(0.0)).is_none());
     // Split at end — invalid
-    assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(8.0), spb).is_none());
+    assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(8.0)).is_none());
 }
 
 #[test]
@@ -537,8 +528,7 @@ fn split_audio_clip_advances_tail_in_point() {
     project.timeline.layers[0].restore_clip(clip);
     project.timeline.mark_clip_lookup_dirty();
 
-    let spb = 60.0 / project.settings.bpm.0; // 0.5s/beat at 120bpm
-    let mut cmd = EditingService::split_clip_at_beat(&project, &id, Beats(4.0), spb).unwrap();
+    let mut cmd = EditingService::split_clip_at_beat(&project, &id, Beats(4.0)).unwrap();
     cmd.execute(&mut project);
 
     let tail = project.timeline.layers[0]
@@ -593,12 +583,11 @@ fn move_clip_to_layer() {
 #[test]
 fn move_clips_across_layers_batches_as_one_undo_entry() {
     let mut project = make_project();
-    let spb = 0.5;
     let c1 = add_clip(&mut project, 0, 0.0, 4.0);
     let c2 = add_clip(&mut project, 0, 10.0, 4.0);
 
     let cmds =
-        EditingService::move_clips_across_layers(&project, &[c1.clone(), c2.clone()], 1, spb);
+        EditingService::move_clips_across_layers(&project, &[c1.clone(), c2.clone()], 1);
     assert!(!cmds.is_empty());
 
     let mut service = EditingService::new();
@@ -628,7 +617,7 @@ fn move_clips_across_layers_all_or_nothing_at_range_boundary() {
     let c1 = add_clip(&mut project, 0, 0.0, 4.0); // valid destination (1)
     let c2 = add_clip(&mut project, 1, 0.0, 4.0); // delta +1 -> index 2, out of range
 
-    let cmds = EditingService::move_clips_across_layers(&project, &[c1, c2], 1, 0.5);
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1, c2], 1);
     assert!(
         cmds.is_empty(),
         "one clip's destination is out of range, so the WHOLE press must no-op \
@@ -646,7 +635,7 @@ fn move_clips_across_layers_blocks_on_gen_video_type_mismatch() {
 
     // Move by +2 so c1's destination (layer 2) is a Generator layer while
     // its source (layer 0) is Video — type mismatch, must block.
-    let cmds = EditingService::move_clips_across_layers(&project, &[c1], 2, 0.5);
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1], 2);
     assert!(
         cmds.is_empty(),
         "video clip moving onto a Generator layer must block the whole press"
@@ -657,7 +646,7 @@ fn move_clips_across_layers_blocks_on_gen_video_type_mismatch() {
 fn move_clips_across_layers_zero_delta_is_noop() {
     let mut project = make_project();
     let c1 = add_clip(&mut project, 0, 0.0, 4.0);
-    let cmds = EditingService::move_clips_across_layers(&project, &[c1], 0, 0.5);
+    let cmds = EditingService::move_clips_across_layers(&project, &[c1], 0);
     assert!(cmds.is_empty());
 }
 
@@ -688,7 +677,7 @@ fn trim_clip_to_region_fully_inside() {
 
     let region = make_region(&project, 0.0, 8.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
-    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, &project.source_clock());
 
     // Fully inside region — no trimming
     assert!((trimmed.start_beat - Beats(2.0)).abs() < Beats(0.001));
@@ -702,7 +691,7 @@ fn trim_clip_to_region_straddles_start() {
 
     let region = make_region(&project, 2.0, 10.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
-    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, &project.source_clock());
 
     // Trimmed at start: should start at 2.0, duration 6.0
     assert!((trimmed.start_beat - Beats(2.0)).abs() < Beats(0.001));
@@ -718,7 +707,7 @@ fn trim_clip_to_region_straddles_end() {
 
     let region = make_region(&project, 0.0, 8.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
-    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, &project.source_clock());
 
     // Trimmed at end: should start at 4.0, duration 4.0
     assert!((trimmed.start_beat - Beats(4.0)).abs() < Beats(0.001));
@@ -732,7 +721,7 @@ fn trim_clip_to_region_straddles_both() {
 
     let region = make_region(&project, 4.0, 12.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
-    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, &project.source_clock());
 
     // Trimmed at both: 4.0..12.0
     assert!((trimmed.start_beat - Beats(4.0)).abs() < Beats(0.001));
@@ -750,11 +739,11 @@ fn copy_clips_region_mode_trims() {
     let region = make_region(&project, 2.0, 6.0, 0, 0);
 
     let mut service = EditingService::new();
-    service.copy_clips(&project, &[id1], Some(&region), 0.5);
+    service.copy_clips(&project, &[id1], Some(&region));
     assert!(service.has_clipboard());
 
     // Paste to verify trimmed content
-    let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
+    let result = service.paste_clips(&mut project, Beats(10.0), 0);
     assert_eq!(result.pasted_clip_ids.len(), 1);
 
     for mut cmd in result.commands {
@@ -782,7 +771,7 @@ fn duplicate_clips_region_mode_trims() {
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
 
-    let cmds = EditingService::duplicate_clips(&project, std::slice::from_ref(&id1), &region, 0.5);
+    let cmds = EditingService::duplicate_clips(&project, std::slice::from_ref(&id1), &region);
     // 1 command: AddClipCommand (overlap enforcement is internal)
     assert_eq!(cmds.len(), 1);
 
@@ -822,8 +811,7 @@ fn delete_region_straddles_both_boundaries() {
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), Some(&region));
     assert!(!cmds.is_empty(), "should produce split + delete commands");
 
     let mut service = EditingService::new();
@@ -849,8 +837,7 @@ fn delete_region_straddles_start_only() {
     let _id1 = add_clip(&mut project, 0, 0.0, 4.0);
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, &[], Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, &[], Some(&region));
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "del".into(), &mut project);
@@ -868,8 +855,7 @@ fn delete_region_straddles_end_only() {
     let _id1 = add_clip(&mut project, 0, 4.0, 6.0);
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, &[], Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, &[], Some(&region));
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "del".into(), &mut project);
@@ -887,8 +873,7 @@ fn delete_region_clip_fully_inside() {
     let _id1 = add_clip(&mut project, 0, 3.0, 2.0);
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, &[], Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, &[], Some(&region));
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "del".into(), &mut project);
@@ -904,8 +889,7 @@ fn delete_region_undo_restores_original() {
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
-    let spb = 60.0 / project.settings.bpm.0;
-    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), Some(&region), spb);
+    let cmds = EditingService::delete_clips(&project, std::slice::from_ref(&id1), Some(&region));
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "del".into(), &mut project);

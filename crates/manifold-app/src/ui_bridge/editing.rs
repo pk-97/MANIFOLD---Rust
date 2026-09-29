@@ -109,14 +109,12 @@ pub(super) fn dispatch_editing(
             let grid_step = Beats::from_f32(ui.viewport.grid_step());
             let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
-                let spb = 60.0 / project.settings.bpm.0.max(1.0);
                 // AddClipCommand enforces non-overlap internally.
                 if let Some((cmd, clip_id)) = EditingService::create_clip_at_position(
                     project,
                     snapped,
                     *layer,
                     Beats::from_f32(4.0),
-                    spb,
                 ) {
                     ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
 
@@ -146,9 +144,8 @@ pub(super) fn dispatch_editing(
         EditingAction::ContextSplitAtPlayhead(clip_id) => {
             let beat = content_state.current_beat.as_f32();
             {
-                let spb = 60.0 / project.settings.bpm.0;
                 if let Some(cmd) =
-                    EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat), spb)
+                    EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat))
                 {
                     {
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
@@ -167,8 +164,7 @@ pub(super) fn dispatch_editing(
             } else {
                 vec![clip_id.clone()]
             };
-            let spb = 60.0 / project.settings.bpm.0.max(1.0);
-            let commands = EditingService::delete_clips(project, &target_ids, None, spb);
+            let commands = EditingService::delete_clips(project, &target_ids, None);
             if !commands.is_empty() {
                 ContentCommand::send(
                     content_tx,
@@ -188,12 +184,10 @@ pub(super) fn dispatch_editing(
                     region.end_beat = clip.start_beat + clip.duration_beats;
                     region.is_active = true;
                 }
-                let spb = 60.0 / project.settings.bpm.0.max(1.0);
                 let commands = EditingService::duplicate_clips(
                     project,
                     std::slice::from_ref(&clip_id),
                     &region,
-                    spb,
                 );
                 if !commands.is_empty() {
                     ContentCommand::send(
@@ -208,22 +202,13 @@ pub(super) fn dispatch_editing(
             // Paste the clip clipboard at the clicked beat/layer — same content-thread
             // PasteClips path as Cmd+V (EditingService owns the clipboard).
             let snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
-            let (tx, rx) = std::sync::mpsc::channel();
-            ContentCommand::send(
+            super::paste_clips_and_select(
                 content_tx,
-                ContentCommand::PasteClips {
-                    target_beat: snapped,
-                    target_layer: *layer as i32,
-                    result_tx: tx,
-                },
+                snapped,
+                *layer as i32,
+                selection,
+                &mut ui.toast,
             );
-            // Brief wait for the pasted IDs so we can select them (matches the
-            // keyboard paste in input_host::paste_clips).
-            if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
-                && !pasted_ids.is_empty()
-            {
-                selection.select_clips(pasted_ids);
-            }
             DispatchResult::structural()
         }
         EditingAction::ContextAddVideoLayer(after_layer) => {
@@ -501,20 +486,13 @@ pub(super) fn dispatch_editing(
             let Some((idx, _)) = project.timeline.find_layer_by_id(layer_id.as_str()) else {
                 return DispatchResult::structural();
             };
-            let (tx, rx) = std::sync::mpsc::channel();
-            ContentCommand::send(
+            super::paste_clips_and_select(
                 content_tx,
-                ContentCommand::PasteClips {
-                    target_beat: content_state.current_beat,
-                    target_layer: idx as i32,
-                    result_tx: tx,
-                },
+                content_state.current_beat,
+                idx as i32,
+                selection,
+                &mut ui.toast,
             );
-            if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
-                && !pasted_ids.is_empty()
-            {
-                selection.select_clips(pasted_ids);
-            }
             DispatchResult::structural()
         }
         EditingAction::ContextImportMidi(layer_id) => {

@@ -163,7 +163,8 @@ pub enum ContentCommand {
     PasteClips {
         target_beat: Beats,
         target_layer: i32,
-        result_tx: std::sync::mpsc::Sender<Vec<ClipId>>,
+        /// Pasted clip ids, plus why any clips were skipped.
+        result_tx: std::sync::mpsc::Sender<(Vec<ClipId>, Option<String>)>,
     },
 
     // ── Direct project mutation ────────────────────────────────────
