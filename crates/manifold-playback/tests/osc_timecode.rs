@@ -13,14 +13,9 @@
 //!   osc_sync.drain_pending_osc_timecode(now)   // subscription slot -> on_timecode_received
 //!   osc_sync.update(now, ...)         // transport-follow + position sync
 //!
-//! These tests also caught a second, independent bug the wiring fix alone
-//! didn't solve: the default `timecode_address` was `"time"` (mechanically
-//! ported from Unity's default), which is not a syntactically valid OSC
-//! address (must start with `/`). `rosc`'s decoder — unlike whatever Unity's
-//! OSC library did — rejects the WHOLE packet, not just the address match,
-//! for a malformed address. So even with the subscribe/drain wiring fixed,
-//! no real UDP timecode packet could ever have decoded. Fixed alongside the
-//! wiring by changing the default to `"/time"` (see `osc_sync.rs::new()`).
+//! The default `timecode_address` must be `"/time"`: `rosc` rejects the whole
+//! packet when an address lacks the leading `/`, so a bare `"time"` default
+//! would drop every timecode packet (see `osc_sync.rs::new()`).
 
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -236,7 +231,7 @@ fn osc_timecode_packet_drives_seek_when_paused() {
 }
 
 /// Transport-follow: timecode arriving while stopped/paused must trigger
-/// PLAY (CORE_ENGINE_MAP section 7's ported-from-Unity semantics — pinned here as
+/// PLAY (CORE_ENGINE_MAP section 7 semantics — pinned here as
 /// the wiring contract, not a claim about a live Ableton lock holding on
 /// stage).
 #[test]

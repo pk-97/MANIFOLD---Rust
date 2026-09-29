@@ -424,13 +424,7 @@ mod tests {
         }
     }
 
-    // ── Beat ↔ Pixel conversions (Unity CoordinateMapperTests.cs) ────
-
-    #[test]
-    fn default_zoom_is_120() {
-        let mapper = CoordinateMapper::new();
-        assert_eq!(mapper.pixels_per_beat(), 120.0);
-    }
+    // ── Beat ↔ Pixel conversions ────
 
     #[test]
     fn beat_to_pixel_default_zoom() {

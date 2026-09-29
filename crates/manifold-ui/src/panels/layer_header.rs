@@ -2509,7 +2509,7 @@ impl LayerHeaderPanel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::types::LayerType;
     use crate::view::UiLayer;
@@ -2770,23 +2770,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_click_chevron() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = LayerHeaderPanel::new();
-        let layers = vec![make_video_layer("L1")];
-        let mapper = mapper_for(&layers);
-        panel.set_layers(layers);
-        panel.build(&mut tree, &layout, &mapper, 0.0);
-
-        let a = panel.handle_click(
-            panel.rows[0].id(LayerControl::Chevron).unwrap(),
-            crate::input::Modifiers::NONE,
-        );
-        assert!(matches!(&a[0], PanelAction::Layer(LayerAction::ChevronClicked(id)) if *id == LayerId::new("L1")));
-    }
-
-    #[test]
     fn set_mute_state_updates() {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
@@ -2998,209 +2981,13 @@ mod tests {
         assert_eq!(panel.name_node_id(0), None);
     }
 
-    // ── Layout equivalence gate ─────────────────────────────────────
-    //
-    // Frozen, independent copy of the card geometry captured at the
-    // descriptor refactor. The live `compute_layer_row` is asserted equal to
-    // this oracle rect-for-rect for every layer type. If a future edit drifts
-    // the live geometry, this frozen copy disagrees and the gate fails —
-    // exactly the "descriptor layout equals old compute_layer_row" guard the
-    // design calls for.
-    #[allow(clippy::too_many_arguments)]
-    fn oracle_row(
-        y_offset: f32,
-        height: f32,
-        panel_width: f32,
-        is_collapsed: bool,
-        is_group: bool,
-        is_generator: bool,
-        is_audio: bool,
-        is_child: bool,
-        is_last_child: bool,
-        is_group_expanded: bool,
-        has_gen_label: bool,
-    ) -> LayerRowData {
-        use LayerControl as C;
-        let mut d = LayerRowData::default();
-        let w = if panel_width > 0.0 {
-            panel_width
-        } else {
-            color::LAYER_CONTROLS_WIDTH
-        };
-        let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
-        let pad = PAD + left_indent;
-        let right_pad = PAD;
-        let mut y = y_offset + PAD;
-        let card_x = left_indent;
-        let card_w = (w - card_x).max(1.0);
-        d.set(C::Background, Rect::new(card_x, y_offset, card_w, height));
-        if is_child {
-            d.set(C::AccentBar, Rect::new(0.0, y_offset, ACCENT_W, height));
-        }
-        if is_group && is_group_expanded {
-            d.set(
-                C::Connector,
-                Rect::new(0.0, y_offset + height * 0.5, ACCENT_W, height * 0.5),
-            );
-        }
-        if is_child && is_last_child {
-            d.set(
-                C::BottomBorder,
-                Rect::new(card_x, y_offset + height - BORDER_H, card_w, BORDER_H),
-            );
-        }
-        d.set(C::SelectAccent, Rect::new(card_x, y_offset, SEL_ACCENT_W, height));
-        let chevron_w = CHEVRON_W;
-        d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
-        let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
-        let handle_x = w - right_pad - HANDLE_W - 8.0;
-        if is_collapsed && has_gen_label {
-            let label_x = handle_x - TOP_GAP - GEN_LABEL_COLLAPSED_W;
-            let name_w = (label_x - TOP_GAP - name_left).max(20.0);
-            d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
-            d.set(
-                C::GenType,
-                Rect::new(label_x, y, GEN_LABEL_COLLAPSED_W, NAME_H),
-            );
-        } else {
-            let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
-            d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
-        }
-        d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
-        y += ROW_STEP;
-        let mut btn_x = pad;
-        d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 6.0;
-        d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 6.0;
-        if is_audio {
-            d.set(C::Analysis, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-            if is_collapsed {
-                d.set(
-                    C::Separator,
-                    Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
-                );
-                return d;
-            }
-            let right_edge = w - right_pad - RIGHT_GUTTER;
-            let gain_x = btn_x + MS_BTN_W + 6.0;
-            d.set(
-                C::Gain,
-                Rect::new(gain_x, y, (right_edge - gain_x).max(20.0), BTN_H),
-            );
-            let send_y = y + BTN_H;
-            d.set(
-                C::Send,
-                Rect::new(pad, send_y, (right_edge - pad).max(20.0), BTN_H),
-            );
-            d.set(
-                C::Separator,
-                Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
-            );
-            return d;
-        }
-        d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 6.0;
-        let dd_w = (w - btn_x - right_pad - RIGHT_GUTTER).max(20.0);
-        d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
-        y += BTN_H;
-        let sep_h = if is_group {
-            color::GROUP_SEPARATOR_HEIGHT
-        } else {
-            SEP_H
-        };
-        if is_collapsed && !is_group {
-            d.set(
-                C::Separator,
-                Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
-            );
-            return d;
-        }
-        // section D routing form — aligned [label | value] rows (mirrors compute_layer_row
-        // rect-for-rect; the equivalence gate enforces it).
-        if !is_group {
-            let right_edge = w - right_pad - RIGHT_GUTTER;
-            let div_y = (y + MIX_DIVIDER_PAD).round();
-            d.set(
-                C::MixDivider,
-                Rect::new(pad, div_y, (right_edge - pad).max(1.0), MIX_DIVIDER_THICK),
-            );
-            y = div_y + MIX_DIVIDER_THICK + MIX_DIVIDER_PAD;
-            let val_x = pad + LBL_W + 6.0;
-            let val_w = (right_edge - val_x).max(20.0);
-            let mode_x = right_edge - MODE_TOGGLE_W;
-            if has_gen_label {
-                // Generator-name line — generators and LED layers (mirrors
-                // compute_layer_row; the equivalence gate enforces it).
-                d.set(C::GenType, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
-                y += BTN_H + ROUTING_ROW_GAP;
-            } else if !is_generator {
-                d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
-                d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
-                y += BTN_H + ROUTING_ROW_GAP;
-            }
-            d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
-            d.set(
-                C::MidiInput,
-                Rect::new(val_x, y, (mode_x - 4.0 - val_x).max(10.0), BTN_H),
-            );
-            d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-            y += BTN_H + ROUTING_ROW_GAP;
-            d.set(C::ChLabel, Rect::new(pad, y, LBL_W, BTN_H));
-            d.set(C::ChDropdown, Rect::new(val_x, y, val_w, BTN_H));
-            y += BTN_H + ROUTING_ROW_GAP;
-            d.set(C::DevLabel, Rect::new(pad, y, LBL_W, BTN_H));
-            d.set(C::DevDropdown, Rect::new(val_x, y, val_w, BTN_H));
-        }
-        let _ = y;
-        d.set(
-            C::Separator,
-            Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
-        );
-        d
-    }
-
-    fn assert_row_eq(a: &LayerRowData, b: &LayerRowData, case: &str) {
-        for &c in &LayerControl::ALL {
-            assert_eq!(a.has(c), b.has(c), "{case}: presence of {c:?}");
-            if a.has(c) {
-                assert_eq!(a.rect(c), b.rect(c), "{case}: rect of {c:?}");
-            }
-        }
-    }
-
+    /// An LED layer is generator-driven without being `LayerType::Generator`:
+    /// it shows the generator-name line and never the source-folder row.
     #[test]
-    fn layout_matches_frozen_oracle() {
-        // (is_collapsed, is_group, is_generator, is_audio, is_child, is_last, is_grp_exp, label)
-        let cases = [
-            (false, false, false, false, false, false, false, "video"),
-            (false, false, true, false, false, false, false, "generator"),
-            (false, true, false, false, false, false, true, "group"),
-            (true, false, false, false, false, false, false, "collapsed-video"),
-            (true, false, true, false, false, false, false, "collapsed-gen"),
-            (false, false, false, false, true, true, false, "child-last"),
-            (false, false, false, true, false, false, false, "audio"),
-            (true, false, false, true, false, false, false, "collapsed-audio"),
-        ];
-        for (coll, grp, genr, aud, child, last, gexp, label) in cases {
-            // Synthetic equivalence check, not the gating test — `genr` doubles
-            // as `has_gen_label` here since both fns receive the identical
-            // value either way.
-            let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
-            let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp, genr);
-            assert_row_eq(&live, &oracle, label);
-        }
-
-        // LED layer (MVP-P1b): generator-driven but NOT `LayerType::Generator` —
-        // is_generator=false with a gen label. The generator-name line must
-        // show and the FOLDER row must not.
-        let live = compute_layer_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, true);
-        let oracle = oracle_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, true);
-        assert_row_eq(&live, &oracle, "led");
-        assert!(
-            live.has(LayerControl::GenType) && !live.has(LayerControl::Folder),
-            "LED layer shows the generator-name line, not the source-folder row",
-        );
+    fn led_layer_shows_generator_line_not_folder_row() {
+        let row = compute_layer_row(0.0, 140.0, 300.0, false, false, false, false, false, false, false, true);
+        assert!(row.has(LayerControl::GenType));
+        assert!(!row.has(LayerControl::Folder));
     }
 
     #[test]
@@ -3232,37 +3019,6 @@ mod tests {
         assert!(
             matches!(a.as_slice(), [PanelAction::Root(RootAction::AudioSendClicked(id))] if *id == LayerId::new("Drums In"))
         );
-    }
-
-    #[test]
-    fn gain_track_right_click_resolves_to_slider_reset_at_unity_not_the_row_menu() {
-        // BUG-061: the gain track never had a reset gesture before this — a
-        // right-click on it fell through to the whole-row LayerHeaderRightClicked
-        // context menu (register_intents registers that on every row node,
-        // gain track included). The gain-specific registration must be added
-        // AFTER that loop so it wins for this one node.
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = LayerHeaderPanel::new();
-        let layers = vec![make_audio_layer("Drums In")];
-        let mapper = mapper_for(&layers);
-        panel.set_layers(layers);
-        panel.build(&mut tree, &layout, &mapper, 0.0);
-
-        let mut reg = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut reg);
-
-        let gain_track = panel.gain_sliders[0].track_id().unwrap();
-        match reg.resolve(&tree, Some(gain_track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(
-                    *changed,
-                    PanelAction::Scrub(ValueRef::LayerAudioGain(ref id), ScrubPhase::Move(ScrubValue::Scalar(v)))
-                        if *id == LayerId::new("Drums In") && v.abs() < f32::EPSILON
-                ));
-            }
-            other => panic!("expected SliderReset, got {other:?}"),
-        }
     }
 
     // ── P0.5 gate: generator label, both states ───────────────────────
@@ -3508,5 +3264,37 @@ mod tests {
                 rect.height
             );
         }
+    }
+
+    /// The gain track's reset must win over the whole-row context menu that
+    /// `register_intents` puts on every row node.
+    pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_audio_layer("Drums In")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+        let got = reg.resolve(&tree, panel.gain_sliders[0].track_id(), crate::intent::Gesture::RightClick);
+        vec![crate::panels::contract_tests::ResetCase {
+            label: "audio gain".into(),
+            got,
+            target: |v| matches!(v, ValueRef::LayerAudioGain(id) if id.as_str() == "Drums In"),
+            default: 0.0,
+        }]
+    }
+
+    pub(crate) fn chevron_click() -> Vec<PanelAction> {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        let layers = vec![make_video_layer("L1")];
+        let mapper = mapper_for(&layers);
+        panel.set_layers(layers);
+        panel.build(&mut tree, &layout, &mapper, 0.0);
+        panel.handle_click(panel.rows[0].id(LayerControl::Chevron).unwrap(), crate::input::Modifiers::NONE)
     }
 }

@@ -70,19 +70,6 @@ mod offline_audio_mod;
 // constraint as `run_export` itself — native Metal, no wgpu).
 #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
 mod journey_proof;
-// BUG-035 regression guard: headless before/after MANIFOLD_RENDER_TRACE proof
-// that the clip-atlas persist debounce cycle no longer spikes the content
-// thread. Shares `journey_proof`'s headless ContentThread infra (same feature
-// gate — no separate harness to maintain).
-#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
-mod bug035_verify;
-// BUG-037 regression guard: headless before/after MANIFOLD_RENDER_TRACE proof
-// that node.render_scene / node.gltf_texture_source's lazy pipeline compiles
-// no longer stall a glTF scene layer's first rendered frame. Shares
-// `journey_proof`'s headless ContentThread infra (same feature gate — no
-// separate harness to maintain).
-#[cfg(all(feature = "journey-proofs", target_os = "macos"))]
-mod bug037_verify;
 // BUG-219 P1 evidence harness (docs/IMPORT_RESPONSIVENESS_DESIGN.md P1):
 // drives the REAL `Application::import_model_file` (unmodified) against the
 // full 43MB ABeautifulGame.glb fixture, sequentially 3x, with a real

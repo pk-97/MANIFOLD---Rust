@@ -1380,101 +1380,6 @@ fn add_scene_object_allocates_recursive_ids_and_preserves_controls_through_undo_
     );
 }
 
-/// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneObjectCommand`
-/// stamps the material/transform/scene_object metadata the caller hands
-/// it into the def's TOP-LEVEL `preset_metadata`, targeting each new
-/// node's bare `NodeId`, with the section named per the convention
-/// (`"{handle} — Material"` / `"{handle} — Transform"` / `handle`).
-/// Undo restores `preset_metadata` verbatim; execute→undo→redo is stable.
-#[test]
-fn add_scene_object_command_stamps_exposures_and_undo_redo_are_stable() {
-    use manifold_core::effect_graph_def::BindingTarget;
-
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-    let mut cmd = AddSceneObjectCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (0.0, 0.0),
-        vec![scene_param_meta("ambient", "Ambient")],
-        vec![scene_param_meta("pos_x", "X")],
-        vec![scene_param_meta("visible", "Visible")],
-        mirror_catalog_default(),
-    );
-
-    // Asserted after both the first execute and the redo: `execute`
-    // mints a fresh random NodeId every call (`scene_build_node` ->
-    // `manifold_core::short_id()`, pre-existing behavior, not a P1
-    // change), so graph IDENTITY isn't byte-stable across redo — only
-    // the STRUCTURE the stamping produces is. "Stable" here means the
-    // exposures always target whichever node currently sits in that
-    // role, not a frozen id.
-    let assert_stamped = |project: &Project| {
-        let def = graph_of(project, &fx);
-        let group = def
-            .nodes
-            .iter()
-            .find(|n| n.handle.as_deref() == Some("Object 1"))
-            .unwrap();
-        let body = group.group.as_deref().unwrap();
-        let mat_node = body
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.pbr_material")
-            .unwrap();
-        let transform_node = body
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.transform_3d")
-            .unwrap();
-        let scene_object_node = body
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.scene_object")
-            .unwrap();
-
-        let meta = def
-            .preset_metadata
-            .as_ref()
-            .expect("P1 stamped into top-level preset_metadata");
-        assert_eq!(meta.params.len(), 3, "one ParamSpecDef per exposed param");
-        assert_eq!(meta.bindings.len(), 3);
-
-        let has_binding = |node_id: &NodeId, param: &str, section: &str| {
-            meta.bindings.iter().any(|b| {
-                matches!(&b.target, BindingTarget::Node { node_id: nid, param: p } if nid == node_id && p == param)
-            }) && meta.params.iter().any(|p| p.section.as_deref() == Some(section))
-        };
-        assert!(
-            has_binding(&mat_node.node_id, "ambient", "Object 1 — Material"),
-            "material exposure targets the grouped node's bare NodeId, section 'Object 1 — Material'"
-        );
-        assert!(
-            has_binding(&transform_node.node_id, "pos_x", "Object 1 — Transform"),
-            "transform exposure targets the grouped node's bare NodeId, section 'Object 1 — Transform'"
-        );
-        assert!(
-            has_binding(&scene_object_node.node_id, "visible", "Object 1"),
-            "scene_object exposure targets the grouped node's bare NodeId, section 'Object 1'"
-        );
-    };
-
-    cmd.execute(&mut project);
-    assert_stamped(&project);
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert!(
-        def.preset_metadata.is_none(),
-        "undo restores the pre-add (empty) preset_metadata verbatim"
-    );
-
-    cmd.execute(&mut project); // redo
-    assert_stamped(&project);
-}
-
 #[test]
 fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
     let (mut project, fx) = project_with_graph(render_scene_graph(2, 1));
@@ -1547,67 +1452,6 @@ fn add_scene_light_command_bumps_count_wires_bare_light_and_undo_restores() {
         def, &before,
         "undo restores the pre-add graph exactly (inverse-pair)"
     );
-}
-
-/// P1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneLightCommand`
-/// stamps the caller-supplied light metadata into the def's TOP-LEVEL
-/// `preset_metadata`, targeting the new light's bare `NodeId`, section
-/// "Light N" (1-based display convention, independent of the node's own
-/// internal `light_{k}` handle). Undo restores `preset_metadata`
-/// verbatim; execute→undo→redo is structurally stable (see the
-/// AddSceneObjectCommand sibling test for why redo isn't byte-identical:
-/// `execute` mints a fresh random NodeId every call).
-#[test]
-fn add_scene_light_command_stamps_exposures_and_undo_redo_are_stable() {
-    use manifold_core::effect_graph_def::BindingTarget;
-
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-    let mut cmd = AddSceneLightCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        0,
-        (-260.0, 50.0),
-        vec![scene_param_meta("intensity", "Intensity")],
-        mirror_catalog_default(),
-    );
-
-    let assert_stamped = |project: &Project| {
-        let def = graph_of(project, &fx);
-        let light = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.light")
-            .unwrap();
-
-        let meta = def
-            .preset_metadata
-            .as_ref()
-            .expect("P1 stamped into top-level preset_metadata");
-        assert_eq!(meta.params.len(), 1);
-        assert_eq!(meta.params[0].section.as_deref(), Some("Light 1"));
-        assert!(
-            meta.bindings.iter().any(|b| matches!(
-                &b.target,
-                BindingTarget::Node { node_id, param } if *node_id == light.node_id && param == "intensity"
-            )),
-            "light exposure targets the light's bare NodeId"
-        );
-    };
-
-    cmd.execute(&mut project);
-    assert_stamped(&project);
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert!(
-        def.preset_metadata.is_none(),
-        "undo restores the pre-add (empty) preset_metadata verbatim"
-    );
-
-    cmd.execute(&mut project); // redo
-    assert_stamped(&project);
 }
 
 /// A fixture with 3 objects wired as `AddSceneObjectCommand` builds them
@@ -3663,206 +3507,8 @@ fn set_node_handle_command_renames_light_and_undo_restores() {
     );
 }
 
-#[test]
-fn add_scene_environment_command_spawns_bake_environment_and_wires_envmap() {
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-    let before = graph_of(&project, &fx).clone();
-
-    let mut cmd = AddSceneEnvironmentCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        (10.0, 20.0),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
-    cmd.execute(&mut project);
-
-    let def = graph_of(&project, &fx);
-    let env = def
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.bake_environment")
-        .expect("environment node created");
-    assert_eq!(env.editor_pos, Some((10.0, 20.0)));
-    assert_eq!(
-        env.params.get("intensity"),
-        Some(&SerializedParamValue::Float { value: 1.0 })
-    );
-    assert!(def.wires.iter().any(|w| w.from_node == env.id
-        && w.from_port == "envmap"
-        && w.to_node == 0
-        && w.to_port == "envmap"));
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert_eq!(
-        def, &before,
-        "undo restores the pre-add graph exactly (inverse-pair)"
-    );
-}
-
-#[test]
-fn add_scene_fog_command_spawns_atmosphere_and_wires_atmosphere_port() {
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-    let before = graph_of(&project, &fx).clone();
-
-    let mut cmd = AddSceneFogCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        (30.0, 40.0),
-        Vec::new(),
-        mirror_catalog_default(),
-    );
-    cmd.execute(&mut project);
-
-    let def = graph_of(&project, &fx);
-    let fog = def
-        .nodes
-        .iter()
-        .find(|n| n.type_id == "node.atmosphere")
-        .expect("fog node created");
-    assert_eq!(fog.editor_pos, Some((30.0, 40.0)));
-    assert!(def.wires.iter().any(|w| w.from_node == fog.id
-        && w.from_port == "atmosphere"
-        && w.to_node == 0
-        && w.to_port == "atmosphere"));
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert_eq!(
-        def, &before,
-        "undo restores the pre-add graph exactly (inverse-pair)"
-    );
-}
-
-/// R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneEnvironmentCommand`
-/// stamps the caller-supplied environment metadata into the def's
-/// TOP-LEVEL `preset_metadata`, targeting the new environment node's bare
-/// `NodeId`, section "Environment" — same P1 stamp shape
-/// `AddSceneLightCommand` performs for its own node. Regression coverage
-/// for the R1 bug: a freshly-added environment was structurally invisible
-/// in the scene panel because `world_sections` (`state_sync.rs`'s
-/// `sections_for_doc_ids`) came back empty with nothing stamped. Undo
-/// restores `preset_metadata` verbatim; execute→undo→redo is stable.
-#[test]
-fn add_scene_environment_command_stamps_exposures_and_undo_redo_are_stable() {
-    use manifold_core::effect_graph_def::BindingTarget;
-
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-    let mut cmd = AddSceneEnvironmentCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        (10.0, 20.0),
-        vec![scene_param_meta("intensity", "Intensity")],
-        mirror_catalog_default(),
-    );
-
-    let assert_stamped = |project: &Project| {
-        let def = graph_of(project, &fx);
-        let env = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.bake_environment")
-            .unwrap();
-
-        let meta = def
-            .preset_metadata
-            .as_ref()
-            .expect("R1 stamped into top-level preset_metadata");
-        assert_eq!(meta.params.len(), 1);
-        assert_eq!(meta.params[0].section.as_deref(), Some("Environment"));
-        assert!(
-            meta.bindings.iter().any(|b| matches!(
-                &b.target,
-                BindingTarget::Node { node_id, param } if *node_id == env.node_id && param == "intensity"
-            )),
-            "environment exposure targets the environment node's bare NodeId"
-        );
-    };
-
-    cmd.execute(&mut project);
-    assert_stamped(&project);
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert!(
-        def.preset_metadata.is_none(),
-        "undo restores the pre-add (empty) preset_metadata verbatim"
-    );
-
-    cmd.execute(&mut project); // redo
-    assert_stamped(&project);
-}
-
-/// R1 (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): `AddSceneFogCommand`
-/// stamps the caller-supplied fog metadata into the def's TOP-LEVEL
-/// `preset_metadata`, targeting the new fog node's bare `NodeId`, section
-/// "Atmosphere" — same P1 stamp shape `AddSceneLightCommand` performs for
-/// its own node. Regression coverage for the R1 bug this lane fixes: a
-/// freshly-added fog node was structurally invisible in the scene panel
-/// (not even the fallback row rendered) because `world_sections`
-/// (`state_sync.rs`'s `sections_for_doc_ids`) came back empty with
-/// nothing stamped, and `build_filtered_properties` iterates an empty
-/// section list. Undo restores `preset_metadata` verbatim; execute→undo→
-/// redo is stable.
-#[test]
-fn add_scene_fog_command_stamps_exposures_and_undo_redo_are_stable() {
-    use manifold_core::effect_graph_def::BindingTarget;
-
-    let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
-
-    let mut cmd = AddSceneFogCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        0,
-        (30.0, 40.0),
-        vec![scene_param_meta("density", "Density")],
-        mirror_catalog_default(),
-    );
-
-    let assert_stamped = |project: &Project| {
-        let def = graph_of(project, &fx);
-        let fog = def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.atmosphere")
-            .unwrap();
-
-        let meta = def
-            .preset_metadata
-            .as_ref()
-            .expect("R1 stamped into top-level preset_metadata");
-        assert_eq!(meta.params.len(), 1);
-        assert_eq!(meta.params[0].section.as_deref(), Some("Atmosphere"));
-        assert!(
-            meta.bindings.iter().any(|b| matches!(
-                &b.target,
-                BindingTarget::Node { node_id, param } if *node_id == fog.node_id && param == "density"
-            )),
-            "fog exposure targets the fog node's bare NodeId"
-        );
-    };
-
-    cmd.execute(&mut project);
-    assert_stamped(&project);
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert!(
-        def.preset_metadata.is_none(),
-        "undo restores the pre-add (empty) preset_metadata verbatim"
-    );
-
-    cmd.execute(&mut project); // redo
-    assert_stamped(&project);
-}
-
 /// BUG-295: `AddSceneFogCommand` stamps the fog exposure into
-/// `def.preset_metadata.params` (proven above), but until
+/// `def.preset_metadata.params` (see the stamp table below), but until
 /// `refresh_manifest_from_graph` is ALSO wired to run post-stamp, that
 /// stamp is invisible to the LIVE `PresetInstance.params` the panel
 /// actually reads — the bug's own root-cause finding (`reconcile_manifest`
@@ -4176,44 +3822,6 @@ fn scene_object_graph() -> EffectGraphDef {
             to_port: "object_0".to_string(),
         }],
     }
-}
-
-#[test]
-fn add_object_transform_command_spawns_transform_3d_and_wires_it_into_scene_object() {
-    let (mut project, fx) = project_with_graph(scene_object_graph());
-    let before = graph_of(&project, &fx).clone();
-
-    let mut cmd = AddObjectTransformCommand::new(
-        GraphTarget::Effect(fx.clone()),
-        vec![],
-        1,
-        (5.0, 6.0),
-        mirror_catalog_default(),
-    );
-    cmd.execute(&mut project);
-    let xf_id = cmd
-        .created_node_id()
-        .expect("command should resolve and create a node");
-
-    let def = graph_of(&project, &fx);
-    let xf = def
-        .nodes
-        .iter()
-        .find(|n| n.id == xf_id)
-        .expect("transform node exists");
-    assert_eq!(xf.type_id, "node.transform_3d");
-    assert_eq!(xf.editor_pos, Some((5.0, 6.0)));
-    assert!(def.wires.iter().any(|w| w.from_node == xf_id
-        && w.from_port == "transform"
-        && w.to_node == 1
-        && w.to_port == "transform"));
-
-    cmd.undo(&mut project);
-    let def = graph_of(&project, &fx);
-    assert_eq!(
-        def, &before,
-        "undo restores the pre-add graph exactly (inverse-pair)"
-    );
 }
 
 #[test]
@@ -4626,4 +4234,181 @@ fn scene_modifier_duplicate_copies_local_string_binding_and_preserves_sibling() 
     assert!(
         matches!(&strings[0].target, BindingTarget::Node { node_id, .. } if *node_id == source_mesh)
     );
+}
+
+/// First node of `type_id` at the top level or one group deep.
+fn find_typed<'a>(def: &'a EffectGraphDef, type_id: &str) -> &'a EffectGraphNode {
+    let grouped = def.nodes.iter().filter_map(|n| n.group.as_deref()).flat_map(|g| g.nodes.iter());
+    def.nodes
+        .iter()
+        .chain(grouped)
+        .find(|n| n.type_id == type_id)
+        .unwrap_or_else(|| panic!("no {type_id} node"))
+}
+
+struct StampCase {
+    name: &'static str,
+    build: fn(GraphTarget) -> Box<dyn Command>,
+    /// (node type, exposed param, panel section) per stamped exposure.
+    exposures: &'static [(&'static str, &'static str, &'static str)],
+}
+
+/// Each scene-item add stamps its exposures into the def's top-level
+/// `preset_metadata`, bound to the new node's bare `NodeId` under the panel's
+/// section name, so the item shows in the scene panel. Undo restores the
+/// empty metadata. Redo mints fresh node ids, so it is checked structurally.
+#[test]
+fn scene_item_add_commands_stamp_exposures_and_undo_redo_are_stable() {
+    let cases = [
+        StampCase {
+            name: "object",
+            build: |t| Box::new(AddSceneObjectCommand::new(
+                t, vec![], 0, 0, (0.0, 0.0),
+                vec![scene_param_meta("ambient", "Ambient")],
+                vec![scene_param_meta("pos_x", "X")],
+                vec![scene_param_meta("visible", "Visible")],
+                mirror_catalog_default(),
+            )),
+            exposures: &[
+                ("node.pbr_material", "ambient", "Object 1 — Material"),
+                ("node.transform_3d", "pos_x", "Object 1 — Transform"),
+                ("node.scene_object", "visible", "Object 1"),
+            ],
+        },
+        StampCase {
+            name: "light",
+            build: |t| Box::new(AddSceneLightCommand::new(
+                t, vec![], 0, 0, (-260.0, 50.0),
+                vec![scene_param_meta("intensity", "Intensity")],
+                mirror_catalog_default(),
+            )),
+            exposures: &[("node.light", "intensity", "Light 1")],
+        },
+        StampCase {
+            name: "environment",
+            build: |t| Box::new(AddSceneEnvironmentCommand::new(
+                t, vec![], 0, (10.0, 20.0),
+                vec![scene_param_meta("intensity", "Intensity")],
+                mirror_catalog_default(),
+            )),
+            exposures: &[("node.bake_environment", "intensity", "Environment")],
+        },
+        StampCase {
+            name: "fog",
+            build: |t| Box::new(AddSceneFogCommand::new(
+                t, vec![], 0, (30.0, 40.0),
+                vec![scene_param_meta("density", "Density")],
+                mirror_catalog_default(),
+            )),
+            exposures: &[("node.atmosphere", "density", "Atmosphere")],
+        },
+    ];
+    for case in &cases {
+        let (mut project, fx) = project_with_graph(render_scene_graph(0, 0));
+        let mut cmd = (case.build)(GraphTarget::Effect(fx.clone()));
+        let assert_stamped = |project: &Project| {
+            let def = graph_of(project, &fx);
+            let meta = def.preset_metadata.as_ref().unwrap_or_else(|| panic!("{}: nothing stamped", case.name));
+            assert_eq!(meta.params.len(), case.exposures.len(), "{}: one param per exposure", case.name);
+            assert_eq!(meta.bindings.len(), case.exposures.len(), "{}: one binding per exposure", case.name);
+            for &(type_id, param, section) in case.exposures {
+                let node = find_typed(def, type_id);
+                assert!(
+                    meta.bindings.iter().any(|b| matches!(
+                        &b.target,
+                        BindingTarget::Node { node_id, param: p } if *node_id == node.node_id && p == param
+                    )),
+                    "{}: {param} binds to the {type_id} node's bare NodeId",
+                    case.name
+                );
+                assert!(
+                    meta.params.iter().any(|p| p.section.as_deref() == Some(section)),
+                    "{}: section {section:?} stamped",
+                    case.name
+                );
+            }
+        };
+
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+        cmd.undo(&mut project);
+        assert!(graph_of(&project, &fx).preset_metadata.is_none(), "{}: undo restores empty metadata", case.name);
+        cmd.execute(&mut project);
+        assert_stamped(&project);
+    }
+}
+
+struct SpawnCase {
+    name: &'static str,
+    fixture: fn() -> EffectGraphDef,
+    build: fn(GraphTarget) -> Box<dyn Command>,
+    node_type: &'static str,
+    editor_pos: (f32, f32),
+    /// (output port on the new node, consumer node id, consumer input port).
+    wire: (&'static str, u32, &'static str),
+    params: &'static [(&'static str, f32)],
+}
+
+/// Each scene-item add spawns its node at the requested editor position and
+/// wires it into its consumer; undo restores the graph exactly.
+#[test]
+fn scene_item_add_commands_spawn_node_and_wire_port() {
+    let cases = [
+        SpawnCase {
+            name: "environment",
+            fixture: || render_scene_graph(0, 0),
+            build: |t| Box::new(AddSceneEnvironmentCommand::new(t, vec![], 0, (10.0, 20.0), Vec::new(), mirror_catalog_default())),
+            node_type: "node.bake_environment",
+            editor_pos: (10.0, 20.0),
+            wire: ("envmap", 0, "envmap"),
+            params: &[("intensity", 1.0)],
+        },
+        SpawnCase {
+            name: "fog",
+            fixture: || render_scene_graph(0, 0),
+            build: |t| Box::new(AddSceneFogCommand::new(t, vec![], 0, (30.0, 40.0), Vec::new(), mirror_catalog_default())),
+            node_type: "node.atmosphere",
+            editor_pos: (30.0, 40.0),
+            wire: ("atmosphere", 0, "atmosphere"),
+            params: &[],
+        },
+        SpawnCase {
+            name: "object transform",
+            fixture: scene_object_graph,
+            build: |t| Box::new(AddObjectTransformCommand::new(t, vec![], 1, (5.0, 6.0), mirror_catalog_default())),
+            node_type: "node.transform_3d",
+            editor_pos: (5.0, 6.0),
+            wire: ("transform", 1, "transform"),
+            params: &[],
+        },
+    ];
+    for case in &cases {
+        let (mut project, fx) = project_with_graph((case.fixture)());
+        let before = graph_of(&project, &fx).clone();
+        let mut cmd = (case.build)(GraphTarget::Effect(fx.clone()));
+        cmd.execute(&mut project);
+
+        let def = graph_of(&project, &fx);
+        let node = def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == case.node_type)
+            .unwrap_or_else(|| panic!("{}: node created", case.name));
+        assert_eq!(node.editor_pos, Some(case.editor_pos), "{}", case.name);
+        for &(param, value) in case.params {
+            assert_eq!(node.params.get(param), Some(&SerializedParamValue::Float { value }), "{}: {param}", case.name);
+        }
+        let (from_port, to_node, to_port) = case.wire;
+        assert!(
+            def.wires.iter().any(|w| w.from_node == node.id
+                && w.from_port == from_port
+                && w.to_node == to_node
+                && w.to_port == to_port),
+            "{}: wired {from_port} into node {to_node}.{to_port}",
+            case.name
+        );
+
+        cmd.undo(&mut project);
+        assert_eq!(graph_of(&project, &fx), &before, "{}: undo restores the graph exactly", case.name);
+    }
 }

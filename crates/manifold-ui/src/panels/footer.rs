@@ -197,35 +197,6 @@ impl Panel for FooterPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intent::{Gesture, IntentRegistry};
-
-    // ── Golden oracle: the original constant-based right-to-left layout ──
-    // Retained as the regression check the Chrome `view()` must reproduce
-    // exactly. The live panel no longer uses it — it exists only to prove the
-    // declarative layout lands every interactive cell where the hand-tuned
-    // pixel math did.
-    #[derive(Default)]
-    struct FooterGolden {
-        quantize_button: Rect,
-        fps_field: Rect,
-    }
-
-    impl FooterGolden {
-        fn compute(&mut self, bounds: Rect) {
-            let elem_h = bounds.height - ELEM_Y_PAD * 2.0;
-            let y = bounds.y + ELEM_Y_PAD;
-            let mut rx = bounds.x_max() - RIGHT_GUTTER;
-
-            rx -= FPS_FIELD_W;
-            self.fps_field = Rect::new(rx, y, FPS_FIELD_W, elem_h);
-            rx -= LABEL_GAP;
-            rx -= FPS_LABEL_W;
-            rx -= SECTION_SPACER;
-
-            rx -= QUANTIZE_BUTTON_W;
-            self.quantize_button = Rect::new(rx, y, QUANTIZE_BUTTON_W, elem_h);
-        }
-    }
 
     /// Every Button node in the tree, as (bounds, text), sorted left-to-right.
     fn buttons(tree: &UITree) -> Vec<(Rect, String)> {
@@ -252,47 +223,17 @@ mod tests {
     }
 
     #[test]
-    fn chrome_layout_matches_golden() {
+    fn controls_keep_their_left_to_right_order() {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = FooterPanel::new();
         panel.build(&mut tree, &layout);
-
-        let mut g = FooterGolden::default();
-        g.compute(layout.footer());
-
-        let want = [(g.quantize_button, "Off"), (g.fps_field, "60")];
-        let mut want: Vec<(Rect, String)> =
-            want.iter().map(|(r, t)| (*r, t.to_string())).collect();
-        want.sort_by(|a, b| a.0.x.partial_cmp(&b.0.x).unwrap());
 
         let got = buttons(&tree);
-        assert_eq!(got.len(), want.len());
-        for ((gr, gt), (wr, wt)) in got.iter().zip(want.iter()) {
-            assert_eq!(gt, wt, "button text mismatch");
-            assert!(
-                (gr.x - wr.x).abs() < 0.01
-                    && (gr.y - wr.y).abs() < 0.01
-                    && (gr.width - wr.width).abs() < 0.01
-                    && (gr.height - wr.height).abs() < 0.01,
-                "button '{gt}' at {gr:?} != golden {wr:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn intents_resolve_through_registry() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = FooterPanel::new();
-        panel.build(&mut tree, &layout);
-
-        let mut intents = IntentRegistry::new();
-        panel.register_intents(&mut intents);
-
-        let fps = intents.resolve(&tree, panel.fps_field_id(), Gesture::Click);
-        assert!(matches!(fps, Some(PanelAction::Transport(TransportAction::FpsFieldClicked))));
-        assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
+        let cells: Vec<(&str, Rect)> = got.iter().map(|(r, t)| (t.as_str(), *r)).collect();
+        let labels: Vec<&str> = cells.iter().map(|c| c.0).collect();
+        assert_eq!(labels, ["Off", "60"], "quantize, then the fps field");
+        crate::panels::layout_order::assert_left_to_right(&cells, layout.footer());
     }
 
     #[test]

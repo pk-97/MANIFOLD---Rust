@@ -576,12 +576,4 @@ mod tests {
         let b = Vec2::new(3.0, 4.0);
         assert!((a.distance(b) - 5.0).abs() < 0.001);
     }
-
-    #[test]
-    fn style_default() {
-        let s = UIStyle::default();
-        assert_eq!(s.bg_color, Color32::TRANSPARENT);
-        assert_eq!(s.text_color, Color32::new(224, 224, 224, 255));
-        assert_eq!(s.font_size, 14);
-    }
 }

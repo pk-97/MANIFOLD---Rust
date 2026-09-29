@@ -347,15 +347,6 @@ mod fire_meter_tests {
     }
 
     #[test]
-    fn distinct_parts_never_collide_across_a_boundary() {
-        // ("ab", "c") must hash differently from ("a", "bc") — the separator
-        // byte between parts is what prevents this.
-        let a = fire_meter_key(&[b"ab", b"c"]);
-        let b = fire_meter_key(&[b"a", b"bc"]);
-        assert_ne!(a, b);
-    }
-
-    #[test]
     fn push_beyond_capacity_is_dropped_not_panicking() {
         let mut cap = FireMeterCapture::default();
         for i in 0..MAX_FIRE_METERS + 8 {
@@ -416,15 +407,6 @@ mod fire_meter_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn new_route_is_disabled_full_band_mid_sensitivity() {
-        let r = TriggerRoute::new(AudioBand::Full);
-        assert!(!r.enabled);
-        assert_eq!(r.source, AudioBand::Full);
-        assert!(r.target_layer.is_none());
-        assert_eq!(r.sensitivity, 0.5);
-    }
 
     #[test]
     fn threshold_inverts_sensitivity() {

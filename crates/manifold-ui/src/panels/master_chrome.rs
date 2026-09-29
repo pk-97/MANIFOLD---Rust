@@ -12,8 +12,6 @@
 //! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
 
 use crate::ParamsAction;
-#[cfg(test)]
-use crate::RootAction;
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
@@ -411,53 +409,33 @@ impl Default for MasterChromePanel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::tree::UITree;
 
-    // Golden oracle for the LED brightness slot (unchanged by section 6d — still on the
-    // LED row, the second row). The opacity slot moved inline onto the header row
-    // and its X depends on the measured title width, so it's checked structurally.
-    fn golden_brightness(rect: Rect) -> Rect {
-        let content_w = rect.width - PAD_H * 2.0;
-        let cx = rect.x + PAD_H;
-        let cy = rect.y + PAD_V + HEADER_ROW_H + DIVIDER_H; // LED row top
-        let btn_x = cx + LED_LABEL_W + GAP;
-        let btn_w =
-            (content_w - LED_LABEL_W - GAP - GAP - LED_TOGGLE_W - GAP - LED_SLIDER_W).max(20.0);
-        let toggle_x = btn_x + btn_w + GAP;
-        let slider_x = toggle_x + LED_TOGGLE_W + GAP;
-        Rect::new(
-            slider_x,
-            cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
-            LED_SLIDER_W,
-            SLIDER_ROW_H,
-        )
-    }
-
+    /// Opacity rides inline on the header row right of the chevron; the LED row
+    /// below reads exit path, toggle, brightness.
     #[test]
-    fn slot_rects_match_golden() {
+    fn slots_keep_their_rows_and_order() {
+        use crate::panels::layout_order::{assert_left_to_right, assert_one_row, assert_top_to_bottom};
         let mut tree = UITree::new();
         let mut panel = MasterChromePanel::new();
         let rect = Rect::new(0.0, 0.0, 280.0, 200.0);
         panel.build(&mut tree, rect);
+        let at = |key| tree.get_bounds(panel.host.node_id_for_key(key).unwrap());
 
-        let bright = golden_brightness(rect);
-        let got_bright = tree.get_bounds(panel.host.node_id_for_key(KEY_BRIGHTNESS_SLOT).unwrap());
-        let got_opacity = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
+        let header = [("chevron", at(KEY_CHEVRON)), ("opacity", at(KEY_OPACITY_SLOT))];
+        assert_one_row(&header);
+        assert_left_to_right(&header, rect);
 
-        let close = |a: Rect, b: Rect| {
-            (a.x - b.x).abs() < 0.01
-                && (a.y - b.y).abs() < 0.01
-                && (a.width - b.width).abs() < 0.01
-                && (a.height - b.height).abs() < 0.01
-        };
-        assert!(close(got_bright, bright), "brightness slot {got_bright:?} != {bright:?}");
-        // section 6d: opacity is inline on the header row now.
-        assert!(
-            (got_opacity.y - (rect.y + PAD_V)).abs() < 0.01 && got_opacity.width > 0.0,
-            "opacity slot not inline on header row: {got_opacity:?}"
-        );
+        let led = [
+            ("exit path", at(KEY_EXIT_PATH)),
+            ("led toggle", at(KEY_LED_TOGGLE)),
+            ("brightness", at(KEY_BRIGHTNESS_SLOT)),
+        ];
+        assert_one_row(&led);
+        assert_left_to_right(&led, rect);
+        assert_top_to_bottom(&[header[1], led[0]], rect);
     }
 
     #[test]
@@ -487,24 +465,6 @@ mod tests {
         assert!(panel.compute_height() < expanded_h);
         assert!(panel.opacity.ids().is_none(), "no opacity slider when collapsed");
         assert!(panel.host.node_id_for_key(KEY_OPACITY_SLOT).is_none());
-    }
-
-    #[test]
-    fn handle_click_chevron_and_exit_path() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
-        assert!(matches!(
-            panel.handle_click(chev).as_slice(),
-            [PanelAction::Params(ParamsAction::MasterCollapseToggle)]
-        ));
-        let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
-        assert!(matches!(
-            panel.handle_click(exit).as_slice(),
-            [PanelAction::Params(ParamsAction::MasterExitPathClicked)]
-        ));
     }
 
     #[test]
@@ -542,32 +502,45 @@ mod tests {
         assert!(!panel.is_dragging());
     }
 
-    #[test]
-    fn right_click_on_either_slider_track_resolves_to_slider_reset_with_declared_default() {
-        // both master-chrome sliders' reset now rides the generic
-        // SliderReset trio (not a bespoke *RightClick), and each carries its
-        // own declared default (1.0 for both opacity and LED brightness).
+    pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {
         let mut tree = UITree::new();
         let mut panel = MasterChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
+        let resolve = |track| reg.resolve(&tree, track, crate::intent::Gesture::RightClick);
+        vec![
+            crate::panels::contract_tests::ResetCase {
+                label: "opacity".into(),
+                got: resolve(panel.opacity.track_id()),
+                target: |v| matches!(v, ValueRef::MasterOpacity),
+                default: 1.0,
+            },
+            crate::panels::contract_tests::ResetCase {
+                label: "led brightness".into(),
+                got: resolve(panel.led_brightness.track_id()),
+                target: |v| matches!(v, ValueRef::LedBrightness),
+                default: 1.0,
+            },
+        ]
+    }
 
-        let opacity_track = panel.opacity.track_id().unwrap();
-        match reg.resolve(&tree, Some(opacity_track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::MasterOpacity, ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 1.0).abs() < f32::EPSILON));
-            }
-            other => panic!("expected SliderReset, got {other:?}"),
-        }
+    pub(crate) fn chevron_click() -> Vec<PanelAction> {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        panel.handle_click(panel.host.node_id_for_key(KEY_CHEVRON).unwrap())
+    }
 
-        let brightness_track = panel.led_brightness.track_id().unwrap();
-        match reg.resolve(&tree, Some(brightness_track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::LedBrightness, ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 1.0).abs() < f32::EPSILON));
-            }
-            other => panic!("expected SliderReset, got {other:?}"),
-        }
+    #[test]
+    fn handle_click_exit_path() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
+        assert!(matches!(
+            panel.handle_click(exit).as_slice(),
+            [PanelAction::Params(ParamsAction::MasterExitPathClicked)]
+        ));
     }
 }

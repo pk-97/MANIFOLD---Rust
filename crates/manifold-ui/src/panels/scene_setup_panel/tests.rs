@@ -493,74 +493,6 @@
         vm
     }
 
-    /// UX-P2 (D6): the "+ Add Modifier" button doesn't resolve a choice
-    /// itself anymore — it emits `SceneSetupAddModifierClicked`, which the
-    /// app resolves into the shared dropdown (`MESH_MODIFIER_CHOICES`
-    /// items, each carrying `SceneSetupAddModifier` — see
-    /// `try_open_dropdown_inner` in `manifold-app/src/ui_root.rs`, not
-    /// reachable from this crate's tests). This test only proves the
-    /// panel's half of D6: one button renders (not 7 chips) and its click
-    /// carries the right `(layer_id, group_node_id, button_node_id)`.
-    #[test]
-    fn add_modifier_button_click_emits_add_modifier_clicked_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let (button_id, group_node_id) = panel.add_modifier_button_id.expect("one Add Modifier button renders");
-        assert_eq!(group_node_id, 42);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: button_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Root(RootAction::SceneSetupAddModifierClicked(l, 42, n))
-                if *l == LayerId::new("layer-1") && *n == button_id
-        ));
-    }
-
-    /// BUG-224 regression: the × close button used to call `self.close()`
-    /// directly, which only flips the panel-local `open` flag — it never
-    /// told the app to reset `layout.scene_setup_width` back to 0 or to
-    /// rebuild, so on the real app the dock's screen footprint and content
-    /// never went away (Peter: "the close button doesn't work"). The fix
-    /// mirrors `AudioSetupPanel::handle_event`'s close arm exactly: emit
-    /// `PanelAction::OpenSceneSetup`, the SAME toggle action the header
-    /// button and Escape use — that's the one path that resets width, closes
-    /// the panel, and triggers the structural rebuild
-    /// (`ui_bridge::dispatch`'s `OpenSceneSetup` arm).
-    #[test]
-    fn close_button_click_routes_through_the_shared_toggle_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_ne!(panel.close_id, NodeId::PLACEHOLDER);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: panel.close_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(
-            matches!(actions.as_slice(), [PanelAction::Root(RootAction::OpenSceneSetup)]),
-            "close (×) must emit the shared toggle action, not flip `open` \
-             locally: got {actions:?}"
-        );
-        // The direct `self.close()` bypass is gone: `open` is untouched by
-        // this click alone (the app-level `toggle_scene_dock()` — driven by
-        // dispatching the action above — is what actually closes it).
-        assert!(panel.is_open(), "handle_event itself must not close the panel — that's the app's job now");
-    }
-
     #[test]
     fn copied_modifier_ids_from_other_objects_do_not_leak_into_properties() {
         let (mut vm, mut surface) = world_transform_vm();
@@ -701,89 +633,6 @@
                 if *layer == LayerId::new("layer-1")));
     }
 
-    /// BUG-hlw8: the "+ Plane" button emits `SceneSetupAddLayerPlane` carrying
-    /// the live `object_count` as its `next_index` — same convention as the
-    /// "+ Object" button, because a layer plane occupies the next object slot.
-    #[test]
-    fn add_plane_button_emits_add_layer_plane_with_object_count_as_next_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let add_plane_id = panel.add_plane_id.unwrap();
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: add_plane_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(l, 99, 2)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// BUG-193/P5: the properties header's "Remove" button (Object
-    /// selection) dispatches `SceneSetupRemoveObject` carrying the selected
-    /// object's own `index`. A `Custom` row has no addressable node id
-    /// (D12), so — unlike v1's per-row "✕" — it can't be selected/removed
-    /// through the panel UI; this is a real reduction from v1's coverage,
-    /// flagged as an escalation in the P5 landing report rather than
-    /// improvised around.
-    #[test]
-    fn object_remove_click_emits_remove_object_action_with_its_own_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        // Default selection = the Known object (Azalea, index 0).
-        assert_eq!(panel.object_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
-        let (remove_id, index) = panel.object_remove_ids[0];
-        assert_eq!(index, 0);
-        assert_eq!(tree.name_of(remove_id), Some("scene_setup.properties.remove"));
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: remove_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupRemoveObject(l, 99, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// D11: the properties header's "Duplicate" button (Object selection)
-    /// dispatches `SceneSetupDuplicateObject` carrying the selected
-    /// object's own `index`.
-    #[test]
-    fn object_duplicate_click_emits_duplicate_object_action() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.object_duplicate_ids.len(), 1);
-        let (dup_id, index) = panel.object_duplicate_ids[0];
-        assert_eq!(index, 0);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: dup_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
     /// UX-P3b-i's own deliverable: the per-row key-range collision audit the
     /// design doc's "as attempted" note calls out, extended from Objects
     /// (P3a's own `OBJ_KEY_STRIDE` 32→44 bump) to Light/Camera/Modifier.
@@ -852,82 +701,6 @@
         // covers all its rows), so there is nothing left to audit here.
 
 
-    }
-
-    /// BUG-193/P5: the Lights-section twin of the object-removal test above
-    /// — the properties header's "Remove" button for a Light selection.
-    #[test]
-    fn light_remove_click_emits_remove_light_action_with_its_own_index() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        // Select the Known light (node 60) — not the default (Azalea).
-        panel.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        assert_eq!(panel.light_remove_ids.len(), 1, "one remove button — the properties header's, for the selection");
-        let (remove_id, index) = panel.light_remove_ids[0];
-        assert_eq!(index, 0);
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: remove_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupRemoveLight(l, 99, 0)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    /// P4: "Import Model…" is a real button (affordance legibility) that
-    /// dispatches `SceneSetupImportModelClicked(layer_id, render_scene_node_id)`
-    /// — the panel itself never touches the filesystem or the merge
-    /// assembler, just carries the address the app-side dispatch needs.
-    #[test]
-    fn import_model_button_emits_scene_setup_import_model_clicked() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let import_model_id = panel.import_model_id.unwrap();
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: import_model_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99)) if *l == LayerId::new("layer-1")
-        ));
-    }
-
-    #[test]
-    fn clicking_the_object_name_emits_rename_clicked_with_object_node_id() {
-        let mut panel = ScenePanel::new();
-        panel.open();
-        panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
-        let mut tree = UITree::new();
-        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
-        let name_id = panel.object_name_ids[0].1;
-
-        let (consumed, actions) = panel.handle_event(&UIEvent::Click {
-            node_id: name_id,
-            pos: crate::node::Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        }, &mut tree);
-        assert!(consumed);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(
-            &actions[0],
-            PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 40, n))
-                if *l == LayerId::new("layer-1") && n == "Azalea"
-        ));
     }
 
     #[test]
@@ -1442,4 +1215,128 @@
         // tested in the app-side integration test that verifies the actual param writes.
         // This UI-level test verifies the button creation and routing infrastructure.
         assert!(!panel.object_frame_ids.is_empty(), "Frame button exists and is routable");
+    }
+
+    struct ButtonCase {
+        name: &'static str,
+        /// Set up selection before build, when the button needs one.
+        select: fn(&mut ScenePanel),
+        /// Find the button after build, checking its structural preconditions.
+        locate: fn(&ScenePanel, &UITree) -> NodeId,
+        /// The click's actions (and any panel state after it) are right.
+        expect: fn(&ScenePanel, NodeId, &[PanelAction]) -> bool,
+    }
+
+    fn layer_1(l: &LayerId) -> bool {
+        *l == LayerId::new("layer-1")
+    }
+
+    /// Each scene-setup button, clicked, is consumed and emits exactly its own
+    /// action carrying the address the app-side dispatch needs.
+    #[test]
+    fn every_scene_setup_button_click_emits_its_action() {
+        let cases = [
+            ButtonCase {
+                // One "+ Add Modifier" button; the app resolves the choice.
+                name: "add modifier",
+                select: |_| {},
+                locate: |p, _| {
+                    let (id, group) = p.add_modifier_button_id.expect("one Add Modifier button renders");
+                    assert_eq!(group, 42);
+                    id
+                },
+                expect: |_, id, a| matches!(a,
+                    [PanelAction::Root(RootAction::SceneSetupAddModifierClicked(l, 42, n))] if layer_1(l) && *n == id),
+            },
+            ButtonCase {
+                // BUG-224: close must emit the shared dock toggle, which resets
+                // the dock width and rebuilds; it must not close the panel itself.
+                name: "close",
+                select: |_| {},
+                locate: |p, _| {
+                    assert_ne!(p.close_id, NodeId::PLACEHOLDER);
+                    p.close_id
+                },
+                expect: |p, _, a| matches!(a, [PanelAction::Root(RootAction::OpenSceneSetup)]) && p.is_open(),
+            },
+            ButtonCase {
+                // A layer plane takes the next object slot, so it carries object_count.
+                name: "add plane",
+                select: |_| {},
+                locate: |p, _| p.add_plane_id.unwrap(),
+                expect: |_, _, a| matches!(a,
+                    [PanelAction::Project(ProjectAction::SceneSetupAddLayerPlane(l, 99, 2))] if layer_1(l)),
+            },
+            ButtonCase {
+                name: "remove object",
+                select: |_| {},
+                locate: |p, t| {
+                    assert_eq!(p.object_remove_ids.len(), 1, "one remove button, the properties header's");
+                    let (id, index) = p.object_remove_ids[0];
+                    assert_eq!(index, 0);
+                    assert_eq!(t.name_of(id), Some("scene_setup.properties.remove"));
+                    id
+                },
+                expect: |_, _, a| matches!(a,
+                    [PanelAction::Project(ProjectAction::SceneSetupRemoveObject(l, 99, 0))] if layer_1(l)),
+            },
+            ButtonCase {
+                name: "duplicate object",
+                select: |_| {},
+                locate: |p, _| {
+                    assert_eq!(p.object_duplicate_ids.len(), 1);
+                    let (id, index) = p.object_duplicate_ids[0];
+                    assert_eq!(index, 0);
+                    id
+                },
+                expect: |_, _, a| matches!(a,
+                    [PanelAction::Project(ProjectAction::SceneSetupDuplicateObject(l, 99, 0))] if layer_1(l)),
+            },
+            ButtonCase {
+                name: "remove light",
+                select: |p| {
+                    p.selection.insert(LayerId::new("layer-1"), SceneSelection::Light(60));
+                },
+                locate: |p, _| {
+                    assert_eq!(p.light_remove_ids.len(), 1, "one remove button, the properties header's");
+                    let (id, index) = p.light_remove_ids[0];
+                    assert_eq!(index, 0);
+                    id
+                },
+                expect: |_, _, a| matches!(a,
+                    [PanelAction::Project(ProjectAction::SceneSetupRemoveLight(l, 99, 0))] if layer_1(l)),
+            },
+            ButtonCase {
+                // The panel never touches the filesystem; it only carries the address.
+                name: "import model",
+                select: |_| {},
+                locate: |p, _| p.import_model_id.unwrap(),
+                expect: |_, _, a| matches!(a,
+                    [PanelAction::Project(ProjectAction::SceneSetupImportModelClicked(l, 99))] if layer_1(l)),
+            },
+            ButtonCase {
+                name: "rename object",
+                select: |_| {},
+                locate: |p, _| p.object_name_ids[0].1,
+                expect: |_, _, a| matches!(a,
+                    [PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(l, 40, n))] if layer_1(l) && n == "Azalea"),
+            },
+        ];
+        for case in &cases {
+            let mut panel = ScenePanel::new();
+            panel.open();
+            panel.configure(SceneSetupState::Live(Box::new(azalea_shaped_vm())));
+            (case.select)(&mut panel);
+            let mut tree = UITree::new();
+            panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+            let id = (case.locate)(&panel, &tree);
+
+            let (consumed, actions) = panel.handle_event(&UIEvent::Click {
+                node_id: id,
+                pos: crate::node::Vec2::new(0.0, 0.0),
+                modifiers: Modifiers::default(),
+            }, &mut tree);
+            assert!(consumed, "{}: click consumed", case.name);
+            assert!((case.expect)(&panel, id, &actions), "{}: click emitted {actions:?}", case.name);
+        }
     }

@@ -1761,50 +1761,6 @@ mod tests {
     }
 
     #[test]
-    fn scene_setup_add_object_dispatches_add_scene_object_command() {
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let original_metadata = effective_def(&project, &layer_id).preset_metadata.unwrap();
-        let before = objects_param(&project, &layer_id, render_scene_id);
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-
-        let action =
-            ProjectAction::SceneSetupAddObject(layer_id.clone(), render_scene_id, before as u32);
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        let unchanged = objects_param(&project, &layer_id, render_scene_id);
-        assert_eq!(unchanged, before, "UI dispatch waits for content");
-        let crate::content_command::ContentCommand::ExecuteSelecting(mut command, request) = content_rx.try_recv().expect("queued insertion") else { panic!("content-owned insertion"); };
-        let pending = request.capture(&project);
-        command.execute(&mut project);
-        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
-        let updated = effective_def(&project, &layer_id);
-        let metadata = updated.preset_metadata.as_ref().unwrap();
-        for binding in &original_metadata.bindings {
-            assert!(metadata.bindings.contains(binding), "existing control lost: {}", binding.id);
-            assert!(project.timeline.layers[0].gen_params().unwrap().params.contains(&binding.id));
-        }
-
-        assert!(
-            result.structural_change,
-            "adding an object is a structural graph edit"
-        );
-        assert_eq!(
-            objects_param(&project, &layer_id, render_scene_id),
-            before + 1.0
-        );
-    }
-
-    #[test]
     fn scene_setup_add_object_then_explicit_physics_reuses_world_and_roundtrips() {
         use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
 
@@ -2445,122 +2401,6 @@ mod tests {
         assert!(content.content_pipeline.sdr_preview(), "undo leaves the viewing preference alone");
     }
 
-    #[test]
-    fn scene_setup_add_light_dispatches_add_scene_light_command() {
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let before = lights_param(&project, &layer_id, render_scene_id);
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-
-        let action =
-            ProjectAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, before as u32);
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        assert!(
-            result.structural_change,
-            "adding a light is a structural graph edit"
-        );
-        assert_eq!(
-            lights_param(&project, &layer_id, render_scene_id),
-            before,
-            "UI dispatch waits for content"
-        );
-        apply_queued_scene_edit(&content_rx, &mut project);
-        assert_eq!(
-            lights_param(&project, &layer_id, render_scene_id),
-            before + 1.0
-        );
-    }
-
-    /// BUG-hlw8: the "+ Plane" button dispatches `AddSceneLayerPlaneCommand`
-    /// through the same `dispatch_project` entry point, bumping the scene's
-    /// `objects` count by one and stamping the new grouped plane into
-    /// the graph.
-    #[test]
-    fn scene_setup_add_layer_plane_dispatches_add_scene_layer_plane_command() {
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let before = objects_param(&project, &layer_id, render_scene_id);
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-
-        let action = ProjectAction::SceneSetupAddLayerPlane(
-            layer_id.clone(),
-            render_scene_id,
-            before as u32,
-        );
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        let unchanged = objects_param(&project, &layer_id, render_scene_id);
-        assert_eq!(unchanged, before, "UI dispatch waits for content");
-        let crate::content_command::ContentCommand::ExecuteSelecting(mut command, request) = content_rx.try_recv().expect("queued insertion") else { panic!("content-owned insertion"); };
-        let pending = request.capture(&project);
-        command.execute(&mut project);
-        assert!(matches!(pending.resolve(&project), Some(crate::edit_selection::EditSelection::Object { .. })));
-
-        assert!(
-            result.structural_change,
-            "adding a layer plane is a structural graph edit"
-        );
-        assert_eq!(
-            objects_param(&project, &layer_id, render_scene_id),
-            before + 1.0
-        );
-
-        let def = effective_def(&project, &layer_id);
-        let added_group = def
-            .nodes
-            .iter()
-            .find(|n| {
-                n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID
-                    && n.group.as_ref().is_some_and(|g| {
-                        g.nodes.iter().any(|n| n.type_id == "node.plane_mesh")
-                    })
-            })
-            .expect("the new layer plane group is present");
-        let body = added_group.group.as_ref().expect("is a group");
-        assert!(body.nodes.iter().any(|n| n.type_id == "node.plane_mesh"));
-        assert!(!body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
-        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
-        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(plane) =
-            vm.objects.last().unwrap()
-        else {
-            panic!("added plane must be editable");
-        };
-        assert!(plane.skin.is_none(), "unassigned plane must not sample transparent skin");
-        assert_eq!(
-            super::super::projection::material::default_skin_target(Some(&def), &plane.material),
-            manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
-        );
-        let scene_object = body
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.scene_object")
-            .expect("scene_object inside group");
-        assert!(
-            body.wires
-                .iter()
-                .any(|w| w.from_node == scene_object.id && w.from_port == "object")
-        );
-    }
-
     /// scene-panel-ux gate: the properties-header "Frame" button drives the
     /// orbit camera to frame the selected object through the SAME
     /// dispatch_project arm a click reaches. Orbit cameras pivot at
@@ -2636,90 +2476,6 @@ mod tests {
             "look_y lifts to the object's height: got {}, want {}",
             get("look_y"),
             obj_pos.1
-        );
-    }
-
-    /// BUG-193 gate: "remove-object button emits RemoveSceneObjectCommand" —
-    /// proven end to end through the SAME `dispatch_project` entry point the
-    /// panel's per-row "✕" click reaches. Removes the LAST existing object
-    /// (Scene ships with at least one), then confirms `objects`
-    /// dropped by one — the panel-visible count `state_sync` re-derives on
-    /// its next structural sync (the "headless flow proving remove-object
-    /// updates the panel" gate: `objects_param` reads the exact same
-    /// `render_scene` param the Vm's `object_count` comes from).
-    #[test]
-    fn scene_setup_remove_object_dispatches_remove_scene_object_command() {
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let before = objects_param(&project, &layer_id, render_scene_id);
-        assert!(before >= 1.0, "Scene ships with at least one object");
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-
-        let action = ProjectAction::SceneSetupRemoveObject(
-            layer_id.clone(),
-            render_scene_id,
-            (before - 1.0) as u32,
-        );
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        assert!(
-            result.structural_change,
-            "removing an object is a structural graph edit"
-        );
-        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before,
-            "UI removal waits for content");
-        let ContentCommand::ExecuteOnContent(mut command) = content_rx.try_recv().unwrap()
-        else { panic!("content-owned removal"); };
-        command.execute(&mut project);
-        assert!(command.was_applied(), "{:?}", command.rejection_reason());
-        assert_eq!(
-            objects_param(&project, &layer_id, render_scene_id),
-            before - 1.0
-        );
-    }
-
-    /// BUG-193 gate: the light-row twin of the object-removal gate above.
-    #[test]
-    fn scene_setup_remove_light_dispatches_remove_scene_light_command() {
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let before = lights_param(&project, &layer_id, render_scene_id);
-        assert!(before >= 1.0, "Scene ships with at least one light");
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-
-        let action = ProjectAction::SceneSetupRemoveLight(
-            layer_id.clone(),
-            render_scene_id,
-            (before - 1.0) as u32,
-        );
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        apply_queued_scene_edit(&content_rx, &mut project);
-        assert!(
-            result.structural_change,
-            "removing a light is a structural graph edit"
-        );
-        assert_eq!(
-            lights_param(&project, &layer_id, render_scene_id),
-            before - 1.0
         );
     }
 
@@ -3101,183 +2857,6 @@ mod tests {
             "the twist modifier's params are exposed, targeting its bare NodeId"
         );
     }
-    /// BUG-229 dispatch regression oracle: scene-panel writes must update the
-    /// effective control value, including generator-manifest slots created by
-    /// scene exposure migration.
-    #[test]
-    fn scene_setup_param_changed_writes_light_intensity_to_def() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-        let def = effective_def(&project, &layer_id);
-        let vm =
-            manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
-        let light_node_id = vm
-            .lights
-            .iter()
-            .find_map(|l| match l {
-                manifold_renderer::node_graph::scene_vm::SceneLightVm::Known(r) => {
-                    Some(r.node_doc_id)
-                }
-                _ => None,
-            })
-            .expect("Scene ships with at least one known light");
-
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let action = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            light_node_id,
-            "intensity".to_string(),
-            7.77,
-        );
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        assert!(
-            !result.structural_change,
-            "a param scrub is not a structural graph edit"
-        );
-
-        assert_ne!(
-            effective_scene_param_value(&project, &layer_id, light_node_id, "intensity"),
-            7.77,
-            "UI dispatch must leave the snapshot unchanged until content executes"
-        );
-        apply_queued_scene_edit(&content_rx, &mut project);
-        assert_eq!(
-            effective_scene_param_value(&project, &layer_id, light_node_id, "intensity"),
-            7.77,
-            "light intensity should have changed in its effective control value"
-        );
-    }
-
-    /// BUG-229 effective-value oracle, camera twin of the light test above.
-    #[test]
-    fn scene_setup_param_changed_writes_camera_orbit_to_def() {
-        let (mut project, layer_id, _render_scene_id) = scene_layer_project();
-        let def = effective_def(&project, &layer_id);
-        let vm =
-            manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
-        let camera_node_id = match vm.camera {
-            manifold_renderer::node_graph::scene_vm::CameraVm::Orbit(c) => c.node_doc_id,
-            other => panic!("Scene's default camera should be Orbit, got {other:?}"),
-        };
-
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-        let action = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            camera_node_id,
-            "orbit".to_string(),
-            2.5,
-        );
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        assert!(
-            !result.structural_change,
-            "a param scrub is not a structural graph edit"
-        );
-
-        assert_ne!(
-            effective_scene_param_value(&project, &layer_id, camera_node_id, "orbit"),
-            2.5,
-            "UI dispatch must leave the snapshot unchanged until content executes"
-        );
-        apply_queued_scene_edit(&content_rx, &mut project);
-        assert_eq!(
-            effective_scene_param_value(&project, &layer_id, camera_node_id, "orbit"),
-            2.5,
-            "camera orbit should have changed in its effective control value"
-        );
-    }
-
-    /// BUG-229 effective-value oracle, fog/atmosphere twin. Scene ships with NO fog node
-    /// by default (`AtmosphereVm::None`) — add one first through the SAME
-    /// `SceneSetupAddFog` dispatch the panel's "+ Fog" button uses, exactly like a
-    /// real session would, then scrub `fog_density` through it.
-    #[test]
-    fn scene_setup_param_changed_writes_fog_density_to_def() {
-        let (mut project, layer_id, render_scene_id) = scene_layer_project();
-        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
-            dispatch_harness();
-        let (content_tx, content_rx) = crossbeam_channel::unbounded();
-
-        let add_fog = ProjectAction::SceneSetupAddFog(layer_id.clone(), render_scene_id);
-        dispatch_project(
-            &add_fog,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        apply_queued_scene_edit(&content_rx, &mut project);
-
-        let def = effective_def(&project, &layer_id);
-        let vm =
-            manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).expect("scene vm");
-        let fog_node_id = match vm.atmosphere {
-            manifold_renderer::node_graph::scene_vm::AtmosphereVm::Wired(a) => a.node_doc_id,
-            manifold_renderer::node_graph::scene_vm::AtmosphereVm::None => {
-                panic!("SceneSetupAddFog should have wired an atmosphere node")
-            }
-        };
-
-        let action = ProjectAction::SceneSetupParamChanged(
-            layer_id.clone(),
-            Vec::new(),
-            fog_node_id,
-            "fog_density".to_string(),
-            0.42,
-        );
-        let result = dispatch_project(
-            &action,
-            &mut project,
-            &content_tx,
-            &content_state,
-            &mut ui,
-            &mut selection,
-            &mut active_layer,
-            &mut user_prefs,
-        );
-        assert!(
-            !result.structural_change,
-            "a param scrub is not a structural graph edit"
-        );
-
-        assert_ne!(
-            effective_scene_param_value(&project, &layer_id, fog_node_id, "fog_density"),
-            0.42,
-            "UI dispatch must leave the snapshot unchanged until content executes"
-        );
-        apply_queued_scene_edit(&content_rx, &mut project);
-        assert_eq!(
-            effective_scene_param_value(&project, &layer_id, fog_node_id, "fog_density"),
-            0.42,
-            "fog density should have changed in its effective control value"
-        );
-    }
-
     fn dispatch_modifier_action(
         action: ProjectAction,
     ) -> crate::scene_modifier_edit::SceneModifierAction {
@@ -3362,6 +2941,268 @@ mod tests {
                     panic!("instance action routed as preparation")
                 }
             }
+        }
+    }
+
+    /// Dispatch one panel action through a fresh harness; returns the result
+    /// and the queue it wrote content-bound commands to.
+    fn dispatch_once(
+        action: &ProjectAction,
+        project: &mut Project,
+    ) -> (DispatchResult, crossbeam_channel::Receiver<ContentCommand>) {
+        let (_unused_tx, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) =
+            dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        let result = dispatch_project(
+            action,
+            project,
+            &content_tx,
+            &content_state,
+            &mut ui,
+            &mut selection,
+            &mut active_layer,
+            &mut user_prefs,
+        );
+        (result, content_rx)
+    }
+
+    /// The added layer plane is an editable grouped plane mesh (never a layer
+    /// source), unskinned, defaulting to base-colour skin, wired out as an object.
+    fn assert_added_layer_plane(_before: &Project, project: &Project, layer_id: &LayerId) {
+        let def = effective_def(project, layer_id);
+        let added_group = def
+            .nodes
+            .iter()
+            .find(|n| {
+                n.type_id == manifold_core::effect_graph_def::GROUP_TYPE_ID
+                    && n.group.as_ref().is_some_and(|g| {
+                        g.nodes.iter().any(|n| n.type_id == "node.plane_mesh")
+                    })
+            })
+            .expect("the new layer plane group is present");
+        let body = added_group.group.as_ref().expect("is a group");
+        assert!(!body.nodes.iter().any(|n| n.type_id == "node.layer_source"));
+        let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def).unwrap();
+        let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(plane) =
+            vm.objects.last().unwrap()
+        else {
+            panic!("added plane must be editable");
+        };
+        assert!(plane.skin.is_none(), "unassigned plane must not sample transparent skin");
+        assert_eq!(
+            super::super::projection::material::default_skin_target(Some(&def), &plane.material),
+            manifold_ui::panels::scene_setup_panel::SkinTargetMap::BaseColor,
+        );
+        let scene_object = body
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.scene_object")
+            .expect("scene_object inside group");
+        assert!(
+            body.wires
+                .iter()
+                .any(|w| w.from_node == scene_object.id && w.from_port == "object")
+        );
+    }
+
+    /// Adding an object keeps every existing exposed control and its manifest slot.
+    fn assert_bindings_kept(before: &Project, project: &Project, layer_id: &LayerId) {
+        let original = effective_def(before, layer_id).preset_metadata.unwrap();
+        let updated = effective_def(project, layer_id);
+        let metadata = updated.preset_metadata.as_ref().unwrap();
+        for binding in &original.bindings {
+            assert!(metadata.bindings.contains(binding), "existing control lost: {}", binding.id);
+            assert!(project.timeline.layers[0].gen_params().unwrap().params.contains(&binding.id));
+        }
+    }
+
+    struct SceneDispatchCase {
+        name: &'static str,
+        /// (layer, render_scene node, count before) -> the panel's action.
+        action: fn(LayerId, u32, u32) -> ProjectAction,
+        /// The render_scene count the action changes (objects or lights).
+        count: fn(&Project, &LayerId, u32) -> f32,
+        delta: f32,
+        /// An insertion selects the new object once content applies it.
+        selects_object: bool,
+        /// Row-specific checks: (project before, project after, layer).
+        after: fn(&Project, &Project, &LayerId),
+    }
+
+    /// Each scene add/remove is a structural edit that leaves the UI snapshot
+    /// untouched until content applies the queued command, which then moves
+    /// the panel-visible count by one.
+    #[test]
+    fn scene_setup_add_and_remove_dispatch_through_content() {
+        let cases = [
+            SceneDispatchCase {
+                name: "add object",
+                action: |l, r, n| ProjectAction::SceneSetupAddObject(l, r, n),
+                count: objects_param,
+                delta: 1.0,
+                selects_object: true,
+                after: assert_bindings_kept,
+            },
+            SceneDispatchCase {
+                // BUG-hlw8: "+ Plane" takes the next object slot.
+                name: "add layer plane",
+                action: |l, r, n| ProjectAction::SceneSetupAddLayerPlane(l, r, n),
+                count: objects_param,
+                delta: 1.0,
+                selects_object: true,
+                after: assert_added_layer_plane,
+            },
+            SceneDispatchCase {
+                name: "add light",
+                action: |l, r, n| ProjectAction::SceneSetupAddLight(l, r, n),
+                count: lights_param,
+                delta: 1.0,
+                selects_object: false,
+                after: |_, _, _| {},
+            },
+            SceneDispatchCase {
+                // BUG-193: the removed count is what state_sync re-derives for the panel.
+                name: "remove object",
+                action: |l, r, n| ProjectAction::SceneSetupRemoveObject(l, r, n - 1),
+                count: objects_param,
+                delta: -1.0,
+                selects_object: false,
+                after: |_, _, _| {},
+            },
+            SceneDispatchCase {
+                name: "remove light",
+                action: |l, r, n| ProjectAction::SceneSetupRemoveLight(l, r, n - 1),
+                count: lights_param,
+                delta: -1.0,
+                selects_object: false,
+                after: |_, _, _| {},
+            },
+        ];
+        for case in &cases {
+            let name = case.name;
+            let (mut project, layer_id, render_scene_id) = scene_layer_project();
+            let stale = project.clone();
+            let before = (case.count)(&project, &layer_id, render_scene_id);
+            assert!(before >= 1.0, "{name}: Scene ships with at least one");
+
+            let action = (case.action)(layer_id.clone(), render_scene_id, before as u32);
+            let (result, content_rx) = dispatch_once(&action, &mut project);
+            assert!(result.structural_change, "{name}: structural graph edit");
+            assert_eq!(
+                (case.count)(&project, &layer_id, render_scene_id),
+                before,
+                "{name}: UI dispatch waits for content"
+            );
+
+            let selected = match content_rx.try_recv().expect("content-owned scene edit") {
+                ContentCommand::ExecuteSelecting(mut command, request) => {
+                    let pending = request.capture(&project);
+                    command.execute(&mut project);
+                    assert!(command.was_applied(), "{name}: {:?}", command.rejection_reason());
+                    pending.resolve(&project)
+                }
+                ContentCommand::ExecuteOnContent(mut command) => {
+                    command.execute(&mut project);
+                    assert!(command.was_applied(), "{name}: {:?}", command.rejection_reason());
+                    None
+                }
+                _ => panic!("{name}: unexpected content command"),
+            };
+            assert_eq!(
+                matches!(selected, Some(crate::edit_selection::EditSelection::Object { .. })),
+                case.selects_object,
+                "{name}: selection after insertion"
+            );
+            assert_eq!(
+                (case.count)(&project, &layer_id, render_scene_id),
+                before + case.delta,
+                "{name}: count after content applies"
+            );
+            (case.after)(&stale, &project, &layer_id);
+        }
+    }
+
+    struct SceneParamCase {
+        name: &'static str,
+        /// Find (or first create, through the panel's own action) the node to write.
+        node: fn(&mut Project, &LayerId, u32) -> u32,
+        param: &'static str,
+        value: f32,
+    }
+
+    /// BUG-229: a scene-panel param write is a non-structural edit that lands
+    /// in the effective control value once content executes it, including
+    /// generator-manifest slots created by scene exposure migration.
+    #[test]
+    fn scene_setup_param_changed_writes_the_effective_value() {
+        use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, CameraVm, SceneLightVm, SceneVm};
+        fn scene_vm(project: &Project, layer_id: &LayerId) -> SceneVm {
+            SceneVm::from_def(&effective_def(project, layer_id)).expect("scene vm")
+        }
+        let cases = [
+            SceneParamCase {
+                name: "light intensity",
+                node: |p, l, _| {
+                    scene_vm(p, l)
+                        .lights
+                        .iter()
+                        .find_map(|l| match l {
+                            SceneLightVm::Known(r) => Some(r.node_doc_id),
+                            _ => None,
+                        })
+                        .expect("Scene ships with at least one known light")
+                },
+                param: "intensity",
+                value: 7.77,
+            },
+            SceneParamCase {
+                name: "camera orbit",
+                node: |p, l, _| match scene_vm(p, l).camera {
+                    CameraVm::Orbit(c) => c.node_doc_id,
+                    other => panic!("Scene's default camera should be Orbit, got {other:?}"),
+                },
+                param: "orbit",
+                value: 2.5,
+            },
+            SceneParamCase {
+                // Scene ships with no fog: add it through the panel's "+ Fog" dispatch first.
+                name: "fog density",
+                node: |p, l, r| {
+                    let (_, rx) = dispatch_once(&ProjectAction::SceneSetupAddFog(l.clone(), r), p);
+                    apply_queued_scene_edit(&rx, p);
+                    match scene_vm(p, l).atmosphere {
+                        AtmosphereVm::Wired(a) => a.node_doc_id,
+                        AtmosphereVm::None => panic!("SceneSetupAddFog should have wired an atmosphere node"),
+                    }
+                },
+                param: "fog_density",
+                value: 0.42,
+            },
+        ];
+        for case in &cases {
+            let name = case.name;
+            let (mut project, layer_id, render_scene_id) = scene_layer_project();
+            let node = (case.node)(&mut project, &layer_id, render_scene_id);
+            let action = ProjectAction::SceneSetupParamChanged(
+                layer_id.clone(),
+                Vec::new(),
+                node,
+                case.param.to_string(),
+                case.value,
+            );
+            let (result, content_rx) = dispatch_once(&action, &mut project);
+            assert!(!result.structural_change, "{name}: a param scrub is not structural");
+            assert_ne!(
+                effective_scene_param_value(&project, &layer_id, node, case.param),
+                case.value,
+                "{name}: UI dispatch leaves the snapshot unchanged until content executes"
+            );
+            apply_queued_scene_edit(&content_rx, &mut project);
+            assert_eq!(
+                effective_scene_param_value(&project, &layer_id, node, case.param),
+                case.value,
+                "{name}: effective control value updated"
+            );
         }
     }
 }

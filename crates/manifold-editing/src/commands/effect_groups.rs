@@ -1403,9 +1403,7 @@ mod tests {
             project
                 .settings
                 .master_effect_groups
-                .as_ref()
-                .unwrap()
-                .is_empty()
+                .is_none()
         );
 
         command.execute(&mut project);
@@ -1457,9 +1455,7 @@ mod tests {
             project
                 .settings
                 .master_effect_groups
-                .as_ref()
-                .unwrap()
-                .is_empty()
+                .is_none()
         );
         command.execute(&mut project);
         let redo_group = project.settings.master_effect_groups.as_ref().unwrap()[0].clone();
@@ -1534,9 +1530,7 @@ mod tests {
             project
                 .settings
                 .master_effect_groups
-                .as_ref()
-                .unwrap()
-                .is_empty()
+                .is_none()
         );
     }
 
@@ -1816,9 +1810,7 @@ mod tests {
             project
                 .settings
                 .master_effect_groups
-                .as_ref()
-                .unwrap()
-                .is_empty()
+                .is_none()
         );
         ungroup.undo(&mut project);
         assert_eq!(

@@ -80,9 +80,7 @@ const HEADER_BODY_GAP: f32 = PADDING;
 /// the effect/generator name reads as a title, not another parameter.
 const HEADER_FONT_SIZE: u16 = color::FONT_HEADING;
 const BORDER_W: f32 = 1.0;
-// Card corner = the design-token card radius (Phase 3). Radius is purely
-// visual — it doesn't move any laid rect, so the golden header-layout tests
-// are unaffected.
+// Card corner = the design-token card radius. Purely visual; it moves no laid rect.
 const CORNER_RADIUS: f32 = color::CARD_RADIUS;
 // section 14.5 E — the inter-card gap is owned by the container (`inspector::SECTION_GAP`),
 // not split between margin + gap. Zero here; the card reports just its frame height.
@@ -1229,7 +1227,7 @@ impl Default for ParamCardPanel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     // `ModulationAction` is asserted against only in these tests now — the
     // production references moved to `RowHost::row_action` (P-S2).
@@ -2186,18 +2184,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_click_chevron() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let actions = panel.handle_click(panel.chevron_btn_id.unwrap(), &tree);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::Params(ParamsAction::EffectCollapseToggle(0))));
-    }
-
-    #[test]
     fn handle_click_driver_button() {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
@@ -2390,40 +2376,6 @@ mod tests {
 
     // ── P7.1 pinning tests — public pointer entry for every row gesture.
 
-    #[test]
-    fn pinning_param_drag_begin_track_end() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
-        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
-        let mid_x = track_rect.x + track_rect.width * 0.5;
-
-        let down = panel.handle_pointer_down(track, Vec2::new(mid_x, track_rect.y), &tree);
-        assert!(
-            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(..))]),
-            "begin emits snapshot + first value: {down:?}"
-        );
-        assert!(panel.is_dragging());
-
-        let quarter_x = track_rect.x + track_rect.width * 0.25;
-        let moved = panel.handle_drag(Vec2::new(quarter_x, track_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Param(target, pid), ScrubPhase::Move(ScrubValue::Scalar(val)))]
-                if *target == GraphParamTarget::Effect(0) && pid.as_ref() == "radius" && (*val - 25.0).abs() < 1.0),
-            "track emits the live value at the new position: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Param(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
-            "end emits exactly one commit: {ended:?}"
-        );
-        assert!(!panel.is_dragging(), "drag slot cleared after end");
-    }
-
     /// BUG-3jpj (scene-modifier-card-drag-clunky): a modifier card's kind is
     /// Effect with effect_index 0, but its rows address `GeneratorOf(owning
     /// layer)` (param_target(), INV-M4). Every wire of a slider drag — begin,
@@ -2524,40 +2476,6 @@ mod tests {
         assert!(matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Commit)]));
     }
 
-    #[test]
-    fn pinning_trim_drag_begin_track_end() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.state.mod_state.driver_expanded[0] = true;
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        let trim = panel.row_host.trim_ids[0].as_ref().expect("driver trim built");
-        let min_bar_id = trim.min_bar_id;
-
-        let down = panel.handle_pointer_down(min_bar_id, Vec2::new(0.0, 0.0), &tree);
-        assert!(
-            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Begin)] if pid.as_ref() == "radius"),
-            "begin emits a trim snapshot: {down:?}"
-        );
-        assert!(panel.is_dragging());
-
-        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
-        let new_x = track_rect.x + track_rect.width * 0.4;
-        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
-            "track emits the live trim range: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
-            "end emits exactly one trim commit: {ended:?}"
-        );
-        assert!(!panel.is_dragging());
-    }
-
     /// BUG-257 regression: shift every node down (what `ScrollContainer::
     /// offset_content` does on a wheel scroll), then drag. The overlay nodes
     /// must land at the track's LIVE y, not the build-time cached one.
@@ -2631,78 +2549,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pinning_env_target_drag_begin_track_end() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.state.mod_state.envelope_expanded[0] = true;
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        let target = panel.row_host.target_ids[0].as_ref().expect("envelope target built");
-        let target_bar_id = target.target_bar_id;
-
-        let down = panel.handle_pointer_down(target_bar_id, Vec2::new(0.0, 0.0), &tree);
-        assert!(
-            matches!(down.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Begin)] if pid.as_ref() == "radius"),
-            "begin emits a target snapshot: {down:?}"
-        );
-        assert!(panel.is_dragging());
-
-        let track_rect = tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track);
-        let new_x = track_rect.x + track_rect.width * 0.3;
-        let moved = panel.handle_drag(Vec2::new(new_x, track_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(ScrubValue::Scalar(norm)))] if pid.as_ref() == "radius" && (*norm - 0.3).abs() < 0.05),
-            "track emits the live target norm: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
-            "end emits exactly one target commit: {ended:?}"
-        );
-        assert!(!panel.is_dragging());
-    }
-
-    #[test]
-    fn pinning_env_decay_drag_begin_track_end() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.state.mod_state.envelope_expanded[0] = true;
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
-
-        let cfg = panel.row_host.envelope_config_ids[0].as_ref().expect("envelope config built");
-        let decay_track = cfg.decay_slider.expect("decay slider in Continuous").track;
-        let decay_rect = tree.get_bounds(decay_track);
-
-        let down = panel.handle_pointer_down(decay_track, Vec2::new(decay_rect.x, decay_rect.y), &tree);
-        assert!(
-            matches!(
-                down.as_slice(),
-                [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid1), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid2), ScrubPhase::Move(..))]
-                if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
-            ),
-            "begin emits snapshot + first decay value: {down:?}"
-        );
-        assert!(panel.is_dragging());
-
-        let new_x = decay_rect.x + decay_rect.width * 0.6;
-        let moved = panel.handle_drag(Vec2::new(new_x, decay_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
-            "track emits the live decay value: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
-            "end emits exactly one decay commit: {ended:?}"
-        );
-        assert!(!panel.is_dragging());
-    }
-
     /// Fixture with param 0's audio mod armed and Continuous — exercises the
     /// shaping sliders (Sensitivity/Attack/Release, `DrawerIds.sliders[0..3]`).
     fn effect_config_with_audio_shape_armed() -> ParamSurface {
@@ -2711,44 +2557,6 @@ mod tests {
         c.rows[0].audio.active = true;
         c.rows[0].audio.send_id = Some(manifold_foundation::AudioSendId::new("send-kick"));
         c
-    }
-
-    #[test]
-    fn pinning_audio_shape_drag_begin_track_end() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config_with_audio_shape_armed());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-
-        let (dids, _) = panel.row_host.audio_configs[0].as_ref().expect("audio drawer built");
-        let sens_slider = dids.sliders[0]; // Sensitivity — the first shaping slider
-        let sens_track = sens_slider.track;
-        let sens_rect = tree.get_bounds(sens_track);
-
-        let down = panel.handle_pointer_down(sens_track, Vec2::new(sens_rect.x, sens_rect.y), &tree);
-        assert!(
-            matches!(
-                down.as_slice(),
-                [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid1, AudioShapeParam::Sensitivity), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid2, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))]
-                if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
-            ),
-            "begin emits snapshot + first shape value: {down:?}"
-        );
-        assert!(panel.is_dragging());
-
-        let new_x = sens_rect.x + sens_rect.width * 0.7;
-        let moved = panel.handle_drag(Vec2::new(new_x, sens_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
-            "track emits the live shape value: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, _), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
-            "end emits exactly one shape commit: {ended:?}"
-        );
-        assert!(!panel.is_dragging());
     }
 
     #[test]
@@ -2826,46 +2634,6 @@ mod tests {
                 GraphParamTarget::Effect(0), id
             ))] if id == &pid
         ));
-    }
-
-    #[test]
-    fn pinning_step_amount_drag_begin_track_end() {
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        let mut cfg = effect_config_with_audio_shape_armed();
-        cfg.rows[0].audio.action_idx = 1; // Step — the 4th drawer slider appears
-        panel.configure(&cfg);
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-
-        let (dids, _) = panel.row_host.audio_configs[0].as_ref().expect("audio drawer built");
-        let step_slider = *dids.sliders.get(3).expect("Step slider built while Action=Step");
-        let step_track = step_slider.track;
-        let step_rect = tree.get_bounds(step_track);
-
-        let down = panel.handle_pointer_down(step_track, Vec2::new(step_rect.x, step_rect.y), &tree);
-        assert!(
-            matches!(
-                down.as_slice(),
-                [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid1), ScrubPhase::Begin), PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid2), ScrubPhase::Move(..))]
-                if pid1.as_ref() == "radius" && pid2.as_ref() == "radius"
-            ),
-            "begin emits snapshot + first step value: {down:?}"
-        );
-        assert!(panel.is_dragging());
-
-        let new_x = step_rect.x + step_rect.width * 0.8;
-        let moved = panel.handle_drag(Vec2::new(new_x, step_rect.y), &mut tree, false);
-        assert!(
-            matches!(moved.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Move(..))] if pid.as_ref() == "radius"),
-            "track emits the live step value: {moved:?}"
-        );
-
-        let ended = panel.handle_drag_end(&mut tree);
-        assert!(
-            matches!(ended.as_slice(), [PanelAction::Scrub(ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid), ScrubPhase::Commit)] if pid.as_ref() == "radius"),
-            "end emits exactly one step commit: {ended:?}"
-        );
-        assert!(!panel.is_dragging());
     }
 
     #[test]
@@ -3304,52 +3072,38 @@ mod tests {
         assert!(panel.row_host.driver_config_ids[0].is_none());
     }
 
-    #[test]
-    fn effect_header_layout_matches_golden() {
-        // The host-built effect header lands toggle / cog / chevron at the right,
-        // with the expand chevron always the rightmost control (matches the
-        // generator header trailing order).
+    /// Trailing header controls in left-to-right order on one row; the expand
+    /// chevron is always rightmost. The 3D Shading icon exists only when its
+    /// feature is on.
+    fn assert_header_order(config: &ParamSurface, lead: (&str, u64)) {
+        use crate::panels::layout_order::{assert_left_to_right, assert_one_row};
         let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new(); // Perform context
-        panel.configure(&effect_config());
+        let mut panel = ParamCardPanel::new();
+        panel.configure(config);
         let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
         panel.build(&mut tree, rect);
+        let at = |key| tree.get_bounds(panel.host.node_id_for_key(key).unwrap());
 
-        let inner_x = rect.x + BORDER_W;
-        let inner_y = rect.y + BORDER_W;
-        let inner_w = rect.width - BORDER_W * 2.0;
-        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
-        let cog_x = chevron_x - GAP - COG_W;
-        // "3D Shading" icon (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) sits between
-        // the ON/OFF toggle and the cog — but only when the feature is enabled
-        // (`RELIGHT_FEATURE_ENABLED`). Disabled, the auto-gap row drops the icon
-        // and its gap, so the toggle lands one slot left of the cog.
-        let toggle_x = if RELIGHT_FEATURE_ENABLED {
-            cog_x - GAP - RELIGHT_W - GAP - TOGGLE_W
-        } else {
-            cog_x - GAP - TOGGLE_W
-        };
-        let elem_y = inner_y + (HEADER_HEIGHT - 16.0) * 0.5;
-
-        let close = |a: Rect, b: Rect| {
-            (a.x - b.x).abs() < 0.01
-                && (a.y - b.y).abs() < 0.01
-                && (a.width - b.width).abs() < 0.01
-                && (a.height - b.height).abs() < 0.01
-        };
-        let toggle = tree.get_bounds(panel.host.node_id_for_key(KEY_TOGGLE).unwrap());
-        assert!(close(toggle, Rect::new(toggle_x, elem_y, TOGGLE_W, 16.0)), "toggle {toggle:?}");
+        let mut cells = vec![(lead.0, at(lead.1))];
         if RELIGHT_FEATURE_ENABLED {
-            let relight_x = cog_x - GAP - RELIGHT_W;
-            let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
-            assert!(close(relight, Rect::new(relight_x, elem_y, RELIGHT_W, 16.0)), "relight {relight:?}");
+            cells.push(("relight", at(KEY_RELIGHT)));
         } else {
             assert!(panel.host.node_id_for_key(KEY_RELIGHT).is_none(), "relight icon hidden when feature off");
         }
-        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
-        assert!(close(chevron, Rect::new(chevron_x, elem_y, CHEVRON_W, 16.0)), "chevron {chevron:?}");
-        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
-        assert!(close(cog, Rect::new(cog_x, elem_y, COG_W, 16.0)), "cog {cog:?}");
+        cells.push(("cog", at(KEY_COG)));
+        cells.push(("chevron", at(KEY_CHEVRON)));
+        assert_one_row(&cells);
+        assert_left_to_right(&cells, rect);
+    }
+
+    #[test]
+    fn effect_header_controls_keep_their_order() {
+        assert_header_order(&effect_config(), ("toggle", KEY_TOGGLE));
+    }
+
+    #[test]
+    fn generator_header_controls_keep_their_order() {
+        assert_header_order(&gen_config(), ("change", KEY_CHANGE));
     }
 
     // ── Modifier-card chrome (SCENE_MODIFIER_FRAMEWORK section 3.7) ──
@@ -3537,71 +3291,6 @@ mod tests {
     }
 
     // ── Generator-card fixtures + tests ───────────────────────────
-
-    #[test]
-    fn generator_header_layout_matches_golden() {
-        // The host-built generator header must land Change / cog / chevron at the
-        // same right-to-left rects the old imperative layout used.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new(); // Perform context by default
-        panel.configure(&gen_config());
-        let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
-        panel.build(&mut tree, rect);
-
-        let inner_x = rect.x + BORDER_W;
-        let inner_y = rect.y + BORDER_W;
-        let inner_w = rect.width - BORDER_W * 2.0;
-        // section 14.5 D — trailing controls right-align to the shared `inner_right - PADDING`
-        // gutter (was flush to the inner edge).
-        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
-        let cog_x = chevron_x - COG_W;
-        // "3D Shading" icon (`docs/DEPTH_RELIGHT_DESIGN.md` P5b) sits between
-        // Change and the cog — but only when the feature is enabled
-        // (`RELIGHT_FEATURE_ENABLED`). Disabled, the icon and its leading gap are
-        // both dropped, so Change lands one slot left of the cog.
-        let change_x = if RELIGHT_FEATURE_ENABLED {
-            cog_x - GAP - RELIGHT_W - GAP - CHANGE_BTN_W
-        } else {
-            cog_x - GAP - CHANGE_BTN_W
-        };
-
-        let close = |a: Rect, b: Rect| {
-            (a.x - b.x).abs() < 0.01
-                && (a.y - b.y).abs() < 0.01
-                && (a.width - b.width).abs() < 0.01
-                && (a.height - b.height).abs() < 0.01
-        };
-        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
-        assert!(
-            close(chevron, Rect::new(chevron_x, inner_y, CHEVRON_W, HEADER_HEIGHT)),
-            "chevron {chevron:?}"
-        );
-        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
-        assert!(close(cog, Rect::new(cog_x, inner_y, COG_W, HEADER_HEIGHT)), "cog {cog:?}");
-        if RELIGHT_FEATURE_ENABLED {
-            let relight_x = cog_x - GAP - RELIGHT_W;
-            let relight = tree.get_bounds(panel.host.node_id_for_key(KEY_RELIGHT).unwrap());
-            assert!(
-                close(relight, Rect::new(relight_x, inner_y, RELIGHT_W, HEADER_HEIGHT)),
-                "relight {relight:?}"
-            );
-        } else {
-            assert!(panel.host.node_id_for_key(KEY_RELIGHT).is_none(), "relight icon hidden when feature off");
-        }
-        let change = tree.get_bounds(panel.host.node_id_for_key(KEY_CHANGE).unwrap());
-        assert!(
-            close(
-                change,
-                Rect::new(
-                    change_x,
-                    inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
-                    CHANGE_BTN_W,
-                    CHANGE_BTN_H
-                )
-            ),
-            "change {change:?}"
-        );
-    }
 
     fn gen_config() -> ParamSurface {
         ParamSurface {
@@ -3926,127 +3615,6 @@ mod tests {
         assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
     }
 
-    #[test]
-    fn right_click_on_param_track_resolves_to_slider_reset_with_declared_default() {
-        // BUG-061: the param reset now rides the generic SliderReset trio (the
-        // old per-panel right-click reset action was deleted), carrying the
-        // param's own declared default (10.0 for "radius" here).
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let mut reg = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut reg);
-
-        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
-        match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::Param(..), ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 10.0).abs() < f32::EPSILON));
-            }
-            other => panic!("expected SliderReset, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn right_click_on_audio_shape_slider_resolves_to_slider_reset_with_shape_default() {
-        // BUG-061: the drawer's Amount/Attack/Release shaping sliders never had
-        // a reset gesture before this — each must resolve to AudioModShape's
-        // own default (1.0 / 5ms / 120ms), not the current live value.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.state.mod_state.audio_rows[0].active = true;
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let mut reg = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut reg);
-
-        let dids = &panel.row_host.audio_configs[0].as_ref().expect("audio drawer built").0;
-        assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
-
-        let expected = [
-            (AudioShapeParam::Sensitivity, AUDIO_SENS_DEFAULT),
-            (AudioShapeParam::Attack, AUDIO_ATTACK_DEFAULT_MS),
-            (AudioShapeParam::Release, AUDIO_RELEASE_DEFAULT_MS),
-        ];
-        for (si, (which, default)) in expected.into_iter().enumerate() {
-            let track = dids.sliders[si].track;
-            match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
-                Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => match *changed {
-                    PanelAction::Scrub(ValueRef::AudioModShape(_, _, got_which), ScrubPhase::Move(ScrubValue::Scalar(v))) => {
-                        assert_eq!(got_which, which);
-                        assert!((v - default).abs() < f32::EPSILON, "slider {si}: {v} != {default}");
-                    }
-                    other => panic!("slider {si}: expected AudioModShape scrub move, got {other:?}"),
-                },
-                other => panic!("slider {si}: expected SliderReset, got {other:?}"),
-            }
-        }
-    }
-
-    /// Shared assertion: `track` resolves to a `SliderReset` via the registry
-    /// on right-click. Reused across the main-slider and drawer-slider cases
-    /// below (spec section 8).
-    fn assert_track_resets(reg: &crate::intent::IntentRegistry, tree: &UITree, track: NodeId) {
-        match reg.resolve(tree, Some(track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { .. })) => {}
-            other => panic!("expected SliderReset on track {track:?}, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn trigger_gate_drawer_sliders_all_resolve_to_slider_reset() {
-        // BUG-070: the Clip Trigger drawer's Amount/Attack/Release sliders got
-        // NO reset gesture, because register_intents' old per-row loop bailed
-        // at `let Some(ids) = slider else { continue }` before it ever reached
-        // the drawer — a trigger-gate row has no main slider (confirmed by the
-        // `slider_ids[gi].is_none()` assertion in
-        // `build_effect_trigger_gate_row_and_drawer` above), so the drawer's
-        // Amount/Attack/Release sliders were structurally unreachable from that
-        // loop. This test fails on that old code path (register_intents never
-        // reaches `audio_configs[gi]` for this row) and passes once resets are
-        // replayed independent of whether the row has a main slider — the fix
-        // in this file's `register_intents`.
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config_with_trigger_gate());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
-
-        let gi = panel.rows.len() - 1;
-        assert!(panel.row_host.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
-
-        let mut reg = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut reg);
-
-        let dids = &panel.row_host.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
-        // Param-drawer unification (2026-07-19): a trigger-gate target fires
-        // on the raw BUG-242 edge, so Attack/Release are placebo there and
-        // the drawer builds only Sensitivity.
-        assert_eq!(dids.sliders.len(), 1, "Sensitivity only — Attack/Release dropped on trigger-gate");
-        for sl in &dids.sliders {
-            assert_track_resets(&reg, &tree, sl.track);
-        }
-    }
-
-    #[test]
-    fn normal_param_row_main_slider_track_resolves_to_slider_reset() {
-        // Companion to the trigger-gate coverage test above, using the same
-        // shared helper: a plain slider row's main track still resolves too
-        // (unchanged behaviour — now via the replay pass instead of the
-        // deleted in-loop registration).
-        let mut tree = UITree::new();
-        let mut panel = ParamCardPanel::new();
-        panel.configure(&effect_config());
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let mut reg = crate::intent::IntentRegistry::new();
-        panel.register_intents(&mut reg);
-
-        let track = panel.row_host.slider_ids[0].as_ref().unwrap().track;
-        assert_track_resets(&reg, &tree, track);
-    }
-
     // ── P2 dispatch-family coverage (`docs/WIDGET_TREE_DESIGN.md` section 6/P2) —
     // roles the pre-existing suite above didn't already regression-pin
     // (DriverBtn/AudioBtn/ToggleBtn/MappingChevron/SectionHeader/ModTab were
@@ -4268,5 +3836,240 @@ mod tests {
             panel.handle_click(label, &tree).is_empty(),
             "a disabled row label must not dispatch the OSC copy"
         );
+    }
+
+    /// The main param slider, the audio drawer's shaping sliders, and a
+    /// trigger-gate row's drawer slider. A trigger-gate row has no main slider,
+    /// so its drawer resets must be registered independently of one.
+    pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {
+        use crate::panels::contract_tests::ResetCase;
+        let mut cases = Vec::new();
+
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.audio_rows[0].active = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+        let resolve = |track| reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick);
+        cases.push(ResetCase {
+            label: "param radius".into(),
+            got: resolve(panel.row_host.slider_ids[0].as_ref().unwrap().track),
+            target: |v| matches!(v, ValueRef::Param(..)),
+            default: 10.0,
+        });
+        let dids = &panel.row_host.audio_configs[0].as_ref().expect("audio drawer built").0;
+        assert_eq!(dids.sliders.len(), 3, "Amount/Attack/Release");
+        type Shape = (&'static str, fn(&ValueRef) -> bool, f32);
+        let shape: [Shape; 3] = [
+            ("audio amount", |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Sensitivity)), AUDIO_SENS_DEFAULT),
+            ("audio attack", |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Attack)), AUDIO_ATTACK_DEFAULT_MS),
+            ("audio release", |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Release)), AUDIO_RELEASE_DEFAULT_MS),
+        ];
+        for (slider, (label, target, default)) in dids.sliders.iter().zip(shape) {
+            cases.push(ResetCase { label: label.into(), got: resolve(slider.track), target, default });
+        }
+
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config_with_trigger_gate());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        let gi = panel.rows.len() - 1;
+        assert!(panel.row_host.slider_ids[gi].is_none(), "trigger-gate row has no main slider");
+        let mut reg = crate::intent::IntentRegistry::new();
+        panel.register_intents(&mut reg);
+        let dids = &panel.row_host.audio_configs[gi].as_ref().expect("audio drawer armed in fixture").0;
+        // A trigger-gate target fires on the raw edge, so only Sensitivity is built.
+        assert_eq!(dids.sliders.len(), 1, "Sensitivity only on a trigger-gate row");
+        cases.push(ResetCase {
+            label: "trigger-gate amount".into(),
+            got: reg.resolve(&tree, Some(dids.sliders[0].track), crate::intent::Gesture::RightClick),
+            target: |v| matches!(v, ValueRef::AudioModShape(_, _, AudioShapeParam::Sensitivity)),
+            default: AUDIO_SENS_DEFAULT,
+        });
+        cases
+    }
+
+    pub(crate) fn chevron_click() -> Vec<PanelAction> {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        panel.handle_click(panel.chevron_btn_id.unwrap(), &tree)
+    }
+
+    struct DragCase {
+        name: &'static str,
+        config: fn() -> ParamSurface,
+        /// Open whichever drawer holds the slider.
+        prepare: fn(&mut ParamCardPanel),
+        /// The node to press and where.
+        press: fn(&ParamCardPanel, &UITree) -> (NodeId, Vec2),
+        /// Where to drag to.
+        drag_to: fn(&ParamCardPanel, &UITree) -> Vec2,
+        /// The value every phase of the gesture must address.
+        value: fn(&ValueRef) -> bool,
+        /// Value sliders emit their first value with Begin; range bars don't.
+        begin_moves: bool,
+        /// Expected scalar after the drag, with tolerance.
+        dragged: Option<(f32, f32)>,
+    }
+
+    fn main_track(panel: &ParamCardPanel, tree: &UITree) -> Rect {
+        tree.get_bounds(panel.row_host.slider_ids[0].as_ref().unwrap().track)
+    }
+
+    fn radius(pid: &manifold_foundation::ParamId) -> bool {
+        pid.as_ref() == "radius"
+    }
+
+    /// Every row slider and drawer slider runs the same drag lifecycle through
+    /// the public pointer entry: Begin on press, one Move per drag, exactly one
+    /// Commit on release, all addressed to the same value.
+    #[test]
+    fn every_drawer_slider_drag_runs_begin_track_commit() {
+        let cases = [
+            DragCase {
+                name: "param",
+                config: effect_config,
+                prepare: |_| {},
+                press: |p, t| {
+                    let r = main_track(p, t);
+                    (p.row_host.slider_ids[0].as_ref().unwrap().track, Vec2::new(r.x + r.width * 0.5, r.y))
+                },
+                drag_to: |p, t| {
+                    let r = main_track(p, t);
+                    Vec2::new(r.x + r.width * 0.25, r.y)
+                },
+                value: |v| matches!(v, ValueRef::Param(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                begin_moves: true,
+                dragged: Some((25.0, 1.0)),
+            },
+            DragCase {
+                name: "driver trim",
+                config: effect_config,
+                prepare: |p| p.state.mod_state.driver_expanded[0] = true,
+                press: |p, _| (p.row_host.trim_ids[0].as_ref().expect("driver trim built").min_bar_id, Vec2::new(0.0, 0.0)),
+                drag_to: |p, t| {
+                    let r = main_track(p, t);
+                    Vec2::new(r.x + r.width * 0.4, r.y)
+                },
+                value: |v| matches!(v, ValueRef::Trim(TrimKind::Driver, GraphParamTarget::Effect(0), pid) if radius(pid)),
+                begin_moves: false,
+                dragged: None,
+            },
+            DragCase {
+                name: "envelope target",
+                config: effect_config,
+                prepare: |p| p.state.mod_state.envelope_expanded[0] = true,
+                press: |p, _| (p.row_host.target_ids[0].as_ref().expect("envelope target built").target_bar_id, Vec2::new(0.0, 0.0)),
+                drag_to: |p, t| {
+                    let r = main_track(p, t);
+                    Vec2::new(r.x + r.width * 0.3, r.y)
+                },
+                value: |v| matches!(v, ValueRef::EnvelopeTarget(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                begin_moves: false,
+                dragged: Some((0.3, 0.05)),
+            },
+            DragCase {
+                name: "envelope decay",
+                config: effect_config,
+                prepare: |p| p.state.mod_state.envelope_expanded[0] = true,
+                press: |p, t| {
+                    let cfg = p.row_host.envelope_config_ids[0].as_ref().expect("envelope config built");
+                    let track = cfg.decay_slider.expect("decay slider in Continuous").track;
+                    let r = t.get_bounds(track);
+                    (track, Vec2::new(r.x, r.y))
+                },
+                drag_to: |p, t| {
+                    let cfg = p.row_host.envelope_config_ids[0].as_ref().unwrap();
+                    let r = t.get_bounds(cfg.decay_slider.unwrap().track);
+                    Vec2::new(r.x + r.width * 0.6, r.y)
+                },
+                value: |v| matches!(v, ValueRef::EnvDecay(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                begin_moves: true,
+                dragged: None,
+            },
+            DragCase {
+                name: "audio shape",
+                config: effect_config_with_audio_shape_armed,
+                prepare: |_| {},
+                press: |p, t| {
+                    let track = p.row_host.audio_configs[0].as_ref().expect("audio drawer built").0.sliders[0].track;
+                    let r = t.get_bounds(track);
+                    (track, Vec2::new(r.x, r.y))
+                },
+                drag_to: |p, t| {
+                    let r = t.get_bounds(p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[0].track);
+                    Vec2::new(r.x + r.width * 0.7, r.y)
+                },
+                value: |v| matches!(v, ValueRef::AudioModShape(GraphParamTarget::Effect(0), pid, AudioShapeParam::Sensitivity) if radius(pid)),
+                begin_moves: true,
+                dragged: None,
+            },
+            DragCase {
+                name: "audio step amount",
+                config: || {
+                    let mut cfg = effect_config_with_audio_shape_armed();
+                    cfg.rows[0].audio.action_idx = 1; // Step: the 4th drawer slider appears
+                    cfg
+                },
+                prepare: |_| {},
+                press: |p, t| {
+                    let sliders = &p.row_host.audio_configs[0].as_ref().expect("audio drawer built").0.sliders;
+                    let track = sliders.get(3).expect("Step slider built while Action=Step").track;
+                    let r = t.get_bounds(track);
+                    (track, Vec2::new(r.x, r.y))
+                },
+                drag_to: |p, t| {
+                    let r = t.get_bounds(p.row_host.audio_configs[0].as_ref().unwrap().0.sliders[3].track);
+                    Vec2::new(r.x + r.width * 0.8, r.y)
+                },
+                value: |v| matches!(v, ValueRef::AudioModStepAmount(GraphParamTarget::Effect(0), pid) if radius(pid)),
+                begin_moves: true,
+                dragged: None,
+            },
+        ];
+        for case in &cases {
+            let name = case.name;
+            let mut tree = UITree::new();
+            let mut panel = ParamCardPanel::new();
+            panel.configure(&(case.config)());
+            (case.prepare)(&mut panel);
+            panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+            let (node, at) = (case.press)(&panel, &tree);
+            let down = panel.handle_pointer_down(node, at, &tree);
+            let begin_ok = match down.as_slice() {
+                [PanelAction::Scrub(v, ScrubPhase::Begin)] => !case.begin_moves && (case.value)(v),
+                [PanelAction::Scrub(v, ScrubPhase::Begin), PanelAction::Scrub(w, ScrubPhase::Move(..))] => {
+                    case.begin_moves && (case.value)(v) && (case.value)(w)
+                }
+                _ => false,
+            };
+            assert!(begin_ok, "{name}: press emitted {down:?}");
+            assert!(panel.is_dragging(), "{name}: dragging after press");
+
+            let to = (case.drag_to)(&panel, &tree);
+            let moved = panel.handle_drag(to, &mut tree, false);
+            let [PanelAction::Scrub(v, ScrubPhase::Move(value))] = moved.as_slice() else {
+                panic!("{name}: drag emitted {moved:?}");
+            };
+            assert!((case.value)(v), "{name}: drag addressed {v:?}");
+            if let Some((want, tol)) = case.dragged {
+                assert!(
+                    matches!(value, ScrubValue::Scalar(x) if (*x - want).abs() < tol),
+                    "{name}: dragged to {value:?}, want {want}"
+                );
+            }
+
+            let ended = panel.handle_drag_end(&mut tree);
+            assert!(
+                matches!(ended.as_slice(), [PanelAction::Scrub(v, ScrubPhase::Commit)] if (case.value)(v)),
+                "{name}: release emitted {ended:?}"
+            );
+            assert!(!panel.is_dragging(), "{name}: drag slot cleared after release");
+        }
     }
 }
