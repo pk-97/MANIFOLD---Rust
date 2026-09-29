@@ -244,7 +244,7 @@ use crate::node_graph::parameters::ParamDef;
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::Source;
 use crate::node_graph::primitives::scene_object::SceneObjectNode;
-use super::{CelMaterial, PbrMaterial, RenderScene, Transform3D, UnlitMaterial};
+use super::{CelMaterial, RenderScene, Transform3D, UnlitMaterial};
 
 /// `Graph::connect` needs a `&'static str` port name; these helpers only
 /// ever address the first handful of scene objects, so a small literal
