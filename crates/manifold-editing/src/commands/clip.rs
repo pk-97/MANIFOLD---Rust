@@ -261,7 +261,6 @@ impl Command for DeleteClipCommand {
 pub struct AddClipCommand {
     clip: TimelineClip,
     layer_id: LayerId,
-    spb: f32,
     /// Clips protected from this add's own overlap enforcement pass —
     /// members of the same batch operation (e.g. the drag/nudge selection
     /// that produced this add via an overlap-split tail). Empty for a
@@ -272,11 +271,10 @@ pub struct AddClipCommand {
 }
 
 impl AddClipCommand {
-    pub fn new(clip: TimelineClip, layer_id: LayerId, spb: f32) -> Self {
+    pub fn new(clip: TimelineClip, layer_id: LayerId) -> Self {
         Self {
             clip,
             layer_id,
-            spb,
             ignore_ids: HashSet::new(),
             overlap_actions: Vec::new(),
         }
@@ -291,13 +289,11 @@ impl AddClipCommand {
     pub fn new_with_ignore_ids(
         clip: TimelineClip,
         layer_id: LayerId,
-        spb: f32,
         ignore_ids: HashSet<ClipId>,
     ) -> Self {
         Self {
             clip,
             layer_id,
-            spb,
             ignore_ids,
             overlap_actions: Vec::new(),
         }
@@ -306,10 +302,15 @@ impl AddClipCommand {
 
 impl Command for AddClipCommand {
     fn execute(&mut self, project: &mut Project) {
+        let clock = manifold_core::tempo::SourceClock::new(
+            &project.tempo_map,
+            project.settings.bpm,
+            project.recording_provenance.project_bpm(),
+        );
         if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
             && let Some(layer) = project.timeline.layers.get_mut(li)
         {
-            self.overlap_actions = layer.add_clip(self.clip.clone(), &self.ignore_ids, self.spb);
+            self.overlap_actions = layer.add_clip(self.clip.clone(), &self.ignore_ids, &clock);
         }
         project.timeline.mark_clip_lookup_dirty();
     }

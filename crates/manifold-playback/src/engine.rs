@@ -2373,20 +2373,14 @@ impl PlaybackEngine {
         (loop_end - loop_start).max(0.0)
     }
 
-    /// Resolve the effective recorded BPM for a clip.
-    /// Checks per-clip BPM first, then project recording provenance, else 0.
-    /// Port of C# PlaybackEngine.ResolveClipRecordedBpm (lines 1480-1492).
+    /// Recorded tempo for a clip, 0 = unwarped. The rule lives in core
+    /// (`TimelineClip::resolve_recorded_bpm`) so editing converts clip edges
+    /// exactly as playback does.
     pub fn resolve_clip_recorded_bpm(&self, clip: &TimelineClip) -> f32 {
-        if clip.recorded_bpm > 0.0 {
-            return clip.recorded_bpm;
+        match &self.project {
+            Some(project) => clip.resolve_recorded_bpm(project.recording_provenance.project_bpm()),
+            None => clip.recorded_bpm_resolved(),
         }
-        if let Some(project) = &self.project
-            && project.recording_provenance.has_recorded_project_bpm
-        {
-            let bpm = project.recording_provenance.recorded_project_bpm;
-            return bpm.0.clamp(20.0, 300.0);
-        }
-        0.0
     }
 
     /// Get playback rate for BPM time-stretching.

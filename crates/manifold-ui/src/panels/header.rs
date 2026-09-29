@@ -131,8 +131,7 @@ impl HeaderPanel {
         View::panel().w(Sizing::Fixed(w)).fill_h()
     }
 
-    fn left_group(&self, available_w: f32, right_w: f32) -> (View, f32) {
-        let room = (available_w - right_w).max(0.0);
+    fn left_group(&self, room: f32) -> (View, f32) {
         let compact = room
             < PROJECT_NAME_W + SPACER + IMPORT_STATUS_W + PROGRESS_BAR_INSET + PROGRESS_BAR_W;
         let project_w = if compact { room.min(140.0) } else { PROJECT_NAME_W };
@@ -214,8 +213,8 @@ impl HeaderPanel {
         )
     }
 
-    fn right_group(&self, available_w: f32) -> (View, f32) {
-        let dock_button_w = ((available_w - ZOOM_CLUSTER_W - GROUP_SPACING) * 0.5)
+    fn right_group(&self, room: f32) -> (View, f32) {
+        let dock_button_w = ((room - ZOOM_CLUSTER_W - GROUP_SPACING) * 0.5)
             .clamp(0.0, 60.0);
         let dock_visible = dock_button_w >= 24.0;
         let dock_gap = if dock_visible { color::SPACE_XS } else { 0.0 };
@@ -246,7 +245,7 @@ impl HeaderPanel {
             );
 
         // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
-        let zoom_label_w = (available_w
+        let zoom_label_w = (room
             - dock_button_w * 2.0
             - dock_gap
             - GROUP_SPACING
@@ -294,8 +293,12 @@ impl HeaderPanel {
 
     fn view(&self) -> View {
         let available_w = (self.rect.width - 2.0 * INSET).max(0.0);
-        let (right, right_w) = self.right_group(available_w);
-        let (left, left_w) = self.left_group(available_w, right_w);
+        // The clock has first claim on width: it is the one thing read on stage.
+        // Reserve its centred slot, then each side group compacts into what is
+        // left beside it.
+        let side_room = ((available_w - TIME_DISPLAY_W) * 0.5 - GROUP_SPACING).max(0.0);
+        let (right, right_w) = self.right_group(side_room);
+        let (left, left_w) = self.left_group(side_room);
         View::stack()
             .fill()
             .bg(color::PANEL_BG_DARK)
@@ -471,6 +474,32 @@ mod tests {
         panel.update(&mut tree);
 
         assert_eq!(tree.structure_version(), sv, "progress toggle must not rebuild");
+    }
+
+    /// The clock is the one header element read on stage; docks and the
+    /// inspector narrow the header, and the side groups compact before the
+    /// clock loses a single character.
+    #[test]
+    fn clock_survives_open_docks_at_1920() {
+        for (audio, scene) in [(true, false), (false, true)] {
+            let mut tree = UITree::new();
+            let mut layout = ScreenLayout::new(1920.0, 1080.0);
+            if audio {
+                layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
+            }
+            if scene {
+                layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
+            }
+            let mut panel = HeaderPanel::new();
+            panel.build(&mut tree, &layout);
+            panel.set_time_display("01:30.50 / 04:00.00  |  4.2.3");
+            panel.update(&mut tree);
+            let clock = node_with_text(&tree, "01:30.50 / 04:00.00  |  4.2.3");
+            assert_eq!(clock.bounds.width, TIME_DISPLAY_W, "clock keeps its full slot");
+            let header = layout.header();
+            let centre = clock.bounds.x + clock.bounds.width * 0.5;
+            assert!((centre - (header.x + header.width * 0.5)).abs() < 1.0, "clock stays centred");
+        }
     }
 
     #[test]

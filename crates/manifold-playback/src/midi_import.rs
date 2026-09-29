@@ -115,8 +115,7 @@ impl MidiImportService {
                 )
             };
 
-            let spb = project.settings.seconds_per_beat();
-            let mut add_cmd = AddClipCommand::new(clip, target_layer_lid.clone(), spb);
+            let mut add_cmd = AddClipCommand::new(clip, target_layer_lid.clone());
             add_cmd.execute(project);
             commands.push(Box::new(add_cmd));
             result.added_clips += 1;

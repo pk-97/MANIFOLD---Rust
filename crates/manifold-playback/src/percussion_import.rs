@@ -234,8 +234,7 @@ impl PercussionImportService {
             // so a later re-detect of that clip clears only these triggers.
             timeline_clip.detection_source = source_clip_id.cloned();
 
-            let spb = 60.0 / project.settings.bpm.0.max(1.0);
-            let mut add_cmd = AddClipCommand::new(timeline_clip, target_layer_lid.clone(), spb);
+            let mut add_cmd = AddClipCommand::new(timeline_clip, target_layer_lid.clone());
             add_cmd.execute(project);
             commands.push(Box::new(add_cmd));
             result.added_clips += 1;

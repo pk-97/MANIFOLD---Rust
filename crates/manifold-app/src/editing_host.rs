@@ -120,6 +120,17 @@ pub struct AppEditingHost<'a> {
 }
 
 impl<'a> AppEditingHost<'a> {
+    /// Read-only clip lookup; `Timeline::find_clip_by_id` needs `&mut` for
+    /// its cache.
+    fn clip_by_id(&self, clip_id: &str) -> Option<&manifold_core::clip::TimelineClip> {
+        self.project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id.as_ref() == clip_id)
+    }
+
     /// Send the edited envelope once per input event, leaving the content
     /// project's authoritative points available to the undoable commit.
     fn send_automation_preview(&self, target: &GraphTarget, param_id: &str) {
@@ -189,11 +200,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .map(|l| l.layer_id.clone())
     }
 
-    fn layer_is_generator(&self, index: usize) -> bool {
-        Some(&*self.project)
-            .and_then(|p| p.timeline.layers.get(index))
-            .map(|l| l.layer_type == manifold_core::types::LayerType::Generator)
-            .unwrap_or(false)
+    fn layer_accepts_clips_from(&self, to: usize, from: usize) -> bool {
+        let layers = &self.project.timeline.layers;
+        match (layers.get(to), layers.get(from)) {
+            (Some(to), Some(from)) => to.layer_type.accepts_clips_from(from.layer_type),
+            _ => false,
+        }
     }
 
     fn is_layer_muted(&self, index: usize) -> bool {
@@ -209,11 +221,18 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .unwrap_or(4)
     }
 
-    fn get_seconds_per_beat(&self) -> f32 {
-        let bpm = Some(&*self.project)
-            .map(|p| p.settings.bpm.0)
-            .unwrap_or(120.0);
-        if bpm > 0.0 { 60.0 / bpm } else { 0.5 }
+    fn clip_source_seconds(&self, clip_id: &str, from: Beats, to: Beats) -> Seconds {
+        match self.clip_by_id(clip_id) {
+            Some(clip) => self.project.source_clock().source_seconds(clip, from, to),
+            None => Seconds::ZERO,
+        }
+    }
+
+    fn clip_beats_for_source(&self, clip_id: &str, from: Beats, seconds: Seconds) -> Beats {
+        match self.clip_by_id(clip_id) {
+            Some(clip) => self.project.source_clock().beats_for_source(clip, from, seconds),
+            None => Beats::ZERO,
+        }
     }
 
     fn is_playing(&self) -> bool {
@@ -235,8 +254,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                         layer_index: li,
                         layer_id: layer.layer_id.clone(),
                         in_point: clip.in_point,
-                        is_generator: layer.layer_type
-                            == manifold_core::types::LayerType::Generator,
+                        is_generator: layer.hosts_generator(),
                         is_locked: clip.is_locked,
                         is_looping: clip.is_looping,
                     });
@@ -262,7 +280,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 layer_index,
                 layer_id: layer.layer_id.clone(),
                 in_point: clip.in_point,
-                is_generator: layer.layer_type == manifold_core::types::LayerType::Generator,
+                is_generator: layer.hosts_generator(),
                 is_locked: clip.is_locked,
                 is_looping: clip.is_looping,
             })
@@ -315,10 +333,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
         let clip_id = {
             let project = Some(&mut *self.project)?;
-            let spb = 60.0 / project.settings.bpm.0.max(1.0);
             // AddClipCommand enforces non-overlap internally.
             let (cmd, id) =
-                EditingService::create_clip_at_position(project, beat, layer, duration, spb)?;
+                EditingService::create_clip_at_position(project, beat, layer, duration)?;
             {
                 let mut cmd = cmd;
                 cmd.execute(project);
@@ -478,7 +495,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // Port of Unity InteractionOverlay overlap enforcement during drag.
         // Commands are executed immediately (model consistency) and stored in
         // command_batch for composite undo on commit_command_batch.
-        let spb = self.get_seconds_per_beat();
         let overlap_cmds = {
             if let Some(project) = Some(&*self.project) {
                 // Linear scan — find_clip_by_id requires &mut for cache healing
@@ -495,7 +511,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                         &clip_clone,
                         layer_idx,
                         ignore_ids,
-                        spb,
                     )
                 } else {
                     Vec::new()
@@ -526,12 +541,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // 3. Return interior clips (the drag set)
         let region = crate::ui_translate::selection_region_to_core(region);
         let region = &region;
-        let spb = self.get_seconds_per_beat();
-
         // Step 1: Build split commands (immutable borrow)
         let split_cmds = {
             if let Some(project) = Some(&*self.project) {
-                EditingService::split_clips_at_region_boundaries(project, region, spb)
+                EditingService::split_clips_at_region_boundaries(project, region)
             } else {
                 return RegionSplitResult {
                     interior_clip_ids: Vec::new(),
@@ -632,10 +645,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn duplicate_clip_to(&mut self, src_clip_id: &str, target_beat: Beats, target_layer: usize) {
         let project = &mut *self.project;
-        let spb = 60.0 / project.settings.bpm.0.max(1.0);
         let src_id = ClipId::new(src_clip_id);
         if let Some(mut cmd) =
-            EditingService::duplicate_clip_to(project, &src_id, target_beat, target_layer, spb)
+            EditingService::duplicate_clip_to(project, &src_id, target_beat, target_layer)
         {
             // Apply to the local mirror now (the copy appears immediately) and
             // push into the batch so it commits as part of the move's one undo
@@ -727,65 +739,27 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     // ── Video metadata ──────────────────────────────────────────
 
     fn get_max_duration_beats(&self, clip_id: &str) -> Beats {
-        // Linear scan — find_clip_by_id requires &mut self (self-healing cache)
-        let clip = self
-            .project
-            .timeline
-            .layers
-            .iter()
-            .flat_map(|l| l.clips.iter())
-            .find(|c| c.id.as_ref() == clip_id);
-
-        let clip = match clip {
-            Some(c) => c,
-            None => return Beats::ZERO,
+        let Some(clip) = self.clip_by_id(clip_id) else {
+            return Beats::ZERO;
         };
 
-        // Audio clips bound to their decoded file length, warped: the source
-        // advances at `60 / recorded_bpm` seconds per beat (beat-anchored), so the
-        // most beats we can show is the remaining file (after in_point) divided by that.
-        if clip.is_audio() {
-            let file_secs = clip.source_duration.as_f32();
-            if file_secs <= 0.0 {
-                return Beats::ZERO;
-            }
-            let available = (file_secs - clip.in_point.as_f32()).max(0.0);
-            let clip_bpm = clip.recorded_bpm_resolved();
-            if clip_bpm > 0.0 {
-                // Warped: source advances at 60/recorded_bpm seconds per beat
-                let source_secs_per_beat = 60.0 / clip_bpm;
-                return Beats(available as f64 / source_secs_per_beat as f64);
-            } else {
-                // Unwarped: bound by current tempo (this is approximate, but good enough for UI limits)
-                let spb = self.get_seconds_per_beat();
-                return Beats(available as f64 / spb as f64);
-            }
-        }
-
-        if clip.video_clip_id.is_empty() {
-            return Beats::ZERO;
-        }
-
-        let video_clip = match self
-            .project
-            .video_library
-            .find_clip_by_id(&clip.video_clip_id)
-        {
-            Some(vc) => vc,
-            None => return Beats::ZERO,
-        };
-
-        if video_clip.duration <= 0.0 {
-            return Beats::ZERO;
-        }
-
-        let available_seconds = (video_clip.duration - clip.in_point.as_f32()).max(0.0);
-        let spb = self.get_seconds_per_beat();
-        if spb > 0.0 {
-            Beats(available_seconds as f64 / spb as f64)
+        // The media left after in_point, converted to beats the way playback
+        // advances this clip's source.
+        let media_seconds = if clip.is_audio() {
+            clip.source_duration.0
         } else {
-            Beats::ZERO
+            match self.project.video_library.find_clip_by_id(&clip.video_clip_id) {
+                Some(vc) => f64::from(vc.duration),
+                None => return Beats::ZERO,
+            }
+        };
+        if media_seconds <= 0.0 {
+            return Beats::ZERO;
         }
+        let available = Seconds((media_seconds - clip.in_point.0).max(0.0));
+        self.project
+            .source_clock()
+            .beats_for_source(clip, clip.start_beat, available)
     }
 
     // ── Automation lane editing ──────────────────────────────────

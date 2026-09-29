@@ -3091,10 +3091,7 @@ impl InteractionOverlay {
                         layer_blocked = true;
                         break;
                     }
-                    // Check video↔generator compatibility
-                    let src_is_gen = host.layer_is_generator(snapshot.layer_index);
-                    let dst_is_gen = host.layer_is_generator(dest as usize);
-                    if src_is_gen != dst_is_gen {
+                    if !host.layer_accepts_clips_from(dest as usize, snapshot.layer_index) {
                         layer_delta = 0;
                         layer_blocked = true;
                         break;
@@ -3210,7 +3207,6 @@ impl InteractionOverlay {
         let mouse_beat = viewport.pixel_to_beat(screen_pos.x);
 
         let min_duration = Beats(0.25); // 1/16 note minimum (Unity line 544)
-        let spb = host.get_seconds_per_beat() as f64;
 
         // Snap context comes from the grabbed clip; the resulting edge delta is
         // shared by every selected clip (each then clamps individually).
@@ -3230,15 +3226,17 @@ impl InteractionOverlay {
             // in-point reaches zero; generators extend left freely.
             let mut new_start = orig.start_beat + raw_delta;
             if !orig.is_generator {
-                new_start = new_start.max(orig.start_beat - Beats(orig.in_point.0 / spb));
+                let source_start = orig.start_beat
+                    + host.clip_beats_for_source(&orig.clip_id, orig.start_beat, Seconds(-orig.in_point.0));
+                new_start = new_start.max(source_start);
             }
             new_start = new_start.min(original_end - min_duration);
             new_start = new_start.max(Beats::ZERO);
 
-            let beat_delta = new_start - orig.start_beat;
             let new_duration = original_end - new_start;
-            let new_in_point =
-                (orig.in_point + Seconds(beat_delta.0 * spb)).max(Seconds::ZERO);
+            let new_in_point = (orig.in_point
+                + host.clip_source_seconds(&orig.clip_id, orig.start_beat, new_start))
+            .max(Seconds::ZERO);
 
             // Unity lines 554-557: direct mutation during drag
             host.set_clip_trim(&orig.clip_id, new_start, new_duration, new_in_point);
@@ -3623,6 +3621,10 @@ impl InteractionOverlay {
 // needed for B4 — these tests pin the contract through the real
 // `on_pointer_click`/`on_begin_drag` entry points instead of leaving it
 // implicit.
+/// The test hosts' fixed clip tempo: 120 BPM, no warp, no tempo map.
+#[cfg(test)]
+const TEST_SECONDS_PER_BEAT: f64 = 0.5;
+
 #[cfg(test)]
 mod b4_group_move_tests {
     use super::*;
@@ -3704,8 +3706,8 @@ mod b4_group_move_tests {
         fn layer_id_at_index(&self, index: usize) -> Option<LayerId> {
             self.layers.get(index).map(|l| l.layer_id.clone())
         }
-        fn layer_is_generator(&self, _index: usize) -> bool {
-            false
+        fn layer_accepts_clips_from(&self, _to: usize, _from: usize) -> bool {
+            true
         }
         fn is_layer_muted(&self, _index: usize) -> bool {
             false
@@ -3713,8 +3715,11 @@ mod b4_group_move_tests {
         fn project_beats_per_bar(&self) -> u32 {
             4
         }
-        fn get_seconds_per_beat(&self) -> f32 {
-            0.5
+        fn clip_source_seconds(&self, _clip_id: &str, from: Beats, to: Beats) -> Seconds {
+            Seconds((to - from).0 * TEST_SECONDS_PER_BEAT)
+        }
+        fn clip_beats_for_source(&self, _clip_id: &str, _from: Beats, seconds: Seconds) -> Beats {
+            Beats(seconds.0 / TEST_SECONDS_PER_BEAT)
         }
         fn is_playing(&self) -> bool {
             false
@@ -4196,8 +4201,8 @@ mod p1_4_gesture_integrity_tests {
         fn layer_id_at_index(&self, index: usize) -> Option<LayerId> {
             self.layers.get(index).map(|l| l.layer_id.clone())
         }
-        fn layer_is_generator(&self, _index: usize) -> bool {
-            false
+        fn layer_accepts_clips_from(&self, _to: usize, _from: usize) -> bool {
+            true
         }
         fn is_layer_muted(&self, _index: usize) -> bool {
             false
@@ -4205,8 +4210,11 @@ mod p1_4_gesture_integrity_tests {
         fn project_beats_per_bar(&self) -> u32 {
             4
         }
-        fn get_seconds_per_beat(&self) -> f32 {
-            0.5
+        fn clip_source_seconds(&self, _clip_id: &str, from: Beats, to: Beats) -> Seconds {
+            Seconds((to - from).0 * TEST_SECONDS_PER_BEAT)
+        }
+        fn clip_beats_for_source(&self, _clip_id: &str, _from: Beats, seconds: Seconds) -> Beats {
+            Beats(seconds.0 / TEST_SECONDS_PER_BEAT)
         }
         fn is_playing(&self) -> bool {
             false
@@ -5528,7 +5536,7 @@ mod p1_4_gesture_integrity_tests {
                 let clip = host.find_clip_by_id("clip_a").unwrap();
                 assert!((clip.start_beat.0 - expected).abs() < 1e-5);
                 assert!((clip.duration_beats.0 - (12.0 - expected)).abs() < 1e-5);
-                let expected_in = (expected - 4.0) * f64::from(host.get_seconds_per_beat());
+                let expected_in = (expected - 4.0) * TEST_SECONDS_PER_BEAT;
                 assert!((clip.in_point.0 - expected_in).abs() < 1e-5);
             }
             assert_eq!(host.committed_batches, vec![1, 1, 1]);

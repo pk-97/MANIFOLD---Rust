@@ -13,8 +13,10 @@
     allowlisted token, so `rg foo | head` or `git add . && git commit -m ...`
     reads as an unmatched compound and prompts. This hook parses the whole
     command and allows only if EVERY command-position is pre-approved: a known
-    read-only tool, or a normal git/cargo workflow write (CLAUDE.md durably
-    authorizes committing and pushing clean work). Destructive git history or
+    read-only tool, a normal git/cargo workflow write (CLAUDE.md durably
+    authorizes committing and pushing clean work), or a non-git segment that
+    the project's `permissions.allow` already allows on its own
+    (`matches_settings_allow`). Destructive git history or
     tree rewrites — reset, clean, rebase, gc, filter-branch — are not in the set
     and still prompt.
 
@@ -415,7 +417,7 @@ def segment_is_allowed(seg: str) -> bool:
         while i < len(toks) and toks[i].startswith("+"):  # +toolchain
             i += 1
         sub = toks[i] if i < len(toks) else ""
-        return sub in CARGO_READ_SUB
+        return sub in CARGO_READ_SUB or matches_settings_allow(toks)
 
     if head in ("cc-fleet", "ccf"):
         sub = next((t for t in toks[1:] if not t.startswith("-")), "")
@@ -436,7 +438,60 @@ def segment_is_allowed(seg: str) -> bool:
                "-fprint", "-fprintf", "-fls"}
         return not any(t in bad for t in toks)
 
-    return head in READ_ONLY
+    return head in READ_ONLY or matches_settings_allow(toks)
+
+
+def _load_settings_allow():
+    """`Bash(...)` rules from settings.json + settings.local.json as
+    (prefix_tokens, is_wildcard). Only `cmd args *` and exact `cmd args`;
+    any other `*` is skipped, which can only cost a prompt."""
+    rules = []
+    for name in ("settings.json", "settings.local.json"):
+        path = _main_checkout_path() / ".claude" / name
+        try:
+            allow = json.loads(path.read_text()).get("permissions", {}).get("allow", [])
+        except (OSError, ValueError):
+            continue
+        for rule in allow:
+            m = re.fullmatch(r"Bash\((.*)\)", rule)
+            if not m:
+                continue
+            body = m.group(1)
+            wildcard = body.endswith(" *")
+            if wildcard:
+                body = body[:-2]
+            if "*" in body:
+                continue
+            try:
+                toks = shlex.split(body)
+            except ValueError:
+                continue
+            if toks:
+                rules.append((toks, wildcard))
+    return rules
+
+
+_SETTINGS_ALLOW = None
+
+
+def matches_settings_allow(toks) -> bool:
+    """True when this one segment would run unprompted on its own under
+    permissions.allow. The harness matcher can't see inside a pipe or `;`
+    chain (BUG-ls9y, Bash hook chain parity). Every other segment is still
+    checked, write redirects and the outward/sed ask guards still run first,
+    and git rules are skipped so destructive git in a chain still prompts."""
+    global _SETTINGS_ALLOW
+    if _SETTINGS_ALLOW is None:
+        _SETTINGS_ALLOW = _load_settings_allow()
+    for prefix, wildcard in _SETTINGS_ALLOW:
+        if prefix[0] == "git":
+            continue
+        if wildcard:
+            if len(toks) > len(prefix) and toks[: len(prefix)] == prefix:
+                return True
+        elif toks == prefix:
+            return True
+    return False
 
 
 def is_preapproved_command(raw: str, _depth: int = 0) -> bool:

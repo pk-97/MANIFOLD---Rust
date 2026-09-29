@@ -3,6 +3,15 @@
 use super::*;
 
 impl Project {
+    /// The project's source clock; see [`crate::tempo::SourceClock`].
+    pub fn source_clock(&self) -> crate::tempo::SourceClock<'_> {
+        crate::tempo::SourceClock::new(
+            &self.tempo_map,
+            self.settings.bpm,
+            self.recording_provenance.project_bpm(),
+        )
+    }
+
     /// Whether any layer has an enabled [`crate::audio_trigger::LayerClipTrigger`]
     /// — the P2 replacement for `AudioSend::has_active_triggers()`, which now
     /// only ever reads drained (always-empty) legacy storage.

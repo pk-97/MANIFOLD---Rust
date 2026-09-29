@@ -119,29 +119,21 @@ def extract_hook_names_from_settings(path: Path) -> set[str]:
                 continue
             for entry in hooks_list:
                 command = entry.get("command", "")
-                name = _extract_hook_name(command)
-                if name:
-                    names.add(name)
+                names.update(_extract_hook_names(command))
 
     return names
 
 
-def _extract_hook_name(command: str) -> str | None:
-    """Extract hook filename from a command string.
+def _extract_hook_names(command: str) -> list[str]:
+    """Hook filenames in a command string.
 
     Handles:
-      python3 "...hook_telemetry.py" preToolUseBash.py
+      python3 "...hook_telemetry.py" preToolUseBash.py lsp-nudge.py
       python3 "...direct-hook.py"
     """
-    parts = command.strip().split()
-    # Last .py arg that is not hook_telemetry.py is the hook name.
-    # If no wrapped hook is found, look for any .py as a direct hook.
-    candidates = [p for p in parts if p.endswith(".py")]
-    for c in reversed(candidates):
-        name = c.strip("\"'").split("/")[-1]
-        if name != "hook_telemetry.py":
-            return name
-    return None
+    names = [p.strip("\"'").split("/")[-1] for p in command.strip().split() if p.endswith(".py")]
+    wrapped = [n for n in names if n != "hook_telemetry.py"]
+    return wrapped or names
 
 
 def per_hook_stats(records: list[dict]) -> list[tuple[str, int, int, int]]:

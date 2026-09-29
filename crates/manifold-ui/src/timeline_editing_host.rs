@@ -80,8 +80,9 @@ pub trait TimelineEditingHost {
     /// Get the LayerId at a positional index (for resolving indices to stable IDs).
     fn layer_id_at_index(&self, index: usize) -> Option<LayerId>;
 
-    /// Whether a layer is a generator layer (for cross-layer type compatibility).
-    fn layer_is_generator(&self, index: usize) -> bool;
+    /// Whether clips on layer `from` may be moved onto layer `to` (same clip
+    /// kind; groups hold none). The rule lives in core, so the app answers it.
+    fn layer_accepts_clips_from(&self, to: usize, from: usize) -> bool;
 
     /// Whether a layer is muted. Unity: IsLayerMuted(int).
     fn is_layer_muted(&self, index: usize) -> bool;
@@ -89,8 +90,15 @@ pub trait TimelineEditingHost {
     /// Beats per bar from project settings.
     fn project_beats_per_bar(&self) -> u32;
 
-    /// Current seconds per beat. Unity: GetSecondsPerBeat().
-    fn get_seconds_per_beat(&self) -> f32;
+    /// Media seconds a clip's source advances while the timeline moves
+    /// `from` → `to` (negative when `to` is earlier), at the clip's own tempo
+    /// the way playback reads it. Never a flat project tempo: warped clips
+    /// run at their recorded tempo and unwarped clips follow the tempo map.
+    fn clip_source_seconds(&self, clip_id: &str, from: Beats, to: Beats) -> Seconds;
+
+    /// Inverse of `clip_source_seconds`: beats past `from` (signed) it takes
+    /// the clip to play `seconds` of media.
+    fn clip_beats_for_source(&self, clip_id: &str, from: Beats, seconds: Seconds) -> Beats;
 
     /// Whether playback is active. Unity: IsPlaying.
     fn is_playing(&self) -> bool;

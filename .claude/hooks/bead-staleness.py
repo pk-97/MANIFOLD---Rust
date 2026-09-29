@@ -6,10 +6,10 @@ markdown backlog died by accumulating exactly these: items nobody chose to fix a
 nobody chose to close. This hook is the forced choice.
 
 Behavior: reads `bd list --json --flat` (open issues), staleness = days since
-`updated_at`. Thresholds: P1 >= 7 days, P2/P3 >= 21. Prints at most the 5 oldest per
-priority — a bounded list gets read, a full one gets ignored. Each surfaced item demands
-one of three moves: fix it, demote it (with `bd update`), or close it with a reason.
-Silent when nothing is stale.
+`updated_at`. Thresholds: P1 >= 7 days, P2/P3 >= 21. Prints one count line and the
+five items that matter most (highest priority, then oldest) — five lines get read,
+fifteen get skimmed. Each surfaced item demands one of three moves: fix it, demote it
+(with `bd update`), or close it with a reason. Silent when nothing is stale.
 
 Fails OPEN: any error (bd missing, JSON shape change) prints nothing and exits 0 —
 session start must never wedge on housekeeping.
@@ -23,7 +23,7 @@ import sys
 from datetime import datetime, timezone
 
 THRESHOLD_DAYS = {1: 7, 2: 21, 3: 21}
-MAX_PER_PRIORITY = 5
+SHOWN = 5
 
 
 def main():
@@ -56,16 +56,12 @@ def main():
     if not stale:
         return
 
-    lines = ["STALE BEADS — each one gets a verb this session: fix, demote "
-             "(bd update <id> -p <n>), or close with a reason (bd close <id>). "
-             "Ignoring the list is how the old backlog died."]
-    for prio in sorted(stale):
-        items = sorted(stale[prio], reverse=True)[:MAX_PER_PRIORITY]
-        extra = len(stale[prio]) - len(items)
-        lines.append(f"P{prio} (threshold {THRESHOLD_DAYS[prio]}d"
-                     + (f", {extra} more not shown" if extra > 0 else "") + "):")
-        for age, bid, title in items:
-            lines.append(f"  {bid}  {age}d untouched  {title}")
+    counts = ", ".join(f"P{p} {len(stale[p])}" for p in sorted(stale))
+    top = [(p, *item) for p in sorted(stale) for item in sorted(stale[p], reverse=True)][:SHOWN]
+    lines = [f"STALE BEADS ({counts}). Give each one below a verb this session: fix, "
+             "demote (bd update <id> -p <n>), or close with a reason (bd close <id>)."]
+    for prio, age, bid, title in top:
+        lines.append(f"  P{prio} {bid}  {age}d  {title}")
     print("\n".join(lines))
 
 

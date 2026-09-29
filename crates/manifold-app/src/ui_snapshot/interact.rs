@@ -201,7 +201,6 @@ fn duplicate_selected_clips(data: &mut SceneData) -> Result<String, String> {
     let region = data.selection.current_region().cloned().unwrap_or_default();
     let used_region_mode = region.is_active;
     let region_core = crate::ui_translate::selection_region_to_core(&region);
-    let spb = 60.0 / data.project.settings.bpm.0.max(1.0);
 
     let before_ids: std::collections::HashSet<ClipId> = data
         .project
@@ -215,7 +214,6 @@ fn duplicate_selected_clips(data: &mut SceneData) -> Result<String, String> {
         &data.project,
         &clip_ids,
         &region_core,
-        spb,
     );
     if commands.is_empty() {
         return Err(format!(
