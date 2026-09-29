@@ -1941,6 +1941,13 @@ impl GpuDevice {
         }
     }
 
+    /// The content frame-completion clock, when retirement is wired. None
+    /// only on harness devices without a content pipeline; they commit and
+    /// wait every frame.
+    pub fn frame_clock(&self) -> Option<super::retire::FrameClock> {
+        self.retirement.get().map(|mark| mark.frame_clock())
+    }
+
     /// The retirement mark, if wired. Allocation paths stamp new textures
     /// with a clone of this `Arc`.
     fn retirement_mark(&self) -> Option<Arc<super::retire::RetireMark>> {

@@ -41,6 +41,7 @@ impl Fixture {
         };
         let initial = FluidControls::default();
         let request = Request {
+            outputs: Default::default(),
             source_identity,
             project_tempo,
             epoch: 1,

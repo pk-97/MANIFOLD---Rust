@@ -443,6 +443,10 @@ struct NativeWorld {
     std::vector<vmath::vec3> whitewater_velocities;
     std::vector<float> whitewater_lifetimes;
     std::vector<char> whitewater_types;
+    // Particle-frame capture scratch: a fixed chunk, reused every capture.
+    std::vector<vmath::vec3> frame_positions;
+    std::vector<vmath::vec3> frame_velocities;
+    MeshLevelSet frame_solid;
     uint32_t isize;
     uint32_t jsize;
     uint32_t ksize;
@@ -1587,6 +1591,98 @@ extern "C" int manifold_fluids_world_capture_surface_frame(void *world, void **f
         auto frame = std::make_unique<NativeSurfaceFrame>();
         native->simulation->captureSurfaceFrame(frame->inputs);
         *frame_out = frame.release();
+    });
+}
+
+static_assert(sizeof(ManifoldFluidsParticleRecord) == 32, "particle record is 32 bytes");
+
+extern "C" int manifold_fluids_world_capture_particle_frame(
+    void *world, const float *offset, ManifoldFluidsParticleRecord *particles,
+    size_t particle_capacity, float *solid, size_t solid_capacity, size_t *count_out,
+    uint32_t *nodes_out, int32_t *fits_out) {
+    return guarded([&] {
+        if (world == nullptr || offset == nullptr || count_out == nullptr ||
+            nodes_out == nullptr || fits_out == nullptr) {
+            throw std::invalid_argument("particle frame pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
+        auto &simulation = *native->simulation;
+        const size_t count = simulation.getNumMarkerParticles();
+        const uint32_t nodes[3] = {native->isize + 1, native->jsize + 1, native->ksize + 1};
+        const size_t solid_len = checked_product(
+            checked_product(nodes[0], nodes[1], "particle frame lattice overflows"), nodes[2],
+            "particle frame lattice overflows");
+        *count_out = count;
+        std::copy(nodes, nodes + 3, nodes_out);
+        *fits_out = count <= particle_capacity && solid_len <= solid_capacity;
+        if (!*fits_out) {
+            return;
+        }
+        if ((count > 0 && particles == nullptr) || solid == nullptr) {
+            throw std::invalid_argument("particle frame destinations must be non-null");
+        }
+        simulation.captureParticleFrameSolid(native->frame_solid);
+        const float scale = static_cast<float>(simulation.getDomainScale());
+        for (uint32_t k = 0; k < nodes[2]; ++k) {
+            for (uint32_t j = 0; j < nodes[1]; ++j) {
+                for (uint32_t i = 0; i < nodes[0]; ++i) {
+                    solid[i + nodes[0] * (j + nodes[1] * k)] =
+                        native->frame_solid(static_cast<int>(i), static_cast<int>(j),
+                                            static_cast<int>(k)) * scale;
+                }
+            }
+        }
+        // The getters apply domain scale and offset to positions only.
+        const float radius = static_cast<float>(simulation.getMarkerParticleRadius()) * scale;
+        constexpr size_t CHUNK = 4096;
+        native->frame_positions.resize(CHUNK);
+        native->frame_velocities.resize(CHUNK);
+        for (size_t start = 0; start < count; start += CHUNK) {
+            const size_t end = std::min(start + CHUNK, count);
+            simulation.getMarkerParticlePositionDataRange(
+                start, end, reinterpret_cast<char *>(native->frame_positions.data()));
+            simulation.getMarkerParticleVelocityDataRange(
+                start, end, reinterpret_cast<char *>(native->frame_velocities.data()));
+            for (size_t index = start; index < end; ++index) {
+                const vmath::vec3 p = native->frame_positions[index - start];
+                const vmath::vec3 v = native->frame_velocities[index - start] * scale;
+                particles[index] = ManifoldFluidsParticleRecord{
+                    {p.x + offset[0], p.y + offset[1], p.z + offset[2], radius},
+                    {v.x, v.y, v.z},
+                    0,
+                };
+            }
+        }
+    });
+}
+
+// Test diagnostic: the captured surface frame's prepared solid, in the
+// particle frame's lattice order. Only Rust tests call this entry.
+extern "C" int manifold_fluids_surface_frame_solid(void *frame, float *solid, size_t capacity,
+                                                   uint32_t *nodes_out) {
+    return guarded([&] {
+        if (frame == nullptr || solid == nullptr || nodes_out == nullptr) {
+            throw std::invalid_argument("surface frame solid pointers must be non-null");
+        }
+        auto &inputs = static_cast<NativeSurfaceFrame *>(frame)->inputs;
+        int isize = 0, jsize = 0, ksize = 0;
+        inputs.solid.getGridDimensions(&isize, &jsize, &ksize);
+        const uint32_t nodes[3] = {static_cast<uint32_t>(isize) + 1,
+                                   static_cast<uint32_t>(jsize) + 1,
+                                   static_cast<uint32_t>(ksize) + 1};
+        std::copy(nodes, nodes + 3, nodes_out);
+        if (static_cast<size_t>(nodes[0]) * nodes[1] * nodes[2] > capacity) {
+            throw std::invalid_argument("surface frame solid exceeds the diagnostic capacity");
+        }
+        for (uint32_t k = 0; k < nodes[2]; ++k) {
+            for (uint32_t j = 0; j < nodes[1]; ++j) {
+                for (uint32_t i = 0; i < nodes[0]; ++i) {
+                    solid[i + nodes[0] * (j + nodes[1] * k)] = inputs.solid(
+                        static_cast<int>(i), static_cast<int>(j), static_cast<int>(k));
+                }
+            }
+        }
     });
 }
 

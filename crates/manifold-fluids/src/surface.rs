@@ -67,6 +67,11 @@ impl FluidWorld {
 }
 
 impl SurfaceFrame {
+    #[cfg(test)]
+    pub(crate) fn native_ptr(&self) -> *mut c_void {
+        self.native
+    }
+
     /// Reconstruct with the production particle mesher and normal decoder.
     /// `subdivisions` has the same 0..=2 meaning as Surface Detail in the app.
     /// This performs CPU meshing work, with no solver or whitewater update.
