@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""SessionStart hook: loud context warning when the worktree pool is
-oversized. Backstop for unknown-unknowns — the ring script and the
-`git worktree add` deny should make this unreachable, but the 2026-07-15
-incident (455 GB of worktrees, disk at 1.2 GB free) went unnoticed for
-weeks precisely because nothing watched. stdout becomes session context.
+"""SessionStart hook: loud context warning when worktrees are eating the disk.
 
-Budgets: pool > POOL_WARN_GB, or more slot dirs than the ring cap.
+Backstop for unknown-unknowns — the ring script and the `git worktree add` deny should
+make this unreachable, but the 2026-07-15 incident (455 GB of worktrees, disk at 1.2 GB
+free) went unnoticed for weeks because nothing watched. stdout becomes session context.
+
+Checks: free disk below MIN_FREE_GB, or more slot dirs than the ring cap. Free space is
+the harm itself and costs one statfs call; walking the pool with `du` cost ~5s per
+session start.
 Fail-silent: any error prints nothing (never blocks a session start).
+
+Obsolete when: the ring script refuses to acquire below a free-space floor.
 """
-import subprocess
+import shutil
 import sys
 from pathlib import Path
 
 POOL = Path(__file__).resolve().parents[2] / ".claude" / "worktrees"
-POOL_WARN_GB = 200
+MIN_FREE_GB = 40
 MAX_SLOTS = 10  # keep in sync with scripts/agent-worktree.py
 
 
@@ -22,27 +26,19 @@ def main() -> int:
         if not POOL.is_dir():
             return 0
         dirs = [p for p in POOL.iterdir() if (p / ".git").exists()]
-        out = subprocess.run(["du", "-sk", str(POOL)],
-                             capture_output=True, text=True, timeout=60)
-        size_gb = int(out.stdout.split()[0]) / 2**20 if out.returncode == 0 else 0
+        free_gb = shutil.disk_usage(POOL).free / 2**30
         problems = []
-        if size_gb > POOL_WARN_GB:
-            problems.append(f"the worktree pool is {size_gb:.0f} GB "
-                            f"(budget {POOL_WARN_GB} GB)")
+        if free_gb < MIN_FREE_GB:
+            problems.append(f"the disk has {free_gb:.0f} GB free (floor {MIN_FREE_GB} GB)")
         if len(dirs) > MAX_SLOTS:
-            problems.append(f"{len(dirs)} worktree dirs exist "
-                            f"(ring cap {MAX_SLOTS})")
+            problems.append(f"{len(dirs)} worktree dirs exist (ring cap {MAX_SLOTS})")
         if problems:
             print(
                 "WORKTREE POOL OVER BUDGET: " + " and ".join(problems) + ". "
-                "The SessionEnd scrub (session-end-worktree-scrub.py) should "
-                "keep the pool under this — either it isn't firing or "
-                "something bypassed the ring. Tell Peter, run "
-                "`scripts/agent-worktree.py list`, then "
-                "`scripts/agent-worktree.py scrub` (never raw `git worktree "
-                "remove` — the Bash hook denies it). More slot dirs than the "
-                "ring cap means a real bypass. Incident precedent: "
-                "2026-07-15, 455 GB."
+                "Tell Peter, run `scripts/agent-worktree.py list`, then "
+                "`scripts/agent-worktree.py scrub` (never raw `git worktree remove` — "
+                "the Bash hook denies it). More slot dirs than the ring cap means "
+                "something bypassed the ring. Precedent: 2026-07-15, 455 GB."
             )
     except Exception:
         pass

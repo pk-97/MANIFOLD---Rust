@@ -1,103 +1,229 @@
 #!/usr/bin/env python3
-"""Telemetry pass-through runner for every registered hook.
-
-Whether a hook ever fires — let alone ever denies/asks/injects — should be a lookup, not
-an argument. Retiring a rule (the "Obsolete when:" census) needs fire counts the same
-way retiring a code path needs coverage. This runner is the counter.
+"""Runner for every registered hook: one interpreter per event, one telemetry line per hook.
 
 settings.json invokes hooks as
-    python3 .../hook_telemetry.py <hook-file.py>
-instead of calling the hook directly. The runner pipes stdin through, mirrors
-stdout/stderr exactly, exits with the hook's exit code — behaviorally transparent — and
-appends one JSONL line per invocation to .claude/telemetry/hook-fires.jsonl (gitignored
-via the .claude/* default):
 
-    {"ts", "hook", "event", "exit", "out", "err", "ms"}
+    python3 .../hook_telemetry.py <hook-a.py> [<hook-b.py> ...]
 
-"Fired and acted" is out > 0 or exit != 0; "fired silent" is out == 0, exit 0. Dead-hook
-census: hooks registered vs hooks appearing in the log over a real working window.
+one command per matcher group. Each hook runs in this process via runpy with its own
+stdin, stdout, stderr, argv and cwd, and file descriptors 1 and 2 redirected, so a
+subprocess a hook spawns cannot write into the harness stream. Why one process: the
+hooks themselves take ~1ms; Python startup takes ~25ms, and a tool call used to pay it
+eight to eleven times.
 
-Fails OPEN twice over: a logging failure never blocks the hook's verdict, and a runner
-failure to even launch the hook exits 0. No timeout imposed — the harness owns that.
+Output, one hook: mirrored verbatim, same exit code — behaviorally identical to running
+the hook directly.
 
-Obsolete when: the harness itself reports per-hook invocation/decision telemetry, or the
-hook census stops being a maintained practice.
+Output, several hooks, merged the way the harness merges parallel hooks:
+  - any exit 2 -> exit 2 with those hooks' stderr (a block is a block);
+  - permissionDecision: deny > ask > allow, reasons joined from the winning level;
+  - top-level decision: block wins, reasons joined;
+  - additionalContext and systemMessage joined; continue=false wins; updatedInput from
+    the first hook that sets one;
+  - plain-text stdout becomes additionalContext on SessionStart / UserPromptSubmit
+    (where plain text is context) and is dropped to stderr elsewhere (where the harness
+    never showed it to the model);
+  - a hook that crashes fails OPEN: its siblings' verdicts stand and a systemMessage
+    names the crash, instead of exit 1 discarding everyone's JSON.
+
+Telemetry: one JSONL line per hook to .claude/telemetry/hook-fires.jsonl
+({"ts", "hook", "event", "exit", "out", "err", "ms", ...}). "Acted" is out > 0 or
+exit != 0. Census: scripts/hook_census.py. Logging never changes a verdict.
+
+Obsolete when: the harness itself reports per-hook invocation/decision telemetry AND
+runs command hooks without a process per hook.
 """
+import io
 import json
-import subprocess
+import os
+import runpy
 import sys
+import tempfile
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
 _HOOKS_DIR = Path(__file__).resolve().parent
 _LOG = _HOOKS_DIR.parent / "telemetry" / "hook-fires.jsonl"
+_PLAIN_IS_CONTEXT = ("SessionStart", "UserPromptSubmit")
+_PERMISSION_RANK = {"allow": 0, "ask": 1, "deny": 2}
 
 
 def _derive_decision(stdout: bytes):
-    """Best-effort parse of hook stdout to derive a decision label.
-
-    Returns a string or None. Never raises.
-    """
+    """Best-effort decision label for telemetry. Never raises."""
     if not stdout:
         return None
     try:
         payload = json.loads(stdout)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-
-    # Permission gates (PreToolUse / AskUserQuestion) carry their verdict
-    # in hookSpecificOutput.permissionDecision.
+    if not isinstance(payload, dict):
+        return None
     hso = payload.get("hookSpecificOutput")
     if isinstance(hso, dict):
         pd = hso.get("permissionDecision")
         if isinstance(pd, str) and pd:
             return pd
-
-    # Stop / SubagentStop hooks carry a top-level decision.
     d = payload.get("decision")
     if isinstance(d, str) and d:
         return d
-
-    # Context injection: the hook added additional context to the turn.
     if isinstance(hso, dict) and isinstance(hso.get("additionalContext"), str) and hso["additionalContext"]:
         return "context"
     if isinstance(payload.get("additionalContext"), str) and payload["additionalContext"]:
         return "context"
-
     return None
 
 
-def main():
-    if len(sys.argv) != 2:
-        print("hook_telemetry: usage: hook_telemetry.py <hook-file.py>",
-              file=sys.stderr)
+def _exit_code(code) -> int:
+    if code is None:
         return 0
-    hook = _HOOKS_DIR / sys.argv[1]
-    stdin_data = sys.stdin.buffer.read()
+    if isinstance(code, int):
+        return code
+    print(code, file=sys.stderr)
+    return 1
 
-    start = time.time()
+
+def run_hook(path: Path, stdin_data: bytes):
+    """Run one hook script in-process. Returns (exit, stdout bytes, stderr bytes)."""
+    saved_streams = (sys.stdin, sys.stdout, sys.stderr)
+    saved_argv = sys.argv[:]
+    saved_cwd = os.getcwd()
+    out_buf, err_buf = io.BytesIO(), io.BytesIO()
+    fd_out, fd_err = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+    for s in saved_streams[1:]:
+        s.flush()
+    saved_fd1, saved_fd2 = os.dup(1), os.dup(2)
+    os.dup2(fd_out.fileno(), 1)
+    os.dup2(fd_err.fileno(), 2)
+    sys.stdin = io.TextIOWrapper(io.BytesIO(stdin_data), encoding="utf-8")
+    sys.stdout = io.TextIOWrapper(out_buf, encoding="utf-8", write_through=True)
+    sys.stderr = io.TextIOWrapper(err_buf, encoding="utf-8", write_through=True)
+    sys.argv = [str(path)]
+    code = 0
     try:
-        r = subprocess.run(
-            [sys.executable, str(hook)], input=stdin_data,
-            capture_output=True,
-        )
-    except Exception as e:
-        print(f"hook_telemetry failed open launching {hook.name}: {e}",
-              file=sys.stderr)
-        return 0
-    ms = round((time.time() - start) * 1000)
+        runpy.run_path(str(path), run_name="__main__")
+    except SystemExit as e:
+        code = _exit_code(e.code)
+    except BaseException:
+        traceback.print_exc()
+        code = 1
+    finally:
+        for s in (sys.stdout, sys.stderr):
+            try:
+                s.flush()
+                s.detach()
+            except Exception:
+                pass
+        sys.stdin, sys.stdout, sys.stderr = saved_streams
+        sys.argv = saved_argv
+        os.dup2(saved_fd1, 1)
+        os.dup2(saved_fd2, 2)
+        os.close(saved_fd1)
+        os.close(saved_fd2)
+        try:
+            os.chdir(saved_cwd)
+        except OSError:
+            pass
+    fd_out.seek(0)
+    fd_err.seek(0)
+    stdout = out_buf.getvalue() + fd_out.read()
+    stderr = err_buf.getvalue() + fd_err.read()
+    fd_out.close()
+    fd_err.close()
+    return code, stdout, stderr
 
-    # Derive decision from stdout before mirroring (the parse is best-effort).
-    decision = _derive_decision(r.stdout)
 
-    # Mirror the hook verbatim — the harness must see exactly what the hook
-    # produced, no framing, no reordering.
-    sys.stdout.buffer.write(r.stdout)
-    sys.stderr.buffer.write(r.stderr)
-    sys.stdout.buffer.flush()
-    sys.stderr.buffer.flush()
+def merge(event: str, results: list):
+    """Combine several hooks' results into one (exit, stdout, stderr) for the harness."""
+    blocking = [r for r in results if r[1] == 2]
+    if blocking:
+        return 2, b"", b"\n".join(r[3].rstrip() for r in blocking) + b"\n"
 
+    hso: dict = {}
+    top: dict = {}
+    contexts, messages, stop_reasons = [], [], []
+    perm_by_level: dict = {}
+    block_reasons, plain, stderr_parts = [], [], []
+    for name, code, out, err in results:
+        if err.strip():
+            stderr_parts.append(err.rstrip())
+        if code != 0:
+            last = (err.decode("utf-8", "replace").strip().splitlines() or ["no stderr"])[-1]
+            messages.append(f"hook {name} failed open (exit {code}): {last}")
+            continue
+        text = out.decode("utf-8", "replace").strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = None
+        if not isinstance(payload, dict):
+            plain.append(text)
+            continue
+        h = payload.get("hookSpecificOutput")
+        if isinstance(h, dict):
+            pd = h.get("permissionDecision")
+            if pd in _PERMISSION_RANK:
+                perm_by_level.setdefault(pd, []).append(h.get("permissionDecisionReason") or "")
+            if h.get("additionalContext"):
+                contexts.append(h["additionalContext"])
+            if "updatedInput" in h and "updatedInput" not in hso:
+                hso["updatedInput"] = h["updatedInput"]
+            for k, v in h.items():
+                if k not in ("permissionDecision", "permissionDecisionReason",
+                             "additionalContext", "updatedInput", "hookEventName"):
+                    hso.setdefault(k, v)
+        if payload.get("additionalContext"):
+            contexts.append(payload["additionalContext"])
+        if payload.get("systemMessage"):
+            messages.append(payload["systemMessage"])
+        d = payload.get("decision")
+        if d == "block":
+            top["decision"] = "block"
+            block_reasons.append(payload.get("reason") or "")
+        elif d and "decision" not in top:
+            top["decision"] = d
+        if payload.get("continue") is False:
+            top["continue"] = False
+            if payload.get("stopReason"):
+                stop_reasons.append(payload["stopReason"])
+        if payload.get("suppressOutput"):
+            top["suppressOutput"] = True
+
+    if plain:
+        if event in _PLAIN_IS_CONTEXT:
+            contexts = plain + contexts
+        else:
+            stderr_parts.extend(p.encode() for p in plain)
+
+    if perm_by_level:
+        level = max(perm_by_level, key=_PERMISSION_RANK.__getitem__)
+        hso["permissionDecision"] = level
+        reasons = [r for r in perm_by_level[level] if r]
+        if reasons:
+            hso["permissionDecisionReason"] = "\n\n".join(reasons)
+    if contexts:
+        hso["additionalContext"] = "\n\n".join(contexts)
+    if hso:
+        hso["hookEventName"] = event
+        top["hookSpecificOutput"] = hso
+    if block_reasons:
+        top["reason"] = "\n\n".join(r for r in block_reasons if r)
+    if stop_reasons:
+        top["stopReason"] = "\n".join(stop_reasons)
+    if messages:
+        top["systemMessage"] = "\n".join(messages)
+
+    stdout = b""
+    if top:
+        stdout = json.dumps(top).encode()
+    stderr = b"\n".join(stderr_parts) + (b"\n" if stderr_parts else b"")
+    return 0, stdout, stderr
+
+
+def _telemetry(stdin_data: bytes, name: str, code: int, out: bytes, err: bytes, ms: int):
     try:
         event = ""
         seat = {}
@@ -105,20 +231,14 @@ def main():
             try:
                 payload = json.loads(stdin_data)
                 event = payload.get("hook_event_name", "")
-                # Seat attribution: the teammate-vs-lead payload shape is the
-                # enforcement surface — guards mis-tiered a teammate because
-                # payloads carry the PARENT transcript. Record the discriminating
-                # fields so seat bugs are a lookup.
+                # Seat attribution: payloads carry the PARENT transcript for teammates,
+                # so record the fields that could discriminate seats.
                 for k in ("session_id", "teammate_name", "team_name", "tool_name"):
                     v = payload.get(k)
                     if v:
                         seat[k] = v
-                # Full key inventory: the teammate-payload shape question (does
-                # ANY field discriminate seats?) must be a lookup.
                 seat["keys"] = ",".join(sorted(payload.keys()))
-                # Command traceability (BUG-0x4w): a permission prompt must
-                # be a lookup, not a reconstruction — record what was about
-                # to run, truncated.
+                # BUG-0x4w (permission prompts untraceable): record what was about to run.
                 if event == "PreToolUse":
                     ti = payload.get("tool_input") or {}
                     cmd = ti.get("command") or ti.get("file_path")
@@ -128,23 +248,53 @@ def main():
                 pass
         record = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "hook": hook.name,
-            "event": event,
-            "exit": r.returncode,
-            "out": len(r.stdout),
-            "err": len(r.stderr),
-            "ms": ms,
-            **seat,
+            "hook": name, "event": event, "exit": code,
+            "out": len(out), "err": len(err), "ms": ms, **seat,
         }
+        decision = _derive_decision(out)
         if decision is not None:
             record["decision"] = decision
         _LOG.parent.mkdir(parents=True, exist_ok=True)
         with open(_LOG, "a") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
-        pass  # telemetry must never change hook behavior
+        pass
 
-    return r.returncode
+
+def main() -> int:
+    names = sys.argv[1:]
+    if not names:
+        print("hook_telemetry: usage: hook_telemetry.py <hook.py> [<hook.py> ...]",
+              file=sys.stderr)
+        return 0
+    stdin_data = sys.stdin.buffer.read()
+    try:
+        event = json.loads(stdin_data).get("hook_event_name", "") if stdin_data else ""
+    except (json.JSONDecodeError, AttributeError):
+        event = ""
+    if str(_HOOKS_DIR) not in sys.path:
+        sys.path.insert(0, str(_HOOKS_DIR))
+
+    results = []
+    for name in names:
+        path = _HOOKS_DIR / name
+        start = time.time()
+        if path.is_file():
+            code, out, err = run_hook(path, stdin_data)
+        else:
+            code, out, err = 1, b"", f"hook file missing: {name}\n".encode()
+        _telemetry(stdin_data, name, code, out, err, round((time.time() - start) * 1000))
+        results.append((name, code, out, err))
+
+    if len(results) == 1:
+        code, out, err = results[0][1:]
+    else:
+        code, out, err = merge(event, results)
+    sys.stdout.buffer.write(out)
+    sys.stderr.buffer.write(err)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.flush()
+    return code
 
 
 if __name__ == "__main__":
