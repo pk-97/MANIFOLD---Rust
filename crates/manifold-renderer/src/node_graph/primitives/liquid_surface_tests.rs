@@ -329,6 +329,45 @@ fn fluid_sort_particles_into_cells_rejects_too_many_cells() {
     assert!(errors.iter().any(|e| e.contains("512 cells") && e.contains("Max Cells")), "{errors:?}");
 }
 
+/// With `enabled` 0 the sort does nothing: after a changed input, every output
+/// is byte-identical to the previous call's.
+#[test]
+fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
+    let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
+    let mut rng = Rng(11);
+    let mut cloud = |seed: f32| -> Vec<FluidParticle> {
+        (0..300u32)
+            .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.8 * seed), 0.02, i + 1))
+            .collect()
+    };
+    let (first, second) = (cloud(1.0), cloud(0.5));
+    let (sorted, sorted_buf) = harness.array::<FluidParticle>(&[], first.len());
+    let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+    let (order, order_buf) = harness.array::<u32>(&[], first.len());
+    let mut sort = SortParticlesIntoCells::new();
+    let mut run = |harness: &mut Harness, particles: &[FluidParticle], enabled: f32| {
+        let (input, _) = harness.array(particles, particles.len());
+        let enabled = harness.scalar_input(enabled);
+        let (_, errors) = harness.run(
+            &mut sort,
+            &[("particles", input), ("enabled", enabled)],
+            &[("sorted", sorted), ("cell_ranges", ranges), ("order", order)],
+            &lattice.params(&[]),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        (
+            read::<u8>(&sorted_buf, sorted_buf.size as usize),
+            read::<u8>(&ranges_buf, ranges_buf.size as usize),
+            read::<u8>(&order_buf, order_buf.size as usize),
+        )
+    };
+    let enabled = run(&mut harness, &first, 1.0);
+    assert_eq!(run(&mut harness, &second, 0.0), enabled, "a disabled sort leaves every output as it was");
+    assert_ne!(run(&mut harness, &second, 1.0), enabled, "re-enabled, it sorts the new particles");
+}
+
 /// Before its first frame the producer publishes zero particles and zero lattice
 /// nodes, which the group's bin-size math turns into a negative cell size.
 #[test]

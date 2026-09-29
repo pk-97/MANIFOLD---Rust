@@ -48,10 +48,11 @@ pub(crate) use float_param;
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
+    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
+        enabled: ScalarF32 optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -62,6 +63,7 @@ crate::primitive! {
         order: Array(u32),
     },
     params: [
+        float_param!("enabled", "Enabled", 1.0, 0.0, 1.0),
         float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
         float_param!("center_y", "Center Y", 0.0, -1000.0, 1000.0),
         float_param!("center_z", "Center Z", 0.0, -1000.0, 1000.0),
@@ -79,7 +81,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire count from the producer's live count (a fluid frame's count_b) so stale records past it are never sorted; records with radius 0 are skipped. Wire the box from a lattice's bounds through node.transform_components (position = centre, scale = size). Every atom that searches these bins must use the same box and cell_size, so wire one value into all of them. A box needing more bins than Max Cells is a named error.",
+    composition_notes: "Wire count from the producer's live count (a fluid frame's count_b) so stale records past it are never sorted; records with radius 0 are skipped. Wire the box from a lattice's bounds through node.transform_components (position = centre, scale = size). Every atom that searches these bins must use the same box and cell_size, so wire one value into all of them. A box needing more bins than Max Cells is a named error. Inside a substep region, gate it with the boundary's tick_end so it sorts once per tick.",
     examples: [],
     picker: { label: "Sort Particles Into Cells", category: Atom },
     summary: "Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly.",
@@ -133,6 +135,9 @@ impl Primitive for SortParticlesIntoCells {
                 }
             }
             self.scan.prepare(gpu.device);
+        }
+        if ctx.scalar_or_param("enabled", 1.0) <= 0.5 {
+            return;
         }
         let invalid_box = !(cell_size.is_finite() && cell_size > 0.0)
             || center.iter().chain(&size).any(|v| !v.is_finite())
