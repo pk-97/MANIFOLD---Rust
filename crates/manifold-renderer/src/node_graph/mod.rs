@@ -15,6 +15,7 @@ pub mod camera;
 pub mod light;
 pub mod material_inspector;
 pub mod material;
+pub mod live_extent;
 pub mod mesh_source;
 pub mod source_asset;
 pub mod render_mode;

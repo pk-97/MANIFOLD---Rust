@@ -284,6 +284,16 @@ pub trait Backend: Send {
     /// scratch by the executor, same shape as [`Backend::set_fluid_role`].
     fn set_mesh_source(&mut self, _slot: Slot, _value: MeshSource) {}
 
+    /// [`LiveExtent`](crate::node_graph::live_extent::LiveExtent) published
+    /// for an array slot: its GPU-known live length (GPU_FLUID_SURFACE_DESIGN.md P6b).
+    fn live_extent(&self, _slot: Slot) -> Option<crate::node_graph::live_extent::LiveExtent> {
+        None
+    }
+
+    /// Publish an array slot's live extent. Drained from the per-step scratch
+    /// by the executor, same shape as [`Backend::set_mesh_source`].
+    fn set_live_extent(&mut self, _slot: Slot, _value: crate::node_graph::live_extent::LiveExtent) {}
+
     /// [`FieldValue`] bound to a slot. CPU-only owned vector-field evaluator
     /// for native physics inputs.
     fn vector_field(&self, _slot: Slot) -> Option<FieldValue> {

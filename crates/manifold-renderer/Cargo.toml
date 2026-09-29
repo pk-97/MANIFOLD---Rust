@@ -159,6 +159,8 @@ required-features = ["gpu-proofs"]
 gpu-proofs = []
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
 rt-perf-proofs = ["gpu-proofs"]
+# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
+fluid-perf-proofs = ["gpu-proofs"]
 
 [lints]
 workspace = true

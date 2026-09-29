@@ -179,6 +179,14 @@ pub mod well_known {
         MASK = "mask";
         DEPTH = "depth";
 
+        // ─── Liquid surface records (GPU_FLUID_SURFACE_DESIGN.md particle-frame contract)
+        POSITION_RADIUS = "position_radius";
+        CENTER_RADIUS = "center_radius";
+        SHAPE_DIAG = "shape_diag";
+        SHAPE_OFF = "shape_off";
+        START = "start";
+        COUNT = "count";
+
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's
         // Array(JointMatrix) output — one skin matrix per joint, column-

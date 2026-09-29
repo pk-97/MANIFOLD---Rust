@@ -407,6 +407,17 @@ impl<'a> NodeInputs<'a> {
         self.backend.mesh_source(slot)
     }
 
+    /// Live extent published for the array bound to `port`: its GPU-known
+    /// length. `None` means the whole array is live.
+    pub fn live_extent(&self, port: &str) -> Option<crate::node_graph::live_extent::LiveExtent> {
+        self.backend.live_extent(self.slot(port)?)
+    }
+
+    /// [`Self::live_extent`] for an already-resolved [`Slot`].
+    pub fn live_extent_slot(&self, slot: Slot) -> Option<crate::node_graph::live_extent::LiveExtent> {
+        self.backend.live_extent(slot)
+    }
+
     /// [`FieldValue`] bound to an already-resolved [`Slot`] — no name scan.
     pub fn vector_field_slot(&self, slot: Slot) -> Option<FieldValue> {
         self.backend.vector_field(slot)
@@ -446,6 +457,7 @@ pub struct NodeOutputs<'a> {
     pending_rigid_body_writes: Option<&'a mut Vec<(Slot, RigidBody)>>,
     pending_fluid_role_writes: Option<&'a mut Vec<(Slot, FluidRole)>>,
     pending_mesh_source_writes: Option<&'a mut Vec<(Slot, MeshSource)>>,
+    pending_live_extent_writes: Option<&'a mut Vec<(Slot, crate::node_graph::live_extent::LiveExtent)>>,
     pending_vector_field_writes: Option<&'a mut Vec<(Slot, FieldValue)>>,
     pending_render_mode_writes: &'a mut Vec<(Slot, RenderMode)>,
     /// Sibling scratch for `SceneObject` writes — same shape as atmospheres.
@@ -479,6 +491,7 @@ impl<'a> NodeOutputs<'a> {
             pending_rigid_body_writes: None,
             pending_fluid_role_writes: None,
             pending_mesh_source_writes: None,
+            pending_live_extent_writes: None,
             pending_vector_field_writes: None,
             pending_object_writes,
         }
@@ -530,6 +543,25 @@ impl<'a> NodeOutputs<'a> {
             self.pending_mesh_source_writes
                 .as_mut()
                 .expect("executor must provide mesh-source output scratch")
+                .push((slot, value));
+        }
+    }
+
+    pub(crate) fn with_live_extent_writes(
+        mut self,
+        writes: &'a mut Vec<(Slot, crate::node_graph::live_extent::LiveExtent)>,
+    ) -> Self {
+        self.pending_live_extent_writes = Some(writes);
+        self
+    }
+
+    /// Publish the live extent of the array written to `port` this frame.
+    /// Drained by the executor into the backend after `evaluate` returns.
+    pub fn set_live_extent(&mut self, port: &str, value: crate::node_graph::live_extent::LiveExtent) {
+        if let Some(slot) = self.slot(port) {
+            self.pending_live_extent_writes
+                .as_mut()
+                .expect("executor must provide live-extent output scratch")
                 .push((slot, value));
         }
     }

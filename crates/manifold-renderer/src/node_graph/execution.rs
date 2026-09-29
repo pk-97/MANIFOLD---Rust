@@ -171,6 +171,8 @@ pub struct Executor {
     fluid_role_write_scratch: Vec<(Slot, crate::node_graph::fluid_role::FluidRole)>,
     /// Sibling scratch for [`PortType::MeshSource`] writes — same drain pattern.
     mesh_source_write_scratch: Vec<(Slot, crate::node_graph::mesh_source::MeshSource)>,
+    /// Sibling scratch for published array live extents — same drain pattern.
+    live_extent_write_scratch: Vec<(Slot, crate::node_graph::live_extent::LiveExtent)>,
     /// Sibling scratch for [`PortType::VectorField`] writes — same drain pattern.
     vector_field_write_scratch: Vec<(Slot, manifold_physics::FieldValue)>,
     render_mode_write_scratch: Vec<(Slot, crate::node_graph::render_mode::RenderMode)>,
@@ -555,6 +557,7 @@ impl Executor {
             rigid_body_write_scratch: Vec::new(),
             fluid_role_write_scratch: Vec::new(),
             mesh_source_write_scratch: Vec::new(),
+            live_extent_write_scratch: Vec::new(),
             vector_field_write_scratch: Vec::new(),
             object_write_scratch: Vec::new(),
             error_scratch: Vec::new(),
@@ -2158,6 +2161,7 @@ impl Executor {
                     self.rigid_body_write_scratch.clear();
                     self.fluid_role_write_scratch.clear();
                     self.mesh_source_write_scratch.clear();
+                    self.live_extent_write_scratch.clear();
                     self.vector_field_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
@@ -2182,6 +2186,7 @@ impl Executor {
                         .with_rigid_body_writes(&mut self.rigid_body_write_scratch)
                         .with_fluid_role_writes(&mut self.fluid_role_write_scratch)
                         .with_mesh_source_writes(&mut self.mesh_source_write_scratch)
+                        .with_live_extent_writes(&mut self.live_extent_write_scratch)
                         .with_vector_field_writes(&mut self.vector_field_write_scratch);
                         // Canvas dims are no longer hung off the
                         // context as a side-channel. Primitives that
@@ -2342,6 +2347,9 @@ impl Executor {
                     }
                     for (slot, value) in self.mesh_source_write_scratch.drain(..) {
                         self.backend.set_mesh_source(slot, value);
+                    }
+                    for (slot, value) in self.live_extent_write_scratch.drain(..) {
+                        self.backend.set_live_extent(slot, value);
                     }
                     for (slot, value) in self.vector_field_write_scratch.drain(..) {
                         self.backend.set_vector_field(slot, value);

@@ -37,7 +37,7 @@ mod pipeline_cache_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, GpuEncoder};
+pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;
 pub use profiling::{GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind};
