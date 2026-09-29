@@ -29,22 +29,26 @@ pub(super) fn read_lattice(ctx: &EffectNodeContext<'_, '_>) -> MatterLattice {
 /// classification)). These tests keep the copies identical.
 #[cfg(test)]
 mod tests {
-    const P2G: &str = include_str!("shaders/matter_to_grid_body.wgsl");
+    const P2G: &str = include_str!("shaders/matter_to_grid.wgsl");
     const G2P: &str = include_str!("shaders/grid_to_matter_body.wgsl");
     const M2P: &str = include_str!("shaders/matter_to_particles_body.wgsl");
 
-    /// The text of `fn <prefix>_<name>` up to its closing brace, with the
-    /// prefix removed.
+    /// The text of `fn <prefix>_<name>` (or `fn <name>` for the hand kernel's
+    /// own module) up to its closing brace, with the prefix removed.
     fn helper(source: &str, prefix: &str, name: &str) -> String {
-        let head = format!("fn {prefix}_{name}(");
+        let head = if prefix.is_empty() { format!("fn {name}(") } else { format!("fn {prefix}_{name}(") };
         let start = source.find(&head).unwrap_or_else(|| panic!("no {head}"));
         let end = start + source[start..].find("\n}\n").expect("helper ends") + 3;
-        source[start..end].replace(&format!("{prefix}_"), "")
+        if prefix.is_empty() {
+            source[start..end].to_string()
+        } else {
+            source[start..end].replace(&format!("{prefix}_"), "")
+        }
     }
 
     #[test]
     fn matter_finite_helpers_are_identical() {
-        let p2g = helper(P2G, "m2g", "finite3");
+        let p2g = helper(P2G, "", "finite3");
         assert_eq!(p2g, helper(G2P, "g2m", "finite3"));
         assert_eq!(p2g, helper(M2P, "m2p", "finite3"));
     }

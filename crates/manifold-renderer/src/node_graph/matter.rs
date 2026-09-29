@@ -138,8 +138,8 @@ pub const MASS_SCALE: f32 = 65_536.0;
 /// than mass relative to dx/dt, so a low-mass node still resolves its velocity.
 pub const MOMENTUM_SCALE: f32 = 134_217_728.0;
 
-/// The integer hash behind D5's unbiased rounding (lowbias32). The P2G body
-/// repeats it; `matter_to_grid_body_pins_fixed_point_constants` pins the two.
+/// The integer hash behind D5's unbiased rounding (lowbias32). The P2G
+/// kernel repeats it; `matter_to_grid_body_pins_fixed_point_constants` pins the two.
 pub fn rounding_hash(v: u32) -> u32 {
     let mut x = v;
     x ^= x >> 16;

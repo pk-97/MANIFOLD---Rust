@@ -339,8 +339,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 83,
-            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, count_surface_triangles and volume_surface_mesh; GPU MPM adds zero_array, matter_to_grid, matter_grid_update, grid_to_matter, matter_fill, particles_to_copies and matter_to_particles; all covered by uniform_layout_proof)"
+            scalar_count, 82,
+            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, count_surface_triangles and volume_surface_mesh; GPU MPM adds zero_array, matter_grid_update, grid_to_matter, matter_fill, particles_to_copies and matter_to_particles; all covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(

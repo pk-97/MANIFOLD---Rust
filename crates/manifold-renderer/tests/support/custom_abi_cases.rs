@@ -19,6 +19,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "matter_to_grid.rs",
+        rust_struct: "P2gParams",
+        shader: "shaders/matter_to_grid.wgsl",
+        shader_struct: "P2gParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "matter_frame.rs",
         rust_struct: "FrameParams",
         shader: "shaders/matter_frame.wgsl",

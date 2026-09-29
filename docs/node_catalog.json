@@ -17150,7 +17150,7 @@
         "WaterDamBreakMatter",
         "WaterStillPoolMatter"
       ],
-      "fusion": "boundary:blocked",
+      "fusion": "boundary:barriered_reduction",
       "inputs": [
         {
           "name": "points",
@@ -17160,6 +17160,16 @@
         {
           "name": "accum",
           "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "order",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "ranges",
+          "required": false,
           "type": "Array"
         },
         {
@@ -17229,6 +17239,21 @@
         },
         {
           "name": "substep_in_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "blocks_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "blocks_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "blocks_z",
           "required": false,
           "type": "f32"
         }
@@ -17381,9 +17406,39 @@
             "4096"
           ],
           "type": "int"
+        },
+        {
+          "default": "18",
+          "label": "Blocks X",
+          "name": "blocks_x",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "18",
+          "label": "Blocks Y",
+          "name": "blocks_y",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "18",
+          "label": "Blocks Z",
+          "name": "blocks_z",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Transfer material points to the matter grid (MLS-MPM particle-to-grid). Each live point adds mass and momentum, including its water pressure as the affine stress term, to the 27 nodes of its quadratic B-spline stencil, as signed fixed point through integer atomics.",
+      "purpose": "Transfer material points to the matter grid (MLS-MPM particle-to-grid). Each live point adds mass and momentum, including its water pressure as the affine stress term, to the 27 nodes of its quadratic B-spline stencil, as signed fixed point through integer atomics. With a cell sort's order and ranges it accumulates each 4³ block of nodes in fast workgroup memory first.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Spreads each liquid particle's weight and motion onto the simulation grid around it.",
