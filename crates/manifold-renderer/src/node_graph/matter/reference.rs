@@ -334,6 +334,34 @@ mod tests {
         }
     }
 
+    /// The GPU's fixed point at the Dam Break's cell size and substep
+    /// (dx = 1/16 m, n = 34): a translating blob keeps its momentum within
+    /// 1e-4 over 300 substeps, as it does without rounding.
+    #[test]
+    fn matter_reference_fixed_point_free_flight_momentum() {
+        let lat = lattice();
+        let velocity = [1.0, 0.5, -0.25];
+        let run = |fixed_point: bool| {
+            let mut points = blob(&lat);
+            for pt in &mut points {
+                pt.v = velocity;
+            }
+            let p = Params { dt: 1.0 / (60.0 * 34.0), fixed_point, ..params() };
+            let before = momentum(&points, p.density);
+            for _ in 0..300 {
+                substep(&mut points, &lat, &p);
+            }
+            let after = momentum(&points, p.density);
+            let j = points.iter().map(|pt| pt.j).fold(1.0f64, f64::max);
+            (std::array::from_fn::<f64, 3, _>(|d| (after[d] - before[d]) / before[d]), j)
+        };
+        let (exact, exact_j) = run(false);
+        let (fixed, fixed_j) = run(true);
+        eprintln!("relative momentum change: f64 {exact:?} (max J {exact_j}), fixed point {fixed:?} (max J {fixed_j})");
+        assert!(exact.iter().all(|c| c.abs() < 1e-9), "{exact:?}");
+        assert!(fixed.iter().all(|c| c.abs() < 1e-4), "{fixed:?}");
+    }
+
     #[test]
     fn matter_reference_free_fall_gains_gravity() {
         let lat = lattice();

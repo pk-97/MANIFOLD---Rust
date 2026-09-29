@@ -291,6 +291,22 @@ impl MatterScene {
         unsafe { buffer.write(offset, bytemuck::bytes_of(&[f32::NAN; 3])) };
     }
 
+    /// Give every live point the same velocity and no affine motion, between
+    /// frames (the GPU is idle).
+    pub(crate) fn set_velocity(&self, velocity: [f32; 3]) {
+        let mut points = self.points();
+        for p in points.iter_mut().filter(|p| p.id != 0) {
+            p.velocity = velocity;
+            p.affine_x = [0.0, 0.0, 0.0, p.affine_x[3]];
+            p.affine_y = [0.0, 0.0, 0.0, p.affine_y[3]];
+            p.affine_z = [0.0; 4];
+        }
+        let backend = self.executor.backend();
+        let buffer = backend.array_buffer(backend.slot_for(self.points).expect("bound")).expect("array");
+        // SAFETY: shared storage, no GPU work in flight.
+        unsafe { buffer.write(0, bytemuck::cast_slice(&points)) };
+    }
+
     /// A scalar the state node read this frame.
     pub(crate) fn state_input(&self, name: &str) -> f32 {
         self.executor

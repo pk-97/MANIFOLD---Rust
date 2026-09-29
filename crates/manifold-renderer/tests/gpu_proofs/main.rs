@@ -103,6 +103,7 @@ mod scene_object_migration_round_trip;
 mod scene_viewport_navigate;
 mod scene_viewport_session;
 mod matter_cost_probe;
+mod matter_look;
 mod matter_scene;
 mod matter_transfer;
 mod smoke;
