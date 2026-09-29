@@ -162,9 +162,10 @@ fn dispatch_tail_census_is_stable() {
     // Code Terminal adds render_glyph_grid, a mixed texture/storage atom.
     // Blob V2 adds region_mask (manual) plus resize_limit and rgb_distance
     // (canonical texture atoms).
-    // Live Matter adds six buffer atoms: zero_array, matter_fill,
-    // matter_to_grid, matter_grid_update, grid_to_matter, particles_to_copies.
-    assert_eq!(total, 193, "standalone atom census drifted");
+    // Live Matter adds seven buffer atoms: zero_array, matter_fill,
+    // matter_to_grid, matter_grid_update, grid_to_matter, particles_to_copies,
+    // matter_to_particles.
+    assert_eq!(total, 194, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"
