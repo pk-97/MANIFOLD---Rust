@@ -59,12 +59,13 @@ impl Row {
     }
 }
 
-fn probe(fill_height: f32, block_p2g: bool) -> Row {
+fn probe(fill_height: f32, block_p2g: bool, stiffness: f32) -> Row {
     let settings = SceneSettings {
         domain_size: 4.0,
         resolution: 64,
         fill_height,
         block_p2g,
+        stiffness,
         ..SceneSettings::default()
     };
     let mut scene = MatterScene::new(&settings);
@@ -126,23 +127,27 @@ fn matter_cost_probe() {
     eprintln!("  64³ cells (71³ nodes), 4 m domain, Stiffness 1; medians of {MEASURED_TICKS} frames, one tick each; ms per frame");
     eprintln!("  kernels, spans and buffer: profiled frames (one encoder per dispatch); production: unprofiled whole-buffer GPU time");
     eprintln!(
-        "  {:>5} {:>7} {:>3} | {:>6} {:>6} {:>7} {:>6} {:>7} {:>6} {:>6} {:>6} | {:>7} {:>7} | {:>10} | {:>6}",
-        "P2G", "points", "n", "clear", "sort", "P2G", "grid", "G2P", "stats", "frame", "other", "spans", "buffer", "production", "ns/p·s"
+        "  {:>5} {:>5} {:>7} {:>3} | {:>6} {:>6} {:>7} {:>6} {:>7} {:>6} {:>6} {:>6} | {:>7} {:>7} | {:>10} | {:>6}",
+        "stiff", "P2G", "points", "n", "clear", "sort", "P2G", "grid", "G2P", "stats", "frame", "other", "spans", "buffer", "production", "ns/p·s"
     );
     let mut rows = Vec::new();
-    for block_p2g in [false, true] {
-        for height in [0.25, 0.5, 1.0] {
-            let row = probe(height, block_p2g);
-            eprintln!(
-                "  {:>5} {:>7} {:>3} | {:>6.3} {:>6.3} {:>7.3} {:>6.3} {:>7.3} {:>6.3} {:>6.3} {:>6.3} | {:>7.3} {:>7.3} | {:>10.3} | {:>6.4}",
-                if block_p2g { "block" } else { "point" },
-                row.points, row.substeps, row.kernel("clear"), row.kernel("sort"), row.kernel("P2G"), row.kernel("grid update"),
-                row.kernel("G2P"), row.kernel("stats"), row.kernel("frame"), row.kernel("other"), row.attributed,
-                row.total, row.production, row.ns_per_point_substep()
-            );
-            rows.push(row);
+    for stiffness in [1.0, 0.5] {
+        for block_p2g in [false, true] {
+            for height in [0.25, 0.5, 1.0] {
+                let row = probe(height, block_p2g, stiffness);
+                eprintln!(
+                    "  {:>5} {:>5} {:>7} {:>3} | {:>6.3} {:>6.3} {:>7.3} {:>6.3} {:>7.3} {:>6.3} {:>6.3} {:>6.3} | {:>7.3} {:>7.3} | {:>10.3} | {:>6.4}",
+                    stiffness,
+                    if block_p2g { "block" } else { "point" },
+                    row.points, row.substeps, row.kernel("clear"), row.kernel("sort"), row.kernel("P2G"), row.kernel("grid update"),
+                    row.kernel("G2P"), row.kernel("stats"), row.kernel("frame"), row.kernel("other"), row.attributed,
+                    row.total, row.production, row.ns_per_point_substep()
+                );
+                rows.push(row);
+            }
         }
     }
+    // The kill check reads Stiffness 1's per-point rows, as P1 defined it.
     let rows: Vec<Row> = rows.into_iter().take(3).collect();
     let largest = rows.last().expect("three probe rows");
     let other: Vec<_> = largest.labels.iter().filter(|(l, _)| family(l) == "other").collect();
