@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built. The surface meets its re-baselined 6 ms gate (5.3 ms p95 at res 64 ×2); blobs and volume at 4 ms are a kernel design item (BUG-l24y (GPU liquid surface kernels cost)). Peter judges the smoothing stills (section 9, P6c). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept. The surface meets its re-baselined 6 ms gate (5.3 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -687,19 +687,8 @@ frame and reports its live vertices.
 2026-09-30 from the 3 ms set before any measurement). With P6b and P6c the Liquid Surface
 measures 5.29 ms p95 at res 64 ×2, tick 90, load 3–7: sort 0.20, blobs 2.03, volume 1.95,
 smoothing 0.45, count 0.15, running total 0.31, emit 0.24; 1080p frame 13.2 ms. Blobs and
-volume are a kernel design item (BUG-l24y (GPU liquid surface kernels cost)), with these
-levers, priced from the split and not yet measured:
-
-- **Anisotropy once per tick.** Blobs already builds each particle's kernel once per
-  frame; the volume reads it rather than recomputing per cell visit. Reusing it across
-  display frames saves blobs × (1 − producer rate / display rate): nothing at the 60 Hz
-  MPM producer, about 1 ms with a 30 Hz producer.
-- **Half-precision neighbour reads.** Both stages are gather-bound: a blob is 48 bytes, a
-  particle 32. Halving them should save roughly 40% of each, about 1.5 ms.
-- **Bin-local shared memory for the volume gather.** At ×2 the eight lattice nodes in a
-  bin read the same 27 bins; loading them once per workgroup cuts the volume's reads
-  about 8×, taking it from 1.95 ms to roughly 0.5 ms. The atom becomes barriered: a hand
-  kernel under exclusion 1 until BUG-vdvg (buffer boundary spec gap) is fixed.
+volume are a kernel design item (BUG-l24y (GPU liquid surface kernels cost)). The three
+levers priced for it were measured in P6d; none paid.
 
 The table below is P6 as first measured, before live-triangle draws and smoothing:
 `fluid_surface_perf`, M4 Max, macOS 26.6.2, load 14–16 (another session's tests), tick
@@ -831,6 +820,18 @@ defaults. **Built (2026-09-30).**
   near wall's waterline. Peter judges the set. Nodes inside solids can pick up liquid
   from their neighbours after smoothing, so the surface may sit fractionally inside a
   wall; the wall hides it.
+
+### P6d — Blob and volume kernel levers
+
+Lead brief, 2026-09-30: measure BUG-l24y (GPU liquid surface kernels cost)'s levers one
+at a time at res 64 ×2; keep a lever only if it pays for itself and passes the same
+proofs; record the rest. **Done: no lever kept.** The surface stays 5.27 ms p95.
+
+| Lever | Measured | Verdict |
+|---|---|---|
+| Anisotropy once per tick | The volume already reads each particle's stored ellipsoid (`FluidBlob`, built once per frame by `node.shape_particle_blobs`); a cell visit costs one 3×3 multiply, nothing to hoist. At the 60 Hz producer tick equals frame. | Already so; nothing to gain at 60 Hz |
+| Bin-local shared memory for the volume gather | Tiled kernel (one workgroup per 4×4×4 node block, the block's bins copied to workgroup memory, same sum order) passed the brute-force proof but took 30.4 ms against 1.95 ms at ×2, 103 ms against 5.5 at ×3: the tile needs 31 KB of the core's 32 KB, leaving one 64-thread workgroup per core. | Dropped |
+| Half-precision neighbour reads | Scalar model at res 64 ×2 scales over 2,000 nodes: f16 blob fields move the level set by up to 9.1e-2 with world-space centres and 1.4e-3 with bin-relative ones, 10⁷–10⁹ f32 ULPs against a 1-LSB bar. | Dropped |
 
 ### P7 — Add Fluid authors the GPU surface
 
