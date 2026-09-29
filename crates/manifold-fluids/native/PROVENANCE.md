@@ -38,6 +38,14 @@ Local changes:
   Boundary triangle removal and contact-normal inversion (not exposed by the
   MANIFOLD bridge) are explicitly rejected. This is an in-memory boundary, not
   a persistent particle-cache format or a solver restart checkpoint.
+- `captureParticleFrameSolid` and `getMarkerParticleRadius` in
+  `fluidsimulation.{h,cpp}` back the particle-frame capture
+  (`manifold_fluids_world_capture_particle_frame`). The solid lattice reuses the
+  same obstacle-offset and domain-boundary preparation as `captureSurfaceFrame`
+  into a caller-owned scratch `MeshLevelSet`, copied in place once its lattice
+  matches, so repeated captures do not allocate. A meshing volume is rejected.
+  Records come from the upstream `DataRange` getters through a fixed bridge
+  scratch. The solver is never advanced and no simulation state changes.
 - The captured-frame mesher can optionally shrink single isolated particles.
   `particlemesher.{h,cpp}` carries optional radii through chunk/block sorting;
   its default path retains the global radius. `SpatialPointGrid::hasPointWithinSphere`
