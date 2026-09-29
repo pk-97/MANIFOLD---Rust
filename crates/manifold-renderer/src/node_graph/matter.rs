@@ -9,8 +9,6 @@ use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use crate::node_graph::transform::Transform;
 
 /// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
-#[cfg(any(test, feature = "gpu-proofs"))]
-#[doc(hidden)]
 pub mod look;
 #[cfg(any(test, feature = "gpu-proofs"))]
 #[doc(hidden)]
