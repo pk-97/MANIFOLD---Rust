@@ -142,6 +142,17 @@ impl RigidSimulation {
             return Err("Physics: impulse queue capacity overflow is latched until rebuild".into());
         }
         self.validate_impulse_targets(payload.targets)?;
+        // Pause and Simulation Speed 0 discard incoming events, so resume never
+        // fires a saved-up pile (WATER_SIMULATION_DESIGN.md "Transport pause /
+        // water speed zero"). Admission succeeds so the producer rearms; no
+        // receipt will ever name the returned tick.
+        if self.held.is_held() {
+            return Ok(self
+                .impulse_queue
+                .as_ref()
+                .expect("initialized world has an impulse queue")
+                .next_tick());
+        }
         let outstanding = self
             .impulse_queue
             .as_ref()

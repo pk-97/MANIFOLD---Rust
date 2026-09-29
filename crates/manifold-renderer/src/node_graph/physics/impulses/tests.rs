@@ -632,3 +632,44 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
         .unwrap();
     assert_eq!(receipts(&mut simulation).len(), 1);
 }
+
+/// WATER_SIMULATION_DESIGN.md "Transport pause / water speed zero": held
+/// rigid bodies discard incoming impulses, so resume never fires a pile.
+#[test]
+fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
+    let bodies = one_body([0.0, 4.0, 0.0]);
+    let mut simulation = RigidSimulation::default();
+    initialize(&mut simulation, &bodies);
+    let strike = |simulation: &mut RigidSimulation, transport: f64, sequence: u64| {
+        let stamp = simulation.impulse_stamp(Seconds(transport), sequence).unwrap();
+        let targets = RigidImpulseTargets {
+            bodies: 1,
+            copies: false,
+        };
+        simulation
+            .enqueue_impulse(stamp, payload([4.0, 0.0, 0.0], targets))
+            .unwrap();
+    };
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .unwrap();
+    // Paused: the transport repeats.
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .unwrap();
+    strike(&mut simulation, DT, 0);
+    // Simulation Speed 0 while the transport keeps running.
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 0.0, 0.0)
+        .unwrap();
+    strike(&mut simulation, 2.0 * DT, 1);
+    assert_eq!(simulation.impulse_queue.as_ref().unwrap().len(), 0, "held impulses pend");
+
+    for frame in 3..8 {
+        simulation
+            .advance(bodies.clone(), [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
+            .unwrap();
+    }
+    assert!(receipts(&mut simulation).is_empty(), "resume replayed a held impulse");
+    assert_eq!(simulation.poses[0].pos[0], 0.0, "{:?}", simulation.poses[0]);
+}
