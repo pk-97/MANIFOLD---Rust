@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1 partial, stopped at its kill check (53 ms against 12 ms): BUG-u3ov (MPM P1 kill check) is Peter's call · P1b–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1 partial; its kill check fired (53 ms against 12 ms) and P1b proceeds, budget at P4 in BUG-u3ov (MPM solver budget) · P1b in progress · P2–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -892,7 +892,7 @@ FLIP-only.
 
 | Invariant | Enforcement |
 |---|---|
-| GPU transfers match the f64 reference at small N | `matter_transfer_matches_reference` (one substep, 512 points, 16³: positions within 1e-5 m, velocities within 2e-5 m/s); `matter_hundred_substeps_match_reference` (affine field fixture) |
+| GPU transfers match the f64 reference at small N | `matter_transfer_matches_reference` (one substep, 512 points, 16³: positions within 1e-5 m and velocities within 2e-5 m/s of the f64 reference with Q = 2^20 fixed-point rounding; velocities within 2e-4 m/s of the continuous f64 reference, because one mass LSB at a low-mass stencil-edge node moves its velocity by about 1e-4 m/s); `matter_hundred_substeps_match_reference` (affine field fixture) |
 | Mass is exact; grid mass matches particle mass | `matter_grid_mass_matches_particle_mass` (relative 1e-5 per substep) |
 | Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks) |
 | A still pool settles | `matter_still_pool_settles` (after 5 s: mean speed < 0.01 m/s; bottom-quarter J matches 1 − ρgd/λ within 20%) |
@@ -1034,9 +1034,9 @@ at the end of the phase.
   without a jump.
 - **Forbidden:** everything in section 10; a CPU fallback; colliders (P2a); tuning a dial
   or threshold to pass A1–A6.
-- **Phase notes (partial, 2026-09-30, Opus 5.5 worker): stopped at the kill check.**
-  Peter's call is BUG-u3ov (MPM P1 kill check).
-  What is owed if it says proceed is BUG-g93n (MPM P1 remaining deliverables).
+- **Phase notes (partial, 2026-09-30, Opus 5.5 worker):** the kill check fired and the
+  lead took the proceed option: P1b runs as designed, and the budget is decided at P4.
+  The budget call is BUG-u3ov (MPM solver budget); what P1 still owes is BUG-g93n (MPM P1 remaining deliverables).
   - Built and green: the records, substep rule, clock and f64 reference in `R/matter.rs`;
     the atoms `matter_domain`, `matter_fill`, `matter_state`, `zero_array`,
     `matter_to_grid`, `matter_grid_update`, `grid_to_matter`, `matter_stats`,
@@ -1066,9 +1066,8 @@ at the end of the phase.
     per frame and carry one tick of jitter debt. `matter_domain` declares `NonGpu`. A
     point whose stencil leaves the lattice is removed (id 0). The fill rounds the fill
     height to whole cells. The frame ring uses shared storage.
-  - Tolerance: section 12's 2e-5 m/s velocity bound holds against a fixed-point f64
-    oracle (gap 5.4e-6). Against the continuous oracle the gap is 1.05e-4, which is
-    Q = 2^20 quantisation, bounded at 2e-4 in the test.
+  - Tolerance: section 12 now names both oracles. Measured gaps are 5.4e-6 m/s against
+    the fixed-point f64 reference and 1.05e-4 m/s against the continuous one.
   - Verified: the Liveliness blend and position update follow Fei et al. 2021 as Blatny
     & Gaume 2025 implement it (positions advect with v_pic). The scatter precedent
     `scatter_particles_3d.rs` carries `boundary_reason: Blocked` with no tracked gap,
