@@ -1281,13 +1281,6 @@ impl FluidRuntime {
         let Some(settings) = self.settings else {
             return Ok(());
         };
-        // Pause and Simulation Speed 0 hold the published water exactly: live
-        // preview neither steps nor accepts an in-flight batch until the
-        // target moves again, so retained time debt cannot drain while held.
-        // Offline drains each frame's debt inside that frame.
-        if self.held && self.initialized && !blocking {
-            return Ok(());
-        }
         if self.worker.is_none() {
             self.worker = Some(Worker::spawn(Arc::clone(&self.cancel_epoch))?);
         }
@@ -1314,6 +1307,13 @@ impl FluidRuntime {
                 } else {
                     return Ok(());
                 }
+            }
+            // Pause and Simulation Speed 0 send no new live request, so
+            // retained time debt cannot drain while held. The batch already
+            // in flight covers played time and still publishes. Offline drains
+            // each frame's debt inside that frame.
+            if self.held && self.initialized && !blocking {
+                return Ok(());
             }
             let target_tick = simulation_tick(self.target_time);
             let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
@@ -2033,8 +2033,8 @@ mod tests {
     }
 
     /// WATER_SIMULATION_DESIGN.md "Transport pause / water speed zero": a held
-    /// target publishes nothing new, even with preview time debt and a batch
-    /// in flight, and discards impulses; moving again resumes from the held
+    /// target publishes only the batch already in flight, never drains preview
+    /// time debt, and discards impulses; moving again resumes from the held
     /// tick without a jump.
     #[test]
     fn fluid_held_transport_freezes_live_water_with_time_debt() {
@@ -2048,13 +2048,36 @@ mod tests {
         runtime.observe(settings, controls, Seconds(1.0), 1.0, 0.0).unwrap();
         runtime.advance(false).unwrap();
         assert!(runtime.busy);
+        let start_tick = runtime.completed_tick;
         let held = |runtime: &FluidRuntime| {
             (
                 runtime.version,
                 runtime.completed_tick,
+                runtime.busy,
                 bytemuck::cast_slice::<MeshVertex, u8>(&runtime.vertices).to_vec(),
             )
         };
+        // Wall-clock waits only bound a poll; they never decide an outcome.
+        let wait_for_tick_change = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
+            let from = runtime.completed_tick;
+            let started = std::time::Instant::now();
+            while runtime.completed_tick == from {
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(120),
+                    "in-flight batch never replied"
+                );
+                runtime
+                    .observe(settings, controls, Seconds(transport), speed, 0.0)
+                    .unwrap();
+                runtime.advance(false).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        // The batch in flight at pause covers played time, so it publishes;
+        // nothing is requested after it.
+        wait_for_tick_change(&mut runtime, 1.0, 1.0);
+        assert_eq!(runtime.completed_tick, start_tick + BATCH as u64);
+        assert!(!runtime.busy, "held water requested more steps");
         let before = held(&runtime);
         let hold = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
             let started = std::time::Instant::now();
@@ -2082,24 +2105,12 @@ mod tests {
         strike(&mut runtime, 2.0, 1);
         assert_eq!(runtime.impulse_outstanding, 0, "held impulses are discarded");
 
-        runtime
-            .observe(settings, controls, Seconds(2.0 + TICK), 1.0, 0.0)
-            .unwrap();
-        // The in-flight batch may still be running under load; wait for its
-        // reply rather than assuming the hold outlasted it.
-        let started = std::time::Instant::now();
-        while runtime.completed_tick == before.1 {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(120),
-                "in-flight batch never replied"
-            );
-            runtime.advance(false).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        // Resume continues from the held tick one batch at a time.
+        wait_for_tick_change(&mut runtime, 2.0 + TICK, 1.0);
         assert_eq!(
             runtime.completed_tick,
             before.1 + BATCH as u64,
-            "resume publishes the held batch, not a jump"
+            "resume publishes one batch, not a jump"
         );
         runtime.advance(true).unwrap();
         assert_eq!(runtime.completed_tick, simulation_tick(1.0 + TICK), "debt is retained");
