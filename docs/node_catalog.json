@@ -15932,6 +15932,46 @@
         {
           "name": "limited_by_substeps",
           "type": "f32"
+        },
+        {
+          "name": "blocks_x",
+          "type": "f32"
+        },
+        {
+          "name": "blocks_y",
+          "type": "f32"
+        },
+        {
+          "name": "blocks_z",
+          "type": "f32"
+        },
+        {
+          "name": "block_center_x",
+          "type": "f32"
+        },
+        {
+          "name": "block_center_y",
+          "type": "f32"
+        },
+        {
+          "name": "block_center_z",
+          "type": "f32"
+        },
+        {
+          "name": "block_size_x",
+          "type": "f32"
+        },
+        {
+          "name": "block_size_y",
+          "type": "f32"
+        },
+        {
+          "name": "block_size_z",
+          "type": "f32"
+        },
+        {
+          "name": "block_cell_size",
+          "type": "f32"
         }
       ],
       "params": [

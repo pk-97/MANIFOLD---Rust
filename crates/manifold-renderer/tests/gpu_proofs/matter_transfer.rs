@@ -79,6 +79,8 @@ pub(crate) struct Chain {
     points: ResourceId,
     accum: ResourceId,
     p2g: NodeInstanceId,
+    /// The sort's order and ranges, on the block path.
+    sorted: Option<(ResourceId, ResourceId)>,
     frame: u32,
 }
 
@@ -98,6 +100,19 @@ fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> Resource
 
 impl Chain {
     pub(crate) fn new(lat: &MatterLattice, points: &[MatterPoint], p: &Params) -> Self {
+        Self::build(lat, points, p, None)
+    }
+
+    /// With `sort_source`, P2G takes the block path: the source points go
+    /// through node.matter_to_particles and node.sort_particles_into_cells
+    /// into the lattice's D6 block bins, and P2G reads `order` and `ranges`.
+    /// A source other than `points` leaves points outside their sorted block.
+    pub(crate) fn build(
+        lat: &MatterLattice,
+        points: &[MatterPoint],
+        p: &Params,
+        sort_source: Option<&[MatterPoint]>,
+    ) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
         let nodes = lat.node_count();
         let mut graph = Graph::new();
@@ -109,6 +124,25 @@ impl Chain {
         let p2g = add(&mut graph, "node.matter_to_grid");
         let update = add(&mut graph, "node.matter_grid_update");
         let g2p = add(&mut graph, "node.grid_to_matter");
+        let src_sort = sort_source.map(|source| {
+            let src = graph.add_node(Box::new(HostArray::new::<MatterPoint>(source.len() as u32)));
+            let m2p = add(&mut graph, "node.matter_to_particles");
+            let sort = add(&mut graph, "node.sort_particles_into_cells");
+            graph.connect((src, "out"), (m2p, "points")).unwrap();
+            graph.connect((m2p, "particles"), (sort, "particles")).unwrap();
+            graph.connect((sort, "order"), (p2g, "order")).unwrap();
+            graph.connect((sort, "cell_ranges"), (p2g, "ranges")).unwrap();
+            // The sort runs only when its `sorted` output has a buffer.
+            graph.add_external_output(sort, "sorted").unwrap();
+            let (centre, size, bin) = lat.block_bins();
+            for (axis, name) in ["x", "y", "z"].iter().enumerate() {
+                set(&mut graph, sort, &format!("center_{name}"), centre[axis]);
+                set(&mut graph, sort, &format!("size_{name}"), size[axis]);
+                set(&mut graph, p2g, &format!("blocks_{name}"), lat.blocks()[axis] as f32);
+            }
+            set(&mut graph, sort, "cell_size", bin);
+            (src, sort)
+        });
         graph.connect((acc, "out"), (zero, "in")).unwrap();
         graph.connect((pts, "out"), (p2g, "points")).unwrap();
         graph.connect((zero, "out"), (p2g, "accum")).unwrap();
@@ -148,12 +182,17 @@ impl Chain {
         pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
         let points_res = output_of(&plan, pts, "out");
         let accum = output_of(&plan, acc, "out");
-        {
-            let slot = backend.slot_for(points_res).expect("points bound");
+        let fill = |resource: ResourceId, data: &[MatterPoint]| {
+            let slot = backend.slot_for(resource).expect("points bound");
             let buffer = Backend::array_buffer(&backend, slot).expect("points buffer");
             // SAFETY: shared storage, nothing in flight.
-            unsafe { buffer.write(0, bytemuck::cast_slice(points)) };
+            unsafe { buffer.write(0, bytemuck::cast_slice(data)) };
+        };
+        fill(points_res, points);
+        if let (Some((src, _)), Some(source)) = (src_sort, sort_source) {
+            fill(output_of(&plan, src, "out"), source);
         }
+        let sorted = src_sort.map(|(_, sort)| (output_of(&plan, sort, "order"), output_of(&plan, sort, "cell_ranges")));
         Self {
             graph,
             plan,
@@ -162,8 +201,14 @@ impl Chain {
             points: points_res,
             accum,
             p2g,
+            sorted,
             frame: 0,
         }
+    }
+
+    /// The sort's (order, ranges as start/count pairs), on the block path.
+    fn sorted(&self) -> Option<(Vec<u32>, Vec<u32>)> {
+        self.sorted.map(|(order, ranges)| (self.read(order), self.read(ranges)))
     }
 
     /// One substep; frame k rounds with tick k, substep 0 (the oracle's
@@ -359,6 +404,43 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
     assert!(small > 1000, "the fixture exercises few small words: {small}");
     assert!(rate >= 0.95, "small words match only {rate:.4}");
     assert!(worst_large <= 256.0, "large words differ by {worst_large} LSB");
+}
+
+/// D6: block-local P2G adds the same integers as one thread per point,
+/// whether every point sits in its sorted block or many have left it (their
+/// sort source shifted 1.5 and 0.75 cells) and add globally.
+#[test]
+fn matter_block_p2g_bit_identical() {
+    let lat = lattice();
+    let points = fixture(&lat);
+    let p = params();
+    let words = |source: Option<&[MatterPoint]>| {
+        let mut chain = Chain::build(&lat, &points, &p, source);
+        chain.step();
+        if let Some((order, ranges)) = chain.sorted() {
+            let ranked = order.iter().filter(|&&i| i != u32::MAX).count();
+            let covered: u32 = ranges.chunks_exact(2).map(|r| r[1]).sum();
+            eprintln!("  sort: {ranked} ranked of {} order slots; ranges cover {covered} points over {} bins", order.len(), ranges.len() / 2);
+        }
+        chain.accum()
+    };
+    let plain = words(None);
+    let dx = lat.cell_size;
+    let shifted: Vec<MatterPoint> = points
+        .iter()
+        .map(|pt| MatterPoint { position: [pt.position[0] + 1.5 * dx, pt.position[1] + 0.75 * dx, pt.position[2]], ..*pt })
+        .collect();
+    let nonzero = plain.iter().filter(|&&w| w != 0).count();
+    eprintln!("matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks", lat.blocks().iter().product::<u32>());
+    assert!(nonzero > 1000, "the fixture touches few nodes: {nonzero}");
+    let compare = |name: &str, other: &[i32]| {
+        let differ = plain.iter().zip(other).filter(|(a, b)| a != b).count();
+        let mass = |w: &[i32]| w.chunks_exact(4).map(|n| i64::from(n[3])).sum::<i64>();
+        eprintln!("  {name}: {differ} words differ; mass {} vs per-point {}", mass(other), mass(&plain));
+        differ
+    };
+    assert_eq!(compare("sorted", &words(Some(&points))), 0, "block path differs from the per-point path");
+    assert_eq!(compare("drifted", &words(Some(&shifted))), 0, "block path with out-of-block points differs");
 }
 
 #[test]

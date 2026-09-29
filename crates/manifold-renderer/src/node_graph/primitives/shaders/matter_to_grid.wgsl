@@ -10,12 +10,12 @@
 // contribution floor(x + u) with u hashed from the point id and the word's
 // global slot (D5), so every path adds the same integers.
 //
-// `scatter_points`: one thread per point, global atomics (the plain path).
-// `scatter_blocks` (D6): one workgroup per 4³ block of stencil base nodes, over
-// the points `order`/`ranges` sorted into that block at tick start. They add
-// into a 6³-node tile in workgroup memory, flushed once per nonzero word; a
-// point that has left its block since the sort adds globally. Integer sums make
-// the two entries bit-identical.
+// Unsorted: one thread per point, global atomics (the plain path). Sorted
+// (D6): one workgroup per 4³ block of stencil base nodes, over the points
+// `order`/`ranges` sorted into that block at tick start. They add into a
+// 6³-node tile in workgroup memory, flushed once per nonzero word; a point that
+// has left its block since the sort adds globally. Integer sums make the two
+// modes bit-identical.
 //
 // A point whose scatter inputs are not finite is skipped; node.matter_stats
 // counts the same points, so D14 halts the publish.
@@ -53,9 +53,9 @@ struct P2gParams {
     blocks_x: u32,
     blocks_y: u32,
     blocks_z: u32,
+    sorted: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: P2gParams;
@@ -190,16 +190,14 @@ fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
     }
 }
 
+// One entry for both modes, with one `scatter` call, so the two modes run the
+// same float code and add the same integers (a second entry point may
+// contract the momentum arithmetic differently under fast math).
+// `params.sorted` 0: workgroup w takes points 256·w.. with global atomics.
+// 1: workgroup w is block w, over the points `order`/`ranges` put there.
 @compute @workgroup_size(256)
-fn scatter_points(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= params.active_count {
-        return;
-    }
-    scatter(points[gid.x], false, vec3<i32>(0));
-}
-
-@compute @workgroup_size(256)
-fn scatter_blocks(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+    let sorted = params.sorted != 0u;
     let block = wg.x;
     let coord = vec3<i32>(
         i32(block % params.blocks_x),
@@ -207,27 +205,40 @@ fn scatter_blocks(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocatio
         i32(block / (params.blocks_x * params.blocks_y)),
     );
     let tile_origin = coord * BLOCK;
-    for (var i = lid; i < TILE_WORDS; i = i + GROUP) {
-        atomicStore(&tile[i], 0);
-    }
-    workgroupBarrier();
-    let range = ranges[block];
-    for (var s = range.start + lid; s < range.start + range.count; s = s + GROUP) {
-        let index = order[s];
-        if index != NO_RANK && index < params.active_count {
-            scatter(points[index], true, tile_origin);
+    if sorted {
+        for (var i = lid; i < TILE_WORDS; i = i + GROUP) {
+            atomicStore(&tile[i], 0);
         }
     }
     workgroupBarrier();
-    let n = nodes();
-    for (var i = lid; i < TILE_WORDS; i = i + GROUP) {
-        let value = atomicLoad(&tile[i]);
-        if value != 0 {
-            let local = i / 4u;
-            let l = vec3<i32>(i32(local % 6u), i32((local / 6u) % 6u), i32(local / 36u));
-            let node = tile_origin + l;
-            if all(node < n) {
-                atomicAdd(&accum[global_slot(node) + (i % 4u)], value);
+    var begin = block * GROUP;
+    var end = min(begin + GROUP, params.active_count);
+    if sorted {
+        let range = ranges[block];
+        begin = range.start;
+        end = range.start + range.count;
+    }
+    for (var s = begin + lid; s < end; s = s + GROUP) {
+        var index = s;
+        if sorted {
+            index = order[s];
+        }
+        if index != NO_RANK && index < params.active_count {
+            scatter(points[index], sorted, tile_origin);
+        }
+    }
+    workgroupBarrier();
+    if sorted {
+        let n = nodes();
+        for (var i = lid; i < TILE_WORDS; i = i + GROUP) {
+            let value = atomicLoad(&tile[i]);
+            if value != 0 {
+                let local = i / 4u;
+                let l = vec3<i32>(i32(local % 6u), i32((local / 6u) % 6u), i32(local / 36u));
+                let node = tile_origin + l;
+                if all(node < n) {
+                    atomicAdd(&accum[global_slot(node) + (i % 4u)], value);
+                }
             }
         }
     }

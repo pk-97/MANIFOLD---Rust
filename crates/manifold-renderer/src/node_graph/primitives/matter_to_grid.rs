@@ -39,14 +39,9 @@ pub(crate) struct P2gParams {
     pub(crate) blocks_x: u32,
     pub(crate) blocks_y: u32,
     pub(crate) blocks_z: u32,
+    pub(crate) sorted: u32,
     pub(crate) _pad0: u32,
     pub(crate) _pad1: u32,
-    pub(crate) _pad2: u32,
-}
-
-pub struct Pipelines {
-    points: GpuComputePipeline,
-    blocks: GpuComputePipeline,
 }
 
 crate::primitive! {
@@ -102,7 +97,7 @@ crate::primitive! {
     aliases: ["p2g", "particle to grid", "mpm scatter", "matter scatter"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
-        pipelines: Option<Pipelines> = None,
+        kernel: Option<GpuComputePipeline> = None,
     },
 }
 
@@ -138,10 +133,9 @@ impl Primitive for MatterToGrid {
         let accum = ctx.inputs.array("accum");
         let sorted = ctx.inputs.array("order").zip(ctx.inputs.array("ranges"));
         let gpu = ctx.gpu_encoder();
-        let pipelines = self.pipelines.get_or_insert_with(|| Pipelines {
-            points: gpu.device.create_compute_pipeline(SHADER, "scatter_points", "node.matter_to_grid.points"),
-            blocks: gpu.device.create_compute_pipeline(SHADER, "scatter_blocks", "node.matter_to_grid.blocks"),
-        });
+        let kernel = self
+            .kernel
+            .get_or_insert_with(|| gpu.device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid"));
         let (Some(points), Some(accum)) = (points, accum) else {
             return;
         };
@@ -167,40 +161,33 @@ impl Primitive for MatterToGrid {
             blocks_x: blocks[0].max(1),
             blocks_y: blocks[1].max(1),
             blocks_z: blocks[2].max(1),
+            sorted: u32::from(sorted.is_some()),
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         let block_total = uniforms.blocks_x * uniforms.blocks_y * uniforms.blocks_z;
-        match sorted {
-            Some((order, ranges))
-                if ranges.size >= u64::from(block_total) * std::mem::size_of::<CellRange>() as u64 =>
-            {
-                let bindings = [
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: accum, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: order, offset: 0 },
-                    GpuBinding::Buffer { binding: 4, buffer: ranges, offset: 0 },
-                ];
-                gpu.native_enc.dispatch_compute(&pipelines.blocks, &bindings, [block_total, 1, 1], "node.matter_to_grid.blocks");
+        // Unsorted, the kernel never reads order or ranges; the accumulator
+        // keeps their slots bound.
+        let (order, ranges, groups) = match sorted {
+            Some((order, ranges)) => {
+                if ranges.size < u64::from(block_total) * std::mem::size_of::<CellRange>() as u64 {
+                    ctx.error(format!(
+                        "Matter to Grid: the ranges cover fewer than the {block_total} blocks of this lattice; sort into node.matter_domain's block bins"
+                    ));
+                    return;
+                }
+                (order, ranges, block_total)
             }
-            Some(_) => ctx.error(format!(
-                "Matter to Grid: the ranges cover fewer than the {block_total} blocks of this lattice; sort into node.matter_domain's block bins"
-            )),
-            None => {
-                // The per-point entry never reads order or ranges; the
-                // accumulator keeps their slots bound.
-                let bindings = [
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: accum, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: accum, offset: 0 },
-                    GpuBinding::Buffer { binding: 4, buffer: accum, offset: 0 },
-                ];
-                gpu.native_enc.dispatch_compute(&pipelines.points, &bindings, [active.div_ceil(256), 1, 1], "node.matter_to_grid.points");
-            }
-        }
+            None => (accum, accum, active.div_ceil(256)),
+        };
+        let bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: accum, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: order, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: ranges, offset: 0 },
+        ];
+        gpu.native_enc.dispatch_compute(kernel, &bindings, [groups, 1, 1], "node.matter_to_grid");
     }
 }
 

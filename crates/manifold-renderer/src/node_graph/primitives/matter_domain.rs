@@ -70,6 +70,10 @@ crate::primitive! {
         liveliness: ScalarF32,
         density: ScalarF32,
         limited_by_substeps: ScalarF32,
+        blocks_x: ScalarF32, blocks_y: ScalarF32, blocks_z: ScalarF32,
+        block_center_x: ScalarF32, block_center_y: ScalarF32, block_center_z: ScalarF32,
+        block_size_x: ScalarF32, block_size_y: ScalarF32, block_size_z: ScalarF32,
+        block_cell_size: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
@@ -106,7 +110,7 @@ crate::primitive! {
         clock: MatterClock = MatterClock::default(),
         setup: Option<MatterSetup> = None,
         limited: bool = false,
-        published: Option<[f32; 31]> = None,
+        published: Option<[f32; OUTPUTS.len()]> = None,
     },
 }
 
@@ -121,12 +125,14 @@ fn closed_faces(ctx: &EffectNodeContext<'_, '_>) -> u32 {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 31] = [
+const OUTPUTS: [&str; 41] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
     "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
     "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
     "fill_seed", "ticks", "substeps_per_tick", "epoch", "simulation_time", "display_time",
     "dropped_seconds", "lambda", "cohesion", "liveliness", "density", "limited_by_substeps",
+    "blocks_x", "blocks_y", "blocks_z", "block_center_x", "block_center_y", "block_center_z",
+    "block_size_x", "block_size_y", "block_size_z", "block_cell_size",
 ];
 const TICKS: usize = 20;
 
@@ -163,6 +169,8 @@ impl MatterDomain {
         let domain_size = ctx.scalar_or_param("domain_size", 4.0);
         let layout = domain_layout(ctx.inputs.transform("domain"), domain_size, resolution)?;
         let lattice = MatterLattice::from_layout(&layout);
+        let blocks = lattice.blocks();
+        let (block_centre, block_size, block_bin) = lattice.block_bins();
         let budget = ctx.param_f32("grid_budget_mcells", 8.0);
         let nodes = f64::from(lattice.node_count());
         if !budget.is_finite() || budget <= 0.0 || nodes > f64::from(budget) * 1e6 {
@@ -282,6 +290,16 @@ impl MatterDomain {
             ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0),
             WATER_DENSITY,
             if limited { fitted as f32 } else { 0.0 },
+            blocks[0] as f32,
+            blocks[1] as f32,
+            blocks[2] as f32,
+            block_centre[0],
+            block_centre[1],
+            block_centre[2],
+            block_size[0],
+            block_size[1],
+            block_size[2],
+            block_bin,
         ])
     }
 }

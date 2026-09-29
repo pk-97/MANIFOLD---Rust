@@ -165,6 +165,10 @@ pub fn encode_fixed(x: f64, point_key: u32, slot: u32) -> i64 {
     whole as i64 + i64::from(carry)
 }
 
+/// Stencil base nodes per block axis in D6's block-local P2G; its workgroup
+/// tile spans BLOCK_NODES + 2 nodes per axis.
+pub const BLOCK_NODES: u32 = 4;
+
 /// Largest J cohesive water keeps (D3): the Cohesion tension κ·λ·J·(J − 1)
 /// pulls a stretched point back; a point stretched to twice its rest volume
 /// is torn, and the cap keeps λ·J·(J − 1) finite. Tension-free water
@@ -275,6 +279,23 @@ impl MatterLattice {
 
     pub fn node_count(&self) -> u32 {
         self.nodes[0] * self.nodes[1] * self.nodes[2]
+    }
+
+    /// D6 blocks per axis: 4 stencil base nodes each, covering every base a
+    /// point can have (0..=nodes − 3).
+    pub fn blocks(&self) -> [u32; 3] {
+        self.nodes.map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
+    }
+
+    /// The cell-sort box whose bins are the D6 blocks: a point's bin is its
+    /// stencil base node's block, floor((q − 1/2) / 4) with q in cells.
+    /// Returns (centre, size, bin size) for `node.sort_particles_into_cells`.
+    pub fn block_bins(&self) -> ([f32; 3], [f32; 3], f32) {
+        let bin = BLOCK_NODES as f32 * self.cell_size;
+        let blocks = self.blocks();
+        let size: [f32; 3] = std::array::from_fn(|i| blocks[i] as f32 * bin);
+        let centre = std::array::from_fn(|i| self.min[i] + 0.5 * self.cell_size + 0.5 * size[i]);
+        (centre, size, bin)
     }
 
     /// Scene AABB of the lattice nodes (the seam's `grid_bounds`).
@@ -451,6 +472,29 @@ mod tests {
         assert_eq!(lattice.min, [-2.1875, -0.1875, -2.1875]);
         let bounds = lattice.bounds();
         assert_eq!(bounds.scale, [4.375; 3]);
+    }
+
+    /// The sort's bin (floor((p − box_min) / bin), as the sort atom computes
+    /// it) is the block of the point's stencil base node, floor(base / 4).
+    #[test]
+    fn matter_block_bins_are_base_node_blocks() {
+        let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 64).unwrap();
+        let lattice = MatterLattice::from_layout(&layout);
+        assert_eq!(lattice.blocks(), [18; 3]);
+        let (centre, size, bin) = lattice.block_bins();
+        let dx = lattice.cell_size;
+        let mut seed = 0x1234_5678u32;
+        for _ in 0..10_000 {
+            seed = rounding_hash(seed);
+            let q = 1.5 + (seed >> 8) as f32 / 16_777_216.0 * 66.0;
+            let p = lattice.min[0] + q * dx;
+            let base = (q - 0.5).floor() as i64;
+            let sorted = ((p - (centre[0] - 0.5 * size[0])) / bin).floor() as i64;
+            // f32 may put a point within an ulp of a block edge in the
+            // neighbour; P2G then adds it globally, still correctly.
+            let near_edge = ((q - 0.5) / 4.0 - ((q - 0.5) / 4.0).round()).abs() < 1e-4;
+            assert!(near_edge || sorted == base.div_euclid(4), "q {q}: bin {sorted}, base {base}");
+        }
     }
 
     fn run(clock: &mut MatterClock, frames: &[(f64, f64)], offline: bool) -> Vec<ClockFrame> {
