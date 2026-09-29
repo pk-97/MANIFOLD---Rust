@@ -444,8 +444,7 @@ fn surface_depth_is_maximum_and_zero_appearance_does_not_occlude() {
             &pipeline,
             &target.texture,
             &b,
-            3,
-            2,
+            manifold_gpu::DrawCount::Direct { vertices: 3, instances: 2 },
             GpuLoadAction::Load,
             "mesh-diagram-surface-depth-proof",
         );

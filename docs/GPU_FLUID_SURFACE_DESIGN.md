@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5 built. P6 built but its budget gate fails (8.1 ms p95 against 3 ms at res 64); mesh capacity, draw cost and kernel reach await a lead decision (section 9, P6). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b built. The budget gate fails (5.6 ms p95 against 3 ms at res 64): blobs and volume alone take 4 ms, a kernel design call; the look (kernel reach) awaits Peter (section 9, P6 and P6b). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -455,7 +455,8 @@ coupled rigid pose. Per tick, the worker loses CPU meshing and gains one capture
 - A deforming 60 fps mesh changes RT acceleration structures and volume-optics inputs
   every display frame instead of every published tick. P6 measures and reports this; it
   is outside the 3 ms gate.
-- The zeroed tail is drawn: capacity vertices every frame. Indirect draw is deferred.
+- Raster passes draw only live triangles; ray tracing builds over a CPU bound about
+  1.5× live (P6b).
 - Live (anisotropic GPU) and baked (sphere-union CPU) surfaces look different until
   particle frames are cached (R5).
 
@@ -510,6 +511,8 @@ up.
 | No lattice yet is silence, not an error | `fluid_sort_particles_into_cells_is_silent_before_the_first_frame`; volume, count and mesh skip on zero nodes |
 | Lattices past 65,535 threadgroups are covered | `fluid_count_surface_triangles_reaches_cells_past_65535_threadgroups` |
 | Every captured frame has a non-empty, finite mesh | `fluid_capture --gpu-surface` reads the mesh back each offline frame and fails on a non-finite vertex or an empty surface |
+| Emit writes only live and last frame's vertices; slots past live stay zero | `fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices` |
+| Raster passes draw only live triangles; ray tracing never passes the bound | `live_draw_args_are_whole_live_triangles_within_capacity`, `indirect_dispatch_and_draw_match_direct`, `object_wire_carries_the_mesh_live_extent` |
 | Uncoupled Box3D advances while the fluid worker stalls | `physics_world_uncoupled_advances_while_fluid_worker_stalls` |
 
 ## 9. Phasing
@@ -697,10 +700,9 @@ column is the p95 of the per-frame sum.
 | 64 | 4 | 0.21 | 2.04 | 12.19 | 1.23 | 2.83 | overflow | 21.83 | 32.4 | 10.88 M |
 
 Open, for the lead:
-- **Capacity drives cost.** Emit writes every slot, and the scene draws and ray-traces
-  the zeroed tail. At res 64 scale 2 the same 2.34 M live vertices cost a 11.4 ms frame
-  at 1.57 M capacity (overflowing, so empty) and 25.9 ms at 8.39 M. Section 11's
-  indirect-draw trigger has fired; Detail 2 at res 64 needs more than 12.6 M by tick 172.
+- **Capacity drove cost.** Emit wrote every slot and the scene drew and ray-traced the
+  zeroed tail (25.9 ms frames at 8.39 M capacity). P6b removed that; Detail 2 at res 64
+  still needs more than 12.6 M vertices by tick 172.
 - **Blobs and volume.** Two milliseconds each at res 64; the volume grows with scale³.
 - **Kernel reach sets the look.** FLIP's marker radius is 0.31 cell, so at Surface
   Particle Scale 2.2 the kernel reaches 0.68 cell, about 1.4 particle spacings, and the
@@ -716,49 +718,61 @@ Open, for the lead:
 - **Gate:** tests green; check-presets and graph-tool validate/fusion clean on `WaterDamBreakGpu.json`; `cargo test -p manifold-renderer --features fluid-perf-proofs --test gpu_proofs fluid_surface_perf` reports p95 ≤ 3.0 ms at scale 2 on M4 Max. A miss stops the phase and reports the slowest stage — never a silent quality cut. The RT and volume-optics per-frame cost is reported, not gated.
 - **Demo:** `fluid_capture --preset WaterDamBreakGpu --frames 180 --stills-every 15` into `/tmp/manifold_gpu_surface`. Computed checks on the run: every frame after the first tick has a nonzero triangle count and no non-finite vertex. L2: Peter compares the stills with the CPU Dam Break at Detail 2.
 - **Gesture:** raise Surface Detail from 0 to 2 mid-splash; the surface sharpens the next frame and the simulation does not restart.
-- **Forbidden:** vertex welding or mesh smoothing passes (deferred); indirect draw; tuning thresholds to pass the budget without reporting it.
+- **Forbidden:** vertex welding or mesh smoothing passes (deferred); tuning thresholds to pass the budget without reporting it.
 
 ### P6b — Live triangles only (BUG-j9cy (GPU liquid mesh live-only draw and emit))
 
 Lead call, 2026-09-30: emit and draw only live triangles, so nothing downstream touches
-the zeroed tail; preset defaults stay. Metal builds triangle acceleration structures
-from a CPU triangle count (no indirect variant), so ray tracing uses a CPU bound.
+the zeroed tail; preset defaults stay. **Built (2026-09-30); its budget verdict stops the
+phase** (below).
 
-- **Shape.** The emit dispatches indirectly over `max(live, last frame's live)`
-  vertices, so its cost follows live triangles and slots past live stay zero for any
-  consumer. The mesh atom publishes the array's live extent: a GPU word holding the live
-  vertex count, and a CPU bound (the one-frame-late `total` × 3 × 1.5, rounded up to
-  3·16,384, clamped to capacity). Raster passes draw indirectly with that count; ray
-  tracing builds over the bound, whose margin triangles are zero. Measured worst growth
-  on the dam break: 1.19× in one tick, 1.42× over two.
-- **Seam, old → new.**
-  - `manifold-gpu`: `DepthMsaaDraw { vertex_count: u32, instance_count: u32, .. }` →
-    `DepthMsaaDraw { count: DrawCount<'a>, .. }` with `DrawCount::Direct { vertices,
-    instances }` or `DrawCount::Indirect { args, offset }` (Metal's four-word draw
-    arguments). The constructors keep their signatures and build `Direct`;
-    `DepthMsaaDraw::indirect(self, args, offset)` switches one draw. New
-    `GpuEncoder::dispatch_compute_indirect(pipeline, bindings, args, offset, label)`
-    beside `dispatch_compute`, sharing its binding code.
-  - Renderer: `LiveExtent { count: GpuBuffer, bound: u32 }`, published per output slot
-    with `NodeOutputs::set_live_extent(port, extent)` and read with
-    `NodeInputs::live_extent_of(slot)`, stored by the executor like mesh revisions.
-    `node.scene_object` forwards the vertices slot unchanged, so wiring is unchanged.
-  - `render_scene.rs`: `mesh_vertex_count(buf)` is deleted; every site asks the
-    object's `MeshExtent` instead.
-- **Call-site inventory** (`rg -n 'mesh_vertex_count\(|vertices\.size|size_of::<MeshVertex>' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
-  and `rg -n 'depth_msaa_draw(_fill_mode|_points)?\(' crates -g '*.rs'`; re-run at
-  execution, stop if the counts differ). Mechanical, unchanged: the 13 draw constructor
-  calls (render_scene 5, volume_optics 1, tests 6, manifold-gpu 1). Needs the new
-  pattern: render_scene 1738 (the helper, deleted), 2032 (weights length, bound), 2797
-  (pass hash, bound), 2864 and 2940 (depth-only passes, indirect), 4266 and 4635 (colour
-  pass, indirect), 4907 (depth pass, indirect), 5506 (ray-tracing triangle count,
-  bound); volume_optics 155 (indirect).
-- **Gate.** GPU proofs: an indirect draw equals the direct draw of the same count;
-  an indirect dispatch equals the direct one; render_scene draws nothing past live
-  (a non-zero tail stays invisible); the emit leaves slots past the previous frame's
-  extent untouched. Then `fluid_surface_perf` at res 64 ×2 and the 1080p frame, with the
-  per-stage split. If blobs plus volume alone exceed 3 ms, stop and report: that is a
-  kernel design call, not tuning.
+- **Shape.** `node.running_total`'s one-thread total kernel also writes an `extent`
+  output: the grand total, then an indirect grid of 256-thread groups covering
+  max(total, last frame's total) × `per_item` elements, with last frame's total kept in
+  a buffer the node owns. `node.volume_surface_mesh` takes `extent`, dispatches its
+  generated kernel over that grid (a new vertex buffer is written whole once), and
+  publishes the array's live extent: the extent's total × 3 on the GPU, plus a CPU bound
+  (the late `total` × 3 × 1.5 plus one grain, rounded up to 3·16,384 vertices, clamped
+  to capacity; capacity for the first two frames). Slots past live stay zero for every
+  consumer. `node.render_scene` writes each such object's draw arguments with one small
+  dispatch and draws every raster pass indirectly; volume optics does the same; ray
+  tracing builds over the bound, because Metal builds triangle acceleration structures
+  from a CPU count. Measured worst growth on the dam break: 1.19× in one tick, 1.42×
+  over two. Growth past the bound within the readback lag truncates ray tracing, not
+  raster, for that frame.
+- **Seam, as built.**
+  - `manifold-gpu`: `DepthMsaaDraw` carries `count: DrawCount<'a>` (`Direct { vertices,
+    instances }` or `Indirect { args, offset }`, Metal's four-word draw arguments); the
+    constructors build `Direct` and `DepthMsaaDraw::indirect(args, offset)` switches one
+    draw. `draw_instanced` takes a `DrawCount` in place of its two counts (11 callers,
+    9 mechanical). New `dispatch_compute_indirect`, sharing `dispatch_compute`'s binding
+    code.
+  - Renderer: `LiveExtent { counts, offset, per_item, bound }`
+    (`node_graph/live_extent.rs`), published with `NodeOutputs::set_live_extent` and
+    read with `NodeInputs::live_extent_slot`, stored per slot by the backend and drained
+    by the executor like mesh sources. `node.scene_object` forwards the vertices slot
+    unchanged, so wiring is unchanged.
+  - `render_scene.rs`: `mesh_vertex_count` is gone; each `ObjectDraw` carries
+    `vertex_count` and `point_count` (the bound with a live extent) and its arguments;
+    `ObjectDraw::live` and `ObjectDraw::draw_count` pick indirect or direct.
+- **Call sites, as executed.** render_scene 2797 (pass hash), 2864 and 2940 (depth-only
+  passes), 4266 and 4635 (colour pass), 4907 (depth pass), 5506 (ray-tracing triangle
+  count); volume_optics 150, 158, 174. The weights-length check stays against capacity,
+  because indirect draws can reach it.
+- **Proofs.** `indirect_dispatch_and_draw_match_direct` (manifold-gpu),
+  `fluid_running_total_extent_covers_this_and_last_frame`,
+  `fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices` (a sentinel past
+  last frame's extent survives; vacated slots clear),
+  `live_draw_args_are_whole_live_triangles_within_capacity`,
+  `object_wire_carries_the_mesh_live_extent`. The Dam Break at its defaults renders the
+  same stills as before P6b (11 and 45 pixels of 921,600 differ, by at most 2/255).
+- **Budget.** `fluid_surface_perf`, res 64 ×2, load 6–7: emit 1.04 ms (3.54 before),
+  Liquid Surface 5.62 ms p95 (8.07), 1080p frame 17.6 ms p95 (25.9). Blobs 2.02 ms plus
+  volume 1.94 ms exceed 3 ms on their own, so per the lead's rule the phase stops there:
+  the kernel cost is a design call (BUG-l24y (GPU liquid surface misses its 3 ms budget)).
+- **Content-thread gate, headless.** `fluid_capture --gpu-surface` with its preview
+  pass: CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under 20 ms. At
+  the defaults: max 6.75 ms, mean 1.04 ms.
 - **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
 
 ### P7 — Add Fluid authors the GPU surface
@@ -805,7 +819,6 @@ or in section 11.
 |---|---|
 | Particle-frame cache for Record/Playback (smaller, remeshable after bake); lifts D12 | The BUG-vglg.18 bake-workflow design session starts, or Peter wants to bake a GPU-surfaced scene |
 | GPU solver writing the frame directly | P1/P4 measurements show the CPU solver cannot hold a show scene at a live resolution, and Peter approves a solver project |
-| Indirect draw of live triangles only | The measured cost of drawing the zeroed tail, or of RT structures over full capacity, exceeds 0.5 ms. **Fired in P6:** about 14.5 ms (section 9, P6) |
 | Vertex welding, shared-vertex output, mesh smoothing | Measured vertex bandwidth or RT build cost matters, or Peter wants CPU-style mesh smoothing |
 | `Array(f32)` → `Texture3D` resolve atom (debug slice, `blur_3d` reuse) | Authoring needs to see or blur the level set |
 | Migrating legacy presets to the GPU surface | Particle-frame caching lands |
@@ -824,7 +837,7 @@ or in section 11.
 | R4 | The surface misses 3 ms at 2× | P6 perf proof | Report the slowest stage; candidate fixes (empty-bin early out, support clamp) go to Peter as visible changes |
 | R5 | Live and baked surfaces look different | Peter's P6 comparison | Particle-frame cache trigger |
 | R6 | Mesh capacity overflow at 3–4× | Empty mesh plus error | Raise capacity in the group; never truncate |
-| R7 | Per-frame RT and volume-optics rebuild cost from a 60 fps mesh | P6 report | Indirect draw and welding triggers |
+| R7 | Per-frame RT and volume-optics rebuild cost from a 60 fps mesh | P6 report | Live-triangle draws (P6b); the welding trigger |
 | R8 | Content-thread cost of ring and pose work | P2 render-trace gate | Fix before landing |
 | R9 | A buffer generator with only gathered inputs cannot fuse, or cannot be expressed | `graph-tool fusion`; standalone codegen failure | Record the region result; BLOCKED plus a `bd` bug, never a quiet exemption |
 | R10 | Doubled latency and quantization at 30 Hz feel wrong on stage | Peter at L4 | Rate is a setup setting; 60 Hz with the GPU surface stays available |

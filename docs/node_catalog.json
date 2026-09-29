@@ -28152,10 +28152,26 @@
         {
           "name": "total",
           "type": "f32"
+        },
+        {
+          "capacity": "fixed:4",
+          "name": "extent",
+          "type": "Array"
         }
       ],
-      "params": [],
-      "purpose": "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late.",
+      "params": [
+        {
+          "default": "1",
+          "label": "Elements Per Count",
+          "name": "per_item",
+          "range": [
+            "1",
+            "64"
+          ],
+          "type": "int"
+        }
+      ],
+      "purpose": "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late. `extent` holds the grand total on the GPU, then an indirect dispatch grid of 256-thread groups covering max(total, last frame's total) × per_item elements.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Adds up a list of counts as it goes, so each item knows where its results start.",
@@ -35335,6 +35351,11 @@
         {
           "name": "scan",
           "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "extent",
+          "required": false,
           "type": "Array"
         },
         {

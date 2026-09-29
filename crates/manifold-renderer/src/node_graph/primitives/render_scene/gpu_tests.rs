@@ -883,8 +883,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
             &pipeline,
             &output,
             &bindings,
-            3,
-            1,
+            manifold_gpu::DrawCount::Direct { vertices: 3, instances: 1 },
             manifold_gpu::GpuLoadAction::Clear,
             "vertex-color-albedo-proof-draw",
         );
@@ -1061,8 +1060,7 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
             &pipeline,
             &output,
             &bindings,
-            6,
-            1,
+            manifold_gpu::DrawCount::Direct { vertices: 6, instances: 1 },
             manifold_gpu::GpuLoadAction::Clear,
             "extension-map-proof-draw",
         );
@@ -1254,7 +1252,8 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 GpuBinding::Bytes { binding: 50, data: bytemuck::cast_slice(&maps) },
             ];
             let mut enc = device.create_encoder("material-mip-proof");
-            enc.draw_instanced(&pipeline, &output, &bindings, 3, 1,
+            enc.draw_instanced(&pipeline, &output, &bindings,
+                manifold_gpu::DrawCount::Direct { vertices: 3, instances: 1 },
                 manifold_gpu::GpuLoadAction::Clear, "material-mip-proof");
             enc.commit_and_wait_completed();
             let actual = readback_rgba16f(&device, &output, 2, 2)[0][0];

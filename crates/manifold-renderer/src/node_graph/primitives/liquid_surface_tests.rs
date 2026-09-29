@@ -26,13 +26,15 @@ pub(super) struct Harness {
     pub device: crate::TestDevice,
     pub backend: MetalBackend,
     next: u32,
+    /// Live extents the last `run` published.
+    pub live_extents: Vec<(Slot, crate::node_graph::live_extent::LiveExtent)>,
 }
 
 impl Harness {
     pub fn new() -> Self {
         let device = crate::test_device();
         let backend = MetalBackend::new(device.arc(), 1, 1, GpuTextureFormat::Rgba8Unorm);
-        Self { device, backend, next: 0 }
+        Self { device, backend, next: 0, live_extents: Vec::new() }
     }
 
     pub fn array<T: bytemuck::Pod>(&mut self, values: &[T], capacity: usize) -> (Slot, GpuBuffer) {
@@ -78,6 +80,7 @@ impl Harness {
         let generations = vec![0_u64; self.next as usize + 1];
         let mut scalars = Vec::new();
         let mut errors = Vec::new();
+        self.live_extents.clear();
         {
             let (mut camera, mut light, mut material, mut transform) =
                 (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -95,7 +98,8 @@ impl Harness {
                 &mut atmosphere,
                 &mut render_mode,
                 &mut object,
-            );
+            )
+            .with_live_extent_writes(&mut self.live_extents);
             let mut native = self.device.create_encoder("liquid surface atom test");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut native, &self.device);
@@ -919,4 +923,131 @@ fn fluid_surface_overflow_reports_error() {
     assert!(first.errors.is_empty(), "nothing is reported before the total arrives");
     let next = run_marching_cubes(&mut harness, &sphere, 999, Some(triangles));
     assert!(next.errors.iter().any(|e| e.contains("Mesh Capacity is 999")), "{:?}", next.errors);
+}
+
+// --- P6b: live triangles only ---------------------------------------------
+
+/// `extent` holds the total, then 256-thread groups covering max(total, last
+/// frame's total) × per_item elements.
+#[test]
+fn fluid_running_total_extent_covers_this_and_last_frame() {
+    let mut harness = Harness::new();
+    let mut node = RunningTotal::new();
+    let (out, _) = harness.array::<u32>(&[], 1000);
+    let (extent_slot, extent) = harness.array::<u32>(&[], 4);
+    let total = harness.scalar();
+    let per_item = params(&[("per_item", 3.0)]);
+    // (live items, expected groups): 300 elements → 2 groups; shrinking to 10
+    // still covers last frame's 300; then 30 elements → 1 group.
+    for (items, groups) in [(100u32, 2u32), (10, 2), (10, 1)] {
+        let values: Vec<u32> = (0..1000).map(|i| u32::from(i < items)).collect();
+        let (input, _) = harness.array(&values, 1000);
+        let (_, errors) = harness.run(
+            &mut node,
+            &[("in", input)],
+            &[("out", out), ("total", total), ("extent", extent_slot)],
+            &per_item,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(read::<u32>(&extent, 4), vec![items, groups, 1, 1], "{items} live items");
+    }
+}
+
+/// One frame of count → running total → mesh with `extent` wired; returns the
+/// live vertex count.
+struct LiveMesh {
+    count: CountSurfaceTriangles,
+    running: RunningTotal,
+    mesh: VolumeSurfaceMesh,
+    counts: Slot,
+    scan: Slot,
+    total: Slot,
+    extent: (Slot, GpuBuffer),
+    vertices: (Slot, GpuBuffer),
+}
+
+impl LiveMesh {
+    fn new(harness: &mut Harness, nodes: usize, capacity: usize) -> Self {
+        let counts = harness.array::<u32>(&[], nodes).0;
+        let scan = harness.array::<u32>(&[], nodes).0;
+        let total = harness.scalar();
+        Self {
+            count: CountSurfaceTriangles::new(),
+            running: RunningTotal::new(),
+            mesh: VolumeSurfaceMesh::new(),
+            counts,
+            scan,
+            total,
+            extent: harness.array::<u32>(&[], 4),
+            vertices: harness.array::<MeshVertex>(&[], capacity),
+        }
+    }
+
+    fn frame(&mut self, harness: &mut Harness, sphere: &SphereLevelSet, capacity: usize) -> usize {
+        let (levelset, _) = harness.array(&sphere.values, sphere.values.len());
+        let n = sphere.nodes as f32;
+        let lattice = [("nodes_x", n), ("nodes_y", n), ("nodes_z", n)];
+        harness.run(&mut self.count, &[("levelset", levelset)], &[("counts", self.counts)], &params(&lattice));
+        harness.run(
+            &mut self.running,
+            &[("in", self.counts)],
+            &[("out", self.scan), ("total", self.total), ("extent", self.extent.0)],
+            &params(&[("per_item", 3.0)]),
+        );
+        let centre = sphere.min + 0.5 * sphere.size;
+        let mut mesh_params = lattice.to_vec();
+        mesh_params.extend([
+            ("center_x", centre),
+            ("center_y", centre),
+            ("center_z", centre),
+            ("size_x", sphere.size),
+            ("size_y", sphere.size),
+            ("size_z", sphere.size),
+            ("resolution_scale", 1.0),
+            ("max_capacity", capacity as f32),
+        ]);
+        let (_, errors) = harness.run(
+            &mut self.mesh,
+            &[("levelset", levelset), ("scan", self.scan), ("extent", self.extent.0)],
+            &[("vertices", self.vertices.0)],
+            &params(&mesh_params),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        read::<u32>(&self.extent.1, 1)[0] as usize * 3
+    }
+}
+
+/// With `extent` wired the emit covers only this frame's and last frame's
+/// vertices: a sentinel past that range survives, a shrinking surface clears
+/// what it vacates, and the live extent is published with a warm-up bound.
+#[test]
+fn fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices() {
+    let mut harness = Harness::new();
+    let big = SphereLevelSet::new(33, 0.7);
+    let small = SphereLevelSet::new(33, 0.35);
+    let capacity = 120_000;
+    let mut live = LiveMesh::new(&mut harness, big.values.len(), capacity);
+    let first = live.frame(&mut harness, &big, capacity);
+    let (slot, extent) = harness.live_extents.first().expect("the mesh publishes its live extent");
+    assert_eq!(*slot, live.vertices.0);
+    assert_eq!((extent.offset, extent.per_item, extent.bound), (0, 3, capacity as u32), "warm-up bound is the capacity");
+    assert!(extent.counts.ptr_eq(&live.extent.1), "the count is the running total's extent");
+
+    let sentinel_from = first.div_ceil(256) * 256 + 512;
+    let sentinel = MeshVertex { position: [9.0; 3], _pad0: 0.0, normal: [1.0, 0.0, 0.0], _pad1: 0.0, uv: [0.0; 2], _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4] };
+    let tail = vec![sentinel; capacity - sentinel_from];
+    // SAFETY: shared buffer, no GPU work in flight between harness runs.
+    unsafe { live.vertices.1.write((sentinel_from * std::mem::size_of::<MeshVertex>()) as u64, bytemuck::cast_slice(&tail)) };
+
+    assert_eq!(live.frame(&mut harness, &big, capacity), first);
+    let shrunk = live.frame(&mut harness, &small, capacity);
+    assert!(shrunk < first, "the small sphere has fewer vertices ({shrunk} of {first})");
+    live.frame(&mut harness, &small, capacity);
+    let vertices: Vec<MeshVertex> = read(&live.vertices.1, capacity);
+    assert!(vertices[..shrunk].iter().all(|v| v.normal != [0.0; 3]), "live vertices are written");
+    assert!(vertices[shrunk..sentinel_from].iter().all(is_zero), "vacated slots are cleared");
+    assert!(
+        vertices[sentinel_from..].iter().all(|v| v.position == [9.0; 3]),
+        "slots past last frame's extent are never touched"
+    );
 }

@@ -628,7 +628,12 @@ impl Primitive for RenderMeshDiagram {
                     GpuBinding::Buffer { binding: 11, buffer: instance_ring, offset: 0 },
                     GpuBinding::Buffer { binding: 12, buffer: instance_ring_counts, offset: 0 },
                 ],
-                3, if uniforms.occlusion != 0 { tri_count * copies } else { 0 }, GpuLoadAction::Load, Self::TYPE_ID,
+                manifold_gpu::DrawCount::Direct {
+                    vertices: 3,
+                    instances: if uniforms.occlusion != 0 { tri_count * copies } else { 0 },
+                },
+                GpuLoadAction::Load,
+                Self::TYPE_ID,
             );
         }
         // The capture follows the diagram pass in the same command stream,

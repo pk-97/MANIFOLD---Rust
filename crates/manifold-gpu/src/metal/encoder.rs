@@ -1019,14 +1019,12 @@ impl GpuEncoder {
     }
 
     /// Draw instanced geometry with a render pipeline.
-    #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced(
         &mut self,
         pipeline: &GpuRenderPipeline,
         target: &GpuTexture,
         bindings: &[GpuBinding],
-        vertex_count: u32,
-        instance_count: u32,
+        count: DrawCount,
         load_action: crate::GpuLoadAction,
         label: &str,
     ) {
@@ -1056,15 +1054,8 @@ impl GpuEncoder {
 
         apply_bindings_draw_both_stages(&enc, pipeline, bindings);
 
-        if instance_count > 0 {
-            unsafe {
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    MTLPrimitiveType::Triangle,
-                    0,
-                    vertex_count as usize,
-                    instance_count as usize,
-                );
-            }
+        if !count.is_empty() {
+            encode_draw(&enc, MTLPrimitiveType::Triangle, &count);
         }
         unsafe {
             enc.popDebugGroup();

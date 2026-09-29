@@ -1,26 +1,35 @@
 //! `node.running_total` — inclusive prefix sum of an `Array(u32)`, with the
 //! grand total read back to the CPU one frame late. A barriered multi-pass
 //! scan plus a readback bridge (ADDING_PRIMITIVES.md exclusions 1 and 3); the
-//! scan is shared with `node.sort_particles_into_cells` (`prefix_scan.rs`).
+//! scan is shared with `node.sort_particles_into_cells` (`prefix_scan.rs`). Its
+//! `extent` keeps last frame's total on the GPU (GPU_FLUID_SURFACE_DESIGN.md P6b).
+
+use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::prefix_scan::PrefixScan;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TotalParams {
     n: u32,
-    _pad: [u32; 3],
+    per_item: u32,
+    _pad: [u32; 2],
 }
+
+/// `extent` words: the total, then Metal's three indirect-dispatch group counts.
+const EXTENT_WORDS: u32 = 4;
+/// Byte offset of the dispatch grid inside `extent`.
+pub(crate) const EXTENT_GRID_OFFSET: u64 = 4;
 
 crate::primitive! {
     name: RunningTotal,
     type_id: "node.running_total",
-    purpose: "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late.",
+    purpose: "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late. `extent` holds the grand total on the GPU, then an indirect dispatch grid of 256-thread groups covering max(total, last frame's total) × per_item elements.",
     inputs: {
         in: Array(u32) required,
         count: ScalarF32 optional,
@@ -28,10 +37,20 @@ crate::primitive! {
     outputs: {
         out: Array(u32),
         total: ScalarF32,
+        extent: Array(u32),
     },
-    params: [],
+    params: [
+        ParamDef {
+            name: Cow::Borrowed("per_item"),
+            label: "Elements Per Count",
+            ty: ParamType::Int,
+            default: ParamValue::Float(1.0),
+            range: Some((1.0, 64.0)),
+            enum_values: &[],
+        },
+    ],
     depth_rule: Terminal,
-    composition_notes: "The building block for variable-length GPU output: per-item counts (triangles per cell, particles per bin) in, each item's inclusive end out, so a later atom finds its slot by binary search. Values past `count` are not written. `total` lags one frame; GPU consumers read the last scanned value directly instead.",
+    composition_notes: "The building block for variable-length GPU output: per-item counts (triangles per cell, particles per bin) in, each item's inclusive end out, so a later atom finds its slot by binary search. Values past `count` are not written. `total` lags one frame; GPU consumers read the last scanned value directly instead. Wire `extent` to an emitter (node.volume_surface_mesh) so it dispatches over its live elements and clears last frame's; set per_item to its elements per count (3 vertices per triangle).",
     examples: [],
     picker: { label: "Running Total", category: Atom },
     summary: "Adds up a list of counts as it goes, so each item knows where its results start.",
@@ -43,6 +62,8 @@ crate::primitive! {
         scan: PrefixScan = PrefixScan::default(),
         read_total: Option<GpuComputePipeline> = None,
         total_cell: Option<GpuBuffer> = None,
+        last_total: Option<GpuBuffer> = None,
+        extent_scratch: Option<GpuBuffer> = None,
         previous_total: f32 = 0.0,
     },
 }
@@ -54,9 +75,11 @@ impl Primitive for RunningTotal {
         _params: &ParamValues,
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
-        (port == "out")
-            .then(|| inputs.iter().find(|(name, _)| *name == "in").map(|&(_, n)| n))
-            .flatten()
+        match port {
+            "out" => inputs.iter().find(|(name, _)| *name == "in").map(|&(_, n)| n),
+            "extent" => Some(EXTENT_WORDS),
+            _ => None,
+        }
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -85,6 +108,12 @@ impl Primitive for RunningTotal {
             if self.total_cell.is_none() {
                 self.total_cell = Some(gpu.device.create_buffer_shared(4));
             }
+            if self.last_total.is_none() {
+                let last = gpu.device.create_buffer_shared(4);
+                last.zero_fill();
+                self.last_total = Some(last);
+                self.extent_scratch = Some(gpu.device.create_buffer_shared(u64::from(EXTENT_WORDS) * 4));
+            }
         }
         let (Some(input), Some(out)) = (ctx.inputs.array("in"), ctx.outputs.array("out")) else {
             return;
@@ -93,6 +122,15 @@ impl Primitive for RunningTotal {
             ctx.error("Running Total: count must be finite");
             return;
         }
+        let per_item = match ctx.params.get("per_item") {
+            Some(ParamValue::Float(n)) => n.round().clamp(1.0, 64.0) as u32,
+            _ => 1,
+        };
+        let extent = ctx
+            .outputs
+            .array("extent")
+            .or(self.extent_scratch.as_ref())
+            .expect("extent scratch allocated");
         let whole = (input.size / 4).min(out.size / 4);
         let n = requested.map_or(whole, |count| (count.max(0.0) as u64).min(whole)) as usize;
         let gpu = ctx.gpu_encoder();
@@ -112,7 +150,7 @@ impl Primitive for RunningTotal {
         if bytes > 0 {
             encoder.copy_buffer_to_buffer(&values, out, bytes);
         }
-        let uniforms = TotalParams { n: n as u32, _pad: [0; 3] };
+        let uniforms = TotalParams { n: n as u32, per_item, _pad: [0; 2] };
         encoder.dispatch_compute(
             self.read_total.as_ref().expect("total pipeline created"),
             &[
@@ -123,6 +161,12 @@ impl Primitive for RunningTotal {
                     buffer: self.total_cell.as_ref().expect("total cell allocated"),
                     offset: 0,
                 },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: self.last_total.as_ref().expect("last total allocated"),
+                    offset: 0,
+                },
+                GpuBinding::Buffer { binding: 4, buffer: extent, offset: 0 },
             ],
             [1, 1, 1],
             "node.running_total.total",

@@ -519,8 +519,7 @@ impl Primitive for RenderValueOverlay {
                 GpuBinding::Texture { binding: 2, texture: font_atlas },
                 GpuBinding::Sampler { binding: 3, sampler: point_sampler },
             ],
-            6,
-            quad_count as u32,
+            manifold_gpu::DrawCount::Direct { vertices: 6, instances: quad_count as u32 },
             GpuLoadAction::Load,
             "node.value_overlay",
         );

@@ -1631,7 +1631,13 @@
             "id": 9,
             "typeId": "node.running_total",
             "handle": "Triangle Offsets",
-            "nodeId": "liquid_offsets"
+            "nodeId": "liquid_offsets",
+            "params": {
+              "per_item": {
+                "type": "Int",
+                "value": 3
+              }
+            }
           },
           {
             "id": 10,
@@ -1828,6 +1834,12 @@
             "fromPort": "total",
             "toNode": 10,
             "toPort": "total"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "extent",
+            "toNode": 10,
+            "toPort": "extent"
           },
           {
             "fromNode": 10,
