@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1 built (FLIP particle capture, test feed only). Next: P2, P5, P6. P3 deferred and P4 dropped (section 9). P7–P8 not built.
+**Status:** BUILDING · P1–P2 built (FLIP test feed; particle-frame seam and ring). Next: P5, P6. P3 deferred and P4 dropped (section 9). P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -337,11 +337,11 @@ Volumes are `Array(f32)` (D8); triangle counts and scans are `Array(u32)`.
 | `grid_nodes_x`, `grid_nodes_y`, `grid_nodes_z` | `ScalarF32` | Solid lattice node counts. |
 | `blend`, `span` | `ScalarF32` | D10. |
 
-`obstacle_pose` and the coupled rigid frame present at `s` when any particle output is
-consumed. The node decides consumption from its compiled outputs.
-⚠ VERIFY-AT-IMPL that an unconsumed output has no resource: read how
-`force_consumed_outputs` (`R/effect_node.rs:1648`) is used in `R/execution_plan.rs` and
-how outputs without consumers are planned.
+Any of the four arrays wired switches the node into publishing particle frames; an
+unwired output has no plan resource, which the node reads through `ctx.outputs.slot`.
+The arrays are provided storage with a capacity hint of one record; downstream
+capacity re-derives as the ring grows. `obstacle_pose` and the coupled rigid frame
+present tick B until P3 builds interpolation (P2, deviation).
 
 Lattice convention, stated once: node (i, j, k) sits at
 `bounds.min + (i, j, k) · size / (nodes − 1)`. A volume at scale `m` has
@@ -495,7 +495,7 @@ up.
 | Frames are id-sorted; ids stable across removal and unique within an identity epoch | `particle_frame_ids_sorted_through_inflow_and_drain` (manifold-fluids); `debug_assert!` on the worker before publishing |
 | Capture never changes the simulation | `particle_frame_capture_leaves_solver_state_bit_identical` |
 | Display time never passes the newest tick; `blend` ∈ [0, 1] | `fluid_display_time_never_passes_newest_tick`; GPU value test: `blend = 0` reproduces A's surviving particles and `blend = 1` reproduces B exactly |
-| All solver-time outputs present at one `s` | `fluid_presentation_outputs_share_display_time` (particles, `obstacle_pose`, coupled rigid frame) |
+| All solver-time outputs present at one `s` | `fluid_presentation_outputs_share_display_time` (particles, `obstacle_pose`, coupled rigid frame) — deferred with P3; until then every output presents tick B |
 | Live never blocks on the worker; ring exhaustion skips a request | `fluid_particle_ring_exhaustion_never_blocks`; negative gate: `rg -n '\.recv\(\)' crates/manifold-renderer/src/node_graph/fluid.rs` shows only the offline branch |
 | No new shared locks | Negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
 | Unsupported rate, mode and coupling combinations are named errors | `fluid_solver_rate_rejects_record_playback_engine_mesh_and_coupled_below_30`, `fluid_particle_outputs_reject_record_and_playback` |
@@ -548,6 +548,37 @@ existed for P4, dropped).
 - **Forbidden:** touching solver numerics; using upstream's `uint16` particle ID; allocating per capture; a second scene-space conversion pass anywhere else.
 
 ### P2 — Frame publication and display clock (renderer)
+
+**Built (2026-09-29).** Section 3.2's outputs on `node.fluid_surface`; `FluidParticle`
+in `R/fluid_particles.rs` (layout asserted equal to `ParticleRecord`); the ring in
+`R/fluid/particle_ring.rs` (four slots loaned inside `Request.outputs`, returned in
+`Reply.outputs`); `blend`/`span` from `display_blend(target − tick, t_A, t_B)`;
+deferred meshing (`set_outputs`, restart on a meshing change, Record always meshes);
+the Record/Playback rejection. Entry-check resolutions:
+- **Content frame fence.** No FrameFence exists on the content thread. The content
+  pipeline's per-frame completion event already drives texture-pool recycling and
+  drop retirement, so the ring reads that clock through a read-only
+  `manifold_gpu::FrameClock` (`GpuDevice::frame_clock()`), not a second fence.
+  Live checks `is_complete` and skips the request; offline waits on the oldest
+  reader, an earlier committed frame.
+- **Growth and late wiring.** One rule covers both: when the published tick is not
+  the completed tick, the next request is capture-only for that tick. A too-small
+  slot reports its counts, the ring grows free slots on the next prepare, and the
+  capture-only reply publishes the same tick without republishing the mesh.
+- **Unconsumed outputs** get no resource (`consumed_outputs` in `R/execution_plan.rs`);
+  the node reads consumption from `ctx.outputs.slot`.
+**Deviation, pending the lead:** `obstacle_pose` and the coupled rigid frame still present
+tick B. With P3 deferred the surface reads `particles_b`, so presenting them at `s` would
+put the paddle up to a tick behind the water it pushes. Presentation at `s` moves into
+P3 with the interpolation atom; `fluid_presentation_outputs_share_display_time` goes
+with it. Tests built: `fluid_display_time_never_passes_newest_tick`,
+`fluid_engine_mesh_skipped_when_vertices_unconsumed`,
+`fluid_particle_outputs_reject_record_and_playback`,
+`physics_world_uncoupled_advances_while_fluid_worker_stalls`; GPU proofs
+`fluid_particle_frame_reaches_gpu` (GPU copy of `particles_b` equals an independent P1
+capture bit for bit), `fluid_particle_ring_exhaustion_never_blocks`,
+`fluid_particle_ring_growth_recaptures_same_tick`. The `MANIFOLD_RENDER_TRACE` app gate
+is the orchestrating session's.
 
 - **Entry state:** P1 merged. Anchors: `rg -n 'fn capture_output|fn process' crates/manifold-renderer/src/node_graph/fluid/native.rs`, `rg -n 'fn accept|fn advance|const BATCH' crates/manifold-renderer/src/node_graph/fluid.rs`, `rg -n 'fn provides_array_output' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs`. ⚠ VERIFY-AT-IMPL the content frame fence: `rg -n 'frame_fence|FrameFence|completed_frame' crates/manifold-renderer/src/gpu_encoder.rs crates/manifold-app/src/content_pipeline.rs`. If no counter is reachable from `EffectNodeContext`, add a read-only `GpuEncoder::frame_fence() -> &FrameFence` fed the way `clip_thumb_gpu.rs:258` is fed; any other shape is an escalation.
 - **Read-back:** D7, D10, D12, D13, D19; sections 3.2–3.3; the forbidden list in section 5.
@@ -654,7 +685,7 @@ or in section 11.
 | `Array(f32)` → `Texture3D` resolve atom (debug slice, `blur_3d` reuse) | Authoring needs to see or blur the level set |
 | Migrating legacy presets to the GPU surface | Particle-frame caching lands |
 | Live versus baked look parity | Peter judges the difference unacceptable before particle caching lands |
-| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, the Particle View preset | A sub-60 Hz particle producer exists |
+| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, the Particle View preset, and presenting `obstacle_pose` and the coupled rigid frame at `s` | A sub-60 Hz particle producer exists |
 | FLIP particle identity (`manifold_id`, renumbering, worker-side sort) | FLIP frames must feed P3's interpolation |
 | Fade-out of particles removed during a tick (D11) | Popping shows away from drains; needs a summed capacity expression in the fusion compiler first |
 

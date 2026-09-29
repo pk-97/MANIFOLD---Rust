@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::Seconds;
-use manifold_fluids::{Bounds, FluidWorld, FrameStats, SurfaceVertex, WhitewaterParticle};
+use manifold_fluids::{
+    Bounds, CaptureError, FluidWorld, FrameStats, SurfaceVertex, WhitewaterParticle,
+};
 use manifold_physics::FieldInput;
 
 use crate::generators::mesh_common::MeshVertex;
@@ -75,6 +77,8 @@ impl NativeSimulation {
         new.set_time_step_options(request.settings.time_steps)
             .map_err(|e| e.to_string())?;
         new.set_surface_options(request.settings.surface)
+            .map_err(|e| e.to_string())?;
+        new.set_surface_reconstruction_enabled(request.outputs.surface_meshing)
             .map_err(|e| e.to_string())?;
         new.set_whitewater_options(request.settings.whitewater)
             .map_err(|e| e.to_string())?;
@@ -177,9 +181,13 @@ impl NativeSimulation {
             return Ok(());
         }
         let native = &mut self.world.as_mut().expect("world initialized").1;
-        native
-            .surface(&mut self.surface)
-            .map_err(|e| e.to_string())?;
+        if request.outputs.surface_meshing {
+            native
+                .surface(&mut self.surface)
+                .map_err(|e| e.to_string())?;
+        } else {
+            self.surface.clear();
+        }
         if self.surface.len() > u32::MAX as usize {
             return Err("Fluid surface exceeds 32-bit GPU vertex indexing".into());
         }
@@ -456,6 +464,22 @@ impl NativeSimulation {
                 )?;
                 recorded_count += 1;
             }
+            // The particle frame is the batch's last completed tick, or the
+            // current tick for a capture-only request.
+            let tick = request.start_tick + completed_count as u64;
+            if let Some(slot) = request.outputs.particles.as_mut()
+                && tick > 0
+                && cancel_epoch.load(Ordering::Acquire) == request.epoch
+            {
+                let native = &mut self.world.as_mut().expect("world initialized").1;
+                match slot.capture(native, domain.native_origin(), tick) {
+                    Ok(()) => {}
+                    Err(CaptureError::Capacity { particles, solid }) => {
+                        request.outputs.growth = Some((particles, solid));
+                    }
+                    Err(CaptureError::Fluid(error)) => return Err(error.to_string()),
+                }
+            }
             Ok(())
         })();
         request.coupled = coupled_request;
@@ -470,6 +494,7 @@ impl NativeSimulation {
             });
         }
         Reply {
+            outputs: request.outputs,
             source_identity: request.source_identity,
             epoch: request.epoch,
             tick: playback_tick.unwrap_or(request.start_tick + completed_count as u64),

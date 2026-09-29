@@ -30,6 +30,7 @@ mod domain;
 pub(super) mod identity;
 mod impulses;
 mod native;
+pub(crate) mod particle_ring;
 #[cfg(test)]
 mod playback_tests;
 mod roles;
@@ -45,6 +46,17 @@ pub const TICK: f64 = 1.0 / 60.0;
 
 pub(super) fn simulation_tick(time: f64) -> u64 {
     (time / TICK + 1e-8).floor() as u64
+}
+
+/// GPU_FLUID_SURFACE_DESIGN.md D10: the blend presenting display time `s`
+/// between frames at `t_a` and `t_b`, and their span. Display time never
+/// passes the newest frame; one frame (`t_a == t_b`) presents it fully.
+pub(crate) fn display_blend(s: f64, t_a: f64, t_b: f64) -> (f32, f32) {
+    let span = t_b - t_a;
+    if span <= 0.0 {
+        return (1.0, 0.0);
+    }
+    (((s - t_a) / span).clamp(0.0, 1.0) as f32, span as f32)
 }
 // Initial retained-input allocation; histories grow without discarding debt.
 const HISTORY_CAPACITY: usize = 8192;
@@ -341,7 +353,33 @@ struct PlaybackCompletion {
     unchanged: bool,
 }
 
+/// What a request publishes besides the mesh (GPU_FLUID_SURFACE_DESIGN.md
+/// D7, D13, D19). Travels in the request and comes back in its reply.
+pub(crate) struct Outputs {
+    /// Per-tick CPU surface reconstruction; off only when nothing reads
+    /// `vertices` (D13). Fixed for a world's lifetime.
+    surface_meshing: bool,
+    /// Ring slot loaned for this request's particle frame.
+    particles: Option<particle_ring::ParticleSlot>,
+    /// Capture the current tick into `particles` without stepping.
+    capture_only: bool,
+    /// Worker answer: the slot was too small (particles, solid nodes).
+    growth: Option<(u32, usize)>,
+}
+
+impl Default for Outputs {
+    fn default() -> Self {
+        Self {
+            surface_meshing: true,
+            particles: None,
+            capture_only: false,
+            growth: None,
+        }
+    }
+}
+
 struct Request {
+    outputs: Outputs,
     source_identity: Option<[u8; 32]>,
     project_tempo: Option<crate::preset_context::ProjectTempo>,
     epoch: u64,
@@ -363,6 +401,7 @@ struct Request {
 }
 
 struct Reply {
+    outputs: Outputs,
     source_identity: Option<[u8; 32]>,
     epoch: u64,
     tick: u64,
@@ -383,6 +422,10 @@ struct Reply {
 
 fn cancelled_reply(request: Request) -> Reply {
     Reply {
+        outputs: Outputs {
+            growth: None,
+            ..request.outputs
+        },
         source_identity: request.source_identity,
         epoch: request.epoch,
         tick: request.start_tick,
@@ -483,6 +526,12 @@ pub struct FluidRuntime {
     cache_mode: CacheMode,
     cache_path: Arc<PathBuf>,
     coupled: Option<coupled::Runtime>,
+    /// Particle-frame slots published as `particles_a/b` and `solid_a/b`.
+    pub(crate) particles: particle_ring::ParticleRing,
+    /// Something reads the particle-frame outputs this frame.
+    particle_outputs: bool,
+    /// Something reads `vertices`; Record meshes regardless (D13).
+    surface_meshing: bool,
 }
 
 impl Default for FluidRuntime {
@@ -528,6 +577,9 @@ impl Default for FluidRuntime {
             cache_mode: CacheMode::Live,
             cache_path: Arc::new(PathBuf::new()),
             coupled: None,
+            particles: particle_ring::ParticleRing::default(),
+            particle_outputs: false,
+            surface_meshing: true,
         }
     }
 }
@@ -638,8 +690,70 @@ impl FluidRuntime {
         self.failure = None;
         self.vertices.clear();
         self.whitewater.clear();
+        self.particles.clear();
         self.stats = FrameStats::default();
         self.version = self.version.wrapping_add(1);
+    }
+
+    /// Which outputs the graph reads. Particle outputs publish frames from the
+    /// next accepted tick. Meshing is fixed before a world's first step, so a
+    /// change restarts the simulation (D13); Record always meshes.
+    pub(crate) fn set_outputs(&mut self, particles: bool, vertices: bool) {
+        self.particle_outputs = particles;
+        let meshing = |mode, vertices| vertices || mode == CacheMode::Record;
+        if meshing(self.cache_mode, vertices) != meshing(self.cache_mode, self.surface_meshing) {
+            self.clear();
+        }
+        self.surface_meshing = vertices;
+    }
+
+    fn effective_surface_meshing(&self) -> bool {
+        self.surface_meshing || self.cache_mode == CacheMode::Record
+    }
+
+    /// Allocate or regrow particle slots. Content thread, before `advance`.
+    pub(crate) fn prepare_particles(&mut self, device: &manifold_gpu::GpuDevice) -> Result<(), String> {
+        let Some(settings) = self.settings else {
+            return Ok(());
+        };
+        let layout = settings.domain_layout()?;
+        let nodes = layout.cells.iter().map(|&n| n as usize + 4).product();
+        self.particles.prepare(device, nodes)
+    }
+
+    /// Scene box and node counts of the solid lattice: the padded native
+    /// grid, node (i, j, k) at `min + (i, j, k)·size/(nodes − 1)`.
+    pub(crate) fn particle_lattice(&self) -> Option<(Transform, [u32; 3])> {
+        let layout = self.settings?.domain_layout().ok()?;
+        let origin = layout.native_origin();
+        let size: [f32; 3] =
+            std::array::from_fn(|axis| (f64::from(layout.cells[axis] + 3) * layout.cell_size) as f32);
+        let bounds = Transform {
+            pos: std::array::from_fn(|axis| origin[axis] + size[axis] * 0.5),
+            scale: size,
+            ..Transform::default()
+        };
+        Some((bounds, layout.cells.map(|cells| cells + 4)))
+    }
+
+    /// The published tick is not the completed tick: a capture is owed.
+    pub(crate) fn particle_capture_pending(&self) -> bool {
+        self.particle_outputs
+            && self.initialized
+            && self.completed_tick > 0
+            && self.particles.newest_tick() != Some(self.completed_tick)
+    }
+
+    /// D10 display clock: `s = target − tick`, blended between the two
+    /// newest published frames. Returns (blend, span); one frame gives (1, 0).
+    pub(crate) fn particle_blend(&self) -> (f32, f32) {
+        let Some((a, b)) = self.particles.pair() else {
+            return (1.0, 0.0);
+        };
+        let tick_time = |slot: &particle_ring::ParticleSlot| {
+            slot.frame().map_or(0.0, |frame| frame.tick as f64 * TICK)
+        };
+        display_blend(self.target_time - TICK, tick_time(a), tick_time(b))
     }
 
     pub fn simulation_time(&self) -> f64 {
@@ -1060,7 +1174,9 @@ impl FluidRuntime {
 
     fn accept(&mut self, mut reply: Reply) -> Result<(), String> {
         self.busy = false;
-        let has_output = !reply.timing.metadata_only
+        // A capture-only reply carries a particle frame and nothing else.
+        let has_output = !reply.outputs.capture_only
+            && !reply.timing.metadata_only
             && !reply.playback.is_some_and(|completed| completed.unchanged);
         if let Err(error) = self.timing.recycle(
             std::mem::take(&mut reply.timing),
@@ -1092,6 +1208,13 @@ impl FluidRuntime {
             } else if reply.epoch == self.epoch {
                 current.recover_missing_request();
             }
+        }
+        if let Some(slot) = reply.outputs.particles.take() {
+            let fresh = reply.epoch == self.epoch && reply.error.is_none();
+            if fresh && let Some((particles, solid)) = reply.outputs.growth {
+                self.particles.grow(particles, solid);
+            }
+            self.particles.accept(slot, fresh);
         }
         self.accept_impulse_batch(reply.epoch, reply.started_tick, reply.impulses);
         self.spare_role_history = Some(reply.role_history);
@@ -1177,7 +1300,11 @@ impl FluidRuntime {
                 legacy_tick: target_tick,
             });
             let due = target_tick.saturating_sub(self.completed_tick);
+            // A owed particle capture goes before any further stepping, so
+            // the frame is the completed tick itself (growth, late wiring).
+            let capture_only = self.particle_capture_pending();
             if self.initialized
+                && !capture_only
                 && (if self.cache_mode == CacheMode::Playback {
                     playback == self.completed_playback
                 } else {
@@ -1190,9 +1317,33 @@ impl FluidRuntime {
                 return Ok(());
             }
             let initial = self.history.front().expect("observed controls").controls;
-            let count = request_count(self.cache_mode, due, target_tick, self.initialized)?;
+            let count = if capture_only {
+                0
+            } else {
+                request_count(self.cache_mode, due, target_tick, self.initialized)?
+            };
+            let particles = if self.particle_outputs && (capture_only || count > 0) {
+                match self.particles.take(blocking) {
+                    Some(slot) => Some(slot),
+                    // Live never waits: ring exhaustion skips this request
+                    // (D19). An owed capture waits for a prepared slot.
+                    None if capture_only || !blocking => return Ok(()),
+                    // Offline keeps stepping; the capture is then owed.
+                    None => None,
+                }
+            } else {
+                None
+            };
             let impulses = if self.cache_mode == CacheMode::Live {
-                self.prepare_impulse_batch(self.completed_tick, count)?
+                match self.prepare_impulse_batch(self.completed_tick, count) {
+                    Ok(events) => events,
+                    Err(error) => {
+                        if let Some(slot) = particles {
+                            self.particles.accept(slot, false);
+                        }
+                        return Err(error);
+                    }
+                }
             } else {
                 // Legacy cache playback can seek; it has no live impulse clock.
                 let mut events = self.spare_impulses.take().expect("recycled impulse batch");
@@ -1211,6 +1362,12 @@ impl FluidRuntime {
                 .expect("one recycled role history per request");
             self.role_history.snapshot(&mut role_history);
             let request = Request {
+                outputs: Outputs {
+                    surface_meshing: self.effective_surface_meshing(),
+                    particles,
+                    capture_only,
+                    growth: None,
+                },
                 source_identity: self.source_identity,
                 project_tempo: self.project_tempo.clone(),
                 epoch: self.epoch,
@@ -1233,7 +1390,12 @@ impl FluidRuntime {
                     .expect("one recycled whitewater frame per request"),
                 cache_mode: self.cache_mode,
                 cache_path: self.cache_path.clone(),
-                coupled: self.coupled.as_mut().map(coupled::Runtime::request),
+                // A capture-only reply publishes no rigid frame.
+                coupled: if capture_only {
+                    None
+                } else {
+                    self.coupled.as_mut().map(coupled::Runtime::request)
+                },
                 timing: self.timing.snapshot(
                     self.initialized && self.cache_mode == CacheMode::Record && count == 0,
                 ),
@@ -1245,6 +1407,9 @@ impl FluidRuntime {
             let worker = self.worker.as_ref().expect("worker exists");
             if let Err(error) = worker.requests.send(request) {
                 let request = error.0;
+                if let Some(slot) = request.outputs.particles {
+                    self.particles.accept(slot, false);
+                }
                 self.spare = Some(request.recycle);
                 self.spare_whitewater = Some(request.recycle_whitewater);
                 self.spare_history = Some(request.history);
@@ -1494,6 +1659,7 @@ mod tests {
             let init = request_receiver.recv().unwrap();
             reply_sender
                 .send(Reply {
+                    outputs: Default::default(),
                     source_identity: None,
                     timing: Default::default(),
                     playback: None,
@@ -1533,6 +1699,7 @@ mod tests {
                             counts.push(request.count);
                             reply_sender
                                 .send(Reply {
+                                    outputs: Default::default(),
                                     source_identity: None,
                                     timing: Default::default(),
                                     playback: None,
@@ -1607,6 +1774,7 @@ mod tests {
             .unwrap();
         runtime
             .accept(Reply {
+                outputs: Default::default(),
                 source_identity: None,
                 timing: Default::default(),
                 playback: None,
@@ -1633,6 +1801,7 @@ mod tests {
         runtime.clear();
         runtime
             .accept(Reply {
+                outputs: Default::default(),
                 source_identity: None,
                 timing: Default::default(),
                 playback: None,
@@ -2092,6 +2261,7 @@ mod tests {
         runtime.spare_history = None;
         runtime
             .accept(Reply {
+                outputs: Default::default(),
                 source_identity: None,
                 timing: Default::default(),
                 playback: None,
@@ -2140,6 +2310,7 @@ mod tests {
         let epoch = runtime.epoch;
         runtime
             .accept(Reply {
+                outputs: Default::default(),
                 source_identity: None,
                 timing: Default::default(),
                 playback: None,
@@ -2165,6 +2336,7 @@ mod tests {
 
         runtime
             .accept(Reply {
+                outputs: Default::default(),
                 source_identity: None,
                 timing: Default::default(),
                 playback: None,
@@ -2198,6 +2370,7 @@ mod tests {
         assert!(runtime.domain_snapshot().accepted_layout.is_none());
         runtime
             .accept(Reply {
+                outputs: Default::default(),
                 source_identity: None,
                 timing: Default::default(),
                 playback: None,
@@ -2238,6 +2411,7 @@ mod tests {
         assert!(
             runtime
                 .accept(Reply {
+                    outputs: Default::default(),
                     source_identity: None,
                     timing: Default::default(),
                     playback: None,
@@ -2593,4 +2767,123 @@ mod tests {
         assert_ne!(runtime.epoch, epoch);
         assert_eq!(runtime.settings, Some(after));
     }
+
+    #[test]
+    fn fluid_display_time_never_passes_newest_tick() {
+        let (t_a, t_b) = (3.0 * TICK, 5.0 * TICK);
+        for step in 0..=80 {
+            let s = step as f64 * TICK / 8.0;
+            let (blend, span) = display_blend(s, t_a, t_b);
+            assert!((0.0..=1.0).contains(&blend), "{s}: {blend}");
+            assert!((f64::from(span) - 2.0 * TICK).abs() < 1e-6);
+            // `span` is published as f32; allow its rounding, nothing more.
+            let presented = t_a + f64::from(blend) * f64::from(span);
+            assert!(presented <= t_b + 1e-6, "display time {presented} passed {t_b}");
+            if s >= t_b {
+                assert_eq!(blend, 1.0);
+            }
+            if s <= t_a {
+                assert_eq!(blend, 0.0);
+            }
+        }
+        // One frame (or no newer frame) presents that frame fully.
+        assert_eq!(display_blend(10.0, 1.0, 1.0), (1.0, 0.0));
+        // Offline, one tick per display frame: s = target − tick lands on A.
+        let target = 7.0 * TICK;
+        assert_eq!(display_blend(target - TICK, 6.0 * TICK, 7.0 * TICK).0, 0.0);
+        // Half a tick later the display is halfway between the ticks.
+        let (blend, _) = display_blend(target + 0.5 * TICK - TICK, 6.0 * TICK, 7.0 * TICK);
+        assert!((blend - 0.5).abs() < 1e-5);
+        // Without particle frames the runtime reports a full blend over no span.
+        assert_eq!(FluidRuntime::default().particle_blend(), (1.0, 0.0));
+    }
+
+    #[test]
+    fn fluid_engine_mesh_skipped_when_vertices_unconsumed() {
+        let settings = FluidSettings {
+            resolution: 12,
+            ..FluidSettings::default()
+        };
+        let controls = FluidControls {
+            emission: false,
+            obstacle_enabled: false,
+            ..FluidControls::default()
+        };
+        let run = |vertices: bool| {
+            let mut runtime = FluidRuntime::default();
+            runtime.set_outputs(false, vertices);
+            for tick in 0..=4 {
+                runtime
+                    .observe(settings, controls, Seconds(tick as f64 * TICK), 1.0, 0.0)
+                    .unwrap();
+                runtime.advance(true).unwrap();
+            }
+            assert_eq!(runtime.completed_tick, 4);
+            assert!(runtime.stats.particles > 0);
+            runtime
+        };
+        let meshed = run(true);
+        assert!(meshed.stats.triangles > 0);
+        assert!(!meshed.vertices.is_empty());
+        let skipped = run(false);
+        assert_eq!(skipped.stats.triangles, 0);
+        assert!(skipped.vertices.is_empty());
+        assert_eq!(skipped.stats.particles, meshed.stats.particles);
+
+        // Meshing is fixed before a world's first step: rewiring restarts it.
+        let mut runtime = run(false);
+        let epoch = runtime.epoch;
+        runtime.set_outputs(false, false);
+        assert_eq!(runtime.epoch, epoch, "an unchanged wiring keeps the world");
+        runtime.set_outputs(true, false);
+        assert_eq!(runtime.epoch, epoch, "particle outputs do not restart the world");
+        runtime.set_outputs(true, true);
+        assert_ne!(runtime.epoch, epoch);
+    }
+
+    #[test]
+    fn physics_world_uncoupled_advances_while_fluid_worker_stalls() {
+        use crate::node_graph::physics::{MAX_BODIES, RigidBody, RigidSimulation};
+        // A fluid whose worker received a request and never answers.
+        let (request_sender, request_receiver) = mpsc::sync_channel::<Request>(1);
+        let (_reply_sender, reply_receiver) = mpsc::sync_channel::<Reply>(1);
+        let mut fluid = FluidRuntime::default();
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        fluid.observe(settings, controls, Seconds(0.0), 1.0, 0.0).unwrap();
+        fluid.worker = Some(Worker {
+            requests: request_sender,
+            replies: reply_receiver,
+            cancel_epoch: Arc::clone(&fluid.cancel_epoch),
+        });
+        fluid.advance(false).unwrap();
+        let _stalled = request_receiver.recv().unwrap();
+
+        let mut bodies: [Option<RigidBody>; MAX_BODIES] = std::array::from_fn(|_| None);
+        bodies[0] = Some(RigidBody {
+            transform: Transform {
+                pos: [0.0, 5.0, 0.0],
+                ..Transform::default()
+            },
+            ..RigidBody::default()
+        });
+        let mut rigid = RigidSimulation::default();
+        let started = std::time::Instant::now();
+        for frame in 0..=30 {
+            let time = Seconds(frame as f64 * TICK);
+            fluid.observe(settings, controls, time, 1.0, 0.0).unwrap();
+            fluid.advance(false).unwrap();
+            rigid
+                .advance(bodies.clone(), [0.0, -9.81, 0.0], time, 1.0, 0.0)
+                .unwrap();
+        }
+        assert!(fluid.busy && !fluid.initialized, "the fluid worker never answered");
+        assert_eq!(fluid.completed_tick, 0);
+        let fallen = 5.0 - rigid.poses[0].pos[1];
+        assert!(fallen > 0.5, "the uncoupled body fell {fallen} m in half a second");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod particle_tests;

@@ -11,6 +11,8 @@ use crate::node_graph::fluid::{
 };
 use crate::node_graph::fluid_cache::CacheMode;
 use crate::node_graph::fluid_mesh_upload::FluidMeshUpload;
+use crate::node_graph::fluid::particle_ring::SlotFrame;
+use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::instance_upload::InstanceSnapshotUpload;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -18,6 +20,10 @@ use crate::node_graph::physics::{RigidImpulseTargets, RigidSceneObservation};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
+
+/// Particle-frame outputs (GPU_FLUID_SURFACE_DESIGN.md section 3.2). Any of
+/// them wired switches the node into publishing particle frames.
+const PARTICLE_ARRAY_PORTS: [&str; 4] = ["particles_a", "particles_b", "solid_a", "solid_b"];
 
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
@@ -119,6 +125,11 @@ crate::primitive! {
         simulation_time: ScalarF32, lag_seconds: ScalarF32, simulation_ms: ScalarF32,
         meshing_ms: ScalarF32, particle_count: ScalarF32, vertex_count: ScalarF32,
         upload_ms: ScalarF32,
+        particles_a: Array(FluidParticle), particles_b: Array(FluidParticle),
+        count_a: ScalarF32, count_b: ScalarF32, identity_a: ScalarF32, identity_b: ScalarF32,
+        solid_a: Array(f32), solid_b: Array(f32), grid_bounds: Transform,
+        grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
+        blend: ScalarF32, span: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
@@ -174,6 +185,8 @@ crate::primitive! {
         spray_upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
         last_version: u64 = u64::MAX,
         last_lag: u32 = u32::MAX,
+        last_particle_version: u64 = u64::MAX,
+        last_blend: u32 = u32::MAX,
         role_pending: bool = false,
         domain_failure: bool = false,
         coupled_mode: bool = false,
@@ -200,10 +213,23 @@ impl FluidSurface {
 }
 
 impl Primitive for FluidSurface {
-    fn provides_array_output(&self, port: &str) -> bool { port == "vertices" }
+    fn provides_array_output(&self, port: &str) -> bool {
+        port == "vertices" || PARTICLE_ARRAY_PORTS.contains(&port)
+    }
 
     fn provided_array_output(&self, port: &str) -> Option<&manifold_gpu::GpuBuffer> {
-        (port == "vertices").then_some(self.surface_buffer.as_ref()).flatten()
+        if port == "vertices" {
+            return self.surface_buffer.as_ref();
+        }
+        // The worker writes ring slots directly; A/B are published as is.
+        let (a, b) = self.runtime.particles.pair()?;
+        match port {
+            "particles_a" => Some(a.particles()),
+            "particles_b" => Some(b.particles()),
+            "solid_a" => Some(a.solid()),
+            "solid_b" => Some(b.solid()),
+            _ => None,
+        }
     }
 
     fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
@@ -311,6 +337,11 @@ impl Primitive for FluidSurface {
                 _ => 100000.0,
             };
             return Some(value.clamp(1.0, 250000.0).round() as u32);
+        }
+        if PARTICLE_ARRAY_PORTS.contains(&port) {
+            // The ring provides storage sized by the solver; downstream
+            // arrays re-derive capacity when a provided array grows.
+            return Some(1);
         }
         if port != "vertices" {
             return None;
@@ -501,6 +532,19 @@ impl Primitive for FluidSurface {
             Self::report_failure(&mut self.domain_failure, ctx, error);
             return;
         }
+        let particle_outputs = PARTICLE_ARRAY_PORTS
+            .iter()
+            .any(|port| ctx.outputs.slot(port).is_some());
+        if particle_outputs && cache_mode != CacheMode::Live {
+            Self::report_failure(
+                &mut self.domain_failure,
+                ctx,
+                "Fluid particle outputs require Live mode until particle frames are recorded in the cache manifest".into(),
+            );
+            return;
+        }
+        self.runtime
+            .set_outputs(particle_outputs, ctx.outputs.slot("vertices").is_some());
         let defaults = FluidControls::default();
         let emitter = ctx.inputs.transform("emitter");
         let obstacle = ctx.inputs.transform("obstacle");
@@ -581,12 +625,24 @@ impl Primitive for FluidSurface {
         if crate::node_graph::physics::authored_sample_only() && !history_drain {
             return;
         }
-        if let Err(error) = self
-            .runtime
-            .advance(crate::node_graph::physics::offline_simulation())
-        {
-            Self::report_failure(&mut self.domain_failure, ctx, error);
-            return;
+        let blocking = crate::node_graph::physics::offline_simulation();
+        // Offline, an owed particle capture (slot growth) is served in the
+        // same frame: prepare storage, then let the worker capture the tick.
+        for _ in 0..3 {
+            if particle_outputs
+                && let Some(gpu) = ctx.gpu.as_deref()
+                && let Err(error) = self.runtime.prepare_particles(gpu.device)
+            {
+                Self::report_failure(&mut self.domain_failure, ctx, error);
+                return;
+            }
+            if let Err(error) = self.runtime.advance(blocking) {
+                Self::report_failure(&mut self.domain_failure, ctx, error);
+                return;
+            }
+            if !(blocking && ctx.gpu.is_some() && self.runtime.particle_capture_pending()) {
+                break;
+            }
         }
         if crate::node_graph::physics::authored_sample_only() {
             return;
@@ -609,6 +665,10 @@ impl Primitive for FluidSurface {
             ("spray_count", self.runtime.whitewater.spray.len() as f32),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
+        }
+        let (blend, span) = self.runtime.particle_blend();
+        if particle_outputs {
+            self.publish_particle_frame(ctx, blend, span);
         }
         let retained = ctx.outputs_retained();
         let Some(gpu) = ctx.gpu.as_deref_mut() else {
@@ -685,11 +745,51 @@ impl Primitive for FluidSurface {
             && !uploaded
             && self.last_version == self.runtime.version
             && self.last_lag == lag.to_bits()
+            && self.last_particle_version == self.runtime.particles.version
+            && self.last_blend == blend.to_bits()
         {
             ctx.mark_outputs_unchanged();
         }
         self.last_version = self.runtime.version;
         self.last_lag = lag.to_bits();
+        self.last_particle_version = self.runtime.particles.version;
+        self.last_blend = blend.to_bits();
+    }
+}
+
+impl FluidSurface {
+    /// Section 3.2's scalar and lattice outputs for the published A/B pair.
+    /// The arrays themselves are provided storage (`provided_array_output`).
+    fn publish_particle_frame(&mut self, ctx: &mut EffectNodeContext<'_, '_>, blend: f32, span: f32) {
+        let (a, b) = self
+            .runtime
+            .particles
+            .pair()
+            .map_or((None, None), |(a, b)| (a.frame(), b.frame()));
+        let count = |frame: Option<SlotFrame>| frame.map_or(0.0, |frame| frame.info.count as f32);
+        let epoch = |frame: Option<SlotFrame>| {
+            frame.map_or(0.0, |frame| frame.info.identity_epoch as f32)
+        };
+        for (name, value) in [
+            ("count_a", count(a)),
+            ("count_b", count(b)),
+            ("identity_a", epoch(a)),
+            ("identity_b", epoch(b)),
+            ("blend", blend),
+            ("span", span),
+        ] {
+            ctx.outputs.set_scalar(name, ParamValue::Float(value));
+        }
+        if let Some((bounds, nodes)) = self.runtime.particle_lattice() {
+            ctx.outputs.set_transform("grid_bounds", bounds);
+            for (name, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(nodes) {
+                ctx.outputs.set_scalar(name, ParamValue::Float(value as f32));
+            }
+        }
+        if ctx.gpu.is_some() {
+            // This frame's GPU work reads the pair; reuse waits for it.
+            self.runtime.particles.mark_read();
+        }
     }
 }
 
@@ -1334,5 +1434,84 @@ mod tests {
         let reset = Primitive::fluid_domain_snapshot(&fluid).unwrap();
         assert_eq!(reset.state, FluidDomainState::Initializing);
         assert!(reset.accepted_layout.is_none());
+    }
+
+    /// `run_mock` with the named array outputs bound, as a plan binds wired
+    /// outputs.
+    fn run_mock_with_outputs(
+        fluid: &mut FluidSurface,
+        params: &ParamValues,
+        outputs: &[&'static str],
+        errors: &mut Vec<String>,
+    ) {
+        use crate::node_graph::ports::ArrayType;
+        use crate::node_graph::{Backend, PortType, ResourceId};
+
+        let mut backend = MockBackend::new();
+        let bindings: Vec<_> = outputs
+            .iter()
+            .enumerate()
+            .map(|(index, &name)| {
+                let ty = if name.starts_with("solid") {
+                    ArrayType::of_known::<f32>()
+                } else {
+                    ArrayType::of_known::<FluidParticle>()
+                };
+                (name, backend.acquire(ResourceId(index as u32), PortType::Array(ty), None, (0, 0)))
+            })
+            .collect();
+        let inputs = NodeInputs::new(&[], &backend, &[]);
+        let (mut scalar, mut camera, mut light, mut material) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut transform, mut atmosphere, mut render_mode, mut object) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let outputs = NodeOutputs::new(
+            &bindings,
+            &backend,
+            &mut scalar,
+            &mut camera,
+            &mut light,
+            &mut material,
+            &mut transform,
+            &mut atmosphere,
+            &mut render_mode,
+            &mut object,
+        );
+        let time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+        let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None).with_errors(errors);
+        Primitive::run(fluid, &mut ctx);
+    }
+
+    #[test]
+    fn fluid_particle_outputs_reject_record_and_playback() {
+        let _offline = PhysicsStepScope::for_render(true);
+        for (mode, rejected) in [(0, false), (1, true), (2, true)] {
+            for outputs in [&["particles_b"][..], &["solid_a"], &["vertices"]] {
+                let mut params = coupled_params();
+                params.insert(Cow::Borrowed("cache_mode"), ParamValue::Enum(mode));
+                params.insert(
+                    Cow::Borrowed("cache_path"),
+                    ParamValue::String(std::sync::Arc::new("/tmp/manifold-unused-particle-cache".into())),
+                );
+                let mut errors = Vec::new();
+                let mut fluid = FluidSurface::new();
+                run_mock_with_outputs(&mut fluid, &params, outputs, &mut errors);
+                let named = errors
+                    .iter()
+                    .any(|error| error.contains("particle outputs require Live mode"));
+                let particle_port = outputs[0] != "vertices";
+                assert_eq!(named, rejected && particle_port, "mode {mode} {outputs:?}: {errors:?}");
+                if named {
+                    assert_eq!(
+                        Primitive::fluid_domain_snapshot(&fluid).unwrap().state,
+                        FluidDomainState::Failed
+                    );
+                }
+            }
+        }
     }
 }
