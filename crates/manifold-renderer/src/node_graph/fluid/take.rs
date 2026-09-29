@@ -236,6 +236,7 @@ impl FluidTakeReplay {
             }
         });
         let request = Request {
+            outputs: Default::default(),
             project_tempo: None,
             epoch: EPOCH,
             settings: pending.settings,
@@ -839,6 +840,7 @@ impl Reader {
                 continue;
             }
             return Ok(Some(Request {
+                outputs: Default::default(),
                 epoch,
                 settings: self.header.settings,
                 initial: self.header.initial,

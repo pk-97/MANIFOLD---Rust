@@ -10244,6 +10244,66 @@
         {
           "name": "upload_ms",
           "type": "f32"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "particles_a",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "particles_b",
+          "type": "Array"
+        },
+        {
+          "name": "count_a",
+          "type": "f32"
+        },
+        {
+          "name": "count_b",
+          "type": "f32"
+        },
+        {
+          "name": "identity_a",
+          "type": "f32"
+        },
+        {
+          "name": "identity_b",
+          "type": "f32"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "solid_a",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "solid_b",
+          "type": "Array"
+        },
+        {
+          "name": "grid_bounds",
+          "type": "Transform"
+        },
+        {
+          "name": "grid_nodes_x",
+          "type": "f32"
+        },
+        {
+          "name": "grid_nodes_y",
+          "type": "f32"
+        },
+        {
+          "name": "grid_nodes_z",
+          "type": "f32"
+        },
+        {
+          "name": "blend",
+          "type": "f32"
+        },
+        {
+          "name": "span",
+          "type": "f32"
         }
       ],
       "params": [

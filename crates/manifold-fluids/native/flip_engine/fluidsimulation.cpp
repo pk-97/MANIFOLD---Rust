@@ -9622,6 +9622,36 @@ void FluidSimulation::captureSurfaceFrame(FluidSurfaceFrame &frame) {
     }
 }
 
+void FluidSimulation::captureParticleFrameSolid(MeshLevelSet &solid) {
+    if (isUpdateInProgress() || isUpdateFailed() || getCurrentFrame() == 0) {
+        throw std::runtime_error("particle frame requires a completed simulation frame");
+    }
+    // A meshing volume would filter particles the caller has already written.
+    if (_isMeshingVolumeSet) {
+        throw std::runtime_error("particle frame does not support a meshing volume");
+    }
+    int isize = 0, jsize = 0, ksize = 0;
+    solid.getGridDimensions(&isize, &jsize, &ksize);
+    if (isize != _isize || jsize != _jsize || ksize != _ksize || solid.getCellSize() != _dx) {
+        solid.constructMinimalSignedDistanceField(_solidSDF);
+    } else {
+        for (int k = 0; k < _ksize + 1; k++) {
+            for (int j = 0; j < _jsize + 1; j++) {
+                for (int i = 0; i < _isize + 1; i++) {
+                    solid.set(i, j, k, _solidSDF(i, j, k));
+                }
+            }
+        }
+    }
+    // Empty: meshing-volume filtering is rejected above, so nothing is read.
+    std::vector<vmath::vec3> noParticles;
+    _prepareSurfaceMeshingInputs(&noParticles, &solid);
+}
+
+double FluidSimulation::getMarkerParticleRadius() {
+    return _markerParticleRadius;
+}
+
 void FluidSimulation::_updateMeshingVolumeSDF() {
     if (!_isMeshingVolumeSet || _currentFrameTimeStepNumber != 0) {
         return;

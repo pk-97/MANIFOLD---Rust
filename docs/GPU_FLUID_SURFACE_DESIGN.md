@@ -2,8 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** PROPOSED · 2026-09-29 · Opus 5.5 (worker seat) for Fable (lead) · awaiting Peter. P1–P8 not built.
-**Prerequisites:** slot-9 surfacing commits `cb8cc7a12` (owned surface frames) and `3cae04429` (deferred meshing) on main — P1 entry check.
+**Status:** BUILDING · P1–P2 built (FLIP test feed; particle-frame seam and ring). Next: P5, P6. P3 deferred and P4 dropped (section 9). P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -265,9 +264,9 @@ pub enum CaptureError {
 }
 
 impl FluidWorld {
-    /// After a completed step. Writes records sorted by strictly increasing id, positions
-    /// offset by `offset`, and the prepared solid distances. Never advances time; no
-    /// allocation once scratch is warm.
+    /// After a completed step. Writes records (id 0, native order), positions offset by
+    /// `offset`, and the prepared solid distances. Never advances time; no allocation
+    /// once scratch is warm.
     pub fn capture_particle_frame(
         &mut self,
         offset: [f32; 3],
@@ -277,15 +276,22 @@ impl FluidWorld {
 }
 ```
 
-Native side: a `manifold_id` `ULONGLONG` attribute assigned from a per-world counter at
-every birth site; the record takes the low 32 bits. When the counter would pass
-`u32::MAX`, the capture renumbers live particles 1..n in current order and bumps
-`identity_epoch` — one tick of move-from-one-end motion, hours apart. Ids reset with the
-world. If native order is not already id-sorted, the capture sorts on the worker. The
-solid distances are the SDF slot-9's `captureSurfaceFrame` prepares (meshing volume and
-domain boundary applied). Positions apply upstream's `domainScale`/`domainOffset` as
-`surfaceframe.cpp:70-71` does, then MANIFOLD's native-origin offset
-(`R/fluid/domain.rs:103-110`).
+**Identity.** A producer with identity writes records sorted by strictly increasing id
+within an epoch; when its next id would pass `u32::MAX` it renumbers live particles 1..n
+in current order and bumps `identity_epoch`. A producer without identity writes id 0 on
+every record and epoch 0; consumers that match by id treat every record as a birth. The
+MLS-MPM solver has identity (its D9). The FLIP capture below does not: it is a test feed
+for this surface, and the `manifold_id` attribute is not built (P1, dropped items).
+
+**FLIP capture (built).** The bridge fills records in native storage order from the
+`DataRange` position and velocity getters through a fixed 4,096-particle scratch, so a
+capture allocates nothing once warm. The solid distances are the SDF `captureSurfaceFrame`
+prepares (obstacle meshing offset and domain boundary applied), produced by the
+MANIFOLD method `FluidSimulation::captureParticleFrameSolid` into a scratch
+`MeshLevelSet` reused across captures; a meshing volume is rejected because it would
+filter particles already written. Positions apply upstream's `domainScale`/`domainOffset`
+through the getter, then MANIFOLD's native-origin offset (`R/fluid/domain.rs:103-110`),
+passed in as `offset`. Radius and velocity are scaled by `domainScale` (1 in MANIFOLD).
 
 `crates/manifold-renderer/src/node_graph/fluid_particles.rs` (new):
 
@@ -331,11 +337,11 @@ Volumes are `Array(f32)` (D8); triangle counts and scans are `Array(u32)`.
 | `grid_nodes_x`, `grid_nodes_y`, `grid_nodes_z` | `ScalarF32` | Solid lattice node counts. |
 | `blend`, `span` | `ScalarF32` | D10. |
 
-`obstacle_pose` and the coupled rigid frame present at `s` when any particle output is
-consumed. The node decides consumption from its compiled outputs.
-⚠ VERIFY-AT-IMPL that an unconsumed output has no resource: read how
-`force_consumed_outputs` (`R/effect_node.rs:1648`) is used in `R/execution_plan.rs` and
-how outputs without consumers are planned.
+Any of the four arrays wired switches the node into publishing particle frames; an
+unwired output has no plan resource, which the node reads through `ctx.outputs.slot`.
+The arrays are provided storage with a capacity hint of one record; downstream
+capacity re-derives as the ring grows. `obstacle_pose` and the coupled rigid frame
+present tick B until P3 builds interpolation (P2, deviation).
 
 Lattice convention, stated once: node (i, j, k) sits at
 `bounds.min + (i, j, k) · size / (nodes − 1)`. A volume at scale `m` has
@@ -489,7 +495,7 @@ up.
 | Frames are id-sorted; ids stable across removal and unique within an identity epoch | `particle_frame_ids_sorted_through_inflow_and_drain` (manifold-fluids); `debug_assert!` on the worker before publishing |
 | Capture never changes the simulation | `particle_frame_capture_leaves_solver_state_bit_identical` |
 | Display time never passes the newest tick; `blend` ∈ [0, 1] | `fluid_display_time_never_passes_newest_tick`; GPU value test: `blend = 0` reproduces A's surviving particles and `blend = 1` reproduces B exactly |
-| All solver-time outputs present at one `s` | `fluid_presentation_outputs_share_display_time` (particles, `obstacle_pose`, coupled rigid frame) |
+| All solver-time outputs present at one `s` | `fluid_presentation_outputs_share_display_time` (particles, `obstacle_pose`, coupled rigid frame) — deferred with P3; until then every output presents tick B |
 | Live never blocks on the worker; ring exhaustion skips a request | `fluid_particle_ring_exhaustion_never_blocks`; negative gate: `rg -n '\.recv\(\)' crates/manifold-renderer/src/node_graph/fluid.rs` shows only the offline branch |
 | No new shared locks | Negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
 | Unsupported rate, mode and coupling combinations are named errors | `fluid_solver_rate_rejects_record_playback_engine_mesh_and_coupled_below_30`, `fluid_particle_outputs_reject_record_and_playback` |
@@ -507,7 +513,31 @@ add `scripts/gpu_proofs_gate.py --filter fluid_ --filter water_` (cargo test, ne
 nextest). New renderer tests carry a `fluid_` prefix so that filter selects them.
 Verify once, at the end of the phase.
 
+**Build order after Peter's pivot (2026-09-29, relayed by the lead).** The live solver is
+the GPU MLS-MPM of GPU_MPM_SOLVER_DESIGN.md, writing the particle-frame seam at 60 Hz.
+FLIP stays the bake engine and becomes a test feed for this surface. So: P1 is cut to the
+capture the test feed needs; P2 builds the seam as specified; P3 is deferred (section 11);
+P4 is dropped; P5 and P6 build the surface. Every atom downstream of the seam reads
+`particles_b` and `solid_b` directly until P3 exists.
+
 ### P1 — Native particle-frame capture (manifold-fluids)
+
+**Built (2026-09-29).** `F/src/particles.rs` (`ParticleRecord`, `ParticleFrameInfo`,
+`CaptureError`, `FluidWorld::capture_particle_frame`); bridge entry
+`manifold_fluids_world_capture_particle_frame` (one call: counts, capacity check, solid,
+records) and the test-only `manifold_fluids_surface_frame_solid`; MANIFOLD methods
+`captureParticleFrameSolid` and `getMarkerParticleRadius` on `FluidSimulation`; a
+PROVENANCE.md entry. Tests: `particle_frame_matches_marker_state`,
+`particle_frame_capture_leaves_solver_state_bit_identical`,
+`particle_frame_capacity_reports_required_counts`,
+`particle_frame_solid_matches_surface_frame`, `particle_frame_requires_a_completed_step`.
+**Dropped, with reasons:** the `manifold_id` attribute, renumbering, worker-side sort and
+their two tests (FLIP is a test feed; ids exist only for interpolation, deferred with P3 —
+revive them with P3 if FLIP must feed interpolation); the 1/15 dt bound,
+`fluid_step_accepts_fifteen_hertz_ticks`, `tick_rate_probe` and the D9 kill check (they
+existed for P4, dropped).
+
+### P1 brief (as designed)
 
 - **Entry state:** `git merge-base --is-ancestor cb8cc7a12 origin/main && git merge-base --is-ancestor 3cae04429 origin/main` passes; otherwise stop — the prerequisite is Peter's visual approval of slot-9. Re-run the anchors: `rg -n 'fn capture_surface_frame|fn set_surface_reconstruction_enabled' crates/manifold-fluids/src`, `rg -n 'addAttributeULongLong' crates/manifold-fluids/native/flip_engine/particlesystem.h`, `rg -n 'DataRange' crates/manifold-fluids/native/flip_engine/fluidsimulation.h`. List every native particle birth site in the phase notes before editing (`rg -n 'addParticle|push_back|_addMarker' crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp`, then read each hit).
 - **Read-back:** D4, D9, D11, D14; section 3.1; `F/native/PROVENANCE.md`. Restate: capture never advances or allocates; ids are bookkeeping, not numerics.
@@ -519,6 +549,37 @@ Verify once, at the end of the phase.
 
 ### P2 — Frame publication and display clock (renderer)
 
+**Built (2026-09-29).** Section 3.2's outputs on `node.fluid_surface`; `FluidParticle`
+in `R/fluid_particles.rs` (layout asserted equal to `ParticleRecord`); the ring in
+`R/fluid/particle_ring.rs` (four slots loaned inside `Request.outputs`, returned in
+`Reply.outputs`); `blend`/`span` from `display_blend(target − tick, t_A, t_B)`;
+deferred meshing (`set_outputs`, restart on a meshing change, Record always meshes);
+the Record/Playback rejection. Entry-check resolutions:
+- **Content frame fence.** No FrameFence exists on the content thread. The content
+  pipeline's per-frame completion event already drives texture-pool recycling and
+  drop retirement, so the ring reads that clock through a read-only
+  `manifold_gpu::FrameClock` (`GpuDevice::frame_clock()`), not a second fence.
+  Live checks `is_complete` and skips the request; offline waits on the oldest
+  reader, an earlier committed frame.
+- **Growth and late wiring.** One rule covers both: when the published tick is not
+  the completed tick, the next request is capture-only for that tick. A too-small
+  slot reports its counts, the ring grows free slots on the next prepare, and the
+  capture-only reply publishes the same tick without republishing the mesh.
+- **Unconsumed outputs** get no resource (`consumed_outputs` in `R/execution_plan.rs`);
+  the node reads consumption from `ctx.outputs.slot`.
+**Deviation, pending the lead:** `obstacle_pose` and the coupled rigid frame still present
+tick B. With P3 deferred the surface reads `particles_b`, so presenting them at `s` would
+put the paddle up to a tick behind the water it pushes. Presentation at `s` moves into
+P3 with the interpolation atom; `fluid_presentation_outputs_share_display_time` goes
+with it. Tests built: `fluid_display_time_never_passes_newest_tick`,
+`fluid_engine_mesh_skipped_when_vertices_unconsumed`,
+`fluid_particle_outputs_reject_record_and_playback`,
+`physics_world_uncoupled_advances_while_fluid_worker_stalls`; GPU proofs
+`fluid_particle_frame_reaches_gpu` (GPU copy of `particles_b` equals an independent P1
+capture bit for bit), `fluid_particle_ring_exhaustion_never_blocks`,
+`fluid_particle_ring_growth_recaptures_same_tick`. The `MANIFOLD_RENDER_TRACE` app gate
+is the orchestrating session's.
+
 - **Entry state:** P1 merged. Anchors: `rg -n 'fn capture_output|fn process' crates/manifold-renderer/src/node_graph/fluid/native.rs`, `rg -n 'fn accept|fn advance|const BATCH' crates/manifold-renderer/src/node_graph/fluid.rs`, `rg -n 'fn provides_array_output' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs`. ⚠ VERIFY-AT-IMPL the content frame fence: `rg -n 'frame_fence|FrameFence|completed_frame' crates/manifold-renderer/src/gpu_encoder.rs crates/manifold-app/src/content_pipeline.rs`. If no counter is reachable from `EffectNodeContext`, add a read-only `GpuEncoder::frame_fence() -> &FrameFence` fed the way `clip_thumb_gpu.rs:258` is fed; any other shape is an escalation.
 - **Read-back:** D7, D10, D12, D13, D19; sections 3.2–3.3; the forbidden list in section 5.
 - **Deliverables:** section 3.2's outputs on `node.fluid_surface`; the ring in `FluidRuntime` (slots in `Request`/`Reply`, fence-gated reuse, growth by capture-only retry); A/B acceptance, `blend`, `span`; `obstacle_pose` and `CoupledRigidFrame` at `s` (lerp translation and scale, slerp rotation); deferred meshing when `vertices` is unconsumed; Record/Playback rejection when particle outputs are consumed. Tests: `fluid_display_time_never_passes_newest_tick`, `fluid_presentation_outputs_share_display_time`, `fluid_particle_ring_exhaustion_never_blocks`, `fluid_particle_ring_growth_recaptures_same_tick`, `fluid_particle_outputs_reject_record_and_playback`, `fluid_engine_mesh_skipped_when_vertices_unconsumed`, `physics_world_uncoupled_advances_while_fluid_worker_stalls`; GPU proof `fluid_particle_frame_reaches_gpu` (mapped readback equals the P1 capture).
@@ -527,6 +588,12 @@ Verify once, at the end of the phase.
 - **Forbidden:** `guard_slot`; any content-thread copy of particle data; changing CPU-mesh graph behaviour (they still present tick B).
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
+
+**DEFERRED (2026-09-29).** Trigger: a sub-60 Hz particle producer exists. At 60 Hz the
+newest frame is at most one tick from display time, so the surface reads `particles_b`.
+The `FluidParticle` records moved to P2 (they are the contract).
+GPU_MPM_SOLVER_DESIGN.md P1's entry check also names `node.particles_to_copies`, which
+stays with this deferred phase.
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
@@ -537,6 +604,9 @@ Verify once, at the end of the phase.
 - **Forbidden:** extrapolation; reusing `Particle`; a fallback when A is missing (A unwired is the move-from-B path by design).
 
 ### P4 — Solver rate (seam brief)
+
+**DROPPED (2026-09-29).** The live solver is MLS-MPM at 60 Hz; FLIP keeps its fixed 60 Hz
+tick as the bake engine. The brief below is kept only as the record of what was designed.
 
 - **Entry state:** P1's kill check did not fire; P3 merged. Re-derive the inventory: `rg -c '\bTICK\b' crates/manifold-renderer/src/node_graph/fluid.rs crates/manifold-renderer/src/node_graph/fluid crates/manifold-renderer/src/node_graph/fluid_cache.rs crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs`. Snapshot 2026-09-29: 167 hits in 13 files — 23 production sites in 7 files (`fluid.rs` 8, `fluid/take.rs` 4, `fluid_cache.rs` 3, `fluid/coupled/native.rs` 3, `fluid/native.rs` 2, `fluid/impulses.rs` 2, `fluid/roles.rs` 1) and 144 in tests. `physics.rs` has its own local `TICK` (Box3D's `FIXED_TICK`) and is out of scope. If the counts differ, list the new sites before touching anything.
 - **Old → new:** `pub const TICK: f64 = 1.0 / 60.0` (`R/fluid.rs:44`) → `pub enum SolverRate { Hz60, Hz30, Hz20, Hz15 }` with `fn seconds(self) -> f64`, stored as `FluidSettings::solver_rate` with a serde default of `Hz60`. `simulation_tick(time)` → `simulation_tick(time, rate)`. Production sites read `settings.solver_rate.seconds()`. Tests rewrite mechanically: `TICK` → `SolverRate::Hz60.seconds()` (worked example: the expected times in `fluid/take/tests.rs`). The cache writer and reader (`fluid_cache.rs:405`, `:459`) keep their 60 Hz check; Record and Playback reject other rates before a cache opens. Coupled observation rejects rates below 30 Hz before the worker sees them; the rigid owner's tick check (`R/fluid/coupled/native.rs:316`) compares against the pair's `solver_rate` instead of `TICK`. Native `max_substeps` scales by `60 / rate`. New `node.fluid_surface` param `solver_rate` (Enum "60 Hz"/"30 Hz"/"20 Hz"/"15 Hz", default 60 Hz, Simulation section).
@@ -615,6 +685,8 @@ or in section 11.
 | `Array(f32)` → `Texture3D` resolve atom (debug slice, `blur_3d` reuse) | Authoring needs to see or blur the level set |
 | Migrating legacy presets to the GPU surface | Particle-frame caching lands |
 | Live versus baked look parity | Peter judges the difference unacceptable before particle caching lands |
+| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, the Particle View preset, and presenting `obstacle_pose` and the coupled rigid frame at `s` | A sub-60 Hz particle producer exists |
+| FLIP particle identity (`manifold_id`, renumbering, worker-side sort) | FLIP frames must feed P3's interpolation |
 | Fade-out of particles removed during a tick (D11) | Popping shows away from drains; needs a summed capacity expression in the fusion compiler first |
 
 ## 12. Risk register
