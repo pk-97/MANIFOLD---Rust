@@ -456,7 +456,7 @@ coupled rigid pose. Per tick, the worker loses CPU meshing and gains one capture
   every display frame instead of every published tick. P6 measures and reports this; it
   is outside the 3 ms gate.
 - Raster passes draw only live triangles; ray tracing builds over a CPU bound about
-  1.5× live (P6b).
+  2× live (P6b).
 - Live (anisotropic GPU) and baked (sphere-union CPU) surfaces look different until
   particle frames are cached (R5).
 
@@ -732,14 +732,15 @@ phase** (below).
   a buffer the node owns. `node.volume_surface_mesh` takes `extent`, dispatches its
   generated kernel over that grid (a new vertex buffer is written whole once), and
   publishes the array's live extent: the extent's total × 3 on the GPU, plus a CPU bound
-  (the late `total` × 3 × 1.5 plus one grain, rounded up to 3·16,384 vertices, clamped
+  (the late `total` × 3 × 2.0 plus one grain, rounded up to 3·16,384 vertices, clamped
   to capacity; capacity for the first two frames). Slots past live stay zero for every
   consumer. `node.render_scene` writes each such object's draw arguments with one small
   dispatch and draws every raster pass indirectly; volume optics does the same; ray
   tracing builds over the bound, because Metal builds triangle acceleration structures
-  from a CPU count. Measured worst growth on the dam break: 1.19× in one tick, 1.42×
-  over two. Growth past the bound within the readback lag truncates ray tracing, not
-  raster, for that frame.
+  from a CPU count. The 2.0× margin (lead call) covers the dam break's measured
+  worst growth, 1.19× in one tick and 1.42× over two, with room for a splash impact:
+  the total is read a tick late. Growth past the bound within that lag truncates ray
+  tracing, not raster, for that frame.
 - **Seam, as built.**
   - `manifold-gpu`: `DepthMsaaDraw` carries `count: DrawCount<'a>` (`Direct { vertices,
     instances }` or `Indirect { args, offset }`, Metal's four-word draw arguments); the

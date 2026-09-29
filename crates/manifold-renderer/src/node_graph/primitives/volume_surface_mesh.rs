@@ -22,9 +22,10 @@ use crate::node_graph::primitive::Primitive;
 const DEFAULT_CAPACITY: f32 = 1_572_864.0;
 /// Ray-tracing bound granularity, in vertices.
 const BOUND_GRAIN: u64 = 3 * 16_384;
-/// Bound headroom over the late total: the dam break grows at most 1.42× over
-/// two ticks (measured 2026-09-30).
-const BOUND_HEADROOM: f64 = 1.5;
+/// Bound headroom over the late total. The dam break grows at most 1.42× over two
+/// ticks (measured 2026-09-30) and the total is read a tick late; a splash impact
+/// can beat 1.5×, and zero margin triangles are cheap.
+const BOUND_HEADROOM: f64 = 2.0;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
