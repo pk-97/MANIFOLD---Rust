@@ -506,6 +506,10 @@ pub struct FluidRuntime {
     previous_reset: Option<f32>,
     reset_requested: bool,
     target_time: f64,
+    /// `target_time` of the previous full (render-frame) observation.
+    observed_target: Option<f64>,
+    /// The latest full observation did not move `target_time`.
+    held: bool,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
     busy: bool,
@@ -557,6 +561,8 @@ impl Default for FluidRuntime {
             previous_reset: None,
             reset_requested: false,
             target_time: 0.0,
+            observed_target: None,
+            held: false,
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
             busy: false,
@@ -673,6 +679,8 @@ impl FluidRuntime {
             coupled.clear();
         }
         self.target_time = 0.0;
+        self.observed_target = None;
+        self.held = false;
         self.completed_tick = 0;
         self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
         if self.epoch > 1 {
@@ -1023,6 +1031,12 @@ impl FluidRuntime {
         } else {
             self.target_time
         };
+        // Historical input samples move the target between render frames, so
+        // only full observations decide whether the transport is held.
+        if !super::physics::authored_sample_only() {
+            self.held = self.observed_target == Some(target_time);
+            self.observed_target = Some(target_time);
+        }
         if self.cache_mode == CacheMode::Playback {
             // The worker resolves timed takes from project transport. Retain
             // the absolute speed-scaled address only for untimed legacy caches.
@@ -1267,6 +1281,13 @@ impl FluidRuntime {
         let Some(settings) = self.settings else {
             return Ok(());
         };
+        // Pause and Simulation Speed 0 hold the published water exactly: live
+        // preview neither steps nor accepts an in-flight batch until the
+        // target moves again, so retained time debt cannot drain while held.
+        // Offline drains each frame's debt inside that frame.
+        if self.held && self.initialized && !blocking {
+            return Ok(());
+        }
         if self.worker.is_none() {
             self.worker = Some(Worker::spawn(Arc::clone(&self.cancel_epoch))?);
         }
@@ -2009,6 +2030,59 @@ mod tests {
             .observe(settings, controls, Seconds(1.0), 1.0, 0.0)
             .unwrap();
         assert_eq!(runtime.target_time, 0.0);
+    }
+
+    /// WATER_SIMULATION_DESIGN.md "Transport pause / water speed zero": a held
+    /// target publishes nothing new, even with preview time debt and a batch
+    /// in flight; moving again resumes from the held tick without a jump.
+    #[test]
+    fn fluid_held_transport_freezes_live_water_with_time_debt() {
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        let mut runtime = FluidRuntime::default();
+        runtime.observe(settings, controls, Seconds(0.0), 1.0, 0.0).unwrap();
+        runtime.advance(true).unwrap();
+        assert!(runtime.initialized);
+        // One second of debt; the live request carries one batch of it.
+        runtime.observe(settings, controls, Seconds(1.0), 1.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        assert!(runtime.busy);
+        let held = |runtime: &FluidRuntime| {
+            (
+                runtime.version,
+                runtime.completed_tick,
+                bytemuck::cast_slice::<MeshVertex, u8>(&runtime.vertices).to_vec(),
+            )
+        };
+        let before = held(&runtime);
+        let hold = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
+            let started = std::time::Instant::now();
+            while started.elapsed() < std::time::Duration::from_millis(1500) {
+                runtime
+                    .observe(settings, controls, Seconds(transport), speed, 0.0)
+                    .unwrap();
+                runtime.advance(false).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        hold(&mut runtime, 1.0, 1.0);
+        assert!(before == held(&runtime), "paused water moved");
+        // Simulation Speed 0 holds while the transport keeps running.
+        hold(&mut runtime, 2.0, 0.0);
+        assert!(before == held(&runtime), "speed-zero water moved");
+        assert!((runtime.target_time - 1.0).abs() < 1e-9, "held time adds no debt");
+
+        runtime
+            .observe(settings, controls, Seconds(2.0 + TICK), 1.0, 0.0)
+            .unwrap();
+        runtime.advance(false).unwrap();
+        assert_eq!(
+            runtime.completed_tick,
+            before.1 + BATCH as u64,
+            "resume publishes the held batch, not a jump"
+        );
+        runtime.advance(true).unwrap();
+        assert_eq!(runtime.completed_tick, simulation_tick(1.0 + TICK), "debt is retained");
     }
 
     #[test]
