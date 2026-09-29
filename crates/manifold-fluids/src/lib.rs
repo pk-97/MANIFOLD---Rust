@@ -17,6 +17,8 @@ mod mesh;
 pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
 mod frame;
 pub use frame::FluidFrame;
+mod surface;
+pub use surface::SurfaceFrame;
 mod coupling;
 pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidReaction};
 
@@ -386,6 +388,10 @@ unsafe extern "C" {
         smoothing: f64,
         smoothing_iterations: u32,
     ) -> i32;
+    fn manifold_fluids_world_set_surface_reconstruction(
+        world: *mut std::ffi::c_void,
+        enabled: i32,
+    ) -> i32;
     fn manifold_fluids_world_set_liquid_options(
         world: *mut std::ffi::c_void,
         viscosity: f64,
@@ -538,6 +544,18 @@ impl FluidWorld {
             )
         };
         native_result(ok, "setting surface options")
+    }
+
+    /// Enable or disable per-step surface reconstruction. This must be called
+    /// before the first step; it defaults to enabled. Disabling reconstruction
+    /// skips mesh construction while physics and whitewater continue, and
+    /// makes [`Self::surface`] return an error. [`Self::capture_surface_frame`]
+    /// remains available for explicit reconstruction after capture.
+    pub fn set_surface_reconstruction_enabled(&mut self, enabled: bool) -> Result<(), FluidError> {
+        let ok = unsafe {
+            manifold_fluids_world_set_surface_reconstruction(self.native, i32::from(enabled))
+        };
+        native_result(ok, "setting surface reconstruction")
     }
 
     pub fn set_liquid_options(&mut self, options: LiquidOptions) -> Result<(), FluidError> {
@@ -787,6 +805,9 @@ impl FluidWorld {
         Ok(native_stats.into())
     }
 
+    /// Read the last production surface mesh. If per-step reconstruction was
+    /// disabled, use [`Self::capture_surface_frame`] and reconstruct the frame
+    /// explicitly, or enable reconstruction before the first step.
     pub fn surface(&mut self, output: &mut Vec<SurfaceVertex>) -> Result<(), FluidError> {
         let mut data = std::ptr::null();
         let mut len = 0;

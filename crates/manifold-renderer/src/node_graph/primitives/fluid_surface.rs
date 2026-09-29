@@ -118,6 +118,7 @@ crate::primitive! {
         foam_count: ScalarF32, bubble_count: ScalarF32, spray_count: ScalarF32,
         simulation_time: ScalarF32, lag_seconds: ScalarF32, simulation_ms: ScalarF32,
         meshing_ms: ScalarF32, particle_count: ScalarF32, vertex_count: ScalarF32,
+        upload_ms: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
@@ -613,6 +614,8 @@ impl Primitive for FluidSurface {
         let Some(gpu) = ctx.gpu.as_deref_mut() else {
             return;
         };
+        // CPU encode cost only; the GPU side of the copy lands in the frame's GPU time.
+        let upload_started = std::time::Instant::now();
         let mut uploaded = false;
         if let Some(dst) = ctx.outputs.array("vertices") {
             let required = self.runtime.vertices.len() as u64 * std::mem::size_of::<MeshVertex>() as u64;
@@ -675,6 +678,9 @@ impl Primitive for FluidSurface {
                 }
             }
         }
+        let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
+        ctx.outputs
+            .set_scalar("upload_ms", ParamValue::Float(upload_ms as f32));
         if retained
             && !uploaded
             && self.last_version == self.runtime.version

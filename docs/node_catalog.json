@@ -10240,6 +10240,10 @@
         {
           "name": "vertex_count",
           "type": "f32"
+        },
+        {
+          "name": "upload_ms",
+          "type": "f32"
         }
       ],
       "params": [

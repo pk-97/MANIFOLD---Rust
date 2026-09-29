@@ -2,7 +2,7 @@
 
 <!-- index: Current CPU FLIP worker, baked playback and water rendering contract; historical custom GPU proposal below. -->
 
-**Status:** SUPERSEDED solver direction · 2026-09-26. The sections below preserve the earlier custom GPU proposal. Current development uses the upstream FLIP Fluids CPU engine; no GPU solver or real-time performance is claimed.
+**Status:** SUPERSEDED solver direction · 2026-09-26. The sections below preserve the earlier custom GPU proposal. Current development uses the upstream FLIP Fluids CPU engine; no GPU solver or real-time performance is claimed. Live-solver direction is now `docs/GPU_MPM_SOLVER_DESIGN.md` (GPU MLS-MPM writing the particle-frame seam of `docs/GPU_FLUID_SURFACE_DESIGN.md`); FLIP remains the bake and reference engine.
 
 ## Current implementation contract — CPU FLIP reference
 

@@ -14,6 +14,8 @@ Tier rules (see docs/AGENT_ROUTING.md, Native provider lanes):
 - LEAD (fable / claude-opus / k3): spawns anything.
 - DISPATCHER / middle (glm-*): may spawn ONLY `model: "haiku"` — the DeepSeek Flash executor slot. Anything else (sonnet/opus/fable lanes, missing model) is denied.
 - EXECUTOR (deepseek*, kimi-k2*, kimi-for-coding, claude-sonnet/haiku): ALL Agent spawns denied.
+- ANY worker seat (marker present): may spawn `subagent_type: "Explore"` only — read-only recon
+  (Peter approved 2026-09-29). Writers stay lead-only.
 
 Fails open on any error (missing/unreadable transcript, format drift): a guard hook must
 never be able to block a session. `agent-launch-guard.py` independently covers the
@@ -109,6 +111,12 @@ def main() -> None:
         # tier returns, reintroduce its allowance HERE, on markers, never on
         # transcript model.
         if any(payload.get(k) for k in ("agent_id", "agent_type", "teammate_name")):
+            # Read-only recon is safe from any seat (Peter approved 2026-09-29):
+            # a worker may spawn `Explore` (no Edit/Write/Agent tools) to save
+            # its own context. Every other spawn from a worker seat is denied.
+            spawn_type = (payload.get("tool_input") or {}).get("subagent_type") or ""
+            if spawn_type == "Explore":
+                sys.exit(0)
             deny(
                 "Agent spawn denied: this session is a worker seat "
                 "(subagent/teammate payload markers present). Workers never "

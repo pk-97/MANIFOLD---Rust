@@ -80,6 +80,7 @@ int manifold_fluids_world_set_force_fields(void *world, const float *values, siz
                                             int enabled);
 int manifold_fluids_world_set_surface_options(void *world, double marker_particle_scale,
                                                double smoothing, uint32_t smoothing_iterations);
+int manifold_fluids_world_set_surface_reconstruction(void *world, int enabled);
 int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
                                               double surface_tension);
 int manifold_fluids_world_set_time_step_options(void *world, uint32_t min_substeps,
@@ -105,6 +106,13 @@ void manifold_fluids_world_abort_frame(void *world);
 int manifold_fluids_world_marker_motion(void *world, float *position_out, float *velocity_out);
 int manifold_fluids_world_rest_waterline(void *world, uint32_t i, uint32_t k, double *height_out);
 int manifold_fluids_world_surface(void *world, const uint8_t **data_out, size_t *len_out);
+int manifold_fluids_world_capture_surface_frame(void *world, void **frame_out);
+void manifold_fluids_surface_frame_destroy(void *frame);
+int manifold_fluids_surface_frame_mesh(void *frame, uint32_t subdivisions,
+                                     double particle_scale, double smoothing,
+                                     uint32_t iterations, double isolated_scale,
+                                     const uint8_t **data_out,
+                                     size_t *len_out);
 int manifold_fluids_world_whitewater_count(void *world, size_t *count_out);
 int manifold_fluids_world_whitewater(void *world, ManifoldFluidsWhitewaterParticle *particles,
                                      size_t capacity, size_t *count_out);
