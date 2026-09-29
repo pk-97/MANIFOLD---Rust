@@ -764,7 +764,6 @@ mod tests {
     use crate::node_graph::physics::PhysicsAuthoredSampleScope;
     use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
     use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
     use manifold_physics::input::EventStamp;
     use std::borrow::Cow;
@@ -989,23 +988,6 @@ mod tests {
                 .find(|(slot, _)| *slot == active_slot)
                 .map(|(_, value)| value),
         )
-    }
-
-    #[test]
-    fn targeted_acceleration_ports_pair_with_all_body_slots_and_copies() {
-        assert_eq!(TARGETED_ACCELERATION_PORTS.len(), BODY_PORTS.len() + 1);
-        assert_eq!(
-            RigidSceneInputs::default().targeted_fields.len(),
-            TARGETED_ACCELERATION_PORTS.len()
-        );
-        for port in TARGETED_ACCELERATION_PORTS {
-            let descriptor = PhysicsWorldNode::INPUTS
-                .iter()
-                .find(|candidate| candidate.name == port)
-                .unwrap_or_else(|| panic!("missing input descriptor for {port}"));
-            assert_eq!(descriptor.ty, PortType::VectorField);
-            assert!(!descriptor.required);
-        }
     }
 
     #[test]

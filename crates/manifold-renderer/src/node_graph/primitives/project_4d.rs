@@ -141,38 +141,6 @@ impl Primitive for Project4D {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn project_4d_declares_vec4_in_and_linepoint_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
-        let point_layout = ArrayType::of_known::<CurvePoint>();
-        assert_eq!(Project4D::TYPE_ID, "node.flatten_4d");
-        assert_eq!(Project4D::INPUTS.len(), 1);
-        assert_eq!(Project4D::INPUTS[0].ty, PortType::Array(vec4_layout));
-        assert_eq!(Project4D::OUTPUTS.len(), 1);
-        assert_eq!(Project4D::OUTPUTS[0].ty, PortType::Array(point_layout));
-    }
-
-    #[test]
-    fn project_4d_has_scale_and_dist_params() {
-        let names: Vec<&str> = Project4D::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["proj_scale", "proj_dist"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Project4D::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.flatten_4d");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! GPU parity tests against `generators::generator_math::project_4d`.

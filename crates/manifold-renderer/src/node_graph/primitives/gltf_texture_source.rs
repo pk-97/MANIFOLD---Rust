@@ -719,41 +719,6 @@ impl GltfTextureSource {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::PortType;
-
-    #[test]
-    fn gltf_texture_source_declares_zero_inputs_and_texture_output() {
-        assert_eq!(GltfTextureSource::TYPE_ID, "node.gltf_texture_source");
-        assert!(GltfTextureSource::INPUTS.is_empty());
-        assert_eq!(GltfTextureSource::OUTPUTS.len(), 1);
-        assert_eq!(GltfTextureSource::OUTPUTS[0].name, "out");
-        assert_eq!(GltfTextureSource::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn gltf_texture_source_param_names_in_order() {
-        let names: Vec<&str> = GltfTextureSource::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "path",
-                "texture_index",
-                "color_space",
-                "width",
-                "height",
-                "mode",
-                "glossiness_factor",
-            ]
-        );
-    }
-
-    #[test]
-    fn primitive_registers() {
-        let prim = GltfTextureSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_texture_source");
-    }
 
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();

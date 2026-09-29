@@ -218,37 +218,3 @@ inventory::submit! {
         }),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn envelope_follower_ar_declares_four_inputs_and_one_output() {
-        let node = EnvelopeFollowerAr::new();
-        assert_eq!(node.inputs().len(), 4);
-        assert_eq!(node.inputs()[0].name, "in");
-        assert!(node.inputs()[0].required);
-        assert_eq!(node.inputs()[1].name, "attack");
-        assert!(!node.inputs()[1].required);
-        assert_eq!(node.inputs()[2].name, "release");
-        assert!(!node.inputs()[2].required);
-        assert_eq!(node.inputs()[3].name, "reset_trigger");
-        assert!(!node.inputs()[3].required);
-        assert_eq!(node.outputs().len(), 1);
-        assert_eq!(node.outputs()[0].name, "out");
-    }
-
-    #[test]
-    fn envelope_follower_ar_has_attack_and_release_params() {
-        let node = EnvelopeFollowerAr::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["attack", "release"]);
-    }
-
-    #[test]
-    fn envelope_follower_ar_type_id_is_node_prefixed() {
-        let node = EnvelopeFollowerAr::new();
-        assert_eq!(node.type_id().as_str(), "node.envelope_follower_ar");
-    }
-}

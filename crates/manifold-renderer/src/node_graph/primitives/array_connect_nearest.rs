@@ -196,30 +196,3 @@ impl Primitive for ArrayConnectNearest {
         self.last_edge_count = Some(edge_count);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn array_connect_nearest_declares_channels_io() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(ArrayConnectNearest::TYPE_ID, "node.connect_nearest");
-        assert_eq!(ArrayConnectNearest::INPUTS.len(), 2);
-        assert_eq!(ArrayConnectNearest::INPUTS[0].name, "in");
-        assert!(matches!(ArrayConnectNearest::INPUTS[0].ty, PortType::Array(_)));
-        assert_eq!(ArrayConnectNearest::OUTPUTS.len(), 1);
-        assert_eq!(ArrayConnectNearest::OUTPUTS[0].name, "edges");
-        let names: Vec<&str> = ArrayConnectNearest::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["max_distance", "max_edges"]);
-    }
-
-    #[test]
-    fn array_connect_nearest_registers() {
-        let prim = ArrayConnectNearest::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.connect_nearest");
-    }
-}

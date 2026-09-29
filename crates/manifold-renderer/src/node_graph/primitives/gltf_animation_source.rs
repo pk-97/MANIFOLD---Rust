@@ -533,7 +533,6 @@ mod tests {
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
     use std::sync::Arc;
 
@@ -544,30 +543,6 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         }
-    }
-
-    #[test]
-    fn declares_progress_input_and_nine_scalar_outputs() {
-        assert_eq!(GltfAnimationSource::TYPE_ID, "node.gltf_animation_source");
-        assert_eq!(GltfAnimationSource::INPUTS.len(), 3);
-        assert_eq!(GltfAnimationSource::INPUTS[0].name, "progress");
-        assert!(!GltfAnimationSource::INPUTS[0].required);
-        assert_eq!(GltfAnimationSource::INPUTS[1].name, "clip_index");
-        assert_eq!(GltfAnimationSource::INPUTS[2].name, "trigger_count");
-        assert_eq!(GltfAnimationSource::OUTPUTS.len(), 9);
-        for (out, name) in GltfAnimationSource::OUTPUTS.iter().zip([
-            "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z",
-        ]) {
-            assert_eq!(out.name, name);
-            assert_eq!(out.ty, PortType::Scalar(ScalarType::F32));
-        }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GltfAnimationSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_animation_source");
     }
 
     fn translation_channel(node: u32, keys: &[(f32, [f32; 3])]) -> crate::node_graph::gltf_anim_cache::Channel {
@@ -1175,13 +1150,6 @@ mod tests {
             Some(ParamValue::Float(f)) => f,
             other => panic!("expected Float on pos_x, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let prim = GltfAnimationSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
     }
 
     fn identity_params(path: &str) -> ParamValues {

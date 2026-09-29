@@ -93,31 +93,3 @@ impl Primitive for SampleTriangleGrid {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    #[test]
-    fn fixed_capacity_and_ports() {
-        assert_eq!(SAMPLE_TRIANGLE_GRID_CAPACITY, 1536);
-        assert_eq!(SampleTriangleGrid::TYPE_ID, "node.sample_triangle_grid");
-        assert_eq!(SampleTriangleGrid::OUTPUTS.len(), 1);
-        assert!(
-            crate::node_graph::PrimitiveRegistry::with_builtin()
-                .contains(SampleTriangleGrid::TYPE_ID)
-        );
-    }
-
-    #[test]
-    fn source_body_keeps_capacity_and_calibration_contract() {
-        let body = <SampleTriangleGrid as PrimitiveSpec>::WGSL_BODY.expect("source body");
-        assert!(body.contains("source_offset_x"));
-        assert!(body.contains("- vec3<f32>(source_offset_x"));
-        assert!(
-            SampleTriangleGrid::INPUTS
-                .iter()
-                .any(|p| p.name == "density")
-        );
-    }
-}

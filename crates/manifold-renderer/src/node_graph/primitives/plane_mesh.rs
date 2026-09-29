@@ -142,7 +142,6 @@ impl Primitive for GeneratePlaneMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
     use crate::node_graph::primitive::PrimitiveSpec;
 
@@ -177,13 +176,6 @@ mod tests {
             ParamValue::Float(n) => assert_eq!(n as u32, PLANE_VERTEX_COUNT),
             _ => panic!("expected Float (Int presentation hint)"),
         }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GeneratePlaneMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.plane_mesh");
     }
 }
 

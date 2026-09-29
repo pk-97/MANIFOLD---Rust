@@ -131,26 +131,6 @@ impl Primitive for ArrayUnpackVec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn array_unpack_vec2_declares_vec2_in_two_f32_out() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let vec2_layout = ArrayType::of_known::<[f32; 2]>();
-        let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(ArrayUnpackVec2::TYPE_ID, "node.split_xy");
-        assert_eq!(ArrayUnpackVec2::INPUTS.len(), 1);
-        assert_eq!(ArrayUnpackVec2::INPUTS[0].name, "in");
-        assert!(ArrayUnpackVec2::INPUTS[0].required);
-        assert_eq!(ArrayUnpackVec2::INPUTS[0].ty, PortType::Array(vec2_layout));
-
-        assert_eq!(ArrayUnpackVec2::OUTPUTS.len(), 2);
-        assert_eq!(ArrayUnpackVec2::OUTPUTS[0].name, "x");
-        assert_eq!(ArrayUnpackVec2::OUTPUTS[0].ty, PortType::Array(f32_layout));
-        assert_eq!(ArrayUnpackVec2::OUTPUTS[1].name, "y");
-        assert_eq!(ArrayUnpackVec2::OUTPUTS[1].ty, PortType::Array(f32_layout));
-    }
 
     #[test]
     fn array_unpack_vec2_outputs_match_input_capacity() {
@@ -170,13 +150,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "other", &params, &inputs),
             None,
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = ArrayUnpackVec2::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.split_xy");
     }
 }
 

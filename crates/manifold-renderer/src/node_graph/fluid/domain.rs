@@ -133,13 +133,6 @@ mod tests {
     }
 
     #[test]
-    fn scene_physics_domain_accepts_resolution_above_old_96_limit() {
-        let settings = FluidSettings { resolution: 128, ..FluidSettings::default() };
-        settings.validate().unwrap();
-        assert_eq!(settings.domain_layout().unwrap().cells, [128; 3]);
-    }
-
-    #[test]
     fn scene_physics_domain_rectangular_grid_is_uniform_and_snaps_outward() {
         let pose = Transform {
             pos: [5.0, -1.0, 2.0],
@@ -179,6 +172,10 @@ mod tests {
 
     #[test]
     fn scene_physics_domain_rejects_invalid_geometry_and_validates_local_fill() {
+        let high_res = FluidSettings { resolution: 128, ..FluidSettings::default() };
+        high_res.validate().unwrap();
+        assert_eq!(high_res.domain_layout().unwrap().cells, [128; 3]);
+
         let domain = Transform {
             pos: [10.0, -5.0, 3.0],
             scale: [6.0, 2.0, 1.0],

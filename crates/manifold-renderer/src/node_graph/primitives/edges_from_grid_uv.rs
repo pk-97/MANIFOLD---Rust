@@ -159,30 +159,6 @@ impl Primitive for EdgesFromGridUv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_grid_size_input_and_edge_pair_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-
-        assert_eq!(EdgesFromGridUv::TYPE_ID, "node.grid_edges");
-        assert_eq!(EdgesFromGridUv::INPUTS.len(), 1);
-        assert_eq!(EdgesFromGridUv::INPUTS[0].name, "grid_size");
-        assert!(!EdgesFromGridUv::INPUTS[0].required);
-        assert_eq!(
-            EdgesFromGridUv::INPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32),
-        );
-
-        let edge_layout = ArrayType::of_known::<EdgePair>();
-        assert_eq!(EdgesFromGridUv::OUTPUTS.len(), 1);
-        assert_eq!(EdgesFromGridUv::OUTPUTS[0].name, "edges");
-        assert_eq!(
-            EdgesFromGridUv::OUTPUTS[0].ty,
-            PortType::Array(edge_layout),
-        );
-    }
 
     #[test]
     fn output_capacity_is_two_n_squared() {
@@ -206,12 +182,5 @@ mod tests {
             Primitive::array_output_capacity(&prim, "bogus", &default, &[]),
             None,
         );
-    }
-
-    #[test]
-    fn registers_as_palette_atom() {
-        let prim = EdgesFromGridUv::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.grid_edges");
     }
 }

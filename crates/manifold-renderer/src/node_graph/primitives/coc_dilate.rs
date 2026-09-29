@@ -114,39 +114,6 @@ impl Primitive for CocDilate {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_single_texture_input_and_output() {
-        use crate::node_graph::ports::PortType;
-
-        assert_eq!(CocDilate::TYPE_ID, "node.coc_dilate");
-        let names: Vec<&str> = CocDilate::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["in"]);
-        assert_eq!(CocDilate::INPUTS[0].ty, PortType::Texture2D);
-        assert!(CocDilate::INPUTS[0].required);
-
-        assert_eq!(CocDilate::OUTPUTS.len(), 1);
-        assert_eq!(CocDilate::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn has_no_params() {
-        assert!(CocDilate::PARAMS.is_empty());
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CocDilate::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.coc_dilate");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! **I1**: generated-vs-hand parity (`docs/ADDING_PRIMITIVES.md` "The

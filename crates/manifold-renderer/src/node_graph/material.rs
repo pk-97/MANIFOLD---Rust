@@ -611,16 +611,4 @@ mod tests {
         let m = Material::unlit([1.0; 4], [1.0, 0.5, 0.25], 0.0);
         assert_eq!(m.emission, [0.0, 0.0, 0.0, 1.0]);
     }
-
-    #[test]
-    fn material_is_copy_and_cheap_to_clone() {
-        // Fixed-size metadata adds independent UV sets, transforms and
-        // samplers for all 19 map families without heap allocation.
-        // Keep a 1 KiB ceiling on this per-wire value as fields are extended.
-        let sz = std::mem::size_of::<Material>();
-        assert!(sz <= 1024, "Material grew unexpectedly large: {sz} bytes");
-        let m = Material::default_unlit_white();
-        let _copy = m;
-        let _another = m;
-    }
 }

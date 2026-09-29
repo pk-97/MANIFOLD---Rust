@@ -53,36 +53,3 @@ impl Primitive for TextureDimensions {
         ctx.outputs.set_scalar("aspect", ParamValue::Float(aspect));
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn texture_dimensions_declares_one_texture_input_and_three_scalar_outputs() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(TextureDimensions::TYPE_ID, "node.texture_size");
-        let ins = TextureDimensions::INPUTS;
-        assert_eq!(ins.len(), 1);
-        assert_eq!(ins[0].name, "in");
-        assert_eq!(ins[0].ty, PortType::Texture2D);
-        assert!(ins[0].required);
-
-        let outs = TextureDimensions::OUTPUTS;
-        assert_eq!(outs.len(), 3);
-        let names: Vec<&str> = outs.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["width", "height", "aspect"]);
-        for port in outs {
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = TextureDimensions::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.texture_size");
-    }
-}

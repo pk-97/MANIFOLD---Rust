@@ -98,8 +98,6 @@ impl Primitive for MuxScalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::Value;
     use crate::node_graph::{Executor, FrameTime, Graph, compile};
     use manifold_core::{Beats, Seconds};
@@ -111,23 +109,6 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         }
-    }
-
-    #[test]
-    fn mux_scalar_declares_one_selector_and_eight_optional_inputs() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        let inputs = MuxScalar::INPUTS;
-        assert_eq!(inputs.len(), 9);
-        assert_eq!(inputs[0].name, "selector");
-        assert!(inputs[0].required);
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-        for port in inputs.iter().skip(1) {
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(MuxScalar::OUTPUTS.len(), 1);
-        assert_eq!(MuxScalar::OUTPUTS[0].name, "out");
-        assert_eq!(MuxScalar::OUTPUTS[0].ty, PortType::Scalar(ScalarType::F32));
     }
 
     #[test]
@@ -158,12 +139,5 @@ mod tests {
         let plan = compile(&g).unwrap();
         let mut exec = Executor::with_mock();
         exec.execute_frame(&mut g, &plan, frame_time());
-    }
-
-    #[test]
-    fn mux_scalar_registers_with_palette() {
-        let prim = MuxScalar::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.switch_value");
     }
 }

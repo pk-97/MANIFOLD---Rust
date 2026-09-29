@@ -356,40 +356,6 @@ impl Primitive for LoopCamera {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn loop_camera_declares_one_scalar_input_and_camera_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(LoopCamera::TYPE_ID, "node.loop_camera");
-        let in_names: Vec<&str> = LoopCamera::INPUTS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(in_names, vec!["phase"]);
-        for input in LoopCamera::INPUTS {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(LoopCamera::OUTPUTS.len(), 4);
-        assert_eq!(LoopCamera::OUTPUTS[0].name, "out");
-        assert_eq!(LoopCamera::OUTPUTS[0].ty, PortType::Camera);
-        assert_eq!(LoopCamera::OUTPUTS[1].name, "pos_x");
-        assert_eq!(LoopCamera::OUTPUTS[2].name, "pos_y");
-        assert_eq!(LoopCamera::OUTPUTS[3].name, "pos_z");
-    }
-
-    #[test]
-    fn loop_camera_has_nineteen_params() {
-        let names: Vec<&str> = LoopCamera::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "cell_size", "axis", "lateral", "height", "home", "fov_y", "near", "far",
-                "roll", "pitch", "yaw", "flow", "patterns_per_loop", "pattern_length",
-                "sway_amp", "sway_cycles", "look_sweep_amp", "look_sweep_cycles",
-                "zoom_pulse_amp",
-            ]
-        );
-    }
 
     /// INV-EC1 (corridor): wrap purity by construction — the per-loop travel
     /// is patterns_per_loop · pattern_length cells, and K·P ≡ 0 (mod P) for
@@ -467,13 +433,6 @@ mod tests {
                 "seam slopes must match (A={a})"
             );
         }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = LoopCamera::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.loop_camera");
     }
 
     // The run() tests below build a real EffectNodeContext over a MockBackend

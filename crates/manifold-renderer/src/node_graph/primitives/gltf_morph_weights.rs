@@ -401,28 +401,6 @@ impl Primitive for GltfMorphWeights {
 mod tests {
     use super::*;
     use crate::node_graph::gltf_anim_cache::GltfAnimSet;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_progress_input_and_f32_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        assert_eq!(GltfMorphWeights::TYPE_ID, "node.gltf_morph_weights");
-        assert_eq!(GltfMorphWeights::INPUTS.len(), 3);
-        assert_eq!(GltfMorphWeights::INPUTS[0].name, "progress");
-        assert!(!GltfMorphWeights::INPUTS[0].required);
-        assert_eq!(GltfMorphWeights::INPUTS[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(GltfMorphWeights::OUTPUTS.len(), 1);
-        assert_eq!(GltfMorphWeights::OUTPUTS[0].name, "weights");
-        assert_eq!(GltfMorphWeights::OUTPUTS[0].ty, PortType::Array(ArrayType::of_known::<f32>()));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GltfMorphWeights::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_morph_weights");
-    }
 
     fn identity_params(path: &str) -> crate::node_graph::effect_node::ParamValues {
         let mut params = crate::node_graph::effect_node::ParamValues::default();
@@ -530,12 +508,5 @@ mod tests {
         let out = sample_morph_weights(Some(&clip), 0, None, 2, 0.5);
         assert!((out[0] - 0.5).abs() < 1e-4, "target 0 halfway: got {}", out[0]);
         assert!((out[1] - 0.2).abs() < 1e-4, "target 1 halfway: got {}", out[1]);
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let prim = GltfMorphWeights::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
     }
 }

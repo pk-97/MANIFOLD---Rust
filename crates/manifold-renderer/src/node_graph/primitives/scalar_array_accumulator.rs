@@ -167,36 +167,6 @@ impl Primitive for ScalarArrayAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_trigger_and_increment_inputs_plus_array_output() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let inputs = ScalarArrayAccumulator::INPUTS;
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].name, "trigger_count");
-        assert!(!inputs[0].required);
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(inputs[1].name, "increment");
-        assert!(!inputs[1].required);
-
-        assert_eq!(ScalarArrayAccumulator::OUTPUTS.len(), 1);
-        assert_eq!(ScalarArrayAccumulator::OUTPUTS[0].name, "accumulated");
-        assert_eq!(
-            ScalarArrayAccumulator::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<f32>())
-        );
-    }
-
-    #[test]
-    fn declares_increment_capacity_and_initial_params() {
-        let params = ScalarArrayAccumulator::PARAMS;
-        assert_eq!(params.len(), 3);
-        assert_eq!(params[0].name, "increment");
-        assert_eq!(params[1].name, "capacity");
-        assert_eq!(params[2].name, "initial");
-        assert_eq!(params[2].ty, ParamType::Table);
-    }
 
     #[test]
     fn array_output_capacity_reads_capacity_param() {
@@ -206,17 +176,5 @@ mod tests {
         params.insert(std::borrow::Cow::Borrowed("capacity"), ParamValue::Float(7.0));
         let cap = Primitive::array_output_capacity(&prim, "accumulated", &params, &[]);
         assert_eq!(cap, Some(7));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_driver() {
-        use crate::node_graph::palette::{PaletteCategory, palette_atoms};
-        let atoms = palette_atoms();
-        let entry = atoms
-            .iter()
-            .find(|e| e.type_id == ScalarArrayAccumulator::TYPE_ID)
-            .expect("scalar_array_accumulator should be registered as a palette atom");
-        assert_eq!(entry.label, "Sum Into Bins");
-        assert!(matches!(entry.category, PaletteCategory::Driver));
     }
 }

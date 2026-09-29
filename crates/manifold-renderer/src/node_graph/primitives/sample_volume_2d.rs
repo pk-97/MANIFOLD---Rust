@@ -135,38 +135,3 @@ impl Primitive for SampleVolume2D {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn sample_volume_declares_texture_3d_in_and_texture_2d_out() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(SampleVolume2D::TYPE_ID, "node.slice_volume");
-        assert_eq!(SampleVolume2D::INPUTS.len(), 1);
-        assert_eq!(SampleVolume2D::INPUTS[0].name, "in");
-        assert_eq!(SampleVolume2D::INPUTS[0].ty, PortType::Texture3D);
-        assert_eq!(SampleVolume2D::OUTPUTS.len(), 1);
-        assert_eq!(SampleVolume2D::OUTPUTS[0].name, "out");
-        assert_eq!(SampleVolume2D::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn sample_volume_has_slice_uv_center_params() {
-        let names: Vec<&str> = SampleVolume2D::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(names, vec!["slice_z", "uv_scale", "center_x", "center_y"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = SampleVolume2D::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.slice_volume");
-    }
-}

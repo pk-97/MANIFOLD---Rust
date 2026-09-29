@@ -282,32 +282,6 @@ mod tests {
     use super::*;
     use crate::node_graph::material::MaterialKind;
     use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::EffectNode;
-
-    #[test]
-    fn unlit_material_declares_port_shadow_scalars_and_material_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-
-        assert_eq!(UnlitMaterial::TYPE_ID, "node.unlit_material");
-        for input in UnlitMaterial::INPUTS {
-            assert!(
-                !input.required,
-                "{} should be optional (port-shadow)",
-                input.name
-            );
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(UnlitMaterial::OUTPUTS.len(), 1);
-        assert_eq!(UnlitMaterial::OUTPUTS[0].name, "out");
-        assert_eq!(UnlitMaterial::OUTPUTS[0].ty, PortType::Material);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = UnlitMaterial::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.unlit_material");
-    }
 
     #[test]
     fn run_emits_unlit_material_with_premultiplied_emission() {

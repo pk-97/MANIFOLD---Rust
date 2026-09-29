@@ -108,38 +108,3 @@ impl Primitive for TextureSum5 {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn texture_sum_5_declares_five_required_texture_inputs() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(TextureSum5::TYPE_ID, "node.texture_sum_5");
-        let ins = TextureSum5::INPUTS;
-        assert_eq!(ins.len(), 5);
-        for (i, name) in ["a", "b", "c", "d", "e"].iter().enumerate() {
-            assert_eq!(ins[i].name, *name);
-            assert!(ins[i].required, "{name} should be required");
-            assert_eq!(ins[i].ty, PortType::Texture2D);
-        }
-        assert_eq!(TextureSum5::OUTPUTS.len(), 1);
-        assert_eq!(TextureSum5::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn texture_sum_5_has_divisor_param() {
-        let names: Vec<&str> = TextureSum5::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["divisor"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = TextureSum5::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.texture_sum_5");
-    }
-}

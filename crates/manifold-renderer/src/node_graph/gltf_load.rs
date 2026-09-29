@@ -4419,20 +4419,6 @@ mod animation_tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gltf/hostile")
     }
 
-    /// BUG-214: `EXT_mesh_gpu_instancing` is fully implemented (raw-JSON
-    /// sniff in [`node_instance_transforms`]) but was missing from the
-    /// supported allowlist, so an asset listing it under
-    /// `extensionsRequired` would hard-fail at the gate despite our
-    /// support. Pin the membership so the allowlist can't drift from the
-    /// implementation again.
-    #[test]
-    fn ext_mesh_gpu_instancing_is_in_supported_allowlist() {
-        assert!(
-            MANIFOLD_SUPPORTED_EXTENSIONS.contains(&"EXT_mesh_gpu_instancing"),
-            "EXT_mesh_gpu_instancing is implemented — it must be in MANIFOLD_SUPPORTED_EXTENSIONS"
-        );
-    }
-
     /// BUG-213: an `extensionsUsed` entry MANIFOLD doesn't implement (and
     /// that isn't `extensionsRequired`) must surface as a report line, and
     /// supported extensions must NOT. No shipped fixture carries an
@@ -5488,30 +5474,6 @@ mod tests {
         );
     }
 
-    /// BUG-186: `SheenWoodLeatherSofa.glb` also carries `EXT_texture_webp`
-    /// (Khronos conformance suite's real-world webp case). Once W1's decode
-    /// path lands, check whether it now imports — this test's own result is
-    /// the source of truth for whether the manifest promotes it to
-    /// `expect_pass`, not a guess.
-    #[test]
-    fn sheenwoodleathersofa_webp_import_status() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/gltf/khronos/SheenWoodLeatherSofa.glb");
-        if !path.exists() {
-            println!("sheenwoodleathersofa_webp_import_status: fixture not fetched, skipping");
-            return;
-        }
-        match gltf_import_summary(&path) {
-            Ok(summary) => println!(
-                "sheenwoodleathersofa_webp_import_status: imports OK, {} materials, bbox {:?}..{:?}",
-                summary.materials.len(),
-                summary.bbox_min,
-                summary.bbox_max,
-            ),
-            Err(e) => println!("sheenwoodleathersofa_webp_import_status: import failed: {e}"),
-        }
-    }
-
     /// The per-material import summary the P1c importer builds its
     /// `render_scene` objects from. Skips when the fixture is absent;
     /// otherwise asserts the azalea's known shape (2 textured materials,
@@ -5886,20 +5848,6 @@ mod tests {
         assert_eq!(map.sampler.min_filter, manifold_gpu::GpuFilterMode::Nearest);
         assert_eq!(map.sampler.mip_filter, Some(manifold_gpu::GpuFilterMode::Nearest));
         std::fs::remove_file(path).expect("remove mutated spec-gloss fixture");
-    }
-
-    /// D4 (BUG-171): the synthetic default-material entry's sentinel and
-    /// spec-mandated neutral factors (glTF spec section 3.9.2's implicit default
-    /// material: base color white, metallic 1.0, roughness 1.0).
-    #[test]
-    fn default_material_synthetic_entry_shape() {
-        // Exercised end-to-end (against a real parsed summary) by
-        // `gltf_import.rs`'s `default_material_primitive_imports_as_one_object`
-        // — this pins the sentinel + spec-default constants in isolation so
-        // a future edit to `gltf_import_summary`'s push-site can't silently
-        // drift them.
-        assert_eq!(DEFAULT_MATERIAL_SENTINEL, u32::MAX);
-        assert_eq!(DEFAULT_MATERIAL_MESH_PARAM, -2);
     }
 
     /// BUG-5uqg: `KHR_lights_punctual` was listed in

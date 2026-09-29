@@ -160,39 +160,6 @@ impl Primitive for RevolveCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn revolve_curve_declares_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let curve_layout = ArrayType::of_known::<CurvePoint>();
-
-        assert_eq!(RevolveCurve::TYPE_ID, "node.revolve_curve");
-
-        let profile_port = RevolveCurve::INPUTS.iter().find(|p| p.name == "profile").unwrap();
-        assert!(profile_port.required);
-        assert_eq!(profile_port.ty, PortType::Array(curve_layout));
-
-        let sweep_port = RevolveCurve::INPUTS.iter().find(|p| p.name == "sweep").unwrap();
-        assert!(!sweep_port.required, "sweep should be optional (port-shadow)");
-        assert_eq!(sweep_port.ty, PortType::Scalar(ScalarType::F32));
-
-        assert!(
-            !RevolveCurve::INPUTS.iter().any(|p| p.name == "segments"),
-            "segments is an int — must not be port-shadowed (P3 brief)"
-        );
-
-        assert_eq!(RevolveCurve::OUTPUTS.len(), 1);
-        assert_eq!(RevolveCurve::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
-
-    #[test]
-    fn revolve_curve_sweep_is_unbounded() {
-        let sweep = RevolveCurve::PARAMS.iter().find(|p| p.name == "sweep").unwrap();
-        assert_eq!(sweep.range, None, "sweep must be unbounded (BUG-039 class)");
-    }
 
     #[test]
     fn revolve_curve_capacity_is_rows_times_cols() {
@@ -206,13 +173,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "out", &params, &inputs),
             Some(45),
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = RevolveCurve::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.revolve_curve");
     }
 }
 

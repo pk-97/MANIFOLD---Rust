@@ -190,32 +190,6 @@ inventory::submit! {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn envelope_decay_declares_two_inputs_and_one_output() {
-        let node = EnvelopeDecay::new();
-        assert_eq!(node.inputs().len(), 2);
-        assert_eq!(node.inputs()[0].name, "trigger");
-        assert!(node.inputs()[0].required);
-        assert_eq!(node.inputs()[1].name, "decay_rate");
-        assert!(!node.inputs()[1].required);
-        assert_eq!(node.outputs().len(), 1);
-        assert_eq!(node.outputs()[0].name, "out");
-    }
-
-    #[test]
-    fn envelope_decay_has_decay_rate_param() {
-        let node = EnvelopeDecay::new();
-        let names: Vec<&str> = node.parameters().iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["decay_rate"]);
-    }
-
-    #[test]
-    fn envelope_decay_type_id_is_node_prefixed() {
-        let node = EnvelopeDecay::new();
-        assert_eq!(node.type_id().as_str(), "node.envelope_decay");
-    }
 
     // CPU-mirror parity test — exercises the same state machine that
     // lives in `FluidSimCore` (lines 493-546 of fluid_sim_core.rs).

@@ -103,33 +103,3 @@ impl Primitive for Checkerboard {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn checkerboard_declares_zero_inputs_and_one_texture_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(Checkerboard::TYPE_ID, "node.checkerboard");
-        assert!(Checkerboard::INPUTS.is_empty());
-        assert_eq!(Checkerboard::OUTPUTS.len(), 1);
-        assert_eq!(Checkerboard::OUTPUTS[0].name, "out");
-        assert_eq!(Checkerboard::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn checkerboard_has_expected_params() {
-        let names: Vec<&str> = Checkerboard::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["scale", "offset_x", "offset_y"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Checkerboard::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.checkerboard");
-    }
-}

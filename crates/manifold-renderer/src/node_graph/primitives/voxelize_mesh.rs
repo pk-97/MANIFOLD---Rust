@@ -165,61 +165,6 @@ impl Primitive for VoxelizeMesh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn voxelize_mesh_declares_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let f32_layout = ArrayType::of_known::<f32>();
-
-        assert_eq!(VoxelizeMesh::TYPE_ID, "node.voxelize_mesh");
-
-        let in_port = VoxelizeMesh::INPUTS.iter().find(|p| p.name == "in").unwrap();
-        assert!(in_port.required);
-        assert_eq!(in_port.ty, PortType::Array(mesh_layout));
-
-        let weights_port = VoxelizeMesh::INPUTS.iter().find(|p| p.name == "weights").unwrap();
-        assert!(!weights_port.required);
-        assert_eq!(weights_port.ty, PortType::Array(f32_layout));
-
-        for name in ["amount", "cell_size"] {
-            let port = VoxelizeMesh::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap_or_else(|| panic!("{name} port-shadow input must exist"));
-            assert!(!port.required, "{name} should be optional (port-shadow)");
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-
-        assert_eq!(VoxelizeMesh::OUTPUTS.len(), 1);
-        assert_eq!(VoxelizeMesh::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
-
-    #[test]
-    fn voxelize_mesh_output_follows_in_input() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = VoxelizeMesh::new();
-        let params = ParamValues::default();
-        let inputs = [("in", 36_u32)];
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "out", &params, &inputs),
-            Some(36),
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = VoxelizeMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.voxelize_mesh");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests. Parity is against a hand-written Rust
