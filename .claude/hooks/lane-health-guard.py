@@ -34,7 +34,7 @@ MARKER = "lane-health-check"
 
 CORRECTED_FORM = (
     "arm a SESSION recurring CronCreate whose prompt contains the literal string "
-    f"'{MARKER}', e.g. CronCreate(cron='7-59/10 * * * *', "
+    f"'{MARKER}', e.g. CronCreate(cron='13-59/30 * * * *', "
     f"prompt='{MARKER}: per lane — is a build/test process running; has the worktree "
     "moved (files, commits)? two consecutive idle checks with no report = stalled: "
     "message once, then stop the lane and escalate per the seat ladder. No lane "

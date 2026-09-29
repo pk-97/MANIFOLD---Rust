@@ -466,6 +466,36 @@ pub(crate) fn select_clip_range_to_with_project(
     );
 }
 
+/// Paste the clip clipboard, select what landed, and say when clips were
+/// skipped for a layer-type mismatch — the one receive path for every paste.
+pub(crate) fn paste_clips_and_select(
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    target_beat: manifold_core::Beats,
+    target_layer: i32,
+    selection: &mut SelectionState,
+    toast: &mut manifold_ui::panels::toast::ToastPanel,
+) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::PasteClips {
+            target_beat,
+            target_layer,
+            result_tx: tx,
+        },
+    );
+    let Ok((pasted_ids, skip_reason)) = rx.recv_timeout(std::time::Duration::from_millis(100))
+    else {
+        return;
+    };
+    if !pasted_ids.is_empty() {
+        selection.select_clips(pasted_ids);
+    }
+    if let Some(message) = skip_reason {
+        toast.show(message);
+    }
+}
+
 /// Handle undo (called from keyboard shortcut). Sends to content thread.
 pub fn undo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
     crate::content_command::ContentCommand::send(
@@ -821,8 +851,7 @@ mod d2_d3_tests {
         let region = selection.current_region().cloned().unwrap_or_default();
         let used_region_mode = region.is_active;
         let region_core = crate::ui_translate::selection_region_to_core(&region);
-        let spb = 60.0 / project.settings.bpm.0.max(1.0);
-        let commands = EditingService::duplicate_clips(project, &clip_ids, &region_core, spb);
+        let commands = EditingService::duplicate_clips(project, &clip_ids, &region_core);
         (commands, used_region_mode)
     }
 

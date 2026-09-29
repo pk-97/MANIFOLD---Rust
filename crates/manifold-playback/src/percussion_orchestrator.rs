@@ -584,9 +584,6 @@ impl PercussionImportOrchestrator {
             .and_then(|s| s.to_str())
             .unwrap_or("Audio")
             .to_string();
-        let spb =
-            manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(project.settings.bpm.0);
-
         // 3. Lane-keyed reuse: an existing group already built for this lane?
         let existing_group = project
             .timeline
@@ -755,7 +752,7 @@ impl PercussionImportOrchestrator {
             if recorded_bpm > 0.0 {
                 clip.set_recorded_bpm(recorded_bpm);
             }
-            let mut add_clip = AddClipCommand::new(clip, lane_id.clone(), spb);
+            let mut add_clip = AddClipCommand::new(clip, lane_id.clone());
             add_clip.execute(project);
             commands.push(Box::new(add_clip));
 

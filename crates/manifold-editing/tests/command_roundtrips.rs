@@ -2552,10 +2552,9 @@ fn capture_range_names_scene_from_nearest_marker_at_or_before() {
 fn capture_range_trim_matches_split_command_in_point_math() {
     let mut split_project = make_session_test_project();
     let clip_id = split_project.timeline.layers[0].clips[0].id.clone();
-    let spb = split_project.settings.seconds_per_beat();
 
     let mut split_cmd =
-        EditingService::split_clip_at_beat(&split_project, clip_id.as_str(), Beats(2.0), spb)
+        EditingService::split_clip_at_beat(&split_project, clip_id.as_str(), Beats(2.0))
             .expect("split at beat 2.0 should be valid (strictly inside the clip)");
     let tail_id = split_cmd.tail_clip_id().clone();
     split_cmd.execute(&mut split_project);

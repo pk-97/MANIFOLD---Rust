@@ -72,6 +72,11 @@ impl ChangeBpmCommand {
             return;
         }
 
+        if is_undo {
+            self.restore_old_tempo_map(project);
+            return;
+        }
+
         if !self.flatten_tempo_map {
             project.tempo_map.add_or_replace_point(
                 Beats::ZERO,
@@ -82,11 +87,6 @@ impl ChangeBpmCommand {
             project
                 .tempo_map
                 .ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
-            return;
-        }
-
-        if is_undo {
-            self.restore_old_tempo_map(project);
             return;
         }
 
@@ -1140,6 +1140,46 @@ impl Command for ChangeRtQualityCommand {
 mod tests {
     use super::*;
     use manifold_core::settings::{RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise};
+
+    #[test]
+    fn change_bpm_undo_restores_recorded_tempo_map() {
+        use manifold_core::Seconds;
+
+        for flatten in [false, true] {
+            let mut project = Project::default();
+            // The transport is in the second tempo segment when BPM is edited.
+            project.settings.bpm = Bpm(140.0);
+            project.tempo_map.add_or_replace_point_with_time(
+                Beats::ZERO, Bpm(120.0), TempoPointSource::Recorded, 0.001, Seconds(2.0),
+            );
+            project.tempo_map.add_or_replace_point_with_time(
+                Beats(16.0), Bpm(140.0), TempoPointSource::Recorded, 0.001, Seconds(10.0),
+            );
+            project.tempo_map.ensure_sorted();
+            let original = serde_json::to_value(&project.tempo_map).unwrap();
+            let command = ChangeBpmCommand::with_tempo_map(
+                project.settings.bpm,
+                Bpm(150.0),
+                TempoPointSource::Manual,
+                flatten,
+                project.tempo_map.clone_points(),
+            );
+            let mut editing = crate::service::EditingService::new();
+            editing.execute(Box::new(command), &mut project);
+            assert_eq!(project.settings.bpm, Bpm(150.0));
+            assert_eq!(project.tempo_map.points().len(), if flatten { 1 } else { 2 });
+            let edited = serde_json::to_value(&project.tempo_map).unwrap();
+
+            for _ in 0..2 {
+                assert!(editing.undo(&mut project));
+                assert_eq!(project.settings.bpm, Bpm(140.0));
+                assert_eq!(serde_json::to_value(&project.tempo_map).unwrap(), original);
+                assert!(editing.redo(&mut project));
+                assert_eq!(project.settings.bpm, Bpm(150.0));
+                assert_eq!(serde_json::to_value(&project.tempo_map).unwrap(), edited);
+            }
+        }
+    }
 
     #[test]
     fn tonemap_editing_service_round_trip_preserves_curve_when_off() {

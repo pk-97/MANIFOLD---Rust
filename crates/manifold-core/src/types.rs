@@ -128,6 +128,34 @@ pub enum LayerType {
     Dmx = 4,
 }
 
+/// The kind of clip a layer holds. A clip may only live on a layer of the
+/// same kind — the one rule clip move, paste, duplicate and create read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipKind {
+    Video,
+    /// Generator and DMX layers share this kind: both host a generator, and a
+    /// clip adopts its target layer's generator.
+    Generator,
+    Audio,
+}
+
+impl LayerType {
+    /// `None` for groups, which hold no clips.
+    pub fn clip_kind(self) -> Option<ClipKind> {
+        match self {
+            LayerType::Video => Some(ClipKind::Video),
+            LayerType::Generator | LayerType::Dmx => Some(ClipKind::Generator),
+            LayerType::Audio => Some(ClipKind::Audio),
+            LayerType::Group => None,
+        }
+    }
+
+    /// Whether clips living on a `from` layer may be placed on this one.
+    pub fn accepts_clips_from(self, from: LayerType) -> bool {
+        self.clip_kind().is_some() && self.clip_kind() == from.clip_kind()
+    }
+}
+
 impl Serialize for LayerType {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_i32(*self as i32)
@@ -1034,6 +1062,28 @@ pub enum TonemapCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layers_only_accept_clips_of_their_own_kind() {
+        use LayerType::*;
+        assert!(Video.accepts_clips_from(Video));
+        assert!(Audio.accepts_clips_from(Audio));
+        // Generator and DMX layers both host a generator; clips move freely.
+        assert!(Dmx.accepts_clips_from(Generator));
+        assert!(Generator.accepts_clips_from(Dmx));
+        for (to, from) in [
+            (Audio, Video),
+            (Video, Audio),
+            (Video, Dmx),
+            (Dmx, Video),
+            (Generator, Video),
+            (Group, Video),
+            (Group, Group),
+            (Video, Group),
+        ] {
+            assert!(!to.accepts_clips_from(from), "{to:?} must refuse clips from {from:?}");
+        }
+    }
 
     /// MVP-P3b wire-form pin (LED_STRIPS_DESIGN.md section 5b D15): the int is
     /// the only form ever written; "Led" stays accepted on load from hand-built

@@ -40,7 +40,7 @@ def write_store(tasks) -> None:
 def marker_task(**over):
     task = {
         "id": "deadbeef",
-        "cron": "7-59/10 * * * *",
+        "cron": "13-59/30 * * * *",
         "prompt": f"{hook.MARKER}: per lane — is a build/test process running",
         "createdAt": 1780000000000,
         "recurring": True,

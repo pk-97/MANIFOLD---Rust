@@ -4,6 +4,7 @@ use crate::preset_type_id::PresetTypeId;
 use crate::effects::{EffectGroup, ParamEnvelope, ParameterDriver, PresetInstance};
 use crate::id::{ClipId, EffectGroupId, LayerId};
 use crate::types::{BlendMode, ClipDurationMode, LayerType, MidiTriggerMode};
+use crate::tempo::SourceClock;
 use crate::units::{Beats, Seconds};
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
@@ -614,17 +615,17 @@ impl Layer {
     /// `ignore_ids` protects clips that are members of the same batch
     /// operation (e.g. a multi-clip drag/nudge) from this clip's overlap
     /// pass — pass an empty set for a genuinely standalone add.
-    /// `spb` = seconds per beat (60.0 / bpm), used for video in_point trimming.
+    /// `clock` advances trimmed clips' in_point the way playback reads them.
     pub fn add_clip(
         &mut self,
         mut clip: TimelineClip,
         ignore_ids: &HashSet<ClipId>,
-        spb: f32,
+        clock: &SourceClock<'_>,
     ) -> Vec<OverlapAction> {
         clip.layer_id = self.layer_id.clone();
         let clip_id = clip.id.clone();
         self.clips.push(clip);
-        let actions = self.enforce_non_overlap_for(&clip_id, ignore_ids, spb);
+        let actions = self.enforce_non_overlap_for(&clip_id, ignore_ids, clock);
         self.mark_clips_unsorted();
         actions
     }
@@ -644,7 +645,7 @@ impl Layer {
         &mut self,
         clip_id: &ClipId,
         ignore_ids: &HashSet<ClipId>,
-        spb: f32,
+        clock: &SourceClock<'_>,
     ) -> Vec<OverlapAction> {
         let mut actions = Vec::new();
 
@@ -681,7 +682,7 @@ impl Layer {
             // Case 2: covers start → trim start of existing
             if placed_start <= clip_start && placed_end < clip_end {
                 let trim_beats = placed_end - clip_start;
-                let trim_seconds = Seconds(trim_beats.0 * spb as f64);
+                let trim_seconds = clock.source_seconds(clip, clip_start, placed_end);
                 actions.push(OverlapAction::Trimmed {
                     clip_id: clip.id.clone(),
                     old_start_beat: clip.start_beat,
@@ -708,8 +709,7 @@ impl Layer {
 
             // Case 4: placed inside existing → split
             if placed_start > clip_start && placed_end < clip_end {
-                let beats_elapsed = placed_end - clip_start;
-                let tail_in_point = clip.in_point + Seconds(beats_elapsed.0 * spb as f64);
+                let tail_in_point = clip.in_point + clock.source_seconds(clip, clip_start, placed_end);
 
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;
@@ -1137,7 +1137,8 @@ mod tests {
     #[test]
     fn add_clip_syncs_clip_layer_id() {
         let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
-        layer.add_clip(TimelineClip::default(), &HashSet::new(), 0.5);
+        let tm = crate::tempo::TempoMap::default();
+        layer.add_clip(TimelineClip::default(), &HashSet::new(), &SourceClock::new(&tm, crate::units::Bpm(120.0), None));
 
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].layer_id, layer.layer_id);
@@ -1252,7 +1253,7 @@ mod tests {
                 ..TimelineClip::default()
             },
             &HashSet::new(),
-            0.5,
+            &SourceClock::new(&crate::tempo::TempoMap::default(), crate::units::Bpm(120.0), None),
         );
         assert_eq!(layer.clips.len(), 2);
         assert!(!layer.has_overlapping_clips());
@@ -1513,7 +1514,7 @@ mod tests {
                 ..TimelineClip::default()
             },
             &HashSet::new(),
-            0.5,
+            &SourceClock::new(&crate::tempo::TempoMap::default(), crate::units::Bpm(120.0), None),
         );
         project.timeline.layers.push(led);
 

@@ -429,7 +429,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn show_toast(&mut self, message: &str) {
-        log::info!("[Toast] {}", message);
+        self.ui_root.toast.show(message);
     }
 
     fn undo(&mut self) {
@@ -590,7 +590,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         );
         // Delete from local project + send commands to content thread
         let project = &mut *self.project;
-        let spb = 60.0 / project.settings.bpm.0.max(1.0);
         let del_region = if has_region {
             self.selection
                 .current_region()
@@ -598,7 +597,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         } else {
             None
         };
-        let commands = EditingService::delete_clips(project, clip_ids, del_region.as_ref(), spb);
+        let commands = EditingService::delete_clips(project, clip_ids, del_region.as_ref());
         if !commands.is_empty() {
             ContentCommand::send(
                 self.content_tx,
@@ -613,22 +612,13 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
-        // Send paste to content thread and wait for result (pasted clip IDs)
-        let (tx, rx) = std::sync::mpsc::channel();
-        ContentCommand::send(
+        crate::ui_bridge::paste_clips_and_select(
             self.content_tx,
-            crate::content_command::ContentCommand::PasteClips {
-                target_beat: Beats::from_f32(target_beat),
-                target_layer,
-                result_tx: tx,
-            },
+            Beats::from_f32(target_beat),
+            target_layer,
+            self.selection,
+            &mut self.ui_root.toast,
         );
-        // Wait briefly for pasted IDs to select them in the UI
-        if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
-            && !pasted_ids.is_empty()
-        {
-            self.selection.select_clips(pasted_ids);
-        }
         *self.needs_structural_sync = true;
     }
 
@@ -651,11 +641,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .iter()
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
-
-            let spb = 60.0 / project.settings.bpm.0.max(1.0);
             let region_core = crate::ui_translate::selection_region_to_core(&region);
             let mut commands =
-                EditingService::duplicate_clips(project, clip_ids, &region_core, spb);
+                EditingService::duplicate_clips(project, clip_ids, &region_core);
             if !commands.is_empty() {
                 // Execute locally for read-back (need new clip IDs for selection).
                 for c in commands.iter_mut() {
@@ -711,7 +699,6 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm.0;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
                 self.selection
@@ -720,7 +707,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             } else {
                 None
             };
-            let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
+            let commands = EditingService::delete_clips(project, clip_ids, region.as_ref());
             if !commands.is_empty() {
                 ContentCommand::send(
                     self.content_tx,
@@ -752,14 +739,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
         let beat = self.content_state.current_beat.as_f32();
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm.0;
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in clip_ids {
                 if let Some(cmd) = EditingService::split_clip_at_beat(
                     project,
                     id,
                     manifold_core::Beats::from_f32(beat),
-                    spb,
                 ) {
                     // D17 "clip split flick": both resulting ids are known
                     // synchronously (the tail clip's id is minted client-side
@@ -815,12 +800,10 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32) {
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm.0;
             let commands = EditingService::nudge_clips(
                 project,
                 clip_ids,
                 manifold_core::Beats::from_f32(beat_delta),
-                spb,
             );
             if !commands.is_empty() {
                 ContentCommand::send(
@@ -834,9 +817,8 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn move_selection_across_layers(&mut self, clip_ids: &[ClipId], layer_delta: i32) {
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm.0;
             let commands =
-                EditingService::move_clips_across_layers(project, clip_ids, layer_delta, spb);
+                EditingService::move_clips_across_layers(project, clip_ids, layer_delta);
             if !commands.is_empty() {
                 ContentCommand::send(
                     self.content_tx,

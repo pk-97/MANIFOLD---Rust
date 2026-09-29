@@ -1778,9 +1778,8 @@ impl ContentThread {
             // ── Clipboard ─────────────────────────────────────────
             ContentCommand::CopyClips { clip_ids, region } => {
                 if let Some(p) = self.engine.project() {
-                    let spb = 60.0 / p.settings.bpm.0.max(1.0);
                     self.editing_service
-                        .copy_clips(p, &clip_ids, region.as_ref(), spb);
+                        .copy_clips(p, &clip_ids, region.as_ref());
                 }
             }
             ContentCommand::PasteClips {
@@ -1789,10 +1788,9 @@ impl ContentThread {
                 result_tx,
             } => {
                 if let Some(p) = self.engine.project_mut() {
-                    let spb = 60.0 / p.settings.bpm.0.max(1.0);
                     let result =
                         self.editing_service
-                            .paste_clips(p, target_beat, target_layer, spb);
+                            .paste_clips(p, target_beat, target_layer);
                     if !result.commands.is_empty() {
                         self.editing_service.execute_batch(
                             result.commands,
@@ -1800,9 +1798,9 @@ impl ContentThread {
                             p,
                         );
                     }
-                    let _ = result_tx.send(result.pasted_clip_ids);
+                    let _ = result_tx.send((result.pasted_clip_ids, result.skip_reason));
                 } else {
-                    let _ = result_tx.send(Vec::new());
+                    let _ = result_tx.send((Vec::new(), None));
                 }
             }
 
