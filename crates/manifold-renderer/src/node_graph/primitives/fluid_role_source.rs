@@ -490,7 +490,7 @@ impl Primitive for FluidRoleSource {
                             compound.as_ref(),
                         )
                     }
-                    .map(|meshes| Arc::new(PreparedFluidGeometry { meshes }));
+                    .map(|meshes| Arc::new(PreparedFluidGeometry::new(meshes)));
                     let _ = tx.send(result);
                 }) {
                 Ok(_) => self.pending_geometry = Some(rx),

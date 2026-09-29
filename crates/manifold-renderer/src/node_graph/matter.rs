@@ -71,10 +71,117 @@ impl KnownItem for MatterGridNode {
     const SPECS: &'static [ChannelSpec] = MATTER_GRID_NODE_SPECS;
 }
 
+/// A collider, source, drain or coupled body during one tick. 128 bytes.
+/// The domain uploads one per body per tick of the frame, holding the tick's
+/// start pose and its motion over the tick; `node.matter_move_bodies` turns
+/// that into the pose at each substep (section 4.1 step 2).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MatterBody {
+    /// World position of the body's origin; w = 1/m (0 = prescribed).
+    pub position_inv_mass: [f32; 4],
+    /// Unit quaternion xyzw, body to world.
+    pub rotation: [f32; 4],
+    /// m/s; w = friction.
+    pub linear_velocity: [f32; 4],
+    /// World rad/s; w = role (0 collider, 1 fill, 2 inflow, 3 drain).
+    pub angular_velocity: [f32; 4],
+    /// World inverse inertia rows at tick start (zero when prescribed).
+    pub inv_inertia_x: [f32; 4],
+    pub inv_inertia_y: [f32; 4],
+    pub inv_inertia_z: [f32; 4],
+    /// xyz predicted external acceleration; w = shape index, −1 when the
+    /// body is disabled.
+    pub accel_shape: [f32; 4],
+}
+
+pub const MATTER_BODY_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::POSITION_INV_MASS, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::ROTATION, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::LINEAR_VELOCITY, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::ANGULAR_VELOCITY, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::INV_INERTIA_X, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::INV_INERTIA_Y, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::INV_INERTIA_Z, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::ACCEL_SHAPE, ty: ChannelElementType::Vec4F },
+];
+
+impl KnownItem for MatterBody {
+    const SPECS: &'static [ChannelSpec] = MATTER_BODY_SPECS;
+}
+
+/// A body-local signed-distance lattice in the domain's atlas. 48 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MatterShape {
+    /// Local position of node (0, 0, 0), unscaled; w = spacing in metres.
+    pub origin_spacing: [f32; 4],
+    pub dims_x: u32,
+    pub dims_y: u32,
+    pub dims_z: u32,
+    /// Index of node (0, 0, 0) in the atlas's half-precision values (even).
+    pub atlas_offset: u32,
+    /// The role's scale per axis; w = the smallest, which turns a local
+    /// distance into a world one that never overstates it.
+    pub scale_min: [f32; 4],
+}
+
+pub const MATTER_SHAPE_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::ORIGIN_SPACING, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::DIMS_X, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::DIMS_Y, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::DIMS_Z, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::ATLAS_OFFSET, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::SCALE_MIN, ty: ChannelElementType::Vec4F },
+];
+
+impl KnownItem for MatterShape {
+    const SPECS: &'static [ChannelSpec] = MATTER_SHAPE_SPECS;
+}
+
 const _: () = {
     assert!(std::mem::size_of::<MatterPoint>() == 80);
     assert!(std::mem::size_of::<MatterGridNode>() == 32);
+    assert!(std::mem::size_of::<MatterBody>() == 128);
+    assert!(std::mem::size_of::<MatterShape>() == 48);
 };
+
+/// Packs distance values two per word as WGSL's `pack2x16float` does (the
+/// first value in the low half), for the shape atlas (D21: storage-only half
+/// precision). An odd count pads with +∞, which reads as far outside.
+pub fn pack_distance_atlas(values: &[f32], out: &mut Vec<u32>) {
+    let half = |v: f32| u32::from(half::f16::from_f32(v).to_bits());
+    for pair in values.chunks(2) {
+        let high = pair.get(1).copied().unwrap_or(f32::INFINITY);
+        out.push(half(pair[0]) | (half(high) << 16));
+    }
+}
+
+/// A body's pose `t` seconds after its tick-start row: translation along the
+/// linear velocity, rotation by the constant angular velocity (the slerp
+/// between the tick's end poses). `node.matter_move_bodies` computes the same
+/// in f32.
+pub fn body_pose_at(body: &MatterBody, t: f32) -> ([f32; 3], [f32; 4]) {
+    let p = body.position_inv_mass;
+    let v = body.linear_velocity;
+    let position = [p[0] + v[0] * t, p[1] + v[1] * t, p[2] + v[2] * t];
+    let w = body.angular_velocity;
+    let angle = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt() * t;
+    let q = body.rotation;
+    if angle <= 0.0 {
+        return (position, q);
+    }
+    let scale = (0.5 * angle).sin() / (angle / t);
+    let d = [w[0] * scale, w[1] * scale, w[2] * scale, (0.5 * angle).cos()];
+    // d ⊗ q: the world-frame rotation applied after the tick-start one.
+    let rotation = [
+        d[3] * q[0] + d[0] * q[3] + d[1] * q[2] - d[2] * q[1],
+        d[3] * q[1] - d[0] * q[2] + d[1] * q[3] + d[2] * q[0],
+        d[3] * q[2] + d[0] * q[1] - d[1] * q[0] + d[2] * q[3],
+        d[3] * q[3] - d[0] * q[0] - d[1] * q[1] - d[2] * q[2],
+    ];
+    (position, rotation)
+}
 
 /// Accumulator words per grid node: momentum x, y, z, then mass.
 pub const ACCUM_WORDS_PER_NODE: u32 = 4;
@@ -526,6 +633,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A quarter turn about y over one tick: halfway through, the pose is the
+    /// slerp midpoint (45°) and the translation the lerp midpoint; the
+    /// quaternion stays unit length. The atlas halves round-trip.
+    #[test]
+    fn matter_body_pose_follows_the_tick() {
+        let tick = crate::node_graph::fluid::TICK as f32;
+        let turn = std::f32::consts::FRAC_PI_2;
+        let body = MatterBody {
+            position_inv_mass: [1.0, 2.0, 3.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            linear_velocity: [0.6 / tick, 0.0, -0.3 / tick, 0.5],
+            angular_velocity: [0.0, turn / tick, 0.0, 0.0],
+            ..MatterBody::default()
+        };
+        let (position, rotation) = body_pose_at(&body, 0.5 * tick);
+        let expected = [0.0, (turn * 0.25).sin(), 0.0, (turn * 0.25).cos()];
+        assert!((0..3).all(|i| (position[i] - [1.3, 2.0, 2.85][i]).abs() < 1e-5), "{position:?}");
+        assert!((0..4).all(|i| (rotation[i] - expected[i]).abs() < 1e-6), "{rotation:?}");
+        let (_, end) = body_pose_at(&body, tick);
+        assert!((end.iter().map(|c| c * c).sum::<f32>() - 1.0).abs() < 1e-6);
+        assert!((end[1] - (turn * 0.5).sin()).abs() < 1e-6);
+        let mut words = Vec::new();
+        pack_distance_atlas(&[-0.25, 1.5, 0.125], &mut words);
+        let unpack = |w: u32| half::f16::from_bits(w as u16).to_f32();
+        assert_eq!((unpack(words[0]), unpack(words[0] >> 16), unpack(words[1])), (-0.25, 1.5, 0.125));
+        assert_eq!(unpack(words[1] >> 16), f32::INFINITY);
     }
 
     /// The sort makes exactly `blocks` bins per axis at every resolution, and

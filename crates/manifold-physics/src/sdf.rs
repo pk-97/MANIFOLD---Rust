@@ -45,18 +45,35 @@ pub fn signed_distance_lattice(
     spacing: f32,
     padding: f32,
 ) -> Result<DistanceLattice, PhysicsError> {
+    signed_distance_union(std::slice::from_ref(mesh), spacing, padding)
+}
+
+/// The union of several closed meshes on one lattice over their joint
+/// bounds: each node takes the smallest of the meshes' signed distances.
+/// That is exact outside the union and has its sign everywhere; inside, it
+/// is one part's own depth, a lower bound that reaches 0 where parts touch.
+pub fn signed_distance_union(
+    meshes: &[TriangleMesh],
+    spacing: f32,
+    padding: f32,
+) -> Result<DistanceLattice, PhysicsError> {
     if !(spacing.is_finite() && spacing > 0.0 && padding.is_finite() && padding >= 0.0) {
         return Err(PhysicsError::InvalidInput(
             "distance lattice spacing must be positive and padding non-negative",
         ));
     }
-    validate_closed_mesh(mesh)?;
+    if meshes.is_empty() {
+        return Err(PhysicsError::InvalidInput("mesh must contain a closed volume"));
+    }
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in &mesh.vertices {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex[axis]);
-            max[axis] = max[axis].max(vertex[axis]);
+    for mesh in meshes {
+        validate_closed_mesh(mesh)?;
+        for vertex in &mesh.vertices {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(vertex[axis]);
+                max[axis] = max[axis].max(vertex[axis]);
+            }
         }
     }
     let origin: [f32; 3] = std::array::from_fn(|axis| min[axis] - padding);
@@ -70,31 +87,35 @@ pub fn signed_distance_lattice(
             "distance lattice is too large; raise the spacing",
         ));
     }
-    let triangles: Vec<[[f64; 3]; 3]> = mesh
-        .triangles
-        .iter()
-        .map(|t| t.map(|i| mesh.vertices[i as usize].map(f64::from)))
-        .collect();
     let mut lattice = DistanceLattice {
         origin,
         spacing,
         dims,
-        values: Vec::with_capacity(total as usize),
+        values: vec![f32::INFINITY; total as usize],
     };
-    for k in 0..dims[2] {
-        for j in 0..dims[1] {
-            for i in 0..dims[0] {
-                let p = lattice.node_position([i, j, k]).map(f64::from);
-                let mut nearest = f64::INFINITY;
-                let mut solid_angle = 0.0;
-                for triangle in &triangles {
-                    nearest = nearest.min(distance_squared_to_triangle(p, triangle));
-                    solid_angle += signed_solid_angle(p, triangle);
+    for mesh in meshes {
+        let triangles: Vec<[[f64; 3]; 3]> = mesh
+            .triangles
+            .iter()
+            .map(|t| t.map(|i| mesh.vertices[i as usize].map(f64::from)))
+            .collect();
+        for k in 0..dims[2] {
+            for j in 0..dims[1] {
+                for i in 0..dims[0] {
+                    let p = lattice.node_position([i, j, k]).map(f64::from);
+                    let mut nearest = f64::INFINITY;
+                    let mut solid_angle = 0.0;
+                    for triangle in &triangles {
+                        nearest = nearest.min(distance_squared_to_triangle(p, triangle));
+                        solid_angle += signed_solid_angle(p, triangle);
+                    }
+                    // Winding number ΣΩ / 4π is 1 inside an outward-wound volume.
+                    let inside = solid_angle > 2.0 * std::f64::consts::PI;
+                    let distance = nearest.sqrt();
+                    let index = lattice.index([i, j, k]);
+                    let value = if inside { -distance } else { distance } as f32;
+                    lattice.values[index] = lattice.values[index].min(value);
                 }
-                // Winding number ΣΩ / 4π is 1 inside an outward-wound volume.
-                let inside = solid_angle > 2.0 * std::f64::consts::PI;
-                let distance = nearest.sqrt();
-                lattice.values.push(if inside { -distance } else { distance } as f32);
             }
         }
     }

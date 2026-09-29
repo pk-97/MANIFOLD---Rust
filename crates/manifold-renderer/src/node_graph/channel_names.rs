@@ -194,6 +194,20 @@ pub mod well_known {
         AFFINE_Z        = "affine_z";
         VELOCITY_MASS   = "velocity_mass";
         VELOCITY_BEFORE = "velocity_before";
+        POSITION_INV_MASS = "position_inv_mass";
+        ROTATION          = "rotation";
+        LINEAR_VELOCITY   = "linear_velocity";
+        ANGULAR_VELOCITY  = "angular_velocity";
+        INV_INERTIA_X     = "inv_inertia_x";
+        INV_INERTIA_Y     = "inv_inertia_y";
+        INV_INERTIA_Z     = "inv_inertia_z";
+        ACCEL_SHAPE       = "accel_shape";
+        ORIGIN_SPACING    = "origin_spacing";
+        DIMS_X            = "dims_x";
+        DIMS_Y            = "dims_y";
+        DIMS_Z            = "dims_z";
+        ATLAS_OFFSET      = "atlas_offset";
+        SCALE_MIN         = "scale_min";
 
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's

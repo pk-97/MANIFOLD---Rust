@@ -70,9 +70,7 @@ pub(in crate::node_graph::fluid) fn request() -> Request {
         ..Default::default()
     });
     let mut role = FluidRole {
-        geometry: Arc::new(PreparedFluidGeometry {
-            meshes: vec![manifold_physics::cook_hull_mesh(&points).unwrap()],
-        }),
+        geometry: Arc::new(PreparedFluidGeometry::new(vec![manifold_physics::cook_hull_mesh(&points).unwrap()])),
         kind: FluidRoleKind::Collider,
         transform: Transform {
             pos: [0.65, 0.8, 0.0],
