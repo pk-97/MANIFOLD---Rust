@@ -58,7 +58,7 @@ Kimi profile: the `sonnet` slot is the classifier, so the lead lands itself.
 
 Lead context is the scarcest resource in the rig. Reach for cheap seats before doing bulk searching and reading yourself: lane-tier agents for tool-using recon, `.claude/hooks/oneshot` for bounded mechanical asks (never review — it has no repo access and fabricates citations).
 
-What never delegates: verification of evidence the lead acts on. A weak model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual verification is lead-only** — lanes never run headless-PNG or screenshot loops; briefs name the expected visual outcome and the lead renders and looks after the commit. Obsolete when: a lane seat shows real visual judgment and Peter re-approves.
+What never delegates: verification of evidence the lead acts on. A weak model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual verification: judgment-tier seats only.** Opus 5.5 workers render and judge their own headless stills as part of their gate (Peter re-approved 2026-09-29: "Opus 5.5 has strong visual skills now"); the lead looks at the same frames before anything lands and is the final call. Sonnet lanes still never run headless-PNG or screenshot loops — briefs name the expected visual outcome and the lead renders and looks after the commit. Obsolete when: Sonnet-tier lanes show real visual judgment and Peter re-approves.
 
 K3 serves at roughly 30–55 tokens/s, so on the Kimi profile the lead plans tersely: no narration before spawning, briefs and verdicts only.
 
