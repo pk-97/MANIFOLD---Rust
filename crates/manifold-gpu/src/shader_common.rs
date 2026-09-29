@@ -66,6 +66,10 @@ fn validate_module(
 /// compile-time input, so a wrong entry name or location is a developer
 /// error that must surface at boot (same doctrine as
 /// [`parse_and_validate_wgsl`]).
+///
+/// Compiled only with the Metal backend, its sole caller. Lift the gate when
+/// the Vulkan backend grows a point-topology pipeline that calls it.
+#[cfg(not(feature = "vulkan"))]
 pub(crate) fn rebind_vertex_output_as_point_size(
     module: naga::Module,
     vs_entry: &str,
