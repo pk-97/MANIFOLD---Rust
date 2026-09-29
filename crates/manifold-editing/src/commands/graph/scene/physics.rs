@@ -617,6 +617,37 @@ pub(super) fn fresh_scene_node(
     scene_build_node(id, type_id, handle, params)
 }
 
+pub(super) fn group_pose_input_id(
+    group: &GroupDef,
+    object_id: u32,
+) -> Result<u32, &'static str> {
+    let mut pose_wires = group.wires.iter().filter(|wire| {
+        wire.to_node == object_id
+            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
+            && wire.from_port == "pose"
+    });
+    let pose_wire = pose_wires
+        .next()
+        .ok_or("Physics group pose input is missing")?;
+    if pose_wires.next().is_some() {
+        return Err("Physics group pose input is ambiguous");
+    }
+    if group.wires.iter().filter(|wire| {
+        wire.to_node == object_id && wire.to_port == pose_wire.to_port
+    }).count() != 1 {
+        return Err("Physics group pose input is ambiguous");
+    }
+    let input = group
+        .nodes
+        .iter()
+        .find(|node| node.id == pose_wire.from_node)
+        .ok_or("Physics group pose input is unavailable")?;
+    if input.type_id != GROUP_INPUT_TYPE_ID {
+        return Err("Physics group pose source has the wrong type");
+    }
+    Ok(input.id)
+}
+
 pub(super) fn add_group_physics(
     group: &mut GroupDef,
     body_id: u32,
@@ -656,8 +687,16 @@ pub(super) fn add_group_physics(
     }
     let body = fresh_scene_node(body_id, "node.rigid_body", Some(body_handle), body_params);
     let body_node_id = body.node_id.clone();
-    let input = fresh_scene_node(input_id, GROUP_INPUT_TYPE_ID, None, BTreeMap::new());
-    let input_node_id = input.node_id.clone();
+    let (input_node_id, input_node_actual) = if let Some(input) = group.nodes.iter()
+        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+    {
+        (input.node_id.clone(), input.id)
+    } else {
+        let input = fresh_scene_node(input_id, GROUP_INPUT_TYPE_ID, None, BTreeMap::new());
+        let identity = (input.node_id.clone(), input.id);
+        group.nodes.push(input);
+        identity
+    };
     let output_id = group
         .nodes
         .iter()
@@ -665,7 +704,6 @@ pub(super) fn add_group_physics(
         .unwrap()
         .id;
     group.nodes.push(body);
-    group.nodes.push(input);
     group.interface.inputs.push(InterfacePortDef {
         name: "pose".to_string(),
         port_type: "Transform".to_string(),
@@ -695,7 +733,7 @@ pub(super) fn add_group_physics(
             && (wire.to_port == "parent_transform" || wire.to_port == "transform")
             && wire.from_node == authored_transform_id
         {
-            wire.from_node = input_id;
+            wire.from_node = input_node_actual;
             wire.from_port = "pose".into();
         }
     }
@@ -740,12 +778,7 @@ pub(super) fn remove_group_physics(
     object_id: u32,
     authored_transform_id: u32,
 ) -> Result<(), &'static str> {
-    let input_id = group
-        .nodes
-        .iter()
-        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-        .ok_or("Physics group pose input is unavailable")?
-        .id;
+    let input_id = group_pose_input_id(group, object_id)?;
     let output_id = group
         .nodes
         .iter()
@@ -768,10 +801,14 @@ pub(super) fn remove_group_physics(
     }) {
         return Err("Physics group body output is malformed");
     }
+    let input_ids: std::collections::HashSet<_> = group
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+        .map(|node| node.id)
+        .collect();
     for wire in &mut group.wires {
-        if wire.from_node == input_id
-            && wire.from_port == "pose"
-            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
+        if input_ids.contains(&wire.from_node) && wire.from_port == "pose"
         {
             wire.from_node = authored_transform_id;
             wire.from_port = "transform".into();
@@ -780,9 +817,13 @@ pub(super) fn remove_group_physics(
     group
         .wires
         .retain(|wire| wire.from_node != body_id && wire.to_node != body_id);
-    group
-        .nodes
-        .retain(|node| node.id != body_id && node.id != input_id);
+    group.nodes.retain(|node| {
+        node.id != body_id
+            && (node.id != input_id
+                || group.wires.iter().any(|wire| {
+                    wire.from_node == input_id || wire.to_node == input_id
+                }))
+    });
     // Remove the boundary only when it has no other non-object output; the
     // imported object shape has exactly one output and this keeps malformed
     // hand-authored groups from losing unrelated ports.
@@ -791,7 +832,16 @@ pub(super) fn remove_group_physics(
         .iter()
         .any(|wire| wire.to_node == output_id && wire.to_port == "body");
     if !body_output_used {
-        group.interface.inputs.retain(|port| port.name != "pose");
+        let pose_input_used = group.wires.iter().any(|wire| {
+            wire.from_port == "pose"
+                && group
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == wire.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
+        });
+        if !pose_input_used {
+            group.interface.inputs.retain(|port| port.name != "pose");
+        }
         group.interface.outputs.retain(|port| port.name != "body");
         let output_still_used = group.wires.iter().any(|wire| wire.to_node == output_id);
         if !output_still_used {

@@ -75,6 +75,10 @@ fn parse_args(args: &[String]) -> Result<ExportReproArgs, String> {
 }
 
 pub fn run(args: &[String]) -> ! {
+    // This subcommand exits before the GUI logger is initialized. Keep the
+    // same diagnostics as the other headless commands, especially on failure.
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
     let parsed = match parse_args(args) {
         Ok(v) => v,
         Err(e) => {

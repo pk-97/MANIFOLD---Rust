@@ -84,6 +84,40 @@ transfer, whitewater and surface controls use ordinary parameters; changing solv
 setup restarts its epoch. CPU cost grows with grid and meshing detail; these controls
 do not imply real-time operation.
 
+**Surface tuning development, 2026-09-29 (BUG-3sta).** Peter requested a separate
+simulation → surface → render workflow on `codex/fluid-surfacing`, with no main
+landing until visual approval. `FluidWorld::capture_surface_frame` is the first
+in-memory boundary: an explicit copy of completed particle positions and prepared
+collision distances, independently reconstructed through the production mesher.
+The application still uses its existing mesh cache and restart behaviour; no new
+UI or persistent cache is implied. The next stages are bounded headless production
+render baselines at resolution 64, detached-droplet sizing, resolution-consistent
+surface controls, then persistent reconstruction inputs and range jobs with
+separate cache validity. Old mesh-only caches must remain playable. Whitewater
+generation stays simulation-side initially. Preview frames and final export must
+use the same reconstruction path; pending work must be visible and export must wait
+for the requested frame/settings. No solver steps during remeshing, no automatic
+resolution changes, no computer use, and no GPU-compute rewrite are permitted in
+this scope. Batch focused checks at meaningful checkpoints; inspect stills before
+short motion renders, and do not repeat passed checks without new evidence.
+
+The captured-frame API now has an experimental isolated-particle scale
+(0.25–1, default 1). Particles with overlapping reconstruction spheres keep
+their main radius; the scale blends in as nearest-neighbour distance increases
+from two to three main radii. This preserves connected water and keeps the
+control relative to cell size, independently of mesh detail. It does not resize
+detached multi-particle clusters, guarantee identical fluid behaviour across
+resolutions, or preserve droplets smaller than the selected meshing grid.
+Classification is retained while tuning the same snapshot. The control remains
+outside application UI/live playback until bounded visual qualification.
+
+`FluidWorld::set_surface_reconstruction_enabled(false)` opts a newly created
+world out of per-step mesh construction before its first step. Physics and
+whitewater continue; completed inputs can still be captured and reconstructed.
+Reading `surface()` while disabled fails explicitly instead of returning an
+empty mesh that could be mistaken for missing liquid. This is an opt-in native
+API for future bake jobs; the application still reconstructs each native frame.
+
 The authored domain describes usable liquid space. Native grids add three cells
 per axis for FLIP's 1.5-cell boundary margins, keeping cell spacing and authored
 bounds consistent. Initial liquid, role geometry, rigid coupling, force sampling,

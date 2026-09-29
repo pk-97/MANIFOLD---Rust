@@ -609,6 +609,183 @@ fn body_params() -> Vec<SceneParamMetadata> {
     vec![scene_param_meta("mass", "Mass"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
 }
 
+fn unused_group_input(id: u32, node_id: &str) -> EffectGraphNode {
+    EffectGraphNode {
+        id,
+        node_id: NodeId::new(node_id),
+        type_id: GROUP_INPUT_TYPE_ID.to_string(),
+        handle: None,
+        params: BTreeMap::new(),
+        exposed_params: Default::default(),
+        editor_pos: None,
+        wgsl_source: None,
+        title: None,
+        output_formats: BTreeMap::new(),
+        output_canvas_scales: BTreeMap::new(),
+        group: None,
+    }
+}
+
+#[test]
+fn imported_physics_reuses_legacy_input_and_roundtrips_with_extra_input() {
+    let mut graph = imported_group_scene_graph();
+    graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .insert(0, unused_group_input(6, "legacy_group_input"));
+    let group = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    group.interface.inputs.push(InterfacePortDef { name: "offset".into(), port_type: "ScalarF32".into() });
+    group.wires.push(EffectGraphWire {
+        from_node: 6, from_port: "offset".into(), to_node: 11, to_port: "pos_z".into(),
+    });
+    let original = graph.clone();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+
+    let mut enable = EnableSceneObjectPhysicsCommand::new(
+        target.clone(),
+        0,
+        0,
+        body_params(),
+        graph.clone(),
+    );
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "enable rejected: {:?}", enable.rejection_reason());
+    let enabled = graph_of(&project, &fx).clone();
+    let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    assert_eq!(group.nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID).count(), 1);
+    assert!(group.wires.iter().any(|wire| {
+        wire.from_node == 6
+            && wire.from_port == "pose"
+            && wire.to_node == 14
+            && wire.to_port == "transform"
+    }));
+    enable.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &original);
+    enable.execute(&mut project);
+    assert!(enable.was_applied());
+
+    let mut extra = graph_of(&project, &fx).clone();
+    extra
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 10)
+        .unwrap()
+        .group
+        .as_mut()
+        .unwrap()
+        .nodes
+        .insert(0, unused_group_input(5, "earlier_unused_input"));
+    let group = extra.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    group.interface.inputs.push(InterfacePortDef { name: "control".into(), port_type: "ScalarF32".into() });
+    group.wires.push(EffectGraphWire {
+        from_node: 5,
+        from_port: "control".into(),
+        to_node: 11,
+        to_port: "pos_x".into(),
+    });
+    project.graph_target_owner_mut(&target).unwrap().graph = Some(extra.clone());
+
+    let mut duplicate = DuplicateSceneObjectCommand::new(
+        target.clone(),
+        vec![],
+        0,
+        0,
+        graph.clone(),
+    );
+    duplicate.execute(&mut project);
+    assert!(duplicate.was_applied(), "duplicate rejected: {:?}", duplicate.rejection_reason());
+    let duplicated = graph_of(&project, &fx).clone();
+    duplicate.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &extra);
+    duplicate.execute(&mut project);
+    assert_eq!(graph_of(&project, &fx), &duplicated);
+    duplicate.undo(&mut project);
+
+    let mut remove = RemoveSceneObjectCommand::new(target.clone(), vec![], 0, 0, graph.clone());
+    remove.execute(&mut project);
+    assert!(remove.was_applied(), "remove rejected: {:?}", remove.rejection_reason());
+    let removed = graph_of(&project, &fx).clone();
+    assert!(!removed.nodes.iter().any(|node| node.id == 10));
+    assert!(removed.nodes.iter().any(|node| node.type_id == "node.physics_world"));
+    remove.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &extra);
+    remove.execute(&mut project);
+    assert_eq!(graph_of(&project, &fx), &removed);
+    remove.undo(&mut project);
+
+    let mut disable = DisableSceneObjectPhysicsCommand::new(target, 0, 0, graph.clone());
+    disable.execute(&mut project);
+    assert!(disable.was_applied(), "disable rejected: {:?}", disable.rejection_reason());
+    let disabled = graph_of(&project, &fx).clone();
+    let group = disabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    assert!(group.nodes.iter().any(|node| node.id == 5));
+    assert!(group.nodes.iter().any(|node| node.id == 6));
+    assert!(group.interface.inputs.iter().any(|port| port.name == "offset"));
+    assert!(group.wires.iter().any(|wire| wire.from_node == 6 && wire.from_port == "offset"));
+    assert!(group.interface.inputs.iter().any(|port| port.name == "control"));
+    assert!(group.wires.iter().any(|wire| {
+        wire.from_node == 5
+            && wire.from_port == "control"
+            && wire.to_node == 11
+            && wire.to_port == "pos_x"
+    }));
+    assert!(!group.nodes.iter().any(|node| node.type_id == "node.rigid_body"));
+    disable.undo(&mut project);
+    assert_eq!(graph_of(&project, &fx), &extra);
+    disable.execute(&mut project);
+    assert_eq!(graph_of(&project, &fx), &disabled);
+}
+
+#[test]
+fn imported_physics_rejects_ambiguous_legacy_pose_atomically() {
+    let graph = imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let target = GraphTarget::Effect(fx.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(
+        target.clone(),
+        0,
+        0,
+        body_params(),
+        graph.clone(),
+    );
+    enable.execute(&mut project);
+    assert!(enable.was_applied());
+    let enabled = graph_of(&project, &fx).clone();
+
+    let mut wrong_source = enabled.clone();
+    let group = wrong_source.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    let pose_wire = group.wires.iter_mut().find(|wire| wire.from_port == "pose").unwrap();
+    pose_wire.from_node = 11;
+    project.graph_target_owner_mut(&target).unwrap().graph = Some(wrong_source.clone());
+    let mut duplicate = DuplicateSceneObjectCommand::new(
+        target.clone(),
+        vec![],
+        0,
+        0,
+        graph.clone(),
+    );
+    duplicate.execute(&mut project);
+    assert!(!duplicate.was_applied());
+    assert_eq!(graph_of(&project, &fx), &wrong_source);
+
+    let mut ambiguous = enabled.clone();
+    let group = ambiguous.nodes.iter_mut().find(|node| node.id == 10).unwrap().group.as_mut().unwrap();
+    let pose_wire = group.wires.iter().find(|wire| wire.from_port == "pose").unwrap().clone();
+    group.wires.push(pose_wire);
+    project.graph_target_owner_mut(&target).unwrap().graph = Some(ambiguous.clone());
+    let mut disable = DisableSceneObjectPhysicsCommand::new(target, 0, 0, graph);
+    disable.execute(&mut project);
+    assert!(!disable.was_applied());
+    assert_eq!(graph_of(&project, &fx), &ambiguous);
+}
+
 #[test]
 fn imported_physics_enable_disable_group_roundtrips_shared_world_and_bindings() {
     let graph = imported_group_scene_graph();

@@ -12,7 +12,7 @@ Except for the local changes documented below, these files are copied byte-for-b
 - `mixbox/mixbox_stub.cpp`
 - `versionutils.cpp.in` (instantiated by `build.rs` into `OUT_DIR`)
 
-`bridge.cpp`, `bridge.h`, `coupling_probe.*`, `coupling_operator_probe.*`,
+`bridge.cpp`, `bridge.h`, `flip_engine/surfaceframe.*`, `coupling_probe.*`, `coupling_operator_probe.*`,
 `coupling_boundary_probe.*`, `coupling_viscosity_probe.*` and
 `coupling_viscosity_operator_probe.*` are
 MANIFOLD-owned code. The bridge compiles with
@@ -25,6 +25,26 @@ source file also retains its original license header.
 
 Local changes:
 
+- Relative velocity-outlier removal cannot lower its cutoff below the
+  configured frame CFL/substep budget. Previously a small, ordinary-speed
+  fluid population could lose its fastest particles every frame until empty
+  (BUG-zpn3). The absolute extreme-speed, solid, open-boundary and per-cell
+  population protections remain active.
+- `surfaceframe.{h,cpp}` and the capture method in `fluidsimulation.{h,cpp}` add
+  explicit, independently owned reconstruction inputs for one completed frame.
+  Capture reuses the production obstacle-offset/meshing-volume preparation;
+  reconstruction reuses `ParticleMesher` and `TriangleMesh` smoothing without
+  retaining a solver. Capture is opt-in and adds no copies to normal playback.
+  Boundary triangle removal and contact-normal inversion (not exposed by the
+  MANIFOLD bridge) are explicitly rejected. This is an in-memory boundary, not
+  a persistent particle-cache format or a solver restart checkpoint.
+- The captured-frame mesher can optionally shrink single isolated particles.
+  `particlemesher.{h,cpp}` carries optional radii through chunk/block sorting;
+  its default path retains the global radius. `SpatialPointGrid::hasPointWithinSphere`
+  is an allocation-free neighbour predicate that exits on the first hit. Classification preserves overlapping
+  spheres, blends from two to three main radii, and is retained per snapshot
+  until the main radius changes. Detached clusters are not classified here.
+  No solver, application default, or persistent cache field is changed.
 - Native worlds accept a 64-bit seed before initialization. Marker sampling,
   particle IDs, source-ID ordering and diffuse emission use independent owned
   RNG streams; frame stepping no longer reseeds process-global `rand` state.

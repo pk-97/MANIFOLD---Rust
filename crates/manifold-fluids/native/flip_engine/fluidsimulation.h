@@ -60,6 +60,7 @@ class MACVelocityField;
 class FluidMaterialGrid;
 class RigidFluidCoupling;
 struct DiffuseParticle;
+struct FluidSurfaceFrame;
 enum class LimitBehaviour : char;
 
 struct FluidSimulationMeshStats {
@@ -295,6 +296,8 @@ public:
         at zero.
     */
     int getCurrentFrame();
+    // Geometry-only copy of an accepted frame; never advances the solver.
+    void captureSurfaceFrame(FluidSurfaceFrame &frame);
     void setCurrentFrame(int frameno);
     void setTimelineFrameStart(int frameno);
     void setTimelineFrameEnd(int frameno);
@@ -2171,6 +2174,8 @@ private:
     void _smoothSurfaceMesh(TriangleMesh &mesh);
     void _invertContactNormals(TriangleMesh &mesh);
     void _removeMeshNearDomain(TriangleMesh &mesh);
+    void _prepareSurfaceMeshingInputs(std::vector<vmath::vec3> *particles,
+                                     MeshLevelSet *solidSDF);
     void _computeDomainBoundarySDF(MeshLevelSet *sdf);
     void _generateOutputSurface(TriangleMesh &surface, TriangleMesh &preview,
                                   std::vector<vmath::vec3> *particles,

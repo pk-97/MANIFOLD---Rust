@@ -78,6 +78,8 @@ READ_ONLY = {
     "echo", "printf", "which", "type", "whoami", "date", "printenv",
     "true", "false", "test", "[", "uname", "hostname", "id", "groups",
     "read",  # shell builtin: reads stdin into a variable, writes no files
+    # process table inspection (lane health checks). Peter approved 2026-09-29.
+    "pgrep", "ps",
 }
 
 # git subcommands that only read repository state.
@@ -124,6 +126,9 @@ _DATA_KEYWORDS = {"for", "select", "case", "in", "function"}
 _STRIP_KEYWORDS = {
     "if", "then", "elif", "else", "fi", "while", "until", "do", "done",
     "esac", "time", "!", "{", "}", "(", ")",
+    # `command ls` / `builtin echo` bypass an alias (eza etc.); the word
+    # after them is the real head and is classified as usual.
+    "command", "builtin",
 }
 
 # Placeholder a quoted span collapses to. Deliberately not a /tmp path and
@@ -437,6 +442,16 @@ def segment_is_allowed(seg: str) -> bool:
         bad = {"-delete", "-exec", "-execdir", "-ok", "-okdir",
                "-fprint", "-fprintf", "-fls"}
         return not any(t in bad for t in toks)
+
+    if head == "xargs":
+        # xargs runs whatever follows its options; pre-approve only when
+        # that command is itself pre-approved. `-I`/`-L`/`-n`/`-P`/`-s`
+        # take a value; other short flags (`-0`, `-r`, `-t`) do not.
+        i = 1
+        while i < len(toks) and toks[i].startswith("-"):
+            i += 2 if toks[i] in ("-I", "-L", "-n", "-P", "-s") else 1
+        rest = toks[i:]
+        return bool(rest) and segment_is_allowed(" ".join(rest))
 
     return head in READ_ONLY or matches_settings_allow(toks)
 
@@ -1002,6 +1017,11 @@ def sed_write_guard(cmd):
     if not re.search(r"(?:^|[|;&(\s])sed\s", cmd):
         return None
     for m in _QUOTED_SPAN_RE.finditer(cmd):
+        # A double-quoted shell variable (`"$W"`, `"${SRC}"`) is a path
+        # argument, not a sed script — `$W` otherwise reads as `$` address +
+        # `w` command (false positive seen 2026-09-29, prompted Peter).
+        if m.group(2) is not None and re.fullmatch(r"\$\{?\w+\}?", m.group(2)):
+            continue
         span = (m.group(1) or m.group(2) or "") + " "
         if _SED_W_RE.search(span):
             return (
