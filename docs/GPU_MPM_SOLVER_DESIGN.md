@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1 partial, stopped at its kill check (53 ms against 12 ms): BUG-u3ov (MPM P1 kill check) is Peter's call · P1b–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -1034,6 +1034,50 @@ at the end of the phase.
   without a jump.
 - **Forbidden:** everything in section 10; a CPU fallback; colliders (P2a); tuning a dial
   or threshold to pass A1–A6.
+- **Phase notes (partial, 2026-09-30, Opus 5.5 worker): stopped at the kill check.**
+  Peter's call is BUG-u3ov (MPM P1 kill check).
+  What is owed if it says proceed is BUG-g93n (MPM P1 remaining deliverables).
+  - Built and green: the records, substep rule, clock and f64 reference in `R/matter.rs`;
+    the atoms `matter_domain`, `matter_fill`, `matter_state`, `zero_array`,
+    `matter_to_grid`, `matter_grid_update`, `grid_to_matter`, `matter_stats`,
+    `matter_frame`; 15 GPU proofs (`scripts/gpu_proofs_gate.py --filter matter_
+    --filter substep`): reference, mass, hundred substeps, still pool, energy,
+    determinism, seed jitter, headroom, non-finite tick and gravity, frame ids, live
+    Stiffness, the probe.
+  - Kill check, from `tests/gpu_proofs/matter_cost_probe.rs` on an M4 Max with no other
+    GPU work (load average 18.6 from CPU jobs). 64³ cells, 4 m, Stiffness 1, n = 34,
+    medians of 30 frames, ms per frame, kernels profiled one encoder per dispatch:
+
+    | Points | Clear | Sort | P2G | Grid update | G2P | Stats | Production frame | ns per point-substep |
+    |---|---|---|---|---|---|---|---|---|
+    | 131,072 | 1.38 | n/a | 11.44 | 0.88 | 1.99 | 0.35 | 15.76 | 3.01 |
+    | 262,144 | 1.39 | n/a | 21.96 | 0.98 | 3.71 | 0.39 | 28.07 | 2.88 |
+    | 524,288 | 1.39 | n/a | 44.95 | 0.95 | 7.54 | 0.55 | 54.50 | 2.94 |
+
+    Projection: 2.94 ns × 500,000 × 34 + lattice 2.34 + stats 0.55 = **53 ms against
+    12 ms: fires.** P2G is bound by its 108 global atomic adds per point (about 4.3e10
+    adds per second). G2P already runs at about 420 GB/s, near section 8's 546 GB/s
+    roofline. With every P2G atomic removed, the rest still costs about 12.6 ms.
+  - Deviations: the lattice and material reach the atoms as scalar wires from
+    `matter_domain`. The boundary serves six iteration scalars (step_dt, step_index,
+    substep_in_tick, tick_start, tick_end, tick_index). Walls act on the face node plus
+    the three padding nodes; without the face node a still pool sinks a cell and
+    splashes. `matter_stats` is hand WGSL under exclusion 1. Live runs allow three ticks
+    per frame and carry one tick of jitter debt. `matter_domain` declares `NonGpu`. A
+    point whose stencil leaves the lattice is removed (id 0). The fill rounds the fill
+    height to whole cells. The frame ring uses shared storage.
+  - Tolerance: section 12's 2e-5 m/s velocity bound holds against a fixed-point f64
+    oracle (gap 5.4e-6). Against the continuous oracle the gap is 1.05e-4, which is
+    Q = 2^20 quantisation, bounded at 2e-4 in the test.
+  - Verified: the Liveliness blend and position update follow Fei et al. 2021 as Blatny
+    & Gaume 2025 implement it (positions advect with v_pic). The scatter precedent
+    `scatter_particles_3d.rs` carries `boundary_reason: Blocked` with no tracked gap,
+    now BUG-1ois (atomic scatter atoms declare Blocked). Fused codegen does not
+    namespace member helpers, so shared helpers are duplicated with an atom prefix.
+  - Owed under the remaining-deliverables bead: the source test pinning the duplicated
+    helpers equal; A1–A6 and the metrics mode (Martin & Moyce not yet transcribed); the
+    momentum test; both presets and `particles_to_copies`; the `landing_gate.py` scope
+    row (its structure not yet verified); the demo.
 
 ### P1b — Profile and optimise
 
