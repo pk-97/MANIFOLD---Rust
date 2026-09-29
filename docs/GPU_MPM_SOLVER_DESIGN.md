@@ -222,7 +222,8 @@ nodes per side (taichi `padding = 3`), node (i, j, k) at `min + (i, j, k)·dx`. 
 `grid_accum: Array(i32)` (4 per node: momentum xyz, mass) and `grid: Array(MatterGridNode)`
 (resolved and pre-update velocity, for Liveliness). Accumulation is `atomicAdd` on i32 in
 normalized units — mass in `m_unit = 1000·dx³/8` kg scaled by Q_m = 2^16, momentum in
-`m_unit·dx/dt` scaled by Q_p = 2^27 — with unbiased rounding per contribution:
+`m_unit·U` scaled by Q_p = 2^27, where the momentum unit U is dx/dt rounded up to a power
+of two — with unbiased rounding per contribution:
 `encode(x) = floor(x·Q + u)`, where u ∈ [0, 1) is a 24-bit hash of the point id, node
 index, tick, substep and word, and the carry out of the fraction is taken in integers
 (`matter::encode_fixed`), so f32 addition cannot bias it. The expected encoding equals x,
@@ -238,7 +239,17 @@ n = 34, 300 substeps, v = (1, 0.5, −0.25) m/s) a translating blob lost 0.82%, 
 Rebalanced scales alone left +6e-4 per component; with unbiased rounding it is −2.2e-5,
 −2.5e-5, −2.8e-5 (f64 without rounding: 2e-16). Q = 2^20 had been the prototype's
 measured mass choice (0–0.0125% mass error, where Q = 4096 gave 2.4–4.8%); that
-measurement never checked momentum. The arrays are provided outputs of `node.matter_state` that grow on setup changes
+measurement never checked momentum.
+**Momentum unit, 2026-09-30.** The rebalanced scales left the GPU free blob at 1.2e-4
+against the 1e-4 gate. Cause: P2G encoded momentum with dt/dx and the grid update
+decoded with dx/dt, each computed separately in f32, and their product was not 1 (about
++5.4e-8 per substep, a steady drift). Now the host computes U = 2^ceil(log2(dx/dt)) once
+per frame (`matter::momentum_unit`, published by `node.matter_domain`) and wires the same
+value into both kernels. P2G's two scales are powers of two times one reciprocal of
+`m_unit`, and the decode multiplies by U·2^-11, so the round trip is exact for every
+resolution and substep count (`matter_momentum_unit_round_trips`). Rounding up keeps the
+headroom bound (section 4.3). Both kernels refuse a U that is not a power of two at or
+above dx/dt. The free blob now drifts 4.9e-6. The arrays are provided outputs of `node.matter_state` that grow on setup changes
 (surface design precedent, `R/primitives/fluid_surface.rs:202-206`), written in place
 through `aliased_array_io`. Rejected: `Texture3D` (surface D8; no float atomics on storage
 textures in WGSL). Rejected: a float compare-exchange loop (slower in the prototype,
@@ -505,7 +516,7 @@ pub struct MatterShape {
 ```
 
 Per-body reaction accumulator: `Array(i32)`, 8 per body (linear xyz, angular xyz, 2
-padding), fixed point in `m_unit·dx/dt` and `m_unit·dx²/dt` at D5's momentum scale and rounding. Per-tick stats: `Array(u32)`,
+padding), fixed point in `m_unit·U` and `m_unit·U·dx` at D5's momentum unit, scale and rounding. Per-tick stats: `Array(u32)`,
 16 words (non-finite count, clamp count, live count, max speed, min and max J, volume,
 max accumulator magnitude, mass, momentum xyz, kinetic, potential and elastic energy, tick
 index; floats as bits). Sums use a fixed reduction tree.
@@ -601,9 +612,10 @@ them inside.
 ### 4.3 Fixed-point encoding and headroom
 
 `encode(x) = floor(x · Q + u)` after normalizing by `m_unit` (mass, Q_m = 2^16) or
-`m_unit·dx/dt` (momentum, Q_p = 2^27), u the D5 hash. A node velocity is
-`p_raw / m_raw · dx/dt · Q_m / Q_p`. A node holds about 8 `m_unit` at rest density, so its
-momentum at the velocity clamp (0.9·dx/dt) is about 2^30, and it reaches 2^31 only when
+`m_unit·U` (momentum, Q_p = 2^27; U the D5 momentum unit, dx/dt rounded up to a power
+of two), u the D5 hash. A node velocity is `p_raw / m_raw · U · Q_m / Q_p`. A node holds
+about 8 `m_unit` at rest density, so its momentum at the velocity clamp (0.9·dx/dt ≤
+0.9·U) is at most about 2^30, and it reaches 2^31 only when
 compressed to J ≈ 0.5 at the clamp. Real flows sit far below the clamp. `matter_stats`
 records the largest accumulator magnitude every tick, and `matter_fixed_point_headroom`
 requires it below 2^30 on the Dam Break.
@@ -921,7 +933,7 @@ FLIP-only.
 |---|---|
 | GPU transfers match the f64 reference at small N | `matter_transfer_matches_reference` (one substep, 512 points, 16³: positions within 1e-5 m and velocities within 2e-5 m/s of the f64 reference with Q = 2^20 fixed-point rounding; velocities within 2e-4 m/s of the continuous f64 reference, because one mass LSB at a low-mass stencil-edge node moves its velocity by about 1e-4 m/s); `matter_hundred_substeps_match_reference` (affine field fixture) |
 | Mass is exact; grid mass matches particle mass | `matter_grid_mass_matches_particle_mass` (relative 1e-5 per substep) |
-| Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks) |
+| Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks; the fixed-point bound derived for this setup is about 5e-5; measured 4.9e-6 with D5's momentum unit) |
 | A still pool settles | `matter_still_pool_settles` (after 5 s: mean speed < 0.01 m/s; bottom-quarter J matches 1 − ρgd/λ within 20%) |
 | Dam-break energy never grows | `matter_dam_break_energy_bounded` (kinetic + potential + elastic ≤ 1.01 × initial at every tick) |
 | Look artefacts A1–A6 | `matter_look_lattice_alignment`, `matter_look_settles_without_ringing`, `matter_look_volume_drift`, `matter_dam_break_front_matches_martin_moyce`, `matter_look_splash_retention`, `matter_look_sheet_retention` (section 7). ⚠ VERIFY-AT-IMPL: transcribe the Martin & Moyce aspect-2 series and its T definition, with the citation, into the test |
@@ -1113,7 +1125,8 @@ at the end of the phase.
   - Gates after the D5 amendment, Dam Break as the preset: A1 1.02–1.03 (pass); A5 1.44%
     against FLIP's 1.34% (pass); A6 0.85% against FLIP's 27.3% (fail); A4 11.0% at
     Liveliness 0 and 2.0% at 0.9, ahead of the experiment by 8–10% from T ≈ 1.3 (fail);
-    free-blob momentum 1.2e-4 against 1e-4 (fail, cause not found). A2, A3, the still
+    free-blob momentum 1.2e-4 against 1e-4 (fail; D5's momentum unit fixed it, now
+    4.9e-6). A2, A3, the still
     pool and headroom fail through BUG-8akp (MPM water J grows without bound): at
     Cohesion 0, λ·J(J−1)·0 turns NaN near t = 1.9 s.
   - Owed with BUG-g93n (MPM P1 remaining deliverables): the `fluid_capture` metrics
@@ -1147,13 +1160,14 @@ at the end of the phase.
     modes; two entry points differed in 5 of 1370 words under fast math.
     `node.matter_to_particles` feeds the surface's `node.sort_particles_into_cells`, boxed
     by `node.matter_domain`'s block bins. `matter_block_p2g_bit_identical` passes with
-    points in and out of their sorted blocks. Owed: the sort needs a gate on the tick
-    start (it runs every substep today) and must run with `sorted` unwired (asked of the
-    surface worker through the lead); the Live Matter group and presets wait for that.
+    points in and out of their sorted blocks. The sort runs once per tick (its `enabled`
+    input takes `tick_start`), and the Live Matter group and both presets take the block
+    path. `matter_block_path_matches_per_point` runs 120 ticks of the small dam break on
+    both paths: 0 of 47,104 points differ.
   - L2 built and measured slower, reverted: G2P at 524k points went from 7.6 ms per frame
     (codegen) to 11.5 ms (hand kernel, per point) and 14.8 ms (tiled), bound by point
     traffic.
-  - L3 not built: its acceptance needs every P1 gate green, and A2, A4, A6 and the still
+  - L3 deferred, not built: its acceptance needs every P1 gate green, and A2, A4, A6 and the still
     pool fail today; it would also change `MatterPoint` across every atom. L4 holds
     (`matter_substeps_follow_stiffness_live`). L5: `graph-tool fusion` finds no fusable
     neighbours in the matter graph.
@@ -1321,6 +1335,14 @@ at the end of the phase.
   solvers in view.
 - **Forbidden:** changing dials, particle counts, resolution or thresholds to pass;
   comparing through different surfaces; any FLIP change.
+- **Inputs carried from P1** (BUG-k85i (MPM P1 look gates), thresholds unchanged):
+
+  | Gate | Matter | Reference |
+  |---|---|---|
+  | A2 settling | Dam Break still moving at 12 s, mean speed 0.44 m/s | FLIP without the moving box: 0.74 m/s at 10 s |
+  | A4 front | 11.0% ahead of Martin & Moyce at Liveliness 0, 2.0% at 0.9 | the experiment |
+  | A6 sheets | 0.82% of points in thin sheets | FLIP 27.3% |
+  | Still pool | mean speed 0.0141 m/s at 5 s, still decaying | gate < 0.01 m/s |
 
 ### P4b — Add Fluid authors matter (after Peter's go)
 

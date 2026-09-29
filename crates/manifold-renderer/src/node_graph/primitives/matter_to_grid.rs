@@ -13,7 +13,7 @@ use super::matter_common::read_lattice;
 use super::standalone_pipeline::active_elements;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::CellRange;
-use crate::node_graph::matter::MatterPoint;
+use crate::node_graph::matter::{MatterPoint, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -40,7 +40,7 @@ pub(crate) struct P2gParams {
     pub(crate) blocks_y: u32,
     pub(crate) blocks_z: u32,
     pub(crate) sorted: u32,
-    pub(crate) _pad0: u32,
+    pub(crate) momentum_unit: f32,
     pub(crate) _pad1: u32,
 }
 
@@ -63,6 +63,7 @@ crate::primitive! {
         active_count: ScalarF32 optional,
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
+        momentum_unit: ScalarF32 optional,
         blocks_x: ScalarF32 optional, blocks_y: ScalarF32 optional, blocks_z: ScalarF32 optional,
     },
     outputs: {
@@ -83,12 +84,13 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("blocks_x"), label: "Blocks X", ty: ParamType::Int, default: ParamValue::Float(18.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("blocks_y"), label: "Blocks Y", ty: ParamType::Int, default: ParamValue::Float(18.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("blocks_z"), label: "Blocks Z", ty: ParamType::Int, default: ParamValue::Float(18.0), range: Some((1.0, 4096.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.zero_array clears the accumulator and before node.matter_grid_update resolves it. accum/accum_out alias one Array(i32) of 4 words per lattice node (momentum xyz, mass), provided by node.matter_state. Lattice, material and the block counts come from node.matter_domain; step_dt, tick_index and substep_in_tick from the substep boundary. Wire order and ranges from node.sort_particles_into_cells over node.matter_to_particles, sorted once per tick into node.matter_domain's block bins, for the block path. Points with id 0 are skipped.",
+    composition_notes: "Region body of the Live Matter group, after node.zero_array clears the accumulator and before node.matter_grid_update resolves it. accum/accum_out alias one Array(i32) of 4 words per lattice node (momentum xyz, mass), provided by node.matter_state. Lattice, material, the block counts and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Wire order and ranges from node.sort_particles_into_cells over node.matter_to_particles, sorted once per tick into node.matter_domain's block bins, for the block path. Points with id 0 are skipped.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter to Grid", category: Atom },
     summary: "Spreads each liquid particle's weight and motion onto the simulation grid around it.",
@@ -127,6 +129,7 @@ impl Primitive for MatterToGrid {
         let requested = count("active_count", 0.0);
         let tick_index = count("tick_index", 0.0);
         let substep_in_tick = count("substep_in_tick", 0.0);
+        let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
         let blocks = [count("blocks_x", 18.0), count("blocks_y", 18.0), count("blocks_z", 18.0)];
         // In place on the accumulator input; the GPU is touched on every path.
         let points = ctx.inputs.array("points");
@@ -141,6 +144,12 @@ impl Primitive for MatterToGrid {
         };
         let active = active_elements::<MatterPoint>(points.size, requested);
         if active == 0 || step_dt <= 0.0 {
+            return;
+        }
+        if !momentum_unit_fits(momentum_unit, lattice.cell_size, step_dt) {
+            ctx.error(format!(
+                "Matter to Grid: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
+            ));
             return;
         }
         let uniforms = P2gParams {
@@ -162,7 +171,7 @@ impl Primitive for MatterToGrid {
             blocks_y: blocks[1].max(1),
             blocks_z: blocks[2].max(1),
             sorted: u32::from(sorted.is_some()),
-            _pad0: 0,
+            momentum_unit,
             _pad1: 0,
         };
         let block_total = uniforms.blocks_x * uniforms.blocks_y * uniforms.blocks_z;
@@ -206,11 +215,12 @@ mod tests {
     fn matter_to_grid_body_pins_fixed_point_constants() {
         use crate::node_graph::matter::{MASS_SCALE, MOMENTUM_SCALE, mass_unit, rounding_hash};
         assert_eq!(MASS_SCALE, 65_536.0);
-        assert!(SHADER.contains("let to_mass = 65536.0 / mass_unit;"));
+        assert!(SHADER.contains("let to_mass = 65536.0 * inv_mass_unit;"));
         assert_eq!(MOMENTUM_SCALE, 134_217_728.0);
-        assert!(SHADER.contains("let to_momentum = 134217728.0 / mass_unit * params.step_dt * inv_dx;"));
+        // `matter_momentum_unit_round_trips` runs this arithmetic in f32.
+        assert!(SHADER.contains("let to_momentum = 134217728.0 / params.momentum_unit * inv_mass_unit;"));
         assert_eq!(mass_unit(2.0), 125.0 * 8.0);
-        assert!(SHADER.contains("125.0 * cell_size * cell_size * cell_size"));
+        assert!(SHADER.contains("let inv_mass_unit = 1.0 / (125.0 * cell_size * cell_size * cell_size);"));
         for line in [
             "x = x ^ (x >> 16u);",
             "x = x * 0x7feb352du;",

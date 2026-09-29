@@ -134,9 +134,30 @@ impl MatterTickStats {
 /// Fixed-point scale of the mass words, per `m_unit` (D5).
 pub const MASS_SCALE: f32 = 65_536.0;
 
-/// Fixed-point scale of the momentum words, per `m_unit·dx/dt` (D5). 2^11 finer
-/// than mass relative to dx/dt, so a low-mass node still resolves its velocity.
+/// Fixed-point scale of the momentum words, per `m_unit·U` with U the
+/// [`momentum_unit`] (D5). 2^11 finer than mass relative to U, so a low-mass
+/// node still resolves its velocity.
 pub const MOMENTUM_SCALE: f32 = 134_217_728.0;
+
+/// D5's momentum unit U: the power of two at or above dx/dt. The host computes
+/// it once per frame (`node.matter_domain`) and wires the same value to P2G
+/// and the grid update, so the encode and decode scales are exact inverses in
+/// f32; dt/dx and dx/dt computed separately are not. Rounding up keeps the
+/// headroom bound p ≤ 2^30 at the velocity clamp.
+pub fn momentum_unit(cell_size: f32, step_dt: f64) -> f32 {
+    let cells_per_second = f64::from(cell_size) / step_dt;
+    2f64.powi(cells_per_second.log2().ceil() as i32) as f32
+}
+
+/// Whether a wired momentum unit is one [`momentum_unit`] could produce for
+/// this lattice and substep: a normal power of two at or above dx/dt (up to
+/// the f32 rounding of dx and dt).
+pub fn momentum_unit_fits(unit: f32, cell_size: f32, step_dt: f32) -> bool {
+    unit.is_normal()
+        && unit > 0.0
+        && unit.to_bits() & 0x007f_ffff == 0
+        && f64::from(unit) >= f64::from(cell_size) / f64::from(step_dt) * (1.0 - 1e-6)
+}
 
 /// The integer hash behind D5's unbiased rounding (lowbias32). The P2G
 /// kernel repeats it; `matter_to_grid_body_pins_fixed_point_constants` pins the two.
@@ -472,6 +493,36 @@ mod tests {
         assert_eq!(lattice.min, [-2.1875, -0.1875, -2.1875]);
         let bounds = lattice.bounds();
         assert_eq!(bounds.scale, [4.375; 3]);
+    }
+
+    /// U sits at or above dx/dt, and with it the encode and decode scales
+    /// round-trip exactly in f32 for every resolution and substep count.
+    #[test]
+    fn matter_momentum_unit_round_trips() {
+        let tick = crate::node_graph::fluid::TICK;
+        assert_eq!(momentum_unit(0.0625, tick / 34.0), 128.0);
+        assert_eq!(momentum_unit(1.0, 1.0 / 64.0), 64.0);
+        assert!(momentum_unit_fits(128.0, 0.0625, (tick / 34.0) as f32));
+        assert!(momentum_unit_fits(256.0, 0.0625, (tick / 34.0) as f32));
+        assert!(!momentum_unit_fits(64.0, 0.0625, (tick / 34.0) as f32));
+        assert!(!momentum_unit_fits(192.0, 0.0625, (tick / 34.0) as f32));
+        assert!(!momentum_unit_fits(0.0, 0.0625, (tick / 34.0) as f32));
+        for domain in [0.5f32, 1.0, 4.0, 20.0] {
+            for resolution in [8u32, 32, 64, 100, 512] {
+                let dx = domain / resolution as f32;
+                for substeps in 1..=MAX_SUBSTEPS {
+                    let dt = tick / f64::from(substeps);
+                    let unit = momentum_unit(dx, dt);
+                    assert!(momentum_unit_fits(unit, dx, dt as f32), "dx {dx} substeps {substeps}: {unit}");
+                    // The kernels' f32 arithmetic, as written in their WGSL.
+                    let inv_mass_unit = 1.0 / mass_unit(dx);
+                    let to_mass = MASS_SCALE * inv_mass_unit;
+                    let to_momentum = MOMENTUM_SCALE / unit * inv_mass_unit;
+                    let to_velocity = unit * (MASS_SCALE / MOMENTUM_SCALE);
+                    assert_eq!(to_momentum / to_mass * to_velocity, 1.0, "dx {dx} substeps {substeps}");
+                }
+            }
+        }
     }
 
     /// The sort's bin (floor((p − box_min) / bin), as the sort atom computes

@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::matter::MatterGridNode;
+use crate::node_graph::matter::{MatterGridNode, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::matter_common::read_lattice;
@@ -25,9 +25,9 @@ struct GridUpdateUniforms {
     gravity: f32,
     gravity_z: f32,
     closed_faces: i32,
+    momentum_unit: f32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
@@ -42,6 +42,7 @@ crate::primitive! {
         step_dt: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
+        momentum_unit: ScalarF32 optional,
     },
     outputs: {
         grid_out: Array(MatterGridNode),
@@ -56,9 +57,10 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity and closed faces come from node.matter_domain, step_dt from the substep boundary.",
+    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, step_dt from the substep boundary.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Grid Update", category: Atom },
     summary: "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",
@@ -95,6 +97,7 @@ impl Primitive for MatterGridUpdate {
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
+        let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
         // In place on the grid input; the GPU is touched on every path.
         let accum = ctx.inputs.array("accum");
         let grid = ctx.inputs.array("grid");
@@ -109,6 +112,12 @@ impl Primitive for MatterGridUpdate {
         if nodes == 0 || step_dt <= 0.0 {
             return;
         }
+        if !momentum_unit_fits(momentum_unit, lattice.cell_size, step_dt) {
+            ctx.error(format!(
+                "Matter Grid Update: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
+            ));
+            return;
+        }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = GridUpdateUniforms {
             nodes_x: lattice.nodes[0] as i32,
@@ -120,9 +129,9 @@ impl Primitive for MatterGridUpdate {
             gravity: gravity[1],
             gravity_z: gravity[2],
             closed_faces,
+            momentum_unit,
             dispatch_count: nodes,
             _pad0: 0,
-            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -152,7 +161,7 @@ mod tests {
         let body = include_str!("shaders/matter_grid_update_body.wgsl");
         assert_eq!(crate::node_graph::matter::MASS_SCALE, 65_536.0);
         assert_eq!(crate::node_graph::matter::MOMENTUM_SCALE, 134_217_728.0);
-        assert!(body.contains("(vel_unit * (65536.0 / 134217728.0))"));
+        assert!(body.contains("/ m_norm * (momentum_unit * (65536.0 / 134217728.0));"));
         assert!(body.contains("m_norm / 65536.0 * mass_unit") && body.contains("0.9 * vel_unit"));
         assert_eq!(crate::node_graph::matter::VELOCITY_CLAMP_CFL, 0.9);
     }

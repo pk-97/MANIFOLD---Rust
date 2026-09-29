@@ -11,9 +11,9 @@
 use std::borrow::Cow;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid::domain_layout;
+use crate::node_graph::fluid::{TICK, domain_layout};
 use crate::node_graph::matter::{
-    MAX_SUBSTEPS, MatterClock, MatterLattice, WATER_DENSITY, free_fall_speed,
+    MAX_SUBSTEPS, MatterClock, MatterLattice, WATER_DENSITY, free_fall_speed, momentum_unit,
     stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -74,6 +74,7 @@ crate::primitive! {
         block_center_x: ScalarF32, block_center_y: ScalarF32, block_center_z: ScalarF32,
         block_size_x: ScalarF32, block_size_y: ScalarF32, block_size_z: ScalarF32,
         block_cell_size: ScalarF32,
+        momentum_unit: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
@@ -125,14 +126,14 @@ fn closed_faces(ctx: &EffectNodeContext<'_, '_>) -> u32 {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 41] = [
+const OUTPUTS: [&str; 42] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
     "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
     "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
     "fill_seed", "ticks", "substeps_per_tick", "epoch", "simulation_time", "display_time",
     "dropped_seconds", "lambda", "cohesion", "liveliness", "density", "limited_by_substeps",
     "blocks_x", "blocks_y", "blocks_z", "block_center_x", "block_center_y", "block_center_z",
-    "block_size_x", "block_size_y", "block_size_z", "block_cell_size",
+    "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
 ];
 const TICKS: usize = 20;
 
@@ -300,6 +301,7 @@ impl MatterDomain {
             block_size[1],
             block_size[2],
             block_bin,
+            momentum_unit(lattice.cell_size, TICK / f64::from(substeps)),
         ])
     }
 }

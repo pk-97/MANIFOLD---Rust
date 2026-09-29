@@ -123,7 +123,8 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
 
     let m_unit = f64::from(super::mass_unit(lat.cell_size));
     let to_mass = f64::from(super::MASS_SCALE) / m_unit;
-    let to_momentum = f64::from(super::MOMENTUM_SCALE) / m_unit * p.dt / dx;
+    let to_momentum =
+        f64::from(super::MOMENTUM_SCALE) / m_unit / f64::from(super::momentum_unit(lat.cell_size, p.dt));
     let quantize = |value: f64, scale: f64, key: u32, slot: usize| {
         if p.fixed_point {
             super::encode_fixed(value * scale, key, slot as u32) as f64 / scale

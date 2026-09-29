@@ -130,6 +130,8 @@ impl MatterScene {
             wire(&mut graph, (domain, port), (p2g, port));
             wire(&mut graph, (domain, port), (stats, port));
         }
+        wire(&mut graph, (domain, "momentum_unit"), (p2g, "momentum_unit"));
+        wire(&mut graph, (domain, "momentum_unit"), (update, "momentum_unit"));
         wire(&mut graph, (domain, "liveliness"), (g2p, "liveliness"));
         wire(&mut graph, (domain, "cohesion"), (g2p, "cohesion"));
 

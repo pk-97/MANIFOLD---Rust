@@ -12,7 +12,8 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::domain_layout;
 use manifold_renderer::node_graph::matter::reference::{self, Params, Point};
 use manifold_renderer::node_graph::matter::{
-    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterLattice, MatterPoint, mass_unit, water_lambda,
+    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterLattice, MatterPoint, mass_unit, momentum_unit,
+    water_lambda,
 };
 use manifold_renderer::node_graph::{
     ArrayType, Backend, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor,
@@ -162,6 +163,9 @@ impl Chain {
             set(&mut graph, node, "nodes_z", lat.nodes[2] as f32);
             set(&mut graph, node, "step_dt", p.dt as f32);
         }
+        let unit = momentum_unit(lat.cell_size, p.dt);
+        set(&mut graph, p2g, "momentum_unit", unit);
+        set(&mut graph, update, "momentum_unit", unit);
         set(&mut graph, p2g, "lambda", p.lambda as f32);
         set(&mut graph, p2g, "cohesion", p.cohesion as f32);
         set(&mut graph, p2g, "density", p.density as f32);
@@ -375,7 +379,7 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
     let grid = reference::substep(&mut fixed, &lat, &Params { fixed_point: true, ..p });
     let m_unit = f64::from(mass_unit(lat.cell_size));
     let to_mass = f64::from(MASS_SCALE) / m_unit;
-    let to_momentum = f64::from(MOMENTUM_SCALE) / m_unit * p.dt / f64::from(lat.cell_size);
+    let to_momentum = f64::from(MOMENTUM_SCALE) / m_unit / f64::from(momentum_unit(lat.cell_size, p.dt));
     // Large words sum f32 contributions of up to 1e8 that partly cancel, so
     // they differ from the f64 oracle by f32 precision: tens of LSB, about
     // 1e-10·dx/dt of velocity at a full node.

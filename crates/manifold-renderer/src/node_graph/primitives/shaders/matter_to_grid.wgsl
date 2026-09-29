@@ -6,7 +6,8 @@
 //   momentum += w · (m_p·v_p + (m_p·C_p − dt·V0·(4/dx²)·τ_p·I)·d_i)
 // with the water Kirchhoff pressure τ = λ·J·(J − 1) (× Cohesion for J ≥ 1).
 // Words per node: momentum x, y, z, mass; signed fixed point, mass in
-// m_unit = 1000·dx³/8 kg at 2^16, momentum in m_unit·dx/dt at 2^27, each
+// m_unit = 1000·dx³/8 kg at 2^16, momentum in m_unit·U at 2^27 (U the
+// domain's power-of-two momentum unit, at or above dx/dt), each
 // contribution floor(x + u) with u hashed from the point id and the word's
 // global slot (D5), so every path adds the same integers.
 //
@@ -54,7 +55,7 @@ struct P2gParams {
     blocks_y: u32,
     blocks_z: u32,
     sorted: u32,
-    _pad0: u32,
+    momentum_unit: f32,
     _pad1: u32,
 }
 
@@ -145,9 +146,11 @@ fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
     let a2 = mass * pt.affine_z.xyz - vec3<f32>(0.0, 0.0, stress);
     let mv = mass * pt.velocity;
 
-    let mass_unit = 125.0 * cell_size * cell_size * cell_size;
-    let to_mass = 65536.0 / mass_unit;
-    let to_momentum = 134217728.0 / mass_unit * params.step_dt * inv_dx;
+    // Both scales are powers of two times one reciprocal, so their ratio is
+    // exactly 2^11 / U and the grid update's decode inverts it.
+    let inv_mass_unit = 1.0 / (125.0 * cell_size * cell_size * cell_size);
+    let to_mass = 65536.0 * inv_mass_unit;
+    let to_momentum = 134217728.0 / params.momentum_unit * inv_mass_unit;
     let key = hash(pt.id ^ hash(params.tick_index * 4096u + params.substep_in_tick));
     let local_base = base_i - tile_origin;
     let in_tile = use_tile && all(local_base >= vec3<i32>(0)) && all(local_base + vec3<i32>(2) < vec3<i32>(TILE));

@@ -15972,6 +15972,10 @@
         {
           "name": "block_cell_size",
           "type": "f32"
+        },
+        {
+          "name": "momentum_unit",
+          "type": "f32"
         }
       ],
       "params": [
@@ -16669,6 +16673,11 @@
           "name": "closed_faces",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "momentum_unit",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Matter Grid Update",
@@ -16769,6 +16778,16 @@
             "63"
           ],
           "type": "int"
+        },
+        {
+          "default": "128",
+          "label": "Momentum Unit (m/s)",
+          "name": "momentum_unit",
+          "range": [
+            "0.001",
+            "1000000000"
+          ],
+          "type": "float"
         }
       ],
       "purpose": "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity, stop velocity into closed domain walls on the outer three nodes, and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
@@ -17283,6 +17302,11 @@
           "type": "f32"
         },
         {
+          "name": "momentum_unit",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "blocks_x",
           "required": false,
           "type": "f32"
@@ -17448,6 +17472,16 @@
           "type": "int"
         },
         {
+          "default": "128",
+          "label": "Momentum Unit (m/s)",
+          "name": "momentum_unit",
+          "range": [
+            "0.001",
+            "1000000000"
+          ],
+          "type": "float"
+        },
+        {
           "default": "18",
           "label": "Blocks X",
           "name": "blocks_x",
@@ -17491,7 +17525,10 @@
         "matter view"
       ],
       "category": "Particles 3D",
-      "examples": [],
+      "examples": [
+        "WaterDamBreakMatter",
+        "WaterStillPoolMatter"
+      ],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -33078,7 +33115,9 @@
       ],
       "category": "Particles 3D",
       "examples": [
-        "WaterDamBreakGpu"
+        "WaterDamBreakGpu",
+        "WaterDamBreakMatter",
+        "WaterStillPoolMatter"
       ],
       "fusion": "boundary:barriered_reduction",
       "inputs": [

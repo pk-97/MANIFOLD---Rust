@@ -6,8 +6,9 @@
 // face node and the three padding nodes beyond it (the authored face sits on
 // node 3), frictionless (taichi_elements grid_bounding_box). Each
 // component is clamped to ±0.9·dx/dt; a clamped node sets velocity_before.w.
-// `accum` is gathered (4 words per node: momentum xyz in m_unit·dx/dt at 2^27,
-// mass in m_unit = 1000·dx³/8 kg at 2^16; D5). Element = MatterGridNode.
+// `accum` is gathered (4 words per node: momentum xyz in m_unit·U at 2^27, U
+// the domain's power-of-two momentum unit that P2G also reads, mass in
+// m_unit = 1000·dx³/8 kg at 2^16; D5). Element = MatterGridNode.
 fn body(
     idx: u32,
     count: u32,
@@ -21,6 +22,7 @@ fn body(
     gravity: f32,
     gravity_z: f32,
     closed_faces: i32,
+    momentum_unit: f32,
 ) -> Element {
     var out: Element;
     out.velocity_mass = vec4<f32>(0.0);
@@ -32,11 +34,12 @@ fn body(
     }
     let m_norm = f32(m_raw);
     let vel_unit = cell_size / step_dt;
+    // U · 2^16 / 2^27 is exact: the inverse of P2G's scale ratio.
     let v_before = vec3<f32>(
         f32(buf_accum[word]),
         f32(buf_accum[word + 1u]),
         f32(buf_accum[word + 2u]),
-    ) / m_norm * (vel_unit * (65536.0 / 134217728.0));
+    ) / m_norm * (momentum_unit * (65536.0 / 134217728.0));
     var v = v_before + step_dt * vec3<f32>(gravity_x, gravity, gravity_z);
 
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
