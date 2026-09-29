@@ -132,8 +132,6 @@ impl Chain {
             graph.connect((m2p, "particles"), (sort, "particles")).unwrap();
             graph.connect((sort, "order"), (p2g, "order")).unwrap();
             graph.connect((sort, "cell_ranges"), (p2g, "ranges")).unwrap();
-            // The sort runs only when its `sorted` output has a buffer.
-            graph.add_external_output(sort, "sorted").unwrap();
             let (centre, size, bin) = lat.block_bins();
             for (axis, name) in ["x", "y", "z"].iter().enumerate() {
                 set(&mut graph, sort, &format!("center_{name}"), centre[axis]);

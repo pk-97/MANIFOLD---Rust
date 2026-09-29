@@ -32,8 +32,7 @@ pub(crate) struct SceneSettings {
     pub points_per_cell_27: bool,
     pub closed: [bool; 6],
     /// P2G takes D6's block path: the region sorts the points into the
-    /// domain's block bins (every substep until the sort can gate on the
-    /// tick start) and P2G reads the order and ranges.
+    /// domain's block bins once per tick and P2G reads the order and ranges.
     pub block_p2g: bool,
 }
 
@@ -164,6 +163,8 @@ impl MatterScene {
             wire(&mut graph, (state, "out"), (m2p, "points"));
             wire(&mut graph, (m2p, "particles"), (sort, "particles"));
             wire(&mut graph, (fill, "count"), (sort, "count"));
+            // Sort once per tick; later substeps reuse its order and ranges.
+            wire(&mut graph, (state, "tick_start"), (sort, "enabled"));
             for (from, to) in [
                 ("block_center_x", "center_x"), ("block_center_y", "center_y"), ("block_center_z", "center_z"),
                 ("block_size_x", "size_x"), ("block_size_y", "size_y"), ("block_size_z", "size_z"),
@@ -176,8 +177,6 @@ impl MatterScene {
             }
             wire(&mut graph, (sort, "order"), (p2g, "order"));
             wire(&mut graph, (sort, "cell_ranges"), (p2g, "ranges"));
-            // The sort runs only when its `sorted` output has a buffer.
-            graph.add_external_output(sort, "sorted").expect("sorted output");
         }
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
@@ -464,6 +463,31 @@ fn matter_deterministic_under_seed() {
     let a_bytes: &[u8] = bytemuck::cast_slice(&a);
     let b_bytes: &[u8] = bytemuck::cast_slice(&b);
     assert!(a_bytes == b_bytes, "two runs of the same seed diverged");
+}
+
+/// D6's block path sorts once per tick and reuses that order for every
+/// substep, so points drift out of their block's tile; the integer
+/// accumulator still makes the whole run bit-identical to the per-point path.
+#[test]
+fn matter_block_path_matches_per_point() {
+    let run = |block_p2g: bool| {
+        let mut scene = MatterScene::new(&SceneSettings { block_p2g, ..small_dam_break() });
+        for _ in 0..120 {
+            scene.tick();
+        }
+        assert_eq!(scene.stats().nonfinite, 0);
+        scene.points()
+    };
+    let point = run(false);
+    let block = run(true);
+    assert_eq!(point.len(), block.len());
+    let differ = point
+        .iter()
+        .zip(&block)
+        .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
+        .count();
+    eprintln!("matter_block_path_matches_per_point: {} points, {differ} differ after 120 ticks", point.len());
+    assert_eq!(differ, 0, "the block path diverged from the per-point path");
 }
 
 #[test]
