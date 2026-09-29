@@ -78,6 +78,8 @@ READ_ONLY = {
     "echo", "printf", "which", "type", "whoami", "date", "printenv",
     "true", "false", "test", "[", "uname", "hostname", "id", "groups",
     "read",  # shell builtin: reads stdin into a variable, writes no files
+    # process table inspection (lane health checks). Peter approved 2026-09-29.
+    "pgrep", "ps",
 }
 
 # git subcommands that only read repository state.
@@ -124,6 +126,9 @@ _DATA_KEYWORDS = {"for", "select", "case", "in", "function"}
 _STRIP_KEYWORDS = {
     "if", "then", "elif", "else", "fi", "while", "until", "do", "done",
     "esac", "time", "!", "{", "}", "(", ")",
+    # `command ls` / `builtin echo` bypass an alias (eza etc.); the word
+    # after them is the real head and is classified as usual.
+    "command", "builtin",
 }
 
 # Placeholder a quoted span collapses to. Deliberately not a /tmp path and

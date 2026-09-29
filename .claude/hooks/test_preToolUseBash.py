@@ -751,6 +751,12 @@ def test_sed_guard_ignores_quoted_shell_variable():
     check("sed guard: real $w command still asks", r2 is not None)
 
 
+def test_pgrep_and_command_prefix_pre_approved():
+    check("pgrep pre-approved", hook.is_preapproved_command("pgrep -fl cargo | head -3"))
+    check("command ls pre-approved", hook.is_preapproved_command("command ls -la .claude/"))
+    check("command rm NOT pre-approved", not hook.is_preapproved_command("command rm -rf x"))
+
+
 def test_xargs_gated_on_its_command():
     check("xargs read-only command pre-approved",
           hook.is_preapproved_command("fd -e rs . crates | xargs wc -l"))
@@ -765,6 +771,7 @@ def test_xargs_gated_on_its_command():
 def main():
     test_sed_guard_ignores_quoted_shell_variable()
     test_xargs_gated_on_its_command()
+    test_pgrep_and_command_prefix_pre_approved()
     test_cd_guard()
     test_branch_force_main_asks()
     test_branch_force_main_worktree_unaffected()
