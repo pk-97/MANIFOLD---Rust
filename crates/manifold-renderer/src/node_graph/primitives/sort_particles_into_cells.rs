@@ -27,7 +27,8 @@ struct SortParams {
     count: u32,
     bin_total: u32,
     sorted_capacity: u32,
-    _pad: [u32; 2],
+    write_order: u32,
+    _pad: u32,
 }
 
 macro_rules! float_param {
@@ -47,7 +48,7 @@ pub(crate) use float_param;
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
+    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -58,6 +59,7 @@ crate::primitive! {
     outputs: {
         sorted: Array(FluidParticle),
         cell_ranges: Array(CellRange),
+        order: Array(u32),
     },
     params: [
         float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
@@ -100,7 +102,7 @@ impl Primitive for SortParticlesIntoCells {
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         match port {
-            "sorted" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
+            "sorted" | "order" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
             "cell_ranges" => match params.get("max_cells") {
                 Some(ParamValue::Float(n)) => Some(n.clamp(1.0, 16_777_216.0) as u32),
                 _ => Some(1_048_576),
@@ -151,6 +153,7 @@ impl Primitive for SortParticlesIntoCells {
         ) else {
             return;
         };
+        let order = ctx.outputs.array("order");
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
         let capacity = (particles.size / particle_size) as u32;
         let sorted_capacity = (sorted.size / particle_size) as u32;
@@ -185,7 +188,8 @@ impl Primitive for SortParticlesIntoCells {
             count,
             bin_total,
             sorted_capacity,
-            _pad: [0; 2],
+            write_order: u32::from(order.is_some()),
+            _pad: 0,
         };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
@@ -194,6 +198,8 @@ impl Primitive for SortParticlesIntoCells {
             GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
             GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
             GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
+            // Unwired, never written (`write_order` is 0); rank keeps the layout bound.
+            GpuBinding::Buffer { binding: 6, buffer: order.unwrap_or(rank), offset: 0 },
         ];
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
         let encoder = &mut *gpu.native_enc;

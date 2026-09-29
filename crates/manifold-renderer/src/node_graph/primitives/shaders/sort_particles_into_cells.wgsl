@@ -2,7 +2,8 @@
 // spatial bins (GPU_FLUID_SURFACE_DESIGN.md D17). Passes, barrier between each:
 // clear_counts → count_particles → prefix_scan (level 0 of `cell_counts`) →
 // write_ranges → clear_tail → scatter. `cell_counts` is the scan storage; after
-// the scan it holds each bin's inclusive end.
+// the scan it holds each bin's inclusive end. With `write_order`, `order` gets each
+// sorted slot's input index (NO_RANK past the live total).
 
 struct FluidParticle {
     position_radius: vec4<f32>,
@@ -22,8 +23,8 @@ struct SortParams {
     count: u32,
     bin_total: u32,
     sorted_capacity: u32,
+    write_order: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SortParams;
@@ -32,6 +33,7 @@ struct SortParams {
 @group(0) @binding(3) var<storage, read_write> ranges: array<CellRange>;
 @group(0) @binding(4) var<storage, read_write> cell_counts: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> rank: array<u32>;
+@group(0) @binding(6) var<storage, read_write> order: array<u32>;
 
 const NO_RANK: u32 = 0xffffffffu;
 
@@ -89,6 +91,9 @@ fn clear_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if i >= atomicLoad(&cell_counts[params.bin_total - 1u]) {
         sorted[i] = FluidParticle(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+        if params.write_order != 0u {
+            order[i] = NO_RANK;
+        }
     }
 }
 
@@ -99,5 +104,9 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let particle = particles[i];
-    sorted[bin_start(bin_of(particle.position_radius.xyz)) + rank[i]] = particle;
+    let slot = bin_start(bin_of(particle.position_radius.xyz)) + rank[i];
+    sorted[slot] = particle;
+    if params.write_order != 0u {
+        order[slot] = i;
+    }
 }

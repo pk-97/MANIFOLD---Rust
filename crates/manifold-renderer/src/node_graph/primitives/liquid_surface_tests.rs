@@ -283,6 +283,34 @@ fn fluid_sort_particles_into_cells_is_a_binned_permutation() {
     }
     assert_eq!(next as usize, live);
     assert!(sorted[live..].iter().all(|p| p.position_radius[3] == 0.0), "tail is inactive");
+
+    // `order` names each sorted slot's input index; past the live total, none.
+    let (input, _) = harness.array(&particles, particles.len());
+    let (sorted_slot, sorted_buf) = harness.array::<FluidParticle>(&[], particles.len());
+    let (ranges_slot, _) = harness.array::<CellRange>(&[], bin_total);
+    let (order_slot, order_buf) = harness.array::<u32>(&[], particles.len());
+    let count_slot = harness.scalar_input(count as f32);
+    let (_, errors) = harness.run(
+        &mut SortParticlesIntoCells::new(),
+        &[("particles", input), ("count", count_slot)],
+        &[("sorted", sorted_slot), ("cell_ranges", ranges_slot), ("order", order_slot)],
+        &lattice.params(&[]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let sorted: Vec<FluidParticle> = read(&sorted_buf, particles.len());
+    let order: Vec<u32> = read(&order_buf, particles.len());
+    for (slot, &index) in order.iter().enumerate() {
+        if slot < live {
+            assert!((index as usize) < count, "slot {slot} names a sorted input");
+            assert_eq!(
+                bytemuck::bytes_of(&sorted[slot]),
+                bytemuck::bytes_of(&particles[index as usize]),
+                "slot {slot} holds input {index}"
+            );
+        } else {
+            assert_eq!(index, u32::MAX, "slot {slot} past the live total names no input");
+        }
+    }
 }
 
 #[test]
