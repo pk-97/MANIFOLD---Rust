@@ -921,6 +921,28 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// `Some` makes this node a substep boundary: the plan compiler contracts
+    /// the nodes between its outputs and its capture producers into a
+    /// [`SubstepRegion`](crate::node_graph::substeps::SubstepRegion) that the
+    /// executor repeats inside one frame. Every declared capture port must
+    /// also be listed in [`state_capture_input_ports`](Self::state_capture_input_ports).
+    /// Default: `None`.
+    fn substep_boundary(&self) -> Option<crate::node_graph::substeps::SubstepBoundaryPorts> {
+        None
+    }
+
+    /// Substep boundary only. The executor calls this before EACH region body
+    /// iteration, after the boundary's `evaluate` resolved this frame's count.
+    /// `true` runs iteration `iteration` with `scalars` (one value per
+    /// [`SubstepBoundaryPorts::iteration_scalars`](crate::node_graph::substeps::SubstepBoundaryPorts::iteration_scalars)
+    /// entry, same order) written to those output slots first; `false` ends
+    /// the repeat, so a zero-iteration frame returns `false` at 0 and the
+    /// boundary's `evaluate` must already have published its state output.
+    /// Default: `false`.
+    fn substep_iteration(&mut self, _iteration: u32, _scalars: &mut [f32]) -> bool {
+        false
+    }
+
     /// If `Some(port_name)`, this node is a branch-selector: only the
     /// upstream subgraph feeding the named input port needs to run
     /// this frame. The executor uses this to prune unselected branches

@@ -26,7 +26,9 @@ use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevisionRule};
-use crate::node_graph::physics_scene::{coupled_execution_order, CoupledSceneSteps};
+use crate::node_graph::physics_scene::{
+    active_execution_order, contracted_execution_order, CoupledSceneSteps,
+};
 use crate::node_graph::ports::{KnownItem, PortType};
 use crate::node_graph::validation::{GraphError, topological_sort, validate};
 
@@ -179,6 +181,9 @@ pub struct ExecutionPlan {
     /// port names are resolved to `ResourceId`s here at compile time,
     /// so the executor's per-frame commit does no name lookups.
     mesh_rules: Vec<Option<CompiledMeshOutputRule>>,
+    /// Substep repeat regions (`docs/GPU_MPM_SOLVER_DESIGN.md` D7), one per
+    /// boundary node. Empty for every graph without one.
+    substep_regions: Vec<crate::node_graph::substeps::SubstepRegion>,
 }
 
 /// SCENE_MODIFIER_RT_DESIGN.md §3.2: a
@@ -314,6 +319,12 @@ impl ExecutionPlan {
         &self.coupled_scenes
     }
 
+    /// Substep repeat regions derived at compile time; empty for graphs
+    /// without a substep boundary.
+    pub fn substep_regions(&self) -> &[crate::node_graph::substeps::SubstepRegion] {
+        &self.substep_regions
+    }
+
     /// Profiling-only: a sub-plan containing just the first `k` execution
     /// steps. Steps are topologically ordered, so `[0..k]` is always a valid
     /// executable prefix — every dependency of a kept step is also kept.
@@ -342,6 +353,9 @@ impl ExecutionPlan {
         p.hoistable_steps.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
         p.coupled_scenes.retain(|pair| pair.rigid_step < k);
+        // A prefix cutting through a region body has no repeat semantics;
+        // only whole regions survive.
+        p.substep_regions.retain(|r| r.steps.iter().all(|&i| i < k));
         p
     }
 }
@@ -398,8 +412,14 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // (most unit-test fixtures) fall back to running every node.
     let full_order = topological_sort(graph)?;
     let has_root = graph.nodes().any(|inst| graph.is_liveness_root(inst.id));
+    let active_order = active_execution_order(graph, &full_order, has_root);
+    // Substep regions contract to one vertex each, like coupled scenes, so
+    // every region's steps are one contiguous block (boundary first).
+    let region_nodes = crate::node_graph::substeps::derive_regions(graph, &active_order)?;
+    let region_blocks: Vec<Vec<NodeInstanceId>> =
+        region_nodes.iter().map(|r| r.nodes.clone()).collect();
     let (order, coupled_scenes) =
-        coupled_execution_order(graph, &full_order, has_root)?;
+        contracted_execution_order(graph, &active_order, &region_blocks)?;
 
     // Index wires by their target (input) port for O(1) lookup during
     // input-binding construction.
@@ -790,7 +810,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             .get_node(node_id)
             .expect("topo order references existing node");
         let state_capture_ports = inst.node.state_capture_input_ports();
-        if !state_capture_ports.is_empty() {
+        // A substep boundary captures once per region iteration; a second
+        // capture at frame end would accept the state twice.
+        if !state_capture_ports.is_empty() && inst.node.substep_boundary().is_none() {
             late_capture_steps.push(step_idx);
         }
 
@@ -999,15 +1021,24 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     // so they must outlive their last reader. Classify them here — the one
     // place lifetimes are decided — so `free_after` (below) never frees
     // them and downstream slot planners can't alias them.
+    let step_of: AHashMap<NodeInstanceId, usize> =
+        order.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+    let region_members: ahash::AHashSet<NodeInstanceId> = region_nodes
+        .iter()
+        .flat_map(|r| r.nodes.iter().copied())
+        .collect();
     let mut held: Vec<ResourceId> = Vec::new();
     let mut hoistable_steps: Vec<bool> = vec![false; steps.len()];
     {
         let mut res_hoistable: AHashMap<ResourceId, bool> =
             AHashMap::with_capacity(resource_types.len());
         for (idx, step) in steps.iter().enumerate() {
-            let pure = graph
-                .get_node(step.node)
-                .is_some_and(|inst| inst.node.is_pure());
+            // A region step's inputs change per iteration even when this
+            // frame's params do not, so it is never memoized.
+            let pure = !region_members.contains(&step.node)
+                && graph
+                    .get_node(step.node)
+                    .is_some_and(|inst| inst.node.is_pure());
             let hoistable = pure
                 && step
                     .inputs
@@ -1053,6 +1084,33 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     for res_id in &persistent {
         last_reader.remove(res_id);
     }
+
+    // Region resources: every remaining wire whose last reader is a region
+    // step. Held for the whole repeat by the executor's region path and
+    // released when the region ends — never through `free_after`.
+    let mut substep_regions = Vec::with_capacity(region_nodes.len());
+    for region in &region_nodes {
+        let step_indices: Vec<usize> = region.nodes.iter().map(|n| step_of[n]).collect();
+        debug_assert!(
+            step_indices.windows(2).all(|w| w[1] == w[0] + 1),
+            "region steps are contiguous by contraction"
+        );
+        let mut held_resources: Vec<ResourceId> = last_reader
+            .iter()
+            .filter(|(_, reader)| step_indices.contains(reader))
+            .map(|(&res, _)| res)
+            .collect();
+        held_resources.sort();
+        for res in &held_resources {
+            last_reader.remove(res);
+        }
+        substep_regions.push(crate::node_graph::substeps::SubstepRegion {
+            boundary: region.boundary,
+            steps: step_indices,
+            held_resources,
+        });
+    }
+
     let mut free_at_step: AHashMap<usize, Vec<ResourceId>> = AHashMap::default();
     for (&res_id, &step_idx) in &last_reader {
         free_at_step.entry(step_idx).or_default().push(res_id);
@@ -1091,6 +1149,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         late_capture_steps,
         coupled_scenes,
         mesh_rules,
+        substep_regions,
     })
 }
 
