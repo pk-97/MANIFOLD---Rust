@@ -138,7 +138,7 @@ def _safe_size(path: Path, seen: Optional[set[tuple[int, int]]] = None,
         return 0
     if _regular_file(path):
         try:
-            stat = path.stat(follow_symlinks=False)
+            stat = path.lstat()
             key = (stat.st_dev, stat.st_ino)
             if key in seen:
                 return 0
@@ -396,7 +396,7 @@ def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
 
 
 def _identity(path: Path) -> tuple[int, int, int, int, int, int]:
-    stat = path.stat(follow_symlinks=False)
+    stat = path.lstat()
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_mode,
             stat.st_blocks)
 
@@ -443,7 +443,7 @@ def plan_cache_cleanup(target: Path) -> CleanupPlan:
                 if not _cache_path(target, path):
                     continue
                 try:
-                    stat = path.stat(follow_symlinks=False)
+                    stat = path.lstat()
                     key = (stat.st_dev, stat.st_ino)
                     allocated = 0 if key in inode_seen else stat.st_blocks * ALLOCATED_BLOCK
                     inode_seen.add(key)
