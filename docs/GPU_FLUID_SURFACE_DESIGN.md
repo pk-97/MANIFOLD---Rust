@@ -55,7 +55,7 @@ Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_gra
 | Particle attributes | `F/native/flip_engine/particlesystem.h:92` (`addAttributeULongLong`), `particlesystem.cpp:88` (`removeParticles` compacts every attribute list together) | Exists. A MANIFOLD id attribute survives removal. Upstream's own particle ID is a random `uint16` (`fluidsimulation.h:2365`) — not unique, unusable. |
 | Raw particle getters | `F/native/flip_engine/fluidsimulation.h:1533-1534` (position and velocity `DataRange`) | Exists. Writes into caller memory without allocating. |
 | Solver dt bound | `F/src/lib.rs:685` (`dt ≤ 1/30`) | Blocks a 15 Hz tick. P1 lifts it. |
-| Coupled rigid/liquid tick | `R/fluid/coupled/native.rs:316` (rigid tick must equal `TICK`), `R/primitives/physics_world.rs:556-568`, `:653-656`, `R/execution.rs:2215` | Exists. See the finding in section 7. |
+| Coupled rigid/liquid tick | `R/fluid/coupled/native.rs:316` (rigid tick must equal `TICK`), `R/primitives/physics_world.rs:556-568`, `:653-656`, `R/execution.rs:2215` | Exists and stays (lockstep). Section 7 states the rule. |
 | Atomic scatter atoms | `R/primitives/scatter_particles_3d.rs:95-98` (`Boundary`/`Blocked`, `atomic_outputs`) | Precedent for atomic atoms on standalone codegen. |
 | Multi-pass scan atoms | `R/primitives/spawn_from_mesh.rs:119` (`BarrieredReduction`), `R/primitives/shaders/spawn_from_mesh.wgsl:134` (single-thread serial scan) | Precedent for the exemption. No parallel prefix scan exists (`rg -n -i 'prefix|scan_main'`). |
 | Buffer generator with gathered inputs | `R/primitives/triangulate_grid.rs:72-74` (`node.make_triangles`: Pointwise, `BufferGather`, capacity from params) | Precedent for per-output-element atoms whose inputs are all gathered. |
@@ -99,9 +99,11 @@ pins it.
 **D5 — Record/Playback stay mesh caches for now (Peter + lead).** Caching particle frames
 instead is deferred with a trigger (section 11).
 
-**D6 — Box3D keeps its own 60 Hz tick and never waits on the fluid worker (Peter +
-lead).** Section 7 states the rule and the finding that coupled scenes do not meet it
-today.
+**D6 — Uncoupled Box3D keeps its own 60 Hz tick and never waits on the fluid worker;
+coupled Box3D stays in lockstep with the fluid tick (Peter's call, relayed by the lead,
+2026-09-29).** A coupled pair steps on the fluid worker as built and presents at display
+time `s` through the same interpolation as the particles (D10). The fluid tick of any
+coupled scene has a 30 Hz floor. Section 7 states the rule and its costs.
 
 **D7 — No separate upload atom; `node.fluid_surface` publishes the frame as provided
 outputs.** The worker writes particle records straight into a shared GPU buffer slot
@@ -124,8 +126,9 @@ resolve atom (deferred).
 
 **D9 — Solver rate is a setup setting, default 60 Hz for existing content.**
 `solver_rate` ∈ {60, 30, 20, 15} Hz on `node.fluid_surface`; changing it restarts the
-world. A rate below 60 requires Live mode, an uncoupled scene, particle outputs consumed,
-`vertices` unconsumed and, until P8, whitewater off. Anything else is a named error,
+world. A rate below 60 requires Live mode, particle outputs consumed, `vertices`
+unconsumed and, until P8, whitewater off. A coupled scene may use 60 or 30 Hz, never
+lower (D6). Anything else is a named error,
 never a silent 60. Add Fluid authors 30 Hz from P7. **Defaulted, with a kill trigger:**
 P1 measures ms per simulated second at res 32/48/64 × 60/30/15 Hz. If 30 Hz is not at
 least 25% cheaper than 60 Hz at res 48, stop and escalate to Peter before P4 — the
@@ -447,15 +450,23 @@ coupled rigid pose. Per tick, the worker loses CPU meshing and gains one capture
 - Live (anisotropic GPU) and baked (sphere-union CPU) surfaces look different until
   particle frames are cached (R5).
 
-## 7. Coupling rule and finding
+## 7. Coupling rule
 
 **Rule.** A scene without a fluid coupling runs Box3D on its own fixed tick inside
 `node.physics_world` (`R/primitives/physics_world.rs:653` onward) and never reads the
-fluid worker. Nothing in this design touches that path. Coupled pairs stay at 60 Hz
-(D9) and their rigid frame presents at `s` with the particles (D10).
+fluid worker. Nothing in this design touches that path. A coupled pair stays in
+lockstep with the fluid tick, as built: the rigid owner's tick equals the pair's solver
+rate (P4 turns the `TICK` check at `R/fluid/coupled/native.rs:316` into that), which is
+60 or 30 Hz, never lower. The coupled rigid frame keeps the previous accepted pair and
+presents at `s` with the particles, interpolated by the same `blend` (lerp translation
+and scale, slerp rotation). There are no fallback modes.
 
-**Finding (read-through 2026-09-29; not fixed here).** A coupled scene has no independent
-Box3D tick today. `set_coupled_physics(true)` drops the node's private simulation
+**Consequences, stated honestly:** at 30 Hz a coupled body's physics advances in 33 ms
+steps and its motion between them is interpolated; impulses on it quantize to the fluid
+tick; when the worker falls behind, the body holds with the water. Decoupling was
+considered and is decided against (section 10).
+
+**As built (read-through 2026-09-29).** A coupled scene has no independent Box3D tick. `set_coupled_physics(true)` drops the node's private simulation
 (`physics_world.rs:556-568`); `run` only republishes the pair accepted with a liquid
 reply (`physics_world.rs:653-656`, latched at `R/execution.rs:2215`); the worker steps
 Box3D inside each 1/60 s liquid tick and rejects any other duration
@@ -466,9 +477,9 @@ lands, jump up to `BATCH = 4` ticks per reply (`R/fluid.rs:51`) and freeze betwe
 replies. Offline, `advance(true)` blocks on the worker (`R/fluid.rs:1153-1157`), as
 expected. The integration plan chose this ("a coupled scene presents at its slowest
 required solver's accepted time" —
-FLUID_ENGINE_INTEGRATION_PLAN.md section 3 (Architecture and ownership)), and it
-contradicts D6 for coupled scenes. Resolving it needs its own design (rigid prediction
-or decoupled presentation) and Peter's call; section 11 carries it.
+FLUID_ENGINE_INTEGRATION_PLAN.md section 3 (Architecture and ownership)). This design
+keeps it; display-time interpolation removes the visible stepping when the worker keeps
+up.
 
 ## 8. Invariants and enforcement
 
@@ -480,7 +491,7 @@ or decoupled presentation) and Peter's call; section 11 carries it.
 | All solver-time outputs present at one `s` | `fluid_presentation_outputs_share_display_time` (particles, `obstacle_pose`, coupled rigid frame) |
 | Live never blocks on the worker; ring exhaustion skips a request | `fluid_particle_ring_exhaustion_never_blocks`; negative gate: `rg -n '\.recv\(\)' crates/manifold-renderer/src/node_graph/fluid.rs` shows only the offline branch |
 | No new shared locks | Negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
-| Unsupported rate, mode and coupling combinations are named errors | `fluid_solver_rate_rejects_record_playback_coupled_and_engine_mesh`, `fluid_particle_outputs_reject_record_and_playback` |
+| Unsupported rate, mode and coupling combinations are named errors | `fluid_solver_rate_rejects_record_playback_engine_mesh_and_coupled_below_30`, `fluid_particle_outputs_reject_record_and_playback` |
 | Mesh overflow is an empty mesh plus an error, never a truncated mesh | `volume_surface_mesh_overflow_writes_empty` (GPU), `fluid_surface_overflow_reports_error` |
 | The emitted mesh is closed and consistently wound | `volume_surface_mesh_sphere_is_watertight` (weld by position; every edge shared twice; consistent orientation) |
 | Interpolated particles stay out of solids | `fluid_push_out_penetration_bounded`: max `−φ` ≤ 0.1 · cell after push-out |
@@ -527,13 +538,13 @@ Verify once, at the end of the phase.
 ### P4 — Solver rate (seam brief)
 
 - **Entry state:** P1's kill check did not fire; P3 merged. Re-derive the inventory: `rg -c '\bTICK\b' crates/manifold-renderer/src/node_graph/fluid.rs crates/manifold-renderer/src/node_graph/fluid crates/manifold-renderer/src/node_graph/fluid_cache.rs crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs`. Snapshot 2026-09-29: 167 hits in 13 files — 23 production sites in 7 files (`fluid.rs` 8, `fluid/take.rs` 4, `fluid_cache.rs` 3, `fluid/coupled/native.rs` 3, `fluid/native.rs` 2, `fluid/impulses.rs` 2, `fluid/roles.rs` 1) and 144 in tests. `physics.rs` has its own local `TICK` (Box3D's `FIXED_TICK`) and is out of scope. If the counts differ, list the new sites before touching anything.
-- **Old → new:** `pub const TICK: f64 = 1.0 / 60.0` (`R/fluid.rs:44`) → `pub enum SolverRate { Hz60, Hz30, Hz20, Hz15 }` with `fn seconds(self) -> f64`, stored as `FluidSettings::solver_rate` with a serde default of `Hz60`. `simulation_tick(time)` → `simulation_tick(time, rate)`. Production sites read `settings.solver_rate.seconds()`. Tests rewrite mechanically: `TICK` → `SolverRate::Hz60.seconds()` (worked example: the expected times in `fluid/take/tests.rs`). The cache writer and reader (`fluid_cache.rs:405`, `:459`) keep their 60 Hz check; Record and Playback reject other rates before a cache opens. Coupled observation rejects rates other than 60 before the worker sees them. Native `max_substeps` scales by `60 / rate`. New `node.fluid_surface` param `solver_rate` (Enum "60 Hz"/"30 Hz"/"20 Hz"/"15 Hz", default 60 Hz, Simulation section).
+- **Old → new:** `pub const TICK: f64 = 1.0 / 60.0` (`R/fluid.rs:44`) → `pub enum SolverRate { Hz60, Hz30, Hz20, Hz15 }` with `fn seconds(self) -> f64`, stored as `FluidSettings::solver_rate` with a serde default of `Hz60`. `simulation_tick(time)` → `simulation_tick(time, rate)`. Production sites read `settings.solver_rate.seconds()`. Tests rewrite mechanically: `TICK` → `SolverRate::Hz60.seconds()` (worked example: the expected times in `fluid/take/tests.rs`). The cache writer and reader (`fluid_cache.rs:405`, `:459`) keep their 60 Hz check; Record and Playback reject other rates before a cache opens. Coupled observation rejects rates below 30 Hz before the worker sees them; the rigid owner's tick check (`R/fluid/coupled/native.rs:316`) compares against the pair's `solver_rate` instead of `TICK`. Native `max_substeps` scales by `60 / rate`. New `node.fluid_surface` param `solver_rate` (Enum "60 Hz"/"30 Hz"/"20 Hz"/"15 Hz", default 60 Hz, Simulation section).
 - **Technique:** delete `TICK` first; the build errors are the checklist. Deletion gate: `rg -n '\bTICK\b' crates/manifold-renderer/src/node_graph/fluid.rs crates/manifold-renderer/src/node_graph/fluid crates/manifold-renderer/src/node_graph/fluid_cache.rs` returns zero.
-- **Deliverables:** the seam; D9's combination errors; tests `fluid_solver_rate_rejects_record_playback_coupled_and_engine_mesh`, `fluid_solver_rate_round_trip` (save at 30 Hz, reload, the world restarts once and runs at 30 Hz), `fluid_thirty_hertz_particle_view_is_even` (P3's metric on a real 30 Hz solver).
+- **Deliverables:** the seam; D9's combination errors; tests `fluid_solver_rate_rejects_record_playback_engine_mesh_and_coupled_below_30`, `fluid_solver_rate_round_trip` (save at 30 Hz, reload, the world restarts once and runs at 30 Hz), `fluid_thirty_hertz_particle_view_is_even` (P3's metric on a real 30 Hz solver).
 - **Gate:** the tests plus the existing renderer `fluid_` and `water_` suite green; clippy clean; deletion gate zero.
 - **Demo:** P3's capture command after setting `WaterDamBreakParticles.json`'s `solver_rate` to 30 Hz. L2.
 - **Gesture:** choose 30 Hz, pour, and watch the motion stay smooth at 60 fps.
-- **Forbidden:** keeping `TICK` as an alias; accepting a non-60 rate in any cache or coupled path; exposing substeps or CFL.
+- **Forbidden:** keeping `TICK` as an alias; accepting a non-60 rate in any cache path, or a coupled rate below 30 Hz; any coupled fallback mode; exposing substeps or CFL.
 
 ### P5 — Level-set atoms
 
@@ -584,12 +595,13 @@ or in section 11.
 3. Solver 15–30 Hz with Hermite interpolation; never extrapolate; one tick of latency.
 4. Section 3's particle frame is the seam for every solver.
 5. The CPU mesher stays for CPU-mesh graphs and their Record/Playback.
-6. Uncoupled Box3D never waits on the fluid worker; coupled pairs stay at 60 Hz.
+6. Uncoupled Box3D never waits on the fluid worker; coupled pairs stay in lockstep with the fluid tick, 30 Hz floor, presented at `s`; no fallback modes.
 7. No upload atom: provided outputs, worker-written slots, fence-gated ring.
 8. Volumes are `Array(f32)` with their lattice on wires, not `Texture3D`.
 9. One display time for live and export, and for every solver-time output.
 10. GPU-surface graphs are Live-only until particle frames are cached.
 11. Surface stage ≤ 3 ms p95 is the proof gate.
+12. Coupled Box3D is not decoupled from the fluid tick (Peter, 2026-09-29): lockstep is stable by construction, and at 30 Hz the rigid rate cost is within the water's own granularity.
 
 ## 11. Deferred, with triggers
 
@@ -597,7 +609,6 @@ or in section 11.
 |---|---|
 | Particle-frame cache for Record/Playback (smaller, remeshable after bake); lifts D12 | The BUG-vglg.18 bake-workflow design session starts, or Peter wants to bake a GPU-surfaced scene |
 | GPU solver writing the frame directly | P1/P4 measurements show the CPU solver cannot hold a show scene at a live resolution, and Peter approves a solver project |
-| Coupled scenes below 60 Hz, and coupled rigid presentation independent of the liquid worker (section 7 finding) | Peter judges coupled rigid stalls unacceptable in a scene he performs; needs its own design |
 | Indirect draw of live triangles only | The measured cost of drawing the zeroed tail, or of RT structures over full capacity, exceeds 0.5 ms |
 | Vertex welding, shared-vertex output, mesh smoothing | Measured vertex bandwidth or RT build cost matters, or Peter wants CPU-style mesh smoothing |
 | `Array(f32)` → `Texture3D` resolve atom (debug slice, `blur_3d` reuse) | Authoring needs to see or blur the level set |
