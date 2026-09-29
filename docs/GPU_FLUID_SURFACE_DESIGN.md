@@ -5,6 +5,7 @@
 **Status:** PROPOSED · 2026-09-29 · Opus 5.5 (worker seat) for Fable (lead) · awaiting Peter. P1–P8 not built.
 **Prerequisites:** slot-9 surfacing commits `cb8cc7a12` (owned surface frames) and `3cae04429` (deferred meshing) on main — P1 entry check.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
+**Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
 On stage today the water is a CPU instrument that cannot keep time. At resolution 64 the
 FLIP worker spends about 245 ms per 1/60 s tick; 35 ms of that is the surface mesher at
