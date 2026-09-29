@@ -161,6 +161,8 @@ gpu-proofs = []
 rt-perf-proofs = ["gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.
 fluid-perf-proofs = ["gpu-proofs"]
+# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
+matter-perf-proofs = ["gpu-proofs"]
 
 [lints]
 workspace = true

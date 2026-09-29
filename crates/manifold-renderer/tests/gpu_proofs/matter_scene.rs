@@ -68,6 +68,8 @@ pub(crate) struct MatterScene {
     stats: ResourceId,
     frame_b: ResourceId,
     frame_count: u32,
+    /// Seconds per display frame; one fixed tick unless set.
+    frame_interval: f64,
 }
 
 const LATTICE: [&str; 7] = [
@@ -237,6 +239,7 @@ impl MatterScene {
             stats: stats_res,
             frame_b,
             frame_count: 0,
+            frame_interval: TICK,
         }
     }
 
@@ -244,6 +247,13 @@ impl MatterScene {
         self.graph
             .set_param(self.domain, name, ParamValue::Float(value))
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+
+    /// Display frames `interval` seconds apart from now on (two ticks per
+    /// frame at 30 Hz).
+    #[cfg_attr(not(feature = "matter-perf-proofs"), expect(dead_code, reason = "the 30 Hz stretch of matter_solver_perf, under matter-perf-proofs, sets it"))]
+    pub(crate) fn set_frame_interval(&mut self, interval: f64) {
+        self.frame_interval = interval;
     }
 
     /// Run one display frame one fixed tick after the last.
@@ -257,8 +267,8 @@ impl MatterScene {
         let device = &harness::shared().device;
         let time = FrameTime {
             beats: Beats(0.0),
-            seconds: Seconds(f64::from(self.frame_count) * TICK),
-            delta: Seconds(TICK),
+            seconds: Seconds(f64::from(self.frame_count) * self.frame_interval),
+            delta: Seconds(self.frame_interval),
             frame_count: i64::from(self.frame_count),
         };
         let mut enc = device.create_encoder("matter-scene");

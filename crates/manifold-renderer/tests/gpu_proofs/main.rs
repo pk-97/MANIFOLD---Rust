@@ -84,6 +84,8 @@ mod rt_dynamic_catalog;
 mod rt_dynamic_perf;
 #[cfg(feature = "fluid-perf-proofs")]
 mod fluid_surface_perf;
+#[cfg(feature = "matter-perf-proofs")]
+mod matter_solver_perf;
 mod rt_dynamic_fusion;
 mod rt_dynamic_shading;
 mod rt_normal_tangent_mirror;
