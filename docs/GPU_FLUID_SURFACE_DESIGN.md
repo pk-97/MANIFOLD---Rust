@@ -702,11 +702,13 @@ Open, for the lead:
   at 1.57 M capacity (overflowing, so empty) and 25.9 ms at 8.39 M. Section 11's
   indirect-draw trigger has fired; Detail 2 at res 64 needs more than 12.6 M by tick 172.
 - **Blobs and volume.** Two milliseconds each at res 64; the volume grows with scale³.
-- **Kernel reach sets the look.** At Surface Particle Scale 2.2 the kernel reaches about
-  0.95 cell, so the surface shows particle rows: ridges along the flow at res 32 and a
-  crinkled pool at res 64. Particle scale 4 with bins of two cells is smooth and glassy
-  with 2.4× fewer vertices at res 32 scale 4, but search cost grows with reach³. With
-  one-cell bins the card's Surface Particle Scale does nothing above about 2.3.
+- **Kernel reach sets the look.** FLIP's marker radius is 0.31 cell, so at Surface
+  Particle Scale 2.2 the kernel reaches 0.68 cell, about 1.4 particle spacings, and the
+  surface shows particle rows: ridges along the flow at res 32 and a crinkled pool at
+  res 64. Particle scale 4 (1.24 cells) with bins of two cells is smooth and glassy with
+  2.4× fewer vertices at res 32 scale 4, but search cost grows with reach³. With
+  one-cell bins the card's Surface Particle Scale stops acting above about 3.2, less
+  where centre smoothing moves the kernel.
 
 - **Entry state:** P4 and P5 merged.
 - **Read-back:** D2, D15, D16, D20; GROUPING_GRAPHS.md; the vertex attributes at `R/fluid/native.rs:190-201`.
