@@ -40,6 +40,7 @@ MATRIX = [
     ("manifold-gpu", "vulkan"),
     ("manifold-recording", "recording-proofs"),
     ("manifold-renderer", "rt-perf-proofs"),
+    ("manifold-renderer", "fluid-perf-proofs"),
     ("manifold-spectral", "gpu-proofs"),
 ]
 

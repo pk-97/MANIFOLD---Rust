@@ -302,6 +302,16 @@ mod twist_mesh;
 mod trigger_ease_to;
 mod trigger_gate;
 mod transform_3d;
+mod transform_components;
+pub(crate) mod prefix_scan;
+mod sort_particles_into_cells;
+mod running_total;
+mod shape_particle_blobs;
+mod particle_volume;
+mod count_surface_triangles;
+mod volume_surface_mesh;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod liquid_surface_tests;
 mod transform_shake;
 mod scene_object;
 mod revolve_curve;

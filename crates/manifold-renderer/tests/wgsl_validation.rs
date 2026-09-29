@@ -53,6 +53,10 @@ const PARTIAL_SHADERS: &[&str] = &[
     "ibl_prefilter_specular.wgsl",
     "ibl_irradiance.wgsl",
     "ibl_brdf_lut.wgsl",
+    // `wgsl_includes` of the marching-cubes atoms: reads the kernel's
+    // `buf_levelset` binding. Their generated kernels are validated at
+    // pipeline creation and by the liquid-surface GPU value tests.
+    "marching_cubes_common.wgsl",
 ];
 
 fn is_partial(path: &std::path::Path) -> bool {

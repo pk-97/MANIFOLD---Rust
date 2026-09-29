@@ -780,11 +780,13 @@ impl FluidSurface {
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
-        if let Some((bounds, nodes)) = self.runtime.particle_lattice() {
+        if let Some((bounds, _)) = self.runtime.particle_lattice() {
             ctx.outputs.set_transform("grid_bounds", bounds);
-            for (name, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(nodes) {
-                ctx.outputs.set_scalar(name, ParamValue::Float(value as f32));
-            }
+        }
+        // The lattice of the published solid; no frame yet → no lattice (0).
+        let nodes = b.map_or([0; 3], |frame| frame.info.solid_nodes);
+        for (name, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(nodes) {
+            ctx.outputs.set_scalar(name, ParamValue::Float(value as f32));
         }
         if ctx.gpu.is_some() {
             // This frame's GPU work reads the pair; reuse waits for it.
