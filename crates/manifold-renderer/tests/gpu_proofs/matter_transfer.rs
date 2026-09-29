@@ -414,17 +414,16 @@ fn matter_block_p2g_bit_identical() {
     let lat = lattice();
     let points = fixture(&lat);
     let p = params();
-    let words = |source: Option<&[MatterPoint]>| {
+    // One step: the accumulator P2G wrote and the points G2P updated.
+    let step = |source: Option<&[MatterPoint]>| {
         let mut chain = Chain::build(&lat, &points, &p, source);
         chain.step();
-        if let Some((order, ranges)) = chain.sorted() {
-            let ranked = order.iter().filter(|&&i| i != u32::MAX).count();
-            let covered: u32 = ranges.chunks_exact(2).map(|r| r[1]).sum();
-            eprintln!("  sort: {ranked} ranked of {} order slots; ranges cover {covered} points over {} bins", order.len(), ranges.len() / 2);
-        }
-        chain.accum()
+        let (ranked, covered) = chain.sorted().map_or((0, 0), |(order, ranges)| {
+            (order.iter().filter(|&&i| i != u32::MAX).count(), ranges.chunks_exact(2).map(|r| r[1]).sum::<u32>())
+        });
+        (chain.accum(), chain.points(), ranked, covered)
     };
-    let plain = words(None);
+    let (plain, plain_points, _, _) = step(None);
     let dx = lat.cell_size;
     let shifted: Vec<MatterPoint> = points
         .iter()
@@ -433,14 +432,19 @@ fn matter_block_p2g_bit_identical() {
     let nonzero = plain.iter().filter(|&&w| w != 0).count();
     eprintln!("matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks", lat.blocks().iter().product::<u32>());
     assert!(nonzero > 1000, "the fixture touches few nodes: {nonzero}");
-    let compare = |name: &str, other: &[i32]| {
-        let differ = plain.iter().zip(other).filter(|(a, b)| a != b).count();
-        let mass = |w: &[i32]| w.chunks_exact(4).map(|n| i64::from(n[3])).sum::<i64>();
-        eprintln!("  {name}: {differ} words differ; mass {} vs per-point {}", mass(other), mass(&plain));
-        differ
-    };
-    assert_eq!(compare("sorted", &words(Some(&points))), 0, "block path differs from the per-point path");
-    assert_eq!(compare("drifted", &words(Some(&shifted))), 0, "block path with out-of-block points differs");
+    for (name, source) in [("sorted", &points), ("drifted", &shifted)] {
+        let (words, moved, ranked, covered) = step(Some(source));
+        let differ = plain.iter().zip(&words).filter(|(a, b)| a != b).count();
+        let points_differ = plain_points
+            .iter()
+            .zip(&moved)
+            .filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b))
+            .count();
+        eprintln!("  {name}: sort ranked {ranked}, ranges cover {covered}; {differ} words and {points_differ} points differ");
+        assert_eq!(covered as usize, points.len(), "{name}: the sort covered every point");
+        assert_eq!(differ, 0, "{name}: block P2G differs from the per-point path");
+        assert_eq!(points_differ, 0, "{name}: the points after the step differ from the per-point path");
+    }
 }
 
 #[test]
