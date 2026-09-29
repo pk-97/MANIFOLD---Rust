@@ -1171,8 +1171,12 @@ at the end of the phase.
     rest of P2G's cost is workgroup-atomic contention: 256 threads add into one 216-node
     tile. A candidate beyond D6: sort by stencil base cell and sum each cell's points in
     registers, one tile add per node per cell (8× fewer atomics at 8 points per cell).
-  - Owed: `tests/gpu_proofs/matter_solver_perf.rs` behind `matter-perf-proofs` (its
-    out-of-tile fraction needs the gated sort).
+  - `tests/gpu_proofs/matter_solver_perf.rs` behind `matter-perf-proofs` (in
+    `scripts/feature_matrix.py`): Dam Break with a 0.625 m pool, 513,152 live points,
+    n = 34, 120 measured frames. Per-point P2G p95 65.2 ms, 141 dispatches; block P2G
+    p95 41.7 ms, 447 dispatches, 11.9 ms of it the ungated sort. 128³ at 30 Hz (4.2M
+    points, 68 substeps a frame) p95 1327 ms. D20's 6 ms is missed; the miss carries to
+    P4. Owed: its out-of-tile fraction, which needs the gated sort.
 
 ### P2a — Colliders
 
