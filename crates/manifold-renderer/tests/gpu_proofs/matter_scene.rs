@@ -148,6 +148,8 @@ impl MatterScene {
         }
         wire(&mut graph, (state, "tick_end"), (stats, "tick_end"));
         wire(&mut graph, (state, "tick_index"), (stats, "tick_index"));
+        wire(&mut graph, (state, "tick_index"), (p2g, "tick_index"));
+        wire(&mut graph, (state, "substep_in_tick"), (p2g, "substep_in_tick"));
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
         graph.add_external_output(frame, "particles_b").expect("frame output");
@@ -481,9 +483,16 @@ fn matter_fixed_point_headroom() {
     };
     let mut scene = MatterScene::new(&settings);
     let mut peak = 0u32;
-    for _ in 0..120 {
+    for t in 0..120 {
         scene.tick();
-        peak = peak.max(scene.stats().max_accum);
+        let s = scene.stats();
+        peak = peak.max(s.max_accum);
+        if std::env::var_os("MATTER_DIAG").is_some() && (t % 5 == 0 || s.max_accum >= 1 << 30) {
+            eprintln!(
+                "tick {t}: max_accum {} max speed {:.3} clamped {} J [{:.4}, {:.4}] live {}",
+                s.max_accum, s.max_speed, s.clamped, s.min_j, s.max_j, s.live
+            );
+        }
     }
     eprintln!("matter_fixed_point_headroom: peak accumulator {peak} ({:.1}% of 2^30)", 100.0 * f64::from(peak) / f64::from(1u32 << 30));
     assert!(peak < 1 << 30, "accumulator reached {peak}");

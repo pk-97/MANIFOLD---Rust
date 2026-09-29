@@ -29,10 +29,10 @@ struct ToGridUniforms {
     cohesion: f32,
     density: f32,
     active_count: i32,
+    tick_index: i32,
+    substep_in_tick: i32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -50,6 +50,8 @@ crate::primitive! {
         cohesion: ScalarF32 optional,
         density: ScalarF32 optional,
         active_count: ScalarF32 optional,
+        tick_index: ScalarF32 optional,
+        substep_in_tick: ScalarF32 optional,
     },
     outputs: {
         accum_out: Array(i32),
@@ -67,6 +69,8 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(1000.0), range: Some((1.0, 1.0e5)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Live Matter group, after node.zero_array clears the accumulator and before node.matter_grid_update resolves it. accum/accum_out alias one Array(i32) of 4 words per lattice node (momentum xyz, mass), provided by node.matter_state. Lattice and material come from node.matter_domain; step_dt from the substep boundary. Points with id 0 are skipped.",
@@ -106,6 +110,8 @@ impl Primitive for MatterToGrid {
         let cohesion = ctx.scalar_or_param("cohesion", 0.0);
         let density = ctx.scalar_or_param("density", 1000.0);
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
+        let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
+        let substep_in_tick = ctx.scalar_or_param("substep_in_tick", 0.0).round().max(0.0) as i32;
         // In place on the accumulator input; the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let accum = ctx.inputs.array("accum");
@@ -131,10 +137,10 @@ impl Primitive for MatterToGrid {
             cohesion,
             density,
             active_count: active as i32,
+            tick_index,
+            substep_in_tick,
             dispatch_count: active,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -162,17 +168,35 @@ mod tests {
         assert!(wgsl.contains("var<storage, read_write> buf_accum_out: array<atomic<i32>>"), "{wgsl}");
         assert!(wgsl.contains("    body(idx, params.dispatch_count, e_points,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<ToGridUniforms>(), 64);
-        assert_eq!(MatterToGrid::PARAMS.len(), 12);
+        assert_eq!(MatterToGrid::PARAMS.len(), 14);
     }
 
-    /// The body inlines Q = 2^20 and the 1000/8 mass unit; they must equal the
-    /// shared constants.
+    /// The body inlines D5's scales, mass unit and rounding hash; they must
+    /// equal the shared definitions the f64 reference uses.
     #[test]
     fn matter_to_grid_body_pins_fixed_point_constants() {
+        use crate::node_graph::matter::{MASS_SCALE, MOMENTUM_SCALE, mass_unit, rounding_hash};
         let body = include_str!("shaders/matter_to_grid_body.wgsl");
-        assert_eq!(crate::node_graph::matter::FIXED_POINT_SCALE, 1_048_576.0);
-        assert!(body.contains("1048576.0"));
-        assert_eq!(crate::node_graph::matter::mass_unit(2.0), 125.0 * 8.0);
+        assert_eq!(MASS_SCALE, 65_536.0);
+        assert!(body.contains("let to_mass = 65536.0 / mass_unit;"));
+        assert_eq!(MOMENTUM_SCALE, 134_217_728.0);
+        assert!(body.contains("let to_momentum = 134217728.0 / mass_unit * step_dt * inv_dx;"));
+        assert_eq!(mass_unit(2.0), 125.0 * 8.0);
         assert!(body.contains("125.0 * cell_size * cell_size * cell_size"));
+        for line in [
+            "x = x ^ (x >> 16u);",
+            "x = x * 0x7feb352du;",
+            "x = x ^ (x >> 15u);",
+            "x = x * 0x846ca68bu;",
+            "m2g_hash(e_points.id ^ m2g_hash(u32(tick_index) * 4096u + u32(substep_in_tick)))",
+            "let fraction = u32((x - whole) * 16777216.0);",
+            "let carry = (fraction + (m2g_hash(key ^ slot) >> 8u)) >> 24u;",
+        ] {
+            assert!(body.contains(line), "{line}");
+        }
+        // The GPU word-for-word comparison in tests/gpu_proofs/matter_transfer.rs
+        // proves the two hashes agree; here, only that it mixes.
+        assert_eq!(rounding_hash(0), 0);
+        assert_ne!(rounding_hash(1), rounding_hash(2));
     }
 }

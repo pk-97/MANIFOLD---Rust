@@ -1538,6 +1538,18 @@
           },
           {
             "fromNode": 3,
+            "fromPort": "tick_index",
+            "toNode": 5,
+            "toPort": "tick_index"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "substep_in_tick",
+            "toNode": 5,
+            "toPort": "substep_in_tick"
+          },
+          {
+            "fromNode": 3,
             "fromPort": "out",
             "toNode": 9,
             "toPort": "points"

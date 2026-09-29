@@ -150,7 +150,10 @@ mod tests {
         assert!(wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 48);
         let body = include_str!("shaders/matter_grid_update_body.wgsl");
-        assert!(body.contains("1048576.0") && body.contains("0.9 * vel_unit"));
+        assert_eq!(crate::node_graph::matter::MASS_SCALE, 65_536.0);
+        assert_eq!(crate::node_graph::matter::MOMENTUM_SCALE, 134_217_728.0);
+        assert!(body.contains("(vel_unit * (65536.0 / 134217728.0))"));
+        assert!(body.contains("m_norm / 65536.0 * mass_unit") && body.contains("0.9 * vel_unit"));
         assert_eq!(crate::node_graph::matter::VELOCITY_CLAMP_CFL, 0.9);
     }
 }

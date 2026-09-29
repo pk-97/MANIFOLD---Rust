@@ -210,11 +210,24 @@ point.** Per the surface design's D8. The lattice is the `domain_layout` box gro
 nodes per side (taichi `padding = 3`), node (i, j, k) at `min + (i, j, k)·dx`. Arrays:
 `grid_accum: Array(i32)` (4 per node: momentum xyz, mass) and `grid: Array(MatterGridNode)`
 (resolved and pre-update velocity, for Liveliness). Accumulation is `atomicAdd` on i32 in
-normalized units — mass in `m_unit = 1000·dx³/8` kg, momentum in `m_unit·dx/dt` — scaled
-by Q = 2^20, round-to-nearest per contribution. Q = 2^20 is the prototype's measured
-choice (0–0.0125% mass error on its fixtures, where Q = 4096 gave 2.4–4.8%). Integer
-addition is order-independent, so the solver is bit-deterministic on one machine and
-build. The arrays are provided outputs of `node.matter_state` that grow on setup changes
+normalized units — mass in `m_unit = 1000·dx³/8` kg scaled by Q_m = 2^16, momentum in
+`m_unit·dx/dt` scaled by Q_p = 2^27 — with unbiased rounding per contribution:
+`encode(x) = floor(x·Q + u)`, where u ∈ [0, 1) is a 24-bit hash of the point id, node
+index, tick, substep and word, and the carry out of the fraction is taken in integers
+(`matter::encode_fixed`), so f32 addition cannot bias it. The expected encoding equals x,
+so small contributions no longer always round to zero. Integer addition is order-independent and u depends only on those
+indices, so the solver is bit-deterministic on one machine and build.
+**Amended 2026-09-30 for BUG-m9g8 (MPM D5 fixed point loses momentum).** The original
+scale, Q = 2^20 for both mass and momentum with round-to-nearest, made one momentum LSB
+worth dx/dt (about 127 m/s at the Dam Break) times one mass LSB. Small-weight
+contributions kept their mass and lost their momentum, so low-mass edge nodes read slow.
+On the f64 reference (`matter_reference_fixed_point_free_flight_momentum`: dx = 1/16 m,
+n = 34, 300 substeps, v = (1, 0.5, −0.25) m/s) a translating blob lost 0.82%, 2.1% and
+5.6% of its x, y, z momentum; on the GPU, 6%, 15% and 39% per second, with J growing.
+Rebalanced scales alone left +6e-4 per component; with unbiased rounding it is −2.2e-5,
+−2.5e-5, −2.8e-5 (f64 without rounding: 2e-16). Q = 2^20 had been the prototype's
+measured mass choice (0–0.0125% mass error, where Q = 4096 gave 2.4–4.8%); that
+measurement never checked momentum. The arrays are provided outputs of `node.matter_state` that grow on setup changes
 (surface design precedent, `R/primitives/fluid_surface.rs:202-206`), written in place
 through `aliased_array_io`. Rejected: `Texture3D` (surface D8; no float atomics on storage
 textures in WGSL). Rejected: a float compare-exchange loop (slower in the prototype,
@@ -481,7 +494,7 @@ pub struct MatterShape {
 ```
 
 Per-body reaction accumulator: `Array(i32)`, 8 per body (linear xyz, angular xyz, 2
-padding), fixed point in `m_unit·dx/dt` and `m_unit·dx²/dt`. Per-tick stats: `Array(u32)`,
+padding), fixed point in `m_unit·dx/dt` and `m_unit·dx²/dt` at D5's momentum scale and rounding. Per-tick stats: `Array(u32)`,
 16 words (non-finite count, clamp count, live count, max speed, min and max J, volume,
 max accumulator magnitude, mass, momentum xyz, kinetic, potential and elastic energy, tick
 index; floats as bits). Sums use a fixed reduction tree.
@@ -576,10 +589,13 @@ them inside.
 
 ### 4.3 Fixed-point encoding and headroom
 
-`encode(x) = round(x · Q)`, Q = 2^20, after normalizing by `m_unit` and `dx/dt`. Per-node
-sums stay far below 2^31 whenever J ≥ 0.1; `matter_stats` records the largest
-accumulator magnitude every tick, and `matter_fixed_point_headroom` requires it below
-2^30 on the Dam Break.
+`encode(x) = floor(x · Q + u)` after normalizing by `m_unit` (mass, Q_m = 2^16) or
+`m_unit·dx/dt` (momentum, Q_p = 2^27), u the D5 hash. A node velocity is
+`p_raw / m_raw · dx/dt · Q_m / Q_p`. A node holds about 8 `m_unit` at rest density, so its
+momentum at the velocity clamp (0.9·dx/dt) is about 2^30, and it reaches 2^31 only when
+compressed to J ≈ 0.5 at the clamp. Real flows sit far below the clamp. `matter_stats`
+records the largest accumulator magnitude every tick, and `matter_fixed_point_headroom`
+requires it below 2^30 on the Dam Break.
 
 ### 4.4 Constitutive branches
 
@@ -612,7 +628,7 @@ Tuning is inherited, not rediscovered. Sources fetched 2026-09-29: taichi_elemen
 | Acoustic CFL | 1/3 | taichi_elements default dt at L = 1 (`2e-2·dx/size` gives c·dt/dx = 0.33); bracketed by `mpm3d.py` (0.26) and `mls-mpm88` (0.51) |
 | Grid velocity clamp | 0.9·dx/dt per component | taichi_elements `g2p2g_allowed_cfl = 0.9` |
 | Points per cell | 8 default, 27 option | FLIP Fluids upstream seeding (parity); `mpm3d.py` uses 2, noted |
-| Fixed-point scale | Q = 2^20 | prototype S1 measurement (section 1.2) |
+| Fixed-point scales | mass Q_m = 2^16, momentum Q_p = 2^27, unbiased hashed rounding | D5 amendment (BUG-m9g8 (MPM D5 fixed point loses momentum)); the prototype's Q = 2^20 measured mass only |
 | Liveliness blend | FLIP-style blend in G2P | Fei et al. 2021. ⚠ VERIFY-AT-IMPL before P1 |
 | Goo scale | μ, λ × 0.3 | taichi_elements (`h = 0.3` for elastic) |
 | Snow θc, θs, ξ, Jp clamp | 2.5e-2, 7.5e-3, 10, [0.6, 20] | `mls-mpm88` constants (from Stomakhin et al. 2013); taichi_elements uses θs = 4.5e-3, noted and not taken |
@@ -1342,7 +1358,7 @@ or in section 15.
 2. MLS-MPM over GPU FLIP/APIC because it avoids the global pressure solve; not claimed cheaper for plain water.
 3. J-tracked weakly compressible water with three dials: Stiffness, Cohesion (default 0), Liveliness (default 0 until Peter picks at P4).
 4. Substeps come from the stiffness/CFL rule every tick, from parameters, never from readback.
-5. Flat arrays with the lattice on wires; i32 fixed point at Q = 2^20; deterministic.
+5. Flat arrays with the lattice on wires; i32 fixed point, mass at 2^16 and momentum at 2^27 with hashed unbiased rounding; deterministic.
 6. One P2G atom; cell-sorted block-local accumulation from P1b; storage order never changes.
 7. Executor repeat region re-implemented from the historical seam.
 8. Fixed 60 Hz ticks owned by the domain node; live caps ticks per frame and reports dropped time; export runs every tick; display one tick behind.

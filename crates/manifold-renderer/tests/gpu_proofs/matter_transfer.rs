@@ -12,7 +12,7 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::domain_layout;
 use manifold_renderer::node_graph::matter::reference::{self, Params, Point};
 use manifold_renderer::node_graph::matter::{
-    FIXED_POINT_SCALE, MatterGridNode, MatterLattice, MatterPoint, mass_unit, water_lambda,
+    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterLattice, MatterPoint, mass_unit, water_lambda,
 };
 use manifold_renderer::node_graph::{
     ArrayType, Backend, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor,
@@ -78,6 +78,7 @@ pub(crate) struct Chain {
     state: StateStore,
     points: ResourceId,
     accum: ResourceId,
+    p2g: NodeInstanceId,
     frame: u32,
 }
 
@@ -159,11 +160,15 @@ impl Chain {
             state: StateStore::new(),
             points: points_res,
             accum,
+            p2g,
             frame: 0,
         }
     }
 
+    /// One substep; frame k rounds with tick k, substep 0 (the oracle's
+    /// `Params { tick_index: k, .. }`).
     pub(crate) fn step(&mut self) {
+        set(&mut self.graph, self.p2g, "tick_index", self.frame as f32);
         let device = &harness::shared().device;
         let time = FrameTime {
             beats: Beats(0.0),
@@ -248,6 +253,8 @@ fn params() -> Params {
         liveliness: 0.5,
         closed: [true; 6],
         fixed_point: false,
+        tick_index: 0,
+        substep_in_tick: 0,
     }
 }
 
@@ -300,12 +307,57 @@ fn matter_grid_mass_matches_particle_mass() {
     let mut chain = Chain::new(&lat, &points, &p);
     chain.step();
     let accum = chain.accum();
-    let unit = f64::from(mass_unit(lat.cell_size)) / f64::from(FIXED_POINT_SCALE);
+    let unit = f64::from(mass_unit(lat.cell_size)) / f64::from(MASS_SCALE);
     let grid: f64 = accum.chunks_exact(4).map(|w| f64::from(w[3]) * unit).sum();
     let particles: f64 = points.iter().map(|pt| f64::from(pt.affine_y[3]) * p.density).sum();
     let rel = (grid - particles).abs() / particles;
     eprintln!("matter_grid_mass_matches_particle_mass: relative error {rel:.3e}");
     assert!(rel <= 1.0e-5, "grid {grid} vs particles {particles}");
+}
+
+/// The GPU rounds each accumulator word as the fixed-point oracle does (D5):
+/// small words, where the rounding offset decides the result and f32 has
+/// bits to spare, match exactly. A different hash on either side would miss
+/// about half of them.
+#[test]
+fn matter_accumulator_words_match_fixed_point_oracle() {
+    let lat = lattice();
+    let points = fixture(&lat);
+    let p = params();
+    let mut chain = Chain::new(&lat, &points, &p);
+    chain.step();
+    let gpu = chain.accum();
+    let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
+    let grid = reference::substep(&mut fixed, &lat, &Params { fixed_point: true, ..p });
+    let m_unit = f64::from(mass_unit(lat.cell_size));
+    let to_mass = f64::from(MASS_SCALE) / m_unit;
+    let to_momentum = f64::from(MOMENTUM_SCALE) / m_unit * p.dt / f64::from(lat.cell_size);
+    // Large words sum f32 contributions of up to 1e8 that partly cancel, so
+    // they differ from the f64 oracle by f32 precision: tens of LSB, about
+    // 1e-10·dx/dt of velocity at a full node.
+    let (mut small, mut exact, mut worst_large) = (0usize, 0usize, 0.0f64);
+    for (node, words) in gpu.chunks_exact(4).enumerate() {
+        let oracle = [
+            grid.momentum[node][0] * to_momentum,
+            grid.momentum[node][1] * to_momentum,
+            grid.momentum[node][2] * to_momentum,
+            grid.mass[node] * to_mass,
+        ];
+        for (word, expected) in words.iter().zip(oracle) {
+            let expected = expected.round();
+            if expected.abs() < 4096.0 {
+                small += 1;
+                exact += usize::from(f64::from(*word) == expected);
+            } else {
+                worst_large = worst_large.max((f64::from(*word) - expected).abs());
+            }
+        }
+    }
+    let rate = exact as f64 / small as f64;
+    eprintln!("matter_accumulator_words_match_fixed_point_oracle: {exact}/{small} small words exact ({rate:.4}), large words within {worst_large} LSB");
+    assert!(small > 1000, "the fixture exercises few small words: {small}");
+    assert!(rate >= 0.95, "small words match only {rate:.4}");
+    assert!(worst_large <= 256.0, "large words differ by {worst_large} LSB");
 }
 
 #[test]
@@ -316,11 +368,10 @@ fn matter_hundred_substeps_match_reference() {
     let mut chain = Chain::new(&lat, &points, &p);
     let mut cpu: Vec<Point> = points.iter().map(Point::from).collect();
     let mut fixed = cpu.clone();
-    let fixed_params = Params { fixed_point: true, ..p };
-    for _ in 0..100 {
+    for step in 0..100 {
         chain.step();
         reference::substep(&mut cpu, &lat, &p);
-        reference::substep(&mut fixed, &lat, &fixed_params);
+        reference::substep(&mut fixed, &lat, &Params { fixed_point: true, tick_index: step, ..p });
     }
     let (dx, dv) = max_errors(&chain.points(), &cpu);
     eprintln!("matter_hundred_substeps_match_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s");

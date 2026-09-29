@@ -1,18 +1,38 @@
 // node.matter_to_grid — ATOMIC SCATTER body (GPU_MPM_SOLVER_DESIGN.md section
-// 4.1 step 3, D5). One thread per material point adds mass and momentum to the
+// 4.1 step 3, D5, D6). One thread per material point adds mass and momentum to the
 // 27 lattice nodes of its quadratic B-spline stencil:
 //   mass     += w · m_p
 //   momentum += w · (m_p·v_p + (m_p·C_p − dt·V0·(4/dx²)·τ_p·I)·d_i)
 // with the water Kirchhoff pressure τ = λ·J·(J − 1) (× Cohesion for J ≥ 1).
-// Sums are signed fixed point: mass in m_unit = 1000·dx³/8 kg, momentum in
-// m_unit·dx/dt, scaled by Q = 2^20 and rounded per contribution. Integer adds
-// are order-independent, so the grid is deterministic. Accumulator words per
-// node: momentum x, y, z, mass. `accum` (the aliased input) is not read. A
-// point whose position is not finite is skipped (it would index the lattice
-// with garbage); the stats report it. Element = MatterPoint.
+// Sums are signed fixed point: mass in m_unit = 1000·dx³/8 kg at 2^16, momentum in
+// m_unit·dx/dt at 2^27. Each word rounds as floor(x + u) with u hashed from the
+// point id, node, tick, substep and word, so its expected value is x: small
+// contributions do not all round to zero, and the grid stays deterministic.
+// Accumulator words per node: momentum x, y, z, mass. `accum` (the aliased input)
+// is not read. A point whose position is not finite is skipped (it would index
+// the lattice with garbage); the stats report it. Element = MatterPoint.
 fn m2g_finite3(v: vec3<f32>) -> bool {
     let e = vec3<u32>(bitcast<u32>(v.x), bitcast<u32>(v.y), bitcast<u32>(v.z)) & vec3<u32>(0x7f800000u);
     return all(e != vec3<u32>(0x7f800000u));
+}
+
+fn m2g_hash(v: u32) -> u32 {
+    var x = v;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return x;
+}
+
+// floor(x + u) with the carry in integers: an f32 sum x + u would round first
+// and bias every word upward by about |x|·2^-24.
+fn m2g_encode(x: f32, key: u32, slot: u32) -> i32 {
+    let whole = floor(x);
+    let fraction = u32((x - whole) * 16777216.0);
+    let carry = (fraction + (m2g_hash(key ^ slot) >> 8u)) >> 24u;
+    return i32(whole) + i32(carry);
 }
 
 fn body(
@@ -31,6 +51,8 @@ fn body(
     cohesion: f32,
     density: f32,
     active_count: i32,
+    tick_index: i32,
+    substep_in_tick: i32,
 ) {
     if e_points.id == 0u || !m2g_finite3(e_points.position) {
         return;
@@ -64,8 +86,9 @@ fn body(
     let mv = mass * e_points.velocity;
 
     let mass_unit = 125.0 * cell_size * cell_size * cell_size;
-    let to_mass = 1048576.0 / mass_unit;
-    let to_momentum = to_mass * step_dt * inv_dx;
+    let to_mass = 65536.0 / mass_unit;
+    let to_momentum = 134217728.0 / mass_unit * step_dt * inv_dx;
+    let key = m2g_hash(e_points.id ^ m2g_hash(u32(tick_index) * 4096u + u32(substep_in_tick)));
 
     for (var a = 0; a < 3; a = a + 1) {
         var wx = w0.x;
@@ -81,10 +104,10 @@ fn body(
                 let momentum = weight * (mv + vec3<f32>(dot(a0, d), dot(a1, d), dot(a2, d)));
                 let node = base_i + vec3<i32>(a, b, c);
                 let slot = u32((node.z * nodes.y + node.y) * nodes.x + node.x) * 4u;
-                atomicAdd(&buf_accum_out[slot], i32(round(momentum.x * to_momentum)));
-                atomicAdd(&buf_accum_out[slot + 1u], i32(round(momentum.y * to_momentum)));
-                atomicAdd(&buf_accum_out[slot + 2u], i32(round(momentum.z * to_momentum)));
-                atomicAdd(&buf_accum_out[slot + 3u], i32(round(weight * mass * to_mass)));
+                atomicAdd(&buf_accum_out[slot], m2g_encode(momentum.x * to_momentum, key, slot));
+                atomicAdd(&buf_accum_out[slot + 1u], m2g_encode(momentum.y * to_momentum, key, slot + 1u));
+                atomicAdd(&buf_accum_out[slot + 2u], m2g_encode(momentum.z * to_momentum, key, slot + 2u));
+                atomicAdd(&buf_accum_out[slot + 3u], m2g_encode(weight * mass * to_mass, key, slot + 3u));
             }
         }
     }

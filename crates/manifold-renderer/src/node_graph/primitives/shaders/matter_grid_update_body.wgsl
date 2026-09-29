@@ -6,8 +6,8 @@
 // face node and the three padding nodes beyond it (the authored face sits on
 // node 3), frictionless (taichi_elements grid_bounding_box). Each
 // component is clamped to ±0.9·dx/dt; a clamped node sets velocity_before.w.
-// `accum` is gathered (4 words per node: momentum xyz, mass; fixed point in
-// m_unit = 1000·dx³/8 kg and m_unit·dx/dt at Q = 2^20). Element = MatterGridNode.
+// `accum` is gathered (4 words per node: momentum xyz in m_unit·dx/dt at 2^27,
+// mass in m_unit = 1000·dx³/8 kg at 2^16; D5). Element = MatterGridNode.
 fn body(
     idx: u32,
     count: u32,
@@ -36,7 +36,7 @@ fn body(
         f32(buf_accum[word]),
         f32(buf_accum[word + 1u]),
         f32(buf_accum[word + 2u]),
-    ) / m_norm * vel_unit;
+    ) / m_norm * (vel_unit * (65536.0 / 134217728.0));
     var v = v_before + step_dt * vec3<f32>(gravity_x, gravity, gravity_z);
 
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
@@ -52,7 +52,7 @@ fn body(
     let clamped = any(abs(v) > vec3<f32>(limit));
     v = clamp(v, vec3<f32>(-limit), vec3<f32>(limit));
     let mass_unit = 125.0 * cell_size * cell_size * cell_size;
-    out.velocity_mass = vec4<f32>(v, m_norm / 1048576.0 * mass_unit);
+    out.velocity_mass = vec4<f32>(v, m_norm / 65536.0 * mass_unit);
     out.velocity_before = vec4<f32>(v_before, select(0.0, 1.0, clamped));
     return out;
 }

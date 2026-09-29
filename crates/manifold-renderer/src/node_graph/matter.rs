@@ -133,9 +133,39 @@ impl MatterTickStats {
     }
 }
 
-/// Signed fixed-point scale of the accumulators (D5; the prototype's measured
-/// choice, 0–0.0125% mass error where 2^12 gave 2.4–4.8%).
-pub const FIXED_POINT_SCALE: f32 = 1_048_576.0;
+/// Fixed-point scale of the mass words, per `m_unit` (D5).
+pub const MASS_SCALE: f32 = 65_536.0;
+
+/// Fixed-point scale of the momentum words, per `m_unit·dx/dt` (D5). 2^11 finer
+/// than mass relative to dx/dt, so a low-mass node still resolves its velocity.
+pub const MOMENTUM_SCALE: f32 = 134_217_728.0;
+
+/// The integer hash behind D5's unbiased rounding (lowbias32). The P2G body
+/// repeats it; `matter_to_grid_body_pins_fixed_point_constants` pins the two.
+pub fn rounding_hash(v: u32) -> u32 {
+    let mut x = v;
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x
+}
+
+/// Key of one point's contributions in one substep.
+pub fn rounding_point_key(id: u32, tick_index: u32, substep_in_tick: u32) -> u32 {
+    rounding_hash(id ^ rounding_hash(tick_index.wrapping_mul(4096).wrapping_add(substep_in_tick)))
+}
+
+/// D5's encoding of a scaled contribution `x` into accumulator word `slot`
+/// (node·4 + word): floor(x + u), u the 24-bit hash offset, with the carry
+/// taken in integers so the result is unbiased at any magnitude.
+pub fn encode_fixed(x: f64, point_key: u32, slot: u32) -> i64 {
+    let whole = x.floor();
+    let fraction = ((x - whole) * 16_777_216.0) as u32;
+    let carry = (fraction + (rounding_hash(point_key ^ slot) >> 8)) >> 24;
+    whole as i64 + i64::from(carry)
+}
 
 /// Rest density of water, kg/m³ (taichi_elements `p_rho`).
 pub const WATER_DENSITY: f32 = 1000.0;

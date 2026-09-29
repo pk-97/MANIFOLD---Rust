@@ -2,8 +2,8 @@
 //! are proven against (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1 (One
 //! substep) and section 12 (Invariants and enforcement)). Built for unit
 //! tests and the `gpu-proofs` binary only.
-//! Accumulation is continuous here; the GPU's Q = 2^20 fixed point stays
-//! inside the section 12 tolerances.
+//! Accumulation is continuous, or with `fixed_point` rounds every grid word
+//! exactly as the GPU does (D5: scales, hashed unbiased rounding).
 // Row/column indices mirror the section 4.1 formulas term for term.
 #![allow(clippy::needless_range_loop)]
 
@@ -22,9 +22,12 @@ pub struct Params {
     pub liveliness: f64,
     /// Closed faces: −X, +X, −Y, +Y, −Z, +Z.
     pub closed: [bool; 6],
-    /// Round every grid contribution to the GPU's Q = 2^20 fixed point
-    /// (D5), isolating f32-versus-f64 error from quantization error.
+    /// Round every grid contribution to the GPU's fixed point (D5),
+    /// isolating f32-versus-f64 error from quantization error.
     pub fixed_point: bool,
+    /// Tick and substep that key D5's rounding hash.
+    pub tick_index: u32,
+    pub substep_in_tick: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,12 +121,18 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
         clamped: vec![false; count],
     };
 
-    let to_mass = f64::from(super::FIXED_POINT_SCALE) / f64::from(super::mass_unit(lat.cell_size));
-    let to_momentum = to_mass * p.dt / dx;
-    let quantize = |value: f64, scale: f64| {
-        if p.fixed_point { (value * scale).round() / scale } else { value }
+    let m_unit = f64::from(super::mass_unit(lat.cell_size));
+    let to_mass = f64::from(super::MASS_SCALE) / m_unit;
+    let to_momentum = f64::from(super::MOMENTUM_SCALE) / m_unit * p.dt / dx;
+    let quantize = |value: f64, scale: f64, key: u32, slot: usize| {
+        if p.fixed_point {
+            super::encode_fixed(value * scale, key, slot as u32) as f64 / scale
+        } else {
+            value
+        }
     };
     for pt in points.iter().filter(|pt| pt.id != 0) {
+        let key = super::rounding_point_key(pt.id, p.tick_index, p.substep_in_tick);
         let Some((base, w, f)) = base_of(lat, pt.x) else { continue };
         let mass = pt.v0 * p.density;
         let stress = p.dt * pt.v0 * 4.0 * inv_dx * inv_dx * water_stress(p, pt.j);
@@ -143,10 +152,11 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
                         (cc as f64 - f[2]) * dx,
                     ];
                     let idx = node_index(lat, [base[0] + a as i64, base[1] + b as i64, base[2] + cc as i64]);
-                    grid.mass[idx] += quantize(weight * mass, to_mass);
+                    grid.mass[idx] += quantize(weight * mass, to_mass, key, idx * 4 + 3);
                     for r in 0..3 {
                         let ad = affine[r][0] * d[0] + affine[r][1] * d[1] + affine[r][2] * d[2];
-                        grid.momentum[idx][r] += quantize(weight * (mass * pt.v[r] + ad), to_momentum);
+                        grid.momentum[idx][r] +=
+                            quantize(weight * (mass * pt.v[r] + ad), to_momentum, key, idx * 4 + r);
                     }
                 }
             }
@@ -291,6 +301,8 @@ mod tests {
             liveliness: 0.0,
             closed: [true; 6],
             fixed_point: false,
+            tick_index: 0,
+            substep_in_tick: 0,
         }
     }
 
@@ -348,8 +360,8 @@ mod tests {
             }
             let p = Params { dt: 1.0 / (60.0 * 34.0), fixed_point, ..params() };
             let before = momentum(&points, p.density);
-            for _ in 0..300 {
-                substep(&mut points, &lat, &p);
+            for step in 0..300u32 {
+                substep(&mut points, &lat, &Params { tick_index: step / 34, substep_in_tick: step % 34, ..p });
             }
             let after = momentum(&points, p.density);
             let j = points.iter().map(|pt| pt.j).fold(1.0f64, f64::max);
