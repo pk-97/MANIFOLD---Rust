@@ -196,21 +196,8 @@ mod port_shadow_tests {
     //! which is the failure mode we want to catch here.
 
     use super::*;
-    use crate::node_graph::effect_node::EffectNode;
     use crate::node_graph::graph::Graph;
     use crate::node_graph::primitives::Value;
-
-    #[test]
-    fn affine_transform_declares_all_three_scalar_input_ports() {
-        let affine = AffineTransform::new();
-        let port_names: Vec<_> = affine.inputs().iter().map(|p| p.name.as_ref()).collect();
-        for needed in ["in", "translate_x", "translate_y", "rotation"] {
-            assert!(
-                port_names.contains(&needed),
-                "missing port `{needed}` — actual ports = {port_names:?}",
-            );
-        }
-    }
 
     #[test]
     fn can_connect_value_into_each_scalar_input_port() {

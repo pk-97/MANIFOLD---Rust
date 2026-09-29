@@ -229,7 +229,6 @@ impl Primitive for TerminalStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
 
     #[test]
     fn dimensions_follow_reference_height_and_bounds() {
@@ -244,41 +243,5 @@ mod tests {
         assert_eq!(grid_dimensions(u32::MAX, 1080, 8.0).columns, MAX_COLS);
         assert_eq!(grid_dimensions(1920, 1080, 0.0).rows, 135);
         assert_eq!(grid_dimensions(1920, 1080, 1000.0).rows, 22);
-    }
-
-    #[test]
-    fn declares_canvas_and_typed_cells_contract() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(TerminalStream::TYPE_ID, "node.terminal_stream");
-        assert_eq!(TerminalStream::INPUTS.len(), 6);
-        assert_eq!(TerminalStream::INPUTS[0].name, "canvas");
-        assert!(TerminalStream::INPUTS[0].required);
-        assert_eq!(TerminalStream::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(TerminalStream::INPUTS[1].name, "reaction");
-        assert!(!TerminalStream::INPUTS[1].required);
-        assert_eq!(TerminalStream::OUTPUTS.len(), 3);
-        assert_eq!(TerminalStream::OUTPUTS[0].name, "cells");
-        assert_eq!(
-            TerminalStream::OUTPUTS[1].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(
-            TerminalStream::OUTPUTS[2].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(TERMINAL_STREAM_CAPACITY, 86400);
-        assert_eq!(TerminalStream::PARAMS[3].default, ParamValue::Enum(0));
-        assert_eq!(TerminalStream::PARAMS[3].enum_values.len(), 4);
-    }
-
-    #[test]
-    fn output_capacity_is_fixed_and_unknown_ports_are_rejected() {
-        let stream = TerminalStream::new();
-        let params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(
-            stream.array_output_capacity("cells", &params, &[]),
-            Some(86400)
-        );
-        assert_eq!(stream.array_output_capacity("other", &params, &[]), None);
     }
 }

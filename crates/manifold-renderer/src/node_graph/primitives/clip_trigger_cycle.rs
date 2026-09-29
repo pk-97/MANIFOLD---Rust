@@ -92,31 +92,6 @@ impl Primitive for ClipTriggerCycleNode {
 mod tests {
     use super::*;
     use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_required_trigger_optional_modulus_and_one_scalar_out() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(ClipTriggerCycleNode::TYPE_ID, "node.clip_trigger_cycle");
-        let inputs = ClipTriggerCycleNode::INPUTS;
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].name, "trigger_count");
-        assert!(inputs[0].required);
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(inputs[1].name, "modulus");
-        assert!(!inputs[1].required);
-        let outputs = ClipTriggerCycleNode::OUTPUTS;
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].name, "out");
-        assert_eq!(outputs[0].ty, PortType::Scalar(ScalarType::F32));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_driver() {
-        let prim = ClipTriggerCycleNode::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.clip_trigger_cycle");
-    }
 
     /// Forwards directly to ClipTriggerCycle::step — these tests
     /// mirror the legacy ones to lock in the wrapper.
@@ -134,13 +109,6 @@ mod tests {
         let mut prim = ClipTriggerCycleNode::new();
         assert_eq!(prim.cycle.step(5, 8), 5);
         assert_eq!(prim.cycle.step(13, 8), 6);
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        let prim = ClipTriggerCycleNode::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
     }
 
     /// BUG-104 — `clear_state()`, called through the same `EffectNode`

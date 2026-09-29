@@ -309,30 +309,6 @@ impl Primitive for TrackPersist {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn track_persist_declares_channels_io_and_params() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(TrackPersist::TYPE_ID, "node.track_persist");
-        assert_eq!(TrackPersist::INPUTS.len(), 3);
-        assert_eq!(TrackPersist::INPUTS[0].name, "in");
-        assert!(matches!(TrackPersist::INPUTS[0].ty, PortType::Array(_)));
-        assert_eq!(TrackPersist::INPUTS[2].name, "cut");
-        assert!(!TrackPersist::INPUTS[2].required);
-        assert_eq!(TrackPersist::OUTPUTS.len(), 1);
-        assert_eq!(TrackPersist::OUTPUTS[0].name, "out");
-        let names: Vec<&str> = TrackPersist::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["match_radius", "grace_frames", "cut_threshold"]);
-    }
-
-    #[test]
-    fn track_persist_registers_as_palette_driver() {
-        let prim = TrackPersist::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.track_persist");
-    }
 
     #[test]
     fn global_matching_assigns_closest_pair_first() {

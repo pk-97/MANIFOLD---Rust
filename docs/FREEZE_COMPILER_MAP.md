@@ -434,10 +434,10 @@ invariant a fused def must respect:
   segments) + library-wide sweeps (`every_fused_preset_executes_one_frame`,
   `every_fused_generator_kernel_compiles`, `fusion_coverage_baseline` — a
   loose floor so coverage can't silently collapse).
-- **First tool for "why didn't X fuse":** `explain_presets` (#[ignore]d, in
-  `region.rs`'s audit module) — prints per-node class + per-wire union verdicts
-  + build_region pass/fail per preset. Also `audit_all_presets` for the
-  library-wide region census.
+- **First tool for "why didn't X fuse":** `graph-tool fusion <file.json>` —
+  per-node class, region membership and cut reasons for one def. The
+  library-wide refusal census is `docs/fusion_census.md`; its header names the
+  regenerate command.
 - **Dump a fused kernel:** the fused def's nodes carry `wgsl_source` inline —
   print it from any test, or read the def out of `fused_view_for`.
 - **Known flake:** heavy GPU proof tests under full-suite parallelism

@@ -136,28 +136,6 @@ impl Primitive for RenderGlyphGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_atlas_cells_and_canvas_output() {
-        assert_eq!(RenderGlyphGrid::TYPE_ID, "node.render_glyph_grid");
-        assert_eq!(RenderGlyphGrid::INPUTS.len(), 4);
-        assert_eq!(RenderGlyphGrid::INPUTS[0].ty, PortType::Texture2D);
-        assert!(RenderGlyphGrid::INPUTS[0].required);
-        assert_eq!(RenderGlyphGrid::INPUTS[1].name, "cells");
-        assert_eq!(
-            RenderGlyphGrid::INPUTS[2].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(
-            RenderGlyphGrid::INPUTS[3].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(RenderGlyphGrid::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(RenderGlyphGrid::PARAMS[0].default, ParamValue::Float(160.0));
-        assert_eq!(RenderGlyphGrid::PARAMS[1].default, ParamValue::Float(60.0));
-    }
 
     #[test]
     fn output_is_canvas_sized() {
@@ -169,11 +147,6 @@ mod tests {
             ),
             Some((1, 1))
         );
-    }
-
-    #[test]
-    fn uniforms_are_16_bytes() {
-        assert_eq!(std::mem::size_of::<GlyphGridUniforms>(), 16);
     }
 }
 

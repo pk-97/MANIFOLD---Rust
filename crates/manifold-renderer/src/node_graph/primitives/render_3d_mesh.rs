@@ -425,86 +425,7 @@ impl Primitive for Render3DMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::primitive::PrimitiveSpec;
     use crate::node_graph::EffectNode;
-
-    #[test]
-    fn render_3d_mesh_declares_material_required_inputs() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-
-        assert_eq!(Render3DMesh::TYPE_ID, "node.render_mesh");
-        let by_name = |n: &str| {
-            Render3DMesh::INPUTS
-                .iter()
-                .find(|p| p.name == n)
-                .unwrap_or_else(|| panic!("missing input {n}"))
-        };
-        let vertices = by_name("vertices");
-        assert!(vertices.required);
-        assert_eq!(vertices.ty, PortType::Array(mesh_layout));
-        let camera = by_name("camera");
-        assert!(camera.required);
-        assert_eq!(camera.ty, PortType::Camera);
-        let material = by_name("material");
-        assert!(material.required, "material must be REQUIRED");
-        assert_eq!(material.ty, PortType::Material);
-        let light = by_name("light");
-        assert!(!light.required);
-        assert_eq!(light.ty, PortType::Light);
-        let envmap = by_name("envmap");
-        assert!(!envmap.required);
-        assert_eq!(envmap.ty, PortType::Texture2D);
-        let normal_map = by_name("normal_map");
-        assert!(!normal_map.required);
-        assert_eq!(normal_map.ty, PortType::Texture2D);
-        let roughness_map = by_name("roughness_map");
-        assert!(!roughness_map.required);
-        assert_eq!(roughness_map.ty, PortType::Texture2D);
-        let base_color_map = by_name("base_color_map");
-        assert!(!base_color_map.required);
-        assert_eq!(base_color_map.ty, PortType::Texture2D);
-        let metallic_map = by_name("metallic_map");
-        assert!(!metallic_map.required);
-        assert_eq!(metallic_map.ty, PortType::Texture2D);
-        for name in [
-            "mr_map",
-            "occlusion_map",
-            "emissive_map",
-            "sheen_color_map",
-            "sheen_roughness_map",
-            "iridescence_map",
-            "iridescence_thickness_map",
-            "anisotropy_map",
-            "clearcoat_map",
-            "clearcoat_roughness_map",
-            "clearcoat_normal_map",
-            "specular_map",
-            "specular_color_map",
-            "transmission_map",
-            "volume_thickness_map",
-            "diffuse_transmission_map",
-            "diffuse_transmission_color_map",
-        ] {
-            let input = by_name(name);
-            assert!(!input.required, "{name} must remain optional");
-            assert_eq!(input.ty, PortType::Texture2D, "{name} type");
-        }
-    }
-
-    #[test]
-    fn render_3d_mesh_has_no_legacy_scalar_params() {
-        // Material system M4 removed scattered light_intensity / ambient /
-        // color_r/g/b — the Material wire is the only surface knob now.
-        assert!(
-            Render3DMesh::PARAMS.is_empty(),
-            "render_3d_mesh should expose no scalar params after Material migration; got {:?}",
-            Render3DMesh::PARAMS
-                .iter()
-                .map(|p| p.name.as_ref())
-                .collect::<Vec<_>>()
-        );
-    }
 
     #[test]
     fn render_3d_mesh_declares_conditional_requirements() {
@@ -527,22 +448,5 @@ mod tests {
             &["light", "envmap"]
         );
         assert_eq!(by_kind(MaterialKind::Cel).required_inputs, &["light"]);
-    }
-
-    #[test]
-    fn render_3d_mesh_outputs_color_and_gbuffer() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(Render3DMesh::OUTPUTS.len(), 3);
-        assert_eq!(Render3DMesh::OUTPUTS[0].name, "color");
-        assert_eq!(Render3DMesh::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(Render3DMesh::OUTPUTS[1].name, "world_pos");
-        assert_eq!(Render3DMesh::OUTPUTS[2].name, "world_normal");
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Render3DMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_mesh");
     }
 }

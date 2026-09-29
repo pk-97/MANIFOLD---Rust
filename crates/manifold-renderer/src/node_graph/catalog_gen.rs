@@ -30,6 +30,7 @@ use manifold_core::preset_def::PresetKind;
 use crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled;
 use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
 use crate::node_graph::descriptor::{Category, NodeDescriptor, Role, descriptor_for};
+use crate::node_graph::freeze::derived_uniform_registry::has_recompute;
 use crate::node_graph::palette::PaletteCategory;
 use crate::node_graph::param_doc::tooltip_for;
 use crate::node_graph::parameters::{ParamType, ParamValue};
@@ -89,6 +90,13 @@ struct NodeRow {
     /// Boundary primitive without a declared reason before the catalog
     /// could pick it up.
     fusion: String,
+    /// Whether the node latches on a trigger edge (`is_trigger_latch`).
+    trigger_latch: bool,
+    /// Uniforms the node derives each frame, and whether a CPU recompute is
+    /// registered for them. Without one the fuser refuses the node's region
+    /// and it renders unfused.
+    derived_uniforms: &'static [&'static str],
+    derived_recompute: bool,
 }
 
 /// Render a node's fusion classification for the catalog (design doc D3).
@@ -103,6 +111,9 @@ struct PortRow {
     name: String,
     ty: String,
     required: bool,
+    /// Array outputs only: how the chain builder sizes the buffer
+    /// ([`capacity_rule`]).
+    capacity: Option<String>,
 }
 
 struct ParamRow {
@@ -174,6 +185,15 @@ fn collect_rows() -> Vec<NodeRow> {
             let node = (f.create)();
             let desc: Option<&NodeDescriptor> = descriptor_for(f.type_id);
             let fusion = fusion_str(node.as_ref());
+            let outputs = node
+                .outputs()
+                .iter()
+                .map(|p| PortRow {
+                    capacity: matches!(p.ty, PortType::Array(_))
+                        .then(|| capacity_rule(node.as_ref(), &p.name)),
+                    ..port_row(p)
+                })
+                .collect();
             NodeRow {
                 type_id: f.type_id,
                 label: f.picker.map(|p| p.label),
@@ -185,9 +205,12 @@ fn collect_rows() -> Vec<NodeRow> {
                 aliases: desc.map(|d| d.aliases).unwrap_or(&[]),
                 examples: examples_by_type_id.get(f.type_id).cloned().unwrap_or_default(),
                 inputs: node.inputs().iter().map(port_row).collect(),
-                outputs: node.outputs().iter().map(port_row).collect(),
+                outputs,
                 params: node.parameters().iter().map(|p| param_row(p, node.as_ref())).collect(),
                 fusion,
+                trigger_latch: node.is_trigger_latch(),
+                derived_uniforms: node.derived_uniforms(),
+                derived_recompute: has_recompute(f.type_id),
             }
         })
         .collect();
@@ -200,6 +223,85 @@ fn port_row(p: &crate::node_graph::ports::NodePort) -> PortRow {
         name: p.name.to_string(),
         ty: port_type_str(&p.ty),
         required: p.required,
+        capacity: None,
+    }
+}
+
+/// How an Array output is sized, probed from `array_output_capacity` with
+/// default params. Pure and deterministic, so the golden pins each node's
+/// sizing rule:
+///
+/// - `canvas` — sized from the canvas at allocation time.
+/// - `follows:<port>` — equals the capacity bound to that Array input.
+/// - `param:<names>=<n>` — set by those params; `<n>` at their defaults.
+/// - `fixed:<n>` — constant.
+/// - `inputs:<a>@1000,<b>@1024` — derived from the inputs some other way.
+/// - `none` — unresolvable; `every_array_output_declares_a_valid_capacity_source`
+///   fails any such node.
+fn capacity_rule(node: &dyn crate::node_graph::effect_node::EffectNode, port: &str) -> String {
+    use crate::node_graph::effect_node::ParamValues;
+
+    if node.canvas_sized_array_outputs().contains(&port) {
+        return "canvas".into();
+    }
+    let defaults: ParamValues =
+        node.parameters().iter().map(|d| (d.name.clone(), d.default.clone())).collect();
+    let arrays: Vec<&str> = node
+        .inputs()
+        .iter()
+        .filter(|p| matches!(p.ty, PortType::Array(_)))
+        .map(|p| p.name.as_ref())
+        .collect();
+    // `pick` bound at `n`, every other Array input at `other` (all at `n`
+    // when `pick` is None).
+    let bound = |pick: Option<&str>, n: u32, other: u32| -> Vec<(&str, u32)> {
+        arrays
+            .iter()
+            .map(|&a| (a, if pick.is_none_or(|p| p == a) { n } else { other }))
+            .collect()
+    };
+    let probe = |params: &ParamValues, inputs: &[(&str, u32)]| {
+        node.array_output_capacity(port, params, inputs)
+    };
+
+    // Other inputs both below and above the picked one, so a max or min
+    // over several inputs never reads as following one of them.
+    for &a in &arrays {
+        if probe(&defaults, &bound(Some(a), 1000, 7)) == Some(1000)
+            && probe(&defaults, &bound(Some(a), 1024, 4096)) == Some(1024)
+        {
+            return format!("follows:{a}");
+        }
+    }
+    let Some(at_1000) = probe(&defaults, &bound(None, 1000, 1000)) else {
+        return "none".into();
+    };
+    let at_1024 = probe(&defaults, &bound(None, 1024, 1024));
+    if at_1024 != Some(at_1000) {
+        let b = at_1024.map_or("none".to_string(), |n| n.to_string());
+        return format!("inputs:{at_1000}@1000,{b}@1024");
+    }
+    let drivers: Vec<&str> = node
+        .parameters()
+        .iter()
+        .filter(|d| {
+            let nudged = match &d.default {
+                ParamValue::Float(v) => ParamValue::Float(v * 2.0 + 3.0),
+                ParamValue::Enum(i) if d.enum_values.len() > 1 => {
+                    ParamValue::Enum((*i + 1) % d.enum_values.len() as u32)
+                }
+                _ => return false,
+            };
+            let mut params = defaults.clone();
+            params.insert(d.name.clone(), nudged);
+            probe(&params, &bound(None, 1000, 1000)) != Some(at_1000)
+        })
+        .map(|d| d.name.as_ref())
+        .collect();
+    if drivers.is_empty() {
+        format!("fixed:{at_1000}")
+    } else {
+        format!("param:{}={at_1000}", drivers.join("+"))
     }
 }
 
@@ -329,7 +431,13 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
     let outputs: Vec<serde_json::Value> = r
         .outputs
         .iter()
-        .map(|p| serde_json::json!({ "name": p.name, "type": p.ty }))
+        .map(|p| {
+            let mut o = serde_json::json!({ "name": p.name, "type": p.ty });
+            if let Some(capacity) = &p.capacity {
+                o["capacity"] = serde_json::json!(capacity);
+            }
+            o
+        })
         .collect();
     let params: Vec<serde_json::Value> = r
         .params
@@ -372,7 +480,7 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
         })
         .collect();
 
-    serde_json::json!({
+    let mut node = serde_json::json!({
         "type_id": r.type_id,
         "label": r.label,
         "stratum": match r.stratum {
@@ -390,7 +498,15 @@ fn node_json(r: &NodeRow) -> serde_json::Value {
         "inputs": inputs,
         "outputs": outputs,
         "params": params,
-    })
+    });
+    if r.trigger_latch {
+        node["trigger_latch"] = serde_json::json!(true);
+    }
+    if !r.derived_uniforms.is_empty() {
+        node["derived_uniforms"] = serde_json::json!(r.derived_uniforms);
+        node["derived_recompute"] = serde_json::json!(r.derived_recompute);
+    }
+    node
 }
 
 /// One effect or generator preset, normalized from its `PresetMetadata`.

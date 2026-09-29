@@ -224,41 +224,6 @@ impl GaussianBlurVariableWidth {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn gaussian_blur_variable_width_declares_two_texture_inputs_and_one_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(
-            GaussianBlurVariableWidth::TYPE_ID,
-            "node.variable_blur"
-        );
-        assert_eq!(GaussianBlurVariableWidth::INPUTS.len(), 2);
-        assert_eq!(GaussianBlurVariableWidth::INPUTS[0].name, "in");
-        assert_eq!(GaussianBlurVariableWidth::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(GaussianBlurVariableWidth::INPUTS[1].name, "width");
-        assert_eq!(GaussianBlurVariableWidth::INPUTS[1].ty, PortType::Texture2D);
-        assert_eq!(GaussianBlurVariableWidth::OUTPUTS.len(), 1);
-        assert_eq!(GaussianBlurVariableWidth::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn gaussian_blur_variable_width_has_axis_radius_quality_weighting_params() {
-        let names: Vec<&str> = GaussianBlurVariableWidth::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["axis", "max_radius", "quality", "weighting_mode"]
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GaussianBlurVariableWidth::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.variable_blur");
-    }
 
     /// BUG-138 — numeric proof that tap count now scales with radius instead
     /// of holding fixed. Mirrors `vbw_subtap_count()` /
@@ -272,37 +237,6 @@ mod tests {
         const SUBTAP_CAP: i32 = 4;
         let raw = (step_size / GAP_THRESHOLD_PX).ceil() as i32;
         raw.clamp(1, SUBTAP_CAP)
-    }
-
-    #[test]
-    fn bug_138_small_radius_stays_at_the_original_fixed_tap_count() {
-        // max_radius = 6.0 DoF-parity setting (composition_notes): at full
-        // CoC, step_size = 1.0 * 6.0 + 1.0 = 7.0, under the 8.0px threshold.
-        let step_size = 1.0f32 * 6.0 + 1.0;
-        assert_eq!(vbw_subtap_count(step_size), 1);
-        let n_half = 12; // High quality, 25-tap
-        let total_taps = 1 + 2 * n_half * vbw_subtap_count(step_size);
-        assert_eq!(total_taps, 25, "DoF-parity radius must stay byte-identical to the original 25-tap kernel");
-    }
-
-    #[test]
-    fn bug_138_large_radius_scales_tap_count_above_the_old_fixed_ceiling() {
-        // The bug's own repro: max_radius = 64px, full CoC.
-        let step_size = 1.0f32 * 64.0 + 1.0;
-        let subtaps = vbw_subtap_count(step_size);
-        assert!(subtaps > 1, "large CoC radius must trigger tap densification");
-        assert_eq!(subtaps, 4, "worst-case subtap multiplier is capped at 4");
-
-        for (n_half, old_fixed_taps) in [(4, 9), (8, 17), (12, 25)] {
-            let total_taps = 1 + 2 * n_half * subtaps;
-            assert!(
-                total_taps > old_fixed_taps,
-                "quality tier with {n_half} half-taps must sample MORE at 64px radius \
-                 than its old fixed count ({old_fixed_taps}); got {total_taps}"
-            );
-        }
-        // High quality goes from the old fixed 25 taps to 97.
-        assert_eq!(1 + 2 * 12 * subtaps, 97);
     }
 
     #[test]

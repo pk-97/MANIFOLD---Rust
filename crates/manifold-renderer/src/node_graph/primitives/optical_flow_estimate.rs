@@ -733,60 +733,6 @@ impl Primitive for OpticalFlowEstimate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn optical_flow_estimate_declares_one_input_and_two_outputs() {
-        use crate::node_graph::channel_names::well_known;
-        use crate::node_graph::ports::{PortType, ScalarType, TextureChannels};
-        assert_eq!(OpticalFlowEstimate::TYPE_ID, "node.optical_flow");
-        assert_eq!(OpticalFlowEstimate::INPUTS.len(), 1);
-        assert_eq!(OpticalFlowEstimate::INPUTS[0].name, "in");
-        assert_eq!(OpticalFlowEstimate::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(OpticalFlowEstimate::OUTPUTS.len(), 2);
-        assert_eq!(OpticalFlowEstimate::OUTPUTS[0].name, "out");
-        // The output declares the Watercolor RGBA layout per section 17 so
-        // any consumer that has also migrated to a typed Texture2D
-        // signature gets a structured ChannelMismatch on layout drift.
-        assert_eq!(
-            OpticalFlowEstimate::OUTPUTS[0].ty,
-            PortType::Texture2DTyped(TextureChannels::new(
-                well_known::FLOW_X,
-                well_known::CONFIDENCE,
-                well_known::FLOW_Y,
-                well_known::VALID,
-            ))
-        );
-        assert_eq!(OpticalFlowEstimate::OUTPUTS[1].name, "cut_score");
-        assert_eq!(
-            OpticalFlowEstimate::OUTPUTS[1].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-    }
-
-    #[test]
-    fn optical_flow_estimate_has_analysis_and_interval_params() {
-        let names: Vec<&str> = OpticalFlowEstimate::PARAMS
-            .iter()
-            .map(|p| p.name.as_ref())
-            .collect();
-        assert_eq!(
-            names,
-            vec!["analysis_max_dim", "update_interval", "fixed_lag"]
-        );
-        assert_eq!(
-            OpticalFlowEstimate::PARAMS[2].default,
-            ParamValue::Bool(false)
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = OpticalFlowEstimate::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.optical_flow");
-    }
 
     #[test]
     fn pack_f32_to_rgba16f_preserves_4_channels() {

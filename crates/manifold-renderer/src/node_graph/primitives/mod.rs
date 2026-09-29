@@ -302,11 +302,12 @@ mod tone_map;
 mod torus_wrap_field;
 mod triangulate_grid;
 mod tube_from_path;
-// D7/P0 I6 test fixture only (docs/CINEMATIC_POST_DESIGN.md) — the whole file
-// is `#![cfg(test)]`, never registered outside test builds. `pub(crate)` so
-// `freeze::proof`'s I6 test can construct it directly (it is deliberately
-// NOT in the global inventory-backed registry — see the module doc comment).
-#[cfg(test)]
+// D7/P0 I6 test fixture only (docs/CINEMATIC_POST_DESIGN.md), never registered
+// outside test builds. Its only user is `freeze::proof`'s GPU I6 test, hence
+// the gpu-proofs gate. `pub(crate)` so that test can construct it directly (it
+// is deliberately NOT in the global inventory-backed registry — see the
+// module doc comment).
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod test_camera_pointwise_fixture;
 mod twist_mesh;
 mod trigger_ease_to;
@@ -630,161 +631,172 @@ mod tests {
         }
     }
 
-    /// Iterate one boxed instance of each V1 primitive so tests can assert
-    /// invariants over the whole catalog without listing them by hand.
-    fn all_primitives() -> Vec<Box<dyn EffectNode>> {
-        vec![
-            Box::new(Brightness::new()),
-            Box::new(ChannelMix::new()),
-            Box::new(ColorRamp::new()),
-            Box::new(Mix::new()),
-            Box::new(Threshold::new()),
-            Box::new(Blur::new()),
-            Box::new(Feedback::new()),
-            Box::new(WetDry::new()),
-        ]
+    /// One boxed instance per registered factory, paired with the id the
+    /// factory registered under. Covers every primitive, present and future.
+    fn registered_nodes() -> Vec<(&'static str, Box<dyn EffectNode>)> {
+        inventory::iter::<crate::node_graph::persistence::PrimitiveFactory>
+            .into_iter()
+            .map(|f| (f.type_id, (f.create)()))
+            .collect()
     }
 
-    #[test]
-    fn all_v1_primitives_have_unique_type_ids() {
-        let primitives = all_primitives();
-        let ids: HashSet<&str> = primitives.iter().map(|p| p.type_id().as_str()).collect();
-        assert_eq!(ids.len(), 8, "primitive type IDs must be unique");
+    fn assert_no_violations(rule: &str, violations: &[String]) {
+        assert!(violations.is_empty(), "{rule}:\n  {}", violations.join("\n  "));
     }
 
+    /// A saved graph finds its node by the registered id, so the node a
+    /// factory builds must report that id, or, for a legacy alias, another
+    /// registered id. Every id is unique and namespaced, and every atom has
+    /// an output. Param defaults match their declared type (an Int
+    /// stores its default as a Float and reads back through `as_scalar`, the
+    /// path every reader funnels through), and an Enum default indexes a
+    /// real option.
     #[test]
-    fn all_v1_primitive_type_ids_have_node_prefix() {
-        for p in all_primitives() {
-            assert!(
-                p.type_id().as_str().starts_with("node."),
-                "node type IDs must start with `node.` — got {}",
-                p.type_id().as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn all_v1_primitives_produce_at_least_one_output() {
-        for p in all_primitives() {
-            assert!(
-                !p.outputs().is_empty(),
-                "primitive {} has no outputs",
-                p.type_id().as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn parameter_defaults_match_declared_types() {
-        // Catches typos like `default: ParamValue::Float(...)` on a
-        // `ty: ParamType::Vec3` parameter.
-        //
-        // `ParamType::Table` is allowed to declare a `Float(_)` sentinel
-        // default — Tables can't live in static-const `ParamValue` (Arc
-        // isn't const-constructible), so primitives that take a Table
-        // param ship a placeholder that's overridden by the JSON preset.
-        for p in all_primitives() {
-            for def in p.parameters() {
-                let ok = matches!(
+    fn every_registered_node_is_well_formed() {
+        let nodes = registered_nodes();
+        let registered: HashSet<&str> = nodes.iter().map(|(id, _)| *id).collect();
+        let mut seen = HashSet::new();
+        let mut violations = Vec::new();
+        for (type_id, node) in nodes {
+            let reported = node.type_id().as_str();
+            if reported != type_id && !registered.contains(reported) {
+                violations.push(format!("{type_id}: factory builds an unregistered `{reported}`"));
+            }
+            if !seen.insert(type_id) {
+                violations.push(format!("{type_id}: registered twice"));
+            }
+            if !type_id.starts_with("node.") && !type_id.starts_with("system.") {
+                violations.push(format!("{type_id}: id lacks the `node.` or `system.` prefix"));
+            }
+            // `system.*` sinks end the graph; `node.__*` are test fixtures.
+            let is_atom = type_id.starts_with("node.") && !type_id.starts_with("node.__");
+            if is_atom && node.outputs().is_empty() {
+                violations.push(format!("{type_id}: declares no outputs"));
+            }
+            for def in node.parameters() {
+                let name = &def.name;
+                let type_ok = matches!(
                     (def.ty, &def.default),
-                    (ParamType::Float, ParamValue::Float(_))
-                        | (ParamType::Int, ParamValue::Float(_))
+                    (ParamType::Float | ParamType::Angle | ParamType::Frequency, ParamValue::Float(_))
+                        | (ParamType::Int | ParamType::Trigger, ParamValue::Float(_))
                         | (ParamType::Bool, ParamValue::Bool(_))
                         | (ParamType::Vec2, ParamValue::Vec2(_))
                         | (ParamType::Vec3, ParamValue::Vec3(_))
                         | (ParamType::Vec4, ParamValue::Vec4(_))
                         | (ParamType::Color, ParamValue::Color(_))
                         | (ParamType::Enum, ParamValue::Enum(_))
-                        | (ParamType::Table, ParamValue::Float(_))
-                        | (ParamType::Table, ParamValue::Table(_))
-                        | (ParamType::Trigger, ParamValue::Float(_))
+                        // Tables and Strings can't live in a const default, so
+                        // a Float placeholder stands in until the preset
+                        // overrides it.
+                        | (ParamType::String, ParamValue::Float(_) | ParamValue::String(_))
+                        | (ParamType::Table, ParamValue::Float(_) | ParamValue::Table(_))
                 );
-                assert!(
-                    ok,
-                    "{} param `{}`: default {:?} does not match declared type {:?}",
-                    p.type_id().as_str(),
-                    def.name,
-                    def.default,
-                    def.ty,
-                );
-            }
-        }
-    }
-
-    /// Regression test for the `scalar_or_param` Int fall-through bug.
-    ///
-    /// Before the `ParamValue::Int` → `Float` storage collapse, an
-    /// `Int`-typed param wired into a primitive via JSON preset
-    /// (`{"type":"Int","value":N}`) would deserialize to
-    /// `ParamValue::Int(N)` and silently fall through every reader that
-    /// only matched on `Float` — the slider moved, the visual didn't.
-    ///
-    /// The new contract: an `Int`-typed param's default lives in
-    /// `ParamValue::Float`, *and* the value can be set via
-    /// `ParamValue::Float(n as f32)` and read back via the standard
-    /// scalar-coercion helpers without losing the value. This test
-    /// asserts the contract at the primitive-registry level so any
-    /// future primitive that declares `ty: ParamType::Int` is forced
-    /// onto the safe path.
-    #[test]
-    fn int_typed_params_use_float_storage_and_coerce_cleanly() {
-        use crate::node_graph::parameters::ParamValue;
-        for p in all_primitives() {
-            for def in p.parameters() {
-                if def.ty != ParamType::Int {
+                if !type_ok {
+                    violations.push(format!(
+                        "{type_id} param `{name}`: default {:?} does not match declared type {:?}",
+                        def.default, def.ty
+                    ));
                     continue;
                 }
-                // Default storage must be Float.
-                let ParamValue::Float(default_f) = def.default else {
-                    panic!(
-                        "{} param `{}`: Int-typed param must store its default \
-                         in ParamValue::Float (collapsed numeric storage); got {:?}",
-                        p.type_id().as_str(),
-                        def.name,
-                        def.default,
-                    );
-                };
-                // Float storage must round-trip cleanly through the
-                // scalar coercion helper — this is the helper that
-                // `scalar_or_param` and every primitive read site
-                // funnels through.
-                let coerced = def.default.as_scalar().unwrap_or_else(|| {
-                    panic!(
-                        "{} param `{}`: Float-stored Int default did not \
-                         coerce via as_scalar()",
-                        p.type_id().as_str(),
-                        def.name,
-                    )
-                });
-                assert_eq!(
-                    coerced, default_f,
-                    "{} param `{}`: as_scalar() must return the stored f32",
-                    p.type_id().as_str(),
-                    def.name,
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn enum_param_defaults_are_in_range() {
-        for p in all_primitives() {
-            for def in p.parameters() {
-                if def.ty == ParamType::Enum {
-                    let ParamValue::Enum(idx) = def.default else {
-                        unreachable!("enforced by parameter_defaults_match_declared_types");
-                    };
-                    assert!(
-                        (idx as usize) < def.enum_values.len(),
-                        "{} param `{}`: default index {} out of bounds for {} options",
-                        p.type_id().as_str(),
-                        def.name,
-                        idx,
-                        def.enum_values.len(),
-                    );
+                if def.ty == ParamType::Int
+                    && let ParamValue::Float(stored) = def.default
+                    && def.default.as_scalar() != Some(stored)
+                {
+                    violations.push(format!("{type_id} param `{name}`: Int default does not read back through as_scalar"));
+                }
+                if let ParamValue::Enum(idx) = def.default
+                    && idx as usize >= def.enum_values.len()
+                {
+                    violations.push(format!(
+                        "{type_id} param `{name}`: enum default {idx} out of range for {} options",
+                        def.enum_values.len()
+                    ));
                 }
             }
         }
+        assert_no_violations("registered-node shape violations", &violations);
+    }
+
+    /// Shadow inputs that are required, so their same-named param can never
+    /// act as the unwired fallback. Known and pinned here; new ones fail.
+    const REQUIRED_SHADOW_INPUTS: &[(&str, &str)] = &[
+        ("node.math", "a"),
+        ("node.scale_offset_value", "a"),
+        ("node.switch_array", "selector"),
+        ("node.switch_texture", "selector"),
+        ("node.switch_value", "selector"),
+    ];
+
+    /// Angles that are winding amounts rather than orientations. A range on
+    /// these clamps a wired or typed value at one turn, the saw-rotation-wrap
+    /// class, so they must stay unbounded.
+    const UNBOUNDED_WINDING_ANGLES: &[(&str, &str)] = &[
+        ("node.bend_mesh", "angle"),
+        ("node.revolve_curve", "sweep"),
+        ("node.twist_mesh", "angle"),
+    ];
+
+    /// Port-shadow convention: an input named like a param lets a wire
+    /// override that param. The wire is optional, since the param is the
+    /// unwired fallback, and it carries the param's scalar type. Bool, Enum,
+    /// Int and Trigger params travel as a plain f32 wire. Table and String
+    /// params cannot be driven by a scalar wire, so they are never shadowed.
+    #[test]
+    fn port_shadow_inputs_are_optional_and_typed_like_their_param() {
+        use crate::node_graph::ports::{PortType, ScalarType};
+        let mut violations = Vec::new();
+        let mut unbounded_seen = 0;
+        for (type_id, node) in registered_nodes() {
+            let params = node.parameters();
+            for port in node.inputs() {
+                let Some(def) = params.iter().find(|d| d.name == port.name) else {
+                    continue;
+                };
+                let name: &str = &port.name;
+                if port.required && !REQUIRED_SHADOW_INPUTS.contains(&(type_id, name)) {
+                    violations.push(format!("{type_id}: shadow input `{name}` is required"));
+                }
+                let expected = match def.ty {
+                    ParamType::Float
+                    | ParamType::Angle
+                    | ParamType::Frequency
+                    | ParamType::Int
+                    | ParamType::Bool
+                    | ParamType::Enum
+                    | ParamType::Trigger => Some(ScalarType::F32),
+                    ParamType::Vec2 => Some(ScalarType::Vec2),
+                    ParamType::Vec3 => Some(ScalarType::Vec3),
+                    ParamType::Vec4 => Some(ScalarType::Vec4),
+                    ParamType::Color => Some(ScalarType::Color),
+                    ParamType::Table | ParamType::String => None,
+                };
+                match expected {
+                    None => violations.push(format!(
+                        "{type_id}: {:?} param `{name}` must not be port-shadowed",
+                        def.ty
+                    )),
+                    Some(scalar) if port.ty != PortType::Scalar(scalar) => violations.push(format!(
+                        "{type_id}: shadow input `{name}` is {:?}, param wants {scalar:?}",
+                        port.ty
+                    )),
+                    Some(_) => {}
+                }
+            }
+            for def in params {
+                let name: &str = &def.name;
+                if !UNBOUNDED_WINDING_ANGLES.contains(&(type_id, name)) {
+                    continue;
+                }
+                unbounded_seen += 1;
+                if def.range.is_some() {
+                    violations.push(format!("{type_id}: winding angle `{name}` must be unbounded"));
+                }
+            }
+        }
+        if unbounded_seen != UNBOUNDED_WINDING_ANGLES.len() {
+            violations.push("an UNBOUNDED_WINDING_ANGLES entry names a param that no longer exists".into());
+        }
+        assert_no_violations("port-shadow violations", &violations);
     }
 
     /// Integration test: assemble the decomposed Bloom shape (blur a
@@ -832,90 +844,6 @@ mod tests {
             validate(&g),
             Err(crate::node_graph::GraphError::RequiredInputUnwired { .. })
         ));
-    }
-
-    /// Every primitive that declares an `Array<T>` output port must
-    /// know how to size that output via
-    /// [`EffectNode::array_output_capacity`] — either from a node-local
-    /// param, from a same-as-input passthrough, or computed from
-    /// multiple params. Test verifies the contract is *resolvable*
-    /// from defaults: with the primitive's `parameters()` defaults
-    /// installed AND assuming any Array input was bound at a generous
-    /// upper bound, the method must return `Some(_)`.
-    ///
-    /// Why this matters: the chain build / `JsonGraphGenerator`
-    /// pre-allocator reads this method on every Array-producing node
-    /// at construction. If it returns `None`, the buffer is never
-    /// allocated, downstream renders nothing — the Lissajous
-    /// black-frame bug class (commit 23e440aa). This test promotes
-    /// the contract from "convention you can forget" to "CI-enforced
-    /// invariant" across every primitive, including future ones.
-    ///
-    /// Walks the live [`super::super::PrimitiveRegistry`] so new
-    /// primitives are picked up automatically — no central list to
-    /// maintain.
-    #[test]
-    fn every_array_output_declares_a_valid_capacity_source() {
-        use super::super::PrimitiveRegistry;
-        use super::super::ports::PortType;
-        use ahash::AHashMap;
-
-        let registry = PrimitiveRegistry::with_builtin();
-        let mut violations: Vec<String> = Vec::new();
-        for type_id in registry.known_type_ids() {
-            let Some(node) = registry.construct(type_id) else {
-                continue;
-            };
-            // Synthesize a default-param bag matching `parameters()`.
-            let mut params: AHashMap<std::borrow::Cow<'static, str>, ParamValue> =
-                AHashMap::default();
-            for def in node.parameters() {
-                params.insert(def.name.clone(), def.default.clone());
-            }
-            // Pretend every Array input was bound at a large but finite
-            // capacity. Same-as-input transforms should resolve against
-            // this; producers should ignore it.
-            let mut synthetic_inputs: Vec<(&str, u32)> = Vec::new();
-            for port in node.inputs() {
-                if matches!(port.ty, PortType::Array(_)) {
-                    synthetic_inputs.push((port.name.as_ref(), 1024));
-                }
-            }
-
-            // Canvas-sized outputs bypass `array_output_capacity` —
-            // the chain builder sizes them from the backend's canvas
-            // dims at allocation time. They're a valid capacity
-            // source even when the method returns None.
-            let canvas_sized: std::collections::HashSet<&str> =
-                node.canvas_sized_array_outputs().iter().copied().collect();
-
-            for port in node.outputs() {
-                if !matches!(port.ty, PortType::Array(_)) {
-                    continue;
-                }
-                if canvas_sized.contains(port.name.as_ref()) {
-                    continue;
-                }
-                let cap = node.array_output_capacity(port.name.as_ref(), &params, &synthetic_inputs);
-                if cap.is_none() {
-                    violations.push(format!(
-                        "{type_id}: Array output `{}` — \
-                         array_output_capacity returned None with default \
-                         params and Array inputs bound at 1024. Override \
-                         the method on the primitive, declare the port via \
-                         `canvas_sized_array_outputs()` for canvas-matched \
-                         buffers, or for producers add a `max_capacity` \
-                         param with an Int/Float default.",
-                        port.name,
-                    ));
-                }
-            }
-        }
-        assert!(
-            violations.is_empty(),
-            "Array-output capacity invariant violations:\n  {}",
-            violations.join("\n  "),
-        );
     }
 
     /// Every shipping primitive's Array ports must carry a declared

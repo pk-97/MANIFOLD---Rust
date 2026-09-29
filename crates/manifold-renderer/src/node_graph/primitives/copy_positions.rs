@@ -101,46 +101,6 @@ impl Primitive for CopyPositions {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn wave_pilot_copy_positions_ports_and_capacity() {
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let prim = CopyPositions::new();
-        assert_eq!(CopyPositions::TYPE_ID, "node.copy_positions");
-        assert_eq!(
-            CopyPositions::INPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<InstanceTransform>())
-        );
-        assert!(CopyPositions::INPUTS[0].required);
-        assert_eq!(
-            CopyPositions::OUTPUTS[0].ty,
-            PortType::Array(ArrayType::of_known::<Vec4Vertex>())
-        );
-        assert_eq!(
-            Primitive::array_output_capacity(
-                &prim,
-                "out",
-                &ParamValues::default(),
-                &[("instances", 17)]
-            ),
-            Some(17)
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CopyPositions::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.copy_positions");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

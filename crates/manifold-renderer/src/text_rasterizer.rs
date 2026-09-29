@@ -606,14 +606,6 @@ mod tests {
     }
 
     #[test]
-    fn test_available_font_families() {
-        let families = TextRasterizer::available_font_families();
-        assert!(!families.is_empty());
-        // Helvetica should always be present on macOS
-        assert!(families.iter().any(|f| f == "Helvetica"));
-    }
-
-    #[test]
     fn test_letter_spacing_wider() {
         let mut rasterizer = TextRasterizer::new();
         let narrow = rasterizer

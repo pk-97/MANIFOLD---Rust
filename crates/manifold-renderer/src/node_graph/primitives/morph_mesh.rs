@@ -229,42 +229,6 @@ impl Primitive for MorphMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn morph_mesh_declares_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let f32_layout = ArrayType::of_known::<f32>();
-
-        assert_eq!(MorphMesh::TYPE_ID, "node.morph_mesh");
-
-        for name in ["in", "b"] {
-            let port = MorphMesh::INPUTS.iter().find(|p| p.name == name).unwrap();
-            assert!(port.required, "{name} must be required");
-            assert_eq!(port.ty, PortType::Array(mesh_layout));
-        }
-
-        let weights_port = MorphMesh::INPUTS.iter().find(|p| p.name == "weights").unwrap();
-        assert!(!weights_port.required);
-        assert_eq!(weights_port.ty, PortType::Array(f32_layout));
-
-        let t_port = MorphMesh::INPUTS
-            .iter()
-            .find(|p| p.name == "t")
-            .unwrap_or_else(|| panic!("t port-shadow input must exist"));
-        assert!(!t_port.required, "t should be optional (port-shadow)");
-        assert_eq!(t_port.ty, PortType::Scalar(ScalarType::F32));
-
-        assert_eq!(MorphMesh::OUTPUTS.len(), 1);
-        assert_eq!(MorphMesh::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-        let params = MorphMesh::PARAMS;
-        assert_eq!(params.len(), 2);
-        assert_eq!(params[1].name, "blend_frames");
-        assert_eq!(params[1].ty, ParamType::Bool);
-        assert_eq!(params[1].default, ParamValue::Bool(false));
-    }
 
     #[test]
     fn morph_mesh_output_follows_smaller_of_in_and_b() {
@@ -281,13 +245,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "out", &params, &inputs2),
             Some(12),
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = MorphMesh::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.morph_mesh");
     }
 }
 

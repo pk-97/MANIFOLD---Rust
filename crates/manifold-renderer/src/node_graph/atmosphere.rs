@@ -83,11 +83,4 @@ mod tests {
         assert_eq!(a.shaft_anisotropy, 0.6);
         assert_eq!(a.shaft_quality, 1, "default quality is Med (1)");
     }
-
-    #[test]
-    fn atmosphere_is_copy() {
-        let a = Atmosphere::default();
-        let _b = a;
-        let _c = a;
-    }
 }

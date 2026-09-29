@@ -1713,12 +1713,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn font_loading() {
-        // Verify all three Inter fonts load without panic.
-        let _fm = FontManager::new();
-    }
-
-    #[test]
     fn text_measurement() {
         let mut fm = FontManager::new();
         let ct_font = fm.get_ct_font(12.0, FontWeight::Regular);

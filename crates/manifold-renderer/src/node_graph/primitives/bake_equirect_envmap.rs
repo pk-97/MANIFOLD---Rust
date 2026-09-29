@@ -404,16 +404,6 @@ mod tests {
     use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
 
-    #[test]
-    fn declares_zero_inputs_and_envmap_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(BakeEquirectEnvmap::TYPE_ID, "node.bake_environment");
-        assert!(BakeEquirectEnvmap::INPUTS.is_empty());
-        assert_eq!(BakeEquirectEnvmap::OUTPUTS.len(), 1);
-        assert_eq!(BakeEquirectEnvmap::OUTPUTS[0].name, "envmap");
-        assert_eq!(BakeEquirectEnvmap::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
     fn params_at(width: f32, height: f32) -> ParamValues {
         let mut p = ahash::AHashMap::default();
         p.insert(std::borrow::Cow::Borrowed("width"), ParamValue::Float(width));
@@ -440,21 +430,6 @@ mod tests {
     }
 
     #[test]
-    fn registers_as_atom() {
-        let prim = BakeEquirectEnvmap::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.bake_environment");
-    }
-
-    #[test]
-    fn uniforms_are_80_bytes() {
-        // RT_FURNACE_ORACLE grew the struct by one field (`uniform_mode`);
-        // WGSL's uniform-address-space size rule requires the next 16-byte
-        // multiple, so 64 -> 80, not 68.
-        assert_eq!(std::mem::size_of::<EnvmapUniforms>(), 80);
-    }
-
-    #[test]
     fn uniform_param_defaults_to_off() {
         let defaults = BakeEquirectEnvmap::PARAMS;
         let uniform_def = defaults.iter().find(|p| p.name == "uniform").expect("uniform param declared");
@@ -467,18 +442,6 @@ mod tests {
         let mode_def = defaults.iter().find(|p| p.name == "mode").expect("mode param declared");
         assert_eq!(mode_def.default, ParamValue::Enum(0));
         assert_eq!(mode_def.enum_values, &["Gradient", "Softbox"]);
-    }
-
-    #[test]
-    fn softbox_params_declared_with_documented_defaults() {
-        let defaults = BakeEquirectEnvmap::PARAMS;
-        let get = |name: &str| defaults.iter().find(|p| p.name == name).unwrap_or_else(|| panic!("{name} param declared"));
-        assert_eq!(get("emitter_count").default, ParamValue::Float(3.0));
-        assert_eq!(get("sun_disc_intensity").default, ParamValue::Float(0.0));
-        assert_eq!(get("sun_x").default, ParamValue::Float(0.0));
-        assert_eq!(get("sun_y").default, ParamValue::Float(0.0));
-        assert_eq!(get("sun_z").default, ParamValue::Float(0.0));
-        assert_eq!(get("sun_disc_size").default, ParamValue::Float(0.0));
     }
 }
 

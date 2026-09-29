@@ -100,16 +100,3 @@ impl Primitive for MagnitudeDb {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-
-    #[test]
-    fn registers_as_magnitude_db() {
-        let node = MagnitudeDb::new();
-        let node: &dyn EffectNode = &node;
-        assert_eq!(node.type_id().as_str(), "node.magnitude_db");
-    }
-}

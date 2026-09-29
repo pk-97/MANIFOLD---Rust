@@ -112,30 +112,6 @@ impl Primitive for BlockSample {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_full_resolution_texture_and_block_size() {
-        assert_eq!(BlockSample::TYPE_ID, "node.block_sample");
-        assert_eq!(BlockSample::INPUTS.len(), 4);
-        assert_eq!(BlockSample::INPUTS[0].name, "in");
-        assert_eq!(BlockSample::INPUTS[0].ty, PortType::Texture2D);
-        assert!(BlockSample::INPUTS[0].required);
-        assert_eq!(BlockSample::INPUTS[1].name, "block_size");
-        assert_eq!(BlockSample::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!BlockSample::INPUTS[1].required);
-        assert_eq!(BlockSample::OUTPUTS.len(), 1);
-        assert_eq!(BlockSample::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(BlockSample::PARAMS.len(), 3);
-        assert_eq!(BlockSample::PARAMS[0].name, "block_size");
-        assert_eq!(BlockSample::PARAMS[0].default, ParamValue::Float(16.0));
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

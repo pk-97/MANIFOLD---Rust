@@ -126,20 +126,6 @@ impl Primitive for GridUvField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn grid_uv_field_declares_vec2_array_output_only() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let layout = ArrayType::of_known::<[f32; 2]>();
-        assert_eq!(GridUvField::TYPE_ID, "node.grid_uv_field");
-        assert!(GridUvField::INPUTS.is_empty());
-        assert_eq!(GridUvField::OUTPUTS.len(), 1);
-        assert_eq!(GridUvField::OUTPUTS[0].name, "uv");
-        assert_eq!(GridUvField::OUTPUTS[0].ty, PortType::Array(layout));
-        assert_eq!(layout.item_size, 8);
-    }
 
     #[test]
     fn grid_uv_field_capacity_is_grid_size_squared() {
@@ -156,24 +142,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "uv", &params, &[]),
             Some(4_096),
         );
-    }
-
-    #[test]
-    fn grid_uv_field_capacity_unknown_port_returns_none() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = GridUvField::new();
-        let params = ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "other", &params, &[]),
-            None,
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GridUvField::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.grid_uv_field");
     }
 }
 
