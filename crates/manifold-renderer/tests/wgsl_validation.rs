@@ -40,6 +40,10 @@ const PARTIAL_SHADERS: &[&str] = &[
     // exercised by the bundled-preset execute tests.
     "gaussian_blur_variable_width.wgsl",
     "radial_burst_force_field.wgsl",
+    // `wgsl_includes` of the marching-cubes atoms: reads the kernel's
+    // `buf_levelset` binding. Their generated kernels are validated at
+    // pipeline creation and by the liquid-surface GPU value tests.
+    "marching_cubes_common.wgsl",
 ];
 
 const NOISE_COMMON: &str = include_str!("../src/generators/shaders/noise_common.wgsl");

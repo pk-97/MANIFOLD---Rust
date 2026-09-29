@@ -246,6 +246,7 @@ mod tests {
                 // this literal enumeration wasn't updated when the atom
                 // landed — a pre-existing gap from that phase, not this one.
                 "Transform 3D",
+                "Transform Components",
                 "Trigger Ease To",
                 "Trigger Gate",
                 "Value",

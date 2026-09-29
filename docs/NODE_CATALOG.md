@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 321 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 328 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -165,7 +165,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (85)
+### 3D Geometry (87)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -177,6 +177,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | Camera Switch | `node.camera_switch` | Source | Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph. |
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Copy Positions | `node.copy_positions` | Map | Turns copy transforms into homogeneous XYZ positions for downstream fields and geometry math. |
+| Count Surface Triangles | `node.count_surface_triangles` | Filter | Works out how many triangles each small cube of the liquid's surface needs, the first step of building its mesh. |
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | Cut Mesh Bands | `node.cut_mesh_bands` | Source | Cuts mesh triangles into directional bands while retaining source-triangle provenance. |
 | Cut Mesh Cells | `node.cut_mesh_cells` | Source | Cuts mesh triangles into grid cells while retaining source-triangle provenance. |
@@ -252,6 +253,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | Shake | `node.transform_shake` | Filter | Stateless shake on a Transform wire — rotational jitter dominant, positional at a quarter ratio, driven by time and frequency. |
 | Tube From Path | `node.tube_from_path` | Source | Sweeps a tube of adjustable thickness along a path — the way you'd build a vine, cable, or ribbon from a center-line curve. Thickness and lift can vary per poi… |
 | Twist Mesh | `node.twist_mesh` | Filter | Twists a mesh around its own length, like wringing out a cloth or spinning a vine. Position and lighting normals both rotate exactly, so continuous saw-LFO spi… |
+| Volume Surface Mesh | `node.volume_surface_mesh` | Filter | Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material. |
 | Voxelize | `node.voxelize_mesh` | Filter | Snaps every vertex to a regular voxel grid, pixel-crushing a smooth mesh into chunky blocks. |
 | Wave Shear Mesh | `node.wave_shear_mesh` | Filter | Shears a textured mesh with a travelling wave while transporting normals and tangents analytically. |
 
@@ -291,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (23)
+### Particles 3D (26)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -310,10 +312,13 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Matter To Particles | `node.matter_to_particles` | Map | Turns the simulated matter into plain liquid particles without reordering them. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a smooth density field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
+| Shape Particle Blobs | `node.shape_particle_blobs` | Map | Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads. |
+| Sort Particles Into Cells | `node.sort_particles_into_cells` | Filter | Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly. |
 | Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
@@ -371,7 +376,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (21)
+### Math & Convert (23)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -387,12 +392,14 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | Range | `node.range` | Source | Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps. |
 | Resolve Scatter | `node.resolve_scatter` | Filter | Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat. |
 | Resolve Scatter (3D) | `node.resolve_scatter_3d` | Filter | Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample. |
+| Running Total | `node.running_total` | Filter | Adds up a list of counts as it goes, so each item knows where its results start. |
 | Scale + Offset (image) | `node.scale_offset_image` | Filter | Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step. |
 | Sine / Cosine | `node.sine_cosine` | Filter | Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient. |
 | Smoothstep | `node.smoothstep` | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
 | Split XY | `node.split_xy` | Filter | Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them. |
 | Sum Into Bins | `node.sum_into_bins` | Control | Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time. |
 | Texture Size | `node.texture_size` | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
+| Transform Components | `node.transform_components` | Map | Breaks a transform into its separate position, rotation and scale numbers so each can drive something else. |
 | Vector Length | `node.vector_length` | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
 | Wrap | `node.wrap` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 | Clear Array | `node.zero_array` | Filter | Resets a list of whole numbers to zero so it can be added into again. |
@@ -451,7 +458,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (92)
+### Effect & generator presets (93)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -542,6 +549,7 @@ _Generated from the node registry. Do not hand-edit. 321 nodes registered, group
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
+| `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1056 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1046 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |

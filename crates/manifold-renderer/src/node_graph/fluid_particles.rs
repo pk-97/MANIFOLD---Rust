@@ -3,7 +3,7 @@
 //! `Array(FluidParticle)` frames; the surface atoms read them unchanged.
 
 use crate::node_graph::channel_names::well_known;
-use crate::node_graph::ports::{ChannelElementType, ChannelName, ChannelSpec, KnownItem};
+use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 /// One liquid particle in scene space. Layout equals
 /// `manifold_fluids::ParticleRecord`, so the FLIP worker writes it directly.
@@ -32,13 +32,63 @@ const _: () = {
 /// stride 32 (vec3 + u32 pack into one 16-byte slot, as `Particle`'s
 /// velocity/life do).
 pub const FLUID_PARTICLE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: ChannelName::from_str("position_radius"), ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::POSITION_RADIUS, ty: ChannelElementType::Vec4F },
     ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
-    ChannelSpec { name: ChannelName::from_str("id"), ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::ID, ty: ChannelElementType::U32 },
 ];
 
 impl KnownItem for FluidParticle {
     const SPECS: &'static [ChannelSpec] = FLUID_PARTICLE_SPECS;
+}
+
+/// One anisotropic surface kernel (Yu & Turk 2010), from
+/// `node.shape_particle_blobs`. The kernel is `(1 − |G·(x − c)|²)³` inside the
+/// ellipsoid `|G·(x − c)| < 1`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct FluidBlob {
+    /// Smoothed centre xyz; w = bounding radius in metres, 0 = inactive.
+    pub center_radius: [f32; 4],
+    /// Symmetric shape matrix G: xx, yy, zz; w = det(G).
+    pub shape_diag: [f32; 4],
+    /// G: xy, xz, yz; w = 0.
+    pub shape_off: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<FluidBlob>() == 48);
+
+pub const FLUID_BLOB_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::CENTER_RADIUS, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::SHAPE_DIAG, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::SHAPE_OFF, ty: ChannelElementType::Vec4F },
+];
+
+impl KnownItem for FluidBlob {
+    const SPECS: &'static [ChannelSpec] = FLUID_BLOB_SPECS;
+}
+
+/// The run of sorted particles inside one spatial bin.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CellRange {
+    pub start: u32,
+    pub count: u32,
+}
+
+pub const CELL_RANGE_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::START, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::COUNT, ty: ChannelElementType::U32 },
+];
+
+impl KnownItem for CellRange {
+    const SPECS: &'static [ChannelSpec] = CELL_RANGE_SPECS;
+}
+
+/// Spatial bins covering an axis-aligned box: `max(1, ceil(size / cell))`
+/// bins per axis, bin (i, j, k) spanning `min + (i, j, k)·cell`. One rule for
+/// the sort and every atom that searches its bins.
+pub fn bin_counts(size: [f32; 3], cell_size: f32) -> [u32; 3] {
+    size.map(|extent| (extent / cell_size).ceil().max(1.0) as u32)
 }
 
 /// View of a `FluidParticle` buffer as the solver's record type, for workers
@@ -65,5 +115,7 @@ mod tests {
             std430_stride(FLUID_PARTICLE_SPECS) as usize,
             std::mem::size_of::<FluidParticle>()
         );
+        assert_eq!(std430_stride(FLUID_BLOB_SPECS) as usize, std::mem::size_of::<FluidBlob>());
+        assert_eq!(std430_stride(CELL_RANGE_SPECS) as usize, std::mem::size_of::<CellRange>());
     }
 }

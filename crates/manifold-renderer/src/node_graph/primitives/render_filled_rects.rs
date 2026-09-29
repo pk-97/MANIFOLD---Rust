@@ -212,8 +212,7 @@ impl Primitive for RenderFilledRects {
                     offset: 0,
                 },
             ],
-            6,
-            rect_count,
+            manifold_gpu::DrawCount::Direct { vertices: 6, instances: rect_count },
             GpuLoadAction::Load,
             "node.draw_rectangles",
         );

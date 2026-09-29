@@ -179,9 +179,15 @@ pub mod well_known {
         MASK = "mask";
         DEPTH = "depth";
 
-        // ─── Liquid particle frames and matter (GPU_FLUID_SURFACE_DESIGN.md,
-        // GPU_MPM_SOLVER_DESIGN.md) — named so generated kernels keep them ─
+        // ─── Liquid particle frames, surface records and matter
+        // (GPU_FLUID_SURFACE_DESIGN.md, GPU_MPM_SOLVER_DESIGN.md) — named so
+        // generated kernels keep them ─
         POSITION_RADIUS = "position_radius";
+        CENTER_RADIUS = "center_radius";
+        SHAPE_DIAG = "shape_diag";
+        SHAPE_OFF = "shape_off";
+        START = "start";
+        COUNT = "count";
         VOLUME_RATIO    = "volume_ratio";
         AFFINE_X        = "affine_x";
         AFFINE_Y        = "affine_y";
