@@ -125,6 +125,30 @@ fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c
     buf as *const _ as *const c_void
 }
 
+/// The grid of one compute dispatch: CPU threadgroup counts, or GPU-written
+/// ones in an arguments buffer.
+#[derive(Clone, Copy)]
+enum DispatchGrid<'a> {
+    Groups([u32; 3]),
+    Indirect { args: &'a GpuBuffer, offset: u64 },
+}
+
+/// How many vertices and instances one batch draw covers.
+#[derive(Clone, Copy)]
+pub enum DrawCount<'a> {
+    Direct { vertices: u32, instances: u32 },
+    /// Metal's four-word draw arguments (vertex count, instance count, vertex
+    /// start, base instance) at `offset`, written on the GPU earlier in the
+    /// same command buffer: the count is known only to the GPU.
+    Indirect { args: &'a GpuBuffer, offset: u64 },
+}
+
+impl DrawCount<'_> {
+    fn is_empty(&self) -> bool {
+        matches!(self, DrawCount::Direct { vertices: 0, .. } | DrawCount::Direct { instances: 0, .. })
+    }
+}
+
 /// One depth-tested mesh in a [`GpuEncoder::draw_instanced_depth_msaa_batch`]
 /// batch: its own material pipeline, its own bindings, its own vertex count.
 /// Construct via [`GpuEncoder::depth_msaa_draw`] (fill),
@@ -134,8 +158,7 @@ fn buffer_identity(buf: &ProtocolObject<dyn objc2_metal::MTLBuffer>) -> *const c
 pub struct DepthMsaaDraw<'a> {
     pipeline: &'a GpuRenderPipeline,
     bindings: &'a [GpuBinding<'a>],
-    vertex_count: u32,
-    instance_count: u32,
+    count: DrawCount<'a>,
     /// Triangle fill mode for this draw (SCENE_RENDER_MODE_DESIGN.md D6).
     /// `Lines` = wireframe. Only the COLOUR batch entries read this; the
     /// depth-only entries (`draw_instanced_depth_only_batch` — shadow maps,
@@ -149,6 +172,36 @@ pub struct DepthMsaaDraw<'a> {
     /// force `Triangle` — same INV-R3 argument as `fill_mode` (point-only
     /// depth would break occlusion and shadows).
     primitive: crate::GpuPrimitiveType,
+}
+
+impl<'a> DepthMsaaDraw<'a> {
+    /// Draw with GPU-written arguments instead of a CPU count: the Metal
+    /// four-word draw arguments at `offset` in `args`.
+    pub fn indirect(mut self, args: &'a GpuBuffer, offset: u64) -> Self {
+        self.count = DrawCount::Indirect { args, offset };
+        self
+    }
+}
+
+/// Encode one draw of `count` with `primitive` topology.
+fn encode_draw(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    primitive: MTLPrimitiveType,
+    count: &DrawCount,
+) {
+    match *count {
+        DrawCount::Direct { vertices, instances } => unsafe {
+            enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                primitive,
+                0,
+                vertices as usize,
+                instances as usize,
+            );
+        },
+        DrawCount::Indirect { args, offset } => unsafe {
+            enc.drawPrimitives_indirectBuffer_indirectBufferOffset(primitive, &args.raw, offset as usize);
+        },
+    }
 }
 
 /// Committed shape (`docs/GBUFFER_DESIGN.md` section 2 D3) for
@@ -439,9 +492,37 @@ impl GpuEncoder {
         workgroups: [u32; 3],
         label: &str,
     ) {
+        self.dispatch_compute_grid(pipeline, bindings, DispatchGrid::Groups(workgroups), label);
+    }
+
+    /// Dispatch a compute shader over a GPU-written grid: three u32
+    /// threadgroup counts at `offset` in `args`, written earlier in this
+    /// command buffer.
+    pub fn dispatch_compute_indirect(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        args: &GpuBuffer,
+        offset: u64,
+        label: &str,
+    ) {
+        self.dispatch_compute_grid(pipeline, bindings, DispatchGrid::Indirect { args, offset }, label);
+    }
+
+    fn dispatch_compute_grid(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        grid: DispatchGrid,
+        label: &str,
+    ) {
         let isolate_rt_stage = label.starts_with("node.render_scene RT");
         if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
-            log::info!("[GPU-DIAG] dispatch stage={label} groups={workgroups:?} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
+            let groups = match grid {
+                DispatchGrid::Groups(groups) => format!("{groups:?}"),
+                DispatchGrid::Indirect { .. } => "indirect".to_owned(),
+            };
+            log::info!("[GPU-DIAG] dispatch stage={label} groups={groups} threads={:?} bindings={}", pipeline.workgroup_size, bindings.len());
         }
         if isolate_rt_stage {
             self.end_current();
@@ -604,19 +685,20 @@ impl GpuEncoder {
         }
 
         let wg = pipeline.workgroup_size;
+        let threads = MTLSize { width: wg[0] as usize, height: wg[1] as usize, depth: wg[2] as usize };
         unsafe {
-            enc.dispatchThreadgroups_threadsPerThreadgroup(
-                MTLSize {
-                    width: workgroups[0] as usize,
-                    height: workgroups[1] as usize,
-                    depth: workgroups[2] as usize,
-                },
-                MTLSize {
-                    width: wg[0] as usize,
-                    height: wg[1] as usize,
-                    depth: wg[2] as usize,
-                },
-            );
+            match grid {
+                DispatchGrid::Groups(groups) => enc.dispatchThreadgroups_threadsPerThreadgroup(
+                    MTLSize { width: groups[0] as usize, height: groups[1] as usize, depth: groups[2] as usize },
+                    threads,
+                ),
+                DispatchGrid::Indirect { args, offset } => enc
+                    .dispatchThreadgroupsWithIndirectBuffer_indirectBufferOffset_threadsPerThreadgroup(
+                        &args.raw,
+                        offset as usize,
+                        threads,
+                    ),
+            }
             enc.popDebugGroup();
         }
         if isolate_rt_stage {
@@ -1060,8 +1142,7 @@ impl GpuEncoder {
         DepthMsaaDraw {
             pipeline,
             bindings,
-            vertex_count,
-            instance_count,
+            count: DrawCount::Direct { vertices: vertex_count, instances: instance_count },
             fill_mode: crate::GpuTriangleFillMode::Fill,
             primitive: crate::GpuPrimitiveType::Triangle,
         }
@@ -1080,8 +1161,7 @@ impl GpuEncoder {
         DepthMsaaDraw {
             pipeline,
             bindings,
-            vertex_count,
-            instance_count,
+            count: DrawCount::Direct { vertices: vertex_count, instances: instance_count },
             fill_mode,
             primitive: crate::GpuPrimitiveType::Triangle,
         }
@@ -1101,8 +1181,7 @@ impl GpuEncoder {
         DepthMsaaDraw {
             pipeline,
             bindings,
-            vertex_count,
-            instance_count,
+            count: DrawCount::Direct { vertices: vertex_count, instances: instance_count },
             fill_mode: crate::GpuTriangleFillMode::Fill,
             primitive: crate::GpuPrimitiveType::Point,
         }
@@ -1249,7 +1328,7 @@ impl GpuEncoder {
         }
 
         for draw in draws {
-            if draw.vertex_count == 0 || draw.instance_count == 0 {
+            if draw.count.is_empty() {
                 continue;
             }
             unsafe {
@@ -1259,16 +1338,9 @@ impl GpuEncoder {
                 enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
-            unsafe {
-                // D8: per-draw topology (Points mode = point primitives) —
-                // colour batches only; depth-only batches force Triangle.
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    format::to_mtl_primitive_type(draw.primitive),
-                    0,
-                    draw.vertex_count as usize,
-                    draw.instance_count as usize,
-                );
-            }
+            // D8: per-draw topology (Points mode = point primitives) — colour
+            // batches only; depth-only batches force Triangle.
+            encode_draw(&enc, format::to_mtl_primitive_type(draw.primitive), &draw.count);
         }
 
         // IMPORT_FIDELITY_DESIGN.md D8/F-P5: the sorted transparent group,
@@ -1282,7 +1354,7 @@ impl GpuEncoder {
                 enc.setDepthStencilState(Some(&second_depth_stencil.raw));
             }
             for draw in second_draws {
-                if draw.vertex_count == 0 || draw.instance_count == 0 {
+                if draw.count.is_empty() {
                     continue;
                 }
                 unsafe {
@@ -1290,14 +1362,7 @@ impl GpuEncoder {
                     enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
                 }
                 apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
-                unsafe {
-                    enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                        format::to_mtl_primitive_type(draw.primitive),
-                        0,
-                        draw.vertex_count as usize,
-                        draw.instance_count as usize,
-                    );
-                }
+                encode_draw(&enc, format::to_mtl_primitive_type(draw.primitive), &draw.count);
             }
         }
 
@@ -1370,7 +1435,7 @@ impl GpuEncoder {
         }
 
         for draw in draws {
-            if draw.vertex_count == 0 || draw.instance_count == 0 {
+            if draw.count.is_empty() {
                 continue;
             }
             unsafe {
@@ -1380,16 +1445,9 @@ impl GpuEncoder {
                 enc.setTriangleFillMode(format::to_mtl_triangle_fill_mode(draw.fill_mode));
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
-            unsafe {
-                // D8: per-draw topology (Points mode = point primitives) —
-                // colour batches only; depth-only batches force Triangle.
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    format::to_mtl_primitive_type(draw.primitive),
-                    0,
-                    draw.vertex_count as usize,
-                    draw.instance_count as usize,
-                );
-            }
+            // D8: per-draw topology (Points mode = point primitives) — colour
+            // batches only; depth-only batches force Triangle.
+            encode_draw(&enc, format::to_mtl_primitive_type(draw.primitive), &draw.count);
         }
 
         unsafe {
@@ -1625,7 +1683,7 @@ impl GpuEncoder {
         }
 
         for draw in draws {
-            if draw.vertex_count == 0 || draw.instance_count == 0 {
+            if draw.count.is_empty() {
                 continue;
             }
             unsafe {
@@ -1641,14 +1699,7 @@ impl GpuEncoder {
                 ));
             }
             apply_bindings_draw_both_stages(&enc, draw.pipeline, draw.bindings);
-            unsafe {
-                enc.drawPrimitives_vertexStart_vertexCount_instanceCount(
-                    MTLPrimitiveType::Triangle,
-                    0,
-                    draw.vertex_count as usize,
-                    draw.instance_count as usize,
-                );
-            }
+            encode_draw(&enc, MTLPrimitiveType::Triangle, &draw.count);
         }
 
         unsafe {
@@ -2928,6 +2979,149 @@ mod tests {
             chunked > 0,
             "a 5000-point draw on real attachments must render"
         );
+    }
+
+    /// GPU_FLUID_SURFACE_DESIGN.md P6b: an indirect dispatch or draw whose
+    /// arguments a kernel wrote earlier in the SAME command buffer does exactly
+    /// what the direct call with those counts does.
+    #[test]
+    fn indirect_dispatch_and_draw_match_direct() {
+        let device = GpuDevice::new();
+        // One kernel writes both argument blocks: dispatch [2, 1, 1] at word 0,
+        // then draw (vertex count from the uniform, 1 instance, 0, 0) at word 4.
+        let args_wgsl = r#"
+            struct Push { vertices: u32, _p0: u32, _p1: u32, _p2: u32 };
+            @group(0) @binding(0) var<storage, read_write> args: array<u32>;
+            @group(0) @binding(1) var<uniform> push: Push;
+            @compute @workgroup_size(1)
+            fn cs_main() {
+                args[0] = 2u; args[1] = 1u; args[2] = 1u; args[3] = 0u;
+                args[4] = push.vertices; args[5] = 1u; args[6] = 0u; args[7] = 0u;
+            }
+        "#;
+        let args_pipeline = device.create_compute_pipeline(args_wgsl, "cs_main", "test indirect args");
+        let fill_wgsl = r#"
+            @group(0) @binding(0) var<storage, read_write> out: array<u32>;
+            @compute @workgroup_size(64)
+            fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+                out[gid.x] = gid.x + 1u;
+            }
+        "#;
+        let fill = device.create_compute_pipeline(fill_wgsl, "cs_main", "test indirect fill");
+        let write_args = |enc: &mut GpuEncoder, args: &GpuBuffer, vertices: u32| {
+            let push = [vertices, 0, 0, 0];
+            enc.dispatch_compute(
+                &args_pipeline,
+                &[
+                    GpuBinding::Buffer { binding: 0, buffer: args, offset: 0 },
+                    GpuBinding::Bytes { binding: 1, data: bytemuck::cast_slice(&push) },
+                ],
+                [1, 1, 1],
+                "test indirect args",
+            );
+        };
+        let read = |buffer: &GpuBuffer, words: usize| -> Vec<u32> {
+            let ptr = buffer.mapped_ptr().expect("shared buffer must be CPU-mapped");
+            unsafe { std::slice::from_raw_parts(ptr as *const u32, words) }.to_vec()
+        };
+
+        let direct = device.create_buffer_shared(512 * 4);
+        let indirect = device.create_buffer_shared(512 * 4);
+        let args = device.create_buffer_shared(8 * 4);
+        let mut enc = device.create_encoder("test indirect dispatch");
+        enc.dispatch_compute(
+            &fill,
+            &[GpuBinding::Buffer { binding: 0, buffer: &direct, offset: 0 }],
+            [2, 1, 1],
+            "test direct fill",
+        );
+        write_args(&mut enc, &args, 3);
+        enc.dispatch_compute_indirect(
+            &fill,
+            &[GpuBinding::Buffer { binding: 0, buffer: &indirect, offset: 0 }],
+            &args,
+            0,
+            "test indirect fill",
+        );
+        enc.commit_and_wait_completed();
+        let (direct, indirect) = (read(&direct, 512), read(&indirect, 512));
+        assert_eq!(direct, indirect, "an indirect grid of [2, 1, 1] matches the direct one");
+        assert_eq!(indirect[127], 128);
+        assert_eq!(indirect[128], 0, "threadgroups past the GPU-written grid never run");
+
+        let wgsl = r#"
+            @vertex
+            fn vs_main(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+                // Two triangles: the first covers the left half, the second the right.
+                var corners = array<vec2<f32>, 6>(
+                    vec2(-1.0, -1.0), vec2(0.0, -1.0), vec2(-1.0, 1.0),
+                    vec2(0.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
+                );
+                return vec4<f32>(corners[vid], 0.0, 1.0);
+            }
+            @fragment
+            fn fs_main() -> @location(0) vec4<f32> {
+                return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+            }
+        "#;
+        let pipeline = device.create_render_pipeline_depth_msaa(
+            wgsl,
+            "vs_main",
+            "fs_main",
+            crate::GpuTextureFormat::Rgba8Unorm,
+            crate::GpuTextureFormat::Depth32Float,
+            None,
+            1,
+            false,
+            "test indirect draw pipeline",
+        );
+        let depth_stencil = device.create_depth_stencil_state(&crate::GpuDepthStencilDesc {
+            compare: crate::GpuCompareFunction::LessEqual,
+            write_enabled: true,
+        });
+        let texture = |format, label| {
+            device.create_texture(&crate::GpuTextureDesc {
+                width: 64,
+                height: 64,
+                depth: 1,
+                format,
+                dimension: crate::GpuTextureDimension::D2,
+                usage: crate::GpuTextureUsage::RENDER_TARGET | crate::GpuTextureUsage::SHADER_READ,
+                label,
+                mip_levels: 1,
+            })
+        };
+        let red_pixels = |indirect_vertices: Option<u32>| -> usize {
+            let target = texture(crate::GpuTextureFormat::Rgba8Unorm, "test indirect color");
+            let depth = texture(crate::GpuTextureFormat::Depth32Float, "test indirect depth");
+            let args = device.create_buffer_shared(8 * 4);
+            let mut enc = device.create_encoder("test indirect draw");
+            let mut draw = GpuEncoder::depth_msaa_draw(&pipeline, &[], 3, 1);
+            if let Some(vertices) = indirect_vertices {
+                write_args(&mut enc, &args, vertices);
+                draw = draw.indirect(&args, 16);
+            }
+            enc.draw_instanced_depth_batch(
+                &target,
+                &depth,
+                &depth_stencil,
+                std::slice::from_ref(&draw),
+                crate::GpuLoadAction::Clear,
+                crate::GpuLoadAction::Clear,
+                "test indirect draw",
+            );
+            let readback = device.create_buffer_shared(64 * 64 * 4);
+            enc.copy_texture_to_buffer(&target, &readback, 64, 64, 64 * 4);
+            enc.commit_and_wait_completed();
+            let ptr = readback.mapped_ptr().expect("shared readback buffer must be CPU-mapped");
+            let px: &[u8] = unsafe { std::slice::from_raw_parts(ptr, 64 * 64 * 4) };
+            px.chunks_exact(4).filter(|c| c[0] > 0).count()
+        };
+        let direct = red_pixels(None);
+        assert!(direct > 0, "the direct three-vertex draw covers the left half");
+        assert_eq!(red_pixels(Some(3)), direct, "GPU-written count 3 draws what the direct call draws");
+        assert_eq!(red_pixels(Some(6)), 2 * direct, "GPU-written count 6 draws both triangles");
+        assert_eq!(red_pixels(Some(0)), 0, "GPU-written count 0 draws nothing");
     }
 }
 

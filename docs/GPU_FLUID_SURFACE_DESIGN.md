@@ -718,6 +718,49 @@ Open, for the lead:
 - **Gesture:** raise Surface Detail from 0 to 2 mid-splash; the surface sharpens the next frame and the simulation does not restart.
 - **Forbidden:** vertex welding or mesh smoothing passes (deferred); indirect draw; tuning thresholds to pass the budget without reporting it.
 
+### P6b — Live triangles only (BUG-j9cy (GPU liquid mesh live-only draw and emit))
+
+Lead call, 2026-09-30: emit and draw only live triangles, so nothing downstream touches
+the zeroed tail; preset defaults stay. Metal builds triangle acceleration structures
+from a CPU triangle count (no indirect variant), so ray tracing uses a CPU bound.
+
+- **Shape.** The emit dispatches indirectly over `max(live, last frame's live)`
+  vertices, so its cost follows live triangles and slots past live stay zero for any
+  consumer. The mesh atom publishes the array's live extent: a GPU word holding the live
+  vertex count, and a CPU bound (the one-frame-late `total` × 3 × 1.5, rounded up to
+  3·16,384, clamped to capacity). Raster passes draw indirectly with that count; ray
+  tracing builds over the bound, whose margin triangles are zero. Measured worst growth
+  on the dam break: 1.19× in one tick, 1.42× over two.
+- **Seam, old → new.**
+  - `manifold-gpu`: `DepthMsaaDraw { vertex_count: u32, instance_count: u32, .. }` →
+    `DepthMsaaDraw { count: DrawCount<'a>, .. }` with `DrawCount::Direct { vertices,
+    instances }` or `DrawCount::Indirect { args, offset }` (Metal's four-word draw
+    arguments). The constructors keep their signatures and build `Direct`;
+    `DepthMsaaDraw::indirect(self, args, offset)` switches one draw. New
+    `GpuEncoder::dispatch_compute_indirect(pipeline, bindings, args, offset, label)`
+    beside `dispatch_compute`, sharing its binding code.
+  - Renderer: `LiveExtent { count: GpuBuffer, bound: u32 }`, published per output slot
+    with `NodeOutputs::set_live_extent(port, extent)` and read with
+    `NodeInputs::live_extent_of(slot)`, stored by the executor like mesh revisions.
+    `node.scene_object` forwards the vertices slot unchanged, so wiring is unchanged.
+  - `render_scene.rs`: `mesh_vertex_count(buf)` is deleted; every site asks the
+    object's `MeshExtent` instead.
+- **Call-site inventory** (`rg -n 'mesh_vertex_count\(|vertices\.size|size_of::<MeshVertex>' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
+  and `rg -n 'depth_msaa_draw(_fill_mode|_points)?\(' crates -g '*.rs'`; re-run at
+  execution, stop if the counts differ). Mechanical, unchanged: the 13 draw constructor
+  calls (render_scene 5, volume_optics 1, tests 6, manifold-gpu 1). Needs the new
+  pattern: render_scene 1738 (the helper, deleted), 2032 (weights length, bound), 2797
+  (pass hash, bound), 2864 and 2940 (depth-only passes, indirect), 4266 and 4635 (colour
+  pass, indirect), 4907 (depth pass, indirect), 5506 (ray-tracing triangle count,
+  bound); volume_optics 155 (indirect).
+- **Gate.** GPU proofs: an indirect draw equals the direct draw of the same count;
+  an indirect dispatch equals the direct one; render_scene draws nothing past live
+  (a non-zero tail stays invisible); the emit leaves slots past the previous frame's
+  extent untouched. Then `fluid_surface_perf` at res 64 ×2 and the 1080p frame, with the
+  per-stage split. If blobs plus volume alone exceed 3 ms, stop and report: that is a
+  kernel design call, not tuning.
+- **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
+
 ### P7 — Add Fluid authors the GPU surface
 
 - **Entry state:** P6 merged. Anchors: `rg -n 'pub struct AddSceneFluidCommand|scene_build_wire\(fluid_id, "vertices"' crates/manifold-editing/src/commands/graph/scene/fluid.rs`.
