@@ -25,6 +25,14 @@ source file also retains its original license header.
 
 Local changes:
 
+- `surfaceframe.h` and the capture method in `fluidsimulation.{h,cpp}` add
+  explicit, independently owned reconstruction inputs for one completed frame.
+  Capture reuses the production obstacle-offset/meshing-volume preparation;
+  reconstruction reuses `ParticleMesher` and `TriangleMesh` smoothing without
+  retaining a solver. Capture is opt-in and adds no copies to normal playback.
+  Boundary triangle removal and contact-normal inversion (not exposed by the
+  MANIFOLD bridge) are explicitly rejected. This is an in-memory boundary, not
+  a persistent particle-cache format or a solver restart checkpoint.
 - Native worlds accept a 64-bit seed before initialization. Marker sampling,
   particle IDs, source-ID ordering and diffuse emission use independent owned
   RNG streams; frame stepping no longer reseeds process-global `rand` state.

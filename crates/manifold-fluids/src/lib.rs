@@ -17,6 +17,8 @@ mod mesh;
 pub use mesh::{InflowOptions, MeshHandle, MeshRole, validate_mesh};
 mod frame;
 pub use frame::FluidFrame;
+mod surface;
+pub use surface::SurfaceFrame;
 mod coupling;
 pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidReaction};
 
