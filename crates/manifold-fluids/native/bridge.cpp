@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "fluidsimulation.h"
+#include "surfaceframe.h"
 #include "rigidfluidcoupling.h"
 #include "aabb.h"
 #include "forcefield.h"
@@ -1300,6 +1301,28 @@ extern "C" int manifold_fluids_world_set_surface_options(void *world,
     });
 }
 
+extern "C" int manifold_fluids_world_set_surface_reconstruction(void *world, int enabled) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        if (enabled != 0 && enabled != 1) {
+            throw std::invalid_argument("surface reconstruction enabled must be 0 or 1");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (native->simulation->isUpdateInProgress() || native->simulation->isUpdateFailed() ||
+            native->simulation->getCurrentFrame() != 0) {
+            throw std::runtime_error(
+                "surface reconstruction can only be configured before the first step");
+        }
+        if (enabled != 0) {
+            native->simulation->enableSurfaceReconstruction();
+        } else {
+            native->simulation->disableSurfaceReconstruction();
+        }
+    });
+}
+
 extern "C" int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
                                                            double surface_tension) {
     return guarded([&] {
@@ -1546,7 +1569,98 @@ void require_accepted_frame(NativeWorld &world) {
         throw std::runtime_error("fluid frame is incomplete or failed; no snapshot is available");
     }
 }
+
+struct NativeSurfaceFrame {
+    FluidSurfaceFrame inputs;
+    std::vector<char> mesh_data;
+};
 } // namespace
+
+extern "C" int manifold_fluids_world_capture_surface_frame(void *world, void **frame_out) {
+    return guarded([&] {
+        if (world == nullptr || frame_out == nullptr) {
+            throw std::invalid_argument("surface frame pointers must be non-null");
+        }
+        *frame_out = nullptr;
+        auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
+        auto frame = std::make_unique<NativeSurfaceFrame>();
+        native->simulation->captureSurfaceFrame(frame->inputs);
+        *frame_out = frame.release();
+    });
+}
+
+extern "C" void manifold_fluids_surface_frame_destroy(void *frame) {
+    // Retain the existing process-wide serialization for every native access.
+    guarded([&] { delete static_cast<NativeSurfaceFrame *>(frame); });
+}
+
+extern "C" int manifold_fluids_surface_frame_mesh(void *frame, uint32_t subdivisions,
+                                                   double particle_scale, double smoothing,
+                                                   uint32_t iterations, double isolated_scale,
+                                                   const uint8_t **data_out,
+                                                   size_t *len_out) {
+    return guarded([&] {
+        if (frame == nullptr || data_out == nullptr || len_out == nullptr) {
+            throw std::invalid_argument("surface frame mesh pointers must be non-null");
+        }
+        if (subdivisions > 2) {
+            throw std::invalid_argument("surface subdivisions must be in 0..=2");
+        }
+        validate_surface_options(particle_scale, smoothing, iterations);
+        if (!std::isfinite(isolated_scale) || isolated_scale < 0.25 || isolated_scale > 1.0) {
+            throw std::invalid_argument("isolated particle scale must be finite and in 0.25..=1");
+        }
+        auto *native = static_cast<NativeSurfaceFrame *>(frame);
+        // A frame captured at low mesh detail must not bypass the grid-index
+        // admission used when creating a higher-detail simulation world.
+        uint64_t nodes = 1;
+        const uint64_t index_limit = std::numeric_limits<int32_t>::max();
+        for (int cells : {native->inputs.isize, native->inputs.jsize, native->inputs.ksize}) {
+            const uint64_t axis_nodes = static_cast<uint64_t>(cells) * (subdivisions + 1) + 1;
+            if (axis_nodes > index_limit / nodes) {
+                throw std::invalid_argument("expanded surface grid exceeds native signed 32-bit indexing");
+            }
+            nodes *= axis_nodes;
+        }
+        auto mesh = native->inputs.mesh(static_cast<int>(subdivisions) + 1,
+                                       particle_scale, smoothing, static_cast<int>(iterations), isolated_scale);
+        mesh.getMeshFileDataBOBJ(native->mesh_data);
+        *data_out = reinterpret_cast<const uint8_t *>(native->mesh_data.data());
+        *len_out = native->mesh_data.size();
+    });
+}
+
+// Bounded synthetic reconstruction fixture: a dense patch and two isolated
+// particles, across block/chunk boundaries. Only Rust tests call this entry.
+extern "C" int manifold_fluids_surface_frame_fixture(double scale, uint32_t chunks, void **frame_out) {
+    return guarded([&] {
+        if (frame_out == nullptr || !std::isfinite(scale) || scale < 0.5 || scale > 2.0 ||
+            chunks < 1 || chunks > 3) {
+            throw std::invalid_argument("invalid bounded surface fixture options");
+        }
+        *frame_out = nullptr;
+        auto native = std::make_unique<NativeSurfaceFrame>();
+        auto &frame = native->inputs;
+        frame.isize = frame.jsize = frame.ksize = 16;
+        frame.dx = 0.2 * scale;
+        frame.particleRadius = 0.15 * scale;
+        frame.chunks = static_cast<int>(chunks);
+        frame.solid.constructMinimalLevelSet(16, 16, 16, frame.dx);
+        for (int z = 0; z < 4; ++z) {
+            for (int y = 0; y < 4; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    frame.particles.emplace_back((0.7 + x * 0.12) * scale,
+                                                 (0.7 + y * 0.12) * scale,
+                                                 (0.7 + z * 0.12) * scale);
+                }
+            }
+        }
+        frame.particles.emplace_back(2.03 * scale, 1.97 * scale, 2.03 * scale);
+        frame.particles.emplace_back(2.73 * scale, 1.97 * scale, 2.03 * scale);
+        *frame_out = native.release();
+    });
+}
 
 // Bounded test diagnostic for an initially flat, stationary tank. Read the
 // pressure level set rather than infer displacement from the authored box or
@@ -1634,6 +1748,11 @@ extern "C" int manifold_fluids_world_surface(void *world, const uint8_t **data_o
         }
         auto *native = static_cast<NativeWorld *>(world);
         require_accepted_frame(*native);
+        if (!native->simulation->isSurfaceReconstructionEnabled()) {
+            throw std::runtime_error(
+                "surface reconstruction is disabled; enable it before the first step or use "
+                "capture_surface_frame and reconstruct");
+        }
         std::vector<char> *data = native->simulation->getSurfaceData();
         if (data == nullptr || data->empty()) {
             native->empty_surface.clear();

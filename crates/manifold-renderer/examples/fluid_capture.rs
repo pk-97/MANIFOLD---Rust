@@ -52,8 +52,8 @@ const MAX_HEIGHT: u32 = 2160;
 const MAX_FRAMES: u32 = 900;
 const MAX_FPS: u32 = 60;
 const MAX_SECONDS: f64 = 3600.0;
-const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count";
-const METRIC_NAMES: [&str; 9] = [
+const CSV_HEADER: &str = "frame,authored_time,simulation_time,lag_seconds,render_cpu_ms,submit_wait_ms,gpu_ms,frame_ms,simulation_ms,meshing_ms,particle_count,vertex_count,capture_ms,presentation_interval_ms,foam_count,bubble_count,spray_count,upload_ms";
+const METRIC_NAMES: [&str; 10] = [
     "simulation_time",
     "lag_seconds",
     "simulation_ms",
@@ -63,6 +63,7 @@ const METRIC_NAMES: [&str; 9] = [
     "foam_count",
     "bubble_count",
     "spray_count",
+    "upload_ms",
 ];
 
 type CaptureResult<T> = Result<T, Box<dyn Error>>;
@@ -103,6 +104,7 @@ struct FluidMetrics {
     foam_count: f64,
     bubble_count: f64,
     spray_count: f64,
+    upload_ms: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -480,6 +482,7 @@ fn read_fluid_metrics(runtime: &PresetRuntime) -> CaptureResult<FluidMetrics> {
         foam_count: values[6],
         bubble_count: values[7],
         spray_count: values[8],
+        upload_ms: values[9],
     })
 }
 
@@ -566,6 +569,7 @@ fn render_output_frame(
     let mut final_fluid = None;
     let mut simulation_ms = 0.0;
     let mut meshing_ms = 0.0;
+    let mut upload_ms = 0.0;
     let temporal_samples = temporal_samples(authored_time);
     for (sample, &temporal_sample) in temporal_samples.iter().enumerate().take(sample_count) {
         let (sample_time, sample_dt) = if options.cinematic {
@@ -590,11 +594,13 @@ fn render_output_frame(
         total_timings.add_assign(timings);
         simulation_ms += fluid.simulation_ms;
         meshing_ms += fluid.meshing_ms;
+        upload_ms += fluid.upload_ms;
         final_fluid = Some(fluid);
     }
     let mut fluid = final_fluid.expect("output frame renders at least one sample");
     fluid.simulation_ms = simulation_ms;
     fluid.meshing_ms = meshing_ms;
+    fluid.upload_ms = upload_ms;
     Ok((total_timings, fluid))
 }
 
@@ -646,7 +652,7 @@ impl CsvWriter {
     fn write_row(&mut self, row: &MetricRow) -> CaptureResult<()> {
         writeln!(
             self.writer,
-            "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.6},{:.6},{:.0},{:.0},{:.0}",
+            "{},{:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.3},{:.3},{:.6},{:.6},{:.0},{:.0},{:.0},{:.6}",
             row.frame,
             row.authored_time,
             row.fluid.simulation_time,
@@ -664,6 +670,7 @@ impl CsvWriter {
             row.fluid.foam_count,
             row.fluid.bubble_count,
             row.fluid.spray_count,
+            row.fluid.upload_ms,
         )?;
         self.writer.flush()?;
         Ok(())

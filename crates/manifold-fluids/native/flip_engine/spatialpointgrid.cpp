@@ -132,6 +132,36 @@ void SpatialPointGrid::queryPointReferencesInsideSphere(GridPointReference ref, 
     _queryPointReferencesInsideSphere(gp.position, r, exclusions, refs);
 }
 
+bool SpatialPointGrid::hasPointWithinSphere(GridPointReference ref, double radius) {
+    FLUIDSIM_ASSERT(ref.id >= 0 && ref.id < (int)_gridPoints.size());
+
+    vmath::vec3 p = getPointFromReference(ref);
+    GridIndex gmin, gmax;
+    Grid3d::getGridIndexBounds(p, radius, _dx, _isize, _jsize, _ksize, &gmin, &gmax);
+
+    double maxdistsq = radius * radius;
+    for (int k = gmin.k; k <= gmax.k; k++) {
+        for (int j = gmin.j; j <= gmax.j; j++) {
+            for (int i = gmin.i; i <= gmax.i; i++) {
+                if (_grid(i, j, k).count > 0) {
+                    CellNode node = _grid(i, j, k);
+                    for (int idx = node.start; idx < node.start + node.count; idx++) {
+                        GridPoint gp = _gridPoints[idx];
+                        if (gp.ref.id != ref.id) {
+                            vmath::vec3 v = gp.position - p;
+                            if (vmath::dot(v, v) <= maxdistsq) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 void SpatialPointGrid::queryPointsInsideAABB(AABB bbox, std::vector<vmath::vec3> &points) {
     GridIndex gmin, gmax;
     Grid3d::getGridIndexBounds(bbox, _dx, _isize, _jsize, _ksize, &gmin, &gmax);

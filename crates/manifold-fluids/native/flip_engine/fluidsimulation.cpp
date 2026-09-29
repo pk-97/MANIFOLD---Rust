@@ -23,6 +23,7 @@ SOFTWARE.
 */
 
 #include "fluidsimulation.h"
+#include "surfaceframe.h"
 #include "rigidfluidcoupling.h"
 
 #include <cstring>
@@ -8423,7 +8424,10 @@ float FluidSimulation::_getMarkerParticleSpeedLimit(double dt) {
         maxspeed = std::min(extremeSpeedOutlierThreshold, maxspeed);
     }
 
-    return maxspeed;
+    // MANIFOLD: a relative outlier in a small population can still be slow.
+    // Never remove particles that fit within the configured frame's CFL and
+    // substep budget merely because they are the fastest remaining particles.
+    return std::max(maxspeed, _maxFrameTimeSteps * speedLimitStep);
 }
 
 void FluidSimulation::_removeMarkerParticles(double dt) {
@@ -9521,16 +9525,12 @@ void FluidSimulation::_computeDomainBoundarySDF(MeshLevelSet *sdf) {
     }
 }
 
-void FluidSimulation::_generateOutputSurface(TriangleMesh &surface, TriangleMesh &preview,
-                                               std::vector<vmath::vec3> *particles,
-                                               MeshLevelSet *solidSDF) {
-    
+void FluidSimulation::_prepareSurfaceMeshingInputs(std::vector<vmath::vec3> *particles,
+                                                  MeshLevelSet *solidSDF) {
     _applyMeshingVolumeToSDF(solidSDF);
     _filterParticlesOutsideMeshingVolume(particles);
 
     if (_markerParticles.empty()) {
-        surface = TriangleMesh();
-        preview = TriangleMesh();
         return;
     }
 
@@ -9559,6 +9559,17 @@ void FluidSimulation::_generateOutputSurface(TriangleMesh &surface, TriangleMesh
         }
         _computeDomainBoundarySDF(solidSDF);
     }
+}
+
+void FluidSimulation::_generateOutputSurface(TriangleMesh &surface, TriangleMesh &preview,
+                                               std::vector<vmath::vec3> *particles,
+                                               MeshLevelSet *solidSDF) {
+    _prepareSurfaceMeshingInputs(particles, solidSDF);
+    if (_markerParticles.empty()) {
+        surface = TriangleMesh();
+        preview = TriangleMesh();
+        return;
+    }
 
     ParticleMesherParameters params;
     params.isize = _isize;
@@ -9584,6 +9595,31 @@ void FluidSimulation::_generateOutputSurface(TriangleMesh &surface, TriangleMesh
     surface.removeMinimumTriangleCountPolyhedra(_minimumSurfacePolyhedronTriangleCount);
     _removeMeshNearDomain(surface);
     _removeMeshNearDomain(preview);
+}
+
+void FluidSimulation::captureSurfaceFrame(FluidSurfaceFrame &frame) {
+    if (isUpdateInProgress() || isUpdateFailed() || getCurrentFrame() == 0) {
+        throw std::runtime_error("surface frame requires a completed simulation frame");
+    }
+    // These upstream options are not exposed by MANIFOLD's bridge. Reject them
+    // explicitly until their postprocessing context is part of the snapshot.
+    if (_isRemoveSurfaceNearDomainEnabled || _isInvertedContactNormalsEnabled) {
+        throw std::runtime_error("surface frame does not support boundary removal or contact-normal inversion");
+    }
+    frame.isize = _isize;
+    frame.jsize = _jsize;
+    frame.ksize = _ksize;
+    frame.dx = _dx;
+    frame.chunks = _numSurfaceReconstructionPolygonizerSlices;
+    frame.minimumTriangles = _minimumSurfacePolyhedronTriangleCount;
+    frame.particleRadius = _markerParticleRadius;
+    frame.domainScale = _domainScale;
+    frame.domainOffset = _domainOffset;
+    frame.particles = getMarkerParticlePositions();
+    if (!frame.particles.empty()) {
+        frame.solid.constructMinimalSignedDistanceField(_solidSDF);
+        _prepareSurfaceMeshingInputs(&frame.particles, &frame.solid);
+    }
 }
 
 void FluidSimulation::_updateMeshingVolumeSDF() {
