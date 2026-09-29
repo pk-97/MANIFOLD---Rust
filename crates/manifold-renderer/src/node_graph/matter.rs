@@ -78,6 +78,58 @@ const _: () = {
 /// Accumulator words per grid node: momentum x, y, z, then mass.
 pub const ACCUM_WORDS_PER_NODE: u32 = 4;
 
+/// Words of the per-tick stats array `node.matter_stats` writes (D14).
+pub const STATS_WORDS: u32 = 16;
+
+/// One tick's statistics, decoded from the stats array (floats stored as
+/// bits): non-finite count, clamped nodes, live points, max speed, J range,
+/// volume Σ V0·J, max accumulator magnitude, mass, momentum, kinetic,
+/// potential and elastic energy, tick index.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MatterTickStats {
+    pub nonfinite: u32,
+    pub clamped: u32,
+    pub live: u32,
+    pub max_speed: f32,
+    pub min_j: f32,
+    pub max_j: f32,
+    pub volume: f32,
+    pub max_accum: u32,
+    pub mass: f32,
+    pub momentum: [f32; 3],
+    pub kinetic: f32,
+    pub potential: f32,
+    pub elastic: f32,
+    pub tick: u32,
+}
+
+impl MatterTickStats {
+    pub fn from_words(w: &[u32]) -> Self {
+        let f = |i: usize| f32::from_bits(w[i]);
+        Self {
+            nonfinite: w[0],
+            clamped: w[1],
+            live: w[2],
+            max_speed: f(3),
+            min_j: f(4),
+            max_j: f(5),
+            volume: f(6),
+            max_accum: w[7],
+            mass: f(8),
+            momentum: [f(9), f(10), f(11)],
+            kinetic: f(12),
+            potential: f(13),
+            elastic: f(14),
+            tick: w[15],
+        }
+    }
+
+    /// Kinetic + potential + elastic energy in joules.
+    pub fn energy(&self) -> f32 {
+        self.kinetic + self.potential + self.elastic
+    }
+}
+
 /// Signed fixed-point scale of the accumulators (D5; the prototype's measured
 /// choice, 0–0.0125% mass error where 2^12 gave 2.4–4.8%).
 pub const FIXED_POINT_SCALE: f32 = 1_048_576.0;

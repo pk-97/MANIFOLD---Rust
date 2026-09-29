@@ -7,8 +7,14 @@
 // Sums are signed fixed point: mass in m_unit = 1000·dx³/8 kg, momentum in
 // m_unit·dx/dt, scaled by Q = 2^20 and rounded per contribution. Integer adds
 // are order-independent, so the grid is deterministic. Accumulator words per
-// node: momentum x, y, z, mass. `accum` (the aliased input) is not read.
-// Element = MatterPoint.
+// node: momentum x, y, z, mass. `accum` (the aliased input) is not read. A
+// point whose position is not finite is skipped (it would index the lattice
+// with garbage); the stats report it. Element = MatterPoint.
+fn m2g_finite3(v: vec3<f32>) -> bool {
+    let e = vec3<u32>(bitcast<u32>(v.x), bitcast<u32>(v.y), bitcast<u32>(v.z)) & vec3<u32>(0x7f800000u);
+    return all(e != vec3<u32>(0x7f800000u));
+}
+
 fn body(
     idx: u32,
     count: u32,
@@ -26,7 +32,7 @@ fn body(
     density: f32,
     active_count: i32,
 ) {
-    if e_points.id == 0u {
+    if e_points.id == 0u || !m2g_finite3(e_points.position) {
         return;
     }
     let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);

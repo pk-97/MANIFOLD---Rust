@@ -6,7 +6,13 @@
 //   C_p  = (4/dx²)·Σ w·v_i ⊗ d_i,   x_p += dt·v_pic,   J ← J·(1 + dt·tr C)
 // Positions advect with v_pic (AFLIP, Fei et al. 2021, as Blatny & Gaume 2025
 // implement it). A point whose stencil leaves the lattice is removed (id 0).
-// Element = MatterPoint.
+// A point whose position is not finite is left as it is, for the stats to
+// report. Element = MatterPoint.
+fn g2m_finite3(v: vec3<f32>) -> bool {
+    let e = vec3<u32>(bitcast<u32>(v.x), bitcast<u32>(v.y), bitcast<u32>(v.z)) & vec3<u32>(0x7f800000u);
+    return all(e != vec3<u32>(0x7f800000u));
+}
+
 fn body(
     idx: u32,
     count: u32,
@@ -23,7 +29,7 @@ fn body(
     active_count: i32,
 ) -> Element {
     var p = e_points;
-    if p.id == 0u {
+    if p.id == 0u || !g2m_finite3(p.position) {
         return p;
     }
     let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);

@@ -12,6 +12,20 @@ pub const CUT_MAP_TYPE_IDS: &[&str] = &["node.cut_mesh_bands", "node.cut_mesh_ce
 
 pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
+        source: "matter_stats.rs",
+        rust_struct: "StatsParams",
+        shader: "shaders/matter_stats.wgsl",
+        shader_struct: "StatsParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "matter_frame.rs",
+        rust_struct: "FrameParams",
+        shader: "shaders/matter_frame.wgsl",
+        shader_struct: "FrameParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "volume_optics.rs",
         rust_struct: "Uniforms",
         shader: "shaders/volume_optics.wgsl",

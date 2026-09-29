@@ -167,11 +167,12 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
                 let vb = grid.momentum[idx].map(|mo| mo / m);
                 let mut v: [f64; 3] = std::array::from_fn(|d| vb[d] + p.dt * p.gravity[d]);
                 let coord = [i, jj, k];
+                // The face node (index `pad`) and the padding beyond it.
                 for d in 0..3 {
-                    if p.closed[2 * d] && coord[d] < pad && v[d] < 0.0 {
+                    if p.closed[2 * d] && coord[d] <= pad && v[d] < 0.0 {
                         v[d] = 0.0;
                     }
-                    if p.closed[2 * d + 1] && coord[d] >= n[d] - pad && v[d] > 0.0 {
+                    if p.closed[2 * d + 1] && coord[d] >= n[d] - pad - 1 && v[d] > 0.0 {
                         v[d] = 0.0;
                     }
                 }

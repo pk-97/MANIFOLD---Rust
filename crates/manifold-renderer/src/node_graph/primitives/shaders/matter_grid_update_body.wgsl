@@ -3,7 +3,8 @@
 //   v_before = momentum / mass                       (Liveliness reads it)
 //   v = v_before + dt · g
 // Closed faces (bits −X, +X, −Y, +Y, −Z, +Z) stop velocity into the wall on the
-// outer three nodes, frictionless (taichi_elements grid_bounding_box). Each
+// face node and the three padding nodes beyond it (the authored face sits on
+// node 3), frictionless (taichi_elements grid_bounding_box). Each
 // component is clamped to ±0.9·dx/dt; a clamped node sets velocity_before.w.
 // `accum` is gathered (4 words per node: momentum xyz, mass; fixed point in
 // m_unit = 1000·dx³/8 kg and m_unit·dx/dt at Q = 2^20). Element = MatterGridNode.
@@ -43,8 +44,8 @@ fn body(
     let faces = u32(closed_faces);
     let low_closed = vec3<bool>((faces & 1u) != 0u, (faces & 4u) != 0u, (faces & 16u) != 0u);
     let high_closed = vec3<bool>((faces & 2u) != 0u, (faces & 8u) != 0u, (faces & 32u) != 0u);
-    let stop_low = low_closed & (coord < vec3<u32>(3u)) & (v < vec3<f32>(0.0));
-    let stop_high = high_closed & (coord >= n - vec3<u32>(3u)) & (v > vec3<f32>(0.0));
+    let stop_low = low_closed & (coord < vec3<u32>(4u)) & (v < vec3<f32>(0.0));
+    let stop_high = high_closed & (coord >= n - vec3<u32>(4u)) & (v > vec3<f32>(0.0));
     v = select(v, vec3<f32>(0.0), stop_low | stop_high);
 
     let limit = 0.9 * vel_unit;
