@@ -163,9 +163,9 @@ fn dispatch_tail_census_is_stable() {
     // Blob V2 adds region_mask (manual) plus resize_limit and rgb_distance
     // (canonical texture atoms).
     // GPU liquid surface adds shape_particle_blobs, particle_volume,
-    // count_surface_triangles and volume_surface_mesh, buffer atoms (not
-    // texture-path).
-    assert_eq!(total, 191, "standalone atom census drifted");
+    // smooth_lattice, count_surface_triangles and volume_surface_mesh, buffer
+    // atoms (not texture-path).
+    assert_eq!(total, 192, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

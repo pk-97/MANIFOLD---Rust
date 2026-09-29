@@ -7,8 +7,8 @@
 //! warm-up and 120 measured frames with per-dispatch GPU timestamps.
 //! Gate: p95 of the group's summed GPU time ≤ 3.0 ms at resolution 64,
 //! scale 2 with the preset's look (M4 Max). Every other configuration is
-//! reported, not gated, including the kernel-reach candidates at res 64 scale 2
-//! (the group's `bin_cells` and `particle_scale`).
+//! reported, not gated, including level-set smoothing at 1 and 3 passes at
+//! res 64 scale 2 (the group's `smoothing_passes`; the preset uses 2).
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -27,10 +27,11 @@ use serde_json::Value;
 use crate::harness;
 
 const PRESET: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpu.json");
-const SURFACE_ATOMS: [&str; 6] = [
+const SURFACE_ATOMS: [&str; 7] = [
     "node.sort_particles_into_cells",
     "node.shape_particle_blobs",
     "node.particle_volume",
+    "node.smooth_lattice",
     "node.count_surface_triangles",
     "node.running_total",
     "node.volume_surface_mesh",
@@ -42,35 +43,36 @@ const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const BUDGET_MS: f64 = 3.0;
 
-/// One simulation run: a resolution, a kernel reach, and the Surface Details
-/// stepped live at tick 90. `look: None` keeps the preset's own look.
+/// One simulation run: a resolution, Liquid Surface group params that differ
+/// from the preset's, and the Surface Details stepped live at tick 90.
 struct Run {
     resolution: u32,
-    look: Option<(f64, f64)>,
+    group: &'static [(&'static str, f64)],
     details: &'static [u32],
 }
 
 const RUNS: [Run; 5] = [
-    Run { resolution: 32, look: None, details: &[0, 1, 2] },
-    Run { resolution: 48, look: None, details: &[0, 1, 2] },
-    Run { resolution: 64, look: None, details: &[0, 1, 2] },
-    Run { resolution: 64, look: Some((2.0, 3.0)), details: &[0] },
-    Run { resolution: 64, look: Some((2.0, 4.0)), details: &[0] },
+    Run { resolution: 32, group: &[], details: &[0, 1, 2] },
+    Run { resolution: 48, group: &[], details: &[0, 1, 2] },
+    Run { resolution: 64, group: &[], details: &[0, 1, 2] },
+    Run { resolution: 64, group: &[("smoothing_passes", 1.0)], details: &[0] },
+    Run { resolution: 64, group: &[("smoothing_passes", 3.0)], details: &[0] },
 ];
 
-/// The preset at `run`'s resolution and look. Card bindings overwrite node
-/// params at build, so each card value moves with the param it binds.
+/// The preset at `run`'s resolution and group params. Card bindings overwrite
+/// node params at build, so the resolution card moves with the node param.
 fn preset(run: &Run) -> Value {
     let mut json: Value = serde_json::from_str(PRESET).expect("GPU dam break preset parses");
-    let mut cards = vec![("resolution", f64::from(run.resolution))];
+    let cards = [("resolution", f64::from(run.resolution))];
     for node in json["nodes"].as_array_mut().expect("nodes") {
         if node["nodeId"] == "fluid_surface" {
             node["params"]["resolution"]["value"] = Value::from(run.resolution);
         }
-        if let (Some((bin_cells, particle_scale)), true) = (run.look, node["nodeId"] == "liquid_surface") {
-            node["params"]["bin_cells"]["value"] = Value::from(bin_cells);
-            node["params"]["particle_scale"]["value"] = Value::from(particle_scale);
-            cards.push(("surface_particle_scale", particle_scale));
+        if node["nodeId"] == "liquid_surface" {
+            for &(name, value) in run.group {
+                let param = &mut node["params"][name];
+                param["value"] = if param["type"] == "Int" { Value::from(value as i64) } else { Value::from(value) };
+            }
         }
     }
     for (list, key) in [("params", "id"), ("bindings", "id")] {
@@ -231,7 +233,7 @@ fn fluid_surface_perf() {
     let mut gated = None;
     for run in &RUNS {
         let resolution = run.resolution;
-        let look = run.look.map_or(String::new(), |(bins, scale)| format!(" bins {bins} particle scale {scale}"));
+        let look: String = run.group.iter().map(|(name, value)| format!(" {name} {value}")).collect();
         let json = preset(run);
         let mut runtime = PresetRuntime::from_json_str_with_device(
             &json.to_string(),
@@ -320,7 +322,7 @@ fn fluid_surface_perf() {
                 surface.iter().all(|ms| *ms > 0.0),
                 "res {resolution} scale {scale}: every measured frame ran the surface atoms"
             );
-            if resolution == 64 && scale == 2 && run.look.is_none() {
+            if resolution == 64 && scale == 2 && run.group.is_empty() {
                 assert!(
                     vertices <= capacity,
                     "res 64 scale 2 needs {vertices:.0} vertices; the preset's Mesh Capacity is {capacity:.0}, so the gate would time an empty mesh"

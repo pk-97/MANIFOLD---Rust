@@ -309,6 +309,7 @@ mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
 mod particle_volume;
+mod smooth_lattice;
 mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b built. The budget gate fails (5.6 ms p95 against 3 ms at res 64): blobs and volume alone take 4 ms, a kernel design call; the look (kernel reach) awaits Peter (section 9, P6 and P6b). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built. The budget gate fails (5.3 ms p95 against 3 ms at res 64): blobs and volume alone take 4 ms, a kernel design call; Peter judges the smoothing stills (section 9, P6b and P6c). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -775,6 +775,42 @@ phase** (below).
   pass: CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under 20 ms. At
   the defaults: max 6.75 ms, mean 1.04 ms.
 - **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
+
+### P6c — Level-set smoothing
+
+Lead ruling, 2026-09-30: kernel reach is not the lever (scale 3 or 4 with two-cell
+bins stays washboard and lumpy at 4× the blob and volume cost). The CPU mesher looked
+smooth because it ran smoothing iterations; the GPU chain gets a smoothing stage
+between the level set and marching cubes. Particle scale 2.2 and one-cell bins stay the
+defaults. **Built (2026-09-30).**
+
+- **Audit** (DECOMPOSING_GENERATORS.md section 2.5 (the primitive audit)): no existing
+  atom smooths an `Array(f32)` lattice. `node.blur_3d_separable` is `Texture3D`-only
+  (D8), `node.neighbor_smooth` works on instance arrays, the rest are 2D. New.
+- **Atom.** `node.smooth_lattice`: one axis of the binomial blur, `passes` rounds of
+  [1, 2, 1] / 4 applied as one (2·passes + 1)-tap gather with edge-clamped indices,
+  fusable per element (`BufferGather`). The Liquid Surface group chains axes x, y, z
+  between the volume and the count and mesh atoms; one `node.value` ("Smoothing
+  Passes") feeds all three and is the group param `smoothing_passes` (default 2).
+  Because the weights are a product of per-axis rows and the clamp is per axis, the
+  chain equals the full 3D binomial blur: `fluid_smooth_lattice_matches_binomial_reference_and_passes_through`
+  checks the chain against an f64 (2p + 1)³ reference for 0–3 passes. A single 3D
+  gather cost 2.0 ms at 2 passes; the chain costs 0.45 ms.
+- **Result**, res 64 ×2, tick 90, load 3–7 (stills `r64_d0_smooth{1,2,3}_t{30,90}.png`):
+
+| Passes | Live vertices t30 / t90 | Smoothing | Emit | Liquid Surface p95 | 1080p frame p95 |
+|---|---|---|---|---|---|
+| none (P6b) | 1.80 M / 2.34 M | — | 1.04 | 5.62 | 17.6 |
+| 1 | 0.48 M / 0.79 M | 0.43 | 0.34 | 5.39 | 13.9 |
+| 2 (default) | 0.40 M / 0.54 M | 0.45 | 0.24 | 5.29 | 13.2 |
+| 3 | 0.38 M / 0.48 M | 0.47 | 0.21 | 5.27 | 13.0 |
+
+  Smoothing pays for itself: fewer triangles make emit, draw and ray tracing cheaper.
+  Two passes turn the crinkled pool into broad smooth waves; a softened band of
+  regular ridges remains at the back of the pool, and faint vertical stripes along the
+  near wall's waterline. Peter judges the set. Nodes inside solids can pick up liquid
+  from their neighbours after smoothing, so the surface may sit fractionally inside a
+  wall; the wall hides it.
 
 ### P7 — Add Fluid authors the GPU surface
 
