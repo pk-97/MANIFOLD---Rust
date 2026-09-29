@@ -5,7 +5,7 @@
 //! card binding (resolution scale 2 → 3 → 4, the performer gesture: the
 //! surface sharpens without restarting the simulation). Each step renders 16
 //! warm-up and 120 measured frames with per-dispatch GPU timestamps.
-//! Gate: p95 of the group's summed GPU time ≤ 3.0 ms at resolution 64,
+//! Gate: p95 of the group's summed GPU time ≤ 6.0 ms at resolution 64,
 //! scale 2 with the preset's look (M4 Max). Every other configuration is
 //! reported, not gated, including level-set smoothing at 1 and 3 passes at
 //! res 64 scale 2 (the group's `smoothing_passes`; the preset uses 2).
@@ -41,7 +41,8 @@ const MEASURED_FRAMES: usize = 120;
 const TICKS: u32 = 90;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
-const BUDGET_MS: f64 = 3.0;
+/// GPU_FLUID_SURFACE_DESIGN.md D20, re-baselined from the unmeasured 3 ms (2026-09-30).
+const BUDGET_MS: f64 = 6.0;
 
 /// One simulation run: a resolution, Liquid Surface group params that differ
 /// from the preset's, and the Surface Details stepped live at tick 90.

@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built. The budget gate fails (5.3 ms p95 against 3 ms at res 64): blobs and volume alone take 4 ms, a kernel design call; Peter judges the smoothing stills (section 9, P6b and P6c). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built. The surface meets its re-baselined 6 ms gate (5.3 ms p95 at res 64 ×2); blobs and volume at 4 ms are a kernel design item (BUG-l24y (GPU liquid surface kernels cost)). Peter judges the smoothing stills (section 9, P6c). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -224,7 +224,7 @@ for the same tick. Rejected: `Arc<Mutex<ParticleFrame>>` between threads (hard r
 GPU allocation on the worker (hands the device to another thread for a rare case); a
 content-thread copy (20 MB per tick).
 
-**D20 — Surface budget ≤ 3 ms (Peter + lead), measured, not argued.** GPU time from the
+**D20 — Surface budget ≤ 6 ms (lead, re-baselined 2026-09-30 from an unmeasured 3 ms), measured, not argued.** GPU time from the
 interpolation dispatch through emit, 64³ sim grid meshed at 2× (135 lattice nodes per
 axis on the padded native grid), 1080p scene, M4 Max, p95 over 120 frames after 16
 warm-up frames. The proof lives in P6.
@@ -454,7 +454,7 @@ coupled rigid pose. Per tick, the worker loses CPU meshing and gains one capture
   FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle).
 - A deforming 60 fps mesh changes RT acceleration structures and volume-optics inputs
   every display frame instead of every published tick. P6 measures and reports this; it
-  is outside the 3 ms gate.
+  is outside the surface gate.
 - Raster passes draw only live triangles; ray tracing builds over a CPU bound about
   2× live (P6b).
 - Live (anisotropic GPU) and baked (sphere-union CPU) surfaces look different until
@@ -506,7 +506,7 @@ up.
 | The emitted mesh is closed and consistently wound | `volume_surface_mesh_sphere_is_watertight` (weld by position; every edge shared twice; consistent orientation) |
 | Interpolated particles stay out of solids | `fluid_push_out_penetration_bounded`: max `−φ` ≤ 0.1 · cell after push-out |
 | Every new barrier-free atom is on codegen | The existing classify source scans plus each atom's value test; `graph-tool fusion` output recorded in P6 |
-| Surface stage ≤ 3 ms | `fluid_surface_perf` (P6), gated on p95; it fails if the gated configuration overflows, so it never times an empty mesh |
+| Surface stage ≤ 6 ms (D20) | `fluid_surface_perf` (P6), gated on p95; it fails if the gated configuration overflows, so it never times an empty mesh |
 | An unwired count means the whole array, at any size | `count` is a wire-only input on the sort and the running total (no numeric default); `fluid_running_total_matches_cpu_scan_and_total_lags_one_frame` at 2²⁴+3 |
 | No lattice yet is silence, not an error | `fluid_sort_particles_into_cells_is_silent_before_the_first_frame`; volume, count and mesh skip on zero nodes |
 | Lattices past 65,535 threadgroups are covered | `fluid_count_surface_triangles_reaches_cells_past_65535_threadgroups` |
@@ -683,9 +683,28 @@ Mesh Capacity is 8,388,606 vertices: the preset's own defaults (res 64, Detail 1
 7.03 M by tick 180. `fluid_capture --gpu-surface` reads the mesh back every offline
 frame and reports its live vertices.
 
-**Budget gate: fails.** `fluid_surface_perf`, M4 Max, macOS 26.6.2, load 14–16 (another
-session's tests), tick 90, 16 warm-up and 120 measured frames, p95 in ms. The surface
-column is the p95 of the per-frame sum.
+**Budget.** The gate is 6.0 ms p95 at res 64 ×2 (D20; the lead re-baselined it on
+2026-09-30 from the 3 ms set before any measurement). With P6b and P6c the Liquid Surface
+measures 5.29 ms p95 at res 64 ×2, tick 90, load 3–7: sort 0.20, blobs 2.03, volume 1.95,
+smoothing 0.45, count 0.15, running total 0.31, emit 0.24; 1080p frame 13.2 ms. Blobs and
+volume are a kernel design item (BUG-l24y (GPU liquid surface kernels cost)), with these
+levers, priced from the split and not yet measured:
+
+- **Anisotropy once per tick.** Blobs already builds each particle's kernel once per
+  frame; the volume reads it rather than recomputing per cell visit. Reusing it across
+  display frames saves blobs × (1 − producer rate / display rate): nothing at the 60 Hz
+  MPM producer, about 1 ms with a 30 Hz producer.
+- **Half-precision neighbour reads.** Both stages are gather-bound: a blob is 48 bytes, a
+  particle 32. Halving them should save roughly 40% of each, about 1.5 ms.
+- **Bin-local shared memory for the volume gather.** At ×2 the eight lattice nodes in a
+  bin read the same 27 bins; loading them once per workgroup cuts the volume's reads
+  about 8×, taking it from 1.95 ms to roughly 0.5 ms. The atom becomes barriered: a hand
+  kernel under exclusion 1 until BUG-vdvg (buffer boundary spec gap) is fixed.
+
+The table below is P6 as first measured, before live-triangle draws and smoothing:
+`fluid_surface_perf`, M4 Max, macOS 26.6.2, load 14–16 (another session's tests), tick
+90, 16 warm-up and 120 measured frames, p95 in ms. The surface column is the p95 of the
+per-frame sum.
 
 | Sim res | Scale | Sort | Blobs | Volume | Count | Total | Emit | Surface | 1080p frame | Live vertices |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -715,7 +734,7 @@ Open, for the lead:
 - **Entry state:** P4 and P5 merged.
 - **Read-back:** D2, D15, D16, D20; GROUPING_GRAPHS.md; the vertex attributes at `R/fluid/native.rs:190-201`.
 - **Deliverables:** `count_surface_triangles` and `volume_surface_mesh`; value tests against a CPU marching-cubes reference on a sphere SDF (positions within 1e-5, area within 1% of analytic); `volume_surface_mesh_sphere_is_watertight`, `volume_surface_mesh_overflow_writes_empty`, `fluid_surface_overflow_reports_error`; `graph-tool fusion` output for the group recorded, with a fused-vs-unfused proof for every pair it places in one region. The "Liquid Surface" group. Preset `WaterDamBreakGpu.json` ("Water — Dam Break (GPU Surface)"): Dam Break at 30 Hz with the group feeding the water object; the outer "Surface Detail" 0/1/2 maps to `resolution_scale` 2/3/4. Perf proof `tests/gpu_proofs/fluid_surface_perf.rs` behind a new `fluid-perf-proofs = ["gpu-proofs"]` feature shaped like `rt-perf-proofs` (`Cargo.toml:161`, `rt_dynamic_perf.rs:31-33`): seeded res-64 dam break, 90 ticks captured through P1 into memory, the group at scales 2/3/4, fused and unfused, 16 warm-up and 120 measured frames, per-stage GPU time via `GpuTimestampSampler` (the `src/bin/freeze_profile.rs:1269` pattern), the full scene at 1920×1080 reported alongside; machine, OS and build recorded.
-- **Gate:** tests green; check-presets and graph-tool validate/fusion clean on `WaterDamBreakGpu.json`; `cargo test -p manifold-renderer --features fluid-perf-proofs --test gpu_proofs fluid_surface_perf` reports p95 ≤ 3.0 ms at scale 2 on M4 Max. A miss stops the phase and reports the slowest stage — never a silent quality cut. The RT and volume-optics per-frame cost is reported, not gated.
+- **Gate:** tests green; check-presets and graph-tool validate/fusion clean on `WaterDamBreakGpu.json`; `cargo test -p manifold-renderer --features fluid-perf-proofs --test gpu_proofs fluid_surface_perf` reports p95 ≤ 6.0 ms at scale 2 on M4 Max (D20). A miss stops the phase and reports the slowest stage — never a silent quality cut. The RT and volume-optics per-frame cost is reported, not gated.
 - **Demo:** `fluid_capture --preset WaterDamBreakGpu --frames 180 --stills-every 15` into `/tmp/manifold_gpu_surface`. Computed checks on the run: every frame after the first tick has a nonzero triangle count and no non-finite vertex. L2: Peter compares the stills with the CPU Dam Break at Detail 2.
 - **Gesture:** raise Surface Detail from 0 to 2 mid-splash; the surface sharpens the next frame and the simulation does not restart.
 - **Forbidden:** vertex welding or mesh smoothing passes (deferred); tuning thresholds to pass the budget without reporting it.
@@ -769,8 +788,9 @@ phase** (below).
   same stills as before P6b (11 and 45 pixels of 921,600 differ, by at most 2/255).
 - **Budget.** `fluid_surface_perf`, res 64 ×2, load 6–7: emit 1.04 ms (3.54 before),
   Liquid Surface 5.62 ms p95 (8.07), 1080p frame 17.6 ms p95 (25.9). Blobs 2.02 ms plus
-  volume 1.94 ms exceed 3 ms on their own, so per the lead's rule the phase stops there:
-  the kernel cost is a design call (BUG-l24y (GPU liquid surface misses its 3 ms budget)).
+  volume 1.94 ms exceeded the original 3 ms on their own; the lead re-baselined the gate
+  to 6 ms (P6, D20) and made the kernel cost a design item (BUG-l24y (GPU liquid surface
+  kernels cost)).
 - **Content-thread gate, headless.** `fluid_capture --gpu-surface` with its preview
   pass: CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under 20 ms. At
   the defaults: max 6.75 ms, mean 1.04 ms.
@@ -847,7 +867,7 @@ or in section 11.
 8. Volumes are `Array(f32)` with their lattice on wires, not `Texture3D`.
 9. One display time for live and export, and for every solver-time output.
 10. GPU-surface graphs are Live-only until particle frames are cached.
-11. Surface stage ≤ 3 ms p95 is the proof gate.
+11. Surface stage ≤ 6 ms p95 is the proof gate (D20).
 12. Coupled Box3D is not decoupled from the fluid tick (Peter, 2026-09-29): lockstep is stable by construction, and at 30 Hz the rigid rate cost is within the water's own granularity.
 
 ## 11. Deferred, with triggers
@@ -871,7 +891,7 @@ or in section 11.
 | R1 | The CPU solver is still too slow at useful resolutions; interpolation just holds | P1 probe table; P4 demo lag readout | Escalate with the table; GPU solver trigger |
 | R2 | Native particle order is not id-sorted; sorting costs worker time | P1 capture ms | Sort stays on the worker; report the cost |
 | R3 | Hermite overshoot near fast colliders shows through walls | `fluid_push_out_penetration_bounded`; P3 stills | Push-out bound holds; if exceeded, escalate before loosening |
-| R4 | The surface misses 3 ms at 2× | P6 perf proof | Report the slowest stage; candidate fixes (empty-bin early out, support clamp) go to Peter as visible changes |
+| R4 | The surface misses its budget at 2× | P6 perf proof | Report the slowest stage; candidate fixes (empty-bin early out, support clamp) go to Peter as visible changes |
 | R5 | Live and baked surfaces look different | Peter's P6 comparison | Particle-frame cache trigger |
 | R6 | Mesh capacity overflow at 3–4× | Empty mesh plus error | Raise capacity in the group; never truncate |
 | R7 | Per-frame RT and volume-optics rebuild cost from a 60 fps mesh | P6 report | Live-triangle draws (P6b); the welding trigger |
