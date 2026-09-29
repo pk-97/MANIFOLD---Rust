@@ -16,7 +16,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
-const ENTRIES: [&str; 5] = ["clear_counts", "count_particles", "write_ranges", "clear_tail", "scatter"];
+const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "clear_tail", "scatter", "stabilise"];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -28,7 +28,7 @@ struct SortParams {
     bin_total: u32,
     sorted_capacity: u32,
     write_order: u32,
-    _pad: u32,
+    write_sorted: u32,
 }
 
 macro_rules! float_param {
@@ -48,7 +48,7 @@ pub(crate) use float_param;
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
+    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -93,6 +93,7 @@ crate::primitive! {
         pipelines: Vec<GpuComputePipeline> = Vec::new(),
         scan: PrefixScan = PrefixScan::default(),
         rank: Option<GpuBuffer> = None,
+        slot_input: Option<GpuBuffer> = None,
     },
 }
 
@@ -151,17 +152,18 @@ impl Primitive for SortParticlesIntoCells {
             ctx.error("Sort Particles Into Cells: box and cell size must be finite and positive");
             return;
         }
-        let (Some(particles), Some(sorted), Some(ranges)) = (
-            ctx.inputs.array("particles"),
-            ctx.outputs.array("sorted"),
-            ctx.outputs.array("cell_ranges"),
-        ) else {
+        let (Some(particles), Some(ranges)) = (ctx.inputs.array("particles"), ctx.outputs.array("cell_ranges")) else {
             return;
         };
+        // Either per-slot output may be unwired; the slots are those every wired one holds.
+        let sorted = ctx.outputs.array("sorted");
         let order = ctx.outputs.array("order");
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
         let capacity = (particles.size / particle_size) as u32;
-        let sorted_capacity = (sorted.size / particle_size) as u32;
+        let sorted_capacity = [sorted.map(|b| b.size / particle_size), order.map(|b| b.size / 4)]
+            .into_iter()
+            .flatten()
+            .fold(u64::from(capacity), u64::min) as u32;
         let count = requested.map_or(capacity, |count| (count.max(0.0) as u32).min(capacity)).min(sorted_capacity);
         let bins = bin_counts(size, cell_size);
         let bin_total = bins.iter().map(|&n| u64::from(n)).product::<u64>();
@@ -185,7 +187,11 @@ impl Primitive for SortParticlesIntoCells {
         if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
             self.rank = Some(gpu.device.create_buffer(rank_bytes));
         }
+        if self.slot_input.as_ref().is_none_or(|slots| slots.size < rank_bytes) {
+            self.slot_input = Some(gpu.device.create_buffer(rank_bytes));
+        }
         let rank = self.rank.as_ref().expect("rank scratch allocated");
+        let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
         let uniforms = SortParams {
             bin_min: std::array::from_fn(|axis| center[axis] - 0.5 * size[axis]),
             inv_cell: 1.0 / cell_size,
@@ -194,22 +200,24 @@ impl Primitive for SortParticlesIntoCells {
             bin_total,
             sorted_capacity,
             write_order: u32::from(order.is_some()),
-            _pad: 0,
+            write_sorted: u32::from(sorted.is_some()),
         };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
             GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: sorted, offset: 0 },
+            // Unwired outputs are never written (their write flag is 0); rank keeps
+            // the layout bound.
+            GpuBinding::Buffer { binding: 2, buffer: sorted.unwrap_or(rank), offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
             GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
             GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
-            // Unwired, never written (`write_order` is 0); rank keeps the layout bound.
             GpuBinding::Buffer { binding: 6, buffer: order.unwrap_or(rank), offset: 0 },
+            GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
         ];
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
         let encoder = &mut *gpu.native_enc;
-        let [clear, count_pass, write_ranges, clear_tail, scatter] = &self.pipelines[..] else {
-            unreachable!("five sort pipelines");
+        let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
+            unreachable!("six sort pipelines");
         };
         encoder.dispatch_compute(clear, &bindings, groups(bin_total), "node.sort_particles_into_cells.clear");
         encoder.compute_memory_barrier_buffers();
@@ -220,5 +228,7 @@ impl Primitive for SortParticlesIntoCells {
         encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), "node.sort_particles_into_cells.tail");
         encoder.compute_memory_barrier_buffers();
         encoder.dispatch_compute(scatter, &bindings, groups(count), "node.sort_particles_into_cells.scatter");
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(stabilise, &bindings, groups(bin_total), "node.sort_particles_into_cells.stabilise");
     }
 }

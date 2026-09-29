@@ -204,8 +204,8 @@ reports the error. Rejected: one thread per active cell writing up to 15 vertice
 scatter write the codegen cannot express and the per-element scope test rejects.
 
 **D17 — Binning is one atom.** `node.sort_particles_into_cells` is atomic count → scan →
-atomic scatter, declared `BarrieredReduction` (precedent `spawn_from_mesh.rs:119`). None
-of its three dispatches is barrier-free, none has another consumer, and the scan kernel
+atomic scatter → per-bin stabilise (D21), declared `BarrieredReduction` (precedent
+`spawn_from_mesh.rs:119`). None of its dispatches is barrier-free, none has another consumer, and the scan kernel
 is one Rust module shared with `node.running_total`. Rejected: three graph nodes for one
 counting sort — the graph gains nothing from seeing them.
 
@@ -228,6 +228,15 @@ content-thread copy (20 MB per tick).
 interpolation dispatch through emit, 64³ sim grid meshed at 2× (135 lattice nodes per
 axis on the padded native grid), 1080p scene, M4 Max, p95 over 120 frames after 16
 warm-up frames. The proof lives in P6.
+
+**D21 — The surface chain is deterministic (lead, 2026-09-30).** Bakes and
+bit-reproducible export need the same input to give the same bytes on every run. The
+sort's atomic ranks vary run to run, so an always-on pass sorts each bin's slots by
+input index before `sorted` and `order` are written. Every float sum downstream then
+adds in a fixed order. Cost: the sort goes from 0.20 to 0.51 ms p95 at res 64 ×2, and
+the surface stays inside D20. Proof: `fluid_sort_particles_into_cells_is_deterministic`
+(three runs byte-identical, bins in input order, crowded and sparse bins). Rejected: an
+opt-in switch, because determinism is an invariant, not a mode.
 
 ## 3. The particle-frame contract
 
@@ -781,8 +790,11 @@ phase** (below).
   to 6 ms (P6, D20) and made the kernel cost a design item (BUG-l24y (GPU liquid surface
   kernels cost)).
 - **Content-thread gate, headless.** `fluid_capture --gpu-surface` with its preview
-  pass: CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under 20 ms. At
-  the defaults: max 6.75 ms, mean 1.04 ms.
+  pass: steady-state CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under
+  20 ms, checked with `awk -F, 'NR>31 && $5>20 {n++} END {exit n>0}' preview.csv`. The
+  first 30 frames are excluded because cold start spikes under load (34 ms at frame 8,
+  load 18–32, on a landing seat; steady-state max 8 ms). At the defaults: max 6.75 ms,
+  mean 1.04 ms.
 - **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
 
 ### P6c — Level-set smoothing
