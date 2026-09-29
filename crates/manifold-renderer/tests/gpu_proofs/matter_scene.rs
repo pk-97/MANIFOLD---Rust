@@ -31,6 +31,10 @@ pub(crate) struct SceneSettings {
     pub seed: u32,
     pub points_per_cell_27: bool,
     pub closed: [bool; 6],
+    /// P2G takes D6's block path: the region sorts the points into the
+    /// domain's block bins (every substep until the sort can gate on the
+    /// tick start) and P2G reads the order and ranges.
+    pub block_p2g: bool,
 }
 
 impl Default for SceneSettings {
@@ -47,6 +51,7 @@ impl Default for SceneSettings {
             seed: 0,
             points_per_cell_27: false,
             closed: [true; 6],
+            block_p2g: false,
         }
     }
 }
@@ -151,6 +156,27 @@ impl MatterScene {
         wire(&mut graph, (state, "tick_index"), (stats, "tick_index"));
         wire(&mut graph, (state, "tick_index"), (p2g, "tick_index"));
         wire(&mut graph, (state, "substep_in_tick"), (p2g, "substep_in_tick"));
+        if settings.block_p2g {
+            let m2p = add(&mut graph, "node.matter_to_particles");
+            let sort = add(&mut graph, "node.sort_particles_into_cells");
+            wire(&mut graph, (state, "out"), (m2p, "points"));
+            wire(&mut graph, (m2p, "particles"), (sort, "particles"));
+            wire(&mut graph, (fill, "count"), (sort, "count"));
+            for (from, to) in [
+                ("block_center_x", "center_x"), ("block_center_y", "center_y"), ("block_center_z", "center_z"),
+                ("block_size_x", "size_x"), ("block_size_y", "size_y"), ("block_size_z", "size_z"),
+                ("block_cell_size", "cell_size"),
+            ] {
+                wire(&mut graph, (domain, from), (sort, to));
+            }
+            for port in ["blocks_x", "blocks_y", "blocks_z"] {
+                wire(&mut graph, (domain, port), (p2g, port));
+            }
+            wire(&mut graph, (sort, "order"), (p2g, "order"));
+            wire(&mut graph, (sort, "cell_ranges"), (p2g, "ranges"));
+            // The sort runs only when its `sorted` output has a buffer.
+            graph.add_external_output(sort, "sorted").expect("sorted output");
+        }
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
         graph.add_external_output(frame, "particles_b").expect("frame output");
