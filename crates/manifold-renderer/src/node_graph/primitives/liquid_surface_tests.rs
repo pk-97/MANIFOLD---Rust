@@ -329,6 +329,48 @@ fn fluid_sort_particles_into_cells_rejects_too_many_cells() {
     assert!(errors.iter().any(|e| e.contains("512 cells") && e.contains("Max Cells")), "{errors:?}");
 }
 
+/// A consumer that wires only `order` and `cell_ranges` gets the same ranges and
+/// the same members per bin as one that also wires `sorted`. Order within a bin
+/// follows atomic ranks, so it may differ between any two runs.
+#[test]
+fn fluid_sort_particles_into_cells_runs_with_sorted_unwired() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
+    let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
+    let mut rng = Rng(23);
+    let particles: Vec<FluidParticle> = (0..500u32)
+        .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.8), if i % 7 == 0 { 0.0 } else { 0.02 }, i + 1))
+        .collect();
+    let (input, _) = harness.array(&particles, particles.len());
+    let run = |harness: &mut Harness, wire_sorted: bool| {
+        let (sorted, _) = harness.array::<FluidParticle>(&[], particles.len());
+        let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+        let (order, order_buf) = harness.array::<u32>(&[], particles.len());
+        let mut outputs = vec![("cell_ranges", ranges), ("order", order)];
+        if wire_sorted {
+            outputs.push(("sorted", sorted));
+        }
+        let (_, errors) = harness.run(&mut SortParticlesIntoCells::new(), &[("particles", input)], &outputs, &lattice.params(&[]));
+        assert!(errors.is_empty(), "{errors:?}");
+        let ranges: Vec<CellRange> = read(&ranges_buf, bins);
+        let order: Vec<u32> = read(&order_buf, particles.len());
+        let members: Vec<Vec<u32>> = ranges
+            .iter()
+            .map(|r| {
+                let mut bin = order[r.start as usize..(r.start + r.count) as usize].to_vec();
+                bin.sort_unstable();
+                bin
+            })
+            .collect();
+        let live: u32 = ranges.iter().map(|r| r.count).sum();
+        assert!(order[live as usize..].iter().all(|&i| i == u32::MAX), "no input past the live total");
+        (bytemuck::cast_slice::<CellRange, u8>(&ranges).to_vec(), members)
+    };
+    let wired = run(&mut harness, true);
+    assert!(wired.1.iter().any(|bin| !bin.is_empty()), "the fixture sorts live particles");
+    assert_eq!(run(&mut harness, false), wired, "ranges and bin members do not depend on sorted being wired");
+}
+
 /// With `enabled` 0 the sort does nothing: after a changed input, every output
 /// is byte-identical to the previous call's.
 #[test]

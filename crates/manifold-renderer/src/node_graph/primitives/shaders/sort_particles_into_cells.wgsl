@@ -3,7 +3,8 @@
 // clear_counts → count_particles → prefix_scan (level 0 of `cell_counts`) →
 // write_ranges → clear_tail → scatter. `cell_counts` is the scan storage; after
 // the scan it holds each bin's inclusive end. With `write_order`, `order` gets each
-// sorted slot's input index (NO_RANK past the live total).
+// sorted slot's input index (NO_RANK past the live total); `sorted` is written only
+// with `write_sorted`.
 
 struct FluidParticle {
     position_radius: vec4<f32>,
@@ -24,7 +25,7 @@ struct SortParams {
     bin_total: u32,
     sorted_capacity: u32,
     write_order: u32,
-    _pad0: u32,
+    write_sorted: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SortParams;
@@ -90,7 +91,9 @@ fn clear_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     if i >= atomicLoad(&cell_counts[params.bin_total - 1u]) {
-        sorted[i] = FluidParticle(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+        if params.write_sorted != 0u {
+            sorted[i] = FluidParticle(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+        }
         if params.write_order != 0u {
             order[i] = NO_RANK;
         }
@@ -105,7 +108,9 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let particle = particles[i];
     let slot = bin_start(bin_of(particle.position_radius.xyz)) + rank[i];
-    sorted[slot] = particle;
+    if params.write_sorted != 0u {
+        sorted[slot] = particle;
+    }
     if params.write_order != 0u {
         order[slot] = i;
     }
