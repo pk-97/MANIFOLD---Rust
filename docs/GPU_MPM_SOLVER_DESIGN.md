@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1 partial; its kill check fired (53 ms against 12 ms) and P1b proceeds, budget at P4 in BUG-u3ov (MPM solver budget) · P1b in progress · P2–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1 partial, stopped on BUG-m9g8 (MPM D5 fixed point loses momentum), which needs a D5 amendment · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P1b–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
