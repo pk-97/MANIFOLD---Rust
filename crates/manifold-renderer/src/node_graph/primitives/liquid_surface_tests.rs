@@ -329,6 +329,45 @@ fn fluid_sort_particles_into_cells_rejects_too_many_cells() {
     assert!(errors.iter().any(|e| e.contains("512 cells") && e.contains("Max Cells")), "{errors:?}");
 }
 
+/// With `enabled` 0 the sort does nothing: after a changed input, every output
+/// is byte-identical to the previous call's.
+#[test]
+fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
+    let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
+    let mut rng = Rng(11);
+    let mut cloud = |seed: f32| -> Vec<FluidParticle> {
+        (0..300u32)
+            .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.8 * seed), 0.02, i + 1))
+            .collect()
+    };
+    let (first, second) = (cloud(1.0), cloud(0.5));
+    let (sorted, sorted_buf) = harness.array::<FluidParticle>(&[], first.len());
+    let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+    let (order, order_buf) = harness.array::<u32>(&[], first.len());
+    let mut sort = SortParticlesIntoCells::new();
+    let mut run = |harness: &mut Harness, particles: &[FluidParticle], enabled: f32| {
+        let (input, _) = harness.array(particles, particles.len());
+        let enabled = harness.scalar_input(enabled);
+        let (_, errors) = harness.run(
+            &mut sort,
+            &[("particles", input), ("enabled", enabled)],
+            &[("sorted", sorted), ("cell_ranges", ranges), ("order", order)],
+            &lattice.params(&[]),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        (
+            read::<u8>(&sorted_buf, sorted_buf.size as usize),
+            read::<u8>(&ranges_buf, ranges_buf.size as usize),
+            read::<u8>(&order_buf, order_buf.size as usize),
+        )
+    };
+    let enabled = run(&mut harness, &first, 1.0);
+    assert_eq!(run(&mut harness, &second, 0.0), enabled, "a disabled sort leaves every output as it was");
+    assert_ne!(run(&mut harness, &second, 1.0), enabled, "re-enabled, it sorts the new particles");
+}
+
 /// Before its first frame the producer publishes zero particles and zero lattice
 /// nodes, which the group's bin-size math turns into a negative cell size.
 #[test]
@@ -1078,4 +1117,83 @@ fn fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices() {
         vertices[sentinel_from..].iter().all(|v| v.position == [9.0; 3]),
         "slots past last frame's extent are never touched"
     );
+}
+
+// --- P6c: level-set smoothing ---------------------------------------------
+
+use super::smooth_lattice::SmoothLattice;
+
+/// f64 reference: the (2p + 1)³ binomial gather with edge-clamped indices.
+fn reference_smooth(values: &[f32], nodes: [usize; 3], passes: usize) -> Vec<f64> {
+    let row: Vec<f64> = {
+        let n = 2 * passes;
+        let mut c = vec![1.0f64; n + 1];
+        for k in 1..n {
+            c[k] = c[k - 1] * (n - k + 1) as f64 / k as f64;
+        }
+        c.iter().map(|w| w / 4f64.powi(passes as i32)).collect()
+    };
+    let p = passes as i64;
+    let at = |x: i64, y: i64, z: i64| {
+        let c = |v: i64, n: usize| v.clamp(0, n as i64 - 1) as usize;
+        f64::from(values[c(x, nodes[0]) + nodes[0] * (c(y, nodes[1]) + nodes[1] * c(z, nodes[2]))])
+    };
+    let mut out = Vec::with_capacity(nodes.iter().product());
+    for z in 0..nodes[2] as i64 {
+        for y in 0..nodes[1] as i64 {
+            for x in 0..nodes[0] as i64 {
+                let mut sum = 0.0;
+                for dz in -p..=p {
+                    for dy in -p..=p {
+                        for dx in -p..=p {
+                            let w = row[(dz + p) as usize] * row[(dy + p) as usize] * row[(dx + p) as usize];
+                            sum += w * at(x + dx, y + dy, z + dz);
+                        }
+                    }
+                }
+                out.push(sum);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn fluid_smooth_lattice_matches_binomial_reference_and_passes_through() {
+    let mut harness = Harness::new();
+    let nodes = [13usize, 11, 9];
+    let total: usize = nodes.iter().product();
+    let mut rng = Rng(0x5eed_5eed);
+    let values: Vec<f32> = (0..total + 20).map(|_| rng.next_f32() * 2.0 - 1.0).collect();
+    let (input, _) = harness.array(&values, values.len());
+    let stages: Vec<(Slot, GpuBuffer)> = (0..3).map(|_| harness.array::<f32>(&[], values.len())).collect();
+    let (out_slot, out) = stages[2].clone();
+    for passes in 0..=3usize {
+        // Axes x, y, z chained: input → stage 0 → stage 1 → stage 2.
+        let mut source = input;
+        for (axis, (stage, _)) in stages.iter().enumerate() {
+            let lattice = [
+                ("nodes_x", nodes[0] as f32),
+                ("nodes_y", nodes[1] as f32),
+                ("nodes_z", nodes[2] as f32),
+                ("passes", passes as f32),
+                ("axis", axis as f32),
+            ];
+            let (_, errors) = harness.run(&mut SmoothLattice::new(), &[("levelset", source)], &[("smoothed", *stage)], &params(&lattice));
+            assert!(errors.is_empty(), "{errors:?}");
+            source = *stage;
+        }
+        let actual: Vec<f32> = read(&out, values.len());
+        let expected: Vec<f64> = if passes == 0 {
+            values[..total].iter().map(|&v| f64::from(v)).collect()
+        } else {
+            reference_smooth(&values, nodes, passes)
+        };
+        let worst = actual[..total].iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+        assert!(worst < 1e-5, "{passes} passes: worst difference {worst}");
+        assert_eq!(&actual[total..], &values[total..], "{passes} passes: values past the lattice pass through");
+    }
+    let (_, errors) = harness.run(&mut SmoothLattice::new(), &[("levelset", input)], &[("smoothed", out_slot)], &params(&[("nodes_x", 0.0), ("passes", 2.0)]));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(read::<f32>(&out, values.len()), values, "no lattice copies the input");
 }

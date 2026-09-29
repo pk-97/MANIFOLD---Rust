@@ -1507,6 +1507,11 @@
               "name": "bin_cells",
               "targetHandle": "Bin Size",
               "targetParam": "b"
+            },
+            {
+              "name": "smoothing_passes",
+              "targetHandle": "Smoothing Passes",
+              "targetParam": "value"
             }
           ]
         },
@@ -1658,6 +1663,54 @@
           {
             "id": 11,
             "typeId": "system.group_output"
+          },
+          {
+            "id": 12,
+            "typeId": "node.smooth_lattice",
+            "handle": "Smooth X",
+            "nodeId": "liquid_smooth_x",
+            "params": {
+              "axis": {
+                "type": "Int",
+                "value": 0
+              }
+            }
+          },
+          {
+            "id": 13,
+            "typeId": "node.smooth_lattice",
+            "handle": "Smooth Y",
+            "nodeId": "liquid_smooth_y",
+            "params": {
+              "axis": {
+                "type": "Int",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": 14,
+            "typeId": "node.smooth_lattice",
+            "handle": "Smooth Z",
+            "nodeId": "liquid_smooth_z",
+            "params": {
+              "axis": {
+                "type": "Int",
+                "value": 2
+              }
+            }
+          },
+          {
+            "id": 15,
+            "typeId": "node.value",
+            "handle": "Smoothing Passes",
+            "nodeId": "liquid_smoothing_passes",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 2.0
+              }
+            }
           }
         ],
         "wires": [
@@ -1770,14 +1823,14 @@
             "toPort": "nodes_z"
           },
           {
-            "fromNode": 7,
-            "fromPort": "levelset",
+            "fromNode": 14,
+            "fromPort": "smoothed",
             "toNode": 8,
             "toPort": "levelset"
           },
           {
-            "fromNode": 7,
-            "fromPort": "levelset",
+            "fromNode": 14,
+            "fromPort": "smoothed",
             "toNode": 10,
             "toPort": "levelset"
           },
@@ -1990,6 +2043,96 @@
             "fromPort": "scale_z",
             "toNode": 10,
             "toPort": "size_z"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "levelset",
+            "toNode": 12,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "smoothed",
+            "toNode": 13,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "smoothed",
+            "toNode": 14,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 12,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 12,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 12,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 13,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 13,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 13,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 14,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 14,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 14,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "passes"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "passes"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "passes"
           }
         ]
       },
@@ -2001,6 +2144,10 @@
         "bin_cells": {
           "type": "Float",
           "value": 1.0
+        },
+        "smoothing_passes": {
+          "type": "Float",
+          "value": 2.0
         }
       }
     }
