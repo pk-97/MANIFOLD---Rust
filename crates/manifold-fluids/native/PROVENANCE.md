@@ -12,7 +12,7 @@ Except for the local changes documented below, these files are copied byte-for-b
 - `mixbox/mixbox_stub.cpp`
 - `versionutils.cpp.in` (instantiated by `build.rs` into `OUT_DIR`)
 
-`bridge.cpp`, `bridge.h`, `coupling_probe.*`, `coupling_operator_probe.*`,
+`bridge.cpp`, `bridge.h`, `flip_engine/surfaceframe.*`, `coupling_probe.*`, `coupling_operator_probe.*`,
 `coupling_boundary_probe.*`, `coupling_viscosity_probe.*` and
 `coupling_viscosity_operator_probe.*` are
 MANIFOLD-owned code. The bridge compiles with
@@ -40,8 +40,8 @@ Local changes:
   a persistent particle-cache format or a solver restart checkpoint.
 - The captured-frame mesher can optionally shrink single isolated particles.
   `particlemesher.{h,cpp}` carries optional radii through chunk/block sorting;
-  its default path retains the global radius. `SpatialPointGrid` supplies an
-  allocation-free neighbour predicate. Classification preserves overlapping
+  its default path retains the global radius. `SpatialPointGrid::hasPointWithinSphere`
+  is an allocation-free neighbour predicate that exits on the first hit. Classification preserves overlapping
   spheres, blends from two to three main radii, and is retained per snapshot
   until the main radius changes. Detached clusters are not classified here.
   No solver, application default, or persistent cache field is changed.

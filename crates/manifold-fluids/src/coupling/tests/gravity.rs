@@ -217,7 +217,10 @@ fn production_coupling_neutral_body_uses_queued_gravity_prediction() {
         );
     }
     assert!((coarse.drift - fine.drift).abs() < 0.02);
-    assert!(previous_velocity.max_drift > 2.0 * coarse.max_drift);
+    // Under constant acceleration the old-velocity control drifts exactly
+    // twice as far as the predicted one, so a 2.0 bound asserts on noise
+    // (the base cleared it by 0.4%). 1.9 still fails if prediction is lost.
+    assert!(previous_velocity.max_drift > 1.9 * coarse.max_drift);
 }
 
 #[test]
