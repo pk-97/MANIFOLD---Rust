@@ -32,6 +32,29 @@ pub(crate) fn authored_sample_only() -> bool {
     SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
 }
 
+/// Transport paused or simulation speed zero: a full render observation left
+/// the simulation target where the previous one put it. Historical input
+/// samples move the target between render frames, so only full observations
+/// judge. Reset with the simulation.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct HeldClock {
+    observed: Option<f64>,
+    held: bool,
+}
+
+impl HeldClock {
+    pub(crate) fn observe(&mut self, target: f64) {
+        if !authored_sample_only() {
+            self.held = self.observed == Some(target);
+            self.observed = Some(target);
+        }
+    }
+
+    pub(crate) fn is_held(self) -> bool {
+        self.held
+    }
+}
+
 /// Fluid workers use the same preview/offline scope as rigid bodies.
 pub(crate) fn offline_simulation() -> bool {
     PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
@@ -394,6 +417,7 @@ pub struct RigidSimulation {
     impulse_failure: Option<String>,
     impulse_overflow_latched: bool,
     accepted_observation: Option<(f64, f64)>,
+    held: HeldClock,
     worker_epoch: Option<u64>,
     advancement_policy: AdvancementPolicy,
 }
@@ -439,6 +463,7 @@ impl Default for RigidSimulation {
             impulse_failure: None,
             impulse_overflow_latched: false,
             accepted_observation: None,
+            held: HeldClock::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
         }
@@ -909,6 +934,7 @@ impl RigidSimulation {
             self.last_time = Some(now);
             self.accumulator = 0.0;
             self.authored_time = 0.0;
+            self.held = HeldClock::default();
             self.physics_time = 0.0;
             self.authored_samples.clear();
             self.targeted_fields.clear();
@@ -953,6 +979,7 @@ impl RigidSimulation {
             targeted_fields,
         )?;
         self.authored_time = authored_time;
+        self.held.observe(authored_time);
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;

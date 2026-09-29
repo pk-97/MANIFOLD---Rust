@@ -506,10 +506,7 @@ pub struct FluidRuntime {
     previous_reset: Option<f32>,
     reset_requested: bool,
     target_time: f64,
-    /// `target_time` of the previous full (render-frame) observation.
-    observed_target: Option<f64>,
-    /// The latest full observation did not move `target_time`.
-    held: bool,
+    held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
     busy: bool,
@@ -561,8 +558,7 @@ impl Default for FluidRuntime {
             previous_reset: None,
             reset_requested: false,
             target_time: 0.0,
-            observed_target: None,
-            held: false,
+            held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
             busy: false,
@@ -679,8 +675,7 @@ impl FluidRuntime {
             coupled.clear();
         }
         self.target_time = 0.0;
-        self.observed_target = None;
-        self.held = false;
+        self.held = Default::default();
         self.completed_tick = 0;
         self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
         if self.epoch > 1 {
@@ -1031,12 +1026,7 @@ impl FluidRuntime {
         } else {
             self.target_time
         };
-        // Historical input samples move the target between render frames, so
-        // only full observations decide whether the transport is held.
-        if !super::physics::authored_sample_only() {
-            self.held = self.observed_target == Some(target_time);
-            self.observed_target = Some(target_time);
-        }
+        self.held.observe(target_time);
         if self.cache_mode == CacheMode::Playback {
             // The worker resolves timed takes from project transport. Retain
             // the absolute speed-scaled address only for untimed legacy caches.
@@ -1312,7 +1302,7 @@ impl FluidRuntime {
             // retained time debt cannot drain while held. The batch already
             // in flight covers played time and still publishes. Offline drains
             // each frame's debt inside that frame.
-            if self.held && self.initialized && !blocking {
+            if self.held.is_held() && self.initialized && !blocking {
                 return Ok(());
             }
             let target_tick = simulation_tick(self.target_time);

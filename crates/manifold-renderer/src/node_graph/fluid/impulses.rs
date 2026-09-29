@@ -97,7 +97,7 @@ impl FluidRuntime {
         // bursts (WATER_SIMULATION_DESIGN.md "Transport pause / water speed
         // zero"). Admission succeeds so the producer rearms; no receipt will
         // ever name the returned tick.
-        if self.held {
+        if self.held.is_held() {
             return Ok(self.impulses.next_tick());
         }
         // Includes the worker-owned batch and undrained delivery receipts.
