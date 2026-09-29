@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 319 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 320 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -291,7 +291,7 @@ _Generated from the node registry. Do not hand-edit. 319 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (21)
+### Particles 3D (22)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -309,6 +309,7 @@ _Generated from the node registry. Do not hand-edit. 319 nodes registered, group
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |

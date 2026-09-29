@@ -397,7 +397,7 @@ pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3
 | Prefix scan | **New** — `node.running_total` | Inclusive multi-level scan of `Array(u32)`, `BarrieredReduction`. `total: ScalarF32` is the last element read back one frame late (the `color_sample` readback pattern). Shares its scan module with the sort. |
 | MC emit | **New** — `node.volume_surface_mesh` | D16. `capacity` param (vertices, multiple of 3); `scan` and level set are `BufferGather`; `total` input drives the error. Writes the attributes `R/fluid/native.rs:190-201` writes. |
 | Mesh consumer | **Exists** | `node.scene_object.vertices` → `node.render_scene`, unchanged. |
-| Whitewater to instances | **New** — `node.particles_to_copies` (P8) | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius). `node.copy_positions` goes the other way. |
+| Whitewater to instances | **Built under GPU_MPM_SOLVER_DESIGN.md P1 (Water kernel, look gates and the cost probe)** — `node.particles_to_copies` | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius), with a `live_count` input that turns slots past the producer's count into holes. `node.copy_positions` goes the other way. |
 | One `gpu_fluid_mesher` node | **Forbidden** | DECOMPOSING_GENERATORS.md section 1.1 (No fused single-effect or single-generator monoliths). |
 
 Every atom that reads a volume also takes that volume's `bounds: Transform` and
@@ -592,12 +592,12 @@ is the orchestrating session's.
 **DEFERRED (2026-09-29).** Trigger: a sub-60 Hz particle producer exists. At 60 Hz the
 newest frame is at most one tick from display time, so the surface reads `particles_b`.
 The `FluidParticle` records moved to P2 (they are the contract).
-GPU_MPM_SOLVER_DESIGN.md P1's entry check also names `node.particles_to_copies`, which
-stays with this deferred phase.
+`node.particles_to_copies` left this phase: it is built under GPU_MPM_SOLVER_DESIGN.md P1
+(Water kernel, look gates and the cost probe).
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
-- **Deliverables:** `fluid_particles.rs` records; atoms `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, each with value `gpu_tests`. Preset `WaterDamBreakParticles.json` ("Water — Dam Break (Particle View)"): the Dam Break scene with liquid particles drawn as copies of a small sphere. Tests `fluid_push_out_penetration_bounded` and `fluid_interpolated_motion_is_even`: over 60 display frames with frames arriving every other display frame, the coefficient of variation of mean per-frame particle displacement is below 0.25 (near 1 without interpolation).
+- **Deliverables:** `fluid_particles.rs` records; atoms `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, each with value `gpu_tests`. Preset `WaterDamBreakParticles.json` ("Water — Dam Break (Particle View)"): the Dam Break scene with liquid particles drawn as copies of a small sphere. Tests `fluid_push_out_penetration_bounded` and `fluid_interpolated_motion_is_even`: over 60 display frames with frames arriving every other display frame, the coefficient of variation of mean per-frame particle displacement is below 0.25 (near 1 without interpolation).
 - **Gate:** the tests above; `cargo run -p manifold-renderer --bin check-presets`; `cargo run -p manifold-renderer --bin graph-tool -- validate crates/manifold-renderer/assets/generator-presets/WaterDamBreakParticles.json --kind generator` and the same with `fusion`, output recorded in the phase report. Interpolate and push-out are expected in one region, with their fused-vs-unfused proof; if they are not, record the builder's reason and file a `bd` bug when it is a codegen gap.
 - **Demo:** `cargo build --profile test --features gpu-proofs --example fluid_capture`, then run it with `--preset WaterDamBreakParticles --frames 120 --stills-every 10` into `/tmp/manifold_particle_view`. L2: Peter looks at the stills.
 - **Gesture:** pause and resume transport mid-splash; the particles hold exactly and resume without a jump.
@@ -685,7 +685,7 @@ or in section 11.
 | `Array(f32)` → `Texture3D` resolve atom (debug slice, `blur_3d` reuse) | Authoring needs to see or blur the level set |
 | Migrating legacy presets to the GPU surface | Particle-frame caching lands |
 | Live versus baked look parity | Peter judges the difference unacceptable before particle caching lands |
-| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, the Particle View preset, and presenting `obstacle_pose` and the coupled rigid frame at `s` | A sub-60 Hz particle producer exists |
+| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, the Particle View preset, and presenting `obstacle_pose` and the coupled rigid frame at `s` | A sub-60 Hz particle producer exists |
 | FLIP particle identity (`manifold_id`, renumbering, worker-side sort) | FLIP frames must feed P3's interpolation |
 | Fade-out of particles removed during a tick (D11) | Popping shows away from drains; needs a summed capacity expression in the fusion compiler first |
 

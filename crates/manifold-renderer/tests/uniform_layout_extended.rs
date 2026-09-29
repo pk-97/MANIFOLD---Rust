@@ -339,8 +339,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 77,
-            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; GPU MPM adds zero_array, matter_to_grid, matter_grid_update, grid_to_matter and matter_fill; all covered by uniform_layout_proof)"
+            scalar_count, 78,
+            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; GPU MPM adds zero_array, matter_to_grid, matter_grid_update, grid_to_matter, matter_fill and particles_to_copies; all covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(
