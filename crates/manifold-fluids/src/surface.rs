@@ -343,6 +343,66 @@ mod tests {
     }
 
     #[test]
+    fn surface_frame_deferred_reconstruction_matches_per_step_output() {
+        let options = SurfaceOptions::default();
+        let make_world = |deferred: bool| {
+            let mut world = world();
+            world.set_surface_reconstruction_enabled(!deferred).unwrap();
+            world.set_surface_options(options).unwrap();
+            world.set_gravity([0.0, -9.81, 0.0]).unwrap();
+            world
+                .add_fluid_box(
+                    Bounds {
+                        min: [0.5, 0.5, 0.5],
+                        max: [1.9, 1.5, 1.9],
+                    },
+                    [0.3, 0.0, 0.0],
+                )
+                .unwrap();
+            world
+        };
+        let mut meshed = make_world(false);
+        let mut deferred = make_world(true);
+        for tick in 0..4 {
+            let obstacle = |shift: f32| Bounds {
+                min: [0.8 + shift, 0.4, 0.8],
+                max: [1.2 + shift, 1.5, 1.2],
+            };
+            let shift = tick as f32 * 0.01;
+            for world in [&mut meshed, &mut deferred] {
+                world
+                    .set_obstacle(
+                        obstacle(shift),
+                        obstacle(shift + 0.01),
+                        obstacle(shift + 0.02),
+                    )
+                    .unwrap();
+            }
+            let expected = meshed.step(Seconds(1.0 / 60.0)).unwrap();
+            let actual = deferred.step(Seconds(1.0 / 60.0)).unwrap();
+            assert_eq!(actual.particles, expected.particles);
+            assert_eq!(actual.substeps, expected.substeps);
+            assert!(expected.triangles > 0);
+            assert_eq!(actual.triangles, 0);
+        }
+        let mut expected = Vec::new();
+        meshed.surface(&mut expected).unwrap();
+        let mut actual = Vec::new();
+        assert!(deferred.surface(&mut actual).is_err());
+        assert!(deferred.set_surface_reconstruction_enabled(true).is_err());
+        assert!(meshed.set_surface_reconstruction_enabled(false).is_err());
+        let mut frame = deferred.capture_surface_frame().unwrap();
+        drop(deferred);
+        frame.reconstruct(0, options, &mut actual).unwrap();
+        assert_same_surface(&expected, &actual);
+
+        let mut aborted = make_world(true);
+        drop(aborted.begin_frame(Seconds(1.0 / 60.0)).unwrap());
+        assert!(aborted.set_surface_reconstruction_enabled(true).is_err());
+        assert!(aborted.capture_surface_frame().is_err());
+    }
+
+    #[test]
     fn surface_frame_empty_and_invalid_inputs_are_explicit() {
         let mut world = world();
         assert!(world.capture_surface_frame().is_err());

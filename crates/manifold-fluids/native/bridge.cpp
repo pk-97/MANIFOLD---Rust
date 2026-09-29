@@ -1301,6 +1301,28 @@ extern "C" int manifold_fluids_world_set_surface_options(void *world,
     });
 }
 
+extern "C" int manifold_fluids_world_set_surface_reconstruction(void *world, int enabled) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        if (enabled != 0 && enabled != 1) {
+            throw std::invalid_argument("surface reconstruction enabled must be 0 or 1");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        if (native->simulation->isUpdateInProgress() || native->simulation->isUpdateFailed() ||
+            native->simulation->getCurrentFrame() != 0) {
+            throw std::runtime_error(
+                "surface reconstruction can only be configured before the first step");
+        }
+        if (enabled != 0) {
+            native->simulation->enableSurfaceReconstruction();
+        } else {
+            native->simulation->disableSurfaceReconstruction();
+        }
+    });
+}
+
 extern "C" int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
                                                            double surface_tension) {
     return guarded([&] {
@@ -1726,6 +1748,11 @@ extern "C" int manifold_fluids_world_surface(void *world, const uint8_t **data_o
         }
         auto *native = static_cast<NativeWorld *>(world);
         require_accepted_frame(*native);
+        if (!native->simulation->isSurfaceReconstructionEnabled()) {
+            throw std::runtime_error(
+                "surface reconstruction is disabled; enable it before the first step or use "
+                "capture_surface_frame and reconstruct");
+        }
         std::vector<char> *data = native->simulation->getSurfaceData();
         if (data == nullptr || data->empty()) {
             native->empty_surface.clear();

@@ -25,6 +25,11 @@ source file also retains its original license header.
 
 Local changes:
 
+- Relative velocity-outlier removal cannot lower its cutoff below the
+  configured frame CFL/substep budget. Previously a small, ordinary-speed
+  fluid population could lose its fastest particles every frame until empty
+  (BUG-zpn3). The absolute extreme-speed, solid, open-boundary and per-cell
+  population protections remain active.
 - `surfaceframe.{h,cpp}` and the capture method in `fluidsimulation.{h,cpp}` add
   explicit, independently owned reconstruction inputs for one completed frame.
   Capture reuses the production obstacle-offset/meshing-volume preparation;

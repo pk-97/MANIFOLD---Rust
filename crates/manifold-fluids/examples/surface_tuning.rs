@@ -1,7 +1,8 @@
 //! Bounded CPU cost comparison: simulate once, destroy the world, remesh six
 //! variants. This is a native dam-break fixture, not a project-render substitute.
 //! Pass `--meshes` to export each remeshed variant as a sibling GLB for viewing.
-//! Usage: surface_tuning <output.csv> [resolution=64] [steps=90] [--meshes]
+//! `--defer-mesh` skips unused per-step meshes; the final snapshot is still meshed.
+//! Usage: surface_tuning <output.csv> [resolution=64] [steps=90] [--meshes] [--defer-mesh]
 
 use std::error::Error;
 use std::fs::File;
@@ -100,16 +101,21 @@ fn mesh_output_path(csv_path: &Path, detail: u32, isolated_scale: f64) -> PathBu
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<_> = std::env::args().collect();
-    let export_meshes = args.last().is_some_and(|arg| arg == "--meshes");
-    let positional_args = if export_meshes {
-        args.len() - 1
-    } else {
-        args.len()
-    };
+    let mut args: Vec<_> = std::env::args().collect();
+    let mut export_meshes = false;
+    let mut defer_mesh = false;
+    while let Some(flag) = args.last() {
+        match flag.as_str() {
+            "--meshes" => export_meshes = true,
+            "--defer-mesh" => defer_mesh = true,
+            _ => break,
+        }
+        args.pop();
+    }
+    let positional_args = args.len();
     if !(2..=4).contains(&positional_args) {
         return Err(
-            "usage: surface_tuning <output.csv> [resolution=64] [steps=90] [--meshes]".into(),
+            "usage: surface_tuning <output.csv> [resolution=64] [steps=90] [--meshes] [--defer-mesh]".into(),
         );
     }
     let resolution: u32 = if positional_args >= 3 {
@@ -142,6 +148,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         surface_subdivisions: 0,
         apic: false,
     })?;
+    world.set_surface_reconstruction_enabled(!defer_mesh)?;
     let options = SurfaceOptions {
         particle_scale: 2.2,
         smoothing: 0.35,
@@ -160,9 +167,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err("simulation exceeded the 120-second probe budget".into());
         }
     }
+    let simulation_phase = if defer_mesh {
+        "simulate_deferred"
+    } else {
+        "simulate"
+    };
     writeln!(
         csv,
-        "simulate,{resolution},{steps},0,1,0,{:.3}",
+        "{simulation_phase},{resolution},{steps},0,1,0,{:.3}",
         start.elapsed().as_secs_f64() * 1000.0
     )?;
     let start = Instant::now();

@@ -80,6 +80,7 @@ int manifold_fluids_world_set_force_fields(void *world, const float *values, siz
                                             int enabled);
 int manifold_fluids_world_set_surface_options(void *world, double marker_particle_scale,
                                                double smoothing, uint32_t smoothing_iterations);
+int manifold_fluids_world_set_surface_reconstruction(void *world, int enabled);
 int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
                                               double surface_tension);
 int manifold_fluids_world_set_time_step_options(void *world, uint32_t min_substeps,

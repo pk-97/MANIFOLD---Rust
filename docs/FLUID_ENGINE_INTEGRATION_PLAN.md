@@ -111,6 +111,13 @@ resolutions, or preserve droplets smaller than the selected meshing grid.
 Classification is retained while tuning the same snapshot. The control remains
 outside application UI/live playback until bounded visual qualification.
 
+`FluidWorld::set_surface_reconstruction_enabled(false)` opts a newly created
+world out of per-step mesh construction before its first step. Physics and
+whitewater continue; completed inputs can still be captured and reconstructed.
+Reading `surface()` while disabled fails explicitly instead of returning an
+empty mesh that could be mistaken for missing liquid. This is an opt-in native
+API for future bake jobs; the application still reconstructs each native frame.
+
 The authored domain describes usable liquid space. Native grids add three cells
 per axis for FLIP's 1.5-cell boundary margins, keeping cell spacing and authored
 bounds consistent. Initial liquid, role geometry, rigid coupling, force sampling,

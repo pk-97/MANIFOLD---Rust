@@ -8424,7 +8424,10 @@ float FluidSimulation::_getMarkerParticleSpeedLimit(double dt) {
         maxspeed = std::min(extremeSpeedOutlierThreshold, maxspeed);
     }
 
-    return maxspeed;
+    // MANIFOLD: a relative outlier in a small population can still be slow.
+    // Never remove particles that fit within the configured frame's CFL and
+    // substep budget merely because they are the fastest remaining particles.
+    return std::max(maxspeed, _maxFrameTimeSteps * speedLimitStep);
 }
 
 void FluidSimulation::_removeMarkerParticles(double dt) {
