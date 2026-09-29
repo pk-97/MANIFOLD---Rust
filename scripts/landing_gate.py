@@ -45,6 +45,37 @@ GPU_PROOFS_SCOPE = [
         ("crates/manifold-renderer/src/node_graph/freeze/",),
         (["freeze::"], []),
     ),
+    # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs
+    # in. particles_to_copies and matter_to_particles keep their proofs in the
+    # lib binary, which a scoped run skips, so they stay uncovered (FULL).
+    (
+        (
+            "crates/manifold-renderer/src/node_graph/matter.rs",
+            "crates/manifold-renderer/src/node_graph/matter/",
+            "crates/manifold-renderer/src/node_graph/substeps.rs",
+            "crates/manifold-renderer/src/node_graph/execution/substep_region.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_common.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_domain.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_fill",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_state.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_stats",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_frame",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_to_grid",
+            "crates/manifold-renderer/src/node_graph/primitives/matter_grid_update",
+            "crates/manifold-renderer/src/node_graph/primitives/grid_to_matter",
+            "crates/manifold-renderer/src/node_graph/primitives/zero_array",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_fill",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_stats",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_frame",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_to_grid",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_grid_update",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/grid_to_matter",
+            "crates/manifold-renderer/src/node_graph/primitives/shaders/zero_array",
+            "crates/manifold-renderer/tests/gpu_proofs/matter_",
+            "crates/manifold-renderer/tests/gpu_proofs/substeps",
+        ),
+        (["matter_", "substeps_"], []),
+    ),
 ]
 
 

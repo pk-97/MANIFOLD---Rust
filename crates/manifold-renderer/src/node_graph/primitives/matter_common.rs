@@ -22,3 +22,45 @@ pub(super) fn read_lattice(ctx: &EffectNodeContext<'_, '_>) -> MatterLattice {
         cells: nodes.map(|n| n.saturating_sub(1 + 2 * crate::node_graph::matter::PADDING_NODES)),
     }
 }
+
+/// Fused codegen does not namespace member helpers, so helpers shared by
+/// several matter bodies are copied with an atom prefix
+/// (GPU_MPM_SOLVER_DESIGN.md section 9 (Section 2.5 audit and codegen
+/// classification)). These tests keep the copies identical.
+#[cfg(test)]
+mod tests {
+    const P2G: &str = include_str!("shaders/matter_to_grid_body.wgsl");
+    const G2P: &str = include_str!("shaders/grid_to_matter_body.wgsl");
+    const M2P: &str = include_str!("shaders/matter_to_particles_body.wgsl");
+
+    /// The text of `fn <prefix>_<name>` up to its closing brace, with the
+    /// prefix removed.
+    fn helper(source: &str, prefix: &str, name: &str) -> String {
+        let head = format!("fn {prefix}_{name}(");
+        let start = source.find(&head).unwrap_or_else(|| panic!("no {head}"));
+        let end = start + source[start..].find("\n}\n").expect("helper ends") + 3;
+        source[start..end].replace(&format!("{prefix}_"), "")
+    }
+
+    #[test]
+    fn matter_finite_helpers_are_identical() {
+        let p2g = helper(P2G, "m2g", "finite3");
+        assert_eq!(p2g, helper(G2P, "g2m", "finite3"));
+        assert_eq!(p2g, helper(M2P, "m2p", "finite3"));
+    }
+
+    #[test]
+    fn matter_stencil_weights_are_identical() {
+        let lines = |source: &str| {
+            source
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with("let base = ") || l.starts_with("let f = ") || l.starts_with("let w0 = ") || l.starts_with("let w1 = ") || l.starts_with("let w2 = "))
+                .map(String::from)
+                .collect::<Vec<_>>()
+        };
+        let p2g = lines(P2G);
+        assert_eq!(p2g.len(), 5, "{p2g:?}");
+        assert_eq!(p2g, lines(G2P));
+    }
+}
