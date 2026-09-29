@@ -1,4 +1,4 @@
-use manifold_core::LayerId;
+use manifold_core::{EffectGroupId, EffectId, LayerId};
 use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::*;
@@ -333,22 +333,6 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
 }
 
 #[test]
-fn slip_clip_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-
-    let mut cmd = SlipClipCommand::new(clip_id.clone(), Seconds(0.0), Seconds(2.5));
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.in_point - Seconds(2.5)).abs() < Seconds(0.001));
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.in_point - Seconds(0.0)).abs() < Seconds(0.001));
-}
-
-#[test]
 fn clip_effects_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
@@ -381,39 +365,6 @@ fn clip_effects_undo_roundtrip() {
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!(!clip.is_looping);
     assert!((clip.scale - 1.0).abs() < 0.001);
-}
-
-#[test]
-fn change_clip_loop_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-
-    let mut cmd = ChangeClipLoopCommand::new(clip_id.clone(), false, true, Beats(0.0), Beats(2.0));
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!(clip.is_looping);
-    assert!((clip.loop_duration_beats - Beats(2.0)).abs() < Beats(0.001));
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!(!clip.is_looping);
-}
-
-#[test]
-fn change_clip_recorded_bpm_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-
-    let mut cmd = ChangeClipRecordedBpmCommand::new(clip_id.clone(), 0.0, 130.0);
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.recorded_bpm - 130.0).abs() < 0.01);
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.recorded_bpm - 0.0).abs() < 0.01);
 }
 
 #[test]
@@ -475,66 +426,7 @@ fn change_clip_recorded_bpm_no_rescale_sets_bpm_without_changing_duration() {
     assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "duration still 4 beats");
 }
 
-#[test]
-fn split_clip_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-    let initial_count = project.timeline.layers[0].clips.len();
-
-    let mut tail = project.timeline.layers[0].clips[0].clone_with_new_id();
-    tail.start_beat = Beats(2.0);
-    tail.duration_beats = Beats(2.0);
-
-    let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd = SplitClipCommand::new(clip_id.clone(), layer_id, Beats(4.0), Beats(2.0), tail);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers[0].clips.len(), initial_count + 1);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats - Beats(2.0)).abs() < Beats(0.001));
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers[0].clips.len(), initial_count);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
-}
-
 // ─── Layer Commands ───
-
-#[test]
-fn add_layer_undo_roundtrip() {
-    let mut project = make_test_project();
-    let initial_count = project.timeline.layers.len();
-
-    let mut cmd = AddLayerCommand::new(
-        "New Layer".into(),
-        LayerType::Video,
-        PresetTypeId::NONE,
-        0,
-        None,
-    );
-
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers.len(), initial_count + 1);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers.len(), initial_count);
-}
-
-#[test]
-fn delete_layer_undo_roundtrip() {
-    let mut project = make_test_project();
-    let initial_count = project.timeline.layers.len();
-    let layer = project.timeline.layers[0].clone();
-
-    let mut cmd = DeleteLayerCommand::new(layer);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers.len(), initial_count - 1);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers.len(), initial_count);
-}
 
 #[test]
 fn delete_group_clears_children_parent_ids() {
@@ -575,126 +467,7 @@ fn delete_group_clears_children_parent_ids() {
     assert_eq!(reparented, child_count);
 }
 
-#[test]
-fn reorder_layer_undo_roundtrip() {
-    let mut project = make_test_project();
-    let old_order = project.timeline.layers.clone();
-    let old_names: Vec<String> = old_order.iter().map(|l| l.name.clone()).collect();
-
-    let mut new_order = old_order.clone();
-    new_order.reverse();
-
-    let empty_map = std::collections::HashMap::new();
-    let mut cmd = ReorderLayerCommand::new(old_order, new_order, empty_map.clone(), empty_map);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers[0].name, old_names[1]);
-    assert_eq!(project.timeline.layers[1].name, old_names[0]);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers[0].name, old_names[0]);
-    assert_eq!(project.timeline.layers[1].name, old_names[1]);
-}
-
-#[test]
-fn group_layers_undo_roundtrip() {
-    let mut project = make_test_project();
-    let initial_count = project.timeline.layers.len();
-    let layer_ids: Vec<LayerId> = project
-        .timeline
-        .layers
-        .iter()
-        .map(|l| l.layer_id.clone())
-        .collect();
-    let original_order = project.timeline.layers.clone();
-
-    let mut cmd = GroupLayersCommand::new(layer_ids, original_order);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers.len(), initial_count + 1); // group added
-    assert!(project.timeline.layers.iter().any(|l| l.is_group()));
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers.len(), initial_count);
-    assert!(!project.timeline.layers.iter().any(|l| l.is_group()));
-}
-
 // ─── Settings Commands ───
-
-#[test]
-fn change_quantize_mode_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let mut cmd = ChangeQuantizeModeCommand::new(QuantizeMode::Off, QuantizeMode::Beat);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.settings.quantize_mode, QuantizeMode::Beat);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.settings.quantize_mode, QuantizeMode::Off);
-}
-
-#[test]
-fn change_frame_rate_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let mut cmd = ChangeFrameRateCommand::new(60.0, 30.0);
-
-    cmd.execute(&mut project);
-    assert!((project.settings.frame_rate - 30.0).abs() < 0.01);
-
-    cmd.undo(&mut project);
-    assert!((project.settings.frame_rate - 60.0).abs() < 0.01);
-}
-
-#[test]
-fn change_layer_midi_note_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd = ChangeLayerMidiNoteCommand::new(layer_id, -1, 60);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers[0].midi_note, 60);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers[0].midi_note, -1);
-}
-
-#[test]
-fn change_layer_blend_mode_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd =
-        ChangeLayerBlendModeCommand::new(layer_id, BlendMode::Normal, BlendMode::Additive);
-
-    cmd.execute(&mut project);
-    assert_eq!(
-        project.timeline.layers[0].default_blend_mode,
-        BlendMode::Additive
-    );
-
-    cmd.undo(&mut project);
-    assert_eq!(
-        project.timeline.layers[0].default_blend_mode,
-        BlendMode::Normal
-    );
-}
-
-#[test]
-fn change_layer_opacity_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd = ChangeLayerOpacityCommand::new(layer_id, 1.0, 0.5);
-
-    cmd.execute(&mut project);
-    assert!((project.timeline.layers[0].opacity - 0.5).abs() < 0.001);
-
-    cmd.undo(&mut project);
-    assert!((project.timeline.layers[0].opacity - 1.0).abs() < 0.001);
-}
 
 #[test]
 fn change_generator_type_undo_roundtrip() {
@@ -827,41 +600,6 @@ fn change_generator_type_clears_and_restores_graph_override() {
 }
 
 #[test]
-fn change_master_opacity_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let mut cmd = ChangeMasterOpacityCommand::new(1.0, 0.7);
-
-    cmd.execute(&mut project);
-    assert!((project.settings.master_opacity - 0.7).abs() < 0.001);
-
-    cmd.undo(&mut project);
-    assert!((project.settings.master_opacity - 1.0).abs() < 0.001);
-}
-
-#[test]
-fn clear_tempo_map_undo_roundtrip() {
-    let mut project = make_test_project();
-    project
-        .tempo_map
-        .add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
-    project
-        .tempo_map
-        .add_or_replace_point(Beats(4.0), Bpm(140.0), TempoPointSource::Manual, 0.001);
-
-    let old_points = project.tempo_map.clone_points();
-    assert_eq!(old_points.len(), 2);
-
-    let mut cmd = ClearTempoMapCommand::new(old_points, Bpm(120.0));
-
-    cmd.execute(&mut project);
-    assert_eq!(project.tempo_map.point_count(), 1); // just the beat-zero point
-
-    cmd.undo(&mut project);
-    assert_eq!(project.tempo_map.point_count(), 2);
-}
-
-#[test]
 fn restore_tempo_lane_undo_roundtrip() {
     let mut project = make_test_project();
     project
@@ -896,106 +634,6 @@ fn restore_tempo_lane_undo_roundtrip() {
 }
 
 // ─── Effect Commands ───
-
-#[test]
-fn add_effect_undo_roundtrip() {
-    let mut project = make_test_project();
-    let target = EffectTarget::Master;
-
-    let mut effect = PresetInstance::new(PresetTypeId::BLOOM);
-    effect.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
-
-    let mut cmd = AddEffectCommand::new(target, effect, 0);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.settings.master_effects.len(), 1);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.settings.master_effects.len(), 0);
-}
-
-#[test]
-fn remove_effect_undo_roundtrip() {
-    let mut project = make_test_project();
-    {
-        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
-        project.settings.master_effects.push(fx);
-    }
-
-    let effect = project.settings.master_effects[0].clone();
-    let target = EffectTarget::Master;
-    let mut cmd = RemoveEffectCommand::new(target, effect, 0);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.settings.master_effects.len(), 0);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.settings.master_effects.len(), 1);
-}
-
-#[test]
-fn toggle_effect_undo_roundtrip() {
-    let mut project = make_test_project();
-    project
-        .settings
-        .master_effects
-        .push(PresetInstance::new(PresetTypeId::BLOOM));
-
-    let effect_id = project.settings.master_effects[0].id.clone();
-    let mut cmd = ToggleEffectCommand::new(effect_id, true, false);
-
-    cmd.execute(&mut project);
-    assert!(!project.settings.master_effects[0].enabled);
-
-    cmd.undo(&mut project);
-    assert!(project.settings.master_effects[0].enabled);
-}
-
-/// `docs/DEPTH_RELIGHT_DESIGN.md` P5: the "3D Shading" toggle + its D3 knobs,
-/// addressed by `GraphTarget` — proven here on an effect instance; the same
-/// commands address a generator's `gen_params` identically since both are
-/// `PresetInstance` (the `GraphTarget::Generator` case is exercised
-/// elsewhere in this file for the ordinary graph commands, same resolver).
-#[test]
-fn toggle_relight_undo_roundtrip() {
-    let mut project = make_test_project();
-    project
-        .settings
-        .master_effects
-        .push(PresetInstance::new(PresetTypeId::BLOOM));
-    let effect_id = project.settings.master_effects[0].id.clone();
-    let target = manifold_core::GraphTarget::Effect(effect_id);
-
-    let mut cmd = ToggleRelightCommand::new(target, false, true);
-    cmd.execute(&mut project);
-    assert!(project.settings.master_effects[0].relight);
-
-    cmd.undo(&mut project);
-    assert!(!project.settings.master_effects[0].relight);
-}
-
-#[test]
-fn set_relight_param_undo_roundtrip() {
-    let mut project = make_test_project();
-    project
-        .settings
-        .master_effects
-        .push(PresetInstance::new(PresetTypeId::BLOOM));
-    let effect_id = project.settings.master_effects[0].id.clone();
-    let target = manifold_core::GraphTarget::Effect(effect_id);
-    let default_relief = project.settings.master_effects[0].relight_params.relief;
-
-    let mut cmd = SetRelightParamCommand::new(target, RelightField::Relief, default_relief, 0.9);
-    cmd.execute(&mut project);
-    assert_eq!(project.settings.master_effects[0].relight_params.relief, 0.9);
-
-    cmd.undo(&mut project);
-    assert_eq!(
-        project.settings.master_effects[0].relight_params.relief,
-        default_relief
-    );
-}
 
 #[test]
 fn set_relight_height_from_undo_roundtrip() {
@@ -1195,7 +833,7 @@ fn reorder_effect_undo_roundtrip() {
 
     let target = EffectTarget::Master;
     // to_index uses pre-removal indexing: to=2 means "insert after the last element"
-    // Unity: remove at 0 -> [Feedback], insertAt = 2-1 = 1, insert Bloom at 1 -> [Feedback, Bloom]
+    // Remove at 0 -> [Feedback], insertAt = 2-1 = 1, insert Bloom at 1 -> [Feedback, Bloom]
     let mut cmd = ReorderEffectCommand::new(target, 0, 2);
 
     cmd.execute(&mut project);
@@ -1216,29 +854,6 @@ fn reorder_effect_undo_roundtrip() {
     assert_eq!(
         *project.settings.master_effects[1].effect_type(),
         PresetTypeId::GLITCH
-    );
-}
-
-#[test]
-fn effect_on_layer_undo_roundtrip() {
-    let mut project = make_test_project();
-
-    let effect = PresetInstance::new(PresetTypeId::MIRROR);
-    let target = EffectTarget::Layer {
-        layer_id: project.timeline.layers[0].layer_id.clone(),
-    };
-    let mut cmd = AddEffectCommand::new(target, effect, 0);
-
-    cmd.execute(&mut project);
-    assert_eq!(
-        project.timeline.layers[0].effects.as_ref().unwrap().len(),
-        1
-    );
-
-    cmd.undo(&mut project);
-    assert_eq!(
-        project.timeline.layers[0].effects.as_ref().unwrap().len(),
-        0
     );
 }
 
@@ -1323,67 +938,6 @@ fn ungroup_effects_undo_roundtrip() {
     );
 }
 
-#[test]
-fn toggle_group_undo_roundtrip() {
-    let mut project = make_test_project();
-    let group = EffectGroup::new("Test".into());
-    let gid = group.id.clone();
-    project.settings.master_effect_groups = Some(vec![group]);
-
-    let target = EffectTarget::Master;
-    let mut cmd = ToggleGroupCommand::new(target, gid, true, false);
-
-    cmd.execute(&mut project);
-    assert!(!project.settings.master_effect_groups.as_ref().unwrap()[0].enabled);
-
-    cmd.undo(&mut project);
-    assert!(project.settings.master_effect_groups.as_ref().unwrap()[0].enabled);
-}
-
-#[test]
-fn rename_group_undo_roundtrip() {
-    let mut project = make_test_project();
-    let group = EffectGroup::new("Old Name".into());
-    let gid = group.id.clone();
-    project.settings.master_effect_groups = Some(vec![group]);
-
-    let target = EffectTarget::Master;
-    let mut cmd = RenameGroupCommand::new(target, gid, "Old Name".into(), "New Name".into());
-
-    cmd.execute(&mut project);
-    assert_eq!(
-        project.settings.master_effect_groups.as_ref().unwrap()[0].name,
-        "New Name"
-    );
-
-    cmd.undo(&mut project);
-    assert_eq!(
-        project.settings.master_effect_groups.as_ref().unwrap()[0].name,
-        "Old Name"
-    );
-}
-
-#[test]
-fn change_group_wet_dry_undo_roundtrip() {
-    let mut project = make_test_project();
-    let group = EffectGroup::new("Test".into());
-    let gid = group.id.clone();
-    project.settings.master_effect_groups = Some(vec![group]);
-
-    let target = EffectTarget::Master;
-    let mut cmd = ChangeGroupWetDryCommand::new(target, gid, 1.0, 0.5);
-
-    cmd.execute(&mut project);
-    assert!(
-        (project.settings.master_effect_groups.as_ref().unwrap()[0].wet_dry - 0.5).abs() < 0.001
-    );
-
-    cmd.undo(&mut project);
-    assert!(
-        (project.settings.master_effect_groups.as_ref().unwrap()[0].wet_dry - 1.0).abs() < 0.001
-    );
-}
-
 // ─── Driver Commands ───
 
 #[test]
@@ -1432,30 +986,6 @@ fn add_driver_effect_undo_roundtrip() {
             .unwrap()
             .is_empty()
     );
-}
-
-#[test]
-fn toggle_driver_enabled_undo_roundtrip() {
-    let mut project = make_test_project();
-    {
-        let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
-        fx.drivers = Some(vec![ParameterDriver {
-            param_id: std::borrow::Cow::Borrowed("amount"),
-            enabled: true,
-            ..make_driver()
-        }]);
-        project.settings.master_effects.push(fx);
-    }
-
-    let effect_id = project.settings.master_effects[0].id.clone();
-    let target = DriverTarget::Effect { effect_id };
-    let mut cmd = ToggleDriverEnabledCommand::new(target, 0, true, false);
-
-    cmd.execute(&mut project);
-    assert!(!project.settings.master_effects[0].drivers.as_ref().unwrap()[0].enabled);
-
-    cmd.undo(&mut project);
-    assert!(project.settings.master_effects[0].drivers.as_ref().unwrap()[0].enabled);
 }
 
 #[test]
@@ -1642,49 +1172,6 @@ fn make_envelope() -> ParamEnvelope {
 }
 
 // ─── Undo-blind fix commands (invariant audit 2026-03-23) ───
-
-#[test]
-fn toggle_export_hdr_undo_roundtrip() {
-    let mut project = make_test_project();
-    assert!(!project.settings.export_hdr);
-
-    let mut cmd = ToggleExportHdrCommand::new(false);
-    cmd.execute(&mut project);
-    assert!(project.settings.export_hdr);
-
-    cmd.undo(&mut project);
-    assert!(!project.settings.export_hdr);
-}
-
-#[test]
-fn change_midi_channel_undo_roundtrip() {
-    let mut project = make_test_project();
-    let layer_id = project.timeline.layers[0].layer_id.clone();
-    let old_channel = project.timeline.layers[0].midi_channel;
-
-    let mut cmd = ChangeLayerMidiChannelCommand::new(layer_id, old_channel, 5);
-    cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers[0].midi_channel, 5);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers[0].midi_channel, old_channel);
-}
-
-#[test]
-fn set_display_dimensions_undo_roundtrip() {
-    let mut project = make_test_project();
-    let old_w = project.settings.output_width;
-    let old_h = project.settings.output_height;
-
-    let mut cmd = SetDisplayDimensionsCommand::new(old_w, old_h, 3840, 2160);
-    cmd.execute(&mut project);
-    assert_eq!(project.settings.output_width, 3840);
-    assert_eq!(project.settings.output_height, 2160);
-
-    cmd.undo(&mut project);
-    assert_eq!(project.settings.output_width, old_w);
-    assert_eq!(project.settings.output_height, old_h);
-}
 
 #[test]
 fn reorder_effect_group_undo_roundtrip() {
@@ -2357,24 +1844,6 @@ fn make_session_test_project() -> Project {
 }
 
 #[test]
-fn add_scene_undo_roundtrip() {
-    let mut project = make_session_test_project();
-    let scene = Scene {
-        id: SceneId::new("scene-1"),
-        name: "Intro".into(),
-        color: None,
-    };
-    let mut cmd = AddSceneCommand::new(scene.clone(), 0);
-
-    cmd.execute(&mut project);
-    assert_eq!(project.session.scenes.len(), 1);
-    assert_eq!(project.session.scenes[0].name, "Intro");
-
-    cmd.undo(&mut project);
-    assert!(project.session.scenes.is_empty());
-}
-
-#[test]
 fn remove_scene_removes_its_slots_and_undo_restores_both() {
     let mut project = make_session_test_project();
     let scene_id = SceneId::new("scene-1");
@@ -2401,24 +1870,6 @@ fn remove_scene_removes_its_slots_and_undo_restores_both() {
     assert_eq!(project.session.scenes.len(), 1);
     assert_eq!(project.session.slots.len(), 1);
     assert_eq!(project.session.slots[0].scene_id, scene_id);
-}
-
-#[test]
-fn rename_scene_undo_roundtrip() {
-    let mut project = make_session_test_project();
-    let scene_id = SceneId::new("scene-1");
-    project.session.scenes.push(Scene {
-        id: scene_id.clone(),
-        name: "Old".into(),
-        color: None,
-    });
-
-    let mut cmd = RenameSceneCommand::new(scene_id.clone(), "Old".into(), "New".into());
-    cmd.execute(&mut project);
-    assert_eq!(project.session.scenes[0].name, "New");
-
-    cmd.undo(&mut project);
-    assert_eq!(project.session.scenes[0].name, "Old");
 }
 
 #[test]
@@ -2685,4 +2136,256 @@ fn delete_layer_removes_its_session_slots_and_undo_restores() {
     cmd.undo(&mut project);
     assert_eq!(project.session.slots.len(), 1);
     assert_eq!(project.session.slots[0].layer_id, layer_id);
+}
+
+// ─── Whole-project undo/redo oracle ───
+
+#[path = "../src/commands/setter_roundtrip.rs"]
+mod setter_roundtrip;
+use setter_roundtrip::{SetterCase, assert_setter_cases};
+
+fn first_clip(p: &Project) -> &TimelineClip {
+    &p.timeline.layers[0].clips[0]
+}
+
+fn first_layer_id(p: &Project) -> LayerId {
+    p.timeline.layers[0].layer_id.clone()
+}
+
+fn push_master_bloom(p: &mut Project) -> EffectId {
+    let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+    fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+    let id = fx.id.clone();
+    p.settings.master_effects.push(fx);
+    id
+}
+
+fn push_master_group(p: &mut Project, name: &str) -> EffectGroupId {
+    let group = EffectGroup::new(name.into());
+    let id = group.id.clone();
+    p.settings.master_effect_groups = Some(vec![group]);
+    id
+}
+
+fn master_group(p: &Project) -> &EffectGroup {
+    &p.settings.master_effect_groups.as_ref().unwrap()[0]
+}
+
+#[test]
+fn project_commands_undo_and_redo_restore_the_whole_project() {
+    assert_setter_cases(make_test_project, &[
+        // Clips
+        SetterCase {
+            name: "slip clip",
+            build: |p| Box::new(SlipClipCommand::new(first_clip(p).id.clone(), Seconds(0.0), Seconds(2.5))),
+            applied: |p| first_clip(p).in_point == Seconds(2.5),
+        },
+        SetterCase {
+            name: "clip loop",
+            build: |p| Box::new(ChangeClipLoopCommand::new(first_clip(p).id.clone(), false, true, Beats(0.0), Beats(2.0))),
+            applied: |p| first_clip(p).is_looping && first_clip(p).loop_duration_beats == Beats(2.0),
+        },
+        SetterCase {
+            name: "clip recorded bpm",
+            build: |p| Box::new(ChangeClipRecordedBpmCommand::new(first_clip(p).id.clone(), first_clip(p).recorded_bpm, 130.0)),
+            applied: |p| first_clip(p).recorded_bpm == 130.0,
+        },
+        SetterCase {
+            name: "mute clip",
+            build: |p| Box::new(MuteClipCommand::new(first_clip(p).id.clone(), false, true)),
+            applied: |p| first_clip(p).is_muted,
+        },
+        SetterCase {
+            name: "split clip",
+            build: |p| {
+                let mut tail = first_clip(p).clone_with_new_id();
+                tail.start_beat = Beats(2.0);
+                tail.duration_beats = Beats(2.0);
+                Box::new(SplitClipCommand::new(first_clip(p).id.clone(), first_layer_id(p), Beats(4.0), Beats(2.0), tail))
+            },
+            applied: |p| p.timeline.layers[0].clips.len() == 3 && first_clip(p).duration_beats == Beats(2.0),
+        },
+        // Layers
+        SetterCase {
+            name: "add layer",
+            build: |_| Box::new(AddLayerCommand::new("New Layer".into(), LayerType::Video, PresetTypeId::NONE, 0, None)),
+            applied: |p| p.timeline.layers.len() == 3,
+        },
+        SetterCase {
+            name: "delete layer",
+            build: |p| Box::new(DeleteLayerCommand::new(p.timeline.layers[0].clone())),
+            applied: |p| p.timeline.layers.len() == 1,
+        },
+        SetterCase {
+            name: "reorder layers",
+            build: |p| {
+                let old = p.timeline.layers.clone();
+                let new = old.iter().rev().cloned().collect();
+                Box::new(ReorderLayerCommand::new(old, new, Default::default(), Default::default()))
+            },
+            applied: |p| p.timeline.layers[0].name == "Layer 2",
+        },
+        SetterCase {
+            name: "group layers",
+            build: |p| {
+                let ids = p.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
+                Box::new(GroupLayersCommand::new(ids, p.timeline.layers.clone()))
+            },
+            applied: |p| p.timeline.layers.iter().any(|l| l.is_group()),
+        },
+        SetterCase {
+            name: "layer midi note",
+            build: |p| Box::new(ChangeLayerMidiNoteCommand::new(first_layer_id(p), p.timeline.layers[0].midi_note, 60)),
+            applied: |p| p.timeline.layers[0].midi_note == 60,
+        },
+        SetterCase {
+            name: "layer midi channel",
+            build: |p| Box::new(ChangeLayerMidiChannelCommand::new(first_layer_id(p), p.timeline.layers[0].midi_channel, 5)),
+            applied: |p| p.timeline.layers[0].midi_channel == 5,
+        },
+        SetterCase {
+            name: "layer blend mode",
+            build: |p| Box::new(ChangeLayerBlendModeCommand::new(first_layer_id(p), p.timeline.layers[0].default_blend_mode, BlendMode::Additive)),
+            applied: |p| p.timeline.layers[0].default_blend_mode == BlendMode::Additive,
+        },
+        SetterCase {
+            name: "layer opacity",
+            build: |p| Box::new(ChangeLayerOpacityCommand::new(first_layer_id(p), p.timeline.layers[0].opacity, 0.5)),
+            applied: |p| p.timeline.layers[0].opacity == 0.5,
+        },
+        // Settings
+        SetterCase {
+            name: "bpm",
+            build: |p| Box::new(ChangeBpmCommand::new(p.settings.bpm, Bpm(128.0))),
+            applied: |p| p.settings.bpm == Bpm(128.0),
+        },
+        SetterCase {
+            name: "quantize mode",
+            build: |p| Box::new(ChangeQuantizeModeCommand::new(p.settings.quantize_mode, QuantizeMode::Beat)),
+            applied: |p| p.settings.quantize_mode == QuantizeMode::Beat,
+        },
+        SetterCase {
+            name: "frame rate",
+            build: |p| Box::new(ChangeFrameRateCommand::new(p.settings.frame_rate, 30.0)),
+            applied: |p| p.settings.frame_rate == 30.0,
+        },
+        SetterCase {
+            name: "master opacity",
+            build: |p| Box::new(ChangeMasterOpacityCommand::new(p.settings.master_opacity, 0.7)),
+            applied: |p| p.settings.master_opacity == 0.7,
+        },
+        SetterCase {
+            name: "export hdr",
+            build: |p| Box::new(ToggleExportHdrCommand::new(p.settings.export_hdr)),
+            applied: |p| p.settings.export_hdr,
+        },
+        SetterCase {
+            name: "display dimensions",
+            build: |p| Box::new(SetDisplayDimensionsCommand::new(p.settings.output_width, p.settings.output_height, 3840, 2160)),
+            applied: |p| (p.settings.output_width, p.settings.output_height) == (3840, 2160),
+        },
+        SetterCase {
+            name: "clear tempo map",
+            build: |p| {
+                p.tempo_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
+                p.tempo_map.add_or_replace_point(Beats(4.0), Bpm(140.0), TempoPointSource::Manual, 0.001);
+                Box::new(ClearTempoMapCommand::new(p.tempo_map.clone_points(), Bpm(120.0)))
+            },
+            applied: |p| p.tempo_map.point_count() == 1,
+        },
+        // Effects
+        SetterCase {
+            name: "add master effect",
+            build: |_| {
+                let mut fx = PresetInstance::new(PresetTypeId::BLOOM);
+                fx.params = manifold_core::params::ParamManifest::from_params(vec![slot("amount", 0.5, true)]);
+                Box::new(AddEffectCommand::new(EffectTarget::Master, fx, 0))
+            },
+            applied: |p| p.settings.master_effects.len() == 1,
+        },
+        SetterCase {
+            name: "add layer effect",
+            build: |p| {
+                let target = EffectTarget::Layer { layer_id: first_layer_id(p) };
+                Box::new(AddEffectCommand::new(target, PresetInstance::new(PresetTypeId::MIRROR), 0))
+            },
+            applied: |p| p.timeline.layers[0].effects.as_ref().is_some_and(|e| e.len() == 1),
+        },
+        SetterCase {
+            name: "remove master effect",
+            build: |p| {
+                push_master_bloom(p);
+                Box::new(RemoveEffectCommand::new(EffectTarget::Master, p.settings.master_effects[0].clone(), 0))
+            },
+            applied: |p| p.settings.master_effects.is_empty(),
+        },
+        SetterCase {
+            name: "toggle effect",
+            build: |p| Box::new(ToggleEffectCommand::new(push_master_bloom(p), true, false)),
+            applied: |p| !p.settings.master_effects[0].enabled,
+        },
+        SetterCase {
+            name: "toggle relight",
+            build: |p| {
+                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
+                Box::new(ToggleRelightCommand::new(target, p.settings.master_effects[0].relight, true))
+            },
+            applied: |p| p.settings.master_effects[0].relight,
+        },
+        SetterCase {
+            name: "relight param",
+            build: |p| {
+                let target = manifold_core::GraphTarget::Effect(push_master_bloom(p));
+                let relief = p.settings.master_effects[0].relight_params.relief;
+                Box::new(SetRelightParamCommand::new(target, RelightField::Relief, relief, 0.9))
+            },
+            applied: |p| p.settings.master_effects[0].relight_params.relief == 0.9,
+        },
+        SetterCase {
+            name: "toggle driver",
+            build: |p| {
+                let effect_id = push_master_bloom(p);
+                p.settings.master_effects[0].drivers = Some(vec![ParameterDriver {
+                    param_id: std::borrow::Cow::Borrowed("amount"),
+                    enabled: true,
+                    ..make_driver()
+                }]);
+                Box::new(ToggleDriverEnabledCommand::new(DriverTarget::Effect { effect_id }, 0, true, false))
+            },
+            applied: |p| !p.settings.master_effects[0].drivers.as_ref().unwrap()[0].enabled,
+        },
+        // Effect groups
+        SetterCase {
+            name: "toggle effect group",
+            build: |p| Box::new(ToggleGroupCommand::new(EffectTarget::Master, push_master_group(p, "Test"), true, false)),
+            applied: |p| !master_group(p).enabled,
+        },
+        SetterCase {
+            name: "rename effect group",
+            build: |p| Box::new(RenameGroupCommand::new(EffectTarget::Master, push_master_group(p, "Old Name"), "Old Name".into(), "New Name".into())),
+            applied: |p| master_group(p).name == "New Name",
+        },
+        SetterCase {
+            name: "effect group wet/dry",
+            build: |p| {
+                let gid = push_master_group(p, "Test");
+                Box::new(ChangeGroupWetDryCommand::new(EffectTarget::Master, gid, master_group(p).wet_dry, 0.5))
+            },
+            applied: |p| master_group(p).wet_dry == 0.5,
+        },
+        // Session
+        SetterCase {
+            name: "add scene",
+            build: |_| Box::new(AddSceneCommand::new(Scene { id: SceneId::new("scene-1"), name: "Intro".into(), color: None }, 0)),
+            applied: |p| p.session.scenes.len() == 1 && p.session.scenes[0].name == "Intro",
+        },
+        SetterCase {
+            name: "rename scene",
+            build: |p| {
+                p.session.scenes.push(Scene { id: SceneId::new("scene-1"), name: "Old".into(), color: None });
+                Box::new(RenameSceneCommand::new(SceneId::new("scene-1"), "Old".into(), "New".into()))
+            },
+            applied: |p| p.session.scenes[0].name == "New",
+        },
+    ]);
 }

@@ -76,7 +76,7 @@ in FOUNDATIONAL_GAPS/CORE_ENGINE_FINDINGS (candidate for section 5).
 | BUG-046 (low-band-kick-deafness-on-mixes) | manifold-audio Low-band kick detection | one-off | open (partial) | mod_harness recovery counts | :644 | none |
 | BUG-047 (setup-panel-overflow) | manifold-ui/audio_setup_panel.rs | structural-design-flaw | open | consumers_fit_within_panel test | :626 | A2 |
 | BUG-048 (arm-two-reds) | manifold-ui/transport.rs | one-off (UX) | open (UX call pending) | automation_state_toggles test | :611 | none |
-| BUG-049 (child-row-right-indent) | manifold-ui/layer_header.rs | one-off | open | layout_matches_frozen_oracle (stale) | :598 | none |
+| BUG-049 (child-row-right-indent) | manifold-ui/layer_header.rs | one-off | open | none named | :598 | none |
 | BUG-050 (ableton-anchor-yankback) | manifold-playback/transport_sync.rs | structural-design-flaw | open (partial) | [ABL-SYNC] traces + 3 tests | :574 | F6/F14 (loose) |
 | BUG-051 (trigger-clear-unwired) | manifold-playback/live_trigger.rs+modulation.rs | missing-invariant-enforcement | struct | clear_all_trigger_edges_rearms_generator_edge | :2570 | none |
 | BUG-052 (sample-rate-dependent-detection) | manifold-audio/manifold-playback | convention-mismatch (units) | struct | time_grid_holds_hop_and_window_duration | :1925 | none |

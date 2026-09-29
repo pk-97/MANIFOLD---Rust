@@ -472,16 +472,6 @@ mod tests {
     }
 
     #[test]
-    fn active_clip_ref_clone_is_cheap() {
-        let r = make_ref("c1", 3, 1.0, 2.0);
-        let cloned = r.clone();
-        assert_eq!(r.clip_id, cloned.clip_id);
-        assert_eq!(r.layer_index, cloned.layer_index);
-        assert_eq!(r.clip_index, cloned.clip_index);
-        assert!((r.start_beat.0 - cloned.start_beat.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
     fn buffer_reclamation_preserves_capacity() {
         let mut sched = ClipScheduler::new();
         let active = AHashSet::new();

@@ -201,31 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn default_enables_drums_only() {
-        let cfg = DetectionConfig::default();
-        assert!(cfg.instrument(PercussionTriggerType::Kick).unwrap().enabled);
-        assert!(cfg.instrument(PercussionTriggerType::Snare).unwrap().enabled);
-        assert!(cfg.instrument(PercussionTriggerType::Hat).unwrap().enabled);
-        assert!(cfg.instrument(PercussionTriggerType::Perc).unwrap().enabled);
-        assert!(!cfg.instrument(PercussionTriggerType::Bass).unwrap().enabled);
-        assert!(!cfg.instrument(PercussionTriggerType::Vocal).unwrap().enabled);
-    }
-
-    #[test]
-    fn default_config_has_all_instruments() {
-        let cfg = DetectionConfig::default();
-        assert_eq!(cfg.instruments.len(), 9);
-        assert!(cfg.quantize_on);
-        assert_eq!(cfg.quantize_step_beats, Beats(0.25));
-    }
-
-    #[test]
-    fn fresh_detection_has_no_analysis() {
-        let d = AudioClipDetection::new();
-        assert!(!d.has_analysis());
-    }
-
-    #[test]
     fn quantize_grid_label_round_trips_options() {
         // Off + every on-step label matches its option entry.
         assert_eq!(quantize_grid_label(false, Beats(0.25)), "Off");

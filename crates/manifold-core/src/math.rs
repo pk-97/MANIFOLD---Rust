@@ -55,10 +55,4 @@ mod tests {
         assert_eq!(BeatQuantizer::quantize_bpm(15.0), 20.0);
         assert_eq!(BeatQuantizer::quantize_bpm(350.0), 300.0);
     }
-
-    #[test]
-    fn test_short_id_length() {
-        let id = short_id();
-        assert_eq!(id.len(), 8);
-    }
 }

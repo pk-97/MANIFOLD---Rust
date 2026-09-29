@@ -414,7 +414,7 @@ fn notify_clip_stopped_removes_only_clip_id() {
         .unwrap();
 
     mgr.notify_clip_stopped(&clip.id);
-    // Unity behavior: only removes from liveSlotClipIds, NOT from liveSlots dict.
+    // Stopping drops the clip from the live clip ids but keeps its slot.
     // The slot persists so NoteOff can still commit the correct held duration.
     assert_eq!(mgr.live_slots().len(), 1); // slot still present
     assert!(!mgr.is_live_slot_clip(&clip.id)); // but clip ID removed from tracking set

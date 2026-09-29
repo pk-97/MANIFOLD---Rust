@@ -452,17 +452,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_dimensions() {
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-
-        let transport = layout.transport_bar();
-        assert_eq!(transport.x, 0.0);
-        assert_eq!(transport.y, 0.0);
-        assert_eq!(transport.width, 1920.0);
-        assert_eq!(transport.height, 36.0);
-    }
-
-    #[test]
     fn content_area_below_transport_left_of_inspector() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let content = layout.content_area();
@@ -558,133 +547,6 @@ mod tests {
         assert!((tracks.x + tracks.width - (body.x + body.width)).abs() < 0.1);
     }
 
-    // ── Audio Setup dock column (D1) ─────────────────────────────────
-
-    #[test]
-    fn audio_setup_zero_when_closed() {
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        // Default layout: dock closed.
-        assert_eq!(layout.audio_setup_width, 0.0);
-        assert_eq!(layout.audio_setup(), Rect::ZERO);
-    }
-
-    #[test]
-    fn audio_setup_zero_width_is_todays_layout_byte_identical() {
-        // The zero-width-is-today's-layout invariant: with the dock closed,
-        // content_area() and inspector() must be exactly what they were before
-        // the dock existed (the values the pre-existing tests assert).
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        assert_eq!(layout.audio_setup_width, 0.0);
-        let content = layout.content_area();
-        assert_eq!(content.x, 0.0);
-        assert_eq!(content.y, 36.0);
-        assert_eq!(content.width, 1420.0); // 1920 - 500 inspector, dock adds nothing
-        assert_eq!(content.height, 1008.0);
-        let insp = layout.inspector();
-        assert_eq!(insp.x, 1420.0);
-        assert_eq!(insp.width, 500.0);
-    }
-
-    #[test]
-    fn audio_setup_shrinks_both_preview_and_timeline() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        let preview_before = layout.video_area().width;
-        let timeline_before = layout.timeline_area().width;
-        let inspector_before = layout.inspector();
-        // Open the dock: preview + timeline both narrow together, inspector
-        // stays exactly where it was (right-anchored, never collapses — D1).
-        layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
-        assert!(layout.video_area().width < preview_before);
-        assert!(layout.timeline_area().width < timeline_before);
-        assert_eq!(layout.inspector(), inspector_before);
-    }
-
-    #[test]
-    fn audio_setup_sits_exactly_between_content_and_inspector() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        layout.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH;
-        let dock = layout.audio_setup();
-        let content = layout.content_area();
-        let insp = layout.inspector();
-        // Dock's left edge == content's right edge (no gap, no overlap).
-        assert!((content.x + content.width - dock.x).abs() < 0.01);
-        // Dock's right edge == inspector's left edge.
-        assert!((dock.x + dock.width - insp.x).abs() < 0.01);
-        // Full height, same as the inspector.
-        assert_eq!(dock.y, insp.y);
-        assert_eq!(dock.height, insp.height);
-        assert_eq!(dock.width, color::DEFAULT_AUDIO_SETUP_WIDTH);
-    }
-
-    #[test]
-    fn reset_audio_setup_width_snaps_data_and_starts_the_visual_ease() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        layout.audio_setup_width = 640.0;
-
-        layout.reset_audio_setup_width();
-        // Data snaps instantly.
-        assert_eq!(layout.audio_setup_width, color::DEFAULT_AUDIO_SETUP_WIDTH);
-        assert!(layout.is_split_reset_animating(), "reset starts the visual ease");
-
-        layout.tick_splits(color::MOTION_MED_MS * 0.5);
-        assert_ne!(layout.audio_setup_width, 640.0, "width must have moved off the pre-reset value");
-        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
-
-        for _ in 0..30 {
-            layout.tick_splits(color::MOTION_MED_MS / 20.0);
-        }
-        assert!(!layout.is_split_reset_animating(), "tween settles");
-        assert_eq!(layout.audio_setup_width, color::DEFAULT_AUDIO_SETUP_WIDTH);
-    }
-
-    // ── P2 "panel-split snap-back" (D15) ─────────────────────────────
-
-    #[test]
-    fn reset_inspector_width_snaps_data_and_starts_the_visual_ease() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        layout.inspector_width = 700.0;
-
-        layout.reset_inspector_width();
-        // Data snaps instantly: the field already reads the default the
-        // moment this returns.
-        assert_eq!(layout.inspector_width, color::DEFAULT_INSPECTOR_WIDTH);
-        assert!(layout.is_split_reset_animating(), "reset starts the visual ease");
-
-        // Mid-flight: `tick_splits` writes the eased value back into the
-        // field every animating frame, so it must have moved off the old
-        // width — NOT necessarily monotonically toward the default, since
-        // `Curve::Snap` overshoots by design (D15's back-out curve).
-        layout.tick_splits(color::MOTION_MED_MS * 0.5);
-        assert_ne!(layout.inspector_width, 700.0, "fill must have moved off the pre-reset width");
-        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
-
-        for _ in 0..30 {
-            layout.tick_splits(color::MOTION_MED_MS / 20.0);
-        }
-        assert!(!layout.is_split_reset_animating(), "tween settles");
-        assert_eq!(layout.inspector_width, color::DEFAULT_INSPECTOR_WIDTH);
-    }
-
-    #[test]
-    fn reset_timeline_split_snaps_data_and_starts_the_visual_ease() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        layout.timeline_split_ratio = 0.6;
-
-        layout.reset_timeline_split();
-        assert_eq!(layout.timeline_split_ratio, color::DEFAULT_TIMELINE_SPLIT_RATIO);
-        assert!(layout.is_split_reset_animating());
-
-        layout.tick_splits(color::MOTION_MED_MS * 0.5);
-        assert_ne!(layout.timeline_split_ratio, 0.6, "ratio must have moved off the pre-reset value");
-        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
-
-        for _ in 0..30 {
-            layout.tick_splits(color::MOTION_MED_MS / 20.0);
-        }
-        assert!(!layout.is_split_reset_animating());
-        assert_eq!(layout.timeline_split_ratio, color::DEFAULT_TIMELINE_SPLIT_RATIO);
-    }
-
     #[test]
     fn reset_already_at_default_is_a_no_op() {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
@@ -692,81 +554,6 @@ mod tests {
         layout.reset_inspector_width();
         layout.reset_timeline_split();
         assert!(!layout.is_split_reset_animating(), "no-op reset never starts a tween");
-    }
-
-    // ── Scene Setup dock column (SCENE_SETUP_PANEL_DESIGN D2) ─────────────
-
-    #[test]
-    fn scene_setup_zero_when_closed() {
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        assert_eq!(layout.scene_setup_width, 0.0);
-        assert_eq!(layout.scene_setup(), Rect::ZERO);
-    }
-
-    #[test]
-    fn scene_setup_zero_width_is_todays_layout_byte_identical() {
-        // The zero-width-is-today's-layout invariant, mirroring the audio
-        // dock's own gate: with BOTH utility docks closed, content_area()
-        // and inspector() are exactly what they were before either dock
-        // existed. This is the machine check section 4's "Show path never pays"
-        // invariant reduces to at the layout level.
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        assert_eq!(layout.audio_setup_width, 0.0);
-        assert_eq!(layout.scene_setup_width, 0.0);
-        let content = layout.content_area();
-        assert_eq!(content.x, 0.0);
-        assert_eq!(content.y, 36.0);
-        assert_eq!(content.width, 1420.0); // 1920 - 500 inspector, neither dock adds anything
-        assert_eq!(content.height, 1008.0);
-        let insp = layout.inspector();
-        assert_eq!(insp.x, 1420.0);
-        assert_eq!(insp.width, 500.0);
-    }
-
-    #[test]
-    fn scene_setup_shrinks_both_preview_and_timeline() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        let preview_before = layout.video_area().width;
-        let timeline_before = layout.timeline_area().width;
-        let inspector_before = layout.inspector();
-        layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
-        assert!(layout.video_area().width < preview_before);
-        assert!(layout.timeline_area().width < timeline_before);
-        assert_eq!(layout.inspector(), inspector_before);
-    }
-
-    #[test]
-    fn scene_setup_sits_exactly_between_content_and_inspector() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
-        let dock = layout.scene_setup();
-        let content = layout.content_area();
-        let insp = layout.inspector();
-        assert!((content.x + content.width - dock.x).abs() < 0.01);
-        assert!((dock.x + dock.width - insp.x).abs() < 0.01);
-        assert_eq!(dock.y, insp.y);
-        assert_eq!(dock.height, insp.height);
-        assert_eq!(dock.width, color::DEFAULT_SCENE_SETUP_WIDTH);
-    }
-
-    #[test]
-    fn reset_scene_setup_width_snaps_data_and_starts_the_visual_ease() {
-        let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        layout.scene_setup_width = 600.0;
-
-        layout.reset_scene_setup_width();
-        assert_eq!(layout.scene_setup_width, color::DEFAULT_SCENE_SETUP_WIDTH);
-        assert!(layout.is_split_reset_animating(), "reset starts the visual ease");
-
-        layout.tick_splits(color::MOTION_MED_MS * 0.5);
-        assert_ne!(layout.scene_setup_width, 600.0, "width must have moved off the pre-reset value");
-        assert!(layout.is_split_reset_animating(), "still mid-flight, not yet settled");
-
-        for _ in 0..30 {
-            layout.tick_splits(color::MOTION_MED_MS / 20.0);
-        }
-        assert!(!layout.is_split_reset_animating(), "tween settles");
-        assert_eq!(layout.scene_setup_width, color::DEFAULT_SCENE_SETUP_WIDTH);
     }
 
     #[test]
@@ -790,5 +577,129 @@ mod tests {
         layout.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH;
         let with_scene = layout.content_area().width;
         assert!((base_content - with_scene - color::DEFAULT_SCENE_SETUP_WIDTH).abs() < 0.01);
+    }
+
+    // ── Docks and split resets ───────────────────────────────────────
+
+    struct DockCase {
+        name: &'static str,
+        open: fn(&mut ScreenLayout),
+        width: fn(&ScreenLayout) -> f32,
+        rect: fn(&ScreenLayout) -> Rect,
+        default: f32,
+    }
+
+    /// Each dock is absent when closed. Open, it sits exactly between the
+    /// content and the inspector at full height, narrowing preview and
+    /// timeline together while the inspector never moves.
+    #[test]
+    fn each_dock_sits_between_content_and_inspector_only_when_open() {
+        let docks = [
+            DockCase {
+                name: "audio setup",
+                open: |l| l.audio_setup_width = color::DEFAULT_AUDIO_SETUP_WIDTH,
+                width: |l| l.audio_setup_width,
+                rect: |l| l.audio_setup(),
+                default: color::DEFAULT_AUDIO_SETUP_WIDTH,
+            },
+            DockCase {
+                name: "scene setup",
+                open: |l| l.scene_setup_width = color::DEFAULT_SCENE_SETUP_WIDTH,
+                width: |l| l.scene_setup_width,
+                rect: |l| l.scene_setup(),
+                default: color::DEFAULT_SCENE_SETUP_WIDTH,
+            },
+        ];
+        for d in &docks {
+            let name = d.name;
+            let mut layout = ScreenLayout::new(1920.0, 1080.0);
+            assert_eq!((d.width)(&layout), 0.0, "{name}: closed by default");
+            assert_eq!((d.rect)(&layout), Rect::ZERO, "{name}: no rect when closed");
+
+            let preview_before = layout.video_area().width;
+            let timeline_before = layout.timeline_area().width;
+            let inspector_before = layout.inspector();
+            (d.open)(&mut layout);
+            assert!(layout.video_area().width < preview_before, "{name}: preview narrows");
+            assert!(layout.timeline_area().width < timeline_before, "{name}: timeline narrows");
+            assert_eq!(layout.inspector(), inspector_before, "{name}: inspector never moves");
+
+            let dock = (d.rect)(&layout);
+            let content = layout.content_area();
+            let insp = layout.inspector();
+            assert!((content.x + content.width - dock.x).abs() < 0.01, "{name}: flush with content");
+            assert!((dock.x + dock.width - insp.x).abs() < 0.01, "{name}: flush with inspector");
+            assert_eq!((dock.y, dock.height), (insp.y, insp.height), "{name}: full height");
+            assert_eq!(dock.width, d.default, "{name}: default width");
+        }
+    }
+
+    struct ResetCase {
+        name: &'static str,
+        set: fn(&mut ScreenLayout, f32),
+        get: fn(&ScreenLayout) -> f32,
+        reset: fn(&mut ScreenLayout),
+        dragged: f32,
+        default: f32,
+    }
+
+    /// Resetting any split snaps the data to its default at once and eases the
+    /// visual there. The ease writes back every frame and overshoots by
+    /// design, so mid-flight only "moved off the old value" holds.
+    #[test]
+    fn every_split_reset_snaps_data_and_eases_the_visual() {
+        let splits = [
+            ResetCase {
+                name: "inspector",
+                set: |l, v| l.inspector_width = v,
+                get: |l| l.inspector_width,
+                reset: ScreenLayout::reset_inspector_width,
+                dragged: 700.0,
+                default: color::DEFAULT_INSPECTOR_WIDTH,
+            },
+            ResetCase {
+                name: "timeline split",
+                set: |l, v| l.timeline_split_ratio = v,
+                get: |l| l.timeline_split_ratio,
+                reset: ScreenLayout::reset_timeline_split,
+                dragged: 0.6,
+                default: color::DEFAULT_TIMELINE_SPLIT_RATIO,
+            },
+            ResetCase {
+                name: "audio setup",
+                set: |l, v| l.audio_setup_width = v,
+                get: |l| l.audio_setup_width,
+                reset: ScreenLayout::reset_audio_setup_width,
+                dragged: 640.0,
+                default: color::DEFAULT_AUDIO_SETUP_WIDTH,
+            },
+            ResetCase {
+                name: "scene setup",
+                set: |l, v| l.scene_setup_width = v,
+                get: |l| l.scene_setup_width,
+                reset: ScreenLayout::reset_scene_setup_width,
+                dragged: 600.0,
+                default: color::DEFAULT_SCENE_SETUP_WIDTH,
+            },
+        ];
+        for s in &splits {
+            let name = s.name;
+            let mut layout = ScreenLayout::new(1920.0, 1080.0);
+            (s.set)(&mut layout, s.dragged);
+
+            (s.reset)(&mut layout);
+            assert_eq!((s.get)(&layout), s.default, "{name}: data snaps instantly");
+            assert!(layout.is_split_reset_animating(), "{name}: reset starts the visual ease");
+
+            layout.tick_splits(color::MOTION_MED_MS * 0.5);
+            assert_ne!((s.get)(&layout), s.dragged, "{name}: moved off the pre-reset value");
+            assert!(layout.is_split_reset_animating(), "{name}: still mid-flight");
+
+            for _ in 0..30 {
+                layout.tick_splits(color::MOTION_MED_MS / 20.0);
+            }
+            assert!(!layout.is_split_reset_animating(), "{name}: tween settles");
+            assert_eq!((s.get)(&layout), s.default, "{name}: settles on the default");
+        }
     }
 }

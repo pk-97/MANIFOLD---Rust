@@ -178,7 +178,6 @@ fn set_trim(project: &mut Project, target: &AbletonMappingTarget, min: f32, max:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::Command;
     use manifold_core::ableton_mapping::{
         AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
     };
@@ -210,51 +209,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn macro_slot_trim_round_trips() {
-        let mut project = Project::default();
-        project.settings.macro_bank.slots[0].ableton_mapping = Some(mapping("macro", 0.2, 0.8));
-
-        let mut cmd = ChangeAbletonTrimCommand::new(
-            AbletonMappingTarget::MacroSlot { slot_index: 0 },
-            0.2,
-            0.8,
-            0.4,
-            0.6,
-        );
-        cmd.execute(&mut project);
-        let m = project.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
-        assert!((m.range_min - 0.4).abs() < f32::EPSILON);
-        assert!((m.range_max - 0.6).abs() < f32::EPSILON);
-
-        cmd.undo(&mut project);
-        let m = project.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
-        assert!((m.range_min - 0.2).abs() < f32::EPSILON);
-        assert!((m.range_max - 0.8).abs() < f32::EPSILON);
+    fn master_bloom(project: &Project) -> &PresetInstance {
+        &project.settings.master_effects[0]
     }
 
     #[test]
-    fn master_effect_trim_round_trips() {
-        let mut project = Project::default();
-        let mut fx = PresetInstance::new(PresetTypeId::new("Bloom"));
-        fx.id = EffectId::new("fx-1");
-        fx.ableton_mappings = Some(vec![mapping("amount", 0.0, 1.0)]);
-        project.settings.master_effects.push(fx);
-
-        let target = AbletonMappingTarget::MasterEffect {
-            effect_type: PresetTypeId::new("Bloom"),
-            param_id: Cow::Borrowed("amount"),
-        };
-        let mut cmd = ChangeAbletonTrimCommand::new(target, 0.0, 1.0, 0.25, 0.75);
-
-        cmd.execute(&mut project);
-        let m = &project.settings.master_effects[0].ableton_mappings.as_ref().unwrap()[0];
-        assert!((m.range_min - 0.25).abs() < f32::EPSILON);
-        assert!((m.range_max - 0.75).abs() < f32::EPSILON);
-
-        cmd.undo(&mut project);
-        let m = &project.settings.master_effects[0].ableton_mappings.as_ref().unwrap()[0];
-        assert!((m.range_min - 0.0).abs() < f32::EPSILON);
-        assert!((m.range_max - 1.0).abs() < f32::EPSILON);
+    fn trim_undo_and_redo_restore_the_whole_project() {
+        use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
+        assert_setter_cases(Project::default, &[
+            SetterCase {
+                name: "macro slot trim",
+                build: |p| {
+                    p.settings.macro_bank.slots[0].ableton_mapping = Some(mapping("macro", 0.2, 0.8));
+                    Box::new(ChangeAbletonTrimCommand::new(
+                        AbletonMappingTarget::MacroSlot { slot_index: 0 },
+                        0.2, 0.8, 0.4, 0.6,
+                    ))
+                },
+                applied: |p| {
+                    let m = p.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
+                    (m.range_min, m.range_max) == (0.4, 0.6)
+                },
+            },
+            SetterCase {
+                name: "master effect trim",
+                build: |p| {
+                    let mut fx = PresetInstance::new(PresetTypeId::new("Bloom"));
+                    fx.id = EffectId::new("fx-1");
+                    fx.ableton_mappings = Some(vec![mapping("amount", 0.0, 1.0)]);
+                    p.settings.master_effects.push(fx);
+                    let target = AbletonMappingTarget::MasterEffect {
+                        effect_type: PresetTypeId::new("Bloom"),
+                        param_id: Cow::Borrowed("amount"),
+                    };
+                    Box::new(ChangeAbletonTrimCommand::new(target, 0.0, 1.0, 0.25, 0.75))
+                },
+                applied: |p| {
+                    let m = &master_bloom(p).ableton_mappings.as_ref().unwrap()[0];
+                    (m.range_min, m.range_max) == (0.25, 0.75)
+                },
+            },
+        ]);
     }
 }
