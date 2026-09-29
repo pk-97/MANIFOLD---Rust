@@ -14,7 +14,7 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::matter::look::{self, Cells};
+use manifold_renderer::node_graph::matter::look::{self, ALIGNMENT_TICKS, Cells, LookRecorder, RETENTION_TICKS};
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
     PrimitiveRegistry, ResourceId, StateStore, Transform, compile, pre_allocate_resources,
@@ -28,12 +28,7 @@ const RESOLUTION: u32 = 64;
 const POOL: f32 = 0.16;
 /// Point spacing at 8 points per cell: half a cell.
 const SPACING: f32 = DOMAIN_SIZE / RESOLUTION as f32 * 0.5;
-const SETTLE_SPEED: f32 = 0.02;
-const RINGING_WINDOW: f32 = 2.0;
 const DAM_BREAK_TICKS: u32 = 720;
-const ALIGNMENT_TICKS: [u32; 2] = [90, 480];
-const RETENTION_TICKS: std::ops::RangeInclusive<u32> = 30..=180;
-const RETENTION_STRIDE: usize = 6;
 
 fn column() -> Transform {
     Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() }
@@ -144,56 +139,34 @@ impl FlipScene {
     }
 }
 
-/// One Dam Break run, sampled per tick.
+/// One Dam Break run: the shared look readings plus what only matter reports.
 struct Series {
-    /// (time, mean speed, mean surface height).
-    samples: Vec<(f32, f32, f32)>,
+    look: LookRecorder,
     /// (time, |Σ V0·J − Σ V0| / Σ V0); matter only.
     volume_error: Vec<(f32, f32)>,
     /// Smallest and largest J seen; matter only.
     j_range: (f32, f32),
-    /// (time, per-axis largest bin over mean, interior points).
-    alignment: Vec<(f32, [f32; 3], usize)>,
-    splash: Vec<(f32, f32)>,
-    sheets: Vec<(f32, f32)>,
+}
+
+impl std::ops::Deref for Series {
+    type Target = LookRecorder;
+
+    fn deref(&self) -> &LookRecorder {
+        &self.look
+    }
 }
 
 impl Series {
     fn new() -> Self {
         Self {
-            samples: Vec::new(),
+            look: LookRecorder::new(cells(), SPACING),
             volume_error: Vec::new(),
             j_range: (f32::INFINITY, f32::NEG_INFINITY),
-            alignment: Vec::new(),
-            splash: Vec::new(),
-            sheets: Vec::new(),
         }
     }
 
     fn observe(&mut self, tick: u32, frame: &[FluidParticle]) {
-        let t = tick as f32 / 60.0;
-        let cells = cells();
-        self.samples.push((t, look::mean_speed(frame), look::mean_surface_height(frame, &cells)));
-        if ALIGNMENT_TICKS.contains(&tick) {
-            let (ratio, interior) = look::lattice_alignment(frame, &cells);
-            self.alignment.push((t, ratio, interior));
-        }
-        if RETENTION_TICKS.contains(&tick) && (tick as usize).is_multiple_of(RETENTION_STRIDE) {
-            self.splash.push((t, look::detached_fraction(frame, SPACING)));
-            self.sheets.push((t, look::sheet_fraction(frame, SPACING)));
-        }
-    }
-
-    fn max_splash(&self) -> f32 {
-        self.splash.iter().map(|s| s.1).fold(0.0, f32::max)
-    }
-
-    fn max_sheets(&self) -> f32 {
-        self.sheets.iter().map(|s| s.1).fold(0.0, f32::max)
-    }
-
-    fn settling(&self) -> look::Settling {
-        look::settling(&self.samples, SETTLE_SPEED, RINGING_WINDOW)
+        self.look.observe(tick as f32 / 60.0, frame);
     }
 }
 
@@ -210,8 +183,11 @@ fn run_matter(liveliness: f32) -> Series {
         });
         let stats = scene.stats();
         assert_eq!(stats.nonfinite, 0, "non-finite state at tick {tick}");
-        series.j_range = (series.j_range.0.min(stats.min_j), series.j_range.1.max(stats.max_j));
-        series.volume_error.push((tick as f32 / 60.0, ((f64::from(stats.volume) - rest).abs() / rest) as f32));
+        // The first frame restarts the domain and runs no tick; its stats are empty.
+        if stats.live > 0 {
+            series.j_range = (series.j_range.0.min(stats.min_j), series.j_range.1.max(stats.max_j));
+            series.volume_error.push((tick as f32 / 60.0, ((f64::from(stats.volume) - rest).abs() / rest) as f32));
+        }
     }
     series
 }
@@ -274,6 +250,15 @@ fn matter_look_settles_without_ringing() {
     let gate = matter(0.0).settling();
     let lively = matter(0.9).settling();
     eprintln!("matter_look_settles_without_ringing: L0 {gate:?}; L0.9 {lively:?}");
+    for (name, s) in [("L0", matter(0.0)), ("L0.9", matter(0.9))] {
+        let per_second: Vec<String> = s
+            .samples
+            .iter()
+            .filter(|x| ((x.0 * 60.0).round() as u32).is_multiple_of(60))
+            .map(|x| format!("{:.0}s {:.3} m/s {:.3} m", x.0, x.1, x.2))
+            .collect();
+        eprintln!("  {name}: {}", per_second.join(", "));
+    }
     let settle = gate.settle_time.expect("the Dam Break never settled within 12 s");
     assert!(settle <= 10.0, "settled at {settle} s");
     assert!(gate.ringing <= 0.005, "ringing {} m", gate.ringing);

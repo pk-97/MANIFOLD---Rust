@@ -352,6 +352,62 @@ pub fn settling(samples: &[(f32, f32, f32)], speed_threshold: f32, window: f32) 
     Settling { settle_time: Some(samples[start].0), ringing }
 }
 
+/// 60 Hz ticks at which A1 is read (t = 1.5 s and 8 s).
+pub const ALIGNMENT_TICKS: [u32; 2] = [90, 480];
+/// 60 Hz ticks over which A5 and A6 take their maximum (t in [0.5, 3] s),
+/// sampled every [`RETENTION_STRIDE`] ticks.
+pub const RETENTION_TICKS: std::ops::RangeInclusive<u32> = 30..=180;
+pub const RETENTION_STRIDE: u32 = 6;
+/// A2: settled below this mean speed, m/s; ringing over windows this long, s.
+pub const SETTLE_SPEED: f32 = 0.02;
+pub const RINGING_WINDOW: f32 = 2.0;
+
+/// One run's look readings, sampled once per frame. The gate tests and
+/// `examples/fluid_capture.rs --look-metrics` both record through this.
+pub struct LookRecorder {
+    pub cells: Cells,
+    /// Point spacing, m: half a cell at 8 points per cell.
+    pub spacing: f32,
+    /// (time, mean speed, mean surface height) per frame.
+    pub samples: Vec<(f32, f32, f32)>,
+    /// (time, per-axis largest bin over mean, interior points).
+    pub alignment: Vec<(f32, [f32; 3], usize)>,
+    pub splash: Vec<(f32, f32)>,
+    pub sheets: Vec<(f32, f32)>,
+}
+
+impl LookRecorder {
+    pub fn new(cells: Cells, spacing: f32) -> Self {
+        Self { cells, spacing, samples: Vec::new(), alignment: Vec::new(), splash: Vec::new(), sheets: Vec::new() }
+    }
+
+    /// Record the frame at `time` seconds.
+    pub fn observe(&mut self, time: f32, frame: &[FluidParticle]) {
+        let tick = (time * 60.0).round() as u32;
+        self.samples.push((time, mean_speed(frame), mean_surface_height(frame, &self.cells)));
+        if ALIGNMENT_TICKS.contains(&tick) {
+            let (ratio, interior) = lattice_alignment(frame, &self.cells);
+            self.alignment.push((time, ratio, interior));
+        }
+        if RETENTION_TICKS.contains(&tick) && tick.is_multiple_of(RETENTION_STRIDE) {
+            self.splash.push((time, detached_fraction(frame, self.spacing)));
+            self.sheets.push((time, sheet_fraction(frame, self.spacing)));
+        }
+    }
+
+    pub fn settling(&self) -> Settling {
+        settling(&self.samples, SETTLE_SPEED, RINGING_WINDOW)
+    }
+
+    pub fn max_splash(&self) -> f32 {
+        self.splash.iter().map(|s| s.1).fold(0.0, f32::max)
+    }
+
+    pub fn max_sheets(&self) -> f32 {
+        self.sheets.iter().map(|s| s.1).fold(0.0, f32::max)
+    }
+}
+
 /// Martin & Moyce 1952 (J. C. Martin and W. J. Moyce, "An experimental study
 /// of the collapse of liquid columns on a rigid horizontal plane", Phil.
 /// Trans. R. Soc. Lond. A 244, 312–324), Figure 3, n² = 2 (column twice as
