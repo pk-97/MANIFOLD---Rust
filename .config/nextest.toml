@@ -14,10 +14,7 @@ status-level = "pass"
 final-status-level = "slow"
 
 # Flag any test slower than this so we notice perf creep before it
-# dominates the suite. Warn-only — GPU tests can legitimately exceed
-# this when contending for the shared Metal device under nextest's
-# cross-binary parallelism. Bump or fork the `ci` profile if killing
-# stuck tests becomes more important than letting slow ones complete.
+# dominates the suite. Warn-only here; the `ci` profile kills stuck tests.
 slow-timeout = "30s"
 
 [profile.default.junit]
@@ -32,3 +29,52 @@ path = "junit.xml"
 retries = { backoff = "fixed", count = 1, delay = "1s" }
 fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 2 }
+
+# GPU tests run one at a time. Each nextest test is its own process, and
+# every default-suite test that opens a Metal device (or a native decoder or
+# encoder that opens one) used to run alongside ~15 others. The machine
+# stalled: trivial CPU tests scheduled beside them took 30-80s, and
+# concurrent GPU processes are what BUG-290 (concurrent GPU processes
+# firmware fault) ties to AGX faults. The cross-process device lock only
+# exists under `gpu-proofs`, so the default suite needs this group instead.
+#
+# The filter is the set of default-feature tests that reach a device
+# constructor. A new ungated test that opens a device belongs here too.
+[test-groups]
+gpu = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = '''
+    package(manifold-gpu)
+  | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
+  | (binary_id(manifold-renderer) & test(/^node_graph::(execution::tests::aliased_output_assertion_fires_on_silent_primitive|gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan)|validate::tests::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | binary_id(manifold-renderer::ableton_picker_scroll_proof)
+  | binary_id(manifold-renderer::dropdown_clip_proof)
+  | binary_id(manifold-renderer::modifier_card_chrome)
+  | binary_id(manifold-renderer::scene_loop_probe)
+  | binary_id(manifold-renderer::scene_loop_wrap_parity)
+  | binary_id(manifold-renderer::text_clip_to_node_bounds)
+  | binary_id(manifold-renderer::ui_cell_arc_repro)
+  | binary_id(manifold-renderer::ui_color_swatches)
+  | binary_id(manifold-app::led_edge_identity)
+  | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|viewport_p5c_demo::|viewport_p6_demo::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
+'''
+test-group = "gpu"
+
+[[profile.ci.overrides]]
+filter = '''
+    package(manifold-gpu)
+  | (binary_id(manifold-media) & test(/^decode_scheduler::tests::|^image_renderer::tests::prewarm_layer_decodes_image_clips$/))
+  | (binary_id(manifold-renderer) & test(/^node_graph::(execution::tests::aliased_output_assertion_fires_on_silent_primitive|gltf_import::tests::corrupted_assembler_output_fails_validation_naming_the_node|graph_loader::tests::(audit_fires_on_unbound_array_resource|pre_allocate_resources_accepts_fully_bound_plan)|validate::tests::(bundled_preset_card_warning_counts|every_bundled_preset_validates_clean))$/))
+  | binary_id(manifold-renderer::ableton_picker_scroll_proof)
+  | binary_id(manifold-renderer::dropdown_clip_proof)
+  | binary_id(manifold-renderer::modifier_card_chrome)
+  | binary_id(manifold-renderer::scene_loop_probe)
+  | binary_id(manifold-renderer::scene_loop_wrap_parity)
+  | binary_id(manifold-renderer::text_clip_to_node_bounds)
+  | binary_id(manifold-renderer::ui_cell_arc_repro)
+  | binary_id(manifold-renderer::ui_color_swatches)
+  | binary_id(manifold-app::led_edge_identity)
+  | (binary_id(manifold-app::bin/manifold) & test(/^(content_thread::tests::paused_|gap_start_probe::|mute_visibility_probe::|viewport_p5c_demo::|viewport_p6_demo::|ui_bridge::project::tests::sdr_controls_route_pointer_gestures_to_content_and_undo$)/))
+'''
+test-group = "gpu"
