@@ -361,9 +361,14 @@ def _cache_path(target: Path, path: Path) -> bool:
 
 _HASHED_DIR = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}$")
 _HASHED_ARTIFACT = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}(?:\.[A-Za-z0-9]+)?$")
+# Covers the hash file (lib-foo), its JSON twin and the dep-info file, for
+# compiled units and build-script runs.
 _FINGERPRINT_METADATA = re.compile(
-    r"^(?:dep-(?:lib|bin|test|example|build-script)-[A-Za-z0-9_.-]+|"
-    r"(?:lib|bin|test|example|build-script)-[A-Za-z0-9_.-]+\.json)$")
+    r"^(?:dep-)?(?:lib|bin|test|example|build-script|run-build-script)-"
+    r"[A-Za-z0-9_.-]+(?:\.json)?$")
+# split-debuginfo = "unpacked" leaves one object per codegen unit beside each
+# artifact: <crate>-<16 hex>.<cgu name>[.<id>].rcgu.o
+_RCGU_OBJECT = re.compile(r"^[A-Za-z0-9_-]+-[0-9a-f]{16}(?:\.[A-Za-z0-9_-]+)+\.rcgu\.o$")
 
 
 def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
@@ -391,6 +396,8 @@ def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
     if subtree in ("deps", "examples"):
         if len(parts) != 1 or "." not in name:
             return False
+        if _RCGU_OBJECT.match(name):
+            return True
         return bool(_HASHED_ARTIFACT.match(name)) and name.endswith(tuple(KNOWN_ARTIFACT_SUFFIXES))
     return False
 

@@ -47,19 +47,21 @@ def missing_tools():
 
 
 def cap_main_target(dry_run):
-    """Clear main's Cargo caches when target/ is over the cap. The delete is
+    """Clear main's Cargo caches when they pass the cap. The delete is
     storage_budget's exact file manifest: regular files only, no directory
     removal, no links followed, refused while any process holds the target."""
-    target = MAIN_CHECKOUT / "target"
-    out = subprocess.run(["du", "-sk", str(target)], capture_output=True, text=True)
-    if out.returncode != 0 or not out.stdout.strip():
-        return f"[target-cap] could not size {target}; skipped\n"
-    size = int(out.stdout.split()[0]) * 1024
+    # The cap counts only what the manifest may delete. Measured against the
+    # whole folder, files it must keep could hold it over the cap forever and
+    # wipe the caches every night without ever getting under.
+    plan = plan_cache_cleanup(MAIN_CHECKOUT / "target")
+    size = plan.bytes_total
+    if plan.refusals:
+        return f"[target-cap] skipped: " + "; ".join(plan.refusals[:5]) + "\n"
     if size <= MAIN_TARGET_CAP_GB * 2**30:
-        return f"[target-cap] {size / 2**30:.1f}G, under the {MAIN_TARGET_CAP_GB}G cap\n"
+        return f"[target-cap] {size / 2**30:.1f}G deletable, under the {MAIN_TARGET_CAP_GB}G cap\n"
     if dry_run:
-        return f"[target-cap] {size / 2**30:.1f}G over the cap; would clear caches\n"
-    removed, files, failures = apply_cache_cleanup(plan_cache_cleanup(target), dry_run=False)
+        return f"[target-cap] {size / 2**30:.1f}G deletable, over the cap; would clear caches\n"
+    removed, files, failures = apply_cache_cleanup(plan, dry_run=False)
     if failures:
         return (f"[target-cap] {size / 2**30:.1f}G over the cap; removed {files} files "
                 f"({removed / 2**30:.1f}G); refused: " + "; ".join(failures[:5]) + "\n")
