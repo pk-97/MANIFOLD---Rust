@@ -744,7 +744,27 @@ def test_inline_python_script_path_unaffected():
 
 
 
+def test_sed_guard_ignores_quoted_shell_variable():
+    r = hook.sed_write_guard('W="/tmp/a.rs"; sed -n \'/^mod tests {/,/fn x/p\' "$W"')
+    check("sed guard: quoted $W variable is not a w command", r is None, r)
+    r2 = hook.sed_write_guard("sed -n '$w /tmp/out' file")
+    check("sed guard: real $w command still asks", r2 is not None)
+
+
+def test_xargs_gated_on_its_command():
+    check("xargs read-only command pre-approved",
+          hook.is_preapproved_command("fd -e rs . crates | xargs wc -l"))
+    check("xargs -n1 read-only command pre-approved",
+          hook.is_preapproved_command("fd -e rs . crates | xargs -n 1 head -1"))
+    check("xargs rm NOT pre-approved",
+          not hook.is_preapproved_command("fd -e tmp . | xargs rm"))
+    check("bare xargs NOT pre-approved",
+          not hook.is_preapproved_command("cat list | xargs"))
+
+
 def main():
+    test_sed_guard_ignores_quoted_shell_variable()
+    test_xargs_gated_on_its_command()
     test_cd_guard()
     test_branch_force_main_asks()
     test_branch_force_main_worktree_unaffected()
