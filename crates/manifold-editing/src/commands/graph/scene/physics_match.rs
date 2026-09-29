@@ -300,13 +300,6 @@ pub(super) fn grouped_physics_scene_object_match(
     else {
         return PhysicsSceneObjectMatch::NotPhysics;
     };
-    let Some(input) = group
-        .nodes
-        .iter()
-        .find(|node| node.type_id == GROUP_INPUT_TYPE_ID)
-    else {
-        return PhysicsSceneObjectMatch::NotPhysics;
-    };
     let Some(body_output) = group
         .wires
         .iter()
@@ -321,14 +314,9 @@ pub(super) fn grouped_physics_scene_object_match(
     else {
         return PhysicsSceneObjectMatch::Malformed("Physics group body node is unavailable");
     };
-    let Some(_pose_wire) = group.wires.iter().find(|wire| {
-        wire.from_node == input.id
-            && wire.from_port == "pose"
-            && wire.to_node == object.id
-            && (wire.to_port == "parent_transform" || wire.to_port == "transform")
-    }) else {
-        return PhysicsSceneObjectMatch::Malformed("Physics group pose input is malformed");
-    };
+    if let Err(reason) = group_pose_input_id(group, object.id) {
+        return PhysicsSceneObjectMatch::Malformed(reason);
+    }
     let Some(authored_wire) = group
         .wires
         .iter()
