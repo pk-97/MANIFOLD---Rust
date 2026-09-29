@@ -1496,6 +1496,18 @@
               "name": "vertices",
               "portType": "Array(MeshVertex)"
             }
+          ],
+          "params": [
+            {
+              "name": "particle_scale",
+              "targetHandle": "Particle Blobs",
+              "targetParam": "particle_scale"
+            },
+            {
+              "name": "bin_cells",
+              "targetHandle": "Bin Size",
+              "targetParam": "b"
+            }
           ]
         },
         "nodes": [
@@ -1968,6 +1980,16 @@
             "toPort": "size_z"
           }
         ]
+      },
+      "params": {
+        "particle_scale": {
+          "type": "Float",
+          "value": 2.2
+        },
+        "bin_cells": {
+          "type": "Float",
+          "value": 1.0
+        }
       }
     }
   ],
