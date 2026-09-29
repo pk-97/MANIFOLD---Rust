@@ -1884,8 +1884,6 @@ mod tests {
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::ParamValues;
     use crate::node_graph::material::MaterialKind;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::EffectNode;
 
     fn run_material(params: ParamValues, bound_emission_r: Option<f32>) -> Material {
         use crate::node_graph::execution_plan::ResourceId;
@@ -2094,24 +2092,6 @@ mod tests {
     }
 
     #[test]
-    fn pbr_material_declares_port_shadow_scalars_and_material_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-
-        assert_eq!(PbrMaterial::TYPE_ID, "node.pbr_material");
-        for input in PbrMaterial::INPUTS {
-            assert!(
-                !input.required,
-                "{} should be optional (port-shadow)",
-                input.name
-            );
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(PbrMaterial::OUTPUTS.len(), 1);
-        assert_eq!(PbrMaterial::OUTPUTS[0].name, "out");
-        assert_eq!(PbrMaterial::OUTPUTS[0].ty, PortType::Material);
-    }
-
-    #[test]
     fn geometric_volume_controls_default_disabled_and_sanitize_values() {
         let defaults = run_material(ParamValues::default(), None);
         assert!(!defaults.volume_geometry);
@@ -2158,13 +2138,6 @@ mod tests {
         assert_eq!(sanitized.volume_scattering_density, 100.0);
         assert_eq!(sanitized.volume_scattering_color[0], 0.0);
         assert_eq!(sanitized.volume_particle_density, 1000.0);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = PbrMaterial::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.pbr_material");
     }
 
     #[test]

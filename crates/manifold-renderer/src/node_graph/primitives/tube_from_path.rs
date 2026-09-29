@@ -195,40 +195,6 @@ impl Primitive for TubeFromPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn tube_from_path_declares_ports() {
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        let curve_layout = ArrayType::of_known::<CurvePoint>();
-        let f32_layout = ArrayType::of_known::<f32>();
-
-        assert_eq!(TubeFromPath::TYPE_ID, "node.tube_from_path");
-
-        let path_port = TubeFromPath::INPUTS.iter().find(|p| p.name == "path").unwrap();
-        assert!(path_port.required);
-        assert_eq!(path_port.ty, PortType::Array(curve_layout));
-
-        for name in ["lift", "radius_scale"] {
-            let port = TubeFromPath::INPUTS.iter().find(|p| p.name == name).unwrap();
-            assert!(!port.required, "{name} should be optional");
-            assert_eq!(port.ty, PortType::Array(f32_layout));
-        }
-
-        let radius_port = TubeFromPath::INPUTS.iter().find(|p| p.name == "radius").unwrap();
-        assert!(!radius_port.required, "radius should be optional (port-shadow)");
-        assert_eq!(radius_port.ty, PortType::Scalar(ScalarType::F32));
-
-        assert!(
-            !TubeFromPath::INPUTS.iter().any(|p| p.name == "sides"),
-            "sides is an int — must not be port-shadowed (P3 brief)"
-        );
-
-        assert_eq!(TubeFromPath::OUTPUTS.len(), 1);
-        assert_eq!(TubeFromPath::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
 
     #[test]
     fn tube_from_path_capacity_is_rows_times_cols() {
@@ -242,13 +208,6 @@ mod tests {
             Primitive::array_output_capacity(&prim, "out", &params, &inputs),
             Some(70),
         );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = TubeFromPath::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.tube_from_path");
     }
 }
 

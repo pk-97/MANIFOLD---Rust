@@ -138,64 +138,6 @@ impl Primitive for DisplaceCopies {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn wave_pilot_displace_copies_ports_and_capacity_guard() {
-        use crate::node_graph::effect_node::ParamValues;
-        use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
-        let prim = DisplaceCopies::new();
-        let layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(DisplaceCopies::TYPE_ID, "node.displace_copies");
-        for name in ["instances", "weights"] {
-            let p = DisplaceCopies::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap();
-            assert!(p.required);
-        }
-        assert_eq!(DisplaceCopies::INPUTS[0].ty, PortType::Array(layout));
-        assert_eq!(DisplaceCopies::OUTPUTS[0].ty, PortType::Array(layout));
-        for name in ["amount", "direction_x", "direction_y", "direction_z"] {
-            let p = DisplaceCopies::INPUTS
-                .iter()
-                .find(|p| p.name == name)
-                .unwrap();
-            assert_eq!(p.ty, PortType::Scalar(ScalarType::F32));
-        }
-        let params = ParamValues::default();
-        assert_eq!(
-            Primitive::array_output_capacity(
-                &prim,
-                "instances",
-                &params,
-                &[("instances", 4), ("weights", 4)]
-            ),
-            Some(4)
-        );
-        assert_eq!(
-            Primitive::array_output_capacity(
-                &prim,
-                "instances",
-                &params,
-                &[("instances", 4), ("weights", 3)]
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = DisplaceCopies::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.displace_copies");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;

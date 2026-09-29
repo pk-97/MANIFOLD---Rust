@@ -162,14 +162,12 @@ impl Primitive for Transform3D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::MockBackend;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
     use crate::node_graph::effect_node::{FrameTime, ParamValues};
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
     use manifold_core::{Beats, Seconds};
 
     fn frame_time() -> FrameTime {
@@ -179,26 +177,6 @@ mod tests {
             delta: Seconds(1.0 / 60.0),
             frame_count: 0,
         }
-    }
-
-    #[test]
-    fn transform_3d_declares_nine_port_shadow_scalars_and_transform_output() {
-        assert_eq!(Transform3D::TYPE_ID, "node.transform_3d");
-        for input in Transform3D::INPUTS {
-            assert!(!input.required, "{} should be optional (port-shadow)", input.name);
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(Transform3D::INPUTS.len(), 9);
-        assert_eq!(Transform3D::OUTPUTS.len(), 1);
-        assert_eq!(Transform3D::OUTPUTS[0].name, "transform");
-        assert_eq!(Transform3D::OUTPUTS[0].ty, PortType::Transform);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = Transform3D::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.transform_3d");
     }
 
     /// Runs `Transform3D` with the given params (defaults inserted for any

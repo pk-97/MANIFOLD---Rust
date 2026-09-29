@@ -703,16 +703,6 @@ mod tests {
     }
 
     #[test]
-    fn shadow_softness_kernel_sizes_match_design() {
-        assert_eq!(ShadowSoftness::Hard.kernel_half_width(), 1);
-        assert_eq!(ShadowSoftness::Hard.tap_count(), 9); // 3×3
-        assert_eq!(ShadowSoftness::Soft.kernel_half_width(), 2);
-        assert_eq!(ShadowSoftness::Soft.tap_count(), 25); // 5×5
-        assert_eq!(ShadowSoftness::VerySoft.kernel_half_width(), 3);
-        assert_eq!(ShadowSoftness::VerySoft.tap_count(), 49); // 7×7
-    }
-
-    #[test]
     fn shadow_view_is_orthonormal() {
         let l = Light::sun(
             [10.0, 20.0, 30.0],

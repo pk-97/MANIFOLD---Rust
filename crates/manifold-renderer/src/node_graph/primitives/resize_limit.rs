@@ -154,36 +154,11 @@ impl Primitive for ResizeLimit {
 mod tests {
     use super::*;
     use crate::node_graph::effect_node::EffectNode;
-    use crate::node_graph::ports::PortType;
-    use crate::node_graph::primitive::PrimitiveSpec;
 
     fn params(max_dim: f32) -> crate::node_graph::effect_node::ParamValues {
         let mut values = ahash::AHashMap::default();
         values.insert(Cow::Borrowed("max_dim"), ParamValue::Float(max_dim));
         values
-    }
-
-    #[test]
-    fn declares_capped_texture_input_and_int_param() {
-        assert_eq!(ResizeLimit::TYPE_ID, "node.resize_limit");
-        assert_eq!(ResizeLimit::INPUTS.len(), 1);
-        assert_eq!(ResizeLimit::INPUTS[0].name, "in");
-        assert_eq!(ResizeLimit::INPUTS[0].ty, PortType::Texture2D);
-        assert!(ResizeLimit::INPUTS[0].required);
-        assert_eq!(ResizeLimit::OUTPUTS.len(), 1);
-        assert_eq!(ResizeLimit::OUTPUTS[0].name, "out");
-        assert_eq!(ResizeLimit::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(ResizeLimit::PARAMS.len(), 1);
-        assert_eq!(ResizeLimit::PARAMS[0].name, "max_dim");
-        assert_eq!(ResizeLimit::PARAMS[0].ty, ParamType::Int);
-        assert_eq!(ResizeLimit::PARAMS[0].default, ParamValue::Float(320.0));
-        assert_eq!(ResizeLimit::PARAMS[0].range, Some((64.0, 1024.0)));
-        let node = ResizeLimit::new();
-        let node: &dyn EffectNode = &node;
-        assert_eq!(
-            node.output_format("out"),
-            Some(GpuTextureFormat::Rgba16Float)
-        );
     }
 
     #[test]

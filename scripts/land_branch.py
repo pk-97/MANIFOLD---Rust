@@ -76,7 +76,7 @@ def main():
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     step("merge origin/main into branch", ["git", "merge", "origin/main", "--no-edit"], wt)
 
-    gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py"]
+    gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py", "--repo", str(wt.resolve())]
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
     elif a.named_red and a.reason:

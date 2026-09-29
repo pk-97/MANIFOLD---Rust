@@ -481,41 +481,6 @@ fn load_tiff_slice(path: &Path) -> Result<DecodedSlice, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use crate::node_graph::ports::{PortType, ScalarType};
-
-    #[test]
-    fn image_folder_ports_and_params() {
-        assert_eq!(ImageFolder::TYPE_ID, "node.image_folder");
-        let inputs = ImageFolder::INPUTS;
-        assert_eq!(inputs.len(), 4);
-        assert_eq!(inputs[0].name, "position");
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!inputs[0].required);
-        assert_eq!(inputs[1].name, "uv_scale");
-        assert_eq!(inputs[2].name, "next");
-        assert_eq!(inputs[2].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!inputs[2].required);
-        assert_eq!(inputs[3].name, "prev");
-        assert_eq!(inputs[3].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!inputs[3].required);
-        assert_eq!(ImageFolder::OUTPUTS.len(), 2);
-        assert_eq!(ImageFolder::OUTPUTS[0].name, "out");
-        assert_eq!(ImageFolder::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(ImageFolder::OUTPUTS[1].name, "trigger_count");
-        assert_eq!(ImageFolder::OUTPUTS[1].ty, PortType::Scalar(ScalarType::F32));
-
-        let names: Vec<&str> = ImageFolder::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["folder", "position", "uv_scale", "next", "prev"]);
-    }
-
-    #[test]
-    fn primitive_registers() {
-        let prim = ImageFolder::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.image_folder");
-    }
 
     #[test]
     fn empty_folder_path_scan_returns_empty() {

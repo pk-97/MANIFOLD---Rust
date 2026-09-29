@@ -19,7 +19,7 @@ class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
               "clippy", "flow-gate", "tests", "gpu-proofs"]
 
-    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True):
+    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head"):
         called, commands = [], []
         paths = ["crates/manifold-gpu/src/metal/device.rs"]
         labels = {
@@ -40,6 +40,8 @@ class LandingTests(unittest.TestCase):
                         out = "docs/new.md"
                     else:
                         out = ("\0" if "-z" in cmd else "\n").join(paths)
+                elif cmd[1:] == ["rev-parse", "HEAD"]:
+                    out = head
                 elif cmd[1] == "rev-parse":
                     out = "codex/test"
                 else:
@@ -63,7 +65,8 @@ class LandingTests(unittest.TestCase):
                 "name": "tooling", "argv": ["python3", "fake-tool-test.py"],
             }]))
             code = landing_gate.main()
-            timings = json.loads((root / ".claude/orchestration/landing-gate-timings.jsonl").read_text())
+            timing_log = root / ".claude/orchestration/landing-gate-timings.jsonl"
+            timings = json.loads(timing_log.read_text()) if timing_log.exists() else None
             logs = [p.read_text() for p in (root / "target/landing-logs").glob("*.log")]
             return code, called, timings, commands, logs, output.getvalue(), deps.call_count
 
@@ -104,6 +107,23 @@ class LandingTests(unittest.TestCase):
         *_, deps = self.exercise(packages=False)
         self.assertEqual(deps, 0)
 
+    def test_head_equal_to_base_fails_before_any_check(self):
+        # The main checkout sits on origin/main: a run there must not pass
+        # on an all-skipped gate.
+        code, called, timings, _, _, output, _ = self.exercise(head="base")
+        self.assertEqual(code, 1)
+        self.assertEqual(called, [])
+        self.assertIsNone(timings)
+        self.assertIn("[FAIL] HEAD == origin/main", output)
+        self.assertIn("Pass --repo <worktree path>", output)
+
+    def test_every_skip_names_its_reason(self):
+        *_, output, _ = self.exercise(packages=False, extra=["--skip-gpu", "deferred"])
+        self.assertIn("[SKIP] clippy (no touched packages)", output)
+        self.assertIn("[SKIP] tests (no touched packages)", output)
+        self.assertIn("[SKIP] gpu-proofs (skipped by flag: deferred)", output)
+        self.assertIn("SKIP clippy (no touched packages)\n", output)
+
     def test_timeout_retains_partial_output(self):
         error = subprocess.TimeoutExpired(["test"], 1, output=b"before timeout\n", stderr=b"detail\n")
         with patch.object(landing_gate.subprocess, "run", side_effect=error):
@@ -140,6 +160,8 @@ class DeliveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "stop before delivery"):
                     land_branch.main()
                 self.assertEqual("--keep-going" in gate.call_args.args[0], expected)
+                argv = gate.call_args.args[0]
+                self.assertEqual(argv[argv.index("--repo") + 1], str(Path(d).resolve()))
 
     def test_progress_is_forwarded_before_child_exits(self):
         # A real child cannot finish until the parent's output sink observes

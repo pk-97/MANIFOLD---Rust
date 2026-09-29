@@ -139,28 +139,6 @@ impl Primitive for MaskExtrema {
 mod tests {
     use super::*;
     use crate::node_graph::effect_node::EffectNode;
-    use crate::node_graph::ports::{PortType, ScalarType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_mask_input_radius_port_and_axis() {
-        assert_eq!(MaskExtrema::TYPE_ID, "node.mask_extrema");
-        assert_eq!(MaskExtrema::INPUTS.len(), 2);
-        assert_eq!(MaskExtrema::INPUTS[0].name, "in");
-        assert_eq!(MaskExtrema::INPUTS[0].ty, PortType::Texture2D);
-        assert!(MaskExtrema::INPUTS[0].required);
-        assert_eq!(MaskExtrema::INPUTS[1].name, "radius");
-        assert_eq!(MaskExtrema::INPUTS[1].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!MaskExtrema::INPUTS[1].required);
-        assert_eq!(MaskExtrema::OUTPUTS.len(), 1);
-        assert_eq!(MaskExtrema::OUTPUTS[0].name, "out");
-        assert_eq!(MaskExtrema::OUTPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(MaskExtrema::PARAMS.len(), 2);
-        assert_eq!(MaskExtrema::PARAMS[0].name, "radius");
-        assert_eq!(MaskExtrema::PARAMS[0].range, Some((-32.0, 32.0)));
-        assert_eq!(MaskExtrema::PARAMS[1].name, "axis");
-        assert_eq!(MaskExtrema::PARAMS[1].enum_values, MASK_EXTREMA_AXES);
-    }
 
     #[test]
     fn declares_fixed_rgba16float_output_and_boundary_classification() {

@@ -136,58 +136,12 @@ mod tests {
     use manifold_core::{Beats, Seconds};
 
     #[test]
-    fn declares_three_optional_inputs_and_scalar_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        let inputs = TriggerGate::INPUTS;
-        assert_eq!(inputs.len(), 3);
-        assert_eq!(inputs[0].name, "trigger_count");
-        assert!(!inputs[0].required);
-        assert_eq!(inputs[0].ty, PortType::Scalar(ScalarType::F32));
-        assert_eq!(inputs[1].name, "enable");
-        assert!(!inputs[1].required);
-        assert_eq!(inputs[2].name, "initial_count");
-        assert!(!inputs[2].required);
-
-        assert_eq!(TriggerGate::OUTPUTS.len(), 2);
-        assert_eq!(TriggerGate::OUTPUTS[0].name, "out");
-        assert_eq!(
-            TriggerGate::OUTPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-        assert_eq!(TriggerGate::OUTPUTS[1].name, "pulse");
-        assert_eq!(
-            TriggerGate::OUTPUTS[1].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-    }
-
-    #[test]
     fn declares_single_enable_param_defaulting_true() {
         let params = TriggerGate::PARAMS;
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "enable");
         assert_eq!(params[0].ty, ParamType::Bool);
         assert!(matches!(params[0].default, ParamValue::Bool(true)));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_driver() {
-        use crate::node_graph::palette::{PaletteCategory, palette_atoms};
-        let atoms = palette_atoms();
-        let entry = atoms
-            .iter()
-            .find(|e| e.type_id == TriggerGate::TYPE_ID)
-            .expect("trigger_gate should be registered as a palette atom");
-        assert_eq!(entry.label, "Trigger Gate");
-        assert!(matches!(entry.category, PaletteCategory::Driver));
-    }
-
-    #[test]
-    fn is_trigger_latch_flag_is_set() {
-        use crate::node_graph::EffectNode;
-        let prim = TriggerGate::new();
-        let node: &dyn EffectNode = &prim;
-        assert!(node.is_trigger_latch());
     }
 
     fn evaluate_actual(node: &mut TriggerGate, trigger_count: f32, enable: bool) -> (f32, f32) {

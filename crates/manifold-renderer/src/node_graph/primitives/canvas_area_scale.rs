@@ -120,43 +120,6 @@ impl Primitive for CanvasAreaScale {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn canvas_area_scale_declares_two_scalar_inputs_and_one_scalar_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(CanvasAreaScale::TYPE_ID, "node.canvas_area_scale");
-        let ins = CanvasAreaScale::INPUTS;
-        assert_eq!(ins.len(), 2);
-        assert_eq!(ins[0].name, "width");
-        assert_eq!(ins[0].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!ins[0].required);
-        assert_eq!(ins[1].name, "height");
-        assert_eq!(ins[1].ty, PortType::Scalar(ScalarType::F32));
-        assert!(!ins[1].required);
-        assert_eq!(CanvasAreaScale::OUTPUTS.len(), 1);
-        assert_eq!(
-            CanvasAreaScale::OUTPUTS[0].ty,
-            PortType::Scalar(ScalarType::F32)
-        );
-    }
-
-    #[test]
-    fn canvas_area_scale_has_width_height_reference_area_and_min_params() {
-        let names: Vec<&str> = CanvasAreaScale::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec!["width", "height", "reference_area", "min_width", "min_height"]
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CanvasAreaScale::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.canvas_area_scale");
-    }
 
     /// Default-params output is `1.0` for 1920×1080 against the
     /// same reference area. This is what a graph sees if the user

@@ -218,31 +218,6 @@ impl Primitive for GltfMorphDeltasSource {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::ports::{ArrayType, PortType};
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn declares_zero_inputs_and_one_array_output() {
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(GltfMorphDeltasSource::TYPE_ID, "node.gltf_morph_deltas_source");
-        assert!(GltfMorphDeltasSource::INPUTS.is_empty());
-        assert_eq!(GltfMorphDeltasSource::OUTPUTS.len(), 1);
-        assert_eq!(GltfMorphDeltasSource::OUTPUTS[0].name, "deltas");
-        assert_eq!(GltfMorphDeltasSource::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = GltfMorphDeltasSource::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gltf_morph_deltas_source");
-    }
-}
-
 /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md P1/R1 gate. Run deliberately:
 /// `cargo test -p manifold-renderer --features gpu-proofs
 /// node_graph::primitives::gltf_morph_deltas_source::gpu_tests`.

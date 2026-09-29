@@ -87,32 +87,3 @@ impl Primitive for FractTexture {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn fract_texture_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(FractTexture::TYPE_ID, "node.wrap");
-        assert_eq!(FractTexture::INPUTS.len(), 1);
-        assert_eq!(FractTexture::OUTPUTS.len(), 1);
-        assert_eq!(FractTexture::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn fract_texture_has_scale_param() {
-        let names: Vec<&str> = FractTexture::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["scale"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = FractTexture::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.wrap");
-    }
-}

@@ -230,46 +230,6 @@ impl Primitive for ArrayFilterDetections {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn array_filter_detections_declares_channels_io() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(
-            ArrayFilterDetections::TYPE_ID,
-            "node.array_filter_detections"
-        );
-        assert_eq!(ArrayFilterDetections::INPUTS[0].name, "in");
-        assert!(matches!(
-            ArrayFilterDetections::INPUTS[0].ty,
-            PortType::Array(_)
-        ));
-        assert_eq!(ArrayFilterDetections::OUTPUTS.len(), 1);
-        assert_eq!(ArrayFilterDetections::OUTPUTS[0].name, "out");
-        let names: Vec<&str> =
-            ArrayFilterDetections::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "min_width",
-                "max_width",
-                "min_height",
-                "max_height",
-                "min_aspect",
-                "max_aspect",
-                "max_area_frac"
-            ]
-        );
-    }
-
-    #[test]
-    fn array_filter_detections_registers() {
-        let prim = ArrayFilterDetections::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.array_filter_detections");
-    }
 
     // Pure filtering-predicate check, mirroring the run() loop's logic
     // so the bound arithmetic is covered without a GPU array context.

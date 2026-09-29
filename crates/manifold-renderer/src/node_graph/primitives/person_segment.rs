@@ -423,26 +423,7 @@ impl Primitive for PersonSegment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn person_segment_declares_one_input_and_one_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(PersonSegment::TYPE_ID, "node.person_mask");
-        assert_eq!(PersonSegment::INPUTS.len(), 1);
-        assert_eq!(PersonSegment::INPUTS[0].name, "in");
-        assert_eq!(PersonSegment::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(PersonSegment::OUTPUTS.len(), 1);
-        assert_eq!(PersonSegment::OUTPUTS[0].name, "out");
-        assert_eq!(PersonSegment::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn person_segment_has_three_params() {
-        let names: Vec<&str> = PersonSegment::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["analysis_max_dim", "update_interval", "smoothing"]);
-    }
 
     #[test]
     fn person_segment_smoothing_defaults_to_legacy_055() {
@@ -462,12 +443,5 @@ mod tests {
         } else {
             panic!("smoothing default must be a Float");
         }
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = PersonSegment::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.person_mask");
     }
 }

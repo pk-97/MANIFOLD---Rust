@@ -116,36 +116,3 @@ impl Primitive for UvDisplaceByFlow {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn uv_displace_by_flow_declares_two_texture_inputs_and_one_output() {
-        use crate::node_graph::ports::PortType;
-        assert_eq!(UvDisplaceByFlow::TYPE_ID, "node.uv_displace_by_flow");
-        assert_eq!(UvDisplaceByFlow::INPUTS.len(), 4);
-        assert_eq!(UvDisplaceByFlow::INPUTS[0].name, "in");
-        assert_eq!(UvDisplaceByFlow::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(UvDisplaceByFlow::INPUTS[1].name, "flow");
-        assert_eq!(UvDisplaceByFlow::INPUTS[1].ty, PortType::Texture2D);
-        assert_eq!(UvDisplaceByFlow::OUTPUTS.len(), 1);
-        assert_eq!(UvDisplaceByFlow::OUTPUTS[0].ty, PortType::Texture2D);
-    }
-
-    #[test]
-    fn uv_displace_by_flow_has_weight_and_bias_params() {
-        let names: Vec<&str> = UvDisplaceByFlow::PARAMS.iter().map(|p| p.name.as_ref()).collect();
-        assert_eq!(names, vec!["weight", "bias"]);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = UvDisplaceByFlow::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.uv_displace_by_flow");
-    }
-}

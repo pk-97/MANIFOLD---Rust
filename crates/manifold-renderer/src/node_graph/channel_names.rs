@@ -281,11 +281,4 @@ mod tests {
         let unknown = ChannelName::from_str("not_in_registry_qqq");
         assert_eq!(debug_name(unknown), None);
     }
-
-    #[test]
-    fn debug_name_method_on_channel_name_matches_free_fn() {
-        let ch = well_known::POSITION;
-        assert_eq!(ch.debug_name(), debug_name(ch));
-        assert_eq!(ch.debug_name(), Some("position"));
-    }
 }

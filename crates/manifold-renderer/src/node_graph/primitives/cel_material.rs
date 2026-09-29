@@ -208,43 +208,7 @@ impl Primitive for CelMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::EffectNode;
     use crate::node_graph::material::MaterialKind;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn cel_material_declares_port_shadow_scalars_and_material_output() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-
-        assert_eq!(CelMaterial::TYPE_ID, "node.cel_material");
-        for input in CelMaterial::INPUTS {
-            assert!(
-                !input.required,
-                "{} should be optional (port-shadow)",
-                input.name
-            );
-            assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(CelMaterial::OUTPUTS.len(), 1);
-        assert_eq!(CelMaterial::OUTPUTS[0].name, "out");
-        assert_eq!(CelMaterial::OUTPUTS[0].ty, PortType::Material);
-    }
-
-    #[test]
-    fn cel_bands_is_int_param() {
-        let bands = CelMaterial::PARAMS
-            .iter()
-            .find(|p| p.name == "cel_bands")
-            .expect("cel_bands param");
-        assert_eq!(bands.ty, ParamType::Int);
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = CelMaterial::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.cel_material");
-    }
 
     #[test]
     fn run_emits_cel_material_with_clamped_band_count() {

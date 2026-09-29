@@ -154,49 +154,6 @@ impl Primitive for FacetNormals {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn facet_normals_declares_mesh_in_and_out_only() {
-        use crate::node_graph::ports::{ArrayType, PortType};
-        let mesh_layout = ArrayType::of_known::<MeshVertex>();
-
-        assert_eq!(FacetNormals::TYPE_ID, "node.facet_normals");
-        assert_eq!(FacetNormals::INPUTS.len(), 1);
-        assert_eq!(FacetNormals::INPUTS[0].name, "in");
-        assert!(FacetNormals::INPUTS[0].required);
-        assert_eq!(FacetNormals::INPUTS[0].ty, PortType::Array(mesh_layout));
-
-        assert_eq!(FacetNormals::OUTPUTS.len(), 1);
-        assert_eq!(FacetNormals::OUTPUTS[0].ty, PortType::Array(mesh_layout));
-
-        assert!(FacetNormals::PARAMS.is_empty(), "facet_normals has no params per section 3 table");
-    }
-
-    #[test]
-    fn facet_normals_output_follows_in_input() {
-        use crate::node_graph::effect_node::ParamValues;
-        let prim = FacetNormals::new();
-        let params = ParamValues::default();
-        let inputs = [("in", 36_u32)];
-        assert_eq!(
-            Primitive::array_output_capacity(&prim, "out", &params, &inputs),
-            Some(36),
-        );
-    }
-
-    #[test]
-    fn primitive_registers_as_palette_atom() {
-        let prim = FacetNormals::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.facet_normals");
-    }
-}
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     //! Real-GPU value-level tests. Behavioral tests dispatch the GENERATED

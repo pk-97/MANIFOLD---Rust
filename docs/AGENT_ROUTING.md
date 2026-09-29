@@ -29,7 +29,7 @@ Never to lanes: graph semantics, GPU/kernel work, undo/lifecycle, design judgmen
 
 ## The landing seat
 
-The happy path of a landing is mechanical: fetch, merge `origin/main` into the branch, `scripts/landing_gate.py`, `git merge --no-ff` to main with a `Closes:` trailer, push, close the beads. A cheaper model does that fine. What it can't be trusted with is judging whether a failure is simple, so it never judges:
+The happy path of a landing is mechanical: fetch, merge `origin/main` into the branch, `scripts/landing_gate.py --repo <worktree path>` (agents cannot cd, and HEAD on main's checkout is the base, so the gate refuses there), `git merge --no-ff` to main with a `Closes:` trailer, push, close the beads. A cheaper model does that fine. What it can't be trusted with is judging whether a failure is simple, so it never judges:
 
 - It lands only a branch the lead has reviewed and named in the brief.
 - **Any non-zero exit, merge conflict, hook deny, or output it doesn't recognise → stop and report verbatim. No fix attempts, no retries with variations.** The lead takes it from there.

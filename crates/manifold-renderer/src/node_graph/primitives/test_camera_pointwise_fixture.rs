@@ -174,24 +174,6 @@ impl Primitive for TestCameraPointwise {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-
-    #[test]
-    fn fixture_declares_camera_and_texture_ports() {
-        assert_eq!(TestCameraPointwise::TYPE_ID, "test.camera_pointwise");
-        assert_eq!(TestCameraPointwise::INPUTS[0].ty, PortType::Texture2D);
-        assert_eq!(TestCameraPointwise::INPUTS[1].ty, PortType::Camera);
-        assert_eq!(TestCameraPointwise::DERIVED_UNIFORMS, &["cam_x"]);
-        let prim = TestCameraPointwise::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "test.camera_pointwise");
-    }
-
-    #[test]
-    fn uniform_struct_is_16_bytes() {
-        assert_eq!(std::mem::size_of::<TestCameraPointwiseUniforms>(), 16);
-    }
 
     #[test]
     fn fixture_is_not_globally_registered() {

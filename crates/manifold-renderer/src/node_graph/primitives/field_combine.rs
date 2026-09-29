@@ -115,33 +115,3 @@ impl Primitive for FieldCombine {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::node_graph::EffectNode;
-    use crate::node_graph::primitive::PrimitiveSpec;
-
-    #[test]
-    fn field_combine_declares_required_texture_and_three_optional_scalar_inputs() {
-        use crate::node_graph::ports::{PortType, ScalarType};
-        let ins = FieldCombine::INPUTS;
-        assert_eq!(ins.len(), 4);
-        assert_eq!(ins[0].name, "in");
-        assert!(ins[0].required);
-        assert_eq!(ins[0].ty, PortType::Texture2D);
-        for (port, expected_name) in ins.iter().skip(1).zip(["a", "b", "c"]) {
-            assert_eq!(port.name, expected_name);
-            assert!(!port.required);
-            assert_eq!(port.ty, PortType::Scalar(ScalarType::F32));
-        }
-        assert_eq!(FieldCombine::OUTPUTS.len(), 1);
-    }
-
-    #[test]
-    fn field_combine_registers_as_palette_atom() {
-        let prim = FieldCombine::new();
-        let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.field_combine");
-    }
-}

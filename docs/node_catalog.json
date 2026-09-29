@@ -50,6 +50,11 @@
         "impulse"
       ],
       "category": "Particles 2D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "time_val",
+        "dt_scaled"
+      ],
       "examples": [
         "FluidSim2D",
         "ParticleText"
@@ -95,6 +100,7 @@
       "label": "Add Burst (radial)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -181,6 +187,11 @@
         "inject"
       ],
       "category": "Particles 3D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "time2",
+        "dt_scaled"
+      ],
       "examples": [
         "FluidSim3D"
       ],
@@ -215,6 +226,7 @@
       "label": "Add Burst (3D, radial)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -382,6 +394,7 @@
       "label": "Analytic Echoes",
       "outputs": [
         {
+          "capacity": "inputs:8000@1000,8192@1024",
           "name": "instances",
           "type": "Array"
         }
@@ -512,6 +525,10 @@
         "repel"
       ],
       "category": "Particles 2D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "frame_count:u32"
+      ],
       "examples": [
         "Cymatics",
         "FluidSim2D",
@@ -543,6 +560,7 @@
       "label": "Anti-Clump Particles",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -592,6 +610,7 @@
       "label": "Arrange Copies",
       "outputs": [
         {
+          "capacity": "param:max_capacity=65536",
           "name": "instances",
           "type": "Array"
         }
@@ -761,6 +780,7 @@
       "label": "Array Feedback",
       "outputs": [
         {
+          "capacity": "follows:seed",
           "name": "out",
           "type": "Array"
         }
@@ -815,6 +835,7 @@
       "label": "Filter Detections",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -947,6 +968,7 @@
       "label": "Array Math",
       "outputs": [
         {
+          "capacity": "follows:a",
           "name": "out",
           "type": "Array"
         }
@@ -1301,6 +1323,7 @@
       "label": "Audio Waveform",
       "outputs": [
         {
+          "capacity": "fixed:512",
           "name": "out",
           "type": "Array"
         }
@@ -1943,6 +1966,10 @@
         "arc"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -1970,6 +1997,7 @@
       "label": "Bend Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -2023,6 +2051,11 @@
         "ao denoise"
       ],
       "category": "Blur & Sharpen",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "near",
+        "far"
+      ],
       "examples": [
         "Lantern"
       ],
@@ -2116,6 +2149,7 @@
       "label": "Blend Copies",
       "outputs": [
         {
+          "capacity": "follows:a",
           "name": "out",
           "type": "Array"
         }
@@ -2239,6 +2273,7 @@
       "label": "Blob Tracker",
       "outputs": [
         {
+          "capacity": "param:max_capacity=8",
           "name": "blobs",
           "type": "Array"
         },
@@ -3800,6 +3835,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Steps through a range on each clip trigger, never landing on the same value twice in a row. Drives never-repeat preset cycling.",
+      "trigger_latch": true,
       "type_id": "node.clip_trigger_cycle"
     },
     {
@@ -3852,6 +3888,7 @@
       "role": "Control",
       "stratum": "atom",
       "summary": "Counts how many times a clip has been triggered and wraps it to a range, so each retrigger steps to the next slot. Drives preset cycling.",
+      "trigger_latch": true,
       "type_id": "node.clip_trigger_index"
     },
     {
@@ -3898,6 +3935,14 @@
         "bokeh"
       ],
       "category": "Mask",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "fov_y",
+        "near",
+        "far",
+        "focus_distance",
+        "f_stop"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -4210,6 +4255,7 @@
       "label": "Combine XY (curve)",
       "outputs": [
         {
+          "capacity": "follows:x",
           "name": "out",
           "type": "Array"
         }
@@ -4269,6 +4315,7 @@
       "label": "Combine XYZW",
       "outputs": [
         {
+          "capacity": "follows:x",
           "name": "out",
           "type": "Array"
         }
@@ -4456,6 +4503,7 @@
       "label": "Connect Nearest",
       "outputs": [
         {
+          "capacity": "param:max_edges=32",
           "name": "edges",
           "type": "Array"
         }
@@ -4563,6 +4611,7 @@
       "label": "Copy Positions",
       "outputs": [
         {
+          "capacity": "follows:instances",
           "name": "out",
           "type": "Array"
         }
@@ -4610,6 +4659,7 @@
       "label": "Count Surface Triangles",
       "outputs": [
         {
+          "capacity": "follows:levelset",
           "name": "counts",
           "type": "Array"
         }
@@ -4673,6 +4723,7 @@
       "label": "Cube Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=36",
           "name": "vertices",
           "type": "Array"
         },
@@ -4923,6 +4974,7 @@
       "label": "Cut Mesh Bands",
       "outputs": [
         {
+          "capacity": "inputs:197607@1000,197631@1024",
           "name": "map",
           "type": "Array"
         }
@@ -5035,6 +5087,7 @@
       "label": "Cut Mesh Cells",
       "outputs": [
         {
+          "capacity": "inputs:197607@1000,197631@1024",
           "name": "map",
           "type": "Array"
         }
@@ -5106,6 +5159,7 @@
       "label": "Cycle Table Row",
       "outputs": [
         {
+          "capacity": "fixed:1",
           "name": "row",
           "type": "Array"
         }
@@ -5123,6 +5177,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Steps through the rows of a small built-in table on each clip trigger, emitting one row of numbers at a time. A way to sequence preset values.",
+      "trigger_latch": true,
       "type_id": "node.cycle_table_row"
     },
     {
@@ -5171,6 +5226,7 @@
       "label": "Cylinder Wrap Field",
       "outputs": [
         {
+          "capacity": "follows:uv",
           "name": "instances",
           "type": "Array"
         }
@@ -5320,6 +5376,7 @@
           "type": "Texture2D"
         },
         {
+          "capacity": "fixed:32",
           "name": "regions",
           "type": "Array"
         },
@@ -5588,6 +5645,7 @@
       "label": "Displace Copies",
       "outputs": [
         {
+          "capacity": "inputs:1000@1000,1024@1024",
           "name": "instances",
           "type": "Array"
         }
@@ -6500,6 +6558,11 @@
         "points"
       ],
       "category": "Particles 2D",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "width:u32",
+        "height:u32"
+      ],
       "examples": [
         "Cymatics",
         "FluidSim2D",
@@ -6537,6 +6600,7 @@
       "label": "Draw Particles (scatter)",
       "outputs": [
         {
+          "capacity": "canvas",
           "name": "accum",
           "type": "Array"
         }
@@ -6615,6 +6679,7 @@
       "label": "Draw Particles (3D scatter)",
       "outputs": [
         {
+          "capacity": "param:vol_res+vol_depth=2097152",
           "name": "accum",
           "type": "Array"
         }
@@ -6679,6 +6744,13 @@
         "3d to 2d"
       ],
       "category": "Particles 3D",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "cam_pos:vec3",
+        "cam_fwd:vec3",
+        "cam_right:vec3",
+        "cam_up:vec3"
+      ],
       "examples": [
         "FluidSim3D"
       ],
@@ -6723,6 +6795,7 @@
       "label": "Draw Particles (camera)",
       "outputs": [
         {
+          "capacity": "canvas",
           "name": "accum",
           "type": "Array"
         }
@@ -7128,6 +7201,7 @@
       "label": "Edge Pairs",
       "outputs": [
         {
+          "capacity": "fixed:64",
           "name": "edges",
           "type": "Array"
         }
@@ -7457,6 +7531,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Turns each trigger advance into a linear pulse whose duration is measured in musical beats.",
+      "trigger_latch": true,
       "type_id": "node.envelope_beats"
     },
     {
@@ -7792,6 +7867,10 @@
         "push shape"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "outline_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -7809,6 +7888,7 @@
       "label": "Extrude Curve",
       "outputs": [
         {
+          "capacity": "inputs:2000@1000,2048@1024",
           "name": "out",
           "type": "Array"
         }
@@ -7867,6 +7947,7 @@
       "label": "Facet Normals",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -8272,6 +8353,17 @@
         "camera projection"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "active_count",
+        "cam_right:vec3",
+        "cam_up:vec3",
+        "cam_fwd:vec3",
+        "cam_pos:vec3",
+        "proj_f",
+        "cam_near",
+        "use_camera:u32"
+      ],
       "examples": [
         "BlossomWire",
         "Wireframe"
@@ -8302,6 +8394,7 @@
       "label": "Flatten 3D → 2D",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -8354,6 +8447,10 @@
         "4d to 3d"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "active_count"
+      ],
       "examples": [
         "Duocylinder",
         "Tesseract"
@@ -8369,6 +8466,7 @@
       "label": "Flatten 4D → 3D",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -8411,6 +8509,12 @@
         "flatten"
       ],
       "category": "Particles 3D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "cam_fwd_x",
+        "cam_fwd_y",
+        "cam_fwd_z"
+      ],
       "examples": [
         "FluidSim3D"
       ],
@@ -8440,6 +8544,7 @@
       "label": "Flatten to Camera Plane",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -10161,6 +10266,7 @@
       "label": "Liquid Surface",
       "outputs": [
         {
+          "capacity": "param:max_capacity=786432",
           "name": "vertices",
           "type": "Array"
         },
@@ -10169,14 +10275,17 @@
           "type": "Transform"
         },
         {
+          "capacity": "param:whitewater_capacity=100000",
           "name": "foam",
           "type": "Array"
         },
         {
+          "capacity": "param:whitewater_capacity=100000",
           "name": "bubbles",
           "type": "Array"
         },
         {
+          "capacity": "param:whitewater_capacity=100000",
           "name": "spray",
           "type": "Array"
         },
@@ -10221,10 +10330,12 @@
           "type": "f32"
         },
         {
+          "capacity": "fixed:1",
           "name": "particles_a",
           "type": "Array"
         },
         {
+          "capacity": "fixed:1",
           "name": "particles_b",
           "type": "Array"
         },
@@ -10245,10 +10356,12 @@
           "type": "f32"
         },
         {
+          "capacity": "fixed:1",
           "name": "solid_a",
           "type": "Array"
         },
         {
+          "capacity": "fixed:1",
           "name": "solid_b",
           "type": "Array"
         },
@@ -10632,6 +10745,10 @@
         "kaleidoscope"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -10654,6 +10771,7 @@
       "label": "Fold",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -10734,6 +10852,7 @@
       "label": "Fractal Noise (per copy)",
       "outputs": [
         {
+          "capacity": "follows:uv",
           "name": "out",
           "type": "Array"
         }
@@ -11033,6 +11152,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Emits a pair of small whole-number ratios from a musical-interval table. Use it for Lissajous curves and similar shapes where the X and Y rates set the form.",
+      "trigger_latch": true,
       "type_id": "node.frequency_ratio"
     },
     {
@@ -11183,6 +11303,10 @@
         "stepped noise"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -11220,6 +11344,7 @@
       "label": "Glitch Jitter",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -11463,6 +11588,7 @@
       "role": "Source",
       "stratum": "driver",
       "summary": "Plays back an imported glTF animation clip. Wire its outputs into a Transform 3D node to animate an imported object, or leave the progress input unwired to loop it on the beat.",
+      "trigger_latch": true,
       "type_id": "node.gltf_animation_source"
     },
     {
@@ -11483,6 +11609,7 @@
       "label": "glTF Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=200000",
           "name": "vertices",
           "type": "Array"
         },
@@ -11638,6 +11765,7 @@
       "label": "glTF Morph Deltas",
       "outputs": [
         {
+          "capacity": "param:max_capacity=200000",
           "name": "deltas",
           "type": "Array"
         }
@@ -11711,6 +11839,7 @@
       "label": "glTF Morph Weights",
       "outputs": [
         {
+          "capacity": "param:target_count=0",
           "name": "weights",
           "type": "Array"
         }
@@ -11814,6 +11943,7 @@
       "role": "Source",
       "stratum": "driver",
       "summary": "Samples an imported glTF asset's morph-target weight animation and outputs the per-target weight vector a Morph Targets Blend node needs. Wire progress to a beat or LFO to animate the blend.",
+      "trigger_latch": true,
       "type_id": "node.gltf_morph_weights"
     },
     {
@@ -11846,6 +11976,7 @@
       "label": "glTF Skeleton Pose",
       "outputs": [
         {
+          "capacity": "param:joint_count=0",
           "name": "joint_matrices",
           "type": "Array"
         }
@@ -11985,6 +12116,7 @@
       "role": "Source",
       "stratum": "driver",
       "summary": "Poses an imported glTF character's skeleton and outputs the joint matrices a Skin Mesh node needs to deform it. Wire progress to a beat or LFO to animate the pose.",
+      "trigger_latch": true,
       "type_id": "node.gltf_skeleton_pose"
     },
     {
@@ -12000,14 +12132,17 @@
       "label": "glTF Skinned Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=200000",
           "name": "vertices",
           "type": "Array"
         },
         {
+          "capacity": "param:max_capacity=200000",
           "name": "joints",
           "type": "Array"
         },
         {
+          "capacity": "param:max_capacity=200000",
           "name": "weights",
           "type": "Array"
         }
@@ -12327,6 +12462,7 @@
       "label": "Grid Edges",
       "outputs": [
         {
+          "capacity": "param:grid_size=1152",
           "name": "edges",
           "type": "Array"
         }
@@ -12378,6 +12514,7 @@
       "label": "Grid Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=2097152",
           "name": "vertices",
           "type": "Array"
         }
@@ -12472,10 +12609,12 @@
       "label": "Grid Points (UV)",
       "outputs": [
         {
+          "capacity": "param:grid_size=576",
           "name": "u_values",
           "type": "Array"
         },
         {
+          "capacity": "param:grid_size=576",
           "name": "v_values",
           "type": "Array"
         }
@@ -12536,6 +12675,7 @@
       "label": "Grid UV Field",
       "outputs": [
         {
+          "capacity": "param:grid_size=160000",
           "name": "uv",
           "type": "Array"
         }
@@ -13101,6 +13241,7 @@
       "label": "Hypercube Edges (4D)",
       "outputs": [
         {
+          "capacity": "fixed:32",
           "name": "edges",
           "type": "Array"
         }
@@ -13136,6 +13277,7 @@
       "label": "Hypercube Points (4D)",
       "outputs": [
         {
+          "capacity": "fixed:16",
           "name": "vertices",
           "type": "Array"
         }
@@ -13487,6 +13629,7 @@
       "label": "Keep In Box (3D)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -14206,18 +14349,22 @@
       "label": "Lightning Bolt",
       "outputs": [
         {
+          "capacity": "param:max_capacity=2048",
           "name": "points",
           "type": "Array"
         },
         {
+          "capacity": "param:max_capacity=2048",
           "name": "widths",
           "type": "Array"
         },
         {
+          "capacity": "param:max_capacity=2048",
           "name": "core_edges",
           "type": "Array"
         },
         {
+          "capacity": "param:max_capacity=2048",
           "name": "branch_edges",
           "type": "Array"
         },
@@ -14997,6 +15144,7 @@
       "label": "Make Triangles",
       "outputs": [
         {
+          "capacity": "param:src_cols+src_rows=390150",
           "name": "out",
           "type": "Array"
         }
@@ -15370,6 +15518,10 @@
         "slump"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -15402,6 +15554,7 @@
       "label": "Melt",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -15468,6 +15621,7 @@
       "label": "Mesh Edges",
       "outputs": [
         {
+          "capacity": "follows:vertices",
           "name": "edges",
           "type": "Array"
         }
@@ -15534,6 +15688,7 @@
       "label": "Mesh Ramp",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "weights",
           "type": "Array"
         }
@@ -15648,6 +15803,10 @@
         "mesh weights"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -15750,6 +15909,7 @@
       "label": "Mesh Spatial Mask",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "weights",
           "type": "Array"
         }
@@ -15933,6 +16093,10 @@
         "mesh gate"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -16010,6 +16174,7 @@
       "label": "Mesh Stagger Envelope",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "weights",
           "type": "Array"
         }
@@ -16290,6 +16455,10 @@
         "crossfade"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -16317,6 +16486,7 @@
       "label": "Morph Mesh",
       "outputs": [
         {
+          "capacity": "inputs:1000@1000,1024@1024",
           "name": "out",
           "type": "Array"
         }
@@ -16353,6 +16523,11 @@
         "shape keys"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "deltas_len:u32",
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -16375,6 +16550,7 @@
       "label": "Morph Targets Blend",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -16405,6 +16581,10 @@
         "smear"
       ],
       "category": "Blur & Sharpen",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "shutter_angle"
+      ],
       "examples": [],
       "fusion": "multi_input_coincident",
       "inputs": [
@@ -16464,6 +16644,10 @@
         "euler"
       ],
       "category": "Particles 2D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "dt_scaled"
+      ],
       "examples": [
         "Cymatics",
         "FluidSim2D",
@@ -16495,6 +16679,7 @@
       "label": "Move Particles (Euler step)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -16538,6 +16723,10 @@
         "euler"
       ],
       "category": "Particles 3D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "dt_scaled"
+      ],
       "examples": [
         "FluidSim3D"
       ],
@@ -16567,6 +16756,7 @@
       "label": "Move Particles (3D, Euler step)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -16735,6 +16925,7 @@
       "label": "Smooth (neighbors)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -17004,6 +17195,10 @@
         "bubble"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -17041,6 +17236,7 @@
       "label": "Boil",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -17160,6 +17356,7 @@
       "label": "Normal Wave Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -17318,6 +17515,7 @@
       "label": "One Euro Filter",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -17704,6 +17902,7 @@
       "label": "Ordered Recon",
       "outputs": [
         {
+          "capacity": "inputs:1000@1000,1024@1024",
           "name": "out",
           "type": "Array"
         }
@@ -18016,6 +18215,7 @@
       "label": "Particle Volume",
       "outputs": [
         {
+          "capacity": "inputs:8000@1000,8192@1024",
           "name": "levelset",
           "type": "Array"
         },
@@ -23293,6 +23493,7 @@
           "type": "Transform"
         },
         {
+          "capacity": "fixed:4000",
           "name": "instances",
           "type": "Array"
         },
@@ -23433,6 +23634,7 @@
       "label": "Plane Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=6",
           "name": "vertices",
           "type": "Array"
         }
@@ -23501,6 +23703,7 @@
       "label": "Platonic Solid Edges",
       "outputs": [
         {
+          "capacity": "fixed:30",
           "name": "edges",
           "type": "Array"
         }
@@ -23558,6 +23761,7 @@
       "label": "Platonic Solid Mesh",
       "outputs": [
         {
+          "capacity": "fixed:108",
           "name": "vertices",
           "type": "Array"
         },
@@ -23620,6 +23824,7 @@
       "label": "Platonic Solid Points",
       "outputs": [
         {
+          "capacity": "fixed:20",
           "name": "vertices",
           "type": "Array"
         }
@@ -23746,6 +23951,7 @@
       "label": "Position Jitter",
       "outputs": [
         {
+          "capacity": "follows:instances",
           "name": "instances",
           "type": "Array"
         }
@@ -23925,6 +24131,10 @@
         "bulge"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -23957,6 +24167,7 @@
       "label": "Push Along Normals",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -24027,6 +24238,7 @@
       "label": "Push From Walls (3D)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -24101,6 +24313,7 @@
       "label": "Push Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -24370,6 +24583,7 @@
       "label": "Range",
       "outputs": [
         {
+          "capacity": "param:max_capacity=256",
           "name": "out",
           "type": "Array"
         }
@@ -24571,6 +24785,7 @@
       "label": "Reflect Array",
       "outputs": [
         {
+          "capacity": "inputs:2000@1000,2048@1024",
           "name": "out",
           "type": "Array"
         }
@@ -24867,6 +25082,7 @@
       "label": "Remap Cut Weights",
       "outputs": [
         {
+          "capacity": "follows:map",
           "name": "out",
           "type": "Array"
         }
@@ -24902,6 +25118,7 @@
       "label": "Remap Mesh Cut",
       "outputs": [
         {
+          "capacity": "follows:map",
           "name": "out",
           "type": "Array"
         }
@@ -24950,6 +25167,7 @@
       "label": "Remove Drift (3D)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -26387,10 +26605,12 @@
       "label": "Repeat Outline (rings)",
       "outputs": [
         {
+          "capacity": "inputs:16000@1000,16384@1024",
           "name": "outline",
           "type": "Array"
         },
         {
+          "capacity": "inputs:16000@1000,16384@1024",
           "name": "edges",
           "type": "Array"
         }
@@ -26586,6 +26806,10 @@
         "solid of revolution"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "profile_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -26603,6 +26827,7 @@
       "label": "Revolve Curve",
       "outputs": [
         {
+          "capacity": "inputs:49000@1000,50176@1024",
           "name": "out",
           "type": "Array"
         }
@@ -27470,6 +27695,10 @@
         "sine displace"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -27507,6 +27736,7 @@
       "label": "Ripple",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -27608,6 +27838,7 @@
       "label": "Rotate 3D",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -27690,6 +27921,7 @@
       "label": "Rotate 4D",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -27862,6 +28094,7 @@
       "label": "Rotation Jitter",
       "outputs": [
         {
+          "capacity": "follows:instances",
           "name": "instances",
           "type": "Array"
         }
@@ -27912,6 +28145,7 @@
       "label": "Running Total",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         },
@@ -27965,6 +28199,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Grabs the value of a signal at each trigger and holds it steady until the next one. Freezes a moving value so later wiggles don't leak through.",
+      "trigger_latch": true,
       "type_id": "node.sample_and_hold"
     },
     {
@@ -28001,6 +28236,7 @@
       "label": "Sample Image for Particles",
       "outputs": [
         {
+          "capacity": "follows:particles",
           "name": "out",
           "type": "Array"
         }
@@ -28047,6 +28283,7 @@
       "label": "Sample Mesh Triangles",
       "outputs": [
         {
+          "capacity": "fixed:1536",
           "name": "vertices",
           "type": "Array"
         }
@@ -28108,6 +28345,7 @@
       "label": "Sample Triangle Grid",
       "outputs": [
         {
+          "capacity": "fixed:1536",
           "name": "vertices",
           "type": "Array"
         }
@@ -28190,6 +28428,7 @@
       "label": "Sample Volume for Particles (3D)",
       "outputs": [
         {
+          "capacity": "follows:particles",
           "name": "out",
           "type": "Array"
         }
@@ -28706,6 +28945,7 @@
       "label": "Scatter On Mesh",
       "outputs": [
         {
+          "capacity": "param:count+max_capacity=256",
           "name": "instances",
           "type": "Array"
         }
@@ -28782,6 +29022,13 @@
         "corridor"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "base_cell:i32",
+        "behind:u32",
+        "ahead:u32",
+        "use_camera:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -28794,6 +29041,7 @@
       "label": "Scene Array",
       "outputs": [
         {
+          "capacity": "fixed:32",
           "name": "out",
           "type": "Array"
         }
@@ -29244,6 +29492,7 @@
       "label": "Shape Particle Blobs",
       "outputs": [
         {
+          "capacity": "follows:sorted",
           "name": "blobs",
           "type": "Array"
         }
@@ -29433,6 +29682,10 @@
         "shard"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -29460,6 +29713,7 @@
       "label": "Shatter",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -29928,6 +30182,7 @@
       "label": "Simplex Noise (per copy)",
       "outputs": [
         {
+          "capacity": "follows:uv",
           "name": "out",
           "type": "Array"
         }
@@ -30209,6 +30464,12 @@
         "joint blend"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "joints_len:u32",
+        "weights_len:u32",
+        "matrices_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -30236,6 +30497,7 @@
       "label": "Skin Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -30267,6 +30529,10 @@
         "planar cut"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -30289,6 +30555,7 @@
       "label": "Slice",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -30677,10 +30944,12 @@
       "label": "Sort Particles Into Cells",
       "outputs": [
         {
+          "capacity": "follows:particles",
           "name": "sorted",
           "type": "Array"
         },
         {
+          "capacity": "param:max_cells=1048576",
           "name": "cell_ranges",
           "type": "Array"
         }
@@ -30820,6 +31089,7 @@
       "label": "Spawn From Image",
       "outputs": [
         {
+          "capacity": "param:max_capacity=1048576",
           "name": "particles",
           "type": "Array"
         }
@@ -30923,6 +31193,7 @@
       "label": "Spawn From Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=1048576",
           "name": "particles",
           "type": "Array"
         }
@@ -31005,6 +31276,7 @@
       "label": "Spawn Particles",
       "outputs": [
         {
+          "capacity": "param:max_capacity=1048576",
           "name": "particles",
           "type": "Array"
         }
@@ -31083,10 +31355,12 @@
       "label": "Split XY",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "x",
           "type": "Array"
         },
         {
+          "capacity": "follows:in",
           "name": "y",
           "type": "Array"
         }
@@ -31107,6 +31381,10 @@
         "random kick"
       ],
       "category": "Particles 2D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "frame_count:u32"
+      ],
       "examples": [
         "StrangeAttractor"
       ],
@@ -31131,6 +31409,7 @@
       "label": "Spread Out (diffuse)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -31173,6 +31452,10 @@
         "jitter"
       ],
       "category": "Particles 3D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "frame_count:u32"
+      ],
       "examples": [
         "FluidSim3D"
       ],
@@ -31207,6 +31490,7 @@
       "label": "Spread Out (3D diffuse)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -31252,6 +31536,12 @@
         "ao"
       ],
       "category": "Mask",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "fov_y",
+        "near",
+        "far"
+      ],
       "examples": [
         "Lantern"
       ],
@@ -31374,6 +31664,7 @@
       "label": "Sum Into Bins",
       "outputs": [
         {
+          "capacity": "param:capacity=5",
           "name": "accumulated",
           "type": "Array"
         }
@@ -31693,6 +31984,7 @@
       "label": "Switch (array)",
       "outputs": [
         {
+          "capacity": "inputs:1000@1000,1024@1024",
           "name": "out",
           "type": "Array"
         }
@@ -31999,6 +32291,10 @@
         "narrow"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -32031,6 +32327,7 @@
       "label": "Taper Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -32135,6 +32432,7 @@
       "label": "Terminal Stream",
       "outputs": [
         {
+          "capacity": "fixed:86400",
           "name": "cells",
           "type": "Array"
         },
@@ -32578,6 +32876,7 @@
       "label": "Torus Wrap Field",
       "outputs": [
         {
+          "capacity": "follows:uv",
           "name": "instances",
           "type": "Array"
         }
@@ -32666,6 +32965,7 @@
       "label": "Track Persist",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -32761,10 +33061,12 @@
       "label": "Track Regions",
       "outputs": [
         {
+          "capacity": "fixed:32",
           "name": "tracks",
           "type": "Array"
         },
         {
+          "capacity": "fixed:32",
           "name": "boxes",
           "type": "Array"
         }
@@ -33242,6 +33544,7 @@
       "label": "Transform Mesh Patches",
       "outputs": [
         {
+          "capacity": "inputs:1000@1000,1024@1024",
           "name": "out",
           "type": "Array"
         }
@@ -33482,6 +33785,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "On each trigger it eases smoothly from its current value to a new target over a number of beats, then rests. A beat-clocked glide between values.",
+      "trigger_latch": true,
       "type_id": "node.trigger_ease_to"
     },
     {
@@ -33544,6 +33848,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off.",
+      "trigger_latch": true,
       "type_id": "node.trigger_gate"
     },
     {
@@ -33555,6 +33860,12 @@
         "pipe"
       ],
       "category": "3D Geometry",
+      "derived_recompute": false,
+      "derived_uniforms": [
+        "path_len:u32",
+        "lift_len:u32",
+        "radius_scale_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -33582,6 +33893,7 @@
       "label": "Tube From Path",
       "outputs": [
         {
+          "capacity": "inputs:9000@1000,9216@1024",
           "name": "out",
           "type": "Array"
         }
@@ -33673,6 +33985,7 @@
       "label": "Turbulence (simplex)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -33749,6 +34062,10 @@
         "simplex"
       ],
       "category": "Particles 3D",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "time2"
+      ],
       "examples": [
         "FluidSim3D"
       ],
@@ -33793,6 +34110,7 @@
       "label": "Turbulence (3D, simplex)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -33856,6 +34174,10 @@
         "helix"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -33883,6 +34205,7 @@
       "label": "Twist Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -35068,6 +35391,7 @@
       "label": "Volume Surface Mesh",
       "outputs": [
         {
+          "capacity": "param:max_capacity=1572864",
           "name": "vertices",
           "type": "Array"
         }
@@ -35458,6 +35782,10 @@
         "blockify"
       ],
       "category": "3D Geometry",
+      "derived_recompute": true,
+      "derived_uniforms": [
+        "weights_len:u32"
+      ],
       "examples": [],
       "fusion": "pointwise",
       "inputs": [
@@ -35485,6 +35813,7 @@
       "label": "Voxelize",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -35649,6 +35978,7 @@
       "label": "Wave Field 3D",
       "outputs": [
         {
+          "capacity": "follows:positions",
           "name": "out",
           "type": "Array"
         }
@@ -35782,6 +36112,7 @@
       "label": "Wave Shear Mesh",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -36075,6 +36406,7 @@
       "label": "Wrap Around (torus)",
       "outputs": [
         {
+          "capacity": "follows:in",
           "name": "out",
           "type": "Array"
         }
@@ -36394,10 +36726,12 @@
           "type": "Texture2D"
         },
         {
+          "capacity": "fixed:1536",
           "name": "vertices",
           "type": "Array"
         },
         {
+          "capacity": "fixed:1",
           "name": "weights",
           "type": "Array"
         }

@@ -212,7 +212,7 @@ shared `viewport.zoom_to(new_ppb, anchor_beat, anchor_x)` entry point — the +/
 on the playhead) and resolve the nearest level first, so they stay sane after a continuous zoom. A
 **draggable horizontal scrollbar** lives in a reserved strip below the tracks (outside `tracks_rect`, so a
 scrollbar drag never starts a clip marquee); its thumb geometry is one source shared by the GPU draw and
-the drag hit-test (`scrollbar_h_layout`). Verified by `playhead_scrollbar_demo`.
+the drag hit-test (`scrollbar_h_layout`).
 
 | | |
 |---|---|
