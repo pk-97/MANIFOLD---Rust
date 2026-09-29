@@ -28,7 +28,7 @@ struct SortParams {
     bin_total: u32,
     sorted_capacity: u32,
     write_order: u32,
-    _pad: u32,
+    write_sorted: u32,
 }
 
 macro_rules! float_param {
@@ -48,7 +48,7 @@ pub(crate) use float_param;
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
+    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -151,17 +151,18 @@ impl Primitive for SortParticlesIntoCells {
             ctx.error("Sort Particles Into Cells: box and cell size must be finite and positive");
             return;
         }
-        let (Some(particles), Some(sorted), Some(ranges)) = (
-            ctx.inputs.array("particles"),
-            ctx.outputs.array("sorted"),
-            ctx.outputs.array("cell_ranges"),
-        ) else {
+        let (Some(particles), Some(ranges)) = (ctx.inputs.array("particles"), ctx.outputs.array("cell_ranges")) else {
             return;
         };
+        // Either per-slot output may be unwired; the slots are those every wired one holds.
+        let sorted = ctx.outputs.array("sorted");
         let order = ctx.outputs.array("order");
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
         let capacity = (particles.size / particle_size) as u32;
-        let sorted_capacity = (sorted.size / particle_size) as u32;
+        let sorted_capacity = [sorted.map(|b| b.size / particle_size), order.map(|b| b.size / 4)]
+            .into_iter()
+            .flatten()
+            .fold(u64::from(capacity), u64::min) as u32;
         let count = requested.map_or(capacity, |count| (count.max(0.0) as u32).min(capacity)).min(sorted_capacity);
         let bins = bin_counts(size, cell_size);
         let bin_total = bins.iter().map(|&n| u64::from(n)).product::<u64>();
@@ -194,16 +195,17 @@ impl Primitive for SortParticlesIntoCells {
             bin_total,
             sorted_capacity,
             write_order: u32::from(order.is_some()),
-            _pad: 0,
+            write_sorted: u32::from(sorted.is_some()),
         };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
             GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: sorted, offset: 0 },
+            // Unwired outputs are never written (their write flag is 0); rank keeps
+            // the layout bound.
+            GpuBinding::Buffer { binding: 2, buffer: sorted.unwrap_or(rank), offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
             GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
             GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
-            // Unwired, never written (`write_order` is 0); rank keeps the layout bound.
             GpuBinding::Buffer { binding: 6, buffer: order.unwrap_or(rank), offset: 0 },
         ];
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
