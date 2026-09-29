@@ -781,8 +781,11 @@ phase** (below).
   to 6 ms (P6, D20) and made the kernel cost a design item (BUG-l24y (GPU liquid surface
   kernels cost)).
 - **Content-thread gate, headless.** `fluid_capture --gpu-surface` with its preview
-  pass: CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under 20 ms. At
-  the defaults: max 6.75 ms, mean 1.04 ms.
+  pass: steady-state CPU encode time per frame (`render_cpu_ms` in `preview.csv`) under
+  20 ms, checked with `awk -F, 'NR>31 && $5>20 {n++} END {exit n>0}' preview.csv`. The
+  first 30 frames are excluded because cold start spikes under load (34 ms at frame 8,
+  load 18–32, on a landing seat; steady-state max 8 ms). At the defaults: max 6.75 ms,
+  mean 1.04 ms.
 - **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
 
 ### P6c — Level-set smoothing
