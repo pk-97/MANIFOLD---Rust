@@ -1,14 +1,13 @@
 //! MLS-MPM matter (`docs/GPU_MPM_SOLVER_DESIGN.md`): the point and grid
 //! records the matter atoms share, the water constants, the lattice, the
-//! fixed-point encoding of grid accumulation (D5), the substep rule (D4) and
-//! the fixed-tick clock (D8).
+//! fixed-point encoding of grid accumulation (D5) and the substep rule (D4).
+//! The clock, bodies and rigid owner are every GPU liquid's: `liquid`.
 
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::fluid::{FluidDomainLayout, TICK};
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use crate::node_graph::transform::Transform;
 
-pub mod bodies;
 pub mod coupling;
 /// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
 pub mod look;
@@ -73,119 +72,10 @@ impl KnownItem for MatterGridNode {
     const SPECS: &'static [ChannelSpec] = MATTER_GRID_NODE_SPECS;
 }
 
-/// A collider, source, drain or coupled body during one tick. 128 bytes.
-/// The domain uploads one per body per tick of the frame, holding the tick's
-/// start pose and its motion over the tick; `node.matter_move_bodies` turns
-/// that into the pose at each substep (section 4.1 step 2).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct MatterBody {
-    /// World position of the shape's origin (a coupled body's centre of
-    /// mass); w = 1/m (0 = prescribed).
-    pub position_inv_mass: [f32; 4],
-    /// Unit quaternion xyzw, body to world.
-    pub rotation: [f32; 4],
-    /// m/s; w = friction.
-    pub linear_velocity: [f32; 4],
-    /// World rad/s; w = role (0 collider, 1 fill, 2 inflow, 3 drain).
-    pub angular_velocity: [f32; 4],
-    /// World inverse inertia rows at tick start (zero when prescribed); the
-    /// rows' w carry the predicted external angular acceleration x, y, z.
-    pub inv_inertia_x: [f32; 4],
-    pub inv_inertia_y: [f32; 4],
-    pub inv_inertia_z: [f32; 4],
-    /// xyz predicted external linear acceleration; w = shape index, −1 when
-    /// the body is disabled.
-    pub accel_shape: [f32; 4],
-}
-
-pub const MATTER_BODY_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::POSITION_INV_MASS, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::ROTATION, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::LINEAR_VELOCITY, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::ANGULAR_VELOCITY, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::INV_INERTIA_X, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::INV_INERTIA_Y, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::INV_INERTIA_Z, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::ACCEL_SHAPE, ty: ChannelElementType::Vec4F },
-];
-
-impl KnownItem for MatterBody {
-    const SPECS: &'static [ChannelSpec] = MATTER_BODY_SPECS;
-}
-
-/// A body-local signed-distance lattice in the domain's atlas. 48 bytes.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct MatterShape {
-    /// Local position of node (0, 0, 0), unscaled; w = spacing in metres.
-    pub origin_spacing: [f32; 4],
-    pub dims_x: u32,
-    pub dims_y: u32,
-    pub dims_z: u32,
-    /// Index of node (0, 0, 0) in the atlas's half-precision values (even).
-    pub atlas_offset: u32,
-    /// The role's scale per axis; w = the smallest, which turns a local
-    /// distance into a world one that never overstates it.
-    pub scale_min: [f32; 4],
-}
-
-pub const MATTER_SHAPE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec { name: well_known::ORIGIN_SPACING, ty: ChannelElementType::Vec4F },
-    ChannelSpec { name: well_known::DIMS_X, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::DIMS_Y, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::DIMS_Z, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::ATLAS_OFFSET, ty: ChannelElementType::U32 },
-    ChannelSpec { name: well_known::SCALE_MIN, ty: ChannelElementType::Vec4F },
-];
-
-impl KnownItem for MatterShape {
-    const SPECS: &'static [ChannelSpec] = MATTER_SHAPE_SPECS;
-}
-
 const _: () = {
     assert!(std::mem::size_of::<MatterPoint>() == 80);
     assert!(std::mem::size_of::<MatterGridNode>() == 32);
-    assert!(std::mem::size_of::<MatterBody>() == 128);
-    assert!(std::mem::size_of::<MatterShape>() == 48);
 };
-
-/// Packs distance values two per word as WGSL's `pack2x16float` does (the
-/// first value in the low half), for the shape atlas (D21: storage-only half
-/// precision). An odd count pads with +∞, which reads as far outside.
-pub fn pack_distance_atlas(values: &[f32], out: &mut Vec<u32>) {
-    let half = |v: f32| u32::from(half::f16::from_f32(v).to_bits());
-    for pair in values.chunks(2) {
-        let high = pair.get(1).copied().unwrap_or(f32::INFINITY);
-        out.push(half(pair[0]) | (half(high) << 16));
-    }
-}
-
-/// A body's pose `t` seconds after its tick-start row: translation along the
-/// linear velocity, rotation by the constant angular velocity (the slerp
-/// between the tick's end poses). `node.matter_move_bodies` computes the same
-/// in f32.
-pub fn body_pose_at(body: &MatterBody, t: f32) -> ([f32; 3], [f32; 4]) {
-    let p = body.position_inv_mass;
-    let v = body.linear_velocity;
-    let position = [p[0] + v[0] * t, p[1] + v[1] * t, p[2] + v[2] * t];
-    let w = body.angular_velocity;
-    let angle = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt() * t;
-    let q = body.rotation;
-    if angle <= 0.0 {
-        return (position, q);
-    }
-    let scale = (0.5 * angle).sin() / (angle / t);
-    let d = [w[0] * scale, w[1] * scale, w[2] * scale, (0.5 * angle).cos()];
-    // d ⊗ q: the world-frame rotation applied after the tick-start one.
-    let rotation = [
-        d[3] * q[0] + d[0] * q[3] + d[1] * q[2] - d[2] * q[1],
-        d[3] * q[1] - d[0] * q[2] + d[1] * q[3] + d[2] * q[0],
-        d[3] * q[2] + d[0] * q[1] - d[1] * q[0] + d[2] * q[3],
-        d[3] * q[3] - d[0] * q[0] - d[1] * q[1] - d[2] * q[2],
-    ];
-    (position, rotation)
-}
 
 /// Accumulator words per grid node: momentum x, y, z, then mass.
 pub const ACCUM_WORDS_PER_NODE: u32 = 4;
@@ -477,117 +367,6 @@ pub fn solid_bytes(nodes: [u32; 3]) -> u64 {
     lattice_nodes(nodes) * 4
 }
 
-/// One frame of the D8 clock: how many fixed ticks to run and where the
-/// display sits.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClockFrame {
-    pub ticks: u32,
-    pub epoch: u32,
-    /// This frame starts a new simulation (first frame, reset, setup change or
-    /// backward seek); the state reseeds before any tick runs.
-    pub restarted: bool,
-    /// Simulated seconds at the end of this frame's ticks.
-    pub simulation_time: f64,
-    /// Simulated seconds this display frame reached (at most one tick past
-    /// `simulation_time` live); authored controls are sampled here.
-    pub target_time: f64,
-    /// Display time `s = target − tick` (surface design D10).
-    pub display_time: f64,
-    /// Simulated time dropped under live overload since the epoch began.
-    pub dropped_seconds: f64,
-}
-
-/// Most live ticks one display frame may run: 1 at 60 fps, 2 at 30, 3 at 24.
-/// A slow frame never earns more than this, so live cannot spiral (D8).
-pub const MAX_LIVE_TICKS: u32 = 3;
-
-/// The fixed 60 Hz clock the domain node owns (D8). Transport and Speed build
-/// a target time; live runs at most the frame's share of ticks and drops the
-/// rest (reported), keeping at most one tick of jitter debt; offline runs
-/// every due tick.
-#[derive(Clone, Debug, Default)]
-pub struct MatterClock {
-    /// 0 before the first start, so outputs a domain holds while it waits
-    /// (for a role's geometry, say) never share an epoch with the first
-    /// simulation, which then seeds.
-    epoch: u32,
-    started: bool,
-    last_transport: f64,
-    previous_reset: Option<f32>,
-    target_time: f64,
-    ticks_done: u64,
-    dropped_seconds: f64,
-    tick_cap: Option<u32>,
-}
-
-impl MatterClock {
-    /// Cap the ticks of the frames that follow, live and offline alike: at most
-    /// `cap` run, one tick of debt is kept and the rest is dropped, reported.
-    /// A coupled domain caps at 0 while its body reaction is pending and at 1
-    /// otherwise (section 5). `None` restores the uncapped clock.
-    pub fn set_tick_cap(&mut self, cap: Option<u32>) {
-        self.tick_cap = cap;
-    }
-
-    /// Advance by one display frame. `frame_interval` is this frame's host
-    /// delta in seconds; it only sets the live tick allowance.
-    pub fn advance(
-        &mut self,
-        transport: f64,
-        frame_interval: f64,
-        speed: f32,
-        reset: f32,
-        setup_changed: bool,
-        offline: bool,
-    ) -> ClockFrame {
-        // A trigger publishes a counter; any change (undo included) resets once.
-        let reset_edge = self.previous_reset.is_some_and(|previous| previous != reset);
-        self.previous_reset = Some(reset);
-        let restarted = !self.started
-            || setup_changed
-            || reset_edge
-            || transport < self.last_transport - 1e-9;
-        if restarted {
-            self.epoch = self.epoch.wrapping_add(1);
-            self.started = true;
-            self.target_time = 0.0;
-            self.ticks_done = 0;
-            self.dropped_seconds = 0.0;
-        } else {
-            self.target_time += (transport - self.last_transport).max(0.0) * f64::from(speed);
-        }
-        self.last_transport = transport;
-        let due = ((self.target_time / TICK + 1e-9).floor() as u64).saturating_sub(self.ticks_done);
-        let ticks = if offline && self.tick_cap.is_none() {
-            due
-        } else {
-            let allowance = match self.tick_cap {
-                Some(cap) => u64::from(cap),
-                None => ((frame_interval / TICK) - 1e-6).ceil().clamp(1.0, f64::from(MAX_LIVE_TICKS)) as u64,
-            };
-            let run = due.min(allowance);
-            // Keep one tick of scheduling jitter; drop the rest visibly.
-            let dropped = due.saturating_sub(run).saturating_sub(1);
-            if dropped > 0 {
-                let seconds = dropped as f64 * TICK;
-                self.target_time -= seconds;
-                self.dropped_seconds += seconds;
-            }
-            run
-        };
-        self.ticks_done += ticks;
-        ClockFrame {
-            ticks: ticks as u32,
-            epoch: self.epoch,
-            restarted,
-            simulation_time: self.ticks_done as f64 * TICK,
-            target_time: self.target_time,
-            display_time: (self.target_time - TICK).max(0.0),
-            dropped_seconds: self.dropped_seconds,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,34 +465,6 @@ mod tests {
         }
     }
 
-    /// A quarter turn about y over one tick: halfway through, the pose is the
-    /// slerp midpoint (45°) and the translation the lerp midpoint; the
-    /// quaternion stays unit length. The atlas halves round-trip.
-    #[test]
-    fn matter_body_pose_follows_the_tick() {
-        let tick = crate::node_graph::fluid::TICK as f32;
-        let turn = std::f32::consts::FRAC_PI_2;
-        let body = MatterBody {
-            position_inv_mass: [1.0, 2.0, 3.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            linear_velocity: [0.6 / tick, 0.0, -0.3 / tick, 0.5],
-            angular_velocity: [0.0, turn / tick, 0.0, 0.0],
-            ..MatterBody::default()
-        };
-        let (position, rotation) = body_pose_at(&body, 0.5 * tick);
-        let expected = [0.0, (turn * 0.25).sin(), 0.0, (turn * 0.25).cos()];
-        assert!((0..3).all(|i| (position[i] - [1.3, 2.0, 2.85][i]).abs() < 1e-5), "{position:?}");
-        assert!((0..4).all(|i| (rotation[i] - expected[i]).abs() < 1e-6), "{rotation:?}");
-        let (_, end) = body_pose_at(&body, tick);
-        assert!((end.iter().map(|c| c * c).sum::<f32>() - 1.0).abs() < 1e-6);
-        assert!((end[1] - (turn * 0.5).sin()).abs() < 1e-6);
-        let mut words = Vec::new();
-        pack_distance_atlas(&[-0.25, 1.5, 0.125], &mut words);
-        let unpack = |w: u32| half::f16::from_bits(w as u16).to_f32();
-        assert_eq!((unpack(words[0]), unpack(words[0] >> 16), unpack(words[1])), (-0.25, 1.5, 0.125));
-        assert_eq!(unpack(words[1] >> 16), f32::INFINITY);
-    }
-
     /// The sort makes exactly `blocks` bins per axis at every resolution, and
     /// a point's bin (floor((p − box_min) · (1 / bin)), as the sort atom
     /// computes it) is the block of its stencil base node, floor(base / 4).
@@ -748,96 +499,5 @@ mod tests {
             let near_edge = ((q - 0.5) / 4.0 - ((q - 0.5) / 4.0).round()).abs() < 1e-4;
             assert!(near_edge || sorted == base.div_euclid(4), "q {q}: bin {sorted}, base {base}");
         }
-    }
-
-    fn run(clock: &mut MatterClock, frames: &[(f64, f64)], offline: bool) -> Vec<ClockFrame> {
-        frames
-            .iter()
-            .map(|&(t, dt)| clock.advance(t, dt, 1.0, 0.0, false, offline))
-            .collect()
-    }
-
-    #[test]
-    fn matter_live_caps_ticks_per_frame() {
-        let mut clock = MatterClock::default();
-        // 60 fps: one tick per frame after the first.
-        let frames: Vec<(f64, f64)> = (0..=10).map(|i| (i as f64 * TICK, TICK)).collect();
-        let out = run(&mut clock, &frames, false);
-        assert!(out[0].restarted);
-        assert!(out[1..].iter().all(|f| f.ticks == 1 && !f.restarted));
-        // A one-second stall: the frame runs its allowance, keeps one tick of
-        // debt and drops the rest, reported.
-        let stalled = clock.advance(10.0 * TICK + 1.0, 1.0, 1.0, 0.0, false, false);
-        assert_eq!(stalled.ticks, MAX_LIVE_TICKS);
-        let owed = 60u32;
-        let dropped_ticks = owed - MAX_LIVE_TICKS - 1;
-        assert!((stalled.dropped_seconds - f64::from(dropped_ticks) * TICK).abs() < 1e-9);
-        // 30 fps runs two ticks per frame.
-        let mut clock = MatterClock::default();
-        let frames: Vec<(f64, f64)> = (0..=6).map(|i| (i as f64 * 2.0 * TICK, 2.0 * TICK)).collect();
-        let out = run(&mut clock, &frames, false);
-        assert!(out[1..].iter().all(|f| f.ticks == 2));
-    }
-
-    #[test]
-    fn matter_export_runs_every_tick() {
-        let mut clock = MatterClock::default();
-        clock.advance(0.0, TICK, 1.0, 0.0, false, true);
-        let frame = clock.advance(1.0, 1.0, 1.0, 0.0, false, true);
-        assert_eq!(frame.ticks, 60);
-        assert_eq!(frame.dropped_seconds, 0.0);
-    }
-
-    #[test]
-    fn matter_clock_pause_reset_speed_and_seek() {
-        let mut clock = MatterClock::default();
-        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
-        let a = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
-        assert_eq!(a.ticks, 1);
-        // Paused transport holds.
-        let held = clock.advance(TICK, 0.0, 1.0, 0.0, false, false);
-        assert_eq!(held.ticks, 0);
-        assert_eq!(held.simulation_time, a.simulation_time);
-        // Speed 0.5 runs a tick every other frame.
-        let ticks: u32 = (2..6)
-            .map(|i| clock.advance(i as f64 * TICK, TICK, 0.5, 0.0, false, false).ticks)
-            .sum();
-        assert_eq!(ticks, 2);
-        // A changed reset counter restarts in a new epoch.
-        let reset = clock.advance(6.0 * TICK, TICK, 1.0, 1.0, false, false);
-        assert!(reset.restarted);
-        assert_eq!(reset.epoch, 2);
-        assert_eq!(reset.ticks, 0);
-        // Seeking backwards restarts too.
-        let seek = clock.advance(2.0 * TICK, TICK, 1.0, 1.0, false, false);
-        assert!(seek.restarted);
-        assert_eq!(seek.epoch, 3);
-        // Display sits one tick behind the target.
-        let next = clock.advance(3.0 * TICK, TICK, 1.0, 1.0, false, false);
-        assert!((next.display_time - 0.0).abs() < 1e-12);
-        assert_eq!(next.ticks, 1);
-    }
-
-    /// A coupled domain's cap: 0 holds without dropping the owed tick, 1 runs
-    /// one; offline obeys the cap too and drops beyond one tick of debt.
-    #[test]
-    fn matter_clock_tick_cap_holds_and_limits() {
-        let mut clock = MatterClock::default();
-        clock.set_tick_cap(Some(1));
-        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
-        clock.set_tick_cap(Some(0));
-        let held = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
-        assert_eq!((held.ticks, held.dropped_seconds), (0, 0.0));
-        clock.set_tick_cap(Some(1));
-        let caught = clock.advance(2.0 * TICK, TICK, 1.0, 0.0, false, false);
-        assert_eq!((caught.ticks, caught.dropped_seconds), (1, 0.0));
-        let offline = clock.advance(5.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
-        assert_eq!(offline.ticks, 1);
-        // Four due (one still owed from the catch-up): one runs, one stays
-        // owed, two drop.
-        assert!((offline.dropped_seconds - 2.0 * TICK).abs() < 1e-9);
-        clock.set_tick_cap(None);
-        let uncapped = clock.advance(8.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
-        assert_eq!(uncapped.ticks, 4);
     }
 }

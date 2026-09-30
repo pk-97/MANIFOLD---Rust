@@ -6,12 +6,8 @@
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::matter::MatterLattice;
 
-/// Body poses: rotation, the constant-angular-velocity turn, material
-/// velocity at a point.
-pub(super) const MATTER_POSE: &str = include_str!("shaders/matter_pose.wgsl");
-/// Collider lattice sampling; needs [`MATTER_POSE`] and the including body's
-/// `matter_atlas_half`.
-pub(super) const MATTER_COLLIDER: &str = include_str!("shaders/matter_collider.wgsl");
+/// The matter lattice's closed walls, three padding nodes deep.
+pub(super) const MATTER_WALLS: &str = include_str!("shaders/matter_walls.wgsl");
 
 /// The lattice wires as a [`MatterLattice`]. Defaults are the 4 m Dam Break
 /// lattice at resolution 64, matching each atom's param defaults.

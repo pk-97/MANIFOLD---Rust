@@ -1,15 +1,15 @@
-// Body poses for the matter atoms (GPU_MPM_SOLVER_DESIGN.md D29), declared
-// through `wgsl_includes`. Matches matter::body_pose_at.
+// Body poses for the GPU liquid atoms (LIQUID_SOLVER_SEAM_DESIGN.md section
+// 3.6), declared through `wgsl_includes`. Matches liquid::bodies::body_pose_at.
 
 // v turned by the unit quaternion q (xyzw).
-fn matter_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+fn liquid_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let t = 2.0 * cross(q.xyz, v);
     return v + q.w * t + cross(q.xyz, t);
 }
 
 // q after turning at the constant world-frame angular velocity w for t
 // seconds: d ⊗ q, d the turn by |w|·t about w.
-fn matter_turn(q: vec4<f32>, w: vec3<f32>, t: f32) -> vec4<f32> {
+fn liquid_turn(q: vec4<f32>, w: vec3<f32>, t: f32) -> vec4<f32> {
     let speed = length(w);
     let angle = speed * t;
     if !(angle > 0.0) {
@@ -25,6 +25,6 @@ fn matter_turn(q: vec4<f32>, w: vec3<f32>, t: f32) -> vec4<f32> {
 }
 
 // The velocity of a body's material at world point x.
-fn matter_body_velocity(linear: vec3<f32>, angular: vec3<f32>, centre: vec3<f32>, x: vec3<f32>) -> vec3<f32> {
+fn liquid_body_velocity(linear: vec3<f32>, angular: vec3<f32>, centre: vec3<f32>, x: vec3<f32>) -> vec3<f32> {
     return linear + cross(angular, x - centre);
 }

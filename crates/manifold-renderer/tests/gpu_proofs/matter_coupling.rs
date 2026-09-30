@@ -18,7 +18,8 @@ use manifold_renderer::frame_status::FrameRenderStatus;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::TICK;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::matter::{MatterBody, MatterTickStats, REACTION_WORDS, STATS_WORDS, WATER_DENSITY};
+use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
+use manifold_renderer::node_graph::matter::{MatterTickStats, REACTION_WORDS, STATS_WORDS, WATER_DENSITY};
 use manifold_renderer::node_graph::physics::PhysicsStepScope;
 use manifold_renderer::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use manifold_renderer::node_graph::{
@@ -367,8 +368,8 @@ impl Run {
     }
 
     /// The coupled body's Box3D state at this frame's display time.
-    fn body(&self) -> MatterBody {
-        self.read::<MatterBody>("node.matter_domain", "bodies")[0]
+    fn body(&self) -> LiquidBody {
+        self.read::<LiquidBody>("node.matter_domain", "bodies")[0]
     }
 
     /// This frame's tick: the body's velocity change and angular impulse
@@ -420,7 +421,7 @@ fn solve3(rows: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
 
 /// Kinetic energy (linear and rotational) plus gravitational potential
 /// relative to `y_ref`, in joules.
-fn body_energy(body: &MatterBody, mass: f64, y_ref: f64) -> f64 {
+fn body_energy(body: &LiquidBody, mass: f64, y_ref: f64) -> f64 {
     let v = v3(body.linear_velocity);
     let w = v3(body.angular_velocity);
     let rows = [v3(body.inv_inertia_x), v3(body.inv_inertia_y), v3(body.inv_inertia_z)];
@@ -448,7 +449,7 @@ fn matter_coupling_hydrostatic_force() {
     let mass = f64::from(scene.mass);
     let (mut impulse, mut ticks) = (0.0, 0u32);
     let mut row_force = 0.0;
-    let mut previous: Option<MatterBody> = None;
+    let mut previous: Option<LiquidBody> = None;
     let (mut lo, mut hi) = (f64::MAX, f64::MIN);
     for _ in 0..120 {
         let (probe, ticked) = run.step();
@@ -615,7 +616,7 @@ fn matter_coupling_export_frame_rate_independent() {
         assert_eq!(both.probe.ticks, 2.0, "30 fps frame {frame} ran {} ticks", both.probe.ticks);
         assert_eq!(later.probe.ticks, 1.0);
         let count = both.probe.body_count as usize;
-        let row_words = count * std::mem::size_of::<MatterBody>() / 4;
+        let row_words = count * std::mem::size_of::<LiquidBody>() / 4;
         assert!(count > 0 && both.rows.len() >= 2 * row_words);
         let checks = [
             ("first tick's body rows", first_difference(&both.rows[..row_words], &earlier.rows[..row_words])),
@@ -690,7 +691,7 @@ fn matter_coupling_energy_light_body() {
         let dx = scene.dx();
         let mut run = Run::new(&scene, false);
         // Fall until the bottom face is within a cell of the surface.
-        let mut before_contact: Option<(MatterBody, MatterTickStats)> = None;
+        let mut before_contact: Option<(LiquidBody, MatterTickStats)> = None;
         let mut liquid: Option<MatterTickStats> = None;
         for _ in 0..60 {
             run.step();
@@ -706,7 +707,7 @@ fn matter_coupling_energy_light_body() {
         let (start_body, start_liquid) = before_contact.expect("the box starts above the pool");
         let y_ref = f64::from(start_body.position_inv_mass[1]);
         let initial = body_energy(&start_body, mass, y_ref) + f64::from(start_liquid.kinetic + start_liquid.elastic);
-        let momentum = |body: &MatterBody, liquid: &MatterTickStats| -> [f64; 3] {
+        let momentum = |body: &LiquidBody, liquid: &MatterTickStats| -> [f64; 3] {
             std::array::from_fn(|i| mass * f64::from(body.linear_velocity[i]) + f64::from(liquid.momentum[i]))
         };
         // Frame n's body row is Box3D at the end of the tick frame n−1's

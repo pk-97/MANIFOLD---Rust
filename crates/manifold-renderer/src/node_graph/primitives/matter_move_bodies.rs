@@ -10,10 +10,10 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
-use crate::node_graph::matter::{MatterBody, REACTION_WORDS};
+use crate::node_graph::liquid::bodies::{LIQUID_POSE, LiquidBody};
+use crate::node_graph::matter::REACTION_WORDS;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::MATTER_POSE;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -38,7 +38,7 @@ crate::primitive! {
     type_id: "node.matter_move_bodies",
     purpose: "Pose each matter body at the end of the current substep from the domain's row for this tick. A prescribed body moves along its linear velocity for (substep_in_tick + 1) × step_dt and turns by its constant angular velocity, which interpolates the tick's end poses exactly (lerp and slerp). A dynamic coupled body (inverse mass above 0) steps from its tick-start state with its external accelerations and the liquid's reaction from the substeps before this one, and carries its current velocities out. Other fields pass through. A row past `rows` comes out disabled.",
     inputs: {
-        bodies: Array(MatterBody) required,
+        bodies: Array(LiquidBody) required,
         reaction: Array(i32) optional,
         tick_index: ScalarF32 optional,
         first_tick: ScalarF32 optional,
@@ -52,7 +52,7 @@ crate::primitive! {
         dynamic_count: ScalarF32 optional,
     },
     outputs: {
-        bodies_out: Array(MatterBody),
+        bodies_out: Array(LiquidBody),
     },
     params: [
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
@@ -67,7 +67,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("dynamic_count"), label: "Dynamic Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, before node.matter_to_grid. bodies, first_tick, body_count, rows, substeps_per_tick, momentum_unit, cell_size, dynamic_count and reaction come from node.matter_domain (one row per body per tick of this frame; reaction is the tick's slot that node.matter_body_reaction adds to later in each substep); tick_index, substep_in_tick and step_dt from node.matter_state. bodies_out feeds node.matter_grid_update's collider projection, node.matter_body_reaction and node.matter_solid_distance. reaction is read only when dynamic_count is above 0.",
+    composition_notes: "Region body of the Live Matter group, before node.matter_to_grid. bodies, first_tick, body_count, rows, substeps_per_tick, momentum_unit, cell_size, dynamic_count and reaction come from node.matter_domain (one row per body per tick of this frame; reaction is the tick's slot that node.matter_body_reaction adds to later in each substep); tick_index, substep_in_tick and step_dt from node.matter_state. bodies_out feeds node.matter_grid_update's collider projection, node.matter_body_reaction and node.liquid_solid_distance. reaction is read only when dynamic_count is above 0.",
     examples: ["WaterDamBreakMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Move Bodies", category: Atom },
     summary: "Moves the solid objects in a liquid to where they are at this instant of the simulation.",
@@ -77,7 +77,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_move_bodies_body.wgsl"),
     input_access: [BufferGather, BufferGather],
-    wgsl_includes: [MATTER_POSE],
+    wgsl_includes: [LIQUID_POSE],
 }
 
 impl Primitive for MatterMoveBodies {
@@ -109,7 +109,7 @@ impl Primitive for MatterMoveBodies {
         let (Some(bodies), Some(out)) = (bodies, out) else {
             return;
         };
-        let stride = std::mem::size_of::<MatterBody>() as u64;
+        let stride = std::mem::size_of::<LiquidBody>() as u64;
         let rows = rows.min((bodies.size / stride).min(i32::MAX as u64) as i32);
         let count = (body_count as u32).min((out.size / stride) as u32);
         if count == 0 {

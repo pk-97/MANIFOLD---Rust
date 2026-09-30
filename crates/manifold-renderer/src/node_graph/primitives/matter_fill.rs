@@ -8,10 +8,11 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
-use crate::node_graph::matter::{MatterBody, MatterPoint, MatterShape};
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::matter::MatterPoint;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
+use super::matter_common::read_lattice;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -53,8 +54,8 @@ crate::primitive! {
         column_z0: ScalarF32 optional, column_z1: ScalarF32 optional,
         points_per_cell: ScalarF32 optional,
         seed: ScalarF32 optional,
-        bodies: Array(MatterBody) optional,
-        shapes: Array(MatterShape) optional,
+        bodies: Array(LiquidBody) optional,
+        shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
@@ -94,7 +95,7 @@ crate::primitive! {
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/matter_fill_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
         filled: Option<([u32; 18], usize)> = None,
@@ -189,7 +190,7 @@ impl Primitive for MatterFill {
         // fills their slots.
         let (bodies, shapes, atlas, body_count) = match colliders {
             (Some(bodies), Some(shapes), Some(atlas)) => {
-                let rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64) as i32;
+                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
                 (bodies, shapes, atlas, body_count.min(rows))
             }
             _ => (buffer, buffer, buffer, 0),

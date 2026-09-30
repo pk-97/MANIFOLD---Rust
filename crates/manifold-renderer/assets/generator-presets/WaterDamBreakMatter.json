@@ -1002,9 +1002,9 @@
           },
           {
             "id": 14,
-            "typeId": "node.matter_solid_distance",
+            "typeId": "node.liquid_solid_distance",
             "handle": "Solid Distance",
-            "nodeId": "matter_solid_distance"
+            "nodeId": "liquid_solid_distance"
           },
           {
             "id": 15,

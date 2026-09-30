@@ -15,7 +15,7 @@
 // and the inward normal part of its velocity relative to the body is
 // removed. Tangential motion is untouched and no relative speed is added.
 // `bodies`, `shapes` and `atlas` are gathered; sampling is
-// matter_collider.wgsl's.
+// liquid_collider.wgsl's.
 //
 // Reaction (D30): the momentum a point loses there, m·v_n·n with
 // m = V0·density, goes to a dynamic body (inv_mass > 0) as the same four
@@ -27,7 +27,7 @@ fn g2m_finite3(v: vec3<f32>) -> bool {
     return all(e != vec3<u32>(0x7f800000u));
 }
 
-fn matter_atlas_half(index: u32) -> f32 {
+fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
@@ -152,15 +152,15 @@ fn body(
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let centre = bd.position_inv_mass.xyz;
-        let g = matter_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
-        if !matter_lattice_holds(g, dims) {
+        let g = liquid_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+        if !liquid_lattice_holds(g, dims) {
             continue;
         }
-        let phi = matter_lattice_distance(sh.atlas_offset, dims, g);
+        let phi = liquid_lattice_distance(sh.atlas_offset, dims, g);
         if phi >= 0.0 {
             continue;
         }
-        let grad = matter_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
+        let grad = liquid_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
         let length_sq = dot(grad, grad);
         if !(length_sq > 0.0) {
             continue;
@@ -169,7 +169,7 @@ fn body(
         // To φ = 0 along the normal, no farther than the surface can be.
         let max_scale = max(sh.scale_min.x, max(sh.scale_min.y, sh.scale_min.z));
         p.position = p.position + normal * min(-phi * inverseSqrt(length_sq), -phi * max_scale);
-        let v_rel = p.velocity - matter_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, centre, p.position);
+        let v_rel = p.velocity - liquid_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, centre, p.position);
         let v_n = dot(v_rel, normal);
         if v_n < 0.0 {
             p.velocity = p.velocity - v_n * normal;

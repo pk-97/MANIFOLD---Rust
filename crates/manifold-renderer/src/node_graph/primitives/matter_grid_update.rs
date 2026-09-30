@@ -8,10 +8,11 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
-use crate::node_graph::matter::{MatterBody, MatterGridNode, MatterShape, momentum_unit_fits};
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::matter::{MatterGridNode, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
+use super::matter_common::{MATTER_WALLS, read_lattice};
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -42,8 +43,8 @@ crate::primitive! {
     inputs: {
         accum: Array(i32) required,
         grid: Array(MatterGridNode) required,
-        bodies: Array(MatterBody) optional,
-        shapes: Array(MatterShape) optional,
+        bodies: Array(LiquidBody) optional,
+        shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -84,7 +85,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
     input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS],
 }
 
 impl Primitive for MatterGridUpdate {
@@ -139,7 +140,7 @@ impl Primitive for MatterGridUpdate {
         // the grid buffer bound in their slots.
         let (bodies, shapes, atlas, body_count) = match colliders {
             (Some(bodies), Some(shapes), Some(atlas)) => {
-                let rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64) as i32;
+                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
                 (bodies, shapes, atlas, body_count.min(rows))
             }
             _ => (grid, grid, grid, 0),
