@@ -1,8 +1,9 @@
 //! `node.faces_to_particles` — the face grid back to the particles and one
 //! RK3 move (docs/FFT_WATER_SOLVER_DESIGN.md D7, section 3 step 9): PIC/FLIP
 //! blended velocity from the projected field, advection through `advect`
-//! (the projected field, or it with the density solve's correction), clamp
-//! to the box. A per-element gather on the codegen path.
+//! (the projected field, or it with the density solve's correction), then
+//! kept `WALL_MARGIN_CELLS` inside the box. A per-element gather on the
+//! codegen path.
 
 use std::borrow::Cow;
 
@@ -17,6 +18,16 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+/// How far inside each wall a moved particle is kept, in cells. The wall
+/// faces carry 0 velocity, so a particle d cells off a wall leaves it at d
+/// times the next face's speed: held on the wall, water that hits the lid
+/// hangs there. The FLIP Fluids engine keeps particles the same 0.2 cells off
+/// its solids. The kernel's `FACES_TO_PARTICLES_WALL_MARGIN` is this value;
+/// the CPU reference in `swash_step_tests` reads it here, so the value proof
+/// fails if the two drift.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) const WALL_MARGIN_CELLS: f64 = 0.2;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -39,7 +50,7 @@ struct AdvectUniforms {
 crate::primitive! {
     name: FacesToParticles,
     type_id: "node.faces_to_particles",
-    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
+    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
     inputs: {
         particles: Array(FluidParticle) required,
         faces: Array(FaceSample) required,

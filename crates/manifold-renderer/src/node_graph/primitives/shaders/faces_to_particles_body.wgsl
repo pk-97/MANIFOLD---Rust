@@ -5,11 +5,20 @@
 // (0 when none). Its new velocity blends FLIP and PIC:
 // flip · (v + new(q) − old(q)) + (1 − flip) · new(q). It then moves by RK3
 // through `advect` (stages at ½ and ¾ of step_dt, weights 2/9, 3/9, 4/9) and
-// is clamped inside the box, 0.001 cells from each wall. Radius and id are
+// is kept FACES_TO_PARTICLES_WALL_MARGIN cells inside each wall. Radius and id are
 // kept; unused slots and a non-finite result pass the particle through at
 // rest. `faces`, `old` and `advect` (FaceSample → Element2) are gathered
 // through buf_faces, buf_old and buf_advect; a grid shorter than the
 // lattice's leaves particles as they were.
+
+// The box walls sit on faces whose velocity is 0, so the grid's velocity
+// into a wall falls linearly to 0 across the last cell, and a particle d
+// cells off a wall moves away at d times the next face's speed. Held 0.001
+// cells off, water that hits the lid needs about 0.4 s at 1 m/s to get one
+// cell clear, so it hangs there; from 0.2 cells it takes about 0.1 s. The
+// FLIP Fluids engine keeps particles the same 0.2 cells off its solids
+// (`_solidBufferWidth`). Mirrored by `faces_to_particles::WALL_MARGIN_CELLS`.
+const FACES_TO_PARTICLES_WALL_MARGIN: f32 = 0.2;
 
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
 fn faces_to_particles_finite(v: vec3<f32>) -> bool {
@@ -85,7 +94,7 @@ fn body(
     let k1 = faces_to_particles_sample(q0, n, 2u);
     let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * k1, n, 2u);
     let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 2u);
-    let edge = vec3<f32>(0.001);
+    let edge = vec3<f32>(FACES_TO_PARTICLES_WALL_MARGIN);
     let q1 = clamp(q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0, edge, vec3<f32>(n) - edge);
     let after = faces_to_particles_sample(q0, n, 0u);
     let before = faces_to_particles_sample(q0, n, 1u);

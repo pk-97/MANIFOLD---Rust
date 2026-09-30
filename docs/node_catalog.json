@@ -9558,7 +9558,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
+      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands the grid's corrected motion back to the liquid particles and moves them one step.",
@@ -118364,14 +118364,14 @@
           "name": "Spray Size"
         },
         {
-          "default": "3",
+          "default": "2.5",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.055",
+          "default": "0.1",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -119155,14 +119155,14 @@
           "name": "Volume Attenuation Colour R"
         },
         {
-          "default": "0.72",
+          "default": "0.76",
           "id": "8_volume_attenuation_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour G"
         },
         {
-          "default": "0.8",
+          "default": "0.76",
           "id": "8_volume_attenuation_color_b",
           "max": "1",
           "min": "0",
@@ -120926,21 +120926,21 @@
           "name": "Geometric Volume"
         },
         {
-          "default": "0.68",
+          "default": "0.7",
           "id": "8_volume_scattering_color_r",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour R"
         },
         {
-          "default": "0.86",
+          "default": "0.88",
           "id": "8_volume_scattering_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour G"
         },
         {
-          "default": "0.92",
+          "default": "0.88",
           "id": "8_volume_scattering_color_b",
           "max": "1",
           "min": "0",
