@@ -2515,6 +2515,7 @@ dependencies = [
  "manifold-playback",
  "manifold-ui",
  "naga",
+ "objc2 0.6.4",
  "parking_lot",
  "png",
  "serde",

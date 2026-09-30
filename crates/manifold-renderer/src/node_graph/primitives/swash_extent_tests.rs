@@ -6,7 +6,7 @@
 use ahash::AHashMap;
 
 use super::sort_particles_into_cells::range_storage_bytes;
-use super::swash_preset::{PressureShape, WaterScene, pressure_def, water_def};
+use super::swash_preset::{PressureShape, WaterScene, pressure_def, render_def, water_def};
 use crate::node_graph::effect_node::ParamValues;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, FluidParticle, bin_counts};
@@ -128,6 +128,12 @@ impl Sizes<'_> {
             match ty {
                 "test.value_source" | "test.value_sink" | "test.liquid_sink" | "test.mesh_sink" | "system.final_output"
                 | "node.transform_3d" | "node.transform_components" | "node.value" | "node.math" => continue,
+                // The shipped render graph of WaterDamBreakGpu.json around the
+                // surface (render_def): textures, scene objects and lights; the
+                // mesh it draws is checked at volume_surface_mesh.
+                "system.generator_input" | "node.orbit_camera" | "node.bake_environment" | "node.light"
+                | "node.pbr_material" | "node.scene_object" | "node.cube_mesh" | "node.render_scene"
+                | "node.tone_map" | "node.hdri_source" | "node.exposure" | "node.switch_texture" => continue,
                 "node.sort_particles_into_cells" if wired(step, "cell_size") => {
                     covers("particles", particle_bytes);
                     covers("sorted", particle_bytes);
@@ -359,7 +365,7 @@ fn plan_for(shape: PressureShape) -> (Graph, ExecutionPlan) {
 /// pass-count trend.
 #[test]
 fn fft_water_pressure_arrays_cover_every_dispatch() {
-    for (n, passes) in [64, 128].into_iter().flat_map(|n| super::swash_preset::TREND_PASSES.map(|p| (n, p))) {
+    for (n, passes) in [64, 96, 128].into_iter().flat_map(|n| super::swash_preset::TREND_PASSES.map(|p| (n, p))) {
         let shape = PressureShape { passes, ..PressureShape::at(n) };
         let (graph, plan) = plan_for(shape);
         assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
@@ -376,7 +382,7 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
 #[test]
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
-    let all = [64, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
+    let all = [64, 96, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
     for scene in all {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
@@ -390,6 +396,24 @@ fn fft_water_scenes_cover_every_dispatch() {
             graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
         });
         assert_eq!(meshed, scene.surface, "the surface is in the plan exactly when asked for");
+    }
+}
+
+/// The scenes as the render smoke runs them, inside the shipped render graph
+/// (`render_def`), at every lattice it runs: the same coverage as the bare
+/// scenes, with the render around them.
+#[test]
+fn fft_water_rendered_scenes_cover_every_dispatch() {
+    let scenes = [WaterScene::dam_break, WaterScene::still_pool];
+    for scene in [64, 96, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))) {
+        let n = scene.pressure.n;
+        let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
+        let plan = compile(&graph).expect("render def compiles");
+        assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
+        let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
+        let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
+        assert!(checked > 150, "checked only {checked} nodes at {n}³");
     }
 }
 
