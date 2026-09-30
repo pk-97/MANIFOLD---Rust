@@ -30,6 +30,8 @@ use objc2_metal_performance_shaders_graph::{
     MPSGraphShapedType, MPSGraphTensor, MPSGraphTensorData,
 };
 
+use std::sync::Mutex;
+
 use super::GpuBuffer;
 use super::encoder::GpuEncoder;
 
@@ -51,10 +53,32 @@ pub struct GpuFft {
     executable: Retained<MPSGraphExecutable>,
     #[expect(dead_code, reason = "ownership-only: keeps the MPSGraph alive for the executable's lifetime; un-suppress: never")]
     graph: Retained<MPSGraph>,
+    /// Never changes after the build.
+    execution: Retained<MPSGraphExecutableExecutionDescriptor>,
+    /// Tensor data for the buffer pairs encoded last, newest first. Making
+    /// it cost about 4 µs a call (docs/ENCODE_REPLAY_DESIGN.md section 8
+    /// (Deferred), path (a)). The command-buffer wrapper is still made on
+    /// every call: one kept between calls outlives its command buffer, and
+    /// MPS then encodes into the committed one.
+    bound: Mutex<Vec<BoundPair>>,
+}
+
+/// How many input/output buffer pairs a plan keeps tensor data for. A plan
+/// sees one pair at a time; another only after its storage moves.
+const BOUND_PAIRS: usize = 4;
+
+/// Tensor data for one input/output buffer pair. It retains both buffers, so
+/// neither address can name another buffer while the pair is kept.
+struct BoundPair {
+    input: *const ProtocolObject<dyn MTLBuffer>,
+    output: *const ProtocolObject<dyn MTLBuffer>,
+    inputs: Retained<NSArray<MPSGraphTensorData>>,
+    outputs: Retained<NSArray<MPSGraphTensorData>>,
 }
 
 // Safety: `MPSGraphExecutable` is thread-safe for encoding (Apple docs:
-// "Using Callables"). `GpuFft` exposes only `&self` encode.
+// "Using Callables"). `GpuFft` exposes only `&self` encode, and the tensor
+// data it keeps is only touched under `bound`'s lock.
 unsafe impl Send for GpuFft {}
 unsafe impl Sync for GpuFft {}
 
@@ -112,19 +136,35 @@ impl GpuFft {
     /// because MPSGraph installs its own encoders, so any open pass ends.
     pub fn encode(&self, enc: &mut GpuEncoder, input: &GpuBuffer, output: &GpuBuffer) {
         let cmd_buf = enc.raw_cmd_buf();
+        let mut pairs = self.bound.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = (Retained::as_ptr(&input.raw), Retained::as_ptr(&output.raw));
+        match pairs.iter().position(|pair| (pair.input, pair.output) == key) {
+            Some(index) => pairs[..=index].rotate_right(1),
+            None => {
+                // SAFETY: both buffers are live Metal buffers; the tensor data retains them.
+                let (input_data, output_data) = unsafe {
+                    (
+                        tensor_data_for_buffer(&input.raw, &self.input_shape, input_dtype(self.kind)),
+                        tensor_data_for_buffer(&output.raw, &self.output_shape, output_dtype(self.kind)),
+                    )
+                };
+                pairs.truncate(BOUND_PAIRS - 1);
+                pairs.insert(0, BoundPair {
+                    input: key.0,
+                    output: key.1,
+                    inputs: NSArray::from_retained_slice(&[input_data]),
+                    outputs: NSArray::from_retained_slice(&[output_data]),
+                });
+            }
+        }
+        let pair = &pairs[0];
         unsafe {
-            let input_data = tensor_data_for_buffer(&input.raw, &self.input_shape, input_dtype(self.kind));
-            let output_data = tensor_data_for_buffer(&output.raw, &self.output_shape, output_dtype(self.kind));
-            let inputs = NSArray::from_retained_slice(&[input_data]);
-            let outputs = NSArray::from_retained_slice(&[output_data]);
             let mps_cmd_buf = MPSCommandBuffer::commandBufferWithCommandBuffer(cmd_buf);
-            let exec_desc = MPSGraphExecutableExecutionDescriptor::new();
-            exec_desc.setWaitUntilCompleted(false);
             self.executable.encodeToCommandBuffer_inputsArray_resultsArray_executionDescriptor(
                 &mps_cmd_buf,
-                &inputs,
-                Some(&outputs),
-                Some(&exec_desc),
+                &pair.inputs,
+                Some(&pair.outputs),
+                Some(&self.execution),
             );
         }
     }
@@ -205,7 +245,9 @@ fn build_plan(device: &ProtocolObject<dyn MTLDevice>, kind: FftKind, shape: &[us
             None,
             Some(&compile_desc),
         );
-        GpuFft { kind, input_shape, output_shape, executable, graph }
+        let execution = MPSGraphExecutableExecutionDescriptor::new();
+        execution.setWaitUntilCompleted(false);
+        GpuFft { kind, input_shape, output_shape, executable, graph, execution, bound: Mutex::default() }
     }
 }
 
@@ -265,6 +307,40 @@ mod tests {
         assert!(peak_bin.abs_diff(expected_bin) <= 1, "GPU FFT peak bin {peak_bin}, expected {expected_bin}");
         let ratio = peak_mag2.sqrt() / (n as f32 / 2.0);
         assert!(ratio > 0.8 && ratio < 1.2, "peak magnitude ratio {ratio}");
+    }
+
+    /// One plan encodes more buffer pairs than it keeps tensor data for, out
+    /// of order and across command buffers, and every output matches a fresh
+    /// plan's bit for bit.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn one_plan_encodes_many_buffer_pairs() {
+        let device = GpuDevice::new();
+        let n: usize = 64;
+        let fft = GpuFft::new_r2c(device.raw_device(), n);
+        let inputs: Vec<GpuBuffer> = (0..2 * BOUND_PAIRS)
+            .map(|m| upload(&device, &(0..n).map(|i| ((i * (m + 3)) % 7) as f32 - 3.0).collect::<Vec<_>>()))
+            .collect();
+        let outputs: Vec<GpuBuffer> =
+            inputs.iter().map(|_| device.create_buffer_shared(fft.output_len_bytes())).collect();
+        let target = |m: usize| (m + 1) % outputs.len();
+        let order: Vec<usize> = (0..inputs.len()).chain((0..inputs.len()).rev()).collect();
+        for _ in 0..2 {
+            let mut enc = device.create_encoder("gpu-fft-pairs");
+            for &m in &order {
+                fft.encode(&mut enc, &inputs[m], &outputs[target(m)]);
+            }
+            enc.commit_and_wait_completed();
+        }
+        let bits = |buf: &GpuBuffer| download(buf, fft.output_element_count()).iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        for (m, input) in inputs.iter().enumerate() {
+            let fresh = GpuFft::new_r2c(device.raw_device(), n);
+            let out = device.create_buffer_shared(fft.output_len_bytes());
+            let mut enc = device.create_encoder("gpu-fft-fresh");
+            fresh.encode(&mut enc, input, &out);
+            enc.commit_and_wait_completed();
+            assert_eq!(bits(&outputs[target(m)]), bits(&out), "pair {m} differs from a fresh plan");
+        }
     }
 
     /// 3D real → half spectrum matches a direct f64 DFT, and the inverse
