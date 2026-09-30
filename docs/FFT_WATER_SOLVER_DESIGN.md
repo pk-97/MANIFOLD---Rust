@@ -2,7 +2,7 @@
 
 <!-- index: Benchmark-gated challenger to the FLIP Fluids CPU engine for water: particles on a face (MAC) grid with pressure solved each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced end to end against the FLIP Fluids engine, solid objects in the water, the active region, then Peter's call. MPM is secondary information; nothing MPM owns is touched. -->
 
-**Status:** APPROVED · 2026-09-30 · P4 decided by Peter: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the density term · owed: the position-only density correction (128³ splash), the race table and clips (record, not gate), BUG-l2h3 (SWASH live-instrument epic) children .1 (mixed-radix lattices) and .2 (collar at its proven bound), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
+**Status:** APPROVED · 2026-09-30 · P4 decided 2026-09-30: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the density term · owed: the position-only density correction (128³ splash), the race table and clips (record, not gate), BUG-l2h3 (SWASH live-instrument epic) children .1 (mixed-radix lattices) and .2 (collar at its proven bound), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
 **Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record) and the P1 measurements below.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -15,8 +15,11 @@ Peter's decisions, 2026-09-30, not reopened:
 - Whitewater (spray, foam, bubbles) is out of scope here: it is BUG-imy3 (GPU whitewater on the particle-frame seam, solver-agnostic). The P3 demo says which part of any gap to FLIP Fluids is whitewater.
 - Solid objects in the water are a phase before P4 (P3b): his scenes have boxes and obstacles in the water, and the FLIP Fluids engine handles them with fractional solid face weights, so equal-or-better accuracy can't be judged on an empty tank.
 - Skipping empty space is a first-class lever: phase P3c.
-- P4 is decided: SWASH is the water solver. GPU_MPM_SOLVER_DESIGN.md D1 and D2 are reopened for water through LIQUID_SOLVER_SEAM_DESIGN.md. The race table and the three-column clips are still made, as his look check and the record, not as a gate.
-- No hard resolution ceiling: he plays at any size. Safety is the CPU extent proof at every size the scene allows, plus named refusals for what can't run: lengths the FFT can't transform (until mixed radix lands) and device memory.
+
+Decided 2026-09-30:
+
+- P4: SWASH is the liquid water solver. GPU_MPM_SOLVER_DESIGN.md D1 and D2 are reopened for water through LIQUID_SOLVER_SEAM_DESIGN.md. The race table and the three-column clips are still made, as the look check and the record, not as a gate.
+- No hard resolution ceiling. Safety is the CPU extent proof at every size the scene allows, plus named refusals for what can't run: lengths the FFT can't transform (until mixed radix lands) and device memory.
 
 ## What it is on stage
 
@@ -222,10 +225,10 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 - **Demo:** none — L1, plus the re-run race table.
 - **Forbidden:** a CPU wait for this tick's bounds; reallocating buffers per tick; a dispatch count the CPU hasn't clamped to capacity; dropping the pad or the collar from B′.
 
-### P4 — Decided: SWASH is the water solver (Peter, 2026-09-30)
+### P4 — Decided 2026-09-30: SWASH is the water solver
 
 - The water presets move from the FLIP Fluids engine to SWASH through LIQUID_SOLVER_SEAM_DESIGN.md, which reopens `GPU_MPM_SOLVER_DESIGN.md` D1 and D2 for water.
-- Still made, as the record and Peter's look check, not as a gate: the P3 race table and three-column clips, and the P3b and P3c tables as those phases land, on one page in BUG-wsim (FFT pressure split research).
+- Still made, as the record and the look check, not as a gate: the P3 race table and three-column clips, and the P3b and P3c tables as those phases land, on one page in BUG-wsim (FFT pressure split research).
 
 ## 6. Decided — do not reopen
 
