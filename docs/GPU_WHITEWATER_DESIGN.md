@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1 and P2 built on `feat/gpu-whitewater`, O1 green as restated with the radius-4 miss recorded (section 3.7); P3 next · owed: approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P3 built on `feat/gpu-whitewater`, O1 green as restated with the radius-4 miss recorded (section 3.7); P4 next · owed: approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step (FFT_WATER_SOLVER_DESIGN.md P3) on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -192,22 +192,25 @@ pub struct WhitewaterFields<'a> {
 pub struct WhitewaterLifecycle { /* owns the native DiffuseParticleSimulation and its grids */ }
 impl WhitewaterLifecycle {
     pub fn new(grid: WhitewaterGrid, capacity: u32, seed: u64) -> Result<Self, FluidError>;
-    pub fn clear(&mut self, seed: u64);
+    pub fn clear(&mut self, seed: u64) -> Result<(), FluidError>;
     pub fn set_fields(&mut self, fields: &WhitewaterFields<'_>) -> Result<(), FluidError>;
     /// Loads live records (lifetime > 0) up to capacity − live, stride-thinned; returns (loaded, thinned).
     pub fn load(&mut self, spawns: &[WhitewaterSpawn]) -> Result<(u32, u32), FluidError>;
     pub fn step(&mut self, dt: f64) -> Result<(), FluidError>;
+    /// Scene space.
     pub fn particles(&mut self, out: &mut Vec<WhitewaterParticle>) -> Result<(), FluidError>;
 }
 ```
 
-Bridge entries are new glue in `bridge.cpp` (`manifold_fluids_whitewater_*`); no file under `flip_engine/` changes. The oracle entries (`manifold_fluids_oracle_curvature`, `manifold_fluids_oracle_emit`) build only under the `whitewater-oracle` cargo feature and call public FLIP API: `ParticleLevelSet::calculateCurvatureGrid`, and `DiffuseParticleSimulation::update` with emission on, turbulence rate 0, lifetime variance 0.
+Bridge entries are new glue in `bridge.cpp` (`manifold_fluids_whitewater_*`); no file under `flip_engine/` changes. The glue sets FLIP's defaults the way `FluidSimulation` does: CFL 5 for collision reach, and the near-solid grid rebuilt from the solid on each `set_fields` (3-cell blocks within 3 cells of a solid node, feathered to the CFL reach). An update with nothing to advance is skipped; its only work is the material grid. The oracle entries (`manifold_fluids_oracle_curvature`, `manifold_fluids_oracle_emit`) build only under the `whitewater-oracle` cargo feature and call public FLIP API: `ParticleLevelSet::calculateCurvatureGrid`, and `DiffuseParticleSimulation::update` with emission on, turbulence rate 0, lifetime variance 0.
 
 `node.whitewater_lifecycle` ports:
 
 | Inputs | Outputs | Params |
 |---|---|---|
-| `spawns` Array(WhitewaterSpawn), `offsets` Array(u32), `count` (emitter slots), `face_u/v/w`, `face_cells_x/y/z`, `level` Array(f32), `solid` Array(f32), `grid_bounds`, `grid_nodes_x/y/z`, `ticks`, `epoch`, `gravity_x/gravity/gravity_z` | `foam_particles`, `bubble_particles`, `spray_particles` Array(FluidParticle); `foam_count`, `bubble_count`, `spray_count`, `emitted`, `thinned`, `dropped_ticks`, `lifecycle_ms` ScalarF32 | `capacity` Int 1–250,000, default 100,000 |
+| `spawns` Array(WhitewaterSpawn), `offsets` Array(u32), `count` (emitter slots), `face_u/v/w`, `face_cells_x/y/z`, `face_valid_layers`, `level` Array(f32), `solid` Array(f32), `grid_bounds`, `grid_nodes_x/y/z`, `ticks`, `epoch`, `gravity_x/gravity/gravity_z` | `foam_particles`, `bubble_particles`, `spray_particles` Array(FluidParticle); `foam_count`, `bubble_count`, `spray_count`, `emitted`, `thinned`, `dropped_ticks`, `lifecycle_ms` ScalarF32 | `capacity` Int 1–250,000, default 100,000 |
+
+The particle outputs plan at Capacity, so the copies downstream hold the whole budget. `emitted`, `thinned` and `dropped_ticks` count since the epoch began. A new grid or Capacity makes a new lifecycle, which clears the population.
 
 The "Whitewater" group exposes the ports of section 3.2 as inputs, the lifecycle's outputs, and params Capacity, Wavecrest Emission (175), Min Energy (0.1), Max Energy (60). Until P5 the Rust SWASH scene builders assemble the chain in code. From P5 its source of truth is the SWASH Dam Break preset JSON, with the three copies objects; other scenes copy the group from it, as the harness copies the Liquid Surface group from `WaterDamBreakGpu.json` (`swash_preset.rs:426`).
 
@@ -242,8 +245,8 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
   - *Recorded miss, not a loosened bound:* the 4h sphere. Re-distance: 14 of 1,426 cells over 0.1h, worst 0.162h, all 1–3 cells out, where even the nearest of all stored crossings misses (one crossing per cell leaves the nearest up to 0.9 cell to the side, and the plane then errs by about r·l²/(2R²)). Curvature: 0.255 against FLIP's 0.246. Both are held at the measured value so they can only shrink. Why it is accepted: droplets of 4 cells (25 cm at 64) are not where wavecrest emission comes from, and O2 is the binding gate; a curvature error that matters shows there.
   - The earlier criterion, ours against FLIP on the exact field (p99 ≤ 0.05), measured FLIP's reinit noise rather than our port: FLIP is off 2/r by 0.25/0.13/0.06 there, ours by 0.012/0.001/0.0001. Ours on the exact field stays asserted within 0.05 of 2/r.
 - **O2, emitter against FLIP** (`whitewater_emitter_matches_flip`): SWASH Dam Break at 64, frames 30, 60, 90 and 120. The same particles, faces, distance, curvature and solid go to FLIP's emitter (through the oracle) and to our atoms; both then take one lifecycle step. Lifetime variance 0 on both, so lifetime encodes Ie. Over 16 seeds a side: total within 5%; each type within 10% where FLIP's mean is ≥ 200; spatial histogram (8³ bins over the tank) L1 ≤ 0.15; lifetime histogram (10 bins) L1 ≤ 0.1. If the seed spread is over half a tolerance, add seeds; tolerances only tighten.
-- **Lifecycle** (CPU, manifold-fluids): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
-- **Handoff** (renderer, `gpu-proofs`): pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts.
+- **Lifecycle** (CPU, manifold-fluids, `whitewater.rs`): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
+- **Handoff** (renderer, `gpu-proofs`, `whitewater_handoff_tests.rs`): what the node publishes equals the lifecycle run on the CPU with the same spawns and fields; pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts; an output slot is rewritten only after its readers retired. A hand-retired fence stands in for the frame clock; every frame still commits on the device.
 - **Extents** (`whitewater_extent_tests.rs`, CPU): every atom's dispatch and array lengths at 64, and the named refusals for a misplaced face grid, a fractional refinement and `face_valid_layers` < 1, before any GPU run at that size.
 - **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, and `lifecycle_ms`; p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; CPU per D11.
 

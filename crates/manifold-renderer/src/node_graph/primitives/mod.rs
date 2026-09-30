@@ -367,6 +367,9 @@ mod crossing_distance;
 mod liquid_cells;
 mod lattice_curvature;
 mod extend_lattice;
+mod whitewater_lifecycle;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_handoff_tests;
 #[cfg(test)]
 mod whitewater_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]

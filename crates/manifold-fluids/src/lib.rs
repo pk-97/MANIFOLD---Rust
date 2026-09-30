@@ -23,6 +23,8 @@ mod particles;
 pub use particles::{CaptureError, ParticleFrameInfo, ParticleRecord};
 mod coupling;
 pub use coupling::{CoupledFluidFrame, RigidBodyState, RigidFluidCoupling, RigidReaction};
+mod whitewater;
+pub use whitewater::{WhitewaterFields, WhitewaterGrid, WhitewaterLifecycle, WhitewaterSpawn};
 #[cfg(feature = "whitewater-oracle")]
 pub mod whitewater_oracle;
 
@@ -242,11 +244,39 @@ pub struct WhitewaterParticle {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct NativeWhitewaterParticle {
+pub(crate) struct NativeWhitewaterParticle {
     position: [f32; 3],
     velocity: [f32; 3],
     lifetime: f32,
     kind: u8,
+}
+
+/// The bridge's whitewater records as typed particles, replacing `output`.
+pub(crate) fn decode_whitewater(
+    native: &[NativeWhitewaterParticle],
+    output: &mut Vec<WhitewaterParticle>,
+) -> Result<(), FluidError> {
+    output.clear();
+    output.reserve(native.len());
+    for particle in native {
+        let kind = match particle.kind {
+            0 => WhitewaterKind::Bubble,
+            1 => WhitewaterKind::Foam,
+            2 => WhitewaterKind::Spray,
+            _ => {
+                return Err(FluidError::native(
+                    "FLIP Fluids returned an unknown whitewater type",
+                ));
+            }
+        };
+        output.push(WhitewaterParticle {
+            position: particle.position,
+            velocity: particle.velocity,
+            lifetime: particle.lifetime,
+            kind,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -856,27 +886,7 @@ impl FluidWorld {
                 "FLIP Fluids whitewater count changed during snapshot",
             ));
         }
-        output.clear();
-        output.reserve(count);
-        for particle in self.whitewater_scratch.iter().take(count) {
-            let kind = match particle.kind {
-                0 => WhitewaterKind::Bubble,
-                1 => WhitewaterKind::Foam,
-                2 => WhitewaterKind::Spray,
-                _ => {
-                    return Err(FluidError::native(
-                        "FLIP Fluids returned an unknown whitewater type",
-                    ));
-                }
-            };
-            output.push(WhitewaterParticle {
-                position: particle.position,
-                velocity: particle.velocity,
-                lifetime: particle.lifetime,
-                kind,
-            });
-        }
-        Ok(())
+        decode_whitewater(&self.whitewater_scratch[..count], output)
     }
 }
 

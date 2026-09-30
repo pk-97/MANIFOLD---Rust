@@ -222,6 +222,9 @@ pub mod well_known {
         CROSSING = "crossing";
         LEVEL = "level";
         KNOWN = "known";
+        // GPU_WHITEWATER_DESIGN.md section 3.4: a spawn record for the lifecycle
+        POSITION_LIFETIME = "position_lifetime";
+        KIND = "kind";
 
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's

@@ -132,6 +132,38 @@ int manifold_fluids_world_whitewater(void *world, ManifoldFluidsWhitewaterPartic
                                      size_t capacity, size_t *count_out);
 const char *manifold_fluids_last_error(void);
 
+// Layout of manifold_fluids::WhitewaterSpawn and the renderer's spawn records.
+typedef struct ManifoldFluidsWhitewaterSpawn {
+    float position_lifetime[4];
+    float velocity[3];
+    uint32_t kind;
+} ManifoldFluidsWhitewaterSpawn;
+
+// FLIP's whitewater lifecycle with emission off, fed fields and spawns from
+// outside (GPU_WHITEWATER_DESIGN.md D1, section 3.4). The grid is isize·jsize·ksize
+// cells of `cell_size` from `origin`, scene metres; particles cross the
+// boundary in scene space.
+int manifold_fluids_whitewater_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
+                                      double cell_size, const float *origin,
+                                      uint32_t capacity, uint64_t seed, void **lifecycle_out);
+void manifold_fluids_whitewater_destroy(void *lifecycle);
+int manifold_fluids_whitewater_clear(void *lifecycle, uint64_t seed);
+// Faces in the seam layout over face_cells, placed face_offset cells into the
+// grid; level at the cell centres; solid at the grid nodes; gravity in m/s².
+int manifold_fluids_whitewater_set_fields(void *lifecycle, const float *face_u,
+                                          const float *face_v, const float *face_w,
+                                          const uint32_t *face_cells, const uint32_t *face_offset,
+                                          const float *level, const float *solid,
+                                          const float *gravity);
+// Loads the records with lifetime > 0, stride-thinned to the room left.
+int manifold_fluids_whitewater_load(void *lifecycle, const ManifoldFluidsWhitewaterSpawn *spawns,
+                                    size_t count, uint32_t *loaded_out, uint32_t *thinned_out);
+int manifold_fluids_whitewater_step(void *lifecycle, double dt);
+int manifold_fluids_whitewater_count(void *lifecycle, size_t *count_out);
+int manifold_fluids_whitewater_particles(void *lifecycle,
+                                         ManifoldFluidsWhitewaterParticle *particles,
+                                         size_t capacity, size_t *count_out);
+
 #ifdef MANIFOLD_WHITEWATER_ORACLE
 // FLIP's own curvature of a cell-centred level set `phi` (isize·jsize·ksize,
 // x fastest, cell size dx): ParticleLevelSet::calculateCurvatureGrid. Writes

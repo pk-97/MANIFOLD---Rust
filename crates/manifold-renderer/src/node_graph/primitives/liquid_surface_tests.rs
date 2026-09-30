@@ -72,6 +72,14 @@ impl Harness {
         slot
     }
 
+    /// A wired transform input holding `value`.
+    pub fn transform_input(&mut self, value: crate::node_graph::transform::Transform) -> Slot {
+        let slot = self.backend.acquire(ResourceId(self.next), PortType::Transform, None, (0, 0));
+        self.next += 1;
+        Backend::set_transform(&mut self.backend, slot, value);
+        slot
+    }
+
     /// One frame of `prim.run()`, committed and waited. Returns the scalar
     /// writes and the node's errors.
     pub fn run<P: Primitive>(

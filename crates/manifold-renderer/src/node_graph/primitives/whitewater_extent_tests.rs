@@ -18,7 +18,9 @@ use crate::node_graph::fluid::domain_layout;
 use crate::node_graph::matter::{MatterLattice, lattice_nodes};
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
-use crate::node_graph::whitewater::{KnownValue, MAX_REFINEMENT, SurfaceCrossing, cell_total, grid_cells, refinement};
+use crate::node_graph::whitewater::{
+    KnownValue, MAX_REFINEMENT, SurfaceCrossing, cell_total, face_offset, grid_box, grid_cells, refinement,
+};
 
 /// The solid lattice both hosts publish at 64: the matter layout's.
 fn lattice_at_64() -> MatterLattice {
@@ -109,6 +111,53 @@ fn whitewater_refuses_fractional_refinement() {
     }
     assert!(refinement([2, 71, 71], [4, 211, 211]).is_err(), "a grid needs three nodes a side");
     assert_eq!(grid_cells([4097, 71, 71]), None, "past the largest lattice");
+}
+
+/// I2: the seam's face grid sits centred on the whitewater grid by one whole
+/// number of cells, the same on every axis (3 at 64), or its placement is a
+/// named refusal, never a guessed offset.
+#[test]
+fn whitewater_refuses_misplaced_face_grid() {
+    let lattice = lattice_at_64();
+    let nodes = lattice.nodes;
+    assert_eq!(face_offset(nodes, [64; 3]), Ok([3; 3]));
+    for face_cells in [[63, 64, 64], [64, 64, 62], [72; 3], [0; 3]] {
+        let refusal = face_offset(nodes, face_cells).expect_err("refused");
+        assert!(refusal.contains("does not sit centred"), "{face_cells:?}: {refusal}");
+    }
+    let (origin, cell_size) = grid_box(lattice.bounds(), nodes).expect("cube cells");
+    assert!((cell_size - 4.0 / 64.0).abs() < 1e-6, "{cell_size}");
+    for axis in 0..3 {
+        assert!((origin[axis] - lattice.min[axis]).abs() < 1e-5, "axis {axis}: {origin:?} against {:?}", lattice.min);
+    }
+    let mut stretched = lattice.bounds();
+    stretched.scale[1] *= 1.5;
+    assert!(grid_box(stretched, nodes).expect_err("refused").contains("cube cells"));
+}
+
+/// One snapshot slot at 64 holds the spawns at FLIP's default capacity, the
+/// emitted count, the seam's three face arrays, the distance and the solid:
+/// 9.2 MB (D6), and the lifecycle's outputs plan at that capacity.
+#[test]
+fn whitewater_snapshot_holds_one_frame_at_64() {
+    use crate::node_graph::whitewater_handoff::SnapshotShape;
+    let lattice = lattice_at_64();
+    let (origin, cell_size) = grid_box(lattice.bounds(), lattice.nodes).expect("grid box");
+    let shape = SnapshotShape {
+        grid: manifold_fluids::WhitewaterGrid { cells: grid_cells(lattice.nodes).expect("cells"), cell_size, origin },
+        face_cells: [64; 3],
+        face_offset: face_offset(lattice.nodes, [64; 3]).expect("offset"),
+        capacity: super::whitewater_lifecycle::DEFAULT_CAPACITY,
+    };
+    assert_eq!([0, 1, 2].map(|a| shape.face_bytes(a)), [266_240 * 4; 3]);
+    assert_eq!(shape.level_bytes(), 343_000 * 4);
+    assert_eq!(shape.solid_bytes(), 357_911 * 4);
+    assert_eq!(shape.spawn_bytes(), 3_200_000);
+    assert_eq!(shape.slot_bytes(), 9_198_528);
+    let capacity = super::whitewater_lifecycle::WhitewaterLifecycle::new()
+        .array_output_capacity("foam_particles", &ParamValues::default(), &[])
+        .expect("planned");
+    assert_eq!(capacity, 100_000, "copies downstream hold FLIP's whole budget");
 }
 
 fn float(v: f64) -> Value {

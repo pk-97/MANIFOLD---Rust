@@ -119,6 +119,49 @@ pub fn refinement(nodes: [u32; 3], level_nodes: [u32; 3]) -> Result<u32, String>
     }
 }
 
+/// Whitewater cells from the grid's first cell to the face grid's, on each
+/// axis: the face grid sits centred by a whole number of cells, the same on
+/// every axis (section 3.1), or the placement is a named refusal.
+pub fn face_offset(nodes: [u32; 3], face_cells: [u32; 3]) -> Result<[u32; 3], String> {
+    let cells = grid_cells(nodes).ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
+    let pad: Vec<Option<u32>> = (0..3)
+        .map(|a| {
+            let spare = cells[a].checked_sub(face_cells[a])?;
+            (face_cells[a] > 0 && spare % 2 == 0).then_some(spare / 2)
+        })
+        .collect();
+    match pad[..] {
+        [Some(x), Some(y), Some(z)] if x == y && y == z => Ok([x; 3]),
+        _ => Err(format!(
+            "a {face_cells:?}-cell face grid does not sit centred on the {cells:?}-cell whitewater grid by one whole number of cells on every axis"
+        )),
+    }
+}
+
+/// The whitewater reads face velocity at least one layer past the liquid.
+pub fn require_extended_faces(layers: f32) -> Result<(), String> {
+    if layers >= 1.0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the face grid carries velocity {layers} layers past the liquid; whitewater needs at least 1"
+        ))
+    }
+}
+
+/// The grid's first node and cell size, from the frame's `grid_bounds` (the
+/// scene box of the solid lattice's nodes) and its node counts. Cells that
+/// aren't cubes are a named refusal.
+pub fn grid_box(bounds: crate::node_graph::transform::Transform, nodes: [u32; 3]) -> Result<([f32; 3], f32), String> {
+    let cells = grid_cells(nodes).ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
+    let sizes: [f32; 3] = std::array::from_fn(|a| bounds.scale[a] / cells[a] as f32);
+    let size = sizes[0];
+    if !(size.is_finite() && size > 0.0) || sizes.iter().any(|s| (s - size).abs() > 1e-4 * size) {
+        return Err(format!("a {:?} m grid box over {nodes:?} nodes does not make cube cells", bounds.scale));
+    }
+    Ok((std::array::from_fn(|a| bounds.pos[a] - 0.5 * bounds.scale[a]), size))
+}
+
 /// The grid index of cell `c`, x fastest.
 pub fn cell_index(cells: [u32; 3], c: [u32; 3]) -> usize {
     let [nx, ny, _] = cells.map(|n| n as usize);

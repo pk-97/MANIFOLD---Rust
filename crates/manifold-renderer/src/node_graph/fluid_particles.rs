@@ -142,6 +142,19 @@ impl KnownItem for FaceSample {
     const SPECS: &'static [ChannelSpec] = FACE_SAMPLE_SPECS;
 }
 
+/// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
+/// 28; stride 32. The record is manifold_fluids' own, so the GPU spawn atoms
+/// and the lifecycle share one definition (GPU_WHITEWATER_DESIGN.md section 3.4).
+pub const WHITEWATER_SPAWN_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::POSITION_LIFETIME, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::KIND, ty: ChannelElementType::U32 },
+];
+
+impl KnownItem for manifold_fluids::WhitewaterSpawn {
+    const SPECS: &'static [ChannelSpec] = WHITEWATER_SPAWN_SPECS;
+}
+
 /// Spatial bins covering an axis-aligned box: `max(1, ceil(size / cell))`
 /// bins per axis, bin (i, j, k) spanning `min + (i, j, k)·cell`. Only the
 /// sort evaluates it; every atom that searches its bins takes the sort's

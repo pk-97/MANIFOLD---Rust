@@ -10,6 +10,7 @@ build = "build.rs"
 whitewater-oracle = []
 
 [dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 serde = { workspace = true }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }
