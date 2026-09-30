@@ -257,6 +257,58 @@ fn swash_box_solve_inverts_the_walled_laplacian() {
     assert!(p_mean.abs() < 1e-5, "pressure mean {p_mean}");
 }
 
+/// Where the box-solve time goes: the vendor FFT call alone versus one
+/// codegen twiddle atom, at a tiny and a real lattice. Equal times at 16³ and
+/// 64³ mean fixed per-call overhead, not bandwidth.
+#[test]
+fn swash_box_solve_cost_split() {
+    let mut harness = Harness::new();
+    for n in [16usize, 64] {
+        let nodes = [n; 3];
+        let values = random_values(n * n * n, 0x5b1d);
+        let slots = ChainSlots::new(&mut harness, &values, nodes);
+        let lattice = lattice_params(nodes, &[]);
+        let mut fft = Fft3d::new();
+        let mut spectrum = CosineSpectrum::new();
+        let repeats = 100;
+        let mut reorder = CosineReorder::new();
+        let forward = lattice_params(nodes, &[("direction", 0.0)]);
+        for (label, which) in [("fft_3d", 0), ("cosine_spectrum", 1), ("cosine_reorder", 2)] {
+            for round in 0..2 {
+                let mut errors = Vec::new();
+                let mut native = harness.device.create_encoder("swash cost split");
+                let start = Instant::now();
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
+                    let backend: &dyn Backend = &harness.backend;
+                    for _ in 0..repeats {
+                        if which == 0 {
+                            step(&mut fft, &mut gpu, backend, &mut errors, ("values", slots.input.0), ("spectrum", slots.spectrum.0), &lattice);
+                        } else if which == 1 {
+                            step(&mut spectrum, &mut gpu, backend, &mut errors, ("spectrum", slots.spectrum.0), ("out", slots.coeffs.0), &lattice);
+                        } else {
+                            step(&mut reorder, &mut gpu, backend, &mut errors, ("values", slots.input.0), ("out", slots.reordered.0), &forward);
+                        }
+                    }
+                }
+                let encoded = start.elapsed().as_secs_f64();
+                native.commit_and_wait_completed();
+                assert!(errors.is_empty(), "{errors:?}");
+                if round == 1 {
+                    let per = |s: f64| s * 1e6 / repeats as f64;
+                    let total = start.elapsed().as_secs_f64();
+                    println!(
+                        "SWASH cost split {n}³ {label}: {:.1} µs per call ({:.1} CPU encode, {:.1} GPU after commit)",
+                        per(total),
+                        per(encoded),
+                        per(total - encoded)
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// The P0 kill check's number: one full box solve at 64³ and 128³.
 #[test]
 fn swash_box_solve_timing() {

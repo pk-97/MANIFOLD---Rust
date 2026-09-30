@@ -144,3 +144,4 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 | Subcell (ghost-fluid) surface to cut splash passes | P1 misses its pass target on the violent fixtures |
 | NL = 4 sheet-cap aliasing check | P1 residual misses on the fixtures with stacked sheets |
 | Vulkan and large-GPU scaling (dispatch count per pass is the limit there) | the Vulkan backend exists |
+| Wrap-around (torus) axes: a per-axis wrap switch on the transform atoms (plain FFT, no reorder or twiddle; eigenvalue 4 sin²(πk/N)), wrapping particle transfers and chart views. Endless ocean = wrap x and z over a floor; a full torus needs force fields in place of gravity, or water accelerates forever. Peter asked for it 2026-09-30 | P2 race done, win or lose |
