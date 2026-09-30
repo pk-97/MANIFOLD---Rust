@@ -232,6 +232,13 @@ fn fft_water_refined_splash_passes() {
     }
 }
 
+/// The 128³ splash as shipped, against the engine's at the same frames
+/// (`fft_water_engine_race_refined`): p99 and top speed, peak height.
+#[test]
+fn fft_water_refined_splash() {
+    dam_break(WaterScene::dam_break(128).with_surface(), "SPLASH 128³", 150);
+}
+
 /// The 128³ splash against what else could feed it: the density source (rate
 /// 0) and the step length (four steps a frame, so a fast particle crosses
 /// half as many cells per step as the two-layer face extension covers).
