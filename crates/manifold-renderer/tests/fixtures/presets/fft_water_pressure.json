@@ -45,7 +45,13 @@
     {
       "id": 3,
       "nodeId": "collar_total",
-      "typeId": "node.running_total"
+      "typeId": "node.running_total",
+      "params": {
+        "capacity": {
+          "type": "Int",
+          "value": 32768
+        }
+      }
     },
     {
       "id": 4,

@@ -33978,9 +33978,19 @@
             "64"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Consumer Capacity",
+          "name": "capacity",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late. `extent` holds the grand total on the GPU, then an indirect dispatch grid of 256-thread groups covering max(total, last frame's total) × per_item elements.",
+      "purpose": "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late. `extent` holds the grand total on the GPU, then an indirect dispatch grid of 256-thread groups covering max(total, last frame's total) × per_item elements. With `capacity` set, a total past it is a named error every frame it lasts: the consumer that places the items holds only `capacity` of them.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Adds up a list of counts as it goes, so each item knows where its results start.",

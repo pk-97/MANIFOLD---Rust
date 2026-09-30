@@ -713,6 +713,34 @@ fn fluid_running_total_matches_cpu_scan_and_total_lags_one_frame() {
     }
 }
 
+/// A total past the consumer's capacity is a named error on every frame it
+/// lasts, never silent; at or under capacity there is none.
+#[test]
+fn fluid_running_total_names_a_total_past_its_capacity() {
+    let mut harness = Harness::new();
+    let flags = vec![1u32; 100];
+    let (input, _) = harness.array(&flags, flags.len());
+    let (out_slot, _) = harness.array::<u32>(&[], flags.len());
+    for (capacity, expect_error) in [(100.0, false), (64.0, true)] {
+        let mut node = RunningTotal::new();
+        let mut params = ParamValues::default();
+        params.insert("capacity".into(), ParamValue::Float(capacity));
+        let mut run = || harness.run(&mut node, &[("in", input)], &[("out", out_slot)], &params).1;
+        assert!(run().is_empty(), "the first frame has no total yet");
+        for frame in 1..3 {
+            let errors = run();
+            if expect_error {
+                assert!(
+                    errors.iter().any(|e| e.contains("needs 100, holds 64")),
+                    "frame {frame}: an overflow must be named every frame: {errors:?}"
+                );
+            } else {
+                assert!(errors.is_empty(), "frame {frame}: capacity {capacity} holds 100: {errors:?}");
+            }
+        }
+    }
+}
+
 /// f64 mirror of `shape_particle_blobs_body.wgsl` by brute force over every
 /// particle (equivalent to the 27-bin search: the kernel radius never passes
 /// one bin). Returns (centre, G, bound) for active particles.

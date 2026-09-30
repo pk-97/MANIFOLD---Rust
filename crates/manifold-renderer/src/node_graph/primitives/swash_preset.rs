@@ -492,7 +492,9 @@ fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
     // Setup: the collar list and each entry's place in the six views.
     let collar = b.node("collar", "node.collar_cells", Builder::lattice(n, &[]));
     b.wire(water, collar, "water");
-    let total = b.node("collar_total", "node.running_total", json!({}));
+    // The capacity is the invariant check: a collar past it is named every
+    // frame, never dropped silently.
+    let total = b.node("collar_total", "node.running_total", json!({"capacity": int(s.capacity)}));
     b.wire((collar, "out"), total, "in");
     let total = (total, "out");
     let entries = b.node("entries", "node.select_flagged", json!({"capacity": int(s.capacity)}));
