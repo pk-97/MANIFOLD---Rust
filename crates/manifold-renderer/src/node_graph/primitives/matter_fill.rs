@@ -7,10 +7,11 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::matter::MatterPoint;
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+use crate::node_graph::matter::{MatterBody, MatterPoint, MatterShape};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
+use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -32,10 +33,10 @@ struct FillUniforms {
     column_z1: i32,
     points_per_cell: i32,
     seed: i32,
+    body_count: i32,
+    epoch: i32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -52,6 +53,11 @@ crate::primitive! {
         column_z0: ScalarF32 optional, column_z1: ScalarF32 optional,
         points_per_cell: ScalarF32 optional,
         seed: ScalarF32 optional,
+        bodies: Array(MatterBody) optional,
+        shapes: Array(MatterShape) optional,
+        atlas: Array(u32) optional,
+        body_count: ScalarF32 optional,
+        epoch: ScalarF32 optional,
     },
     outputs: {
         points: Array(MatterPoint),
@@ -74,6 +80,8 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("column_z1"), label: "Box Max Z (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Points per Cell", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((8.0, 27.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("epoch"), label: "Epoch", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells (lattice minus 3 padding nodes per side), from node.matter_domain's fill outputs; the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27.",
@@ -85,9 +93,11 @@ crate::primitive! {
     aliases: ["seed matter", "matter fill", "initial fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/matter_fill_body.wgsl"),
+    input_access: [BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 16], usize)> = None,
+        filled: Option<([u32; 18], usize)> = None,
     },
 }
 
@@ -131,6 +141,10 @@ impl Primitive for MatterFill {
         ];
         let ppc = if int("points_per_cell", 8.0) >= 27 { 27 } else { 8 };
         let seed = int("seed", 0.0);
+        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
+        // With colliders the seeds depend on their pose at the epoch's start.
+        let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
         let cells = lattice.cells;
         let column = std::array::from_fn(|d| {
             [column[d][0].min(cells[d]), column[d][1].min(cells[d])]
@@ -162,11 +176,20 @@ impl Primitive for MatterFill {
         }
         let gpu = ctx.gpu_encoder();
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
+        // Without all three collider arrays no body is read; the points buffer
+        // fills their slots.
+        let (bodies, shapes, atlas, body_count) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas)) => {
+                let rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64) as i32;
+                (bodies, shapes, atlas, body_count.min(rows))
+            }
+            _ => (buffer, buffer, buffer, 0),
+        };
         let key = [
             lattice.min[0].to_bits(), lattice.min[1].to_bits(), lattice.min[2].to_bits(),
             lattice.cell_size.to_bits(), lattice.nodes[0], lattice.nodes[1], lattice.nodes[2],
             pool, column[0][0], column[0][1], column[1][0], column[1][1], column[2][0], column[2][1],
-            ppc, seed,
+            ppc, seed, body_count as u32, epoch,
         ];
         // A pure function of its params: refill only when one changes.
         if self.filled == Some((key, buffer.identity_key())) {
@@ -190,16 +213,19 @@ impl Primitive for MatterFill {
             column_z1: column[2][1] as i32,
             points_per_cell: ppc as i32,
             seed: seed as i32,
+            body_count,
+            epoch: epoch as i32,
             dispatch_count: count,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: bodies, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: shapes, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: atlas, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer, offset: 0 },
             ],
             [count.div_ceil(256), 1, 1],
             "node.matter_fill",
@@ -226,8 +252,13 @@ mod tests {
     fn matter_fill_generates_a_source_kernel() {
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MatterFill>()
             .expect("matter_fill codegen");
-        assert!(wgsl.contains("var<storage, read_write> buf_points: array<Element>"), "{wgsl}");
+        assert!(wgsl.contains("var<storage, read_write> buf_points: array<Element3>"), "{wgsl}");
         assert!(wgsl.contains("buf_points[idx] = body(idx, params.dispatch_count,"), "{wgsl}");
+        assert!(wgsl.contains("buf_bodies") && wgsl.contains("buf_atlas: array<u32>"), "{wgsl}");
         assert_eq!(std::mem::size_of::<FillUniforms>(), 80);
+        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
     }
 }

@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); J bounded for BUG-8akp (MPM water J grows without bound); A2, A4, A6 and the still pool fail as look findings for Peter · P1b in progress (L1 built) · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P2–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); J bounded for BUG-8akp (MPM water J grows without bound); A2, A4, A6 and the still pool fail as look findings for Peter · P1b in progress (L1 built) · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P2a built on the branch · P2b–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -451,6 +451,56 @@ classifies spray, foam and bubbles from grid potentials with FLIP Fluids' own co
 and publishes the surface design's whitewater frames. P7 records particle frames per tick
 through the existing cache writer. P8 ships one demo scene per capability.
 
+**D25 — Distance lattices build lazily on a worker thread; the domain holds until they
+are ready (amends D16).** D16's VERIFY fired: role geometry is prepared on the content
+thread, so a lattice built there would stall the frame. `PreparedFluidGeometry` keeps
+the lattice in a `OnceLock` filled by a short-lived worker thread on first request
+(`fluid_role.rs`, `distance_lattice`); the lattice is derived and not serialized, so
+take and cache identity are unchanged. While any collider's lattice is pending,
+`node.matter_domain` holds its last outputs (`warmup_pending`) and the clock does not
+advance; the simulation starts on the frame every lattice is ready. The worker holds
+only the `Arc` of the prepared geometry; no channel, mutex or long-lived thread.
+
+**D26 — A role's scale applies at use.** A lattice is built once in the geometry's own
+unscaled frame. Samplers map a world point through the pose and divide by the per-axis
+scale (world → local); a local distance becomes metres by the smallest scale, which
+never overstates the gap for a non-uniform scale. `MatterShape` is 48 bytes: origin and
+spacing, dims, atlas offset, and the scale with its minimum in w.
+
+**D27 — One lattice per geometry: the longest extent over 32, two spacings of padding.**
+Roles sharing geometry share one atlas block. World spacing is the local spacing times
+the role scale per axis. At 64³ (dx = 0.0625 m on the 4 m Dam Break domain): the Dam
+Break's moving box (a unit cube scaled 0.6 × 1.16 × 0.85) samples at 0.019–0.036 m,
+0.3–0.58 dx; a 0.25 m prop at 0.008 m, 0.13 dx; a domain-sized 4 m collider at
+0.125 m, 2 dx. Any collider longer than 32 dx is coarser than the grid and rounds its
+corners by up to a spacing; P4 decides whether to raise the count for large colliders.
+
+**D28 — Bodies are per-tick rows; the pose is evaluated per substep.**
+`node.matter_domain` records each collider's transform once per display frame into
+`InputHistory` at the frame's target time and publishes one `MatterBody` row per body
+per tick of the frame: the tick-start pose, and the linear and angular velocity that
+carry it to the tick-end pose. A restart publishes the first tick's rows with no tick
+run, so the fill sees the starting pose. Rows upload through the inline uniform path in
+encoder order. `node.matter_move_bodies` poses each body at the end of its substep,
+`t = (substep_in_tick + 1)·step_dt`, the slerp between the tick's end poses;
+`node.matter_solid_distance` poses the last row at the frame's end.
+
+**D29 — Colliders are projected on the grid and pushed out on the points (amends
+section 4.1 steps 4 and 6).** The grid projection alone leaves points up to about a cell
+inside a moving body, because a point moves with a velocity blended from 27 nodes. G2P
+therefore finishes every point update against each body at its substep-end pose: a
+point at local distance φ < 0 steps along the lattice normal onto the surface
+(`−φ·∇φ/|∇φ|²` with the world-space gradient of the local distance, capped at the
+largest possible gap), and the inward normal part of its velocity relative to the
+body is removed. Tangential motion is untouched and relative speed never grows. The
+push-out is a position correction with no momentum exchange; P2b measures the coupled
+momentum balance with it on. The four collider atoms share one sampler: the
+`matter_pose.wgsl` and `matter_collider.wgsl` includes; each body defines only the
+atlas read over its own gathered binding. Gate: no point ends a tick more than 0.5·dx
+inside a collider. **MatterClock epochs start at 1**, 0 meaning not started: with the
+first epoch at 0, a domain holding zeros while a lattice built looked like a started
+epoch, and the state never seeded.
+
 ## 3. Data model and atoms
 
 ### 3.1 Records
@@ -508,10 +558,13 @@ pub struct MatterBody {
     pub accel_shape: [f32; 4],         // xyz predicted external acceleration; w = shape index
 }
 
-/// Body-local distance lattice descriptor. 32 bytes.
+/// Body-local distance lattice descriptor. 48 bytes (P2a: grew from 32 to carry the
+/// role's scale, which roles apply at use, not at preparation).
 pub struct MatterShape {
-    pub origin_spacing: [f32; 4],      // local lattice min xyz; w = spacing (m)
-    pub dims_offset: [u32; 4],         // nodes x/y/z; w = offset into the packed atlas
+    pub origin_spacing: [f32; 4],      // local lattice min xyz, unscaled; w = spacing (m)
+    pub dims_x: u32, pub dims_y: u32, pub dims_z: u32,
+    pub atlas_offset: u32,             // index of node (0, 0, 0) in the atlas's halves
+    pub scale_min: [f32; 4],           // role scale xyz; w = the smallest
 }
 ```
 
@@ -537,8 +590,8 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | `node.grid_to_matter` | `points`, `grid` (BufferGather), `material`, lattice wires, `step_dt` → `points_out` | P1 |
 | `node.matter_stats` | `points`, `grid`, `accum`, `material`, `tick_end` → `stats: Array(u32)` | P1 |
 | `node.matter_frame` | `points`, `stats`, `material`, lattice wires, optional `solid`, `simulation_time` → the surface seam outputs: `particles_a`, `particles_b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span` | P1 |
-| `node.matter_move_bodies` | `bodies`, `reaction: Array(i32)`, `step_dt`, `substep_in_tick` → `bodies_out` | P2a |
-| `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask → `solid: Array(f32)` | P2a |
+| `node.matter_move_bodies` | `bodies` (the domain's tick rows), `tick_index`, `first_tick`, `substep_in_tick`, `step_dt`, `body_count`, `rows`; P2b adds `reaction: Array(i32)` → `bodies_out` | P2a |
+| `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask, `body_count`, `rows`, `tick_seconds` → `solid: Array(f32)`; once per frame after the region, poses at the last tick's end | P2a |
 | `node.matter_body_reaction` | `accum`, `grid`, `bodies`, `shapes`, `atlas`, lattice wires, `reaction: Array(i32)` → `reaction_out` (aliased atomic) | P2b |
 | `node.matter_emit` | `points`, `bodies`, `shapes`, `atlas`, lattice wires, `tick_start`, `material`, `points_per_cell` → `points_out` | P3b |
 | `node.matter_drain` | `points`, `bodies`, `shapes`, `atlas`, lattice wires → `points_out` | P3b |
@@ -596,7 +649,9 @@ over the 27 nodes `i = base + {0,1,2}³`, `d_i = (i·dx + lattice_min) − x_p`.
    collider projection.
 6. **G2P** (`node.grid_to_matter`): `v_pic = Σ w·v_i`,
    `v_p ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic`,
-   `C_p = (4/dx²)·Σ w·v_i ⊗ d_i`, `x_p += dt·v_pic`, `J_p ← J_p·(1 + dt·tr C_p)`.
+   `C_p = (4/dx²)·Σ w·v_i ⊗ d_i`, `x_p += dt·v_pic`, `J_p ← J_p·(1 + dt·tr C_p)`; then
+   a point inside a collider steps out onto its surface and loses the inward normal
+   part of its velocity relative to the body (D29).
 7. **Deformation** (P5 models): `F ← (I + dt·C_p)·F`, then Melt relaxation (D10), then the
    model's return mapping.
 
@@ -854,10 +909,11 @@ module; the honest count.
 | `matter_state`, `matter_frame` | Exempt, exclusion 2 (cross-frame state) | Clock and ring unit tests; frame value tests. |
 | `matter_domain` | Exempt, exclusion 3 (CPU bridge) | CPU unit tests; upload round-trip GPU test. |
 
-Helper functions shared by several bodies (stencil weights, fixed-point encode) are
-duplicated with an atom-specific prefix and pinned equal by a source test, unless P1
-read-back finds that fused codegen already namespaces member helpers (⚠ VERIFY-AT-IMPL:
-read `R/freeze/codegen/fused.rs`). A body the codegen cannot express is BLOCKED: file a
+Fused codegen does not namespace member helpers (`R/freeze/codegen/fused_buffer.rs`:
+same name and text dedupe, same name and different text is a `HelperCollision`). Small
+helpers shared by several bodies (stencil weights, finite checks) are duplicated with
+an atom-specific prefix and pinned equal by a source test. Larger shared code is a
+`wgsl_includes` library, as the collider sampler is (D29). A body the codegen cannot express is BLOCKED: file a
 `bd` bug naming the missing read path and declare `boundary_reason: Blocked` — never a
 quiet exemption.
 
@@ -1231,6 +1287,26 @@ at the end of the phase.
 - **Gesture:** sweep the paddle fast through the pool; water parts and nothing leaks.
 - **Forbidden:** a GPU mesh-to-SDF atom; a matter geometry cache; box-only fallbacks for
   rejected meshes; CPIC sidedness.
+- **Phase notes (2026-09-30, Opus 5.5 worker):** built on `feat/gpu-mpm-build-b`, as
+  D25–D29 record.
+  - `matter_collider_penetration_bounded` (dx 0.03125): deepest point −0.00068 m against
+    the −0.5·dx gate of −0.0156 m, over 120,032 point-ticks within a cell of a body. Grid
+    projection alone left −1.15·dx; D29's push-out closes it.
+    `matter_grid_update_projects_colliders`: worst normal velocity into a body 4.05e-6 m/s
+    over 96 nodes. `matter_fill_skips_colliders`: 4,922 slots left empty for about 5,898
+    expected from the box volume.
+  - GPU filter `matter_`: 24 pass; the 4 failures are BUG-k85i (MPM water look gates red)
+    exactly: A4, A6 sheet retention, settling, the still pool.
+  - Demo: the Dam Break Matter capture at 64³, 340,224 points, with the moving box. Water
+    parts round the box and none shows inside it.
+  - `examples/fluid_capture.rs` treats `PendingGeometry` as unfinished preparation during
+    warm-up and a failure in the measured frames, per `FrameRenderStatus`: role distance
+    lattices build on a worker (D25).
+  - BUG-0pmv (matter_to_particles runs every substep) is not fixable as the lead ruled it:
+    a region body is every node downstream of the boundary and upstream of the capture
+    (`node_graph/substeps.rs` module doc and `fn region_body`), and
+    `node.matter_to_particles` reads the per-tick state and feeds sort → P2G → capture.
+    The boundary runs once a frame, not once a tick, and regions do not nest.
 
 ### P2b — Two-way Box3D coupling
 

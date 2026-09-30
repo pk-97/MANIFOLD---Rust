@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Water — Dam Break (Live GPU)",
-  "description": "GPU MLS-MPM dam break: the Water — Dam Break column and basin simulated live on the GPU, one fixed 60 Hz tick per frame. The solver is one group, Live Matter: the domain sets the lattice, walls, gravity and clock; the fill seeds points; Point State repeats Clear Grid, Points To Grid, Grid Update and Grid To Points once per substep; at each tick's first substep Sort Into Blocks orders the points by grid block so Points To Grid adds each block in fast memory; Tick Stats checks each tick; Frame publishes the particles. The group flattens to the same graph as its wired atoms. Particles are drawn as small spheres until the liquid surface lands.",
+  "description": "GPU MLS-MPM dam break: the Water — Dam Break column and basin simulated live on the GPU, one fixed 60 Hz tick per frame. The solver is one group, Live Matter: the domain sets the lattice, walls, gravity and clock; the fill seeds points; Point State repeats Clear Grid, Points To Grid, Grid Update and Grid To Points once per substep; at each tick's first substep Sort Into Blocks orders the points by grid block so Points To Grid adds each block in fast memory; Tick Stats checks each tick; Frame publishes the particles. The group flattens to the same graph as its wired atoms. The copper Moving Box is a Collider role: the domain turns it into a body the liquid flows around, the fill leaves its volume dry, and Solid Distance adds it to the solid lattice beside the walls. Move its transform to push the water. Particles are drawn as small spheres until the liquid surface lands.",
   "presetMetadata": {
     "id": "WaterDamBreakMatter",
     "displayName": "Water — Dam Break (Live GPU)",
@@ -621,7 +621,7 @@
         },
         "objects": {
           "type": "Int",
-          "value": 6
+          "value": 7
         }
       }
     },
@@ -854,6 +854,10 @@
             {
               "name": "initialVolume",
               "portType": "Transform"
+            },
+            {
+              "name": "collider",
+              "portType": "FluidRole"
             }
           ],
           "outputs": [
@@ -975,6 +979,18 @@
             "typeId": "node.sort_particles_into_cells",
             "handle": "Sort Into Blocks",
             "nodeId": "matter_sort_into_blocks"
+          },
+          {
+            "id": 13,
+            "typeId": "node.matter_move_bodies",
+            "handle": "Move Bodies",
+            "nodeId": "matter_move_bodies"
+          },
+          {
+            "id": 14,
+            "typeId": "node.matter_solid_distance",
+            "handle": "Solid Distance",
+            "nodeId": "matter_solid_distance"
           }
         ],
         "wires": [
@@ -1703,6 +1719,234 @@
             "fromPort": "initialVolume",
             "toNode": 1,
             "toPort": "initial_volume"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "collider",
+            "toNode": 1,
+            "toPort": "role_0"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bodies",
+            "toNode": 2,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "shapes",
+            "toNode": 2,
+            "toPort": "shapes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "atlas",
+            "toNode": 2,
+            "toPort": "atlas"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 2,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "epoch",
+            "toNode": 2,
+            "toPort": "epoch"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bodies",
+            "toNode": 13,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "first_tick",
+            "toNode": 13,
+            "toPort": "first_tick"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 13,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_rows",
+            "toNode": 13,
+            "toPort": "rows"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "tick_index",
+            "toNode": 13,
+            "toPort": "tick_index"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "substep_in_tick",
+            "toNode": 13,
+            "toPort": "substep_in_tick"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "step_dt",
+            "toNode": 13,
+            "toPort": "step_dt"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "bodies_out",
+            "toNode": 6,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "shapes",
+            "toNode": 6,
+            "toPort": "shapes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "atlas",
+            "toNode": 6,
+            "toPort": "atlas"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 6,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "bodies_out",
+            "toNode": 7,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "shapes",
+            "toNode": 7,
+            "toPort": "shapes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "atlas",
+            "toNode": 7,
+            "toPort": "atlas"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 7,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "lattice_min_x",
+            "toNode": 6,
+            "toPort": "lattice_min_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "lattice_min_y",
+            "toNode": 6,
+            "toPort": "lattice_min_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "lattice_min_z",
+            "toNode": 6,
+            "toPort": "lattice_min_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bodies",
+            "toNode": 14,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "shapes",
+            "toNode": 14,
+            "toPort": "shapes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "atlas",
+            "toNode": 14,
+            "toPort": "atlas"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "lattice_min_x",
+            "toNode": 14,
+            "toPort": "lattice_min_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "lattice_min_y",
+            "toNode": 14,
+            "toPort": "lattice_min_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "lattice_min_z",
+            "toNode": 14,
+            "toPort": "lattice_min_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cell_size",
+            "toNode": 14,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "nodes_x",
+            "toNode": 14,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "nodes_y",
+            "toNode": 14,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "nodes_z",
+            "toNode": 14,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "closed_faces",
+            "toNode": 14,
+            "toPort": "closed_faces"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 14,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_rows",
+            "toNode": 14,
+            "toPort": "rows"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "solid",
+            "toNode": 9,
+            "toPort": "solid"
           }
         ]
       }
@@ -1766,6 +2010,102 @@
       "typeId": "node.scene_object",
       "handle": "Particles",
       "nodeId": "particle_object"
+    },
+    {
+      "id": 64,
+      "nodeId": "obstacle_transform",
+      "typeId": "node.transform_3d",
+      "handle": "Moving Box Transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.35
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 0.58
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": -0.1
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 1.16
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.85
+        }
+      }
+    },
+    {
+      "id": 65,
+      "nodeId": "obstacle_collider",
+      "typeId": "node.fluid_role_source",
+      "handle": "Moving Box Collider",
+      "params": {
+        "role": {
+          "type": "Enum",
+          "value": 3
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        },
+        "radius": {
+          "type": "Float",
+          "value": 0.8660254
+        }
+      }
+    },
+    {
+      "id": 66,
+      "nodeId": "obstacle_mesh",
+      "typeId": "node.cube_mesh",
+      "handle": "Moving Box Mesh"
+    },
+    {
+      "id": 67,
+      "nodeId": "obstacle_material",
+      "typeId": "node.pbr_material",
+      "handle": "Moving Box Material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 0.52
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.23
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.073
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.94
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.19
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 68,
+      "nodeId": "obstacle_object",
+      "typeId": "node.scene_object",
+      "handle": "Moving Box"
     }
   ],
   "wires": [
@@ -1990,6 +2330,42 @@
       "fromPort": "object",
       "toNode": 30,
       "toPort": "object_0"
+    },
+    {
+      "fromNode": 64,
+      "fromPort": "transform",
+      "toNode": 65,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 65,
+      "fromPort": "role",
+      "toNode": 51,
+      "toPort": "collider"
+    },
+    {
+      "fromNode": 64,
+      "fromPort": "transform",
+      "toNode": 68,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 66,
+      "fromPort": "vertices",
+      "toNode": 68,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 67,
+      "fromPort": "out",
+      "toNode": 68,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 68,
+      "fromPort": "object",
+      "toNode": 30,
+      "toPort": "object_6"
     }
   ]
 }

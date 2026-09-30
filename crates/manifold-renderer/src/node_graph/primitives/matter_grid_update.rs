@@ -11,7 +11,7 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::{MatterBody, MatterGridNode, MatterShape, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
+use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -84,6 +84,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
     input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
 }
 
 impl Primitive for MatterGridUpdate {

@@ -34,6 +34,9 @@ pub(crate) struct SceneSettings {
     /// P2G takes D6's block path: the region sorts the points into the
     /// domain's block bins once per tick and P2G reads the order and ranges.
     pub block_p2g: bool,
+    /// Collider roles: built-in unit cubes posed by these transforms (their
+    /// scale is the box size), wired as node.fluid_role_source Collider roles.
+    pub colliders: Vec<Transform>,
 }
 
 impl Default for SceneSettings {
@@ -51,6 +54,7 @@ impl Default for SceneSettings {
             points_per_cell_27: false,
             closed: [true; 6],
             block_p2g: false,
+            colliders: Vec::new(),
         }
     }
 }
@@ -63,6 +67,9 @@ pub(crate) struct MatterScene {
     pub domain: NodeInstanceId,
     pub frame_node: NodeInstanceId,
     pub state_node: NodeInstanceId,
+    /// Each collider's node.transform_3d.
+    colliders: Vec<NodeInstanceId>,
+    solid_b: Option<ResourceId>,
     points: ResourceId,
     stats: ResourceId,
     frame_b: ResourceId,
@@ -185,6 +192,7 @@ impl MatterScene {
         }
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
+        let colliders = Self::wire_colliders(&mut graph, &registry, settings, [domain, fill, state, update, g2p, frame]);
         graph.add_external_output(frame, "particles_b").expect("frame output");
 
         let set = |graph: &mut Graph, name: &str, value: ParamValue| {
@@ -235,7 +243,8 @@ impl MatterScene {
         let lattice = MatterLattice::from_layout(
             &domain_layout(None, settings.domain_size, settings.resolution).expect("scene layout"),
         );
-        Self {
+        let solid_b = (!settings.colliders.is_empty()).then(|| output(frame, "solid_b"));
+        let mut scene = Self {
             graph,
             plan,
             executor: Executor::new(Box::new(backend)),
@@ -250,6 +259,106 @@ impl MatterScene {
             lattice,
             frame_count: 0,
             frame_interval: TICK,
+            colliders,
+            solid_b,
+        };
+        for (index, transform) in settings.colliders.iter().enumerate() {
+            scene.set_collider(index, *transform);
+        }
+        scene
+    }
+
+    /// Collider roles as the presets wire them: a transform into a built-in
+    /// unit cube role source into the domain, which the fill seeds around;
+    /// node.matter_move_bodies in the
+    /// region feeding the grid update; node.matter_solid_distance feeding the
+    /// frame's solid lattice. Returns each collider's transform node.
+    fn wire_colliders(
+        graph: &mut Graph,
+        registry: &PrimitiveRegistry,
+        settings: &SceneSettings,
+        [domain, fill, state, update, g2p, frame]: [NodeInstanceId; 6],
+    ) -> Vec<NodeInstanceId> {
+        if settings.colliders.is_empty() {
+            return Vec::new();
+        }
+        let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
+        fn wire(graph: &mut Graph, from: (NodeInstanceId, &'static str), to: (NodeInstanceId, &'static str)) {
+            graph.connect(from, to).unwrap_or_else(|e| panic!("{from:?} -> {to:?}: {e:?}"));
+        }
+        const ROLES: [&str; 4] = ["role_0", "role_1", "role_2", "role_3"];
+        let set = |graph: &mut Graph, node: NodeInstanceId, name: &str, value: ParamValue| {
+            graph.set_param(node, name, value).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        };
+        let mut transforms = Vec::new();
+        for role in ROLES.iter().take(settings.colliders.len()) {
+            let transform = add(graph, "node.transform_3d");
+            let source = add(graph, "node.fluid_role_source");
+            set(graph, source, "role", ParamValue::Enum(3));
+            set(graph, source, "shape", ParamValue::Enum(1));
+            // A built-in cube of this radius spans ±0.5, so the transform's
+            // scale is the box size.
+            set(graph, source, "radius", ParamValue::Float(0.5 / 0.577_350_26));
+            wire(graph, (transform, "transform"), (source, "transform"));
+            wire(graph, (source, "role"), (domain, role));
+            transforms.push(transform);
+        }
+        // The fill leaves seeds inside a collider's starting pose unused.
+        for port in ["bodies", "shapes", "atlas", "body_count", "epoch"] {
+            wire(graph, (domain, port), (fill, port));
+        }
+        let bodies = add(graph, "node.matter_move_bodies");
+        wire(graph, (domain, "bodies"), (bodies, "bodies"));
+        for (from, to) in [("first_tick", "first_tick"), ("body_count", "body_count"), ("body_rows", "rows")] {
+            wire(graph, (domain, from), (bodies, to));
+        }
+        for port in ["tick_index", "substep_in_tick", "step_dt"] {
+            wire(graph, (state, port), (bodies, port));
+        }
+        wire(graph, (bodies, "bodies_out"), (update, "bodies"));
+        for port in ["shapes", "atlas", "body_count", "lattice_min_x", "lattice_min_y", "lattice_min_z"] {
+            wire(graph, (domain, port), (update, port));
+        }
+        wire(graph, (bodies, "bodies_out"), (g2p, "bodies"));
+        for port in ["shapes", "atlas", "body_count"] {
+            wire(graph, (domain, port), (g2p, port));
+        }
+        let solid = add(graph, "node.matter_solid_distance");
+        for port in [
+            "bodies", "shapes", "atlas", "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size",
+            "nodes_x", "nodes_y", "nodes_z", "closed_faces", "body_count",
+        ] {
+            wire(graph, (domain, port), (solid, port));
+        }
+        wire(graph, (domain, "body_rows"), (solid, "rows"));
+        wire(graph, (solid, "solid"), (frame, "solid"));
+        graph.add_external_output(frame, "solid_b").expect("solid output");
+        transforms
+    }
+
+    /// The frame's solid lattice B (walls and colliders), with colliders.
+    pub(crate) fn solid_b(&self) -> Vec<f32> {
+        self.read(self.solid_b.expect("a scene with colliders"))
+    }
+
+    pub(crate) fn lattice(&self) -> MatterLattice {
+        self.lattice
+    }
+
+    /// Simulated seconds at the end of the last frame's ticks; 0 before any frame.
+    pub(crate) fn simulation_time(&self) -> f32 {
+        self.executor.live_scalar_input(self.frame_node, "simulation_time").unwrap_or(0.0)
+    }
+
+    /// Pose collider `index` from now on (its node.transform_3d).
+    pub(crate) fn set_collider(&mut self, index: usize, transform: Transform) {
+        let node = self.colliders[index];
+        for (name, value) in [
+            ("pos_x", transform.pos[0]), ("pos_y", transform.pos[1]), ("pos_z", transform.pos[2]),
+            ("rot_x", transform.rot_euler[0]), ("rot_y", transform.rot_euler[1]), ("rot_z", transform.rot_euler[2]),
+            ("scale_x", transform.scale[0]), ("scale_y", transform.scale[1]), ("scale_z", transform.scale[2]),
+        ] {
+            self.graph.set_param(node, name, ParamValue::Float(value)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         }
     }
 

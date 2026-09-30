@@ -12,6 +12,7 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::MatterBody;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use super::matter_common::MATTER_POSE;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -62,6 +63,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_move_bodies_body.wgsl"),
     input_access: [BufferGather],
+    wgsl_includes: [MATTER_POSE],
 }
 
 impl Primitive for MatterMoveBodies {

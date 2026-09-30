@@ -8,9 +8,22 @@
 // implement it). A point whose stencil leaves the lattice is removed (id 0).
 // A point whose position is not finite is left as it is, for the stats to
 // report. Element = MatterPoint.
+//
+// Colliders (D29): after the move, a point inside an enabled body (φ < 0 at
+// the body's pose at the end of this substep, `bodies` from
+// node.matter_move_bodies) steps along the lattice normal onto the surface,
+// and the inward normal part of its velocity relative to the body is
+// removed. Tangential motion is untouched and no relative speed is added.
+// `bodies`, `shapes` and `atlas` are gathered; sampling is
+// matter_collider.wgsl's.
 fn g2m_finite3(v: vec3<f32>) -> bool {
     let e = vec3<u32>(bitcast<u32>(v.x), bitcast<u32>(v.y), bitcast<u32>(v.z)) & vec3<u32>(0x7f800000u);
     return all(e != vec3<u32>(0x7f800000u));
+}
+
+fn matter_atlas_half(index: u32) -> f32 {
+    let pair = unpack2x16float(buf_atlas[index / 2u]);
+    return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
 fn body(
@@ -28,6 +41,7 @@ fn body(
     liveliness: f32,
     cohesion: f32,
     active_count: i32,
+    body_count: i32,
 ) -> Element {
     var p = e_points;
     if p.id == 0u || !g2m_finite3(p.position) {
@@ -82,6 +96,38 @@ fn body(
     let c2 = k * b2;
     p.velocity = liveliness * (p.velocity + flip_delta) + (1.0 - liveliness) * v_pic;
     p.position = p.position + step_dt * v_pic;
+    for (var b = 0; b < body_count; b = b + 1) {
+        let bd = buf_bodies[u32(b)];
+        let shape_index = i32(bd.accel_shape.w);
+        if shape_index < 0 {
+            continue;
+        }
+        let sh = buf_shapes[u32(shape_index)];
+        let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
+        let centre = bd.position_inv_mass.xyz;
+        let g = matter_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+        if !matter_lattice_holds(g, dims) {
+            continue;
+        }
+        let phi = matter_lattice_distance(sh.atlas_offset, dims, g);
+        if phi >= 0.0 {
+            continue;
+        }
+        let grad = matter_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
+        let length_sq = dot(grad, grad);
+        if !(length_sq > 0.0) {
+            continue;
+        }
+        let normal = grad * inverseSqrt(length_sq);
+        // To φ = 0 along the normal, no farther than the surface can be.
+        let max_scale = max(sh.scale_min.x, max(sh.scale_min.y, sh.scale_min.z));
+        p.position = p.position + normal * min(-phi * inverseSqrt(length_sq), -phi * max_scale);
+        let v_rel = p.velocity - matter_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, centre, p.position);
+        let v_n = dot(v_rel, normal);
+        if v_n < 0.0 {
+            p.velocity = p.velocity - v_n * normal;
+        }
+    }
     // D3: tension-free water (Cohesion 0) stores no expansion; cohesive water
     // tears at twice its rest volume.
     let j_max = select(2.0, 1.0, cohesion <= 0.0);

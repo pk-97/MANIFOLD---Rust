@@ -12,7 +12,7 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::{MatterBody, MatterShape};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
+use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -31,7 +31,9 @@ struct SolidDistanceUniforms {
     tick_seconds: f32,
     max_capacity: i32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -78,6 +80,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_solid_distance_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
 }
 
 impl Primitive for MatterSolidDistance {
@@ -117,7 +120,9 @@ impl Primitive for MatterSolidDistance {
             tick_seconds,
             max_capacity: (solid.size / 4).min(i32::MAX as u64) as i32,
             dispatch_count: nodes,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -152,19 +157,14 @@ mod tests {
         assert_eq!(std::mem::size_of::<SolidDistanceUniforms>(), 64);
     }
 
-    /// The solid atom poses bodies the way node.matter_move_bodies does; the
-    /// quaternion product is written out in both bodies.
+    /// The solid atom poses bodies the way node.matter_move_bodies does:
+    /// both turn through the shared pose library.
     #[test]
     fn matter_solid_distance_poses_bodies_as_move_bodies() {
         let solid = include_str!("shaders/matter_solid_distance_body.wgsl");
         let moving = include_str!("shaders/matter_move_bodies_body.wgsl");
-        for line in [
-            "w * (sin(0.5 * angle) / speed), cos(0.5 * angle)",
-            "d.w * q.x + d.x * q.w + d.y * q.z - d.z * q.y",
-            "d.w * q.w - d.x * q.x - d.y * q.y - d.z * q.z",
-        ] {
-            assert!(moving.contains(line), "{line}");
-            assert!(solid.contains(&line.replace("d.", "dq.")), "{line}");
-        }
+        assert!(solid.contains("matter_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds)"));
+        assert!(moving.contains("matter_turn(b.rotation, b.angular_velocity.xyz, t)"));
+        assert!(!solid.contains("sin(0.5 * angle)") && !moving.contains("sin(0.5 * angle)"));
     }
 }

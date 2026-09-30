@@ -8,6 +8,7 @@ use crate::node_graph::fluid::{FluidDomainLayout, TICK};
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use crate::node_graph::transform::Transform;
 
+pub mod bodies;
 /// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
 pub mod look;
 #[cfg(any(test, feature = "gpu-proofs"))]
@@ -452,6 +453,9 @@ pub struct ClockFrame {
     pub restarted: bool,
     /// Simulated seconds at the end of this frame's ticks.
     pub simulation_time: f64,
+    /// Simulated seconds this display frame reached (at most one tick past
+    /// `simulation_time` live); authored controls are sampled here.
+    pub target_time: f64,
     /// Display time `s = target − tick` (surface design D10).
     pub display_time: f64,
     /// Simulated time dropped under live overload since the epoch began.
@@ -468,6 +472,9 @@ pub const MAX_LIVE_TICKS: u32 = 3;
 /// every due tick.
 #[derive(Clone, Debug, Default)]
 pub struct MatterClock {
+    /// 0 before the first start, so outputs a domain holds while it waits
+    /// (for a role's geometry, say) never share an epoch with the first
+    /// simulation, which then seeds.
     epoch: u32,
     started: bool,
     last_transport: f64,
@@ -497,9 +504,7 @@ impl MatterClock {
             || reset_edge
             || transport < self.last_transport - 1e-9;
         if restarted {
-            if self.started {
-                self.epoch = self.epoch.wrapping_add(1);
-            }
+            self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
             self.target_time = 0.0;
             self.ticks_done = 0;
@@ -531,6 +536,7 @@ impl MatterClock {
             epoch: self.epoch,
             restarted,
             simulation_time: self.ticks_done as f64 * TICK,
+            target_time: self.target_time,
             display_time: (self.target_time - TICK).max(0.0),
             dropped_seconds: self.dropped_seconds,
         }
@@ -755,12 +761,12 @@ mod tests {
         // A changed reset counter restarts in a new epoch.
         let reset = clock.advance(6.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!(reset.restarted);
-        assert_eq!(reset.epoch, 1);
+        assert_eq!(reset.epoch, 2);
         assert_eq!(reset.ticks, 0);
         // Seeking backwards restarts too.
         let seek = clock.advance(2.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!(seek.restarted);
-        assert_eq!(seek.epoch, 2);
+        assert_eq!(seek.epoch, 3);
         // Display sits one tick behind the target.
         let next = clock.advance(3.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!((next.display_time - 0.0).abs() < 1e-12);

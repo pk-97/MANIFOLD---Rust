@@ -15,34 +15,11 @@
 // the domain's power-of-two momentum unit that P2G also reads, mass in
 // m_unit = 1000·dx³/8 kg at 2^16; D5). Element = MatterGridNode; `bodies`
 // (MatterBody), `shapes` (MatterShape) and `atlas` (distances two halves
-// per word) are gathered.
+// per word) are gathered; the sampling is matter_collider.wgsl's.
 
-fn gu_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
-    let t = 2.0 * cross(q.xyz, v);
-    return v + q.w * t + cross(q.xyz, t);
-}
-
-fn gu_atlas(index: u32) -> f32 {
+fn matter_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
-}
-
-// Trilinear distance at lattice coordinate g (in nodes), clamped to the
-// lattice; the caller has checked g lies inside it.
-fn gu_lattice(offset: u32, dims: vec3<u32>, g: vec3<f32>) -> f32 {
-    let c = clamp(g, vec3<f32>(0.0), vec3<f32>(dims - vec3<u32>(1u)));
-    let base = min(vec3<u32>(floor(c)), dims - vec3<u32>(2u));
-    let f = c - vec3<f32>(base);
-    var value = 0.0;
-    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        let o = vec3<u32>(corner & 1u, (corner >> 1u) & 1u, (corner >> 2u) & 1u);
-        let at = base + o;
-        let w = select(1.0 - f.x, f.x, o.x == 1u)
-            * select(1.0 - f.y, f.y, o.y == 1u)
-            * select(1.0 - f.z, f.z, o.z == 1u);
-        value = value + w * gu_atlas(offset + at.x + dims.x * (at.y + dims.y * at.z));
-    }
-    return value;
 }
 
 fn body(
@@ -100,31 +77,18 @@ fn body(
         }
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let q = bd.rotation;
-        let q_inv = vec4<f32>(-q.xyz, q.w);
-        let local = gu_rotate(q_inv, x - bd.position_inv_mass.xyz) / sh.scale_min.xyz;
-        let g = (local - sh.origin_spacing.xyz) / sh.origin_spacing.w;
-        if any(g < vec3<f32>(0.0)) || any(g > vec3<f32>(dims - vec3<u32>(1u))) {
+        let centre = bd.position_inv_mass.xyz;
+        let g = matter_lattice_coord(x, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+        if !matter_lattice_holds(g, dims) || matter_lattice_distance(sh.atlas_offset, dims, g) >= 0.0 {
             continue;
         }
-        if gu_lattice(sh.atlas_offset, dims, g) >= 0.0 {
-            continue;
-        }
-        // The outward normal: the lattice gradient in local units, through
-        // the inverse scale and the rotation.
-        let h = 0.5;
-        let grad = vec3<f32>(
-            gu_lattice(sh.atlas_offset, dims, g + vec3<f32>(h, 0.0, 0.0)) - gu_lattice(sh.atlas_offset, dims, g - vec3<f32>(h, 0.0, 0.0)),
-            gu_lattice(sh.atlas_offset, dims, g + vec3<f32>(0.0, h, 0.0)) - gu_lattice(sh.atlas_offset, dims, g - vec3<f32>(0.0, h, 0.0)),
-            gu_lattice(sh.atlas_offset, dims, g + vec3<f32>(0.0, 0.0, h)) - gu_lattice(sh.atlas_offset, dims, g - vec3<f32>(0.0, 0.0, h)),
-        );
-        let world = gu_rotate(q, grad / sh.scale_min.xyz);
-        let length_sq = dot(world, world);
+        let grad = matter_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
+        let length_sq = dot(grad, grad);
         if !(length_sq > 0.0) {
             continue;
         }
-        let normal = world * inverseSqrt(length_sq);
-        let v_body = bd.linear_velocity.xyz + cross(bd.angular_velocity.xyz, x - bd.position_inv_mass.xyz);
+        let normal = grad * inverseSqrt(length_sq);
+        let v_body = matter_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, centre, x);
         let v_rel = v - v_body;
         let v_n = dot(v_rel, normal);
         if v_n < 0.0 {

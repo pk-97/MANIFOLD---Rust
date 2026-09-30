@@ -31,19 +31,6 @@ fn body(
         b.position_inv_mass.xyz + b.linear_velocity.xyz * t,
         b.position_inv_mass.w,
     );
-    let w = b.angular_velocity.xyz;
-    let speed = length(w);
-    let angle = speed * t;
-    if angle > 0.0 {
-        let d = vec4<f32>(w * (sin(0.5 * angle) / speed), cos(0.5 * angle));
-        let q = b.rotation;
-        // d ⊗ q: the world-frame turn applied after the tick-start rotation.
-        b.rotation = vec4<f32>(
-            d.w * q.x + d.x * q.w + d.y * q.z - d.z * q.y,
-            d.w * q.y - d.x * q.z + d.y * q.w + d.z * q.x,
-            d.w * q.z + d.x * q.y - d.y * q.x + d.z * q.w,
-            d.w * q.w - d.x * q.x - d.y * q.y - d.z * q.z,
-        );
-    }
+    b.rotation = matter_turn(b.rotation, b.angular_velocity.xyz, t);
     return b;
 }

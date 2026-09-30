@@ -26,6 +26,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "matter_domain.rs",
+        rust_struct: "UploadParams",
+        shader: "shaders/matter_domain_upload.wgsl",
+        shader_struct: "UploadParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "matter_frame.rs",
         rust_struct: "FrameParams",
         shader: "shaders/matter_frame.wgsl",

@@ -607,6 +607,7 @@ fn render_frame(
     authored_time: f64,
     dt: f64,
     options: &CaptureOptions,
+    warming: bool,
 ) -> CaptureResult<(FrameTimings, FluidMetrics)> {
     let frame_started = Instant::now();
     let mut encoder = device.create_encoder("fluid-capture");
@@ -622,7 +623,11 @@ fn render_frame(
         gpu.frame_status()
     };
     let render_cpu_ms = render_started.elapsed().as_secs_f64() * 1000.0;
-    if status != FrameRenderStatus::Complete {
+    // Warm-up frames may still be preparing assets (FrameRenderStatus's
+    // contract); a captured frame must be complete.
+    let acceptable = status == FrameRenderStatus::Complete
+        || (warming && status == FrameRenderStatus::PendingGeometry);
+    if !acceptable {
         return Err(io::Error::other(format!(
             "Water Basin frame {frame} failed with status {status:?}"
         ))
@@ -794,6 +799,7 @@ fn render_output_frame(
             sample_time,
             sample_dt,
             options,
+            false,
         )?;
         total_timings.add_assign(timings);
         simulation_ms += fluid.simulation_ms;
@@ -1047,7 +1053,7 @@ fn warmup_assets(
         ensure_wall_limit(overall_started, "capture", options.max_seconds)?;
         thread::sleep(Duration::from_millis(10));
         // Asset IO must settle without advancing the fluid or authored clock.
-        render_frame(runtime, target, device, 0, 0.0, 0.0, options)?;
+        render_frame(runtime, target, device, 0, 0.0, 0.0, options, true)?;
     }
     Ok(())
 }
@@ -1090,6 +1096,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         0.0,
         frame_dt,
         options,
+        true,
     )?;
     warmup_assets(
         &mut offline_runtime,
@@ -1272,6 +1279,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
                 0.0,
                 frame_dt,
                 options,
+                true,
             )?;
             warmup_assets(
                 &mut preview_runtime,

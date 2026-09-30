@@ -7,10 +7,11 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::matter::{MatterGridNode, MatterPoint};
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+use crate::node_graph::matter::{MatterBody, MatterGridNode, MatterPoint, MatterShape};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
+use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
 use super::standalone_pipeline::{active_elements, standalone_pipeline};
 
 #[repr(C)]
@@ -27,16 +28,23 @@ struct ToMatterUniforms {
     liveliness: f32,
     cohesion: f32,
     active_count: i32,
+    body_count: i32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
     name: GridToMatter,
     type_id: "node.grid_to_matter",
-    purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point leaving the lattice is removed.",
+    purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it. A point leaving the lattice is removed.",
     inputs: {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
+        bodies: Array(MatterBody) optional,
+        shapes: Array(MatterShape) optional,
+        atlas: Array(u32) optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -44,6 +52,7 @@ crate::primitive! {
         liveliness: ScalarF32 optional,
         cohesion: ScalarF32 optional,
         active_count: ScalarF32 optional,
+        body_count: ScalarF32 optional,
     },
     outputs: {
         points_out: Array(MatterPoint),
@@ -60,9 +69,10 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.matter_grid_update. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Liveliness 0 is APIC (calm, dissipative); toward 1 it keeps more of each point's own velocity change (livelier splashes, more noise). Positions always advect with the gathered velocity.",
+    composition_notes: "Region body of the Live Matter group, after node.matter_grid_update. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Liveliness 0 is APIC (calm, dissipative); toward 1 it keeps more of each point's own velocity change (livelier splashes, more noise). Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Grid to Matter", category: Atom },
     summary: "Moves each liquid particle with the grid's velocities and updates how compressed it is.",
@@ -71,7 +81,8 @@ crate::primitive! {
     aliases: ["g2p", "grid to particle", "mpm gather", "matter gather"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
-    input_access: [Coincident, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
 }
 
 impl Primitive for GridToMatter {
@@ -100,10 +111,12 @@ impl Primitive for GridToMatter {
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
+        let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         // In place: the point buffer is mutated whether or not `points_out`
         // is consumed, so the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let grid = ctx.inputs.array("grid");
+        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
         let gpu = ctx.gpu_encoder();
         let (Some(points), Some(grid)) = (points, grid) else {
             return;
@@ -112,6 +125,15 @@ impl Primitive for GridToMatter {
         if active == 0 || step_dt <= 0.0 {
             return;
         }
+        // Without all three collider arrays the body loop runs zero times over
+        // the grid buffer bound in their slots.
+        let (bodies, shapes, atlas, body_count) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas)) => {
+                let rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64) as i32;
+                (bodies, shapes, atlas, body_count.min(rows))
+            }
+            _ => (grid, grid, grid, 0),
+        };
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = ToMatterUniforms {
             lattice_min_x: lattice.min[0],
@@ -125,7 +147,11 @@ impl Primitive for GridToMatter {
             liveliness,
             cohesion,
             active_count: active as i32,
+            body_count,
             dispatch_count: active,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -133,7 +159,10 @@ impl Primitive for GridToMatter {
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: grid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: points, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: bodies, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: shapes, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: atlas, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: points, offset: 0 },
             ],
             [active.div_ceil(256), 1, 1],
             "node.grid_to_matter",
@@ -149,9 +178,16 @@ mod tests {
     fn grid_to_matter_generates_a_gathering_point_kernel() {
         let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<GridToMatter>()
             .expect("grid_to_matter codegen");
+        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         assert!(wgsl.contains("var<storage, read> buf_grid: array<Element2>"), "{wgsl}");
         assert!(wgsl.contains("buf_points_out[idx] = body(idx, params.dispatch_count, e_points,"), "{wgsl}");
-        assert_eq!(std::mem::size_of::<ToMatterUniforms>(), 48);
+        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>"] {
+            assert!(wgsl.contains(binding), "{binding}: {wgsl}");
+        }
+        assert_eq!(std::mem::size_of::<ToMatterUniforms>(), 64);
     }
 
     /// The body inlines D3's J bound; it must equal the shared constant the

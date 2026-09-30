@@ -4,17 +4,22 @@
 //! fill boxes, the fixed-tick clock (D8) and the per-tick substep count and
 //! material dials (D3, D4) the matter atoms read as wires. P1 carries the
 //! domain, walls, box fill, clock, gravity, speed, reset, seed and the water
-//! dials; roles, fields, impulses and coupling join in later phases.
+//! dials; P2a Collider roles as bodies, shapes and a distance atlas (D11);
+//! fields, impulses and coupling join in later phases.
 //! Exempt from the codegen mandate as a CPU bridge (ADDING_PRIMITIVES.md
 //! exclusion 3).
 
 use std::borrow::Cow;
 
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::{TICK, domain_layout};
+use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
+use crate::node_graph::matter::bodies::{BodiesStatus, MatterBodies};
 use crate::node_graph::matter::{
-    MAX_SUBSTEPS, MatterClock, MatterLattice, WATER_DENSITY, free_fall_speed, momentum_unit,
-    stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
+    MAX_SUBSTEPS, MatterBody, MatterClock, MatterLattice, MatterShape, WATER_DENSITY, free_fall_speed,
+    momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -30,10 +35,36 @@ pub struct MatterSetup {
     seed: u32,
 }
 
+const UPLOAD_SHADER: &str = include_str!("shaders/matter_domain_upload.wgsl");
+/// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
+const UPLOAD_GROUPS: usize = 254;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct UploadParams {
+    start: u32,
+    count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    words: [[u32; 4]; 254],
+}
+
+const _: () = assert!(std::mem::size_of::<UploadParams>() < 4096);
+
+/// The provided body, shape and atlas storage. Shapes and the atlas are
+/// rebuilt into fresh buffers (never in flight); body rows are uploaded in
+/// encoder order each frame.
+pub struct BodyBuffers {
+    bodies: GpuBuffer,
+    shapes: GpuBuffer,
+    atlas: GpuBuffer,
+    version: u64,
+}
+
 crate::primitive! {
     name: MatterDomain,
     type_id: "node.matter_domain",
-    purpose: "Define a live GPU liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and box, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms.",
+    purpose: "Define a live GPU liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, six closed faces, initial fill height and box, gravity, simulation speed, reset and seed, plus the matter dials Points per Cell, Stiffness, Cohesion and Liveliness, and up to 64 Collider roles. Outputs the lattice, fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms, and the colliders as one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
@@ -46,6 +77,70 @@ crate::primitive! {
         stiffness: ScalarF32 optional,
         cohesion: ScalarF32 optional,
         liveliness: ScalarF32 optional,
+        role_0: FluidRole optional,
+        role_1: FluidRole optional,
+        role_2: FluidRole optional,
+        role_3: FluidRole optional,
+        role_4: FluidRole optional,
+        role_5: FluidRole optional,
+        role_6: FluidRole optional,
+        role_7: FluidRole optional,
+        role_8: FluidRole optional,
+        role_9: FluidRole optional,
+        role_10: FluidRole optional,
+        role_11: FluidRole optional,
+        role_12: FluidRole optional,
+        role_13: FluidRole optional,
+        role_14: FluidRole optional,
+        role_15: FluidRole optional,
+        role_16: FluidRole optional,
+        role_17: FluidRole optional,
+        role_18: FluidRole optional,
+        role_19: FluidRole optional,
+        role_20: FluidRole optional,
+        role_21: FluidRole optional,
+        role_22: FluidRole optional,
+        role_23: FluidRole optional,
+        role_24: FluidRole optional,
+        role_25: FluidRole optional,
+        role_26: FluidRole optional,
+        role_27: FluidRole optional,
+        role_28: FluidRole optional,
+        role_29: FluidRole optional,
+        role_30: FluidRole optional,
+        role_31: FluidRole optional,
+        role_32: FluidRole optional,
+        role_33: FluidRole optional,
+        role_34: FluidRole optional,
+        role_35: FluidRole optional,
+        role_36: FluidRole optional,
+        role_37: FluidRole optional,
+        role_38: FluidRole optional,
+        role_39: FluidRole optional,
+        role_40: FluidRole optional,
+        role_41: FluidRole optional,
+        role_42: FluidRole optional,
+        role_43: FluidRole optional,
+        role_44: FluidRole optional,
+        role_45: FluidRole optional,
+        role_46: FluidRole optional,
+        role_47: FluidRole optional,
+        role_48: FluidRole optional,
+        role_49: FluidRole optional,
+        role_50: FluidRole optional,
+        role_51: FluidRole optional,
+        role_52: FluidRole optional,
+        role_53: FluidRole optional,
+        role_54: FluidRole optional,
+        role_55: FluidRole optional,
+        role_56: FluidRole optional,
+        role_57: FluidRole optional,
+        role_58: FluidRole optional,
+        role_59: FluidRole optional,
+        role_60: FluidRole optional,
+        role_61: FluidRole optional,
+        role_62: FluidRole optional,
+        role_63: FluidRole optional,
     },
     outputs: {
         lattice_min_x: ScalarF32, lattice_min_y: ScalarF32, lattice_min_z: ScalarF32,
@@ -75,6 +170,8 @@ crate::primitive! {
         block_size_x: ScalarF32, block_size_y: ScalarF32, block_size_z: ScalarF32,
         block_cell_size: ScalarF32,
         momentum_unit: ScalarF32,
+        body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
+        bodies: Array(MatterBody), shapes: Array(MatterShape), atlas: Array(u32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
@@ -99,7 +196,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -112,6 +209,12 @@ crate::primitive! {
         setup: Option<MatterSetup> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
+        bodies: MatterBodies = MatterBodies::default(),
+        role_pending: bool = false,
+        body_buffers: Option<BodyBuffers> = None,
+        upload: Option<GpuComputePipeline> = None,
+        body_rows: f32 = 0.0,
+        rows_fresh: bool = false,
     },
 }
 
@@ -126,7 +229,7 @@ fn closed_faces(ctx: &EffectNodeContext<'_, '_>) -> u32 {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 42] = [
+const OUTPUTS: [&str; 45] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
     "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
     "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
@@ -134,38 +237,157 @@ const OUTPUTS: [&str; 42] = [
     "dropped_seconds", "lambda", "cohesion", "liveliness", "density", "limited_by_substeps",
     "blocks_x", "blocks_y", "blocks_z", "block_center_x", "block_center_y", "block_center_z",
     "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
+    "body_count", "body_rows", "first_tick",
+];
+/// Wired role ports, in slot order (node.fluid_surface's names).
+const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
+    "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
+    "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16", "role_17",
+    "role_18", "role_19", "role_20", "role_21", "role_22", "role_23", "role_24", "role_25", "role_26",
+    "role_27", "role_28", "role_29", "role_30", "role_31", "role_32", "role_33", "role_34", "role_35",
+    "role_36", "role_37", "role_38", "role_39", "role_40", "role_41", "role_42", "role_43", "role_44",
+    "role_45", "role_46", "role_47", "role_48", "role_49", "role_50", "role_51", "role_52", "role_53",
+    "role_54", "role_55", "role_56", "role_57", "role_58", "role_59", "role_60", "role_61", "role_62",
+    "role_63",
 ];
 const TICKS: usize = 20;
 
 impl Primitive for MatterDomain {
+    fn provides_array_output(&self, port: &str) -> bool {
+        matches!(port, "bodies" | "shapes" | "atlas")
+    }
+
+    fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        let buffers = self.body_buffers.as_ref()?;
+        match port {
+            "bodies" => Some(&buffers.bodies),
+            "shapes" => Some(&buffers.shapes),
+            "atlas" => Some(&buffers.atlas),
+            _ => None,
+        }
+    }
+
+    fn array_output_capacity(
+        &self,
+        port_name: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+        _input_capacities: &[(&str, u32)],
+    ) -> Option<u32> {
+        // Provided storage: a one-record hint, grown at run time.
+        matches!(port_name, "bodies" | "shapes" | "atlas").then_some(1)
+    }
+
+    fn warmup_pending(&self) -> bool {
+        self.role_pending
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A physics sample reads authored inputs only; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
             return;
         }
+        let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
+        self.role_pending = false;
+        for (slot, port) in ROLE_PORTS.iter().enumerate() {
+            if let Some(input) = ctx.inputs.slot(port) {
+                roles[slot] = ctx.inputs.fluid_role(port);
+                self.role_pending |= !ctx.inputs.slot_content_ready(input) || roles[slot].is_none();
+            }
+        }
         // Every output is published every frame, so no consumer reads a slot
-        // this node left unwritten. On an error the liquid holds: the last
-        // good outputs repeat with zero ticks.
-        let values = match self.compute(ctx) {
-            Ok(values) => {
-                self.published = Some(values);
-                values
+        // this node left unwritten. While a role is still being prepared, or
+        // on an error, the liquid holds: the last good outputs repeat with
+        // zero ticks.
+        let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
+        let held = || {
+            let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
+            held[TICKS] = 0.0;
+            held
+        };
+        let (values, fresh) = match computed {
+            Ok(Some(values)) => (values, true),
+            Ok(None) => {
+                self.role_pending = true;
+                (held(), false)
             }
             Err(error) => {
                 ctx.error(error);
-                let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
-                held[TICKS] = 0.0;
-                held
+                (held(), false)
             }
         };
+        if fresh {
+            self.published = Some(values);
+        }
         for (name, value) in OUTPUTS.iter().zip(values) {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
+        self.upload_bodies(ctx, fresh && self.rows_fresh);
     }
 }
 
 impl MatterDomain {
-    fn compute(&mut self, ctx: &EffectNodeContext<'_, '_>) -> Result<[f32; OUTPUTS.len()], String> {
+    /// Keep the provided body, shape and atlas buffers current: rebuilt
+    /// shapes and atlas go into fresh buffers, this frame's body rows are
+    /// written in encoder order.
+    fn upload_bodies(&mut self, ctx: &mut EffectNodeContext<'_, '_>, rows_fresh: bool) {
+        let Some(gpu) = ctx.gpu.as_deref_mut() else { return };
+        let row_bytes = std::mem::size_of_val(self.bodies.last_rows());
+        let needs_bodies = self
+            .body_buffers
+            .as_ref()
+            .is_none_or(|buffers| buffers.bodies.size < row_bytes as u64);
+        let version = self.bodies.version;
+        if self.body_buffers.as_ref().is_none_or(|buffers| buffers.version != version) || needs_bodies {
+            let fresh = |bytes: &[u8], least: usize| {
+                let buffer = gpu.device.create_buffer_shared(bytes.len().max(least) as u64);
+                // SAFETY: new shared buffer, not yet visible to the GPU.
+                unsafe { buffer.write(0, bytes) };
+                buffer
+            };
+            let bodies = match self.body_buffers.take() {
+                Some(buffers) if !needs_bodies => buffers.bodies,
+                _ => gpu.device.create_buffer_shared(row_bytes.max(std::mem::size_of::<MatterBody>()) as u64),
+            };
+            self.body_buffers = Some(BodyBuffers {
+                bodies,
+                shapes: fresh(bytemuck::cast_slice(self.bodies.shapes()), std::mem::size_of::<MatterShape>()),
+                atlas: fresh(bytemuck::cast_slice(self.bodies.atlas()), 4),
+                version,
+            });
+        }
+        if !rows_fresh || row_bytes == 0 {
+            return;
+        }
+        let pipeline = self
+            .upload
+            .get_or_insert_with(|| gpu.device.create_compute_pipeline(UPLOAD_SHADER, "cs_main", "node.matter_domain.bodies"));
+        let target = &self.body_buffers.as_ref().expect("allocated above").bodies;
+        let groups: &[[u32; 4]] = bytemuck::cast_slice(self.bodies.last_rows());
+        for (chunk_index, chunk) in groups.chunks(UPLOAD_GROUPS).enumerate() {
+            let mut params: UploadParams = bytemuck::Zeroable::zeroed();
+            let UploadParams { start, count, words, .. } = &mut params;
+            *start = (chunk_index * UPLOAD_GROUPS) as u32;
+            *count = chunk.len() as u32;
+            words[..chunk.len()].copy_from_slice(chunk);
+            gpu.native_enc.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                    GpuBinding::Buffer { binding: 1, buffer: target, offset: 0 },
+                ],
+                [(chunk.len() as u32).div_ceil(64), 1, 1],
+                "node.matter_domain.bodies",
+            );
+        }
+    }
+
+    /// This frame's outputs, or None while a collider's distance lattice is
+    /// still building (the liquid holds and the clock does not advance).
+    fn compute(
+        &mut self,
+        ctx: &EffectNodeContext<'_, '_>,
+        roles: &[Option<FluidRole>],
+    ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
         let resolution = ctx.scalar_or_param("resolution", 64.0).round().max(0.0) as u32;
         let domain_size = ctx.scalar_or_param("domain_size", 4.0);
         let layout = domain_layout(ctx.inputs.transform("domain"), domain_size, resolution)?;
@@ -229,6 +451,9 @@ impl MatterDomain {
         if !speed.is_finite() || !(0.0..=4.0).contains(&speed) || live.iter().any(|v| !v.is_finite()) {
             return Err("Matter: Simulation Speed must be between 0 and 4, and gravity and the dials must be finite".into());
         }
+        if self.bodies.prepare(roles, lattice.cell_size)? == BodiesStatus::Pending {
+            return Ok(None);
+        }
         let setup_changed = self.setup != Some(setup);
         self.setup = Some(setup);
         let frame = self.clock.advance(
@@ -239,6 +464,21 @@ impl MatterDomain {
             setup_changed,
             crate::node_graph::physics::offline_simulation(),
         );
+        let consumed = frame.simulation_time - f64::from(frame.ticks) * TICK;
+        self.bodies.observe(roles, frame.epoch, frame.target_time, consumed)?;
+        let first_tick = (consumed / TICK).round() as u64;
+        // A restart runs no tick yet still publishes the first tick's rows: the
+        // fill seeds around the colliders' starting poses. Otherwise a frame
+        // without ticks keeps the last rows as the bodies' poses.
+        let row_ticks = if frame.restarted { frame.ticks.max(1) } else { frame.ticks };
+        self.rows_fresh = row_ticks > 0;
+        let rows = if row_ticks > 0 {
+            let rows = self.bodies.rows(first_tick, row_ticks).len() as f32;
+            self.body_rows = rows;
+            rows
+        } else {
+            self.body_rows
+        };
 
         // D4: substeps from the stiffness/CFL rule, from parameters only.
         let longest = f64::from(layout.size.iter().copied().fold(0.0f32, f32::max));
@@ -259,7 +499,7 @@ impl MatterDomain {
             .min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
 
-        Ok([
+        Ok(Some([
             lattice.min[0],
             lattice.min[1],
             lattice.min[2],
@@ -302,6 +542,9 @@ impl MatterDomain {
             block_size[2],
             block_bin,
             momentum_unit(lattice.cell_size, TICK / f64::from(substeps)),
-        ])
+            self.bodies.count() as f32,
+            rows,
+            first_tick as f32,
+        ]))
     }
 }

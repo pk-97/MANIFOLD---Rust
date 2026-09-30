@@ -15,7 +15,10 @@ use manifold_renderer::node_graph::{
     PrimitiveRegistry, ResourceId, StateStore, compile, pre_allocate_resources,
 };
 
+use manifold_renderer::node_graph::Transform;
+
 use crate::harness;
+use crate::matter_scene::{MatterScene, SceneSettings};
 use crate::matter_transfer::{HostArray, output_of, set};
 
 /// One atom fed by host arrays, run for single frames.
@@ -324,4 +327,156 @@ fn matter_grid_update_projects_colliders() {
     eprintln!("matter_grid_update_projects_colliders: {projected} nodes projected, worst {worst:e} m/s");
     assert!(projected > 50, "the box projected few nodes: {projected}");
     assert!(worst < 1e-4, "GPU and CPU projections differ by {worst} m/s");
+}
+
+/// Signed distance to a box of `size` centred at `centre`, turned `yaw`
+/// about y (the Euler convention node.transform_3d and the roles use).
+fn box_distance(p: [f32; 3], centre: [f32; 3], yaw: f32, size: [f32; 3]) -> f32 {
+    let d = [p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]];
+    let (s, c) = yaw.sin_cos();
+    let local = [d[0] * c - d[2] * s, d[1], d[0] * s + d[2] * c];
+    let q: [f32; 3] = std::array::from_fn(|i| local[i].abs() - 0.5 * size[i]);
+    let outside = q.map(|v| v.max(0.0));
+    (outside[0] * outside[0] + outside[1] * outside[1] + outside[2] * outside[2]).sqrt() + q[0].max(q[1]).max(q[2]).min(0.0)
+}
+
+/// Run frames until the domain has taken its colliders and ticked once.
+fn until_ticking(scene: &mut MatterScene, mut pose: impl FnMut(&mut MatterScene, f32)) {
+    for _ in 0..600 {
+        let next = scene.simulation_time() + TICK as f32;
+        pose(scene, next);
+        scene.tick();
+        if scene.simulation_time() > 0.0 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the colliders never became ready");
+}
+
+/// D11: a box lowered into a still pool while spinning about y pushes the
+/// liquid aside; no point ends a tick more than half a cell inside it.
+#[test]
+fn matter_collider_penetration_bounded() {
+    let size = [0.4, 0.15, 0.2];
+    let pose = |t: f32| ([0.0, 0.6 - 0.35 * (t / 1.0).min(1.0), 0.0], 1.5 * t);
+    let transform = |t: f32| {
+        let (pos, yaw) = pose(t);
+        Transform { pos, rot_euler: [0.0, yaw, 0.0], scale: size, ..Transform::default() }
+    };
+    let mut scene = MatterScene::new(&SceneSettings {
+        fill_height: 0.3,
+        colliders: vec![transform(0.0)],
+        ..SceneSettings::default()
+    });
+    let dx = scene.lattice().cell_size;
+    until_ticking(&mut scene, |scene, t| scene.set_collider(0, transform(t)));
+    let (mut worst, mut touching) = (f32::INFINITY, 0usize);
+    for _ in 0..90 {
+        let next = scene.simulation_time() + TICK as f32;
+        scene.set_collider(0, transform(next));
+        scene.tick();
+        let now = scene.simulation_time();
+        let (centre, yaw) = pose(now);
+        let (mut tick_worst, mut deep, mut at) = (f32::INFINITY, 0, [0.0f32; 3]);
+        for point in scene.points().iter().filter(|p| p.id != 0) {
+            let phi = box_distance(point.position, centre, yaw, size);
+            worst = worst.min(phi);
+            touching += usize::from(phi < dx);
+            deep += usize::from(phi < -0.5 * dx);
+            if phi < tick_worst {
+                tick_worst = phi;
+                let d = [point.position[0] - centre[0], point.position[1] - centre[1], point.position[2] - centre[2]];
+                let (s, c) = yaw.sin_cos();
+                at = [d[0] * c - d[2] * s, d[1], d[0] * s + d[2] * c];
+            }
+        }
+        if std::env::var_os("MATTER_PENETRATION_TRACE").is_some() {
+            eprintln!("  t {now:.3}: deepest {tick_worst:.4} at local {at:.3?}, {deep} points deeper than dx/2");
+        }
+        assert_eq!(scene.stats().nonfinite, 0);
+    }
+    eprintln!(
+        "matter_collider_penetration_bounded: deepest point {worst:.5} m (bound {:.5}), {touching} point-ticks within a cell of the box",
+        -0.5 * dx
+    );
+    assert!(touching > 1000, "the box never reached the liquid: {touching}");
+    assert!(worst >= -0.5 * dx, "a point sits {worst} m inside the box");
+}
+
+/// D11: the frame's solid lattice is the walls and the body together: at
+/// every node, the smaller of the distance to the nearest closed wall and a
+/// turned cube's signed distance (within the half-precision, trilinear
+/// sampling of its lattice near the cube; exact elsewhere).
+#[test]
+fn matter_solid_lattice_matches_bodies() {
+    let size = [0.25; 3];
+    let (centre, yaw) = ([0.1, 0.55, -0.05], 0.4);
+    let transform = Transform { pos: centre, rot_euler: [0.0, yaw, 0.0], scale: size, ..Transform::default() };
+    let mut scene = MatterScene::new(&SceneSettings {
+        fill_height: 0.2,
+        colliders: vec![transform],
+        ..SceneSettings::default()
+    });
+    until_ticking(&mut scene, |scene, _| scene.set_collider(0, transform));
+    scene.tick();
+    let lat = scene.lattice();
+    let dx = lat.cell_size;
+    let solid = scene.solid_b();
+    let low: [f32; 3] = std::array::from_fn(|d| lat.min[d] + 3.0 * dx);
+    let high: [f32; 3] = std::array::from_fn(|d| low[d] + lat.cells[d] as f32 * dx);
+    let far = lat.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
+    let n = lat.nodes;
+    let (mut near, mut worst_near, mut worst_far) = (0, 0.0f32, 0.0f32);
+    for (idx, &value) in solid.iter().enumerate().take(lat.node_count() as usize) {
+        let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
+        let x: [f32; 3] = std::array::from_fn(|d| lat.min[d] + coord[d] as f32 * dx);
+        let walls = (0..3).fold(far, |m, d| m.min(x[d] - low[d]).min(high[d] - x[d]));
+        let body = box_distance(x, centre, yaw, size);
+        // The cube's lattice reaches two spacings (1/16 of its side) past it.
+        // Trilinear sampling of a box's distance is off by up to 0.21 spacings
+        // in a cell centred on an edge (corners at ±h/2 read 0.35h, 0.5h, 0.5h
+        // and −0.5h, averaging 0.21h where the true distance is 0), plus the
+        // half-precision rounding: 0.3 spacings bounds it.
+        if body < 0.25 / 16.0 {
+            near += 1;
+            worst_near = worst_near.max((value - walls.min(body)).abs());
+        } else if body > 0.25 {
+            worst_far = worst_far.max((value - walls).abs());
+        }
+    }
+    eprintln!("matter_solid_lattice_matches_bodies: {near} nodes at the cube within {worst_near:.5} m, walls within {worst_far:e} m");
+    assert!(near > 100, "few nodes near the cube: {near}");
+    let spacing = 0.25 / 32.0;
+    assert!(worst_near < 0.3 * spacing, "near the cube the lattice is off by {worst_near} m");
+    assert!(worst_far < 1e-5, "away from it the walls are off by {worst_far} m");
+}
+
+/// D11 with the fill (section 3.2): a box standing in the pool from the
+/// start leaves its volume unseeded; the seeds it would have held are unused
+/// slots (id 0) and every live seed starts outside it.
+#[test]
+fn matter_fill_skips_colliders() {
+    let size = [0.3, 0.4, 0.25];
+    let (centre, yaw) = ([0.05, 0.15, 0.0], 0.3);
+    let transform = Transform { pos: centre, rot_euler: [0.0, yaw, 0.0], scale: size, ..Transform::default() };
+    let mut scene = MatterScene::new(&SceneSettings {
+        fill_height: 0.25,
+        colliders: vec![transform],
+        ..SceneSettings::default()
+    });
+    until_ticking(&mut scene, |scene, _| scene.set_collider(0, transform));
+    let dx = scene.lattice().cell_size;
+    let points = scene.points();
+    let unused = points.iter().filter(|p| p.id == 0).count();
+    let deepest = points
+        .iter()
+        .filter(|p| p.id != 0)
+        .map(|p| box_distance(p.position, centre, yaw, size))
+        .fold(f32::INFINITY, f32::min);
+    // The box's submerged volume at 8 points per cell.
+    let expected = (size[0] * size[2] * (0.25 - (centre[1] - 0.5 * size[1])) / (dx * dx * dx) * 8.0) as usize;
+    eprintln!("matter_fill_skips_colliders: {unused} unused slots (about {expected} expected), deepest live point {deepest:.4} m after one tick");
+    assert!(unused * 10 > expected * 8 && unused * 10 < expected * 12, "{unused} unused, {expected} expected");
+    assert!(deepest > -0.5 * dx, "a live point starts {deepest} m inside the box");
 }
