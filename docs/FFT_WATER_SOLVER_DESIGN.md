@@ -155,11 +155,11 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 - **Read-back:** section 3; the `wave/live-water` sources of `mac_gather_advect` and `mac_extrapolate` (`git show wave/live-water:<path>`); `sort_particles_into_cells.rs`; `WaterDamBreak.json` and how `node.fluid_surface` seeds its Dam Break (tank, block, fill height); `pressuresolver.cpp` `_calculateMatrixCoefficientsThread` (the engine's surface condition, so the residual rows are read correctly). Restate D2, D7, I1–I6.
 - **Deliverables:**
   - Atoms for steps 1–4 and 8–9.
-  - Preset `FftWaterDamBreak.json`: the engine's Dam Break scene (4 m domain, walls on all six sides, its block and fill height; where it differs from the P1 fixture's scene, the engine's wins, since accuracy is judged on the same scene), 8 particles per cell, 2 steps per frame, 24 passes, at 64³; and its 128³ twin.
+  - Preset `FftWaterDamBreak.json`: the engine's Dam Break scene without its obstacle box (4 m domain, walls on all six sides, the `initial_column` block and the 0.16 m fill; where it differs from the P1 fixture's scene, the engine's wins, since accuracy is judged on the same scene), 8 particles per cell, 2 steps per frame, 24 passes, at 64³; and its 128³ twin. The shipped Dam Break has a box in the water (`obstacle_transform`, 0.6 × 1.16 × 0.85 m at (0.35, 0.58, −0.1)); SWASH has no solids until P3b, so P3's race runs the engine with the obstacle unwired and P3b races the scene as shipped.
   - Cost probe `fft_water_cost_probe.rs` on the MPM probe's timing method: GPU ms and CPU encode ms per tick, step and surface separately.
   - Engine probe: the same Dam Break through `FluidWorld::step` at the same resolution and frames, `simulation_ms` and `meshing_ms` per tick, whitewater off for the race and on for the look.
   - Accuracy oracles, run on both solvers, each on its own water cells. Residual: RMS face divergence over water cells after projection, divided by the RMS before it, per tick. The engine's is read by a native test probe beside `coupling_boundary_probe.cpp`, with no engine edit. Volume: the signed volume inside each solver's surface mesh per frame, relative to frame 0.
-  - Occupancy report, per frame over the 300-frame Dam Break: the fraction of the box that is water, the fraction of 8³ blocks holding water, and the height of the water's bounding box in cells. These size P3c.
+  - Occupancy report, per frame over the 300-frame Dam Break: the fraction of the box that is water, the fraction of 8³ blocks holding water, and the height of the water's bounding box in cells. These size P3c. Also the collar size per frame against its capacity (8n²): a collar past capacity drops entries safely but solves the wrong problem, so the stats count overflow and the proofs require zero; splashes grow the collar past the P1 fixtures' 18,655, and the Krylov cost scales with capacity, so capacity is set from the measured maximum.
   - Still-pool proof (I5); momentum proof (a box of water in free fall keeps g within 1%).
 - **Gate:** both proofs pass. Race table, same machine, same session, at 64³ and 128³:
 
@@ -185,7 +185,7 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 - **The face collar (the collar on the solid boundary).** The engine's operator is a weighted Laplacian: face f carries its open fraction w_f in [0, 1]. The box transform inverts only the unweighted one. At a water cell i the two differ by Σ over its faces with w_f < 1 of (1 − w_f)(q_j − q_i)/h², where j is the cell across f. So each face with w_f < 1 that touches a water cell gets one unknown ν_f, a dipole source: +ν_f in the water cell, −ν_f in the cell across (for a water–water face both sides need it; in a solid cell it is harmless; in an air collar cell λ absorbs it). Its condition row is ν_f − (1 − w_f)(q_j − q_i)/h² = 0. With the air collar rows and the constant row unchanged, q on water satisfies the engine's weighted equation exactly, by the uniqueness argument of P3c. A face into a fully solid cell has w_f = 0. The solid's velocity enters f the way the engine's does.
 - **How the helper treats a solid face:** face unknowns skip the charts. For the infinite lattice, a unit dipole across a face gives q_j − q_i = h²/3 (the Green's function drops by h²/6 per step), so the ν block's diagonal is 1 − (1 − w_f)/3, between 2/3 and 1. The helper divides each face entry by it. The block is well conditioned, so the pass count should barely move; the Python record checks that before any atom exists.
 - **Deliverables:**
-  - The face collar in `scripts/swash_reference.py` on a submerged-box fixture (the P1 Dam Break with a fixed box in the flow path): exactness against a direct weighted solve, and passes to the empty tank's residual with the diagonal helper. This comes first.
+  - The face collar in `scripts/swash_reference.py` on a submerged-box fixture (the P1 Dam Break with the shipped Dam Break's obstacle box): exactness against a direct weighted solve, and passes to the empty tank's residual with the diagonal helper. This comes first.
   - Atoms: face weights and solid face velocities from Box3D box poses (analytic clip of each face square against each box, codegen); face-collar flag, compaction and gather/source atoms, or a face mode on the collar atoms if the audit shows one wire away; the diagonal helper scale (codegen); the pressure impulse and torque per body as a class 1 reduction, no atomics.
   - Moving solids through the existing exchange: SWASH implements `StepCoupling` / `SubstepExchange` (`manifold-physics`, no `matter_*` import). `exchange` reads the rigid poses and velocities from `PhysicsWorld`, encodes the step, and applies last tick's reaction through `PhysicsWorld::apply_impulses`; the reaction crosses back through a fenced readback one tick late, as MPM D12 does. `finish` captures the paired rigid state.
   - I6 CPU size proof with the face collar at its capacity (the solids' total surface area in faces, clamped).
@@ -193,9 +193,9 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   - Python: exact against the direct weighted solve to 1e-10; passes to the empty tank's residual up at most 25%.
   - Hydrostatics: a fixed box fully under a still pool feels a lift of ρgV within 2%, SWASH and the engine both reported.
   - Floating: a Box3D box at half water density dropped into the pool settles at its analytic draft within one cell, and within one cell of the engine's.
-  - The P3 race rows on the fixed-box Dam Break, SWASH against the engine at 64³ and 128³.
+  - The P3 race rows on the Dam Break as shipped, obstacle box included, SWASH against the engine at 64³ and 128³.
 - **Kill check:** passes to the empty tank's residual up more than 50% with the box, in Python or on the GPU → stop and escalate with the numbers; the diagonal helper is the part to rethink.
-- **Demo:** L2 — the fixed-box Dam Break, SWASH beside the engine, 300 frames headless; Peter looks. **Performer gesture:** the wave breaks around the box, then the floating box rides the slosh.
+- **Demo:** L2 — the Dam Break as shipped, obstacle box included, SWASH beside the engine, 300 frames headless; Peter looks. **Performer gesture:** the wave breaks around the box, then the floating box rides the slosh.
 - **Forbidden:** whole-cell solids (the engine uses fractions, so the scenes would differ); a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### P3c — Active region: work only where water is
@@ -214,7 +214,7 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 ### P4 — Peter's call
 
 - **Deliverables:** one page in BUG-wsim (FFT pressure split research) with the P3, P3b and P3c tables and the side-by-side PNGs; a `decision` bead for Peter.
-- **Wins means:** faster than the FLIP Fluids engine end to end, ms per tick at the same resolution, on the Dam Break and on P3b's fixed-box scene, with residual (as Peter settles BUG-m632 (swash-residual-bar)), volume drift and look each equal or better. MPM rows are information only.
+- **Wins means:** faster than the FLIP Fluids engine end to end, ms per tick at the same resolution, on the Dam Break without and with its obstacle box (P3, P3b), with residual (as Peter settles BUG-m632 (swash-residual-bar)), volume drift and look each equal or better. MPM rows are information only.
 - **If it wins:** a design for moving the water presets from the FLIP Fluids engine to SWASH, and a seam brief against `GPU_MPM_SOLVER_DESIGN.md` reopening D1 and D2 for water, written with the MPM lead. **If it loses:** this doc and the branch go to `docs/archive/` with the numbers.
 - **Demo:** the P3 and P3b side-by-sides.
 
