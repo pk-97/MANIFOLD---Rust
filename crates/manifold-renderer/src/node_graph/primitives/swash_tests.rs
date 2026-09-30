@@ -24,7 +24,7 @@ use super::combine_rows::CombineRows;
 use super::cosine_surface_scale::CosineSurfaceScale;
 use super::divide_by_value::DivideByValue;
 use super::dot_products::DotProducts;
-use super::krylov_givens::{KrylovGivens, residual_offset, state_len};
+use super::krylov_givens::{KrylovGivens, MAX_PASSES, residual_offset, state_len};
 use super::krylov_solve::KrylovSolve;
 use super::fft_3d::{Fft3d, InverseFft3d};
 use super::liquid_surface_tests::{Harness, params, read};
@@ -271,48 +271,51 @@ fn step_ports<P: Primitive>(
     Primitive::run(prim, &mut ctx);
 }
 
+/// A power-of-two lattice and a mixed-radix one (factors 3 and 5).
 #[test]
 fn swash_cosine_transform_matches_reference_and_round_trips() {
-    let mut harness = Harness::new();
-    let nodes = [16usize, 8, 4];
-    let total: usize = nodes.iter().product();
-    let values = random_values(total, 0x5eed_c05e);
-    let slots = ChainSlots::new(&mut harness, &values, nodes);
-    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, Middle::Nothing, 3, 1);
-    assert!(errors.is_empty(), "{errors:?}");
+    for nodes in [[16usize, 8, 4], [12, 10, 6]] {
+        let mut harness = Harness::new();
+        let total: usize = nodes.iter().product();
+        let values = random_values(total, 0x5eed_c05e);
+        let slots = ChainSlots::new(&mut harness, &values, nodes);
+        let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, Middle::Nothing, 3, 1);
+        assert!(errors.is_empty(), "{nodes:?}: {errors:?}");
 
-    let expected = reference_dct(&values, nodes, 3);
-    let actual: Vec<f32> = read(&slots.coeffs.1, total);
-    let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
-    assert!(worst < 1e-5 * scale.max(1.0), "cosine transform off by {worst} (scale {scale})");
+        let expected = reference_dct(&values, nodes, 3);
+        let actual: Vec<f32> = read(&slots.coeffs.1, total);
+        let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+        assert!(worst < 1e-5 * scale.max(1.0), "{nodes:?}: cosine transform off by {worst} (scale {scale})");
 
-    let back: Vec<f32> = read(&slots.output.1, total);
-    let err = back.iter().zip(&values).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
-    assert!(err < 1e-5, "forward then inverse does not return the input: {err}");
+        let back: Vec<f32> = read(&slots.output.1, total);
+        let err = back.iter().zip(&values).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+        assert!(err < 1e-5, "{nodes:?}: forward then inverse does not return the input: {err}");
+    }
 }
 
 /// Plane mode: every z slice transformed on its own along x and y. The batch
-/// count (6) is not a power of two; only transformed lengths need to be.
+/// count may be anything; the second lattice's planes are mixed radix.
 #[test]
 fn swash_plane_transform_matches_reference_and_round_trips() {
-    let mut harness = Harness::new();
-    let nodes = [16usize, 8, 6];
-    let total: usize = nodes.iter().product();
-    let values = random_values(total, 0x0091_a4e5);
-    let slots = ChainSlots::new(&mut harness, &values, nodes);
-    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, Middle::Nothing, 2, 1);
-    assert!(errors.is_empty(), "{errors:?}");
+    for nodes in [[16usize, 8, 6], [10, 6, 5]] {
+        let mut harness = Harness::new();
+        let total: usize = nodes.iter().product();
+        let values = random_values(total, 0x0091_a4e5);
+        let slots = ChainSlots::new(&mut harness, &values, nodes);
+        let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, Middle::Nothing, 2, 1);
+        assert!(errors.is_empty(), "{nodes:?}: {errors:?}");
 
-    let expected = reference_dct(&values, nodes, 2);
-    let actual: Vec<f32> = read(&slots.coeffs.1, total);
-    let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
-    assert!(worst < 1e-5 * scale.max(1.0), "plane transform off by {worst} (scale {scale})");
+        let expected = reference_dct(&values, nodes, 2);
+        let actual: Vec<f32> = read(&slots.coeffs.1, total);
+        let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+        assert!(worst < 1e-5 * scale.max(1.0), "{nodes:?}: plane transform off by {worst} (scale {scale})");
 
-    let back: Vec<f32> = read(&slots.output.1, total);
-    let err = back.iter().zip(&values).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
-    assert!(err < 1e-5, "plane forward then inverse does not return the input: {err}");
+        let back: Vec<f32> = read(&slots.output.1, total);
+        let err = back.iter().zip(&values).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+        assert!(err < 1e-5, "{nodes:?}: plane forward then inverse does not return the input: {err}");
+    }
 }
 
 /// cosine_surface_scale alone, against the symbol computed on the CPU, with
@@ -348,28 +351,30 @@ fn swash_surface_scale_matches_symbol() {
 }
 
 /// The helper's surface operator on a stack of planes: forward plane
-/// transform, cosine_surface_scale, inverse, against the same in f64.
+/// transform, cosine_surface_scale, inverse, against the same in f64, on
+/// square power-of-two planes and on mixed-radix ones.
 #[test]
 fn swash_surface_helper_matches_reference() {
-    let mut harness = Harness::new();
-    let nodes = [16usize, 16, 3];
-    let total: usize = nodes.iter().product();
-    let (h, lowest_wave) = (0.25_f32, 1.5707964_f32);
-    let values = random_values(total, 0x4e1f);
-    let slots = ChainSlots::new(&mut harness, &values, nodes);
-    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, Middle::Surface { lowest_wave }, 2, 1);
-    assert!(errors.is_empty(), "{errors:?}");
+    for nodes in [[16usize, 16, 3], [12, 20, 3]] {
+        let mut harness = Harness::new();
+        let total: usize = nodes.iter().product();
+        let (h, lowest_wave) = (0.25_f32, 1.5707964_f32);
+        let values = random_values(total, 0x4e1f);
+        let slots = ChainSlots::new(&mut harness, &values, nodes);
+        let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, Middle::Surface { lowest_wave }, 2, 1);
+        assert!(errors.is_empty(), "{nodes:?}: {errors:?}");
 
-    let mut coeffs = reference_dct(&values, nodes, 2);
-    for (idx, c) in coeffs.iter_mut().enumerate() {
-        let k = [idx % nodes[0], (idx / nodes[0]) % nodes[1]];
-        *c *= surface_symbol(k, [nodes[0], nodes[1]], f64::from(h), f64::from(lowest_wave));
+        let mut coeffs = reference_dct(&values, nodes, 2);
+        for (idx, c) in coeffs.iter_mut().enumerate() {
+            let k = [idx % nodes[0], (idx / nodes[0]) % nodes[1]];
+            *c *= surface_symbol(k, [nodes[0], nodes[1]], f64::from(h), f64::from(lowest_wave));
+        }
+        let expected = reference_idct(&coeffs, nodes, 2);
+        let actual: Vec<f32> = read(&slots.output.1, total);
+        let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+        assert!(worst < 1e-5 * scale.max(1.0), "{nodes:?}: surface helper off by {worst} (scale {scale})");
     }
-    let expected = reference_idct(&coeffs, nodes, 2);
-    let actual: Vec<f32> = read(&slots.output.1, total);
-    let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
-    assert!(worst < 1e-5 * scale.max(1.0), "surface helper off by {worst} (scale {scale})");
 }
 
 /// Apply the walled 7-point Laplacian (missing neighbours contribute nothing).
@@ -400,27 +405,29 @@ fn walled_laplacian(p: &[f32], nodes: [usize; 3], h: f64) -> Vec<f64> {
     out
 }
 
+/// On a power-of-two box and a mixed-radix one (factors 3 and 5).
 #[test]
 fn swash_box_solve_inverts_the_walled_laplacian() {
-    let mut harness = Harness::new();
-    let nodes = [32usize, 16, 8];
-    let total: usize = nodes.iter().product();
-    let h = 0.0625_f32;
-    let mut values = random_values(total, 0xb0c5_5017);
-    let mean = values.iter().map(|&v| f64::from(v)).sum::<f64>() / total as f64;
-    for v in &mut values {
-        *v -= mean as f32;
+    for nodes in [[32usize, 16, 8], [24, 20, 12]] {
+        let mut harness = Harness::new();
+        let total: usize = nodes.iter().product();
+        let h = 0.0625_f32;
+        let mut values = random_values(total, 0xb0c5_5017);
+        let mean = values.iter().map(|&v| f64::from(v)).sum::<f64>() / total as f64;
+        for v in &mut values {
+            *v -= mean as f32;
+        }
+        let slots = ChainSlots::new(&mut harness, &values, nodes);
+        let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, Middle::Poisson, 3, 1);
+        assert!(errors.is_empty(), "{nodes:?}: {errors:?}");
+        let p: Vec<f32> = read(&slots.output.1, total);
+        let lap = walled_laplacian(&p, nodes, f64::from(h));
+        let norm = values.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>().sqrt();
+        let resid = lap.iter().zip(&values).map(|(l, &f)| (l - f64::from(f)).powi(2)).sum::<f64>().sqrt();
+        assert!(resid / norm < 1e-4, "{nodes:?}: relative residual {}", resid / norm);
+        let p_mean = p.iter().map(|&v| f64::from(v)).sum::<f64>() / total as f64;
+        assert!(p_mean.abs() < 1e-5, "{nodes:?}: pressure mean {p_mean}");
     }
-    let slots = ChainSlots::new(&mut harness, &values, nodes);
-    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, Middle::Poisson, 3, 1);
-    assert!(errors.is_empty(), "{errors:?}");
-    let p: Vec<f32> = read(&slots.output.1, total);
-    let lap = walled_laplacian(&p, nodes, f64::from(h));
-    let norm = values.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>().sqrt();
-    let resid = lap.iter().zip(&values).map(|(l, &f)| (l - f64::from(f)).powi(2)).sum::<f64>().sqrt();
-    assert!(resid / norm < 1e-4, "relative residual {}", resid / norm);
-    let p_mean = p.iter().map(|&v| f64::from(v)).sum::<f64>() / total as f64;
-    assert!(p_mean.abs() < 1e-5, "pressure mean {p_mean}");
 }
 
 /// Where the box-solve time goes: the vendor FFT call alone versus one
@@ -615,9 +622,16 @@ fn cpu_givens(state: &[f32], first: &[f32], second: &[f32], norm: f32, m: usize,
     out
 }
 
+/// A short solve, and one at the kernels' cap, where the local column and
+/// coefficient arrays are full.
 #[test]
 fn swash_krylov_givens_and_solve_match_cpu() {
-    let m = 6usize;
+    for m in [6, MAX_PASSES as usize] {
+        krylov_givens_and_solve_match_cpu(m);
+    }
+}
+
+fn krylov_givens_and_solve_match_cpu(m: usize) {
     let len = state_len(m as u32) as usize;
     // Each pass starts from the CPU's state after the previous one.
     let mut state = vec![0.0f32; len];
@@ -633,7 +647,7 @@ fn swash_krylov_givens_and_solve_match_cpu() {
             len,
             &params(&[("passes", m as f32), ("column", j as f32)]),
         );
-        assert_close(&got, &want, &format!("givens pass {j}"));
+        assert_close(&got, &want, &format!("givens pass {j} of {m}"));
         state = want.iter().map(|&v| v as f32).collect();
     }
     let y = run_atom(&mut KrylovSolve::new(), &[("state", &state)], m, &params(&[("passes", m as f32)]));
@@ -645,7 +659,7 @@ fn swash_krylov_givens_and_solve_match_cpu() {
         let d = f64::from(state[k * (m + 1) + k]);
         want[k] = if d.abs() > 1e-30 { acc / d } else { 0.0 };
     }
-    assert_close(&y, &want, "solve");
+    assert_close(&y, &want, &format!("solve of {m}"));
 }
 
 // The collar atoms (P1) against CPU ports, on a lattice small enough to read

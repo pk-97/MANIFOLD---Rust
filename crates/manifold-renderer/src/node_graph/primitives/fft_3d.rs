@@ -38,14 +38,15 @@ fn plan_for<'a>(
     &slot.as_ref().expect("plan built above").1
 }
 
-/// Every transformed length must be a power of two, 2 to 1024; a batched z
-/// need not be.
+/// Every transformed length must be even, 2 to 1024, with any other factors
+/// (the vendor plan is mixed radix); a batched z may be any count. Even
+/// because the half-spectrum inverse is built for an even x, and the cosine
+/// reorder pairs nodes.
 fn legal_key(params: &ParamValues) -> Option<PlanKey> {
-    let axes = transform_axes(params);
-    lattice_nodes(params).filter(|n| n[..axes as usize].iter().all(|v| v.is_power_of_two())).map(|n| (n, axes))
+    lattice_nodes(params).map(|n| (n, transform_axes(params)))
 }
 
-const ILLEGAL_LENGTH: &str = "every transformed length must be a power of two, 2 to 1024";
+const ILLEGAL_LENGTH: &str = "every transformed length must be even, 2 to 1024";
 
 fn refusal(params: &ParamValues, label: &str) -> Option<String> {
     legal_key(params).is_none().then(|| format!("{label}: {ILLEGAL_LENGTH}"))
@@ -64,7 +65,7 @@ fn plan_key(ctx: &mut EffectNodeContext<'_, '_>, label: &str) -> Option<PlanKey>
 crate::primitive! {
     name: Fft3d,
     type_id: "node.fft_3d",
-    purpose: "Real FFT of a lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k), every transformed length a power of two) into its half spectrum: nx/2 + 1 complex entries along x, unscaled, entry (kx, ky, kz) at kx + (nx/2 + 1)·(ky + ny·kz). Axes 3 transforms x, y and z; axes 2 transforms x and y of every z slice on its own. One vendor FFT call.",
+    purpose: "Real FFT of a lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k), every transformed length even) into its half spectrum: nx/2 + 1 complex entries along x, unscaled, entry (kx, ky, kz) at kx + (nx/2 + 1)·(ky + ny·kz). Axes 3 transforms x, y and z; axes 2 transforms x and y of every z slice on its own. One vendor FFT call.",
     inputs: {
         values: Array(f32) required,
     },

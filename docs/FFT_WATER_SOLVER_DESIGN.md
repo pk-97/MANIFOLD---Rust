@@ -2,7 +2,7 @@
 
 <!-- index: Benchmark-gated challenger to the FLIP Fluids CPU engine for water: particles on a face (MAC) grid with pressure solved each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced end to end against the FLIP Fluids engine, solid objects in the water, the active region, then Peter's call. MPM is secondary information; nothing MPM owns is touched. -->
 
-**Status:** APPROVED · 2026-09-30 · P4 decided 2026-09-30: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the position-only density solve · owed: the quiet race timing, BUG-h8or (lid slabs), BUG-l2h3 (SWASH live-instrument epic) children .1 (mixed-radix lattices), .2 (collar at its proven bound) and .3 (planner reuses no temporaries), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
+**Status:** APPROVED · 2026-09-30 · P4 decided 2026-09-30: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the position-only density solve · owed: the quiet race timing, BUG-h8or (lid slabs), BUG-l2h3 (SWASH live-instrument epic) children .2 (collar at its proven bound) and .3 (planner reuses no temporaries), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
 **Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record) and the P1 measurements below.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -19,7 +19,7 @@ Peter's decisions, 2026-09-30, not reopened:
 Decided 2026-09-30:
 
 - P4: SWASH is the liquid water solver. GPU_MPM_SOLVER_DESIGN.md D1 and D2 are reopened for water through LIQUID_SOLVER_SEAM_DESIGN.md. The race table and the three-column clips are still made, as the look check and the record, not as a gate.
-- No hard resolution ceiling. Safety is the CPU extent proof at every size the scene allows, plus named refusals for what can't run: lengths the FFT can't transform (until mixed radix lands) and device memory.
+- No hard resolution ceiling. Safety is the CPU extent proof at every size the scene allows, plus named refusals for what can't run: odd lattice sides and device memory.
 
 ## What it is on stage
 
@@ -196,9 +196,9 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 - **Deviations:**
   - The density solve (section 3, steps 9–10) was not in the plan. It is the P3 fix for water that sank.
   - Two volume measures, both in the race probe. The share of particles past 8 per cell measures the water: it is the solver's accuracy guard (I8). The skin-corrected meshed volume measures the surface. Calibration: V_true = particles·h³/8. Frame 0 gives the skin δ = (V₀ − V_true)/A₀, and each frame reads (V − δA)/V_true − 1, with the raw mesh volume printed beside it. The skin belongs to the mesher, not the shape: 31.4 mm on the still pool and 30.2 mm on the Dam Break at 64³. Mid-splash, the meshed volume at 64³ mostly shows thin sheets the surface loses at 6.25 cm cells, so it is a look item.
-  - An FFT length the transform can't take is refused once at build: `params_refusal` on `node.fft_3d` and `node.inverse_fft_3d`, surfaced by validation as `GraphError::IllegalParams`. MPSGraph transforms mixed-radix lengths (`manifold-gpu` fft tests: 96³ forward plus inverse 0.60 ms, 128³ 0.73 ms). Relaxing the limit is child .1 (mixed-radix lattices) of BUG-l2h3 (SWASH live-instrument epic).
+  - The transforms are mixed radix (MPSGraph), so every even side from 2 to 1024 runs, with no padding: a walled box padded past its wall loses the wall. `manifold-gpu` fft tests: 96³ forward plus inverse 0.60 ms, 128³ 0.73 ms. An odd side is refused once at build, because the half-spectrum inverse is built for an even x and the cosine reorder pairs nodes: `params_refusal` on `node.fft_3d` and `node.inverse_fft_3d`, surfaced by validation as `GraphError::IllegalParams`.
   - A collar past capacity is a named error every frame it lasts (`node.running_total`'s `capacity`: "needs N, holds M"). The collar is at most 6n³/7 (a collar cell is air beside water, and the 7-cell cross tiles space). Sizing to that bound is child .2 (collar at its proven bound) of BUG-l2h3 (SWASH live-instrument epic).
-  - I6 covers every power-of-two lattice from 16 to 256, open and closed surface, surface scales 1–3, and the render graph. 512 is out: 176M particles is past `node.liquid_fill`'s 67M ceiling, and it needs 257 GB. Int params are f32, so capacities past 2²⁴ round up (`capacity` in `swash_preset.rs`); at 256³ the solid lattice was one float short before that.
+  - I6 covers the lattices 16, 32, 48, 64, 80, 96, 128 and 256, open and closed surface, surface scales 1–3, and the render graph. 512 is out: 176M particles is past `node.liquid_fill`'s 67M ceiling, and it needs 257 GB. Int params are f32, so capacities past 2²⁴ round up (`capacity` in `swash_preset.rs`); at 256³ the solid lattice was one float short before that.
   - Array census for the rendered Dam Break: 0.76, 1.29, 5.5 and 37.7 GB at 32, 64, 128 and 256³ with the shipped surface; 26.4 GB at 256³ with surface scale 1. The planner reuses none of its temporaries in these graphs, which is child .3 (planner reuses no temporaries) of BUG-l2h3 (SWASH live-instrument epic).
   - Size ladder, the rendered Dam Break through `swash_render_smoke_tests` (GPU ms per frame, 2 steps, median over timestamped frames scaled to the plain frame; contended by other sessions, not the race):
 

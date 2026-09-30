@@ -370,11 +370,11 @@ impl Sizes<'_> {
     }
 }
 
-/// Every lattice a scene may use: the power-of-two sides the FFT atoms
-/// accept, 16 to 256. Each is proven here before any GPU run at it. 512 is
-/// not runnable: its Dam Break is 176M particles, past node.liquid_fill's
-/// 67M ceiling, and 257 GB of arrays.
-const LATTICES: [usize; 5] = [16, 32, 64, 128, 256];
+/// Every lattice a scene may use, 16 to 256, the mixed-radix sides between
+/// the powers of two included. Each is proven here before any GPU run at it.
+/// 512 is not runnable: its Dam Break is 176M particles, past
+/// node.liquid_fill's 67M ceiling, and 257 GB of arrays.
+const LATTICES: [usize; 8] = [16, 32, 48, 64, 80, 96, 128, 256];
 
 /// Krylov solves per step: the pressure, and the density solve when on.
 fn solves(scene: WaterScene) -> usize {
@@ -412,7 +412,16 @@ fn fft_water_scenes_cover_every_dispatch() {
     // four steps a frame is four copies of the step.
     let refined = WaterScene::dam_break(128).with_surface();
     let bare = |n| WaterScene { spread_rate: 0.0, ..WaterScene::dam_break(n) };
-    let probes = [refined.with_passes(16), refined.with_passes(32), WaterScene { steps: 4, ..refined }, bare(64), bare(128).with_surface()];
+    let step = WaterScene::dam_break(128);
+    let probes = [
+        refined.with_passes(16),
+        refined.with_passes(32),
+        WaterScene { steps: 4, ..refined },
+        bare(64),
+        bare(128).with_surface(),
+        step.with_passes(32),
+        step.with_passes(48),
+    ];
     for scene in all.chain(probes) {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
@@ -426,6 +435,24 @@ fn fft_water_scenes_cover_every_dispatch() {
             graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
         });
         assert_eq!(meshed, scene.surface, "the surface is in the plan exactly when asked for");
+    }
+}
+
+/// A pass count past the Krylov kernels' local arrays is refused at build,
+/// naming the Krylov node; it never runs as fewer passes.
+#[test]
+fn fft_water_refuses_passes_past_the_kernel_cap() {
+    let scene = WaterScene::dam_break(64);
+    let cap = super::krylov_givens::MAX_PASSES as usize;
+    let build = |passes| water_def(scene.with_passes(passes)).into_graph(&registry(), &Default::default()).expect("water def builds");
+    assert!(compile(&build(cap)).is_ok(), "{cap} passes compile");
+    let graph = build(cap + 1);
+    match compile(&graph) {
+        Err(GraphError::IllegalParams { node, reason }) => {
+            let kind = graph.get_node(node).expect("refused node exists").node.type_id().as_str().to_string();
+            assert!(kind.contains("krylov") && reason.starts_with(&format!("passes {} ", cap + 1)), "refused by {kind}: {reason}");
+        }
+        other => panic!("{} passes must be refused at build, got {:?}", cap + 1, other.map(|_| "a plan")),
     }
 }
 
@@ -560,15 +587,16 @@ fn fft_water_collar_capacity_memory() {
 }
 
 /// A lattice the FFT atoms can't transform is refused once, at build, naming
-/// the transform, never frame by frame: 80, 96 and 112 are not powers of two.
+/// the transform, never frame by frame: an odd side can't pair the cosine
+/// reorder's nodes.
 #[test]
 fn fft_water_refuses_an_illegal_lattice_at_build() {
-    for n in [80, 96, 112] {
+    for n in [63, 81, 97] {
         let graph = water_def(WaterScene::dam_break(n)).into_graph(&registry(), &Default::default()).expect("water def builds");
         match compile(&graph) {
             Err(GraphError::IllegalParams { node, reason }) => {
                 let kind = graph.get_node(node).expect("refused node exists").node.type_id().as_str().to_string();
-                assert!(kind.contains("fft_3d") && reason.contains("power of two"), "{n}³ refused by {kind}: {reason}");
+                assert!(kind.contains("fft_3d") && reason.contains("even"), "{n}³ refused by {kind}: {reason}");
             }
             other => panic!("{n}³ must be refused at build, got {:?}", other.map(|_| "a plan")),
         }

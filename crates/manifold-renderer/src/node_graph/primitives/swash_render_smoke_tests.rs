@@ -1096,6 +1096,12 @@ fn swash_render_smoke_64() {
     run(WaterScene::still_pool(64), "still_pool", true);
 }
 
+/// A mixed-radix lattice (96 = 2⁵·3), between the powers of two.
+#[test]
+fn swash_render_smoke_96() {
+    run(WaterScene::dam_break(96), "dam_break", true);
+}
+
 #[test]
 fn swash_render_smoke_128() {
     run(WaterScene::dam_break(128), "dam_break", true);
