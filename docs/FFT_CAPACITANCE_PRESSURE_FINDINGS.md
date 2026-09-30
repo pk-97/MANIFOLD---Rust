@@ -112,6 +112,6 @@ No paper found that kills the idea; thin sheets, splash crowns and droplet cloud
 ## Where the evidence lives
 
 - Viewer (2D and 3D runs, pass-count charts, the 128³ GPU splash): https://claude.ai/artifact/1nvDRAGrQTTVYbm8KTEA6H
-- Dam Break scripts (not yet attached): `dambreak_mlx.py` (sim, both solvers), `mlx_dct.py` (GPU cosine transform), `bench_solvers.py` (the race), `oracle_blocks.py` (per-patch oracle).
+- Dam Break scripts, same `scripts/` folder: `dambreak_mlx.py` (sim, both solvers), `mlx_dct.py` (GPU cosine transform), `bench_solvers.py` (the race), `oracle_blocks.py` (per-patch oracle), `drop_spectrum.py`.
 - Research scripts (Python; numpy/scipy, MLX for GPU) are published with that viewer under `scripts/`: `split2d.py` (air split model), `capacitance.py` (2D collar solve), `freesurf_sim.py` (2D tank), `cap3d.py` (3D solve), `sim3d_flip.py` / `sim3d_mix.py` (3D particle demos, CPU), `gpu_cap3d.py` / `gpu_breakdown.py` (GPU timings), `sim3d_mlx.py` (full GPU particle step).
 - Numbers and the running log: BUG-wsim (FFT pressure split research) notes.
