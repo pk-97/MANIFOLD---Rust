@@ -2,7 +2,7 @@
 
 <!-- index: Research record for a free-surface liquid pressure solve built from FFTs: capacitance unknowns on a one-cell air collar, whole-box FFT/DCT solves, and a surface-FFT |k| helper that keeps the pass count flat as the grid grows. Measured 2D/3D/GPU results, the rejected routes with their numbers (Dodd-Ferrante air split, naive masked FFT helper, warm start, edge band), the math found on the way (split ringing, waterbed law), literature status, and what is owed before engine work. -->
 
-**Status: RESEARCH · 2026-09-30 · Claude + Peter, reviewed by Astra (Codex). Beats multigrid ~1.5× on MPM's Dam Break in Python/MLX; not in the engine. Owed: per-surface helper, solid-object test, Rust benchmark. Tracker: BUG-wsim (FFT pressure split research).**
+**Status: RESEARCH · 2026-09-30 · Claude + Peter, reviewed by Astra (Codex). Beats multigrid ~1.5× on MPM's Dam Break in Python/MLX; not in the engine. Engine work: `docs/FFT_WATER_SOLVER_DESIGN.md`. Tracker: BUG-wsim (FFT pressure split research).**
 
 ## The result
 
@@ -102,12 +102,9 @@ A search found no publication combining a one-cell air collar, a free-surface li
 
 No paper found that kills the idea; thin sheets, splash crowns and droplet clouds are untested anywhere.
 
-## Owed before any engine work
+## Owed before engine work
 
-1. **Per-surface helper: make it cheap.** Built (six signed views, smoothed-normal weights): drops 15.0/15.8/16.5 and tower 16.8/19.5/20.5 passes at 32/64/96 versus 17.5/22.0/25.1 and 21.2/29.1/32.0 for the column helper. On the GPU Dam Break it saves ~15% of passes but costs 1.3 vs 0.8 ms per pass in MLX. Next: run the whole Krylov solve on a compacted collar list, not N³ fields; check whether the 4-sheet cap aliases sheets.
-2. **Solid object in the tank.** A floating box: pass count and correct bobbing.
-3. **Rust benchmark on the engine FFT.** Extend the MPSGraph plan to 3D with a real cosine transform, run the fixed-pass loop GPU-side, and time the Dam Break against the MPM path and a multigrid baseline.
-4. **Integration shape.** It would replace MPM's spring pressure for water inside the GPU MPM pipeline (`docs/GPU_MPM_SOLVER_DESIGN.md`), keeping particles, transfers, the repeat region, meshing and coupling. MPM stores velocity at grid corners and this solve is face-based; the earlier `mac_*` face-based prototype recorded in that doc is the starting point. The FFT would be new primitives: section 2.5 (primitive audit) of `docs/DECOMPOSING_GENERATORS.md` first, and it goes on the freeze exemption list because it is not a per-element atom.
+Moved to `docs/FFT_WATER_SOLVER_DESIGN.md`: the compacted collar (D6), the NL = 4 aliasing check and solid objects (Deferred), the Rust benchmark against MPM and multigrid (P0–P3), and the integration shape (a face-grid challenger, D1–D2). On the GPU Dam Break in MLX the six-view helper saved ~15% of passes but cost 1.3 vs 0.8 ms per pass on full-grid masks, which is what D6 fixes.
 
 ## Where the evidence lives
 
