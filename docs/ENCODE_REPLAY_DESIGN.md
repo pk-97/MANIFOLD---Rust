@@ -1,6 +1,6 @@
 # Encode Replay — record a repeat region's dispatches once, replay them every frame
 
-**Status:** PROPOSED design, not built · 2026-10-01 · Opus 5.5 (worker seat, slot-4). P3 is blocked on the FFT decision in section 8 (Deferred).
+**Status:** IN PROGRESS · 2026-10-01 · Opus 5.5 (worker seat, slot-4). P1a built on feat/encode-replay; P1b and P2 open; P3 blocked on the FFT decision in section 8 (Deferred).
 **Prerequisites:** feat/planner-reuse (array slots static after `pre_allocate_resources`).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -69,7 +69,7 @@ Rejected: one entry and a CPU wait, because a live frame never waits on the GPU.
 - Bytes arenas are shared `GpuBuffer`s from the device's allocation path, so they retire through `retire.rs` if a cache is dropped mid-flight. Slots are 256-byte aligned: the constant-buffer offset rule on non-Apple GPUs, and cheap insurance on Apple ones.
 - Each recorded command retains its pipeline state and buffers, so an address can't be reused while a recording names it.
 - Each execute declares the stretch's buffers with one `useResources` call (read and write) from a reserved scratch list.
-- All WGSL compute pipelines are created with `supportIndirectCommandBuffers = true` through the descriptor path, archive or not, and `GpuComputePipeline` records that.
+- Every buffers-only WGSL compute pipeline is created with `supportIndirectCommandBuffers = true` through the descriptor path, archive or not, and `GpuComputePipeline` records that (`supports_replay`). Metal refuses the flag for a function that binds a texture or sampler directly ("Compute function cannot be used with indirect command buffers"), so those pipelines are built without it. A function Metal refuses for any other reason is built without it too, with a warning naming it; replay is a speed-up, never a reason a pipeline fails.
 Rejected: argument buffers for textures, because nothing recordable in the measured regions binds a texture.
 
 **D7 — When replay is off.** Replay is off under encoder dispatch profiling, under GPU fault diagnostics (`gpu_fault::diagnostics_enabled`), under executor `dump_all`, when `MANIFOLD_ENCODE_REPLAY=0`, and on a backend whose store is not built (Vulkan today). Off means `begin_replay` hands back a span that encodes everything directly. Executor CPU step profiling keeps replay on, because it measures the real cost.
@@ -116,13 +116,15 @@ pub struct GpuReplayStats {
 impl GpuEncoder {
     /// Open a span. Until `end_replay`, recordable compute dispatches
     /// validate against, or record into, one entry of `cache`.
-    pub fn begin_replay(&mut self, cache: GpuReplayCache);
+    pub fn begin_replay(&mut self, device: &GpuDevice, cache: GpuReplayCache);
     /// Run the pending stretch and hand the cache back.
     pub fn end_replay(&mut self) -> GpuReplayCache;
 }
 ```
 
-The cache moves into the encoder for the span and back out, so `GpuEncoder` gets no lifetime and nothing is shared. A span never nests: `begin_replay` inside an open span is a `debug_assert!` failure, and the executor opens spans at depth 0 only.
+The cache moves into the encoder for the span and back out, so `GpuEncoder` gets no lifetime and nothing is shared. `begin_replay` takes the device because it is the only place a store allocates: it grows the chosen entry to what its last visit wanted (chunks, and arenas from the device's retire-aware allocator). A visit that outgrows its entry encodes the rest directly and the next visit grows it. A span never nests: `begin_replay` inside an open span is a `debug_assert!` failure, and the executor opens spans at depth 0 only.
+
+`GpuReplayCache` is backend-specific (`metal/replay.rs`, and a stats-only stub in `vulkan/replay.rs`); `GpuReplayStats`, the recorded command list, the comparison and the ring policy are the neutral part in `replay.rs`.
 
 ### 3.2 Internals (`replay.rs` neutral, `metal/replay.rs` backend store)
 
@@ -156,13 +158,13 @@ The first visit inserts into the map; later frames never allocate. The offline h
 - A replayed stretch loses per-dispatch signposts in GPU captures and fault reports (D8).
 - A recording retains the buffers it names until that entry is re-recorded or dropped. After a resize, the old arrays live up to one more visit per entry.
 - Every compute pipeline changes its creation flags, so the binary archive misses once. The first launch after landing recompiles pipelines at load.
-- Whether `supportIndirectCommandBuffers` costs GPU time is not known. P1a measures it with replay off.
+- A replayed command costs GPU time. Measured in P1a on 64-group kernels: about 1.5 µs more per command than direct (26 dispatches: 0.142 ms direct, 0.182 ms replayed; 6: 0.036 against 0.052). Kernels that small are all overhead, so a real region shows less, but P1b's GPU-ms gate decides whether it holds on SWASH.
 
 ## 4. Invariants & enforcement
 
 - **I1 — A replayed command is exactly the command direct encoding would have issued.** Enforcement: the comparison runs on every visit (D2). Tests: `replay_key_detects_every_field` (`manifold-gpu`, CPU-only: change each field of a dispatch in turn; each change must miss); `replay_matches_direct_bit_for_bit` (`manifold-gpu`, GPU); `encode_replay_parity` (renderer GPU proof; section 6 (Phasing), P1b).
-- **I2 — An entry is written only while nothing pending executed it.** Enforcement: a `debug_assert!(entry.store.is_idle())` in the record and patch paths. Test: `replay_never_writes_an_entry_in_flight` (commit without waiting for four frames; `ring_busy` counts, no assert fires, output matches direct).
-- **I3 — Every buffer an executed stretch references is declared and alive.** Enforcement: record retains, execute declares (D6). Test: the P1a proofs run under the Metal API validation layer (`MTL_DEBUG_LAYER=1`). ⚠ VERIFY-AT-IMPL that the layer reports a missing `useResource` for an ICB-referenced buffer: delete the declaration in a scratch run and confirm the layer errors.
+- **I2 — An entry is written only while nothing pending executed it.** Enforcement: an entry is chosen only when idle (`pick_entry` over `ReplayStore::is_idle`, the status of the last command buffer that executed it), and a `debug_assert!` keeps every write in a span at positions that span has not executed yet. Test: `replay_never_writes_an_entry_in_flight` (every frame waits on an event the CPU holds back: three frames take the three entries, the fourth finds none idle and encodes directly; output matches direct).
+- **I3 — Every buffer an executed stretch references is declared and alive.** Enforcement: record retains, execute declares (D6); arenas come from the retire-aware allocator and the command buffer retains an executed chunk. Tests: every P1a proof runs green under `MTL_DEBUG_LAYER=1 MTL_VALIDATION=1` with no validation errors; `replay_cache_dropped_in_flight_is_safe` drops a cache whose entry is still executing and still matches direct. Not run: the negative half (switch the declaration off and watch the layer object). The auto-mode classifier blocks switching `useResources` off, so that check is Peter's to run by hand or waive.
 - **I4 — A warm ring allocates nothing.** Test: `replay_steady_state_records_nothing` (after the warm-up frames, `recorded` and `store_allocations` stay flat over 20 frames).
 - **I5 — Replay is off wherever per-dispatch attribution is needed.** Test: `replay_off_under_profiling_and_dump` (encoder profiling on, or `dump_all` on: `replayed == 0`).
 - **I6 — Replay knows nothing about any particular graph.** Negative gate, zero hits: `rg -i 'swash|krylov|fft_3d|matter' crates/manifold-gpu/src/replay.rs crates/manifold-gpu/src/metal/replay.rs crates/manifold-renderer/src/node_graph/execution/substep_region.rs`.
@@ -182,15 +184,15 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
   - The Cargo features `MTLIndirectCommandBuffer` and `MTLIndirectCommandEncoder`.
   - `replay.rs`, `metal/replay.rs`, and the `vulkan/replay.rs` stub.
   - The encoder hooks from section 3.2 (not the copy kernel).
-  - ICB support on every pipeline from `create_compute_pipeline_inner`, with the flag on `GpuComputePipeline`.
+  - ICB support on every buffers-only pipeline from `create_compute_pipeline_inner`, with the flag on `GpuComputePipeline`.
   - The `MANIFOLD_ENCODE_REPLAY` switch.
-  - The tests `replay_key_detects_every_field`, `replay_matches_direct_bit_for_bit` (a chain of about 30 small kernels with bytes that change every frame, interleaved with a texture dispatch, a blit and an indirect dispatch, over 10 frames; replay against direct, byte-equal readback), `replay_never_writes_an_entry_in_flight` and `replay_steady_state_records_nothing`.
-  - `replay_cpu_cost_probe`, which reports direct against replayed CPU µs for stretches of 2, 6 and 26 dispatches, plus GPU ms with ICB support on and replay off against the pre-change base.
+  - The tests `replay_key_detects_every_field`, `replay_matches_direct_bit_for_bit` (a chain of 30 small kernels with bytes that change every frame, broken by a texture round trip, a blit and an indirect dispatch, over 10 frames; replay against direct, byte-equal readback), `replay_survives_structural_changes`, `replay_never_writes_an_entry_in_flight`, `replay_steady_state_records_nothing` and `replay_cache_dropped_in_flight_is_safe`.
+  - `replay_cpu_cost_probe`, which reports direct against replayed CPU µs and GPU ms for stretches of 2, 6 and 26 dispatches.
 - **Gate:**
   - Positive:
-    - `cargo clippy -p manifold-gpu -- -D warnings` is clean.
-    - `cargo test -p manifold-gpu replay` passes.
-    - `MTL_DEBUG_LAYER=1 cargo test -p manifold-gpu replay` passes with no validation errors in the output.
+    - `cargo clippy -p manifold-gpu --all-targets --features gpu-proofs -- -D warnings` and `cargo clippy -p manifold-gpu --features vulkan -- -D warnings` are clean.
+    - `cargo test -p manifold-gpu --features gpu-proofs --lib replay -- --test-threads=1` passes.
+    - The same under `MTL_DEBUG_LAYER=1 MTL_VALIDATION=1` passes with no validation errors in the output.
     - The probe's numbers are reported.
   - **Kill line:** a replayed stretch of 6 dispatches must cost at most half the direct CPU. If it doesn't, stop and report the numbers; don't build P1b.
   - Negative: I6 and I7 return zero hits.
@@ -215,6 +217,7 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
     - `encode_replay_survives_changes`: change a param that changes a grid, an iteration count and an array capacity mid-run; output still matches replay off, and `recorded` shows the re-record.
     - `replay_off_under_profiling_and_dump`.
   - `encode_replay_probe`: frame CPU with replay on and off, and GPU ms, for the bundled Dam Break.
+  - Path (a) of the FFT decision (section 8 (Deferred)), moved here by the lead: `GpuFft::encode` stops making its tensor data, arrays and execution descriptor on every call. The FFT's CPU µs per call is reported before and after on SWASH 64, and the `manifold-gpu` fft tests stay green.
 - **Gate:**
   - Positive:
     - `cargo clippy -p manifold-gpu -p manifold-renderer -- -D warnings` is clean.
@@ -269,10 +272,10 @@ Blocked on the FFT decision in section 8 (Deferred), decider Peter via the lead.
 
 ## 8. Deferred
 
-- **FFT encode, blocking for P3; decider Peter via the lead.** MPSGraph FFT encode is about 46% of SWASH's CPU, and an ICB can't hold it. Two paths:
+- **FFT encode, blocking for P3; decider Peter via the lead; logged as decision .7 under BUG-l2h3 (SWASH live-instrument epic).** MPSGraph FFT encode is about 46% of SWASH's CPU, and an ICB can't hold it. Two paths:
   - (a) Keep MPSGraph and cache the per-call wrappers in `GpuFft::encode` (`metal/fft.rs:129` makes two tensor data objects, two arrays, a command-buffer wrapper and an execution descriptor per call). That saves about 5 of the 22–27 µs per call: about 1.4 ms at 64. FFTs keep breaking stretches.
   - (b) Replace MPSGraph with `manifold-gpu` compute FFT kernels, mixed radix like MPSGraph so every even side still runs. The FFTs then record with everything else: one stretch per region visit, and SWASH's encode drops to roughly the executor's own cost. It is also what the Vulkan backend needs anyway, since MPSGraph is Metal-only. It reverses FFT_WATER_SOLVER_DESIGN.md D9 (exemption classes), which names each FFT as one MPSGraph call.
-  - Recommendation: (a) now, because it's cheap and independent. Decide (b) on the P1b numbers.
+  - (a) is built in P1b (the lead's call); (b) is decided on the P1b numbers.
 - **Whole-frame spans.** Revive when a graph without regions shows more than 1 ms of recordable top-level dispatch per frame.
 - **Texture dispatches through argument buffers.** Revive when a region that matters spends more than 1 ms per frame on texture-bound compute.
 - **Vulkan store (D10).** Built with the Vulkan backend's command-buffer phase.

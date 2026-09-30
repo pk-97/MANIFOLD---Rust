@@ -18,6 +18,11 @@ pub mod types;
 pub use types::*;
 pub mod trace_planner;
 pub use trace_planner::*;
+// The recording core is unused on Vulkan until its store records command
+// buffers (docs/ENCODE_REPLAY_DESIGN.md D10); that store lifts this allow.
+#[cfg_attr(feature = "vulkan", allow(dead_code))]
+mod replay;
+pub use replay::{GpuReplayStats, REPLAY_RING};
 
 /// Point-in-time device memory values used by resource admission. The
 /// snapshot is deliberately plain data so callers can capture it once at an

@@ -724,67 +724,55 @@ impl GpuDevice {
         let available: Vec<String> = available_ns_names.iter().map(|s| s.to_string()).collect();
         let function = find_entry_function(&library, &msl_entry_name, &available, label, "compute");
 
-        // Use descriptor-based creation when archive is available — enables
-        // binary archive lookup (near-instant on cache hit) and auto-populates
-        // the archive on miss.
-        let mut archive_guard = self.archive.lock().unwrap();
-        let state = if let Some(ref mut arch) = *archive_guard {
-            let desc = unsafe {
-                use objc2::AnyThread;
-                MTLComputePipelineDescriptor::init(MTLComputePipelineDescriptor::alloc())
-            };
-            unsafe {
-                desc.setComputeFunction(Some(&function));
-                desc.setLabel(Some(&NSString::from_str(label)));
-                let archives =
-                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
-                desc.setBinaryArchives(Some(&archives));
-            }
-
-            let state = unsafe {
-                self.device
-                    .newComputePipelineStateWithDescriptor_options_reflection_error(
-                        &desc,
-                        MTLPipelineOption::None,
-                        None,
-                    )
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{label}: MTL compute PSO error: {}",
-                    e.localizedDescription()
-                )
-            });
-
-            if !arch.was_added(hash) {
-                match unsafe {
-                    arch.raw_archive()
-                        .addComputePipelineFunctionsWithDescriptor_error(&desc)
-                } {
-                    Ok(()) => {
-                        arch.mark_added(hash);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "{label}: failed to add to binary archive: {}",
-                            e.localizedDescription()
-                        );
-                    }
-                }
-            }
-            state
-        } else {
-            unsafe {
-                self.device
-                    .newComputePipelineStateWithFunction_error(&function)
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{label}: MTL compute PSO error: {}",
-                    e.localizedDescription()
-                )
-            })
+        // A buffers-only pipeline can enter an encode-replay recording
+        // (docs/ENCODE_REPLAY_DESIGN.md D6); Metal refuses indirect-command
+        // support for a function that binds a texture or sampler directly.
+        // With an archive loaded, the descriptor also looks the binary up
+        // there and adds it on a miss.
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLComputePipelineDescriptor::init(MTLComputePipelineDescriptor::alloc())
         };
+        let mut supports_replay = slot_map.buffers_only();
+        unsafe {
+            desc.setComputeFunction(Some(&function));
+            desc.setLabel(Some(&NSString::from_str(label)));
+            desc.setSupportIndirectCommandBuffers(supports_replay);
+        }
+        let mut archive_guard = self.archive.lock().unwrap();
+        if let Some(ref arch) = *archive_guard {
+            let archives = objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
+            unsafe { desc.setBinaryArchives(Some(&archives)) };
+        }
+        let create = |desc: &MTLComputePipelineDescriptor| unsafe {
+            self.device
+                .newComputePipelineStateWithDescriptor_options_reflection_error(desc, MTLPipelineOption::None, None)
+        };
+        let state = match create(&desc) {
+            Ok(state) => state,
+            // Replay is only a speed-up: a function Metal won't allow in an
+            // indirect command buffer for a reason the slot map can't see
+            // still builds, and its dispatches encode directly.
+            Err(e) if supports_replay => {
+                log::warn!(
+                    "{label}: no indirect-command support ({}); its dispatches won't replay",
+                    e.localizedDescription()
+                );
+                supports_replay = false;
+                unsafe { desc.setSupportIndirectCommandBuffers(false) };
+                create(&desc)
+                    .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {}", e.localizedDescription()))
+            }
+            Err(e) => panic!("{label}: MTL compute PSO error: {}", e.localizedDescription()),
+        };
+        if let Some(ref mut arch) = *archive_guard
+            && !arch.was_added(hash)
+        {
+            match unsafe { arch.raw_archive().addComputePipelineFunctionsWithDescriptor_error(&desc) } {
+                Ok(()) => arch.mark_added(hash),
+                Err(e) => log::warn!("{label}: failed to add to binary archive: {}", e.localizedDescription()),
+            }
+        }
         drop(archive_guard);
 
         let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
@@ -794,6 +782,7 @@ impl GpuDevice {
             label: label.to_string(),
             workgroup_size,
             needs_sizes_buffer,
+            supports_replay,
         };
         self.compute_cache
             .lock()
@@ -1383,6 +1372,7 @@ impl GpuDevice {
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
             profile: None,
             scopes: Vec::new(),
+            replay: None,
         }
     }
 

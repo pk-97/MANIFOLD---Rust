@@ -25,6 +25,7 @@ mod msl_cache;
 mod profiling;
 mod residency;
 pub mod raytrace;
+mod replay;
 mod retire;
 mod shader_compiler;
 pub mod surface;
@@ -34,9 +35,12 @@ mod types;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod pipeline_cache_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod replay_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
+pub use replay::GpuReplayCache;
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;
@@ -91,5 +95,11 @@ impl SlotMap {
     #[inline]
     pub fn get(&self, binding: u32) -> Option<&Slot> {
         self.slots.get(binding as usize).and_then(|s| s.as_ref())
+    }
+
+    /// Whether every binding is a buffer: Metal refuses indirect-command
+    /// support for a function that binds a texture or sampler directly.
+    pub(crate) fn buffers_only(&self) -> bool {
+        self.slots.iter().flatten().all(|slot| slot.kind == SlotKind::Buffer)
     }
 }
