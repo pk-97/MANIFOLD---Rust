@@ -85,7 +85,19 @@ free roots; an explicit alias removes its root from reuse. Array inputs and outp
 of `NonGpu` and `IoBridge` nodes remain dedicated: CPU evaluation can finish before
 queued GPU reads/writes execute, and GPU hazard tracking does not order mapped
 CPU access. Held, persistent, prebound, atomic, explicit
-in-place, canvas-dependent and carried/exported resources remain dedicated. Buffers stay allocated
+in-place and carried/exported resources remain dedicated, and so does every array
+whose size can change after planning: a canvas-sized or provider-published array,
+and any array whose declared capacity follows one. Membership follows capacity, not
+wires. An array sized from params stays an ordinary temporary even when it reads
+growing particles. The capacity rule is opaque, so the planner probes it with the
+lineage's inputs moved together (`capacity_follows` in `resource_allocation.rs`).
+A substep region's arrays never return storage before the region ends. After the
+frame, a temporary's storage holds whichever array used it last, so a host that
+reads or fills an array outside the frame declares it with
+`Graph::add_external_output`, which keeps it dedicated. Post-frame readers go
+through `Executor::host_array_buffer`, which refuses an array a later step
+overwrote. The whole-graph dump (Cmd+D) reads every array, so it copies each
+overwritten one as its producer finishes. Buffers stay allocated
 for the runtime; ordered encoding and native hazard tracking govern GPU access.
 Executor storage revisions detect overwritten cached outputs. This changes
 neither cross-runtime sharing nor GPU retirement/residency policy.

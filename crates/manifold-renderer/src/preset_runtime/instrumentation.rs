@@ -326,12 +326,7 @@ impl PresetRuntime {
             let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
                 continue;
             };
-            let Some(buffer) = self
-                .executor
-                .backend()
-                .slot_for(res)
-                .and_then(|s| self.executor.backend().array_buffer(s))
-            else {
+            let Some(buffer) = self.executor.dump_array_buffer(res) else {
                 continue;
             };
             let (offsets, _, _) = std430_layout(at.specs);
@@ -489,12 +484,7 @@ impl PresetRuntime {
             let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
                 continue;
             };
-            let Some(buffer) = self
-                .executor
-                .backend()
-                .slot_for(res)
-                .and_then(|s| self.executor.backend().array_buffer(s))
-            else {
+            let Some(buffer) = self.executor.dump_array_buffer(res) else {
                 continue;
             };
             let (offsets, _, _) = std430_layout(at.specs);

@@ -124,10 +124,13 @@ impl FlipScene {
 
     fn frame(&self) -> Vec<FluidParticle> {
         let count = self.executor.live_scalar_input(self.counter, "live_count").unwrap_or(0.0) as usize;
-        let backend = self.executor.backend();
-        let Some(source) = backend.slot_for(self.particles).and_then(|slot| backend.array_buffer(slot)) else {
+        if self.executor.backend().slot_for(self.particles).is_none() {
             return Vec::new();
-        };
+        }
+        let source = self
+            .executor
+            .host_array_buffer(&self.graph, &self.plan, self.particles)
+            .expect("particles hold their own contents");
         let device = &harness::shared().device;
         let bytes = (count * std::mem::size_of::<FluidParticle>()) as u64;
         let copy = device.create_buffer_shared(bytes.max(16));

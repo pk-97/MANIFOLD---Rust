@@ -871,6 +871,44 @@ pub mod test_nodes {
         }
     }
 
+    /// Copies `in` into a fresh `out` of the same capacity: an ordinary
+    /// temporary, which the array planner may place in storage another array
+    /// has released.
+    struct ParticleCopy {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+    }
+
+    impl EffectNode for ParticleCopy {
+        node_basics!();
+        fn requires(&self) -> NodeRequires {
+            NodeRequires {
+                gpu_encoder: true,
+                state_store: false,
+            }
+        }
+        fn array_output_capacity(
+            &self,
+            port_name: &str,
+            _params: &ParamValues,
+            input_capacities: &[(&str, u32)],
+        ) -> Option<u32> {
+            (port_name == "out")
+                .then(|| input_capacities.iter().find(|(p, _)| *p == "in").map(|&(_, n)| n))
+                .flatten()
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            let (Some(source), Some(copy)) = (ctx.inputs.array("in"), ctx.outputs.array("out")) else {
+                return;
+            };
+            let size = source.size.min(copy.size);
+            let gpu = ctx.gpu.as_deref_mut().expect("particle copy needs a GpuEncoder");
+            gpu.native_enc.copy_buffer_to_buffer(source, copy, size);
+        }
+    }
+
     /// Consumes particles and yields a texture so the region reaches a final
     /// output; draws nothing.
     struct ParticleSink {
@@ -900,6 +938,15 @@ pub mod test_nodes {
         });
         registry.register("test.particle_boundary", || Box::new(ParticleBoundary::new()));
         registry.register("test.particle_inner_boundary", || Box::new(ParticleBoundary::inner()));
+        registry.register("test.particle_copy", || {
+            let particles = PortType::Array(ArrayType::of_known::<Particle>());
+            Box::new(ParticleCopy {
+                type_id: EffectNodeType::new("test.particle_copy"),
+                inputs: vec![port("in", particles, PortKind::Input, true)],
+                outputs: vec![port("out", particles, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
         registry.register("test.particle_sink", || {
             Box::new(ParticleSink {
                 type_id: EffectNodeType::new("test.particle_sink"),
@@ -2833,6 +2880,99 @@ mod tests {
             regions.iter().any(|r| r.members.iter().any(|m| m.doc_id == 6) && r.members.iter().any(|m| m.doc_id == 7)),
             "control: the force atom and mover should fuse"
         );
+    }
+
+    /// [`nested_particle_def`] with three-copy chains of same-size
+    /// temporaries before the nest (`seed` into `outer.seed`), in the outer
+    /// body (`outer_b` into `inner.seed`) and after it (`outer.out` into the
+    /// sink).
+    pub(crate) fn nested_copy_chains_def() -> manifold_core::effect_graph_def::EffectGraphDef {
+        let mut def = serde_json::to_value(nested_particle_def()).unwrap();
+        let mut chain = |ids: [u64; 3], from: u64, to: (u64, &str)| {
+            let mut previous = from;
+            for id in ids {
+                def["nodes"].as_array_mut().unwrap().push(
+                    serde_json::json!({"id": id, "nodeId": format!("copy_{id}"), "typeId": "test.particle_copy"}),
+                );
+                def["wires"].as_array_mut().unwrap().push(
+                    serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": id, "toPort": "in"}),
+                );
+                previous = id;
+            }
+            let wires = def["wires"].as_array_mut().unwrap();
+            wires.retain(|w| !(w["toNode"] == to.0 && w["toPort"] == to.1));
+            wires.push(serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": to.0, "toPort": to.1}));
+        };
+        chain([20, 21, 22], 0, (2, "seed"));
+        chain([25, 26, 27], 4, (5, "seed"));
+        chain([30, 31, 32], 2, (12, "particles"));
+        serde_json::from_value(def).unwrap()
+    }
+
+    /// Temporary array reuse around and inside a nest. Every array a region
+    /// step touches keeps its storage for the whole outer region, every
+    /// iteration of both levels. Arrays before and after the nest still reuse
+    /// each other.
+    #[test]
+    fn nested_region_arrays_keep_storage_across_iterations() {
+        use crate::node_graph::resource_allocation::{lifetimes, plan_array_allocations, ArrayAllocationAction};
+
+        let graph = crate::node_graph::EffectGraphDefExt::into_graph(nested_copy_chains_def(), &particle_registry(), &Default::default())
+            .expect("nest with chains builds");
+        let plan = compile(&graph).expect("nest with chains compiles");
+        let region = &plan.substep_regions()[0];
+        assert_eq!(region.inner.len(), 1);
+
+        let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
+        let reused = lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned);
+        assert!(reused >= 3, "the chains before, inside and after the nest reuse: {reused}");
+        // No array a region step touches ever hands its storage on.
+        let (first, last) = (region.steps[0], *region.steps.last().unwrap());
+        let touched: AHashSet<_> = region.steps.iter()
+            .flat_map(|&s| plan.steps()[s].inputs.iter().chain(&plan.steps()[s].outputs).map(|(_, r)| *r))
+            .filter(|r| planned.storage.contains_key(r))
+            .collect();
+        for step in &plan.steps()[last + 1..] {
+            for (_, resource) in &step.outputs {
+                let Some(storage) = planned.storage.get(resource) else { continue };
+                assert!(
+                    touched.iter().all(|t| planned.storage[t].root != storage.root),
+                    "{resource:?} after the nest takes storage a region array still names"
+                );
+            }
+        }
+        // A region array that reuses storage takes it from before the region.
+        let mut inside = 0;
+        for step in &plan.steps()[first..=last] {
+            let declared = graph.get_node(step.node).unwrap().node.aliased_array_io();
+            for (port, resource) in &step.outputs {
+                if declared.iter().any(|(_, out)| out == port) {
+                    continue;
+                }
+                if let Some(ArrayAllocationAction::Alias { input, .. }) = planned.actions.iter()
+                    .find(|a| matches!(a, ArrayAllocationAction::Alias { resource: r, .. } if r == resource))
+                {
+                    let owner = plan.steps().iter().position(|s| s.outputs.iter().any(|(_, r)| r == input)).unwrap();
+                    assert!(owner < first, "{resource:?} reuses storage released inside the region");
+                    inside += 1;
+                }
+            }
+        }
+        assert!(inside > 0, "the outer body's copies take storage the pre-nest chain released");
+
+        // The oracle has teeth: a body copy placed in the storage of the array
+        // the outer boundary seeds from is live across every iteration.
+        let output = |id: u32| {
+            let node = graph.nodes().find(|n| n.node_id.as_str() == format!("copy_{id}")).unwrap().id;
+            plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1
+        };
+        let mut broken = planned.clone();
+        let seed_root = broken.storage[&output(22)].root;
+        broken.storage.get_mut(&output(26)).unwrap().root = seed_root;
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &broken)
+        }));
+        assert!(caught.is_err(), "a body array in storage the region still reads must be refused");
     }
 
     /// The fused-def cache is keyed by the def's content, and the nest is a
