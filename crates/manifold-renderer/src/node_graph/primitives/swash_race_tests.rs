@@ -198,8 +198,8 @@ fn worst(v: &[f64]) -> f64 {
     v.iter().copied().fold(0.0_f64, f64::max)
 }
 
-fn particle_motion(particles: &[FluidParticle]) -> Motion {
-    motion(particles.iter().map(|p| (p.position_radius, p.velocity)), super::swash_preset::DAM_MIN[1])
+fn particle_motion(particles: &[FluidParticle], min: [f64; 3]) -> Motion {
+    motion(particles.iter().map(|p| (p.position_radius, p.velocity)), min[1])
 }
 
 /// The fraction of cells that are water and the fraction of 8³ blocks
@@ -222,12 +222,12 @@ fn occupancy(water: &[f32], n: usize) -> (f64, f64) {
 /// How the particles pack: per occupied cell, how many particles (8 is the
 /// fill's density); how many sit on a wall (within a hundredth of a cell)
 /// or near the lid; the mean height.
-fn report_packing(particles: &[FluidParticle], n: usize, h: f64) {
+fn report_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) {
     let mut per_cell = vec![0u32; n * n * n];
     let (mut on_wall, mut high, mut height) = (0usize, 0usize, 0.0_f64);
     let side = n as f64 * h;
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let local: [f64; 3] = std::array::from_fn(|a| f64::from(p.position_radius[a]) - super::swash_preset::DAM_MIN[a]);
+        let local: [f64; 3] = std::array::from_fn(|a| f64::from(p.position_radius[a]) - min[a]);
         if local.iter().any(|&x| x < 0.01 * h || x > side - 0.01 * h) {
             on_wall += 1;
         }
@@ -260,9 +260,9 @@ fn report_packing(particles: &[FluidParticle], n: usize, h: f64) {
     println!("SWASH packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
-fn swash_packing(particles: &[FluidParticle], n: usize, h: f64) -> Packing {
+fn swash_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) -> Packing {
     let live = particles.iter().filter(|p| p.position_radius[3] > 0.0);
-    packing(live.map(|p| p.position_radius), super::swash_preset::DAM_MIN, [n; 3], h)
+    packing(live.map(|p| p.position_radius), min, [n; 3], h)
 }
 
 /// How far the particles sit from the fill's 8 a cell, over the solver's own
@@ -326,7 +326,7 @@ struct Record {
 /// the collar within capacity.
 fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let mut run = Run::new(scene);
-    let (n, h) = (run.n(), scene.pressure.cell_size());
+    let (n, h, min) = (run.n(), scene.pressure.cell_size(), scene.min());
     let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new() };
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut collar_max, mut blocks_max, mut water_max) = (0u32, 0.0_f64, 0.0_f64);
@@ -358,20 +358,20 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             }
         }
         let particles = run.particles();
-        record.motion.push(particle_motion(&particles));
-        let pack = swash_packing(&particles, n, h);
+        record.motion.push(particle_motion(&particles, min));
+        let pack = swash_packing(&particles, min, n, h);
         packed.push(pack);
         let sheet = frame % 5 == 4 && frame < 90;
         if frame % 15 == 14 || sheet {
             let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| (p.position_radius, p.velocity)).collect();
-            let floor = super::swash_preset::DAM_MIN[1];
+            let floor = min[1];
             if sheet {
                 print_side_sheet(label, frame, &live, floor);
                 print_height(label, frame, &record.motion[frame]);
             }
             if frame % 15 == 14 {
                 print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
-                print_lid_layer(label, frame, &live, super::swash_preset::DAM_MIN, [n; 3], h, floor);
+                print_lid_layer(label, frame, &live, min, [n; 3], h, floor);
             }
         }
         if frame % 30 == 29 {
@@ -386,7 +386,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             println!("{label} frame {frame:3}: particles past rest {:.1}%, missing inside {:.1}%", 100.0 * pack.crowded, 100.0 * pack.hollow);
         }
     }
-    report_packing(&run.particles(), n, h);
+    report_packing(&run.particles(), min, n, h);
     report_water(label, &packed);
     println!("{label}: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&record.gpu), median(&record.cpu));
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));

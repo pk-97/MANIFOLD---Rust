@@ -10,7 +10,8 @@ use super::particles_to_faces::face_count;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid::domain_layout;
 use crate::node_graph::liquid::grid::{face_dims, face_len};
-use crate::node_graph::matter::{MatterLattice, PADDING_NODES, lattice_nodes};
+use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
+use crate::node_graph::matter::lattice_nodes;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 
@@ -53,16 +54,16 @@ fn check_swash(cells: [u32; 3]) {
     }
 }
 
-fn check_matter(lattice: &MatterLattice) {
-    let nodes = lattice_nodes(lattice.nodes);
-    assert_eq!(matter_cells(lattice.nodes), Some(lattice.cells), "{:?}", lattice.nodes);
+fn check_matter(lattice: &LiquidLattice) {
+    let nodes = lattice_nodes(lattice.nodes());
+    assert_eq!(matter_cells(lattice.nodes()), Some(lattice.cells()), "{:?}", lattice.nodes());
     for axis in 0..3 {
-        let count = face_len(lattice.cells, axis);
+        let count = face_len(lattice.cells(), axis);
         let capacity = MatterFaceComponent::new()
             .array_output_capacity("out", &ParamValues::default(), &[("grid", nodes as u32)])
             .expect("out capacity");
-        assert!(count <= u64::from(capacity), "{:?} axis {axis}: out is shorter than the faces", lattice.nodes);
-        assert!(matter_last_read(lattice.nodes, axis) < nodes, "{:?} axis {axis}: read past the grid", lattice.nodes);
+        assert!(count <= u64::from(capacity), "{:?} axis {axis}: out is shorter than the faces", lattice.nodes());
+        assert!(matter_last_read(lattice.nodes(), axis) < nodes, "{:?} axis {axis}: read past the grid", lattice.nodes());
     }
 }
 
@@ -72,8 +73,8 @@ fn check_matter(lattice: &MatterLattice) {
 fn face_grid_extents_at_64() {
     check_swash([64; 3]);
     check_swash([6, 5, 4]);
-    let lattice = MatterLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout"));
-    assert_eq!(lattice.cells, [64; 3]);
+    let lattice = LiquidLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout"));
+    assert_eq!(lattice.cells(), [64; 3]);
     check_matter(&lattice);
     assert_eq!(face_len([64; 3], 0), 266_240);
     assert_eq!(face_len([64; 3], 0) * 4, 1_064_960);
@@ -139,11 +140,35 @@ fn whitewater_refuses_unextended_faces() {
     assert!(require_extended_faces(layers).expect_err("MPM refused").contains("needs at least 1"));
 }
 
+/// The MPM face scene, at every Resolution its domain admits, with and
+/// without the moving box, either refuses by name or covers every dispatch
+/// under the liquid extent rules; the fused consumer's lattice is the one at
+/// 64.
+#[test]
+fn matter_face_scene_covers_every_dispatch() {
+    use super::face_grid_scenes::matter_dam_break_faces;
+    use crate::node_graph::liquid::extent::{ExtentError, LiquidPreset};
+    for collider in [false, true] {
+        let mut preset = LiquidPreset::build(&matter_dam_break_faces(None, collider)).expect("the face scene builds");
+        let mut ran = 0;
+        for res in preset.resolutions() {
+            match preset.check(res) {
+                Ok(_) => ran += 1,
+                Err(ExtentError::Refused { reason, .. }) if reason.contains("Grid Budget") || reason.contains("Resolution") => {}
+                Err(error) => panic!("collider {collider}, Resolution {res}: {error}"),
+            }
+        }
+        assert!(ran > 100, "collider {collider}: only {ran} resolutions run");
+    }
+    let mut consumed = LiquidPreset::build(&matter_dam_break_faces(Some(1), false)).expect("the consumer scene builds");
+    consumed.check(64).unwrap_or_else(|error| panic!("consumer at 64: {error}"));
+}
+
 /// Every Resolution the matter presets allow keeps its reads inside the grid.
 #[test]
 fn face_grid_extents_at_every_matter_resolution() {
     for res in 8..=512 {
-        check_matter(&MatterLattice::from_layout(&domain_layout(None, 4.0, res).expect("layout")));
+        check_matter(&LiquidLattice::from_layout(&domain_layout(None, 4.0, res).expect("layout")));
     }
     assert_eq!(matter_cells([7, 20, 20]), None, "a lattice with no cells is refused");
 }

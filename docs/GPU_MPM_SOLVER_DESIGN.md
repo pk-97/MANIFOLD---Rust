@@ -794,7 +794,7 @@ Offline (export and Record) a frame runs every due tick, each with its own excha
 host sync: the GPU finishes the previous tick, the domain settles its reaction, steps
 Box3D over it, rewrites that tick's body rows in place and clears the reaction. The tick
 sequence is the one a 60 fps export runs, so a 30 fps export matches it word for word at
-every shared instant (`matter_coupling_export_frame_rate_independent`). The display stays
+every shared instant (`liquid_export_frame_rate_independent`). The display stays
 at the tick Box3D had settled when the frame began, so at 30 fps the shown pair is one
 tick older than at 60 fps.
 
@@ -1049,12 +1049,12 @@ FLIP-only.
 | Look artefacts A1, A3, A5 | `matter_look_lattice_alignment`, `matter_look_volume_drift`, `matter_look_splash_retention` (section 7 (Look — artefacts, metrics and dials); the other look gates are withdrawn) |
 | Determinism | `matter_deterministic_under_seed` (two runs, 120 ticks, bit-identical points); `matter_seed_changes_jitter`; `matter_block_p2g_bit_identical` (P1b) |
 | Fixed-point headroom | `matter_fixed_point_headroom` (Dam Break, max accumulator magnitude < 2^30) |
-| A non-finite tick is never published | `matter_nonfinite_tick_not_published` |
+| A non-finite tick is never published | `liquid_nonfinite_tick_not_published` (LIQUID_SOLVER_SEAM_DESIGN.md section 4 (Invariants & enforcement), every liquid row) |
 | Substep rule | `matter_substep_rule_matches_worked_example` (n = 34); `matter_substeps_follow_stiffness` (0.5 → 21, 2 → 61); `matter_dials_limited_to_substep_cap` (a request needing n > 128 runs at the largest fitting value and reports it) |
-| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`; coupled: `matter_coupling_export_frame_rate_independent` (30 fps export equals 60 fps word for word) |
+| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`; coupled: `liquid_export_frame_rate_independent` (30 fps export equals 60 fps word for word) |
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
-| Coupling | `matter_coupling_hydrostatic_force` (within 5%), `matter_coupling_floating_equilibrium` (density 0.5 settles at the waterline ± 0.5·dx), `matter_coupling_energy_light_body` (ratios 0.1/1/10 over 8 ticks: body energy, and body plus liquid energy, never above 1.01 × initial total; body plus liquid momentum less gravity within 1% of the momentum exchanged), `matter_push_out_reaction_matches_removed_momentum` (D30), `matter_coupling_free_flight_matches_box3d`, `matter_coupling_presentation_shares_display_time` |
+| Coupling | the liquid conformance suite, run for every coupled liquid: `liquid_hydrostatic_lift` (within 5%), `liquid_floating_draft` (density 0.5 settles at the waterline ± 0.5·dx), `liquid_coupling_collision` (ratios 0.1/1/10 over up to 30 ticks, ending where the scene loses liquid or the box and never under 8: body energy, and body plus liquid energy, never above 1.01 × initial total; body plus liquid momentum less gravity within 1% of the momentum exchanged), `liquid_free_flight`, `liquid_coupled_world_steps_once_per_tick`; MPM's own: `matter_push_out_reaction_matches_removed_momentum` (D30), `matter_coupling_presentation_shares_display_time` |
 | Coupled pair never blocks live | `matter_coupled_holds_when_reaction_pending`; negative gate: `rg -n 'wait_until_completed\|commit_and_wait' crates/manifold-renderer/src/node_graph/primitives/matter_*.rs` returns nothing |
 | Forces and impulses | `matter_impulse_once_per_tick_across_substeps`; `matter_force_lattice_matches_field`; `matter_input_stream_24_30_60` |
 | One liquid-domain predicate | negative gate: `rg -n '"node\.fluid_surface"' crates -g '*.rs'` returns hits only in `manifold-core/src/liquid_domain.rs`, `R/primitives/fluid_surface.rs` and test code |

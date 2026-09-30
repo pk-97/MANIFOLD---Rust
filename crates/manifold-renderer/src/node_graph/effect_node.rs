@@ -197,6 +197,38 @@ pub struct ConditionalRequirement {
     pub required_inputs: &'static [&'static str],
 }
 
+#[cfg(feature = "gpu-proofs")]
+thread_local! {
+    static NODE_ERROR_TAP: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// GPU proofs: while alive, records every error a node reports on this
+/// thread ([`EffectNodeContext::error`]), so a check can require a named one.
+#[cfg(feature = "gpu-proofs")]
+#[doc(hidden)]
+pub struct NodeErrorTap(std::marker::PhantomData<std::rc::Rc<()>>);
+
+#[cfg(feature = "gpu-proofs")]
+impl NodeErrorTap {
+    #[expect(clippy::new_without_default, reason = "arming the tap is a side effect, not a default value")]
+    pub fn new() -> Self {
+        NODE_ERROR_TAP.set(Some(Vec::new()));
+        Self(std::marker::PhantomData)
+    }
+
+    /// The errors reported since the last take.
+    pub fn take(&self) -> Vec<String> {
+        NODE_ERROR_TAP.with_borrow_mut(|tap| tap.as_mut().map(std::mem::take).unwrap_or_default())
+    }
+}
+
+#[cfg(feature = "gpu-proofs")]
+impl Drop for NodeErrorTap {
+    fn drop(&mut self) {
+        NODE_ERROR_TAP.set(None);
+    }
+}
+
 /// What an [`EffectNode`] sees during `evaluate`.
 ///
 /// The runtime populates this each step with the bindings produced by the
@@ -481,8 +513,15 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// scratch (legacy test paths). Production execution always wires
     /// one in.
     pub fn error(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        #[cfg(feature = "gpu-proofs")]
+        NODE_ERROR_TAP.with_borrow_mut(|tap| {
+            if let Some(log) = tap {
+                log.push(message.clone());
+            }
+        });
         if let Some(buf) = self.errors.as_deref_mut() {
-            buf.push(message.into());
+            buf.push(message);
         }
     }
 

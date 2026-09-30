@@ -15,7 +15,8 @@ use super::particle_volume::{ParticleVolume, refined_nodes};
 use super::surface_crossings::SurfaceCrossings;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid::domain_layout;
-use crate::node_graph::matter::{MatterLattice, lattice_nodes};
+use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::matter::lattice_nodes;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::whitewater::{
@@ -23,8 +24,8 @@ use crate::node_graph::whitewater::{
 };
 
 /// The solid lattice both hosts publish at 64: the matter layout's.
-fn lattice_at_64() -> MatterLattice {
-    MatterLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout"))
+fn lattice_at_64() -> LiquidLattice {
+    LiquidLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout"))
 }
 
 fn grid_params(nodes: [u32; 3]) -> ParamValues {
@@ -57,7 +58,7 @@ fn level_last_read(cells: [u32; 3], s: u32, level: [u32; 3]) -> u64 {
 /// surface group allows.
 #[test]
 fn whitewater_extents_at_64() {
-    let nodes = lattice_at_64().nodes;
+    let nodes = lattice_at_64().nodes();
     assert_eq!(nodes, [71; 3]);
     let cells = grid_cells(nodes).expect("cells");
     assert_eq!(cells, [70; 3]);
@@ -104,7 +105,7 @@ fn whitewater_extents_at_64() {
 /// every axis and 1 to 4, is a named refusal, never a guessed stride.
 #[test]
 fn whitewater_refuses_fractional_refinement() {
-    let nodes = lattice_at_64().nodes;
+    let nodes = lattice_at_64().nodes();
     for level in [[212; 3], [211, 141, 211], [351; 3], [70; 3]] {
         let refusal = refinement(nodes, level).expect_err("refused");
         assert!(refusal.contains("is not a whole refinement of 1 to 4"), "{level:?}: {refusal}");
@@ -119,7 +120,7 @@ fn whitewater_refuses_fractional_refinement() {
 #[test]
 fn whitewater_refuses_misplaced_face_grid() {
     let lattice = lattice_at_64();
-    let nodes = lattice.nodes;
+    let nodes = lattice.nodes();
     assert_eq!(face_offset(nodes, [64; 3]), Ok([3; 3]));
     for face_cells in [[63, 64, 64], [64, 64, 62], [72; 3], [0; 3]] {
         let refusal = face_offset(nodes, face_cells).expect_err("refused");
@@ -128,7 +129,7 @@ fn whitewater_refuses_misplaced_face_grid() {
     let (origin, cell_size) = grid_box(lattice.bounds(), nodes).expect("cube cells");
     assert!((cell_size - 4.0 / 64.0).abs() < 1e-6, "{cell_size}");
     for axis in 0..3 {
-        assert!((origin[axis] - lattice.min[axis]).abs() < 1e-5, "axis {axis}: {origin:?} against {:?}", lattice.min);
+        assert!((origin[axis] - lattice.min()[axis]).abs() < 1e-5, "axis {axis}: {origin:?} against {:?}", lattice.min());
     }
     let mut stretched = lattice.bounds();
     stretched.scale[1] *= 1.5;
@@ -142,11 +143,11 @@ fn whitewater_refuses_misplaced_face_grid() {
 fn whitewater_snapshot_holds_one_frame_at_64() {
     use crate::node_graph::whitewater_handoff::SnapshotShape;
     let lattice = lattice_at_64();
-    let (origin, cell_size) = grid_box(lattice.bounds(), lattice.nodes).expect("grid box");
+    let (origin, cell_size) = grid_box(lattice.bounds(), lattice.nodes()).expect("grid box");
     let shape = SnapshotShape {
-        grid: manifold_fluids::WhitewaterGrid { cells: grid_cells(lattice.nodes).expect("cells"), cell_size, origin },
+        grid: manifold_fluids::WhitewaterGrid { cells: grid_cells(lattice.nodes()).expect("cells"), cell_size, origin },
         face_cells: [64; 3],
-        face_offset: face_offset(lattice.nodes, [64; 3]).expect("offset"),
+        face_offset: face_offset(lattice.nodes(), [64; 3]).expect("offset"),
         capacity: super::whitewater_lifecycle::DEFAULT_CAPACITY,
     };
     assert_eq!([0, 1, 2].map(|a| shape.face_bytes(a)), [266_240 * 4; 3]);
@@ -178,7 +179,7 @@ fn whitewater_particle_extents_at_64() {
     use super::whitewater_particle_cpu::face_index;
     use crate::node_graph::liquid::grid::face_len;
 
-    let nodes = lattice_at_64().nodes;
+    let nodes = lattice_at_64().nodes();
     let cells = grid_cells(nodes).expect("cells");
     let face_cells = [64; 3];
     let pad = face_offset(nodes, face_cells).expect("offset")[0] as i32;
@@ -247,7 +248,7 @@ fn emitter_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<
 /// running total, spawn and type into the lifecycle, its foam to a sink.
 /// Without, the counts go straight to a sink.
 fn whitewater_chain_def(spawn: bool) -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<&'static str>) {
-    let nodes = lattice_at_64().nodes;
+    let nodes = lattice_at_64().nodes();
     let level = refined_nodes(nodes.map(|n| n as f32), 3);
     let grid = |extra: &[(&str, Value)]| {
         let mut params = json!({"nodes_x": float(71.0), "nodes_y": float(71.0), "nodes_z": float(71.0)});
@@ -454,7 +455,7 @@ fn int(v: u64) -> Value {
 /// out: no test sink takes their records, and a consumer that reaches no
 /// output makes the partitioner refuse its producer's region.
 fn grid_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<&'static str>) {
-    let nodes = lattice_at_64().nodes;
+    let nodes = lattice_at_64().nodes();
     let level = refined_nodes(nodes.map(|n| n as f32), 3);
     let grid = |extra: &[(&str, Value)]| {
         let mut params = json!({"nodes_x": float(71.0), "nodes_y": float(71.0), "nodes_z": float(71.0)});

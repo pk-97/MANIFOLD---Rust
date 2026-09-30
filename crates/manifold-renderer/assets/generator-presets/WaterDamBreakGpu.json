@@ -1721,6 +1721,12 @@
                 "value": 2.0
               }
             }
+          },
+          {
+            "id": 16,
+            "typeId": "node.clamp_liquid_to_solids",
+            "handle": "Clamp To Solids",
+            "nodeId": "liquid_clamp_to_solids"
           }
         ],
         "wires": [
@@ -1871,12 +1877,102 @@
           {
             "fromNode": 14,
             "fromPort": "smoothed",
+            "toNode": 16,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "solid",
+            "toNode": 16,
+            "toPort": "solid"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 16,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 16,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 16,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_x",
+            "toNode": 16,
+            "toPort": "solid_nodes_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_y",
+            "toNode": 16,
+            "toPort": "solid_nodes_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_z",
+            "toNode": 16,
+            "toPort": "solid_nodes_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pos_x",
+            "toNode": 16,
+            "toPort": "center_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pos_y",
+            "toNode": 16,
+            "toPort": "center_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pos_z",
+            "toNode": 16,
+            "toPort": "center_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_x",
+            "toNode": 16,
+            "toPort": "size_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_y",
+            "toNode": 16,
+            "toPort": "size_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_z",
+            "toNode": 16,
+            "toPort": "size_z"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "clamped",
             "toNode": 8,
             "toPort": "levelset"
           },
           {
-            "fromNode": 14,
-            "fromPort": "smoothed",
+            "fromNode": 16,
+            "fromPort": "clamped",
             "toNode": 10,
             "toPort": "levelset"
           },

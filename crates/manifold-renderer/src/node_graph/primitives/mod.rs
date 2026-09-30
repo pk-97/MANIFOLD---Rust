@@ -189,8 +189,8 @@ mod math;
 mod grid_to_matter;
 mod matter_body_reaction;
 mod matter_common;
-mod matter_domain;
-mod matter_fill;
+pub(crate) mod matter_domain;
+pub(crate) mod matter_fill;
 mod matter_frame;
 mod matter_grid_update;
 mod matter_move_bodies;
@@ -324,43 +324,46 @@ mod trigger_gate;
 mod transform_3d;
 mod transform_components;
 pub(crate) mod prefix_scan;
-mod sort_particles_into_cells;
+pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
-mod particle_volume;
+pub(crate) mod particle_volume;
 mod smooth_lattice;
 mod cosine_reorder;
-mod cosine_spectrum;
+pub(crate) mod cosine_spectrum;
 mod cosine_half_spectrum;
 mod cosine_poisson_divide;
 mod cosine_surface_scale;
 mod fft_3d;
-mod dot_products;
+pub(crate) mod dot_products;
 mod combine_rows;
 mod divide_by_value;
-mod krylov_givens;
+pub(crate) mod krylov_givens;
 mod krylov_solve;
 mod krylov_basis;
-mod collar_cells;
-mod select_flagged;
-mod chart_entries;
+pub(crate) mod collar_cells;
+pub(crate) mod select_flagged;
+pub(crate) mod chart_entries;
 mod chart_sums;
 mod chart_spread;
 mod collar_source;
 mod collar_gather;
 mod collar_pressure;
-mod liquid_fill;
-mod liquid_feedback;
+pub(crate) mod liquid_fill;
+pub(crate) mod liquid_state;
+pub(crate) mod liquid_stats;
+mod liquid_frame;
+pub(crate) mod swash_domain;
 mod cells_with_particles;
-mod particles_to_faces;
+pub(crate) mod particles_to_faces;
 mod face_gravity;
 mod face_divergence;
 mod density_source;
 mod subtract_pressure;
 mod extend_faces;
 mod faces_to_particles;
-mod face_sample_component;
-mod matter_face_component;
+pub(crate) mod face_sample_component;
+pub(crate) mod matter_face_component;
 mod surface_crossings;
 mod nearest_crossing;
 mod crossing_distance;
@@ -374,7 +377,7 @@ mod wavecrest_potential;
 mod emission_count;
 mod spawn_whitewater;
 mod whitewater_type;
-mod whitewater_lifecycle;
+pub(crate) mod whitewater_lifecycle;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_handoff_tests;
 #[cfg(test)]
@@ -391,16 +394,14 @@ mod whitewater_field_tests;
 mod whitewater_extent_tests;
 #[cfg(test)]
 mod face_grid_extent_tests;
-#[cfg(test)]
-mod face_grid_scenes;
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod face_grid_scenes;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_scene_tests;
-#[cfg(test)]
-mod swash_preset;
-#[cfg(test)]
-mod swash_extent_tests;
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod swash_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -419,12 +420,11 @@ pub(crate) mod swash_race_tests;
 pub(crate) mod swash_still;
 #[cfg(all(test, feature = "water-race-probes"))]
 mod swash_render_smoke_tests;
+mod clamp_liquid_to_solids;
 mod count_surface_triangles;
-mod volume_surface_mesh;
+pub(crate) mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
-#[cfg(test)]
-mod matter_extent_tests;
 mod transform_shake;
 mod scene_object;
 mod revolve_curve;

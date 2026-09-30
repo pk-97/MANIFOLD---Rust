@@ -8,9 +8,18 @@
 //! descendants of the boundary and ancestors of its capture producers are
 //! contracted into a [`SubstepRegion`]. The executor runs the boundary once,
 //! then the region body `count` times with per-iteration scalars; only the
-//! boundary's final outputs escape. Regions are compile-time, never nested,
-//! and a malformed region is a compile error naming NodeIds, never a
-//! fallback to ordinary traversal.
+//! boundary's final outputs escape. A malformed region is a compile error
+//! naming NodeIds, never a fallback to ordinary traversal.
+//!
+//! Regions nest at most [`MAX_REGION_DEPTH`] deep
+//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D10): an outer body may hold whole
+//! inner regions, which hold none. An inner region lies wholly inside one
+//! outer body, names no clock, and only its boundary's outputs leave it, into
+//! the outer body or the outer capture. The executor runs an inner region its
+//! own count times on every outer iteration.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use ahash::{AHashMap, AHashSet};
 
@@ -60,6 +69,10 @@ pub struct SubstepResultPorts {
     pub output: &'static str,
 }
 
+/// How deep substep regions nest: an outer region and the inner regions in
+/// its body.
+pub const MAX_REGION_DEPTH: usize = 2;
+
 /// One contracted repeat region of an
 /// [`ExecutionPlan`](crate::node_graph::execution_plan::ExecutionPlan).
 ///
@@ -70,21 +83,125 @@ pub struct SubstepResultPorts {
 /// iteration or, for the boundary, before the body reads it — so the executor
 /// holds them for the whole repeat and releases them when the region ends.
 /// `clock` is the clock owner of a boundary that opted into host syncs.
+///
+/// `inner` are the regions nested in this body, in step order, each a
+/// contiguous run of `steps`. An inner region has no `inner`, no `clock` and
+/// no `held_resources`: its outer region holds everything an inner step
+/// reads for the whole outer repeat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubstepRegion {
     pub boundary: NodeInstanceId,
     pub steps: Vec<usize>,
     pub held_resources: Vec<ResourceId>,
     pub clock: Option<NodeInstanceId>,
+    pub inner: Vec<SubstepRegion>,
 }
 
 /// Node-level result of region derivation: the boundary first, then its body
-/// in topological order. `compile` maps it to step indices.
+/// in execution order, every inner region a contiguous run inside it.
+/// `compile` maps it to step indices.
 #[derive(Debug, Clone)]
 pub(crate) struct RegionNodes {
     pub boundary: NodeInstanceId,
     pub nodes: Vec<NodeInstanceId>,
     pub clock: Option<NodeInstanceId>,
+    /// The outer region's boundary when this region is nested.
+    pub parent: Option<NodeInstanceId>,
+}
+
+/// A region's place in the nest. The plan compiler and the freeze finder
+/// both derive it here, so a fused kernel and the executor always agree on
+/// which side of every border a node sits.
+pub(crate) struct RegionNest<N> {
+    pub boundary: N,
+    /// Every body node, each inner region whole (boundary and body).
+    pub body: AHashSet<N>,
+    pub parent: Option<N>,
+    pub children: Vec<N>,
+}
+
+/// A nest the compiler refuses, before any per-node check.
+pub(crate) enum NestError<N> {
+    /// `inner` sits in `middle`'s body, which sits in `outer`'s.
+    TooDeep { outer: N, middle: N, inner: N },
+    /// `inner` sits in the bodies of two regions, neither inside the other.
+    TwoOuters { inner: N, first: N, second: N },
+}
+
+/// Nest the regions of `boundaries` (each boundary with its capture
+/// producers); the result is parallel to the input.
+///
+/// A region is inner when its boundary lies in another region's forward body
+/// (a descendant of that boundary and an ancestor of its capture producers,
+/// capture wires excluded). That outer body then also takes every node
+/// between the outer boundary and the inner capture producers, so the inner
+/// region and whatever feeds it per outer iteration lie wholly inside. `fwd`
+/// and `rev` carry forward wires only.
+pub(crate) fn nest_regions<N>(
+    boundaries: &[(N, Vec<N>)],
+    fwd: &AHashMap<N, Vec<N>>,
+    rev: &AHashMap<N, Vec<N>>,
+) -> Result<Vec<RegionNest<N>>, NestError<N>>
+where
+    N: Copy + Eq + std::hash::Hash,
+{
+    let raw: Vec<AHashSet<N>> = boundaries
+        .iter()
+        .map(|(boundary, producers)| region_body(*boundary, producers, fwd, rev))
+        .collect();
+    let children: Vec<Vec<usize>> = (0..boundaries.len())
+        .map(|outer| {
+            (0..boundaries.len())
+                .filter(|&inner| inner != outer && raw[outer].contains(&boundaries[inner].0))
+                .collect()
+        })
+        .collect();
+    for (outer, inners) in children.iter().enumerate() {
+        for &middle in inners {
+            if let Some(&inner) = children[middle].first() {
+                return Err(NestError::TooDeep {
+                    outer: boundaries[outer].0,
+                    middle: boundaries[middle].0,
+                    inner: boundaries[inner].0,
+                });
+            }
+        }
+    }
+    let mut parent: Vec<Option<usize>> = vec![None; boundaries.len()];
+    for (outer, inners) in children.iter().enumerate() {
+        for &inner in inners {
+            if let Some(first) = parent[inner] {
+                return Err(NestError::TwoOuters {
+                    inner: boundaries[inner].0,
+                    first: boundaries[first].0,
+                    second: boundaries[outer].0,
+                });
+            }
+            parent[inner] = Some(outer);
+        }
+    }
+    Ok(raw
+        .into_iter()
+        .enumerate()
+        .map(|(index, raw_body)| {
+            let (boundary, producers) = &boundaries[index];
+            let body = if children[index].is_empty() {
+                raw_body
+            } else {
+                let mut all_producers = producers.clone();
+                for &inner in &children[index] {
+                    all_producers.extend(boundaries[inner].1.iter().copied());
+                }
+                region_body(*boundary, &all_producers, fwd, rev)
+            };
+            RegionNest {
+                boundary: *boundary,
+                body,
+                parent: parent[index].map(|outer| boundaries[outer].0),
+                children: children[index].iter().map(|&inner| boundaries[inner].0).collect(),
+            }
+        })
+        .collect())
 }
 
 /// Derive and validate the substep regions of the live graph.
@@ -98,10 +215,12 @@ pub(crate) struct RegionNodes {
 ///
 /// Every failure is [`GraphError::MalformedSubstepRegion`] naming the boundary
 /// and the offending node: an undeclared port, an unwired capture port, a
-/// capture producer the boundary does not reach, a nested boundary, a
-/// state-capture node, a draw call, the final output or a coupled-scene
-/// participant inside a body, a body wire read outside the region, a node
-/// claimed by two regions, or one region feeding another.
+/// capture producer the boundary does not reach, a nest deeper than
+/// [`MAX_REGION_DEPTH`], an inner region inside two outer ones or only partly
+/// inside one, a clock on an inner region, a state-capture node, a draw call,
+/// the final output or a coupled-scene participant inside a body, a body wire
+/// read outside the region, an inner intermediate captured by the outer
+/// boundary, a node claimed by two regions, or one region feeding another.
 pub(crate) fn derive_regions(
     graph: &Graph,
     active_order: &[NodeInstanceId],
@@ -130,8 +249,8 @@ pub(crate) fn derive_regions(
         .flat_map(|pair| [pair.fluid, pair.rigid])
         .collect();
 
-    let mut regions: Vec<RegionNodes> = Vec::with_capacity(boundaries.len());
-    let mut claimed: AHashSet<NodeInstanceId> = AHashSet::default();
+    let mut declared: Vec<(NodeInstanceId, SubstepBoundaryPorts, Vec<NodeInstanceId>)> =
+        Vec::with_capacity(boundaries.len());
     for &(boundary, ports) in &boundaries {
         if !active.contains(&boundary) {
             continue;
@@ -177,15 +296,63 @@ pub(crate) fn derive_regions(
             };
             producers.push(wire.from.0);
         }
+        declared.push((boundary, ports, producers));
+    }
 
-        let members = region_body(boundary, &producers, &fwd, &rev);
+    let shapes: Vec<(NodeInstanceId, Vec<NodeInstanceId>)> = declared
+        .iter()
+        .map(|(boundary, _, producers)| (*boundary, producers.clone()))
+        .collect();
+    let nest = nest_regions(&shapes, &fwd, &rev).map_err(|error| match error {
+        NestError::TooDeep { outer, middle, inner } => malformed(
+            outer,
+            inner,
+            format!(
+                "substep regions nest at most {MAX_REGION_DEPTH} deep: region {inner:?} sits \
+                 inside {middle:?}, which sits inside {outer:?}"
+            ),
+        ),
+        NestError::TwoOuters { inner, first, second } => malformed(
+            second,
+            inner,
+            format!(
+                "partial overlap: inner region {inner:?} sits inside two outer regions, \
+                 {first:?} and {second:?}; an inner region lies wholly inside one outer body"
+            ),
+        ),
+    })?;
+    for (region, (boundary, ports, _)) in nest.iter().zip(&declared) {
+        if let (Some(outer), Some(port)) = (region.parent, ports.clock) {
+            return Err(malformed(
+                outer,
+                *boundary,
+                format!(
+                    "inner region {boundary:?} names clock port `{port}` — only an outer \
+                     region may own host syncs"
+                ),
+            ));
+        }
+    }
+    // Capture wires by producer, for the inner-intermediate check; only a
+    // nest needs them.
+    let mut captured_by: AHashMap<NodeInstanceId, Vec<NodeInstanceId>> = AHashMap::default();
+    if nest.iter().any(|region| region.parent.is_some()) {
+        for w in graph.walk_wires(WireWalkMode::CaptureOnly) {
+            captured_by.entry(w.from.0).or_default().push(w.to.0);
+        }
+    }
+
+    let mut regions: Vec<RegionNodes> = Vec::with_capacity(declared.len());
+    let mut claimed: AHashSet<NodeInstanceId> = AHashSet::default();
+    for (region, (boundary, ports, producers)) in nest.iter().zip(&declared) {
+        let (boundary, ports) = (*boundary, *ports);
         let body: Vec<NodeInstanceId> = active_order
             .iter()
             .copied()
-            .filter(|id| members.contains(id))
+            .filter(|id| region.body.contains(id))
             .collect();
 
-        for &producer in &producers {
+        for &producer in producers {
             if !body.contains(&producer) {
                 return Err(malformed(
                     boundary,
@@ -198,16 +365,27 @@ pub(crate) fn derive_regions(
         }
 
         let members: AHashSet<NodeInstanceId> = body.iter().copied().collect();
+        // Inner regions' nodes: their own region claims them.
+        let inner_members: AHashSet<NodeInstanceId> = nest
+            .iter()
+            .filter(|inner| region.children.contains(&inner.boundary))
+            .flat_map(|inner| inner.body.iter().copied().chain([inner.boundary]))
+            .collect();
         for &node in &body {
             let inst = graph.get_node(node).expect("body node exists");
-            if inst.node.substep_boundary().is_some() {
+            let inner_boundary = region.children.contains(&node);
+            if !inner_boundary && inst.node.substep_boundary().is_some() {
                 return Err(malformed(
                     boundary,
                     node,
-                    "nested substep boundary inside a region".to_string(),
+                    format!(
+                        "partial overlap: substep boundary {node:?} lies in this region's body \
+                         but its own body does not; an inner region lies wholly inside one \
+                         outer body and feeds it through its boundary's outputs"
+                    ),
                 ));
             }
-            if !inst.node.state_capture_input_ports().is_empty() {
+            if !inner_boundary && !inst.node.state_capture_input_ports().is_empty() {
                 return Err(malformed(
                     boundary,
                     node,
@@ -234,16 +412,32 @@ pub(crate) fn derive_regions(
                 .get(&node)
                 .and_then(|targets| targets.iter().find(|t| **t != boundary && !members.contains(t)))
             {
+                let reason = if inner_boundary {
+                    format!(
+                        "inner region {node:?}'s output escapes to outside reader {target:?} — \
+                         an inner region's outputs feed only its outer body or the outer capture"
+                    )
+                } else {
+                    format!(
+                        "region intermediate wire escapes to outside reader {target:?} — \
+                         only the boundary's outputs may leave the region"
+                    )
+                };
+                return Err(malformed(boundary, node, reason));
+            }
+            if let Some(outer) = region.parent
+                && captured_by.get(&node).is_some_and(|targets| targets.contains(&outer))
+            {
                 return Err(malformed(
                     boundary,
                     node,
                     format!(
-                        "region intermediate wire escapes to outside reader {target:?} — \
-                         only the boundary's outputs may leave the region"
+                        "inner region intermediate is captured by the outer boundary {outer:?} — \
+                         only the inner boundary's outputs may leave the inner region"
                     ),
                 ));
             }
-            if !claimed.insert(node) {
+            if !inner_members.contains(&node) && !claimed.insert(node) {
                 return Err(malformed(
                     boundary,
                     node,
@@ -277,20 +471,52 @@ pub(crate) fn derive_regions(
         };
         let mut nodes = Vec::with_capacity(body.len() + 1);
         nodes.push(boundary);
-        nodes.extend(body);
-        regions.push(RegionNodes { boundary, nodes, clock });
+        if region.children.is_empty() {
+            nodes.extend(body);
+        } else {
+            let inner_blocks: Vec<Vec<NodeInstanceId>> = nest
+                .iter()
+                .filter(|inner| region.children.contains(&inner.boundary))
+                .map(|inner| {
+                    std::iter::once(inner.boundary)
+                        .chain(active_order.iter().copied().filter(|id| inner.body.contains(id)))
+                        .collect()
+                })
+                .collect();
+            nodes.extend(order_outer_body(&body, &inner_blocks, &fwd)?);
+        }
+        regions.push(RegionNodes {
+            boundary,
+            nodes,
+            clock,
+            parent: region.parent,
+        });
     }
 
     // One region feeding another (chaining) is not supported: a member whose
-    // forward predecessor belongs to a different region.
-    let region_of: AHashMap<NodeInstanceId, NodeInstanceId> = regions
+    // forward predecessor belongs to a different region. Nesting is not
+    // chaining: an inner region reads its outer body, and the outer body
+    // reads the inner boundary's outputs.
+    let mut region_of: AHashMap<NodeInstanceId, NodeInstanceId> = AHashMap::default();
+    for region in regions.iter().filter(|r| r.parent.is_none()) {
+        region_of.extend(region.nodes.iter().map(|&n| (n, region.boundary)));
+    }
+    for region in regions.iter().filter(|r| r.parent.is_some()) {
+        region_of.extend(region.nodes.iter().map(|&n| (n, region.boundary)));
+    }
+    let parent_of: AHashMap<NodeInstanceId, NodeInstanceId> = regions
         .iter()
-        .flat_map(|r| r.nodes.iter().map(move |&n| (n, r.boundary)))
+        .filter_map(|r| r.parent.map(|outer| (r.boundary, outer)))
         .collect();
     for region in &regions {
-        for &node in &region.nodes {
+        let own = region.nodes.iter().filter(|n| region_of.get(n) == Some(&region.boundary));
+        for &node in own {
             for &pred in rev.get(&node).map(Vec::as_slice).unwrap_or(&[]) {
-                if region_of.get(&pred).is_some_and(|&b| b != region.boundary) {
+                if region_of.get(&pred).is_some_and(|&b| {
+                    b != region.boundary
+                        && Some(b) != region.parent
+                        && parent_of.get(&b) != Some(&region.boundary)
+                }) {
                     return Err(malformed(
                         region.boundary,
                         pred,
@@ -303,6 +529,75 @@ pub(crate) fn derive_regions(
     }
 
     Ok(regions)
+}
+
+/// An outer body in execution order: topological, each inner region one
+/// contiguous run, boundary first. `body` is in topological order; each
+/// `inner` block is its boundary then its body in topological order.
+fn order_outer_body(
+    body: &[NodeInstanceId],
+    inner: &[Vec<NodeInstanceId>],
+    fwd: &AHashMap<NodeInstanceId, Vec<NodeInstanceId>>,
+) -> Result<Vec<NodeInstanceId>, GraphError> {
+    let block_of: AHashMap<NodeInstanceId, usize> = inner
+        .iter()
+        .enumerate()
+        .flat_map(|(block, members)| members.iter().map(move |&n| (n, block)))
+        .collect();
+    // (first topological position, members)
+    let mut groups: Vec<(usize, Vec<NodeInstanceId>)> = Vec::new();
+    let mut group_of: AHashMap<NodeInstanceId, usize> = AHashMap::default();
+    for (position, &node) in body.iter().enumerate() {
+        if group_of.contains_key(&node) {
+            continue;
+        }
+        let members = match block_of.get(&node) {
+            Some(&block) => inner[block].clone(),
+            None => vec![node],
+        };
+        for &member in &members {
+            group_of.insert(member, groups.len());
+        }
+        groups.push((position, members));
+    }
+    let mut incoming = vec![0usize; groups.len()];
+    let mut outgoing = vec![Vec::<usize>::new(); groups.len()];
+    let mut edges = AHashSet::<(usize, usize)>::default();
+    for &node in body {
+        for target in fwd.get(&node).map(Vec::as_slice).unwrap_or(&[]) {
+            let (Some(&from), Some(&to)) = (group_of.get(&node), group_of.get(target)) else {
+                continue;
+            };
+            if from != to && edges.insert((from, to)) {
+                outgoing[from].push(to);
+                incoming[to] += 1;
+            }
+        }
+    }
+    let mut ready: BinaryHeap<Reverse<(usize, usize)>> = incoming
+        .iter()
+        .enumerate()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(group, _)| Reverse((groups[group].0, group)))
+        .collect();
+    let mut order = Vec::with_capacity(body.len());
+    let mut placed = 0;
+    while let Some(Reverse((_, group))) = ready.pop() {
+        placed += 1;
+        order.extend(groups[group].1.iter().copied());
+        for &next in &outgoing[group] {
+            incoming[next] -= 1;
+            if incoming[next] == 0 {
+                ready.push(Reverse((groups[next].0, next)));
+            }
+        }
+    }
+    if placed != groups.len() {
+        return Err(GraphError::CycleDetected {
+            involves: body.to_vec(),
+        });
+    }
+    Ok(order)
 }
 
 fn malformed(boundary: NodeInstanceId, node: NodeInstanceId, reason: String) -> GraphError {
@@ -464,17 +759,29 @@ pub mod test_nodes {
     /// A particle substep boundary with the same shape the MPM state node
     /// takes: `seed` copied in once, `out` the persistent state the body
     /// mutates, `in` the capture. `iterations` per frame, `step_dt` from
-    /// [`particle_step_dt`], `step_index` the iteration.
+    /// [`particle_step_dt`], `step_index` the iteration. The inner variant
+    /// (`test.particle_inner_boundary`) copies `seed` in on every evaluate:
+    /// nested in an outer body, it restarts from that body each outer
+    /// iteration, the way a Krylov boundary restarts from its start vector.
     struct ParticleBoundary {
         type_id: EffectNodeType,
         inputs: Vec<NodeInput>,
         outputs: Vec<NodeOutput>,
         params: Vec<ParamDef>,
         seeded: bool,
+        reseed: bool,
         pending: u32,
     }
 
     impl ParticleBoundary {
+        fn inner() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.particle_inner_boundary"),
+                reseed: true,
+                ..Self::new()
+            }
+        }
+
         fn new() -> Self {
             let particles = PortType::Array(ArrayType::of_known::<Particle>());
             let f32_ty = PortType::Scalar(ScalarType::F32);
@@ -491,6 +798,7 @@ pub mod test_nodes {
                 ],
                 params: vec![int_param("iterations", 4.0)],
                 seeded: false,
+                reseed: false,
                 pending: 0,
             }
         }
@@ -533,7 +841,7 @@ pub mod test_nodes {
             else {
                 return;
             };
-            if !self.seeded {
+            if !self.seeded || self.reseed {
                 self.seeded = true;
                 let size = seed.size.min(out.size);
                 let gpu = ctx.gpu.as_deref_mut().expect("particle boundary needs a GpuEncoder");
@@ -647,6 +955,7 @@ pub mod test_nodes {
             })
         });
         registry.register("test.particle_boundary", || Box::new(ParticleBoundary::new()));
+        registry.register("test.particle_inner_boundary", || Box::new(ParticleBoundary::inner()));
         registry.register("test.particle_sink", || {
             Box::new(ParticleSink {
                 type_id: EffectNodeType::new("test.particle_sink"),
@@ -733,6 +1042,9 @@ mod tests {
                 outputs.push(output("stats", PortType::Texture2D));
                 &["in", "stats_in"]
             };
+            if let Some(clock) = ports.clock {
+                inputs.push(input(clock, PortType::Texture2D, false));
+            }
             Self {
                 boundary: Some(ports),
                 capture_inputs,
@@ -1032,30 +1344,261 @@ mod tests {
         assert!(reason.contains("not reachable"), "{reason}");
     }
 
+    // ─── Nested regions: the compiler (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P5) ───
+
+    fn region_nodes(plan: &crate::node_graph::ExecutionPlan, region: &SubstepRegion) -> Vec<NodeInstanceId> {
+        region.steps.iter().map(|&i| plan.steps()[i].node).collect()
+    }
+
+    /// ```text
+    /// src ─▶ outer.seed
+    /// outer.out ─┬─▶ pre.a ─┬─▶ inner.seed
+    ///            │          ├─▶ z.a ──────▶ inner_body.b
+    ///            │          └─▶ side.a ───▶ post.b
+    ///            └─▶ consumer.tex
+    /// inner.out ─┬─▶ inner_body.a ─▶ (capture) inner.in
+    ///            └─▶ post.a ─▶ (capture) outer.in
+    /// ```
+    /// `z` feeds only the inner body, so the outer region reaches it only
+    /// through the inner region. Plain topological order puts `z` and `side`
+    /// between the inner boundary and its body.
     #[test]
-    fn substeps_region_nested_boundary_rejected() {
+    fn nested_region_contracts_inner_whole() {
         let mut graph = Graph::new();
         let src = source(&mut graph, "src");
         let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
-        let body_a = pass(&mut graph, "body_a");
+        let pre = pass(&mut graph, "pre");
         let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let z = pass(&mut graph, "z");
+        let side = pass(&mut graph, "side");
         let inner_body = pass(&mut graph, "inner_body");
-        let body_b = pass(&mut graph, "body_b");
+        let post = pass(&mut graph, "post");
         let consumer = sink(&mut graph, "consumer");
         graph.connect((src, "out"), (outer, "seed")).unwrap();
-        graph.connect((outer, "out"), (body_a, "a")).unwrap();
-        graph.connect((body_a, "out"), (body_b, "a")).unwrap();
-        graph.connect((body_a, "out"), (inner, "seed")).unwrap();
-        graph.connect((inner, "out"), (body_b, "b")).unwrap();
+        graph.connect((outer, "out"), (pre, "a")).unwrap();
+        graph.connect((pre, "out"), (inner, "seed")).unwrap();
+        graph.connect((pre, "out"), (z, "a")).unwrap();
+        graph.connect((pre, "out"), (side, "a")).unwrap();
         graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((z, "out"), (inner_body, "b")).unwrap();
         graph.connect((inner_body, "out"), (inner, "in")).unwrap();
-        graph.connect((body_b, "out"), (outer, "in")).unwrap();
+        graph.connect((inner, "out"), (post, "a")).unwrap();
+        graph.connect((side, "out"), (post, "b")).unwrap();
+        graph.connect((post, "out"), (outer, "in")).unwrap();
         graph.connect((outer, "out"), (consumer, "tex")).unwrap();
 
-        // Boundaries are walked in id order; `outer` was added first.
+        let topo = crate::node_graph::validation::topological_sort(&graph).unwrap();
+        let at = |node| topo.iter().position(|&n| n == node).unwrap();
+        assert!(
+            at(inner) < at(z) && at(z) < at(inner_body),
+            "premise: plain topological order splits the inner region: {topo:?}"
+        );
+
+        let plan = compile(&graph).unwrap();
+        let order: Vec<NodeInstanceId> = plan.steps().iter().map(|s| s.node).collect();
+        assert_eq!(
+            order,
+            vec![src, outer, pre, z, inner, inner_body, side, post, consumer],
+            "the inner region is one run inside the outer block"
+        );
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 1, "only the outer region runs at the top level");
+        let outer_region = &regions[0];
+        assert_eq!(outer_region.boundary, outer);
+        assert_eq!(outer_region.steps, (1..=7).collect::<Vec<_>>());
+        assert_eq!(outer_region.inner.len(), 1);
+        let inner_region = &outer_region.inner[0];
+        assert_eq!(region_nodes(&plan, inner_region), vec![inner, inner_body]);
+        assert_eq!(inner_region.steps, vec![4, 5]);
+        assert!(inner_region.inner.is_empty() && inner_region.clock.is_none());
+
+        // The outer region holds everything its steps read, inner ones
+        // included, for the whole outer repeat; the inner region holds nothing.
+        assert!(inner_region.held_resources.is_empty());
+        let held = |node, port| step_output(&plan, order.iter().position(|&n| n == node).unwrap(), port);
+        for resource in [held(src, "out"), held(pre, "out"), held(z, "out"), held(side, "out"), held(inner, "out")] {
+            assert!(outer_region.held_resources.contains(&resource), "{resource:?} not held");
+        }
+        for step in &plan.steps()[1..=7] {
+            for resource in &outer_region.held_resources {
+                assert!(!step.free_after.contains(resource), "{resource:?} freed mid-region");
+            }
+        }
+        assert!(plan.late_capture_step_indices().is_empty(), "both boundaries capture per iteration");
+        assert!((1..=7).all(|i| !plan.step_hoistable(i)));
+    }
+
+    /// The inner boundary's output may be the outer region's candidate
+    /// directly: the outer capture.
+    #[test]
+    fn nested_region_inner_output_feeds_outer_capture() {
+        let mut graph = Graph::new();
+        let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner_body = pass(&mut graph, "inner_body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((outer, "out"), (inner, "seed")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(region_nodes(&plan, &regions[0]), vec![outer, inner, inner_body]);
+        assert_eq!(region_nodes(&plan, &regions[0].inner[0]), vec![inner, inner_body]);
+    }
+
+    /// `side`'s boundary sits in the outer body (its output feeds the inner
+    /// body) but its own body does not.
+    #[test]
+    fn nested_region_rejects_partial_overlap() {
+        let mut graph = Graph::new();
+        let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let pre = pass(&mut graph, "pre");
+        let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let side = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let side_body = pass(&mut graph, "side_body");
+        let inner_body = pass(&mut graph, "inner_body");
+        let post = pass(&mut graph, "post");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((outer, "out"), (pre, "a")).unwrap();
+        graph.connect((pre, "out"), (inner, "seed")).unwrap();
+        graph.connect((pre, "out"), (side, "seed")).unwrap();
+        graph.connect((side, "out"), (side_body, "a")).unwrap();
+        graph.connect((side_body, "out"), (side, "in")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((side, "out"), (inner_body, "b")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (post, "a")).unwrap();
+        graph.connect((post, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "tex")).unwrap();
+
+        let (b, node, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!((b, node), (outer, side));
+        assert!(reason.contains("partial overlap"), "{reason}");
+    }
+
+    /// One inner region in the bodies of two outer regions.
+    #[test]
+    fn nested_region_rejects_two_outer_regions() {
+        let mut graph = Graph::new();
+        let outer_a = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let outer_b = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let merge = pass(&mut graph, "merge");
+        let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner_body = pass(&mut graph, "inner_body");
+        let post_a = pass(&mut graph, "post_a");
+        let post_b = pass(&mut graph, "post_b");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((outer_a, "out"), (merge, "a")).unwrap();
+        graph.connect((outer_b, "out"), (merge, "b")).unwrap();
+        graph.connect((merge, "out"), (inner, "seed")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (post_a, "a")).unwrap();
+        graph.connect((inner, "out"), (post_b, "a")).unwrap();
+        graph.connect((post_a, "out"), (outer_a, "in")).unwrap();
+        graph.connect((post_b, "out"), (outer_b, "in")).unwrap();
+        graph.connect((outer_a, "out"), (consumer, "tex")).unwrap();
+        graph.connect((outer_b, "out"), (consumer, "aux")).unwrap();
+
+        let (b, node, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!((b, node), (outer_b, inner));
+        assert!(reason.contains("two outer regions") && reason.contains(&format!("{outer_a:?}")), "{reason}");
+    }
+
+    #[test]
+    fn nested_region_rejects_depth_three() {
+        let mut graph = Graph::new();
+        let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let middle = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner_body = pass(&mut graph, "inner_body");
+        let middle_post = pass(&mut graph, "middle_post");
+        let outer_post = pass(&mut graph, "outer_post");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((outer, "out"), (middle, "seed")).unwrap();
+        graph.connect((middle, "out"), (inner, "seed")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (middle_post, "a")).unwrap();
+        graph.connect((middle_post, "out"), (middle, "in")).unwrap();
+        graph.connect((middle, "out"), (outer_post, "a")).unwrap();
+        graph.connect((outer_post, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "tex")).unwrap();
+
         let (b, node, reason) = malformed_parts(compile(&graph).unwrap_err());
         assert_eq!((b, node), (outer, inner));
-        assert!(reason.contains("nested"), "{reason}");
+        assert!(
+            reason.contains("at most 2 deep") && reason.contains(&format!("{middle:?}")),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn nested_region_rejects_inner_clock() {
+        const CLOCKED: SubstepBoundaryPorts = SubstepBoundaryPorts {
+            clock: Some("clock"),
+            ..PORTS
+        };
+        let mut graph = Graph::new();
+        let clock = source(&mut graph, "clock");
+        let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner = graph.add_node(Box::new(TestNode::boundary(CLOCKED)));
+        let inner_body = pass(&mut graph, "inner_body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((clock, "out"), (inner, "clock")).unwrap();
+        graph.connect((outer, "out"), (inner, "seed")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "tex")).unwrap();
+
+        let (b, node, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!((b, node), (outer, inner));
+        assert!(reason.contains("clock port `clock`") && reason.contains("only an outer"), "{reason}");
+    }
+
+    #[test]
+    fn nested_region_rejects_inner_output_escaping_outer() {
+        let mut graph = Graph::new();
+        let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner_body = pass(&mut graph, "inner_body");
+        let post = pass(&mut graph, "post");
+        let peek = sink(&mut graph, "peek");
+        graph.connect((outer, "out"), (inner, "seed")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (post, "a")).unwrap();
+        graph.connect((inner, "out"), (peek, "tex")).unwrap();
+        graph.connect((post, "out"), (outer, "in")).unwrap();
+
+        let (b, node, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!((b, node), (outer, inner));
+        assert!(reason.contains("inner region") && reason.contains("escapes"), "{reason}");
+    }
+
+    /// An inner intermediate wired straight into the outer capture escapes
+    /// the inner region past its boundary.
+    #[test]
+    fn nested_region_rejects_inner_intermediate_in_outer_capture() {
+        let mut graph = Graph::new();
+        let outer = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let inner_body = pass(&mut graph, "inner_body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((outer, "out"), (inner, "seed")).unwrap();
+        graph.connect((inner, "out"), (inner_body, "a")).unwrap();
+        graph.connect((inner_body, "out"), (inner, "in")).unwrap();
+        graph.connect((inner_body, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "tex")).unwrap();
+
+        let (b, node, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!((b, node), (inner, inner_body));
+        assert!(reason.contains("captured by the outer boundary"), "{reason}");
     }
 
     #[test]
@@ -1358,9 +1901,34 @@ mod tests {
         accepted: f32,
         seeded: bool,
         ports: SubstepBoundaryPorts,
+        /// What evaluate logs; captures log `<capture_label> <value>`.
+        name: &'static str,
+        capture_label: &'static str,
+        /// Take `seed` on every evaluate, as an inner region restarting from
+        /// its outer body does.
+        reseed: bool,
+        step_dt: f32,
     }
 
     impl SimBoundary {
+        /// A labelled boundary for nests: its own log lines and `step_dt`,
+        /// reseeded on every evaluate when it is the inner one.
+        fn labelled(
+            log: Log,
+            count: Arc<Mutex<u32>>,
+            name: &'static str,
+            step_dt: f32,
+            reseed: bool,
+        ) -> Self {
+            Self {
+                name,
+                capture_label: if reseed { "inner capture" } else { "outer capture" },
+                step_dt,
+                reseed,
+                ..Self::new(log, count)
+            }
+        }
+
         fn new(log: Log, count: Arc<Mutex<u32>>) -> Self {
             let f32_ty = PortType::Scalar(ScalarType::F32);
             Self {
@@ -1381,6 +1949,10 @@ mod tests {
                 accepted: 0.0,
                 seeded: false,
                 ports: SIM_PORTS,
+                name: "boundary",
+                capture_label: "capture",
+                reseed: false,
+                step_dt: 0.5,
             }
         }
     }
@@ -1402,8 +1974,8 @@ mod tests {
             &[]
         }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            self.log.lock().unwrap().push("boundary".into());
-            if !self.seeded {
+            self.log.lock().unwrap().push(self.name.into());
+            if !self.seeded || self.reseed {
                 self.seeded = true;
                 self.accepted = scalar_in(ctx, "seed").unwrap_or(0.0);
             }
@@ -1423,13 +1995,13 @@ mod tests {
             if iteration >= self.pending {
                 return false;
             }
-            scalars[0] = 0.5;
+            scalars[0] = self.step_dt;
             scalars[1] = iteration as f32;
             true
         }
         fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             let candidate = scalar_in(ctx, "in").expect("capture slot bound");
-            self.log.lock().unwrap().push(format!("capture {candidate}"));
+            self.log.lock().unwrap().push(format!("{} {candidate}", self.capture_label));
             self.accepted = candidate;
             ctx.outputs.set_scalar("out", ParamValue::Float(candidate));
         }
@@ -1927,5 +2499,462 @@ mod tests {
             r.members.iter().any(|m| m.doc_id == 3) && r.members.iter().any(|m| m.doc_id == 5)
         });
         assert!(fused_together, "control: the force atom and mover should fuse");
+    }
+
+    // ─── Nested regions: executor and freeze (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P6) ───
+    //
+    // ```text
+    // src ─▶ outer.seed                     outer.step_index ─▶ pre.b
+    // outer.out ─▶ pre.a ─▶ inner.seed      outer.step_dt ─▶ z.a     aux ─▶ z.b
+    // inner.out ─▶ in_a.a ─▶ in_b.a ─▶ (capture) inner.in
+    // inner.step_index ─▶ in_a.b    z.out ─▶ in_a.c    inner.step_dt ─▶ in_b.b
+    // inner.out ─▶ post.a ─▶ (capture) outer.in       outer.step_dt ─▶ post.b
+    // outer.out ─▶ consumer.a
+    // ```
+    //
+    // Per outer iteration o: `pre = s + o`, `z = 0.5`; the inner region
+    // restarts from `pre` and runs `c = c + i + z + 0.25` per inner iteration
+    // i; `post = c + 0.5` becomes the outer state. The outer boundary serves
+    // step_dt 0.5, the inner one 0.25, so a level reading the other's
+    // scalars shows in the log.
+
+    struct NestFixture {
+        graph: Graph,
+        plan: crate::node_graph::ExecutionPlan,
+        log: Log,
+        outer_count: Arc<Mutex<u32>>,
+        inner_count: Arc<Mutex<u32>>,
+        aux: NodeInstanceId,
+        z: NodeInstanceId,
+    }
+
+    fn nest_fixture(outer_clock: bool) -> NestFixture {
+        let log: Log = Arc::default();
+        let outer_count = Arc::new(Mutex::new(2));
+        let inner_count = Arc::new(Mutex::new(3));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
+        let aux = graph.add_node(Box::new(Adder::constant("aux", log.clone(), 0.0)));
+        let mut outer_node = SimBoundary::labelled(log.clone(), outer_count.clone(), "outer", 0.5, false);
+        if outer_clock {
+            outer_node.ports = SIM_CLOCK_PORTS;
+        }
+        let outer = graph.add_node(Box::new(outer_node));
+        let pre = graph.add_node(Box::new(Adder::new("pre", log.clone())));
+        let z = graph.add_node(Box::new(Adder::new("z", log.clone())));
+        let inner = graph.add_node(Box::new(SimBoundary::labelled(
+            log.clone(),
+            inner_count.clone(),
+            "inner",
+            0.25,
+            true,
+        )));
+        let in_a = graph.add_node(Box::new(Adder::new("in_a", log.clone())));
+        let in_b = graph.add_node(Box::new(Adder::new("in_b", log.clone())));
+        let post = graph.add_node(Box::new(Adder::new("post", log.clone())));
+        let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
+        if outer_clock {
+            let clock = graph.add_node(Box::new(EagerClock {
+                type_id: EffectNodeType::new("test.eager_clock"),
+                outputs: vec![output("out", PortType::Scalar(ScalarType::F32))],
+                log: log.clone(),
+            }));
+            graph.connect((clock, "out"), (outer, "clock")).unwrap();
+        }
+        graph.connect((src, "out"), (outer, "seed")).unwrap();
+        graph.connect((outer, "out"), (pre, "a")).unwrap();
+        graph.connect((outer, "step_index"), (pre, "b")).unwrap();
+        graph.connect((pre, "out"), (inner, "seed")).unwrap();
+        graph.connect((outer, "step_dt"), (z, "a")).unwrap();
+        graph.connect((aux, "out"), (z, "b")).unwrap();
+        graph.connect((inner, "out"), (in_a, "a")).unwrap();
+        graph.connect((inner, "step_index"), (in_a, "b")).unwrap();
+        graph.connect((z, "out"), (in_a, "c")).unwrap();
+        graph.connect((in_a, "out"), (in_b, "a")).unwrap();
+        graph.connect((inner, "step_dt"), (in_b, "b")).unwrap();
+        graph.connect((in_b, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (post, "a")).unwrap();
+        graph.connect((outer, "step_dt"), (post, "b")).unwrap();
+        graph.connect((post, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "a")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].boundary, outer);
+        assert_eq!(regions[0].inner.len(), 1);
+        assert_eq!(regions[0].inner[0].boundary, inner);
+        NestFixture {
+            graph,
+            plan,
+            log,
+            outer_count,
+            inner_count,
+            aux,
+            z,
+        }
+    }
+
+    fn run_nest(fx: &mut NestFixture, exec: &mut Executor, outer: u32, inner: u32) -> Vec<String> {
+        *fx.outer_count.lock().unwrap() = outer;
+        *fx.inner_count.lock().unwrap() = inner;
+        fx.log.lock().unwrap().clear();
+        exec.execute_frame(&mut fx.graph, &fx.plan, frame_time());
+        fx.log.lock().unwrap().clone()
+    }
+
+    /// The outer state after `frames` frames, computed on the CPU.
+    fn nest_expected(frames: u32, outer: u32, inner: u32) -> f32 {
+        let mut state = 1.0f32;
+        for _ in 0..frames {
+            for o in 0..outer {
+                let mut c = state + o as f32;
+                for i in 0..inner {
+                    c = c + i as f32 + 0.5;
+                    c += 0.25;
+                }
+                state = c + 0.5;
+            }
+        }
+        state
+    }
+
+    fn without(log: &[String], prefixes: &[&str]) -> Vec<String> {
+        log.iter()
+            .filter(|e| !prefixes.iter().any(|p| e.starts_with(p)))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn nested_region_runs_inner_per_outer_iteration() {
+        let mut fx = nest_fixture(false);
+        let mut exec = Executor::with_mock();
+        let log = run_nest(&mut fx, &mut exec, 2, 3);
+        assert_eq!(
+            without(&log, &["src", "aux", "z "]),
+            vec![
+                "outer",
+                "pre a=1 b=0 c=none",
+                "inner",
+                "in_a a=1 b=0 c=0.5",
+                "in_b a=1.5 b=0.25 c=none",
+                "inner capture 1.75",
+                "in_a a=1.75 b=1 c=0.5",
+                "in_b a=3.25 b=0.25 c=none",
+                "inner capture 3.5",
+                "in_a a=3.5 b=2 c=0.5",
+                "in_b a=6 b=0.25 c=none",
+                "inner capture 6.25",
+                "post a=6.25 b=0.5 c=none",
+                "outer capture 6.75",
+                "pre a=6.75 b=1 c=none",
+                "inner",
+                "in_a a=7.75 b=0 c=0.5",
+                "in_b a=8.25 b=0.25 c=none",
+                "inner capture 8.5",
+                "in_a a=8.5 b=1 c=0.5",
+                "in_b a=10 b=0.25 c=none",
+                "inner capture 10.25",
+                "in_a a=10.25 b=2 c=0.5",
+                "in_b a=12.75 b=0.25 c=none",
+                "inner capture 13",
+                "post a=13 b=0.5 c=none",
+                "outer capture 13.5",
+                "consumer a=13.5 b=0 c=none",
+            ]
+        );
+        let z_runs = log.iter().filter(|e| e.starts_with("z ")).count();
+        assert_eq!(z_runs, 2, "z runs once per outer iteration: {log:?}");
+        assert_eq!(nest_expected(1, 2, 3), 13.5);
+
+        // The outer state carries across frames.
+        let log = run_nest(&mut fx, &mut exec, 2, 3);
+        assert_eq!(log.last().unwrap(), &format!("consumer a={} b=0 c=none", nest_expected(2, 2, 3)));
+
+        // No inner iterations: the inner boundary still restarts from `pre`
+        // each outer iteration and `post` reads that.
+        let log = run_nest(&mut fx, &mut exec, 1, 0);
+        let s = nest_expected(2, 2, 3);
+        assert_eq!(
+            without(&log, &["src", "aux", "z "]),
+            vec![
+                "outer".to_string(),
+                format!("pre a={s} b=0 c=none"),
+                "inner".to_string(),
+                format!("post a={s} b=0.5 c=none"),
+                format!("outer capture {}", s + 0.5),
+                format!("consumer a={} b=0 c=none", s + 0.5),
+            ]
+        );
+
+        // No outer iterations: nothing in the outer body runs.
+        let log = run_nest(&mut fx, &mut exec, 0, 3);
+        assert_eq!(
+            without(&log, &["src", "aux"]),
+            vec!["outer".to_string(), format!("consumer a={} b=0 c=none", s + 0.5)]
+        );
+    }
+
+    /// What the inner body reads from the outer body, and what the outer body
+    /// reads from outside, stays bound through every iteration of both
+    /// levels and is released once the outer region ends.
+    #[test]
+    fn nested_region_no_recycle_across_iterations() {
+        let mut fx = nest_fixture(false);
+        let mut exec = Executor::with_mock();
+        let output_of = |fx: &NestFixture, node| {
+            fx.plan
+                .steps()
+                .iter()
+                .find(|s| s.node == node)
+                .and_then(|s| s.outputs.first())
+                .map(|&(_, r)| r)
+                .unwrap()
+        };
+        let (aux_out, z_out) = (output_of(&fx, fx.aux), output_of(&fx, fx.z));
+        let region = &fx.plan.substep_regions()[0];
+        assert!(region.held_resources.contains(&aux_out) && region.held_resources.contains(&z_out));
+        let mut slot_counts = Vec::new();
+        for _ in 0..3 {
+            let log = run_nest(&mut fx, &mut exec, 3, 4);
+            let inner_reads: Vec<&String> = log.iter().filter(|e| e.starts_with("in_a")).collect();
+            assert_eq!(inner_reads.len(), 12);
+            assert!(inner_reads.iter().all(|e| e.ends_with("c=0.5")), "{inner_reads:?}");
+            let outer_reads: Vec<&String> = log.iter().filter(|e| e.starts_with("z ")).collect();
+            assert_eq!(outer_reads.len(), 3);
+            assert!(outer_reads.iter().all(|e| e.as_str() == "z a=0.5 b=0 c=none"), "{outer_reads:?}");
+            assert!(exec.backend().slot_for(aux_out).is_none());
+            assert!(exec.backend().slot_for(z_out).is_none());
+            slot_counts.push(exec.backend().slot_count());
+        }
+        assert!(
+            slot_counts.windows(2).all(|w| w[0] == w[1]),
+            "slot count grew across frames: {slot_counts:?}"
+        );
+    }
+
+    #[test]
+    fn nested_region_host_sync_only_between_outer_iterations() {
+        let _export = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        let mut fx = nest_fixture(true);
+        let mut exec = Executor::with_mock();
+        let log = run_nest(&mut fx, &mut exec, 3, 3);
+        let events: Vec<&str> = log
+            .iter()
+            .map(String::as_str)
+            .filter(|e| e.starts_with("host") || e.starts_with("pre") || e.contains("capture"))
+            .collect();
+        let mut expected = Vec::new();
+        for o in 0..3 {
+            if o > 0 {
+                expected.push(format!("host {o}"));
+            }
+            expected.push("pre".to_string());
+            expected.extend(["inner capture"; 3].map(String::from));
+            expected.push("outer capture".to_string());
+        }
+        let shapes: Vec<String> = events
+            .iter()
+            .map(|e| {
+                if e.starts_with("host") {
+                    e.to_string()
+                } else {
+                    e.rsplit_once(' ').map_or(e.to_string(), |(head, _)| head.to_string())
+                }
+            })
+            .map(|e| if e.starts_with("pre") { "pre".to_string() } else { e })
+            .collect();
+        assert_eq!(shapes, expected);
+        assert_eq!(exec.substep_host_syncs(), 2);
+        // The same state as a run without syncs.
+        assert_eq!(log.last().unwrap(), &format!("consumer a={} b=0 c=none", nest_expected(1, 3, 3)));
+        drop(_export);
+
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let log = run_nest(&mut fx, &mut exec, 3, 3);
+        assert!(log.iter().all(|e| !e.starts_with("host")), "{log:?}");
+        assert_eq!(exec.substep_host_syncs(), 2, "live never syncs");
+    }
+
+    #[test]
+    fn nested_region_truncation_keeps_inner_with_outer() {
+        let fx = nest_fixture(false);
+        let outer = &fx.plan.substep_regions()[0];
+        let last = *outer.steps.last().unwrap();
+        let whole = fx.plan.truncated(last + 1);
+        assert_eq!(whole.substep_regions(), fx.plan.substep_regions());
+        // A prefix past the inner region but inside the outer body drops
+        // both: the inner region never survives without its outer one.
+        let past_inner = *outer.inner[0].steps.last().unwrap() + 1;
+        assert!(past_inner <= last);
+        assert!(fx.plan.truncated(past_inner).substep_regions().is_empty());
+    }
+
+    /// ```text
+    /// seed ─▶ outside ─▶ outer_a.forces
+    /// outer.out ─▶ outer_a ─▶ outer_b ─▶ inner.seed
+    /// outer.out ─▶ z.particles, z.out ─▶ inner_a.forces
+    /// inner.out ─▶ inner_a ─▶ inner_b ─▶ (capture) inner.in
+    /// inner.out ─▶ post_a ─▶ post_b ─▶ (capture) outer.in
+    /// ```
+    /// `outside` (no region), `z` (outer body) and `inner_a` (inner body)
+    /// each meet a fusable neighbour across a border through a coincident
+    /// array wire; only the border gates keep them apart.
+    fn nested_particle_def() -> manifold_core::effect_graph_def::EffectGraphDef {
+        serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
+                {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                {"id": 2, "nodeId": "outer", "typeId": "test.particle_boundary"},
+                {"id": 3, "nodeId": "outer_a", "typeId": "node.move_particles_3d"},
+                {"id": 4, "nodeId": "outer_b", "typeId": "node.move_particles_3d"},
+                {"id": 5, "nodeId": "inner", "typeId": "test.particle_inner_boundary"},
+                {"id": 6, "nodeId": "z", "typeId": "node.push_from_walls_3d"},
+                {"id": 7, "nodeId": "inner_a", "typeId": "node.move_particles_3d"},
+                {"id": 8, "nodeId": "inner_b", "typeId": "node.move_particles_3d"},
+                {"id": 9, "nodeId": "post_a", "typeId": "node.move_particles_3d"},
+                {"id": 10, "nodeId": "post_b", "typeId": "node.move_particles_3d"},
+                {"id": 11, "nodeId": "outside", "typeId": "node.push_from_walls_3d"},
+                {"id": 12, "nodeId": "sink", "typeId": "test.particle_sink"},
+                {"id": 13, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "seed"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 11, "toPort": "in"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 11, "toPort": "particles"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
+                {"fromNode": 11, "fromPort": "out", "toNode": 3, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_dt", "toNode": 3, "toPort": "speed"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_index", "toNode": 4, "toPort": "speed"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "seed"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "in"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "in"},
+                {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "forces"},
+                {"fromNode": 5, "fromPort": "step_dt", "toNode": 7, "toPort": "speed"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "forces"},
+                {"fromNode": 5, "fromPort": "step_index", "toNode": 8, "toPort": "speed"},
+                {"fromNode": 8, "fromPort": "out", "toNode": 5, "toPort": "in"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 9, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 9, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_dt", "toNode": 9, "toPort": "speed"},
+                {"fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 10, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_index", "toNode": 10, "toPort": "speed"},
+                {"fromNode": 10, "fromPort": "out", "toNode": 2, "toPort": "in"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 12, "toPort": "particles"},
+                {"fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn particle_registry() -> crate::node_graph::PrimitiveRegistry {
+        let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        super::test_nodes::register_substep_test_nodes(&mut registry);
+        registry
+    }
+
+    /// I15: fusion never crosses a region border, nested or not.
+    #[test]
+    fn nested_region_fusion_stays_inside() {
+        use crate::node_graph::freeze::region::partition_regions;
+
+        let registry = particle_registry();
+        let def = nested_particle_def();
+        // The def compiles as a nest: the border the finder must respect.
+        let graph = crate::node_graph::EffectGraphDefExt::into_graph(def.clone(), &registry, &Default::default())
+            .expect("nested def builds");
+        let plan = compile(&graph).expect("nested def compiles");
+        assert_eq!(plan.substep_regions().len(), 1);
+        assert_eq!(plan.substep_regions()[0].inner.len(), 1);
+
+        let regions = partition_regions(&def, &registry);
+        let region_of = |id: u32| regions.iter().position(|r| r.members.iter().any(|m| m.doc_id == id));
+        for pair in [(3, 4), (7, 8), (9, 10)] {
+            assert!(region_of(pair.0).is_some(), "{pair:?} should fuse");
+            assert_eq!(region_of(pair.0), region_of(pair.1), "{pair:?} should fuse together");
+        }
+        assert_ne!(region_of(6), region_of(7), "an outer-body atom joined the inner body");
+        assert_ne!(region_of(11), region_of(3), "an outside atom joined the outer body");
+        // Every fused kernel lies on one side of every border.
+        let side = |id: u32| match id {
+            3 | 4 | 6 | 9 | 10 => Some(2),
+            7 | 8 => Some(5),
+            _ => None,
+        };
+        for region in &regions {
+            let sides: AHashSet<Option<u32>> = region.members.iter().map(|m| side(m.doc_id)).collect();
+            assert_eq!(sides.len(), 1, "a fused kernel crosses a border: {:?}", region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>());
+        }
+
+        // Control: the same force atom → mover wire with no boundaries
+        // fuses, so the inner border is what kept `z` and `inner_a` apart.
+        let control: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
+                {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                {"id": 6, "nodeId": "z", "typeId": "node.push_from_walls_3d"},
+                {"id": 7, "nodeId": "mover", "typeId": "node.move_particles_3d"},
+                {"id": 12, "nodeId": "sink", "typeId": "test.particle_sink"},
+                {"id": 13, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "in"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 7, "toPort": "in"},
+                {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "forces"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 12, "toPort": "particles"},
+                {"fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in"}
+            ]
+        }))
+        .unwrap();
+        let regions = partition_regions(&control, &registry);
+        assert!(
+            regions.iter().any(|r| r.members.iter().any(|m| m.doc_id == 6) && r.members.iter().any(|m| m.doc_id == 7)),
+            "control: the force atom and mover should fuse"
+        );
+    }
+
+    /// The fused-def cache is keyed by the def's content, and the nest is a
+    /// function of the def: the same atoms arranged as two sibling regions
+    /// instead of a nest key differently and fuse differently.
+    #[test]
+    fn nested_region_freeze_key_includes_nesting() {
+        use crate::node_graph::freeze::install::def_content_key;
+        use crate::node_graph::freeze::region::partition_regions;
+
+        let registry = particle_registry();
+        let nested = nested_particle_def();
+        // Siblings: the inner region seeds from the particle source instead
+        // of the outer body, and `post_a` reads `outer_b` instead of the
+        // inner state, so the inner region leaves the outer body.
+        let mut siblings = nested.clone();
+        for wire in &mut siblings.wires {
+            match (wire.from_node, wire.to_node, wire.to_port.as_str()) {
+                (4, 5, "seed") => wire.from_node = 0,
+                (5, 9, "in") => wire.from_node = 4,
+                _ => {}
+            }
+        }
+        assert_ne!(def_content_key(&nested), def_content_key(&siblings));
+        let members = |def| {
+            let mut regions: Vec<Vec<u32>> = partition_regions(def, &registry)
+                .iter()
+                .map(|r| {
+                    let mut ids: Vec<u32> = r.members.iter().map(|m| m.doc_id).collect();
+                    ids.sort();
+                    ids
+                })
+                .collect();
+            regions.sort();
+            regions
+        };
+        assert_ne!(members(&nested), members(&siblings));
     }
 }

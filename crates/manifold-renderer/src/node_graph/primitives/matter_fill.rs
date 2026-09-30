@@ -9,10 +9,11 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::EXACT_F32_COUNT;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::MatterPoint;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -112,11 +113,16 @@ pub(crate) fn fill_cells(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3]) -> u
     pool_count + column_count
 }
 
-/// Points a fill seeds at `points_per_cell`, refused by name past the 32-bit
-/// count every point kernel dispatches over.
+/// Points a fill seeds at `points_per_cell`, refused by name past the count
+/// the `count` wire carries exactly.
 pub(crate) fn fill_count(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3], points_per_cell: u32) -> Result<u32, String> {
     let count = fill_cells(cells, pool, column) * u64::from(points_per_cell);
-    u32::try_from(count).map_err(|_| format!("Matter fill: {count} points exceed 32-bit indexing"))
+    match u32::try_from(count) {
+        Ok(count) if count <= EXACT_F32_COUNT => Ok(count),
+        _ => Err(format!(
+            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Lower Resolution, Points per Cell or the fill."
+        )),
+    }
 }
 
 impl Primitive for MatterFill {
@@ -139,7 +145,7 @@ impl Primitive for MatterFill {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let int = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let pool = int("pool_cells", 3.0);
         let column = [
@@ -153,7 +159,7 @@ impl Primitive for MatterFill {
         let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
         // With colliders the seeds depend on their pose at the epoch's start.
         let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
-        let cells = lattice.cells;
+        let cells = lattice.cells();
         let column = std::array::from_fn(|d| {
             [column[d][0].min(cells[d]), column[d][1].min(cells[d])]
         });
@@ -172,7 +178,10 @@ impl Primitive for MatterFill {
         let bytes = u64::from(count) * std::mem::size_of::<MatterPoint>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size < bytes) {
             let grown = bytes.max(self.buffer.as_ref().map_or(0, |b| b.size.saturating_mul(3) / 2));
-            let created = ctx.gpu_encoder().device.try_create_buffer_shared(grown);
+            let device = ctx.gpu_encoder().device;
+            let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), grown)
+                .map_err(|error| error.to_string())
+                .and_then(|()| device.try_create_buffer_shared(grown));
             match created {
                 Ok(buffer) => {
                     self.buffer = Some(buffer);
@@ -196,8 +205,8 @@ impl Primitive for MatterFill {
             _ => (buffer, buffer, buffer, 0),
         };
         let key = [
-            lattice.min[0].to_bits(), lattice.min[1].to_bits(), lattice.min[2].to_bits(),
-            lattice.cell_size.to_bits(), lattice.nodes[0], lattice.nodes[1], lattice.nodes[2],
+            lattice.min()[0].to_bits(), lattice.min()[1].to_bits(), lattice.min()[2].to_bits(),
+            lattice.cell_size().to_bits(), lattice.nodes()[0], lattice.nodes()[1], lattice.nodes()[2],
             pool, column[0][0], column[0][1], column[1][0], column[1][1], column[2][0], column[2][1],
             ppc, seed, body_count as u32, epoch,
         ];
@@ -207,13 +216,13 @@ impl Primitive for MatterFill {
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = FillUniforms {
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
-            cell_size: lattice.cell_size,
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
+            cell_size: lattice.cell_size(),
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
             pool_cells: pool as i32,
             column_x0: column[0][0] as i32,
             column_x1: column[0][1] as i32,
@@ -256,6 +265,17 @@ mod tests {
         assert_eq!(cells, 64 * 3 * 64 + 19 * 30 * 56);
         // An empty box adds nothing; the pool never exceeds the domain.
         assert_eq!(fill_cells([8; 3], 20, [[0, 0], [0, 0], [0, 0]]), 8 * 8 * 8);
+    }
+
+    /// The count crosses to every point atom as an f32 wire: 2^24 points is
+    /// the last fill it carries exactly, one cell more is refused by name.
+    #[test]
+    fn matter_fill_refuses_counts_past_the_exact_f32_range() {
+        let empty = [[0, 0]; 3];
+        assert_eq!(fill_count([256, 32, 256], 32, empty, 8), Ok(EXACT_F32_COUNT));
+        let error = fill_count([256, 33, 256], 33, empty, 8).unwrap_err();
+        assert!(error.contains("exact f32 range") && error.contains("Resolution"), "{error}");
+        assert!(fill_count([512; 3], 512, empty, 27).unwrap_err().contains("exact f32 range"));
     }
 
     #[test]

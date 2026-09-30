@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P5 built on `feat/gpu-whitewater` with the chain on the Rust builder; O1 and O2 green; P6 rendered from the builder · owed: the Whitewater group in the SWASH Dam Break preset (BUG-imy3.4, under BUG-imy3 (GPU whitewater, solver-agnostic)), Peter's side-by-side verdict, approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P6 built on `feat/gpu-whitewater`; the Whitewater group ships in the SWASH Dam Break preset; O1 and O2 green · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step (FFT_WATER_SOLVER_DESIGN.md P3) on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -233,7 +233,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 
 ### 3.6 Solver feeds
 
-- **SWASH, the host:** `face_sample_component` × 3 on the last step's `new` faces (`swash_preset.rs:609`). In P1–P4 the Rust scene builders wire them straight to the atoms with ticks 1, the generator input's trigger count as epoch, gravity −9.81, 8 particles per cell. From P5 the SWASH Dam Break preset JSON carries the wiring; when the seam's P7a builds `node.liquid_frame`, it publishes `FACE_GRID_PORTS` and the clock scalars, and the direct wiring goes.
+- **SWASH, the host:** `face_sample_component` × 3 on the last step's `new` faces (`swash_preset.rs:609`). In P1–P4 the Rust scene builders wire them straight to the atoms with ticks 1, the generator input's trigger count as epoch, gravity −9.81, 8 particles per cell. From P5 the SWASH Dam Break preset carries the Whitewater group: its inputs come from `node.liquid_frame` (particles, count, solid, grid box and nodes, `FACE_GRID_PORTS`), the Liquid Surface group (the level set and its nodes) and the domain (ticks, epoch, gravity, simulation time as the seed). Inside, the grid's nodes, box and cell size reach every atom on wires, so the group runs at any lattice the domain builds.
 - **MPM:** `matter_frame` publishes `FACE_GRID_PORTS` from three `matter_face_component` on `matter_state`'s grid, one buffer per axis copied on each tick (only frame B's faces are published), only when wired, held while paused. The components run after the region: a region's steps sit contiguous right after its boundary (`R/substeps.rs`, `SubstepRegion`), so any other consumer of the boundary's grid runs once, on the last substep's grid. `face_valid_layers` is 0 (`MATTER_FACE_VALID_LAYERS`, `R/primitives/matter_face_component.rs`): a point's stencil puts mass on every corner of its cell, so a liquid cell's own faces and the faces sharing an edge with them always read grid velocity, but the face one cell out along its own axis needs a point in the half of the cell next to it. Measured in Dam Break at 64 after 45 ticks (`face_grid_demo_swash_and_matter_side_by_side`): own faces 100%, one out across 100%, one out along 67.7%; SWASH 100% on all three. So the whitewater refuses an MPM face grid by name until MPM extends its faces a layer. MPM is proven at the face grid (`liquid_face_grid_layout`); no MPM scene hosts whitewater.
 - **FLIP:** no grid (seam D3); its native whitewater stays the reference.
 
@@ -340,16 +340,16 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Demo:** L2: SWASH Dam Break with whitewater at 1.5 s and 3 s, PNG.
 - **Forbidden:** widening an O2 tolerance; an MPM whitewater scene; editing the SWASH preset beyond the group, its wires and the copies objects.
 - **Test scope:** focused renderer and manifold-fluids; GPU proofs.
-- **Notes (2026-10-01):** the preset did not exist at entry, so the lead split P5. Built: both atoms with CPU, GPU and fused proofs; the oracle; O2; the chain on the Rust builder (`whitewater_scene_tests.rs`: atoms wired onto `render_def`, drawn by `WaterDamBreakGpu.json`'s own foam, bubble and spray objects, seed the generator's frame count, epoch its trigger count). `swash_builder_whitewater_emits` runs it frozen: 1,307 foam, 290 bubbles, 108 spray at 1.5 s, 3,486 emitted, nothing thinned. The group, the copies objects, the preset run, the round trip and the preset's `graph-tool` checks are BUG-imy3.4, under BUG-imy3 (GPU whitewater, solver-agnostic). O2 (16 seeds, more until every measure's seed spread is under half its tolerance; the per-type floor taken on FLIP's pool over the seeds, which gates more than the mean would):
+- **Notes (2026-10-01):** built: both atoms with CPU, GPU and fused proofs; the oracle; O2; the Whitewater group in `WaterDamBreakSwash.json` (params Capacity, Wavecrest Emission, Min Energy, Max Energy), `WaterDamBreakGpu.json`'s foam, bubble and spray objects drawing it through `{foam,bubble,spray}_copies`, and cards Whitewater Budget, Foam Size, Spray Size and Bubble Scattering. The builder's Dam Break publishes the face grid, so the shipped preset is still `render_def` of it. Every whitewater atom has a rule in the liquid extent walk (`liquid/extent.rs`), proven at every lattice 16 to 128; `node.surface_crossings` sizes its output from the solid array it reads, since its lattice arrives on wires. `swash_whitewater_emits` runs the preset frozen: 1,505 foam, 229 bubbles, 119 spray at 1.5 s, 3,757 emitted, nothing thinned or dropped. `swash_whitewater_holds_while_paused`: paused at 1 s, three paused frames change no count and no pixel; play resumes emission. `swash_preset_round_trips_with_its_whitewater`: load, save and reload keep every field, the group's params and the cards. `graph-tool validate --kind generator` OK; `fusion`: 296 nodes, 17 regions, nothing refused. O2 on the preset (16 seeds, more until every measure's seed spread is under half its tolerance, up to 16,384; the per-type floor taken on FLIP's pool over the seeds, which gates more than the mean would):
 
   | Frame | Seeds | Total GPU / FLIP | Foam | Spray | Spatial L1 | Lifetime L1 |
   |---|---|---|---|---|---|---|
-  | 30 | 96 | 28.2 / 28.5 (−0.9%) | −5.9% | +3.4% | 0.047 | 0.008 |
-  | 60 | 80 | 49.2 / 47.8 (+3.0%) | +7.3% | −1.2% | 0.043 | 0.032 |
-  | 90 | 1,200 | 3.74 / 3.73 (+0.3%) | +0.9% | −1.7% | 0.054 | 0.007 |
-  | 120 | 160 | 81.9 / 79.6 (+2.9%) | +3.7% | +1.4% | 0.066 | 0.022 |
+  | 30 | 112 | 31.6 / 30.5 (+3.7%) | +4.1% | +3.7% | 0.040 | 0.034 |
+  | 60 | 48 | 60.2 / 57.8 (+4.1%) | +6.0% | +2.9% | 0.059 | 0.060 |
+  | 90 | 5,536 | 0.57 / 0.58 (−1.3%) | −2.6% | +0.9% | 0.079 | 0.031 |
+  | 120 | 128 | 79.1 / 79.1 (+0.0%) | −1.3% | +1.6% | 0.075 | 0.017 |
 
-  Bubbles stay under the floor in a single emission (FLIP 0.37 a seed at frame 120, ours 0.54). One emission is 4 to 80 particles here, so FLIP's per-seed mean never reaches the design's 200.
+  Bubbles stay under the floor in a single emission (FLIP 1.34 a seed at frame 120, ours 1.44). Frame 90 is a lull in the preset's splash, under one particle a seed, so it needs 5,536 seeds to judge.
 
 ### P6 — Side by side and cost
 

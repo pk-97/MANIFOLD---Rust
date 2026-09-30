@@ -6,8 +6,11 @@
 // flip · (v + new(q) − old(q)) + (1 − flip) · new(q). It then moves by RK3
 // through `advect` (stages at ½ and ¾ of step_dt, weights 2/9, 3/9, 4/9) and
 // is kept FACES_TO_PARTICLES_WALL_MARGIN cells inside each wall. Radius and id are
-// kept; unused slots and a non-finite result pass the particle through at
-// rest. `faces`, `old` and `advect` (FaceSample → Element2) are gathered
+// kept; unused slots pass through. A non-finite move or velocity is written
+// as it is, never clamped or zeroed: the tick's node.liquid_stats must see it
+// to halt the liquid (LIQUID_SOLVER_SEAM_DESIGN.md D4 amendment 2). Every
+// index is clamped as an integer, so a non-finite position reads in bounds.
+// `faces`, `old` and `advect` (FaceSample → Element2) are gathered
 // through buf_faces, buf_old and buf_advect; a grid shorter than the
 // lattice's leaves particles as they were.
 
@@ -95,16 +98,12 @@ fn body(
     let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * k1, n, 2u);
     let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 2u);
     let edge = vec3<f32>(FACES_TO_PARTICLES_WALL_MARGIN);
-    let q1 = clamp(q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0, edge, vec3<f32>(n) - edge);
+    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0;
+    let q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), faces_to_particles_finite(reached));
     let after = faces_to_particles_sample(q0, n, 0u);
     let before = faces_to_particles_sample(q0, n, 1u);
     let velocity = flip * (e_particles.velocity + after - before) + (1.0 - flip) * after;
-    let moved = lo + q1 * cell_size;
-    if !faces_to_particles_finite(moved) || !faces_to_particles_finite(velocity) {
-        out.velocity = vec3<f32>(0.0);
-        return out;
-    }
-    out.position_radius = vec4<f32>(moved, e_particles.position_radius.w);
+    out.position_radius = vec4<f32>(lo + q1 * cell_size, e_particles.position_radius.w);
     out.velocity = velocity;
     return out;
 }

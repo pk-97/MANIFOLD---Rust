@@ -10,7 +10,8 @@ use super::matter_face_component::MatterFaceComponent;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::liquid::grid::{face_coords, face_len, face_position};
-use crate::node_graph::matter::{MatterGridNode, PADDING_NODES};
+use crate::node_graph::liquid::lattice::PADDING_NODES;
+use crate::node_graph::matter::MatterGridNode;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 

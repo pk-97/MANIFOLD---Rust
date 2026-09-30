@@ -76,7 +76,7 @@
             forces: Vec::new(),
             force_picker: Vec::new(),
             camera: CameraRowVm::None,
-            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
+            camera_sections: Vec::new(), camera_parameter_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         })));
         let mut tree = UITree::new();
@@ -185,7 +185,7 @@
                     exposure_ev: mrow(RowValue { addr: RowAddr::root(71, "exposure_ev"), value: 0.0, min: -8.0, max: 8.0, driven: false, exposed: false }),
                 }),
             })),
-            camera_sections: Vec::new(), camera_param_doc_ids: None, world_sections: Vec::new(),
+            camera_sections: Vec::new(), camera_parameter_ids: None, world_sections: Vec::new(),
             scene_bounds: None,
         }
     }
@@ -432,7 +432,7 @@
         row.fluid_role_available = true;
         let expected_index = row.index as u32;
         let expected_scene = vm.scene_root_node_id;
-        let domains = vec![FluidDomainOption { node_doc_id: 99, name: "Liquid B".into() }];
+        let domains = vec![FluidDomainOption { node: FoundationNodeId::new("liquid_b"), name: "Liquid B".into() }];
         vm.fluid_domains = domains.clone();
         let mut panel = ScenePanel::new();
         panel.open();

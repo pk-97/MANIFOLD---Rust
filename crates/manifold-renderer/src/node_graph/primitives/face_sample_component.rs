@@ -19,7 +19,7 @@ use crate::node_graph::primitive::Primitive;
 pub(super) const AXES: &[&str] = &["X (u)", "Y (v)", "Z (w)"];
 
 /// The `axis` param: 0, 1 or 2.
-pub(super) fn axis_param(params: &ParamValues) -> Option<usize> {
+pub(crate) fn axis_param(params: &ParamValues) -> Option<usize> {
     match params.get("axis") {
         Some(ParamValue::Enum(a)) => Some(*a as usize),
         None => Some(0),

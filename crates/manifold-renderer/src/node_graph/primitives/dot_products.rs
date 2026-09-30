@@ -16,7 +16,7 @@ use crate::node_graph::primitive::Primitive;
 const SHADER: &str = include_str!("shaders/dot_products.wgsl");
 
 /// Rows one node can reduce: the finalize pass is one 64-thread workgroup.
-const MAX_ROWS: u32 = 64;
+pub(crate) const MAX_ROWS: u32 = 64;
 /// Partial sums per row, at most; one per 1024 elements below that.
 const MAX_GROUPS: u32 = 64;
 

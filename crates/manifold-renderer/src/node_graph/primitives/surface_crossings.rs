@@ -71,9 +71,14 @@ crate::primitive! {
 }
 
 impl Primitive for SurfaceCrossings {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(&self, port: &str, params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
         if port != "out" {
             return None;
+        }
+        // The lattice may arrive on wires, which the planner cannot read; a
+        // cell per solid node covers any lattice the solid array holds.
+        if let Some(&(_, nodes)) = inputs.iter().find(|(name, _)| *name == "solid") {
+            return Some(nodes);
         }
         let cells = grid_cells(param_nodes(params, ["nodes_x", "nodes_y", "nodes_z"], 71.0))?;
         u32::try_from(cell_total(cells)).ok()

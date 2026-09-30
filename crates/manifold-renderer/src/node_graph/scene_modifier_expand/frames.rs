@@ -11,7 +11,9 @@ use manifold_core::scene_source_identity::{
     SceneSourceIdentityError, scene_source_definition_hash,
 };
 
-use super::{SceneModifierExpandError, index::FlatSceneIndex};
+use manifold_core::scene_index::FlatSceneIndex;
+
+use super::SceneModifierExpandError;
 
 fn frame_error(target: &SceneNodeRef, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::UnsupportedCoordinateFrame {

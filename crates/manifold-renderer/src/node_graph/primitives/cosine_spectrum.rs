@@ -38,7 +38,7 @@ pub(super) const AXES_PARAM: ParamDef = ParamDef {
     enum_values: &[],
 };
 
-pub(super) fn transform_axes(params: &ParamValues) -> u32 {
+pub(crate) fn transform_axes(params: &ParamValues) -> u32 {
     match params.get("axes") {
         Some(ParamValue::Float(a)) if a.round() == 2.0 => 2,
         _ => 3,
@@ -47,15 +47,25 @@ pub(super) fn transform_axes(params: &ParamValues) -> u32 {
 
 /// Lattice lengths from the params. Every transformed length is even, 2 to
 /// 1024; a batched z (axes 2) is any count from 1 to 4096.
-pub(super) fn lattice_nodes(params: &ParamValues) -> Option<[u32; 3]> {
+pub(crate) fn lattice_nodes(params: &ParamValues) -> Option<[u32; 3]> {
     lattice_nodes_with(params, transform_axes(params))
 }
 
-pub(super) fn lattice_nodes_with(params: &ParamValues, axes: u32) -> Option<[u32; 3]> {
+pub(crate) fn lattice_nodes_with(params: &ParamValues, axes: u32) -> Option<[u32; 3]> {
     let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| match params.get(name) {
         Some(ParamValue::Float(n)) => n.round() as i64,
         _ => 64,
     });
+    legal_lengths(nodes, axes)
+}
+
+/// Whether a box solve can transform a lattice of `cells`: the rule every
+/// 3D cosine transform atom applies to its lengths.
+pub(super) fn transformable_cells(cells: [u32; 3]) -> bool {
+    legal_lengths(cells.map(i64::from), 3).is_some()
+}
+
+fn legal_lengths(nodes: [i64; 3], axes: u32) -> Option<[u32; 3]> {
     let batched = axes == 2;
     let valid = |axis: usize, n: i64| {
         if axis == 2 && batched { (1..=4096).contains(&n) } else { (2..=1024).contains(&n) && n % 2 == 0 }
@@ -64,7 +74,7 @@ pub(super) fn lattice_nodes_with(params: &ParamValues, axes: u32) -> Option<[u32
 }
 
 /// Entries in the half spectrum of a lattice: nx/2 + 1 along x.
-pub(super) fn half_spectrum_len(nodes: [u32; 3]) -> u32 {
+pub(crate) fn half_spectrum_len(nodes: [u32; 3]) -> u32 {
     (nodes[0] / 2 + 1) * nodes[1] * nodes[2]
 }
 

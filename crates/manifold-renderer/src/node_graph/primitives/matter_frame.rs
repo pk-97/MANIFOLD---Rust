@@ -11,16 +11,13 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::liquid::frame_ring::{FrameRing, RING};
-use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, face_len};
-use crate::node_graph::matter::{MatterLattice, MatterPoint, PADDING_NODES, solid_bytes};
+use crate::node_graph::liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
+use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::matter::{MatterPoint, solid_bytes};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
-use super::matter_face_component::MATTER_FACE_VALID_LAYERS;
 
-/// The face grid's inputs, one per axis, beside the outputs they publish
-/// (`FACE_GRID_PORTS[0..3]`).
-const FACE_INPUTS: [&str; 3] = ["face_u_in", "face_v_in", "face_w_in"];
+use super::matter_face_component::MATTER_FACE_VALID_LAYERS;
 
 const SHADER: &str = include_str!("shaders/matter_frame.wgsl");
 
@@ -33,43 +30,10 @@ struct FrameParams {
     _pad0: u32,
 }
 
-/// Signed distance from each lattice node to the nearest closed wall of the
-/// authored box (positive inside, negative past a closed face), the seam's
-/// solid lattice for a domain whose only solids are its walls. Open faces
-/// contribute nothing; with none closed, every node reads the lattice
-/// diagonal.
-pub(crate) fn wall_distance_lattice(lattice: &MatterLattice, closed_faces: u32) -> Vec<f32> {
-    let dx = lattice.cell_size;
-    let low: [f32; 3] = std::array::from_fn(|d| lattice.min[d] + PADDING_NODES as f32 * dx);
-    let high: [f32; 3] = std::array::from_fn(|d| low[d] + lattice.cells[d] as f32 * dx);
-    let far = lattice.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
-    let [nx, ny, nz] = lattice.nodes;
-    let mut out = Vec::with_capacity(lattice.node_count() as usize);
-    for k in 0..nz {
-        for j in 0..ny {
-            for i in 0..nx {
-                let p = [i, j, k].map(|c| c as f32 * dx);
-                let mut distance = far;
-                for d in 0..3 {
-                    let x = lattice.min[d] + p[d];
-                    if closed_faces & (1 << (2 * d)) != 0 {
-                        distance = distance.min(x - low[d]);
-                    }
-                    if closed_faces & (1 << (2 * d + 1)) != 0 {
-                        distance = distance.min(high[d] - x);
-                    }
-                }
-                out.push(distance);
-            }
-        }
-    }
-    out
-}
-
 crate::primitive! {
     name: MatterFrame,
     type_id: "node.matter_frame",
-    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, it also publishes frame B's face grid (face_u, face_v, face_w over face_cells_x/y/z, and face_valid_layers, 0: only the liquid's own faces and those sharing an edge with them are sure to carry velocity), copied each tick and held between ticks. A tick with non-finite values is never published as particles; the face grid is copied as the grid holds it.",
+    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, it also publishes frame B's face grid (face_u, face_v, face_w over face_cells_x/y/z, and face_valid_layers, 0: only the liquid's own faces and those sharing an edge with them are sure to carry velocity), copied each tick and held between ticks. A tick with non-finite values is never published, as particles or as faces.",
     inputs: {
         points: Array(MatterPoint) required,
         stats: Array(u32) required,
@@ -112,13 +76,13 @@ crate::primitive! {
         solid_key: Option<([u32; 7], u32)> = None,
         solid_slots: Vec<GpuBuffer> = Vec::new(),
         solid_wired: bool = false,
-        faces: [Option<GpuBuffer>; 3] = [None, None, None],
+        faces: PublishedFaces = PublishedFaces::default(),
     },
 }
 
 impl Primitive for MatterFrame {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b") || FACE_GRID_PORTS[..3].contains(&port)
+        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b") || PublishedFaces::provides(port)
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -128,7 +92,7 @@ impl Primitive for MatterFrame {
             "solid_a" if self.solid_wired => self.solid_slots.get(self.ring.a()),
             "solid_b" if self.solid_wired => self.solid_slots.get(self.ring.b()),
             "solid_a" | "solid_b" => self.solid.as_ref(),
-            _ => FACE_GRID_PORTS[..3].iter().position(|&p| p == port).and_then(|axis| self.faces[axis].as_ref()),
+            _ => self.faces.buffer(port),
         }
     }
 
@@ -143,7 +107,7 @@ impl Primitive for MatterFrame {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as u32;
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
@@ -153,19 +117,19 @@ impl Primitive for MatterFrame {
         let stats = ctx.inputs.array("stats");
         let solid_in = ctx.inputs.array("solid");
         self.solid_wired = solid_in.is_some();
-        let faces_in = FACE_INPUTS.map(|port| ctx.inputs.array(port));
+        let faces_in = FACE_INPUT_PORTS.map(|port| ctx.inputs.array(port));
 
         let solid_key = (
             [
-                lattice.min[0].to_bits(), lattice.min[1].to_bits(), lattice.min[2].to_bits(),
-                lattice.cell_size.to_bits(), lattice.nodes[0], lattice.nodes[1], lattice.nodes[2],
+                lattice.min()[0].to_bits(), lattice.min()[1].to_bits(), lattice.min()[2].to_bits(),
+                lattice.cell_size().to_bits(), lattice.nodes()[0], lattice.nodes()[1], lattice.nodes()[2],
             ],
             closed_faces,
         );
-        let mut solid_refused = None;
+        let mut refused = None;
         let gpu = ctx.gpu_encoder();
         if self.solid_key != Some(solid_key) {
-            let distances = wall_distance_lattice(&lattice, closed_faces);
+            let distances = lattice.wall_distance(closed_faces);
             // A fresh buffer per setup: the previous one may still be read by
             // an in-flight frame; its drop is fence-retired.
             let buffer = gpu.device.create_buffer_shared((distances.len() * 4).max(4) as u64);
@@ -175,46 +139,20 @@ impl Primitive for MatterFrame {
             self.solid_key = Some(solid_key);
         }
 
-        // Frame B's face grid: storage for each wired axis, zero until the
-        // first tick copies into it. A fresh buffer per lattice, like the
-        // solid's; the old one retires with its fence.
-        let mut faces_refused = None;
-        let mut fresh_faces = [false; 3];
-        for (axis, input) in faces_in.iter().enumerate() {
-            let bytes = face_len(lattice.cells, axis) * 4;
-            if input.is_none() {
-                self.faces[axis] = None;
-            } else if self.faces[axis].as_ref().is_none_or(|b| b.size < bytes) {
-                match gpu.device.try_create_buffer_shared(bytes.max(4)) {
-                    Ok(buffer) => {
-                        buffer.zero_fill();
-                        self.faces[axis] = Some(buffer);
-                        fresh_faces[axis] = true;
-                    }
-                    Err(error) => {
-                        self.faces[axis] = None;
-                        faces_refused = Some(format!(
-                            "Matter Frame: the face grid needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
-                        ));
-                    }
-                }
-            }
-        }
-        // A new lattice's grid is published at once: its old faces never
-        // stand in for it.
         let wants_tick = self.ring.wants_tick(epoch, simulation_time);
-        for (axis, input) in faces_in.iter().enumerate() {
-            if let (Some(input), Some(slot)) = (input, self.faces[axis].as_ref())
-                && (wants_tick || fresh_faces[axis])
-            {
-                let bytes = (face_len(lattice.cells, axis) * 4).min(input.size).min(slot.size);
-                gpu.native_enc.copy_buffer_to_buffer(input, slot, bytes);
-            }
-        }
-
-        if wants_tick && let (Some(points), Some(stats)) = (points, stats) {
-            let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
-            let slot = self.ring.begin(gpu.device, bytes, epoch);
+        let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
+        let ring = if wants_tick && points.is_some() && stats.is_some() {
+            self.ring.begin(gpu.device, bytes, epoch).map(Some).unwrap_or_else(|error| {
+                refused = Some(format!(
+                    "Matter Frame: the particle frames need 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                ));
+                None
+            })
+        } else {
+            None
+        };
+        let published = ring.is_some();
+        if let (Some(slot), Some(points), Some(stats)) = (ring, points, stats) {
             let write = slot.write;
             let pipeline = self.convert.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame")
@@ -242,16 +180,20 @@ impl Primitive for MatterFrame {
             if let Some(solid_in) = solid_in {
                 // Each tick's solid lattice sits beside its frame, so A and B
                 // each carry the bodies where their particles were.
-                let bytes = solid_bytes(lattice.nodes);
+                let bytes = solid_bytes(lattice.nodes());
                 let fresh = self.solid_slots.len() < RING || self.solid_slots.iter().any(|s| s.size < bytes);
                 if fresh {
                     // A ring the device cannot give leaves none: this node
                     // names it, and the surface atoms draw nothing without it.
-                    self.solid_slots = (0..RING)
-                        .map(|_| gpu.device.try_create_buffer_shared(bytes.max(4)))
-                        .collect::<Result<_, _>>()
+                    let device = gpu.device;
+                    self.solid_slots = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                        device.modifier_memory_snapshot(),
+                        RING as u64 * bytes.max(4),
+                    )
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| (0..RING).map(|_| device.try_create_buffer_shared(bytes.max(4))).collect::<Result<_, _>>())
                         .unwrap_or_else(|error| {
-                            solid_refused = Some(format!(
+                            refused = Some(format!(
                                 "Matter Frame: the solid lattice needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
                             ));
                             Vec::new()
@@ -265,28 +207,29 @@ impl Primitive for MatterFrame {
             }
             self.ring.finish(slot, params.count, epoch, simulation_time);
         }
+        let faces_refused = self.faces.publish(gpu, lattice.cells(), faces_in, stats, published, "Matter Frame");
 
         let (blend, span) = self.ring.blend(display_time);
-        let faces_published = self.faces.iter().all(Option::is_some);
+        let faces_published = self.faces.complete();
         for (name, value) in [
             ("count_a", self.ring.count_a() as f32),
             ("count_b", self.ring.count_b() as f32),
             ("identity_a", epoch as f32),
             ("identity_b", epoch as f32),
-            ("grid_nodes_x", lattice.nodes[0] as f32),
-            ("grid_nodes_y", lattice.nodes[1] as f32),
-            ("grid_nodes_z", lattice.nodes[2] as f32),
+            ("grid_nodes_x", lattice.nodes()[0] as f32),
+            ("grid_nodes_y", lattice.nodes()[1] as f32),
+            ("grid_nodes_z", lattice.nodes()[2] as f32),
             ("blend", blend),
             ("span", span),
-            ("face_cells_x", lattice.cells[0] as f32),
-            ("face_cells_y", lattice.cells[1] as f32),
-            ("face_cells_z", lattice.cells[2] as f32),
+            ("face_cells_x", lattice.cells()[0] as f32),
+            ("face_cells_y", lattice.cells()[1] as f32),
+            ("face_cells_z", lattice.cells()[2] as f32),
             ("face_valid_layers", if faces_published { MATTER_FACE_VALID_LAYERS as f32 } else { 0.0 }),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", lattice.bounds());
-        for error in [solid_refused, faces_refused].into_iter().flatten() {
+        for error in [refused, faces_refused].into_iter().flatten() {
             ctx.error(error);
         }
     }
@@ -297,21 +240,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matter_frame_wall_lattice_is_signed_distance_to_closed_faces() {
-        let layout = crate::node_graph::fluid::domain_layout(None, 1.0, 8).unwrap();
-        let lattice = MatterLattice::from_layout(&layout);
-        let dx = lattice.cell_size;
-        let all = wall_distance_lattice(&lattice, 63);
-        let n = lattice.nodes;
-        let at = |i: u32, j: u32, k: u32| all[((k * n[1] + j) * n[0] + i) as usize];
-        // The authored floor sits on node 3; one node below reads −dx.
-        assert!((at(7, 3, 7)).abs() < 1e-6);
-        assert!((at(7, 2, 7) + dx).abs() < 1e-6);
-        assert!((at(7, 5, 7) - 2.0 * dx).abs() < 1e-5);
-        // An open top: the node above the ceiling is not inside a solid.
-        let open_top = wall_distance_lattice(&lattice, 63 & !(1 << 3));
-        let top = n[1] - 1;
-        assert!(open_top[((7 * n[1] + top) * n[0] + 7) as usize] > 0.0);
+    fn matter_frame_params_match_the_shader() {
         assert_eq!(std::mem::size_of::<FrameParams>(), 16);
     }
 }

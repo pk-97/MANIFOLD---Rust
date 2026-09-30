@@ -7,7 +7,8 @@
 // Row/column indices mirror the section 4.1 formulas term for term.
 #![allow(clippy::needless_range_loop)]
 
-use super::{MatterLattice, MatterPoint, PADDING_NODES, VELOCITY_CLAMP_CFL};
+use super::{MatterPoint, VELOCITY_CLAMP_CFL};
+use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
 
 /// A point's stencil: base node, per-axis weights, per-axis fraction.
 pub type Stencil = ([i64; 3], [[f64; 3]; 3], [f64; 3]);
@@ -76,21 +77,21 @@ pub fn stencil(q: f64) -> (i64, [f64; 3], f64) {
     (base as i64, w, f)
 }
 
-fn node_index(lat: &MatterLattice, i: [i64; 3]) -> usize {
-    let n = lat.nodes.map(|v| v as i64);
+fn node_index(lat: &LiquidLattice, i: [i64; 3]) -> usize {
+    let n = lat.nodes().map(|v| v as i64);
     ((i[2] * n[1] + i[1]) * n[0] + i[0]) as usize
 }
 
 /// Stencil base of a point, or `None` when its 3×3×3 stencil leaves the
 /// lattice.
-pub fn base_of(lat: &MatterLattice, x: [f64; 3]) -> Option<Stencil> {
+pub fn base_of(lat: &LiquidLattice, x: [f64; 3]) -> Option<Stencil> {
     let mut base = [0i64; 3];
     let mut w = [[0.0; 3]; 3];
     let mut f = [0.0; 3];
     for d in 0..3 {
-        let q = (x[d] - f64::from(lat.min[d])) / f64::from(lat.cell_size);
+        let q = (x[d] - f64::from(lat.min()[d])) / f64::from(lat.cell_size());
         let (b, wd, fd) = stencil(q);
-        if b < 0 || b + 2 > i64::from(lat.nodes[d]) - 1 {
+        if b < 0 || b + 2 > i64::from(lat.nodes()[d]) - 1 {
             return None;
         }
         base[d] = b;
@@ -109,9 +110,9 @@ pub fn water_stress(p: &Params, j: f64) -> f64 {
 
 /// Clear, P2G, grid update and G2P over `points` (section 4.1 steps 1, 3, 4
 /// and 6). Points leaving the lattice are removed (id 0), as the GPU does.
-pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
+pub fn substep(points: &mut [Point], lat: &LiquidLattice, p: &Params) -> Grid {
     let count = lat.node_count() as usize;
-    let dx = f64::from(lat.cell_size);
+    let dx = f64::from(lat.cell_size());
     let inv_dx = 1.0 / dx;
     let mut grid = Grid {
         mass: vec![0.0; count],
@@ -121,10 +122,10 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
         clamped: vec![false; count],
     };
 
-    let m_unit = f64::from(super::mass_unit(lat.cell_size));
+    let m_unit = f64::from(super::mass_unit(lat.cell_size()));
     let to_mass = f64::from(super::MASS_SCALE) / m_unit;
     let to_momentum =
-        f64::from(super::MOMENTUM_SCALE) / m_unit / f64::from(super::momentum_unit(lat.cell_size, p.dt));
+        f64::from(super::MOMENTUM_SCALE) / m_unit / f64::from(super::momentum_unit(lat.cell_size(), p.dt));
     let quantize = |value: f64, scale: f64, key: u32, slot: usize| {
         if p.fixed_point {
             super::encode_fixed(value * scale, key, slot as u32) as f64 / scale
@@ -165,7 +166,7 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
     }
 
     let limit = f64::from(VELOCITY_CLAMP_CFL) * dx / p.dt;
-    let n = lat.nodes.map(|v| v as i64);
+    let n = lat.nodes().map(|v| v as i64);
     let pad = i64::from(PADDING_NODES);
     for k in 0..n[2] {
         for jj in 0..n[1] {
@@ -254,19 +255,19 @@ pub fn substep(points: &mut [Point], lat: &MatterLattice, p: &Params) -> Grid {
 mod tests {
     use super::*;
 
-    fn lattice() -> MatterLattice {
+    fn lattice() -> LiquidLattice {
         let layout = crate::node_graph::fluid::domain_layout(None, 1.0, 16).unwrap();
-        MatterLattice::from_layout(&layout)
+        LiquidLattice::from_layout(&layout)
     }
 
     /// A 4×4×4-cell blob of 8 points per cell at the domain centre, moving
     /// with a uniform velocity plus a shear, at rest volume.
-    fn blob(lat: &MatterLattice) -> Vec<Point> {
-        let dx = f64::from(lat.cell_size);
+    fn blob(lat: &LiquidLattice) -> Vec<Point> {
+        let dx = f64::from(lat.cell_size());
         let v0 = dx * dx * dx / 8.0;
         let mut points = Vec::new();
         let centre: [f64; 3] = std::array::from_fn(|d| {
-            f64::from(lat.min[d]) + 0.5 * f64::from(lat.nodes[d] - 1) * dx
+            f64::from(lat.min()[d]) + 0.5 * f64::from(lat.nodes()[d] - 1) * dx
         });
         let mut id = 1;
         for i in 0..8 {

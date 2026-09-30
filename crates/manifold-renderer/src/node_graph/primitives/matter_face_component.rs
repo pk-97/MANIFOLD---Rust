@@ -10,7 +10,8 @@ use super::face_sample_component::{AXES, axis_param};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::liquid::grid::face_len;
-use crate::node_graph::matter::{MatterGridNode, PADDING_NODES, grid_bytes};
+use crate::node_graph::liquid::lattice::PADDING_NODES;
+use crate::node_graph::matter::{MatterGridNode, grid_bytes};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 

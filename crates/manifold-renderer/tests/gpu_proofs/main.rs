@@ -113,6 +113,7 @@ mod matter_scene;
 mod matter_transfer;
 mod matter_bodies;
 mod matter_coupling;
+mod liquid_conformance;
 mod smoke;
 mod substeps;
 mod swash_krylov;

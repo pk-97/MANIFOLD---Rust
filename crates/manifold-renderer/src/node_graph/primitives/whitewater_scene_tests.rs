@@ -19,8 +19,7 @@ use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use serde_json::{Value, json};
 
-use super::swash_preset::{EXTENDED_LAYERS, FACE_NODES, REST_PER_CELL, WaterScene, render_def};
-use super::swash_solve_tests::output_of;
+use super::swash_preset::{WaterScene, render_def};
 use crate::gpu_encoder::GpuEncoder;
 use crate::headless_readback::{encode_rgba8_png, readback_srgb_rgba8};
 use crate::node_graph::depth_rule::DepthRule;
@@ -28,31 +27,13 @@ use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeTy
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
-use crate::node_graph::whitewater::SPREAD_STEPS;
-use crate::node_graph::{NodeInstanceId, PrimitiveRegistry};
+use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
 use crate::preset_runtime::PresetRuntime;
 use crate::render_target::RenderTarget;
 
-/// Foam, bubbles, spray: the lifecycle's outputs and the preset's objects.
-const KINDS: [&str; 3] = ["foam", "bubble", "spray"];
-const LIFECYCLE_PORTS: [(&str, &str); 3] =
-    [("foam_particles", "foam_count"), ("bubble_particles", "bubble_count"), ("spray_particles", "spray_count")];
 const LIFECYCLE_REPORTS: [&str; 8] =
     ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "dropped_ticks", "lifecycle_ms", "worker_ms"];
-
-/// The engine preset's whitewater objects `render_def` leaves out.
-const OBJECTS: [&str; 9] = [
-    "foam_mesh",
-    "foam_material",
-    "foam_object",
-    "bubble_mesh",
-    "bubble_material",
-    "bubble_object",
-    "spray_mesh",
-    "spray_material",
-    "spray_object",
-];
 
 const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
 const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
@@ -64,14 +45,6 @@ fn preset_json(file: &str) -> Value {
 
 fn float(v: f64) -> Value {
     json!({"type": "Float", "value": v})
-}
-
-fn json_params(values: &[(&str, f64)]) -> Value {
-    let mut params = json!({});
-    for (name, value) in values {
-        params[*name] = float(*value);
-    }
-    params
 }
 
 type Port = (u64, &'static str);
@@ -151,10 +124,6 @@ impl Appender {
         self.named(name)["id"].as_u64().expect("numeric id")
     }
 
-    fn param(&self, name: &str, param: &str) -> f64 {
-        self.named(name)["params"][param]["value"].as_f64().unwrap_or_else(|| panic!("{name}.{param} unset"))
-    }
-
     fn add(&mut self, mut node: Value) -> u64 {
         let id = self.next;
         self.next += 1;
@@ -197,196 +166,17 @@ impl Appender {
     }
 }
 
-/// The whitewater grid: the surface's solid lattice, its cells and box, and
-/// the face grid centred in it.
-#[derive(Clone, Copy, Debug)]
-struct GridBox {
-    center: [f64; 3],
-    size: [f64; 3],
-    nodes: f64,
-    h: f64,
-    face_cells: f64,
-}
-
-impl GridBox {
-    fn of(g: &Appender, scene: WaterScene) -> Self {
-        let center = ["pos_x", "pos_y", "pos_z"].map(|p| g.param("surface_lattice", p));
-        let size = ["scale_x", "scale_y", "scale_z"].map(|p| g.param("surface_lattice", p));
-        let nodes = g.param("surface_nodes", "value");
-        let h = scene.pressure.cell_size();
-        assert!(size.iter().all(|s| (s - (nodes - 1.0) * h).abs() < 1e-6), "the lattice's cells are the solver's: {size:?}");
-        Self { center, size, nodes, h, face_cells: scene.pressure.n as f64 }
-    }
-
-    fn values(&self) -> Vec<(&'static str, f64)> {
-        let mut values = Vec::new();
-        for axis in 0..3 {
-            values.push((["center_x", "center_y", "center_z"][axis], self.center[axis]));
-            values.push((["size_x", "size_y", "size_z"][axis], self.size[axis]));
-            values.push((["nodes_x", "nodes_y", "nodes_z"][axis], self.nodes));
-        }
-        values
-    }
-
-    fn face_values(&self) -> [(&'static str, f64); 3] {
-        [("face_cells_x", self.face_cells), ("face_cells_y", self.face_cells), ("face_cells_z", self.face_cells)]
-    }
-}
-
-/// `render_def` of `scene` with its faces published, the Whitewater chain
-/// wired straight to its atoms, and the engine preset's foam, bubble and
-/// spray objects drawing the lifecycle's particles through
-/// node.particles_to_copies. The generator input's frame count seeds the
-/// randomness and its trigger count is the epoch, as a clip relaunch
-/// restarts the liquid. The lifecycle's reports are probed by name, the
-/// frame's particle count as `count`.
+/// `render_def` of `scene` with its faces published, which for the Dam Break
+/// at 64 is the shipped preset with its Whitewater group. The group's reports
+/// are probed by name, the frame's particle count as `count`.
 fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
-    let scene = scene.with_faces();
-    let mut g = Appender::new(render_def(scene));
-    let grid = GridBox::of(&g, scene);
-    let nodes = [("nodes_x", grid.nodes), ("nodes_y", grid.nodes), ("nodes_z", grid.nodes)];
-    let lattice = |extra: &[(&str, f64)]| json_params(&[&nodes[..], extra].concat());
-    let boxed = || json_params(&grid.values());
-    let faced = || json_params(&[&grid.values()[..], &grid.face_values()[..]].concat());
-
-    let surface = g.id("surface");
-    let solid: Port = (g.id("solid"), "out");
-    let bounds: Port = (g.id("surface_lattice"), "transform");
-    let corners: Port = (g.id("surface_nodes"), "out");
-    let count: Port = (g.id("fill"), "count");
-    let particles: Port = (g.id(&format!("s{}.move", scene.steps - 1)), "out");
-    let faces: [Port; 3] = FACE_NODES.map(|name| (g.id(name), "out"));
-    let input = g.id("input");
-    let (seed, epoch): (Port, Port) = ((input, "frame_count"), (input, "trigger_count"));
-    let face_ports = ["face_u", "face_v", "face_w"];
-
-    // The liquid field on the whitewater grid (section 3.3, grid atoms).
-    let crossings = g.node("ww.crossings", "node.surface_crossings", lattice(&[]));
-    g.wire((surface, "level_set"), crossings, "level_set");
-    g.wire(solid, crossings, "solid");
-    for (from, to) in ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"].into_iter().zip(["level_nodes_x", "level_nodes_y", "level_nodes_z"]) {
-        g.wire((surface, from), crossings, to);
-    }
-    let mut nearest: Port = (crossings, "out");
-    for (k, step) in SPREAD_STEPS.iter().enumerate() {
-        let id = g.node(&format!("ww.nearest{k}"), "node.nearest_crossing", lattice(&[("step", f64::from(*step))]));
-        g.wire(nearest, id, "crossings");
-        nearest = (id, "out");
-    }
-    let distance = g.node("ww.distance", "node.crossing_distance", lattice(&[("cell_size", grid.h)]));
-    g.wire(nearest, distance, "crossings");
-    g.wire(solid, distance, "solid");
-    let distance: Port = (distance, "out");
-    let cells = g.node("ww.cells", "node.liquid_cells", lattice(&[]));
-    g.wire(distance, cells, "distance");
-    g.wire(solid, cells, "solid");
-    let cells: Port = (cells, "out");
-    let curvature = g.node("ww.curvature", "node.lattice_curvature", lattice(&[("cell_size", grid.h)]));
-    g.wire(distance, curvature, "distance");
-    let mut curvature: Port = (curvature, "out");
-    for k in 0..3 {
-        let id = g.node(&format!("ww.extend{k}"), "node.extend_lattice", lattice(&[]));
-        g.wire(curvature, id, "values");
-        curvature = (id, "out");
-    }
-
-    // The emitters (section 3.3, particle atoms).
-    let jitter = g.node("ww.jitter", "node.jitter_particles", json_params(&[("cell_size", grid.h)]));
-    g.wire(particles, jitter, "particles");
-    g.wire(seed, jitter, "seed");
-    g.wire(epoch, jitter, "epoch");
-    let sample = g.node("ww.sample", "node.sample_faces_at_particles", faced());
-    g.wire((jitter, "out"), sample, "particles");
-    for (face, port) in faces.iter().zip(face_ports) {
-        g.wire(*face, sample, port);
-    }
-    let sampled: Port = (sample, "out");
-    let energy = g.node("ww.energy", "node.energy_potential", json!({}));
-    g.wire(sampled, energy, "particles");
-    let energy: Port = (energy, "out");
-    let wavecrest = g.node("ww.wavecrest", "node.wavecrest_potential", boxed());
-    g.wire(sampled, wavecrest, "particles");
-    g.wire(distance, wavecrest, "distance");
-    g.wire(curvature, wavecrest, "curvature");
-    g.wire(cells, wavecrest, "cells");
-    let counts = g.node("ww.counts", "node.emission_count", json_params(&[("points_per_cell", REST_PER_CELL), ("ticks", 1.0)]));
-    g.wire(sampled, counts, "particles");
-    g.wire(energy, counts, "energy");
-    g.wire((wavecrest, "out"), counts, "wavecrest");
-    g.wire(count, counts, "live_count");
-    let offsets = g.node("ww.offsets", "node.running_total", json!({}));
-    g.wire((counts, "out"), offsets, "in");
-    g.wire(count, offsets, "count");
-
-    // Spawn, type and the lifecycle (sections 3.3, 3.4).
-    let spawn = g.node("ww.spawn", "node.spawn_whitewater", faced());
-    g.wire((offsets, "out"), spawn, "offsets");
-    g.wire(sampled, spawn, "particles");
-    g.wire(energy, spawn, "energy");
-    for (face, port) in faces.iter().zip(face_ports) {
-        g.wire(*face, spawn, port);
-    }
-    g.wire(solid, spawn, "solid");
-    g.wire(count, spawn, "emitters");
-    g.wire(seed, spawn, "seed");
-    g.wire(epoch, spawn, "epoch");
-    let kind = g.node("ww.type", "node.whitewater_type", boxed());
-    g.wire((spawn, "out"), kind, "spawns");
-    g.wire(distance, kind, "distance");
-    g.wire(cells, kind, "cells");
-    let face_count: Port = (g.node("ww.face_cells", "node.value", json_params(&[("value", grid.face_cells)])), "out");
-    let layers: Port = (g.node("ww.valid_layers", "node.value", json_params(&[("value", EXTENDED_LAYERS as f64)])), "out");
-    let ticks: Port = (g.node("ww.ticks", "node.value", json_params(&[("value", 1.0)])), "out");
-    let life = g.node("ww.lifecycle", "node.whitewater_lifecycle", json!({}));
-    g.wire((kind, "out"), life, "spawns");
-    g.wire((offsets, "out"), life, "offsets");
-    g.wire(count, life, "count");
-    for (face, port) in faces.iter().zip(face_ports) {
-        g.wire(*face, life, port);
-    }
-    for (cells_port, nodes_port) in ["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]) {
-        g.wire(face_count, life, cells_port);
-        g.wire(corners, life, nodes_port);
-    }
-    g.wire(layers, life, "face_valid_layers");
-    g.wire(distance, life, "level");
-    g.wire(solid, life, "solid");
-    g.wire(bounds, life, "grid_bounds");
-    g.wire(ticks, life, "ticks");
-    g.wire(epoch, life, "epoch");
-
-    // The engine preset's whitewater objects, drawing the lifecycle.
-    let preset = preset_json("WaterDamBreakGpu.json");
-    let preset_nodes = preset["nodes"].as_array().expect("preset nodes");
-    let name_of = |id: &Value| -> String {
-        let node = preset_nodes.iter().find(|n| n["id"] == *id).expect("preset node");
-        node["nodeId"].as_str().expect("preset name").to_string()
-    };
-    for name in OBJECTS {
-        g.add(preset_nodes.iter().find(|n| n["nodeId"] == name).expect("whitewater object").clone());
-    }
-    for wire in preset["wires"].as_array().expect("preset wires") {
-        let (from, to) = (name_of(&wire["fromNode"]), name_of(&wire["toNode"]));
-        if OBJECTS.contains(&from.as_str()) && (OBJECTS.contains(&to.as_str()) || to == "scene") {
-            let mut wire = wire.clone();
-            wire["fromNode"] = json!(g.id(&from));
-            wire["toNode"] = json!(g.id(&to));
-            g.def["wires"].as_array_mut().expect("wires").push(wire);
-        }
-    }
-    for (kind, (population, live)) in KINDS.into_iter().zip(LIFECYCLE_PORTS) {
-        let copies = g.node(&format!("ww.{kind}_copies"), "node.particles_to_copies", json!({}));
-        g.wire((life, population), copies, "particles");
-        g.wire((life, live), copies, "live_count");
-        let object = g.id(&format!("{kind}_object"));
-        g.wire((copies, "copies"), object, "instances");
-        g.wire((life, live), object, "instance_count");
-    }
+    let mut g = Appender::new(render_def(scene.with_faces()));
+    let group = g.id("whitewater");
     for report in LIFECYCLE_REPORTS {
-        g.probe(report, (life, report));
+        g.probe(report, (group, report));
     }
-    g.probe("count", count);
-    g.def["name"] = json!("SWASH with GPU whitewater");
+    let frame = g.id("frame");
+    g.probe("count", (frame, "count_b"));
     g.finish()
 }
 
@@ -420,9 +210,6 @@ struct Show {
     runtime: PresetRuntime,
     target: RenderTarget,
     size: (u32, u32),
-    /// The surface's solid lattice source and its values, written before
-    /// every frame, since the planner may recycle a source's storage.
-    solid: Option<(NodeInstanceId, Vec<f32>)>,
     sampler: manifold_gpu::GpuTimestampSampler,
     /// Per plan step, the index of its whitewater label: a step whose node,
     /// or any member of its fused node, is a `ww.` atom.
@@ -430,6 +217,8 @@ struct Show {
     labels: Vec<String>,
     frame_count: i64,
     trigger: u32,
+    /// The transport is paused: frames hold the clock with dt 0.
+    paused: bool,
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
@@ -442,7 +231,7 @@ struct Frame {
 }
 
 impl Show {
-    fn new(def: EffectGraphDef, size: (u32, u32), solid: Option<Vec<f32>>, frozen: bool, held: &[String]) -> Self {
+    fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(ScalarProbe::new()));
@@ -474,27 +263,10 @@ impl Show {
                 }
             }));
         }
-        let solid = solid.map(|values| {
-            let id = runtime.graph.nodes().find(|n| n.node_id.as_str() == "solid").expect("solid source").id;
-            (id, values)
-        });
-        let mut show = Self { device, runtime, target, size, solid, sampler, step_label, labels, frame_count: 0, trigger: 0 };
-        let mut held: Vec<NodeId> = held.iter().map(|name| NodeId::from(name.as_str())).collect();
-        if show.solid.is_some() {
-            held.push(NodeId::from("solid"));
-        }
+        let mut show = Self { device, runtime, target, size, sampler, step_label, labels, frame_count: 0, trigger: 0, paused: false };
+        let held: Vec<NodeId> = held.iter().map(|name| NodeId::from(name.as_str())).collect();
         show.runtime.set_dump_visible(None, &held);
         show
-    }
-
-    fn write_solid(&self) {
-        let Some((id, values)) = &self.solid else { return };
-        let resource = output_of(&self.runtime.plan, *id, "out");
-        let backend = self.runtime.backend_for_test();
-        let buffer = backend.array_buffer(backend.slot_for(resource).expect("solid bound")).expect("solid buffer");
-        assert!(buffer.size as usize >= values.len() * 4, "the solid source holds the lattice");
-        // SAFETY: shared storage of at least this many floats; no frame is in flight.
-        unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
     }
 
     /// One frame 1/60 s on. Metal's autoreleased objects drain per frame, as
@@ -504,14 +276,15 @@ impl Show {
     }
 
     fn frame_inner(&mut self, profile: bool) -> Frame {
-        self.write_solid();
-        self.frame_count += 1;
+        if !self.paused {
+            self.frame_count += 1;
+        }
         let time = self.frame_count as f64 / 60.0;
         let (w, h) = self.size;
         let ctx = PresetContext {
             time,
             beat: time * 2.0,
-            dt: 1.0 / 60.0,
+            dt: if self.paused { 0.0 } else { 1.0 / 60.0 },
             width: w,
             height: h,
             output_width: w,
@@ -586,14 +359,12 @@ impl Show {
     }
 }
 
-/// SWASH's Dam Break at 64 with the Whitewater chain, frozen as the app
-/// renders it, 90 frames: no node refuses and foam is up by 1.5 s. The
-/// design's `swash_whitewater_emits`, on the builder until the preset holds
-/// the chain.
+/// The shipped SWASH Dam Break with its Whitewater group, frozen as the app
+/// renders it, 90 frames: no node refuses and foam is up by 1.5 s.
 #[test]
-fn swash_builder_whitewater_emits() {
+fn swash_whitewater_emits() {
     let scene = WaterScene::dam_break(64);
-    let mut show = Show::new(whitewater_render_def(scene), (320, 180), Some(scene.surface_solid()), true, &[]);
+    let mut show = Show::new(whitewater_render_def(scene), (320, 180), true, &[]);
     show.restart();
     let mut last = [0.0; 8];
     for frame in 1..=90 {
@@ -622,7 +393,7 @@ fn swash_builder_whitewater_emits() {
 fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     let scene = WaterScene::dam_break(64);
     let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
-    let mut show = Show::new(whitewater_render_def(scene), (320, 180), Some(scene.surface_solid()), true, &[]);
+    let mut show = Show::new(whitewater_render_def(scene), (320, 180), true, &[]);
     show.restart();
     let (mut content, mut worker) = (Vec::new(), Vec::new());
     let mut last = [0.0; 8];
@@ -643,6 +414,43 @@ fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     assert!(last[0] > 0.0, "no foam by 3 s: {last:?}");
     assert!(worker.iter().any(|&ms| ms > 0.0), "the lifecycle thread never reported work");
     assert_eq!(last[5], 0.0, "live, with the GPU waited each frame, no tick drops");
+}
+
+/// The pause gesture on the shipped preset: paused mid-splash, the
+/// whitewater holds (no emission, the same population, the same picture)
+/// and moves on when play resumes.
+#[test]
+fn swash_whitewater_holds_while_paused() {
+    let scene = WaterScene::dam_break(64);
+    let mut show = Show::new(whitewater_render_def(scene), (320, 180), true, &[]);
+    show.restart();
+    for _ in 0..60 {
+        show.frame(false);
+    }
+    let playing = show.probes(LIFECYCLE_REPORTS);
+    assert!(playing[0] > 0.0, "no foam by 1 s: {playing:?}");
+    show.paused = true;
+    show.frame(false);
+    let (held, image) = (show.probes(LIFECYCLE_REPORTS), show.readback());
+    for _ in 0..3 {
+        show.frame(false);
+    }
+    let (still, still_image) = (show.probes(LIFECYCLE_REPORTS), show.readback());
+    let changed = image.chunks_exact(4).zip(still_image.chunks_exact(4)).filter(|(a, b)| a != b).count();
+    println!("WHITEWATER pause: playing {playing:?}; paused {held:?} then {still:?}; {changed} pixels changed over 3 paused frames");
+    // The first paused frame publishes the last playing tick: the lifecycle
+    // reads a tick's snapshot a frame after the GPU wrote it (D11).
+    assert!(held[3] >= playing[3], "the first paused frame lost emission: {held:?}");
+    assert_eq!(still[..6], held[..6], "paused frames moved the whitewater");
+    assert_eq!(changed, 0, "paused frames changed the picture");
+    show.paused = false;
+    for _ in 0..15 {
+        show.frame(false);
+    }
+    let resumed = show.probes(LIFECYCLE_REPORTS);
+    assert!(resumed[3] > still[3], "no emission after play resumed: {resumed:?}");
+    let errors = show.errors();
+    assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
 }
 
 fn percentile(values: &[f64], p: f64) -> f64 {
@@ -842,7 +650,7 @@ const FLIP_PROBES: [&str; 4] = ["foam_count", "bubble_count", "spray_count", "si
 /// The engine's simulation ms a frame over `DEMO_FRAMES`, its whitewater on
 /// or off, with nothing else drawing on the cores.
 fn flip_simulation_ms(whitewater: bool) -> Vec<f64> {
-    let mut show = Show::new(flip_def(whitewater), (320, 180), None, false, &[]);
+    let mut show = Show::new(flip_def(whitewater), (320, 180), false, &[]);
     let ms = (0..DEMO_FRAMES)
         .map(|_| {
             show.frame(false);
@@ -875,12 +683,12 @@ fn whitewater_side_by_side() {
     std::fs::create_dir_all(&dir).expect("output directory");
     let scene = WaterScene::dam_break(64);
     let swash_show = || {
-        let mut show = Show::new(whitewater_render_def(scene), DEMO_SIZE, Some(scene.surface_solid()), true, &[]);
+        let mut show = Show::new(whitewater_render_def(scene), DEMO_SIZE, true, &[]);
         show.restart();
         show
     };
 
-    let mut flip = Show::new(flip_def(true), DEMO_SIZE, None, false, &[]);
+    let mut flip = Show::new(flip_def(true), DEMO_SIZE, false, &[]);
     let (flip_clip, flip_values) = record(&mut flip, "flip", &dir, FLIP_PROBES);
     drop(flip);
     let mut swash = swash_show();
@@ -993,7 +801,7 @@ mod emitter_oracle {
     use super::super::liquid_surface_tests::{Harness, params, read};
     use super::super::sample_faces_at_particles::SampleFacesAtParticles;
     use super::super::spawn_whitewater::SpawnWhitewater;
-    use super::super::swash_preset::DAM_MIN;
+    use super::super::swash_preset::REST_PER_CELL;
     use super::super::wavecrest_potential::WavecrestPotential;
     use super::super::whitewater_type::WhitewaterType;
     use super::*;
@@ -1002,6 +810,50 @@ mod emitter_oracle {
     use crate::node_graph::liquid::grid::face_len;
     use crate::node_graph::primitive::Primitive;
     use crate::node_graph::whitewater::KnownValue;
+
+    /// The whitewater grid: the surface's solid lattice, its cells and box, and
+    /// the face grid centred in it.
+    #[derive(Clone, Copy, Debug)]
+    struct GridBox {
+        center: [f64; 3],
+        size: [f64; 3],
+        nodes: f64,
+        h: f64,
+        face_cells: f64,
+    }
+
+    impl GridBox {
+        /// The solid lattice the SWASH domain publishes for `scene`, and its face
+        /// grid.
+        fn of(scene: WaterScene) -> Self {
+            let n = scene.pressure.n;
+            let lattice = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&scene.layout());
+            let bounds = lattice.bounds();
+            let nodes = lattice.nodes();
+            assert!(nodes.iter().all(|&v| v == nodes[0]), "a cubic lattice: {nodes:?}");
+            Self {
+                center: bounds.pos.map(f64::from),
+                size: bounds.scale.map(f64::from),
+                nodes: f64::from(nodes[0]),
+                h: f64::from(lattice.cell_size()),
+                face_cells: n as f64,
+            }
+        }
+
+        fn values(&self) -> Vec<(&'static str, f64)> {
+            let mut values = Vec::new();
+            for axis in 0..3 {
+                values.push((["center_x", "center_y", "center_z"][axis], self.center[axis]));
+                values.push((["size_x", "size_y", "size_z"][axis], self.size[axis]));
+                values.push((["nodes_x", "nodes_y", "nodes_z"][axis], self.nodes));
+            }
+            values
+        }
+
+        fn face_values(&self) -> [(&'static str, f64); 3] {
+            [("face_cells_x", self.face_cells), ("face_cells_y", self.face_cells), ("face_cells_z", self.face_cells)]
+        }
+    }
 
     const FRAMES: [usize; 4] = [30, 60, 90, 120];
     const CAPACITY: u32 = 250_000;
@@ -1013,7 +865,9 @@ mod emitter_oracle {
     const DT: f64 = 1.0 / 60.0;
     const SEEDS: u32 = 16;
     /// Past this a frame fails as too noisy to judge rather than passing.
-    const SEED_LIMIT: u32 = 4096;
+    /// The shipped preset's frame 90 emits under one particle a seed, so its
+    /// histograms settle only past 4,096 seeds.
+    const SEED_LIMIT: u32 = 16_384;
     const TOTAL_TOLERANCE: f64 = 0.05;
     const KIND_TOLERANCE: f64 = 0.10;
     const KIND_FLOOR: f64 = 200.0;
@@ -1029,6 +883,7 @@ mod emitter_oracle {
         distance: Vec<f32>,
         curvature: Vec<KnownValue>,
         cells: Vec<u32>,
+        solid: Vec<f32>,
     }
 
     impl Show {
@@ -1050,10 +905,8 @@ mod emitter_oracle {
     }
 
     fn capture(scene: WaterScene, grid: GridBox) -> Vec<Captured> {
-        let particles_node = format!("s{}.move", scene.steps - 1);
-        let held: Vec<String> =
-            [particles_node.as_str(), "face_u", "face_v", "face_w", "ww.distance", "ww.extend2", "ww.cells"].map(String::from).to_vec();
-        let mut show = Show::new(whitewater_render_def(scene), (320, 180), Some(scene.surface_solid()), false, &held);
+        let held: Vec<String> = ["frame", "ww.distance", "ww.extend2", "ww.cells"].map(String::from).to_vec();
+        let mut show = Show::new(whitewater_render_def(scene), (320, 180), false, &held);
         show.restart();
         let lattice = (cells(grid) as usize).pow(3);
         let face_cells = [grid.face_cells as u32; 3];
@@ -1066,11 +919,12 @@ mod emitter_oracle {
             captured.push(Captured {
                 frame,
                 count: show.probes(["count"])[0] as u32,
-                particles: show.dumped(&particles_node, "out", scene.particles() as usize),
-                faces: [0, 1, 2].map(|axis| show.dumped(FACE_NODES[axis], "out", face_len(face_cells, axis) as usize)),
+                particles: show.dumped("frame", "particles_b", scene.particles() as usize),
+                faces: [0, 1, 2].map(|axis| show.dumped("frame", ["face_u", "face_v", "face_w"][axis], face_len(face_cells, axis) as usize)),
                 distance: show.dumped("ww.distance", "out", lattice),
                 curvature: show.dumped("ww.extend2", "out", lattice),
                 cells: show.dumped("ww.cells", "out", lattice),
+                solid: show.dumped("frame", "solid_b", (grid.nodes as usize).pow(3)),
             });
         }
         let errors = show.errors();
@@ -1087,7 +941,7 @@ mod emitter_oracle {
     }
 
     impl Outcome {
-        fn of(particles: &[WhitewaterParticle]) -> Self {
+        fn of(particles: &[WhitewaterParticle], min: [f64; 3]) -> Self {
             let mut out = Self { kinds: [0.0; 3], space: vec![0.0; SPACE_BINS.pow(3)], life: vec![0.0; LIFE_BINS] };
             let bin = |x: f32, bins: usize| ((x * bins as f32).floor() as i64).clamp(0, bins as i64 - 1) as usize;
             for p in particles {
@@ -1097,7 +951,7 @@ mod emitter_oracle {
                     WhitewaterKind::Spray => 2,
                 };
                 out.kinds[kind] += 1.0;
-                let at = |a: usize| bin((p.position[a] - DAM_MIN[a] as f32) / TANK, SPACE_BINS);
+                let at = |a: usize| bin((p.position[a] - min[a] as f32) / TANK, SPACE_BINS);
                 out.space[at(0) + SPACE_BINS * (at(1) + SPACE_BINS * at(2))] += 1.0;
                 out.life[bin(p.lifetime / MAX_LIFETIME, LIFE_BINS)] += 1.0;
             }
@@ -1332,9 +1186,10 @@ mod emitter_oracle {
     #[test]
     fn whitewater_emitter_matches_flip() {
         let scene = WaterScene::dam_break(64);
-        let grid = GridBox::of(&Appender::new(render_def(scene.with_faces())), scene);
-        let solid = scene.surface_solid();
+        let grid = GridBox::of(scene);
+        let tank_min = scene.min();
         let captured = capture(scene, grid);
+        let solid = captured[0].solid.clone();
         let mut chain = Chain::new(grid, scene.particles() as usize, &solid);
         let mut failures = Vec::new();
         let mut population = Vec::new();
@@ -1357,11 +1212,11 @@ mod emitter_oracle {
                     ours.load(&spawns).expect("load");
                     ours.step(DT).expect("step");
                     ours.particles(&mut population).expect("population");
-                    gpu.push(Outcome::of(&population));
+                    gpu.push(Outcome::of(&population, tank_min));
                     let mut theirs = lifecycle(grid, c, &solid, seed);
                     whitewater_oracle::emit(&mut theirs, &curvature, &positions, DT).expect("FLIP emits");
                     theirs.particles(&mut population).expect("population");
-                    flip.push(Outcome::of(&population));
+                    flip.push(Outcome::of(&population, tank_min));
                 }
                 seeds += SEEDS;
                 let spread = noise(&gpu, &flip);

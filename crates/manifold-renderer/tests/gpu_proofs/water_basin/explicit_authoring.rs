@@ -174,7 +174,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         .into_iter()
         .filter_map(|object| match object {
             SceneObjectVm::Known(row)
-                if row.group_node_id.is_some() && row.fluid_node_ids.is_empty() =>
+                if row.group_node_id.is_some() && row.fluid_controls.is_empty() =>
             {
                 Some(row)
             }

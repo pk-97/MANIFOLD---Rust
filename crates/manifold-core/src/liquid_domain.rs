@@ -3,13 +3,21 @@
 //! the same walk (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.5 (Scene
 //! recognition)). No other file writes a domain type-id literal.
 
+use std::collections::BTreeSet;
+
+use crate::SceneNodeRef;
+use crate::scene_index::{FlatSceneIndex, SceneIndexError};
+
 /// The FLIP liquid domain.
 pub const FLIP_DOMAIN_TYPE_ID: &str = "node.fluid_surface";
 /// The GPU MLS-MPM liquid domain.
 pub const MATTER_DOMAIN_TYPE_ID: &str = "node.matter_domain";
+/// The SWASH liquid domain: PIC/FLIP particles on a face grid with a
+/// pressure solve made of FFTs (`docs/FFT_WATER_SOLVER_DESIGN.md`).
+pub const SWASH_DOMAIN_TYPE_ID: &str = "node.swash_domain";
 
 /// Every liquid domain type.
-pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID];
+pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, SWASH_DOMAIN_TYPE_ID];
 
 pub fn is_liquid_domain(type_id: &str) -> bool {
     LIQUID_DOMAIN_TYPE_IDS.contains(&type_id)
@@ -44,7 +52,69 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
             "points_per_cell", "stiffness", "cohesion", "liveliness",
         ],
     ),
+    (
+        SWASH_DOMAIN_TYPE_ID,
+        &[
+            "domain_size", "fill_height",
+            "gravity_x", "gravity", "gravity_z",
+            "speed", "reset",
+            "resolution",
+        ],
+    ),
 ];
+
+/// The liquid domain an object's surface is built from. Water is recognised
+/// by its particle producer, not by the port that feeds the object: the walk
+/// starts at the object's `vertices` producer, follows every wired input
+/// upstream and stops at each liquid domain it meets. A CPU surface
+/// (`fluid_surface.vertices`) and a GPU surface (particles → sort → blobs →
+/// volume → marching cubes) both reach their domain.
+pub fn liquid_domain_of(
+    index: &FlatSceneIndex,
+    object: &SceneNodeRef,
+) -> Result<Option<SceneNodeRef>, SceneIndexError> {
+    let unsupported = |path: String, detail: &str| SceneIndexError::Unsupported {
+        path,
+        detail: detail.into(),
+    };
+    let Some(wire) = index.input(object, "vertices")? else {
+        return Ok(None);
+    };
+    let mut pending = vec![wire.from_node];
+    let mut seen = BTreeSet::from([wire.from_node]);
+    let mut domains = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        let Some(node) = index.flat.nodes.iter().find(|node| node.id == id) else {
+            return Err(unsupported(
+                format!("{object:?}.vertices"),
+                "surface chain names a missing producer",
+            ));
+        };
+        if is_liquid_domain(&node.type_id) {
+            let reference = index.by_id.get(&id).ok_or_else(|| {
+                unsupported(
+                    format!("{object:?}.vertices"),
+                    "liquid domain has no stable scene reference",
+                )
+            })?;
+            domains.insert(reference.clone());
+            continue;
+        }
+        for wire in index.flat.wires.iter().filter(|wire| wire.to_node == id) {
+            if seen.insert(wire.from_node) {
+                pending.push(wire.from_node);
+            }
+        }
+    }
+    let domain = domains.pop_first();
+    if !domains.is_empty() {
+        return Err(unsupported(
+            format!("{object:?}"),
+            "scene object's surface is built from more than one liquid domain",
+        ));
+    }
+    Ok(domain)
+}
 
 /// The water-panel params of `type_id`, or `None` when it is not a liquid
 /// domain.
@@ -60,9 +130,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn liquid_domain_predicate_covers_both() {
+    fn liquid_domain_predicate_covers_every_solver() {
         assert!(is_liquid_domain(FLIP_DOMAIN_TYPE_ID));
         assert!(is_liquid_domain(MATTER_DOMAIN_TYPE_ID));
+        assert!(is_liquid_domain(SWASH_DOMAIN_TYPE_ID));
         assert!(!is_liquid_domain("node.physics_world"));
         assert!(!is_liquid_domain("node.matter_state"));
     }
@@ -92,6 +163,7 @@ mod tests {
             "manifold-core/src/type_id_migration.rs",
             "manifold-renderer/src/node_graph/primitives/fluid_surface.rs",
             "manifold-renderer/src/node_graph/primitives/matter_domain.rs",
+            "manifold-renderer/src/node_graph/primitives/swash_domain.rs",
         ];
         let patterns: Vec<String> = LIQUID_DOMAIN_TYPE_IDS
             .iter()

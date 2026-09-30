@@ -40,6 +40,7 @@ pub mod preset_type_registry;
 pub mod project;
 pub mod recording;
 pub mod scene_exposure;
+pub mod scene_index;
 pub mod scene_modifier_preset;
 pub mod scene_modifier_edit;
 pub mod scene_modifier_math_view;

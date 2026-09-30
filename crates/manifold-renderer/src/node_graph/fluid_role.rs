@@ -77,7 +77,11 @@ impl PreparedFluidGeometry {
             let spawned = std::thread::Builder::new()
                 .name("fluid-role-distance".into())
                 .spawn(move || {
-                    let _ = geometry.distance.lattice.set(build_distance(&geometry.meshes));
+                    // Always settle the lattice, so a waiter never waits on a
+                    // build that panicked.
+                    let built = std::panic::catch_unwind(|| build_distance(&geometry.meshes))
+                        .unwrap_or_else(|_| Err("Fluid role distance lattice build panicked".into()));
+                    let _ = geometry.distance.lattice.set(built);
                 });
             if let Err(error) = spawned {
                 let _ = self
@@ -87,6 +91,18 @@ impl PreparedFluidGeometry {
             }
         }
         DistanceState::Pending
+    }
+
+    /// [`Self::distance_lattice`], waiting for the build instead of returning
+    /// Pending: an offline render never spends simulated time on it.
+    pub fn wait_distance_lattice(self: &Arc<Self>) -> DistanceState {
+        match self.distance_lattice() {
+            DistanceState::Pending => match self.distance.lattice.wait() {
+                Ok(lattice) => DistanceState::Ready(Arc::clone(lattice)),
+                Err(error) => DistanceState::Failed(error.clone()),
+            },
+            settled => settled,
+        }
     }
 }
 

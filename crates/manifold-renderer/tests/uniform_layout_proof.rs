@@ -491,7 +491,6 @@ const NON_STANDALONE: &[&str] = &[
     "node.grid_points",
     "node.hypercube_edges",
     "node.lightning_bolt",
-    "node.liquid_feedback",
     "node.mesh_edges",
     "node.one_euro_filter",
     "node.platonic_solid_edges",
@@ -519,9 +518,12 @@ const NON_STANDALONE: &[&str] = &[
     "node.torus_wrap_field",
     // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
     "system.mesh_input",
-    // GPU MPM state, frame ring and barriered stats reduction: cross-frame
-    // state and a multipass reduction, their custom ABIs reflected by the
-    // extended custom cases.
+    // Liquid state, frame ring and barriered stats reduction (the seam's and
+    // GPU MPM's): cross-frame state and a multipass reduction, their custom
+    // ABIs reflected by the extended custom cases.
+    "node.liquid_frame",
+    "node.liquid_state",
+    "node.liquid_stats",
     "node.matter_frame",
     "node.matter_state",
     "node.matter_stats",

@@ -1166,7 +1166,7 @@ impl Application {
             return false;
         };
         if let Some(ed) = self.graph_editor.as_ref() {
-            crate::fluid_domain_edit::apply_runtime_domains(&mut scene, &def, &ed.viewport_fluid_domains);
+            crate::fluid_domain_edit::apply_runtime_domains(&mut scene, &ed.viewport_fluid_domains);
         }
         let (w, h, cam, mode, selected) = {
             let Some(ed) = self.graph_editor.as_ref() else { return false };

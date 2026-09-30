@@ -26,7 +26,7 @@ pub(super) const CONSUMER_LATTICE: [f32; 3] = [130.0, 64.0, 32.0];
 /// one element (BUG-sk62, divide_by_value fused region shrinks to its divisor). Without
 /// `collider` the moving box is unwired, so the tank holds only the column
 /// and the pool, as SWASH's Dam Break does.
-pub(super) fn matter_dam_break_faces(consumer: Option<usize>, collider: bool) -> EffectGraphDef {
+pub(crate) fn matter_dam_break_faces(consumer: Option<usize>, collider: bool) -> EffectGraphDef {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakMatter.json");
     let mut preset: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses");
     let nodes = preset["nodes"].as_array_mut().expect("preset nodes");
