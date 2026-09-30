@@ -314,7 +314,7 @@ _Generated from the node registry. Do not hand-edit. 331 nodes registered, group
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
-| Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a smooth density field on a grid, the step before the surface mesh is drawn. |
+| Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |

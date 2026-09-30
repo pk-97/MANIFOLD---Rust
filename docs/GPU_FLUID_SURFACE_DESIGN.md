@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) building. The surface meets its re-baselined 6 ms gate (5.3 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built, look owed to Peter. The surface meets its re-baselined 6 ms gate (5.7 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -849,7 +849,8 @@ proofs; record the rest. **Done: no lever kept.** The surface stays 5.27 ms p95.
 ### P6e — Surface look: a distance level set
 
 Lead brief, 2026-09-30: make the live surface read as water and come close to the FLIP
-bake surface, working on the particle-frame seam, inside the 6 ms gate.
+bake surface, working on the particle-frame seam, inside the 6 ms gate. **Built
+(2026-09-30)**; results at the end of this phase. Peter judges the stills.
 
 **Measured, before.** `fluid_capture --dump-mesh` writes the GPU mesh, the CPU FLIP mesh
 of the same particles (a hidden second water object keeps the CPU mesher running) and
@@ -915,6 +916,34 @@ kernels are still Yu & Turk's, and FLIP's sphere union is this atom fed isotropi
 - **Demo:** `fluid_capture --gpu-surface --dump-mesh` on the Dam Break and the settle scene, before and after, stills plus the table above re-measured on the GPU mesh. L2: Peter judges the stills.
 - **Gesture:** drag Surface Particle Scale mid-splash; the water swells and thins smoothly with no restart.
 - **Forbidden:** raising smoothing passes or kernel reach to hide the bumps (measured above: neither removes them); a second level-set atom beside `particle_volume`; any MPM scene above res 64 on the GPU (BUG-bnp9 (MPM matter hard lock)).
+
+**Result, on the GPU mesh.** Same captures, same particles (the simulation is
+deterministic: the before run reproduces the earlier numbers to the hundredth), preset
+defaults. Slope rms at 1–2 dx / 2–4 dx / over 4 dx, then curvature std:
+
+| Scene | CPU FLIP | GPU before | GPU after |
+|---|---|---|---|
+| Dam Break 6 s | 13.2° / 11.4° / 14.8°, 30 | 28.5° / 23.5° / 18.1°, 70 | 12.1° / 11.9° / 14.7°, 27 |
+| Dam Break 8 s | 8.3° / 4.9° / 11.5°, 22 | 18.7° / 13.2° / 11.9°, 34 | 8.0° / 6.1° / 11.5°, 18 |
+| Dam Break 10 s | 7.2° / 4.0° / 11.4°, 12 | 12.3° / 8.6° / 11.8°, 24 | 6.5° / 5.4° / 11.5°, 10 |
+| Settle 4 s | 12.0° / 9.3° / 17.6°, 16 | 21.9° / 18.5° / 19.1°, 44 | 10.5° / 10.7° / 17.6°, 13 |
+| Settle 8 s | 6.1° / 3.4° / 5.1°, 10 | 12.8° / 9.8° / 6.3°, 21 | 6.0° / 5.0° / 5.3°, 8 |
+
+The GPU surface now sits at FLIP's roughness at every scale; the 2–4 cell band stays up
+to 1.5× FLIP's on a calm pool, which the isotropic setting closes (replica table above).
+The settle scene at 4 s had holes in the old surface (12,047 of 13,272 columns); the
+distance field closes them.
+
+**Cost.** `fluid_surface_perf`, res 64 ×2, tick 90, M4 Max, load 10–21 from other
+sessions: Liquid Surface 5.71 ms p95, 1080p frame 14.0 ms p95. The volume costs what the
+kernel sum cost (1.97 ms p95 against 1.95); blobs 2.01. The sort measures 0.61 ms against
+P6c's 0.20 since the MPM merge's in-place point sort, not this phase. Scale 3: 12.4 ms;
+scale 4: 25.0 ms, as before.
+
+**Owed.** The MPM matter presets use the same group and now get the distance field too;
+they were not rendered here (BUG-bnp9 (MPM matter hard lock)). Whether the default look
+is anisotropic (this build) or FLIP's isotropic sphere union is Peter's call; isotropic
+could also drop the blob stage's covariance work.
 
 ### P7 — Add Fluid authors the GPU surface
 
