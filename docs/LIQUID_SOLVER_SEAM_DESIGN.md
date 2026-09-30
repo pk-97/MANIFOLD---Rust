@@ -122,7 +122,7 @@ f32 in m/s, scene space, shared storage. Scalars: `face_cells_x/y/z` and `face_v
 
 The producer resamples; no consumer sees a native layout:
 - SWASH: `node.face_sample_component` copies one axis of its `FaceSample` lattice into the array, skipping the padding entries.
-- MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:397`, `:402`).
+- MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`).
 - FLIP: no grid (D3).
 
 The liquid distance field is not a solver output. The Liquid Surface group already builds it (`R/primitives/particle_volume.rs:54`: distance to the nearest blob, negative inside, capped at a tenth of a bin outside). The group exports it as `level_set` with `level_set_bounds` and `level_set_nodes_x/y/z`. Whitewater owns the one atom that resamples or re-distances it onto the lattice it needs.

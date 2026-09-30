@@ -157,7 +157,7 @@ P1's atoms (the seam's P10):
 | Atom | Rule |
 |---|---|
 | `node.face_sample_component` | one axis of SWASH's `FaceSample` lattice into the seam array, padding skipped; param `axis` |
-| `node.matter_face_component` | one axis from the MPM grid: the mean of the four nodes around each face centre, after the lattice padding (`R/matter.rs:397`, `:402`); param `axis` |
+| `node.matter_face_component` | one axis from the MPM grid: the mean of the four nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`); param `axis` |
 
 Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces.wgsl` (FLIP's MAC trilinear on the seam arrays) and `whitewater_common.wgsl` (hash, grid trilinear, 26-neighbour air test). The particle chain from `jitter_particles` to `emission_count` must fuse into at most two dispatches and `spawn_whitewater` + `whitewater_type` into one (⚠ VERIFY-AT-IMPL: `cargo run -p manifold-renderer --bin graph-tool -- fusion` on the SWASH Dam Break preset; before P5, the fusion plan of the builder graph).
 
@@ -229,7 +229,7 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
 ### 3.6 Solver feeds
 
 - **SWASH, the host:** `face_sample_component` × 3 on the last step's `new` faces (`swash_preset.rs:609`). In P1–P4 the Rust scene builders wire them straight to the atoms with ticks 1, the generator input's trigger count as epoch, gravity −9.81, 8 particles per cell. From P5 the SWASH Dam Break preset JSON carries the wiring; when the seam's P7a builds `node.liquid_frame`, it publishes `FACE_GRID_PORTS` and the clock scalars, and the direct wiring goes.
-- **MPM:** `matter_frame` publishes `FACE_GRID_PORTS` from `matter_face_component` on the region's final grid, one copy per ring slot beside `solid_*`, only when wired, held while paused (⚠ VERIFY-AT-IMPL: the grid escapes the region as a boundary result — `R/primitives/matter_state.rs:157`). `face_valid_layers` is what the kernel support gives (⚠ VERIFY-AT-IMPL: measure; 1 expected). MPM is proven at the face grid (`liquid_face_grid_layout`); no MPM scene hosts whitewater.
+- **MPM:** `matter_frame` publishes `FACE_GRID_PORTS` from three `matter_face_component` on `matter_state`'s grid, one buffer per axis copied on each tick (only frame B's faces are published), only when wired, held while paused. The components run after the region: a region's steps sit contiguous right after its boundary (`R/substeps.rs`, `SubstepRegion`), so any other consumer of the boundary's grid runs once, on the last substep's grid. `face_valid_layers` is 1 (`MATTER_FACE_VALID_LAYERS`, `R/primitives/matter_face_component.rs`): a point's stencil puts mass on every corner of its cell, so the faces sharing an edge with a liquid cell read grid velocity; the face one cell out along its own axis needs a point in the near half of the cell. MPM is proven at the face grid (`liquid_face_grid_layout`); no MPM scene hosts whitewater.
 - **FLIP:** no grid (seam D3); its native whitewater stays the reference.
 
 ### 3.7 Proofs
@@ -283,10 +283,10 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 
 ### P1 — Grid outputs (the seam's P10)
 
-- **Entry state:** this design approved; `origin/feat/fft-water` merged into the branch; anchors `swash_preset.rs:609`, `matter_state.rs:157`, `R/matter.rs:397` re-read.
+- **Entry state:** this design approved; `origin/feat/fft-water` merged into the branch; anchors `swash_preset.rs:609`, `matter_state.rs:157`, `R/matter.rs:287` re-read.
 - **Read-back:** LIQUID_SOLVER_SEAM_DESIGN.md section 3.2 (Grid outputs) and P10 (Grid outputs); ADDING_PRIMITIVES.md; this doc's section 3.1 (Grids) and section 3.6 (Solver feeds). Restate D2, the seam's P10 forbidden list, and the entry findings.
 - **Deliverables:** `R/liquid/grid.rs` with `FACE_GRID_PORTS`; `node.face_sample_component`, `node.matter_face_component`; `matter_frame` inputs and outputs for the grid; group outputs `level_set`, `level_set_bounds`, `level_set_nodes_x/y/z` in every preset that embeds the Liquid Surface group (`rg -l '"liquid_surface"' crates/manifold-renderer/assets/generator-presets`), thumbnails regenerated; `face_grid_extent_tests.rs`; `liquid_face_grid_layout` (uniform and linear-shear fields, both producers, within 1e-5 of the seam positions).
-- **Gate:** `cargo nextest run -p manifold-renderer face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: I1's pattern on the two new atoms → 0.
+- **Gate:** `cargo nextest run -p manifold-renderer face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e swash_ -e fluid_surface crates/manifold-renderer/src/node_graph/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
 - **Demo:** L2, the seam's P10 demo: a face-speed slice of SWASH and MPM Dam Break at the same tick, side by side, PNG.
 - **Forbidden:** a consumer switching on solver; node velocities as the contract; publishing every tick; `liquid_frame` (P7a's).
 - **Test scope:** focused renderer; GPU proofs.
