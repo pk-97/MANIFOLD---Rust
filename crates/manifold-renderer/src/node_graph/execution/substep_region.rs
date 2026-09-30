@@ -70,71 +70,87 @@ impl Executor {
         self.substep_scalar_values[depth].clear();
         self.substep_scalar_values[depth].resize(ports.iteration_scalars.len(), 0.0);
 
-        let mut iteration = 0u32;
-        loop {
-            let more = graph
-                .get_node_mut(region.boundary)
-                .expect("boundary exists")
-                .node
-                .substep_iteration(iteration, &mut self.substep_scalar_values[depth]);
-            if !more {
-                break;
-            }
-            if iteration == MAX_REGION_ITERATIONS {
-                eprintln!(
-                    "[graph error] substep boundary {:?} asked for more than \
-                     {MAX_REGION_ITERATIONS} iterations this frame; the region stopped there",
-                    region.boundary,
-                );
-                break;
-            }
-            // Host syncs are opt-in per boundary and offline only: a region
-            // without a clock owner, or any live frame, never commits or
-            // waits mid-region.
-            if let Some(clock) = region.clock
-                && iteration > 0
-                && offline_simulation()
-                && graph.get_node(clock).is_some_and(|inst| inst.node.substep_host_sync(iteration))
-            {
-                if let Some(gpu) = gpu.as_deref_mut() {
-                    gpu.native_enc.commit_wait_and_continue(gpu.device);
+        // An outermost region's body replays its recorded dispatches
+        // (docs/ENCODE_REPLAY_DESIGN.md D1); nested regions ride inside it.
+        let replay = depth == 0 && self.encode_replay && !self.dump_all;
+        if replay && let Some(gpu) = gpu.as_deref_mut() {
+            let cache = std::mem::take(self.replay_caches.entry(region.boundary).or_default());
+            gpu.native_enc.begin_replay(gpu.device, cache);
+        }
+        let flow = 'iterations: {
+            let mut iteration = 0u32;
+            loop {
+                let more = graph
+                    .get_node_mut(region.boundary)
+                    .expect("boundary exists")
+                    .node
+                    .substep_iteration(iteration, &mut self.substep_scalar_values[depth]);
+                if !more {
+                    break StepFlow::Next;
                 }
-                self.substep_host_syncs += 1;
-                let owner = graph.get_node_mut(clock).expect("clock owner exists");
-                if let Err(error) = owner.node.substep_host_step(iteration, gpu.as_deref_mut()) {
+                if iteration == MAX_REGION_ITERATIONS {
                     eprintln!(
-                        "[graph error] node {clock:?} ({}): substep host step before iteration {iteration}: {error}",
-                        owner.node.type_id().as_str(),
+                        "[graph error] substep boundary {:?} asked for more than \
+                         {MAX_REGION_ITERATIONS} iterations this frame; the region stopped there",
+                        region.boundary,
                     );
+                    break StepFlow::Next;
                 }
-            }
-            for (slot, &value) in self.substep_scalar_slots[depth]
-                .iter()
-                .zip(&self.substep_scalar_values[depth])
-            {
-                if let Some(slot) = *slot {
-                    self.backend.set_scalar(slot, ParamValue::Float(value));
+                // Host syncs are opt-in per boundary and offline only: a region
+                // without a clock owner, or any live frame, never commits or
+                // waits mid-region.
+                if let Some(clock) = region.clock
+                    && iteration > 0
+                    && offline_simulation()
+                    && graph.get_node(clock).is_some_and(|inst| inst.node.substep_host_sync(iteration))
+                {
+                    if let Some(gpu) = gpu.as_deref_mut() {
+                        gpu.native_enc.commit_wait_and_continue(gpu.device);
+                    }
+                    self.substep_host_syncs += 1;
+                    let owner = graph.get_node_mut(clock).expect("clock owner exists");
+                    if let Err(error) = owner.node.substep_host_step(iteration, gpu.as_deref_mut()) {
+                        eprintln!(
+                            "[graph error] node {clock:?} ({}): substep host step before iteration {iteration}: {error}",
+                            owner.node.type_id().as_str(),
+                        );
+                    }
                 }
-            }
-            let body_pass = StepPass::Repeat {
-                first: pass.first_visit() && iteration == 0,
-            };
-            let mut position = 1;
-            while position < region.steps.len() {
-                let step_idx = region.steps[position];
-                let flow = if let Some(inner) = region.inner.iter().find(|inner| inner.steps[0] == step_idx) {
-                    position += inner.steps.len();
-                    self.run_substep_region(graph, plan, inner, body_pass, depth + 1, env, tally, gpu, state)
-                } else {
-                    position += 1;
-                    self.run_step(graph, plan, step_idx, body_pass, env, tally, gpu, state)
+                for (slot, &value) in self.substep_scalar_slots[depth]
+                    .iter()
+                    .zip(&self.substep_scalar_values[depth])
+                {
+                    if let Some(slot) = *slot {
+                        self.backend.set_scalar(slot, ParamValue::Float(value));
+                    }
+                }
+                let body_pass = StepPass::Repeat {
+                    first: pass.first_visit() && iteration == 0,
                 };
-                if flow == StepFlow::Abort {
-                    return StepFlow::Abort;
+                let mut position = 1;
+                while position < region.steps.len() {
+                    let step_idx = region.steps[position];
+                    let flow = if let Some(inner) = region.inner.iter().find(|inner| inner.steps[0] == step_idx) {
+                        position += inner.steps.len();
+                        self.run_substep_region(graph, plan, inner, body_pass, depth + 1, env, tally, gpu, state)
+                    } else {
+                        position += 1;
+                        self.run_step(graph, plan, step_idx, body_pass, env, tally, gpu, state)
+                    };
+                    if flow == StepFlow::Abort {
+                        break 'iterations StepFlow::Abort;
+                    }
                 }
+                self.capture_step(graph, plan, boundary_idx, env, gpu, state);
+                iteration += 1;
             }
-            self.capture_step(graph, plan, boundary_idx, env, gpu, state);
-            iteration += 1;
+        };
+        if replay && let Some(gpu) = gpu.as_deref_mut() {
+            let cache = gpu.native_enc.end_replay();
+            *self.replay_caches.get_mut(&region.boundary).expect("taken above") = cache;
+        }
+        if flow == StepFlow::Abort {
+            return StepFlow::Abort;
         }
 
         for &resource in &region.held_resources {

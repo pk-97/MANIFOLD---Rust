@@ -116,3 +116,4 @@ mod matter_coupling;
 mod liquid_conformance;
 mod smoke;
 mod substeps;
+mod encode_replay;

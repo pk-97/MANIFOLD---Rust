@@ -304,6 +304,11 @@ pub struct Executor {
     /// Copies of overwritten arrays, taken as their producer finishes.
     /// Reused across consecutive dump frames and dropped when dumping stops.
     dump_array_snapshots: ahash::AHashMap<ResourceId, manifold_gpu::GpuBuffer>,
+    /// Encode replay for outermost substep regions (docs/ENCODE_REPLAY_DESIGN.md),
+    /// on unless a caller turns it off. Off under `dump_all` regardless.
+    encode_replay: bool,
+    /// One recording cache per outermost region, keyed by its boundary.
+    replay_caches: ahash::AHashMap<NodeInstanceId, manifold_gpu::GpuReplayCache>,
     /// Dedup key for the node-output-preview diagnostic log:
     /// `(target, matched_a_live_step, texture_2d_output_count,
     /// captured_resource)`. Logged (grep `[preview]`) only when it changes
@@ -602,6 +607,8 @@ impl Executor {
             dump_array_resources: Vec::new(),
             dump_array_overwritten: Vec::new(),
             dump_array_snapshots: ahash::AHashMap::new(),
+            encode_replay: true,
+            replay_caches: ahash::AHashMap::new(),
             preview_debug_last: None,
             profile_force_all_live: false,
             profiling: false,
@@ -683,6 +690,22 @@ impl Executor {
     /// on the frame's encoder; read results via [`Self::take_step_profiles`].
     pub fn set_profiling(&mut self, on: bool) {
         self.profiling = on;
+    }
+
+    /// Turn encode replay for outermost substep regions on or off (on by
+    /// default). Output is the same either way; off costs CPU encode time
+    /// and brings back per-dispatch GPU signposts.
+    pub fn set_encode_replay(&mut self, on: bool) {
+        self.encode_replay = on;
+    }
+
+    /// What encode replay did, summed over every region this executor runs.
+    pub fn replay_stats(&self) -> manifold_gpu::GpuReplayStats {
+        let mut total = manifold_gpu::GpuReplayStats::default();
+        for cache in self.replay_caches.values() {
+            total += cache.stats();
+        }
+        total
     }
 
     /// Set this executor's instance identity for profiled tags (D6

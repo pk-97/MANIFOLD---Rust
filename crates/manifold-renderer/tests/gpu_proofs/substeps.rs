@@ -29,7 +29,7 @@ use manifold_renderer::node_graph::{
 
 use crate::harness;
 
-const N: usize = 1000;
+pub(crate) const N: usize = 1000;
 const ITERATIONS: u32 = 4;
 const FRAMES: u32 = 3;
 
@@ -64,13 +64,13 @@ fn def() -> EffectGraphDef {
     .expect("substep proof def")
 }
 
-fn registry() -> PrimitiveRegistry {
+pub(crate) fn registry() -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
     register_substep_test_nodes(&mut registry);
     registry
 }
 
-fn seed_particles() -> Vec<Particle> {
+pub(crate) fn seed_particles() -> Vec<Particle> {
     (0..N)
         .map(|i| Particle {
             position: [i as f32 * 0.001, 0.5, -(i as f32) * 0.0005],
@@ -84,13 +84,13 @@ fn seed_particles() -> Vec<Particle> {
         .collect()
 }
 
-fn forces() -> Vec<[f32; 3]> {
+pub(crate) fn forces() -> Vec<[f32; 3]> {
     (0..N)
         .map(|i| [0.01 + i as f32 * 1.0e-5, -0.02, 0.003 * (i % 5) as f32])
         .collect()
 }
 
-fn node_of(graph: &Graph, type_id: &str) -> NodeInstanceId {
+pub(crate) fn node_of(graph: &Graph, type_id: &str) -> NodeInstanceId {
     graph
         .nodes()
         .find(|n| n.node.type_id().as_str() == type_id)
@@ -98,7 +98,7 @@ fn node_of(graph: &Graph, type_id: &str) -> NodeInstanceId {
         .unwrap_or_else(|| panic!("graph has no `{type_id}`"))
 }
 
-fn resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str, output: bool) -> ResourceId {
+pub(crate) fn resource(plan: &ExecutionPlan, node: NodeInstanceId, port: &str, output: bool) -> ResourceId {
     let step = plan.steps().iter().find(|s| s.node == node).expect("node compiled");
     let list = if output { &step.outputs } else { &step.inputs };
     list.iter()
@@ -263,7 +263,7 @@ fn substeps_frozen_unfrozen_match() {
 const OUTER: u32 = 3;
 const INNER: u32 = 4;
 
-fn nested_def() -> EffectGraphDef {
+pub(crate) fn nested_def() -> EffectGraphDef {
     serde_json::from_value(serde_json::json!({
         "version": 3,
         "nodes": [
@@ -518,7 +518,7 @@ fn nested_region_frozen_unfrozen_match() {
 /// nest (`seed` into `outer.seed`), in the outer body (`outer_b` into
 /// `inner.seed`) and after it (`outer.out` into the sink). A copy changes no
 /// value, so [`nested_expected`] still holds.
-fn nested_copy_chains_def() -> EffectGraphDef {
+pub(crate) fn nested_copy_chains_def() -> EffectGraphDef {
     let mut def = serde_json::to_value(nested_def()).expect("nest serialises");
     let mut chain = |ids: [u64; 3], from: u64, to: (u64, &str)| {
         let mut previous = from;
