@@ -1,7 +1,7 @@
 //! `node.particle_volume` — the liquid level set: one value per lattice node,
-//! summed from the anisotropic kernels in the node's bins
-//! (GPU_FLUID_SURFACE_DESIGN.md D8, D15, D18). A per-element gather on the
-//! codegen path.
+//! the distance to the nearest anisotropic kernel in the node's bins
+//! (GPU_FLUID_SURFACE_DESIGN.md D8, D15, D18, P6e). A per-element gather on
+//! the codegen path.
 
 use std::borrow::Cow;
 
@@ -29,11 +29,11 @@ struct VolumeUniforms {
     nodes_z: f32,
     cell_size: f32,
     resolution_scale: i32,
-    threshold: f32,
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
     dispatch_count: u32,
+    _pad0: u32,
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -51,7 +51,7 @@ fn scale_param(params: &ParamValues) -> u32 {
 crate::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on a lattice: at each node, threshold minus the sum of every nearby kernel's (1 − |G·(x − c)|²)³, so negative is inside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is empty, so the surface closes.",
+    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a tenth of a bin outside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
@@ -60,7 +60,6 @@ crate::primitive! {
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
-        threshold: ScalarF32 optional,
         bins_x: ScalarF32 optional, bins_y: ScalarF32 optional, bins_z: ScalarF32 optional,
     },
     outputs: {
@@ -86,19 +85,18 @@ crate::primitive! {
             range: Some((1.0, 4.0)),
             enum_values: &[],
         },
-        float_param!("threshold", "Threshold", 0.5, 0.01, 8.0),
         bin_param!("bins_x", "Bins X"),
         bin_param!("bins_y", "Bins Y"),
         bin_param!("bins_z", "Bins Z"),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. Raising threshold thins the liquid. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
-    summary: "Turns liquid particles into a smooth density field on a grid, the step before the surface mesh is drawn.",
+    summary: "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
     category: Particles3D,
     role: Filter,
-    aliases: ["level set", "particle density", "liquid field", "scalar field"],
+    aliases: ["level set", "signed distance", "liquid field", "scalar field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather],
@@ -142,11 +140,11 @@ impl Primitive for ParticleVolume {
             nodes_z: nodes[2],
             cell_size: ctx.scalar_or_param("cell_size", 0.0625),
             resolution_scale: scale as i32,
-            threshold: ctx.scalar_or_param("threshold", 0.5),
             bins_x: 0,
             bins_y: 0,
             bins_z: 0,
             dispatch_count: 0,
+            _pad0: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

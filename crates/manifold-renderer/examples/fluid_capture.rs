@@ -17,8 +17,9 @@
 //! `--linear`, `--cinematic`, `--supersample` and `--gpu-surface` flags. `--gpu-surface`
 //! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
 //! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
-//! surface, and reports its live vertices as `vertex_count`. Defaults preserve the
-//! shipped Water Basin workflow.
+//! surface, and reports its live vertices as `vertex_count`. A preset with its own
+//! `node.tone_map` is always read back as `--linear` (sRGB of the graph output, what
+//! the app shows); otherwise defaults preserve the shipped Water Basin workflow.
 //!
 //! A preset may run CPU FLIP (`node.fluid_surface`) or the GPU matter solver (the
 //! Live Matter group, e.g. WaterDamBreakMatter); the matter solver has no CPU mesh
@@ -99,6 +100,10 @@ struct CaptureOptions {
     /// The preset meshes on the GPU (the Liquid Surface group): the fluid node
     /// publishes particle frames and its CPU mesh is off by design.
     gpu_surface: bool,
+    /// On still frames, write each surface mesh's live vertices (position then
+    /// normal, six little-endian f32 each) to `mesh/` for offline roughness
+    /// measurement.
+    dump_mesh: bool,
     /// Record the particle look metrics (GPU_MPM_SOLVER_DESIGN.md section 7
     /// (look gates) A1, A2, A5, A6) from each offline frame's particles.
     look_metrics: bool,
@@ -761,6 +766,60 @@ fn gpu_surface_vertices(runtime: &PresetRuntime, device: &GpuDevice, frame: u32)
     Ok(live)
 }
 
+/// Writes the live vertices of every surface mesh in the graph: each GPU
+/// Liquid Surface (`gpu`, live = nonzero normal) and the fluid node's CPU mesh
+/// (`cpu`, live = its first `cpu_count` vertices). A GPU mesh node other than
+/// the preset's `liquid_mesh` is tagged `gpu-<node id>`, so one run can mesh
+/// the same particles through several surface variants.
+fn dump_surface_meshes(
+    runtime: &PresetRuntime,
+    device: &GpuDevice,
+    frame: u32,
+    cpu_count: usize,
+    fluid: &FluidMetrics,
+    dir: &Path,
+) -> CaptureResult<()> {
+    for array in runtime.dump_arrays_all() {
+        let tag = match (array.type_id.as_str(), array.port.as_str()) {
+            ("node.volume_surface_mesh", "vertices") if array.name == "liquid_mesh" => "gpu".to_string(),
+            ("node.volume_surface_mesh", "vertices") => {
+                let name: String =
+                    array.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+                format!("gpu-{name}")
+            }
+            ("node.fluid_surface", "vertices") => "cpu".to_string(),
+            ("node.fluid_surface" | "node.matter_frame", "particles_b") => "particles".to_string(),
+            _ => continue,
+        };
+        let size = array.buffer.size();
+        let staging = device.create_buffer_shared(size);
+        let mut encoder = device.create_encoder("surface-mesh-dump");
+        encoder.copy_buffer_to_buffer(array.buffer, &staging, size);
+        encoder.commit_and_wait_completed();
+        let ptr = staging.mapped_ptr().expect("shared staging buffer");
+        // SAFETY: the copy has completed and nothing else writes the staging buffer.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
+        if tag == "particles" {
+            // Raw FluidParticle slots; the name carries the live count.
+            let live = fluid.particle_count as usize;
+            fs::write(dir.join(format!("frame_{frame:06}_particles_{live}.bin")), bytes)?;
+            continue;
+        }
+        let mut out = Vec::new();
+        for (index, chunk) in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()).enumerate() {
+            let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
+            let live = if tag.starts_with("gpu") { vertex.normal != [0.0; 3] } else { index < cpu_count };
+            if live {
+                for value in vertex.position.iter().chain(&vertex.normal) {
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        fs::write(dir.join(format!("frame_{frame:06}_{tag}.f32")), out)?;
+    }
+    Ok(())
+}
+
 fn render_output_frame(
     runtime: &mut PresetRuntime,
     target: &RenderTarget,
@@ -936,6 +995,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         cinematic: false,
         supersample: 1,
         gpu_surface: false,
+        dump_mesh: false,
         look_metrics: false,
         solver: Solver::Flip,
     };
@@ -964,6 +1024,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--linear" => options.linear = true,
             "--cinematic" => options.cinematic = true,
             "--gpu-surface" => options.gpu_surface = true,
+            "--dump-mesh" => options.dump_mesh = true,
             "--look-metrics" => options.look_metrics = true,
             "--supersample" => {
                 options.supersample = parse_u32(&value("--supersample")?, "--supersample")?
@@ -981,7 +1042,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--look-metrics]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--look-metrics] [--dump-mesh]",
         )
     })?;
     if options.width == 0
@@ -1066,7 +1127,13 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     let json = read_preset(&options.preset_path)?;
     fs::write(options.output_dir.join("preset.json"), &json)?;
     let preset = preset_settings(&json)?;
-    let options = &CaptureOptions { solver: preset.solver, ..options.clone() };
+    // A graph with its own display transform is read back as the app presents
+    // it; a second Reinhard curve on top darkens it and makes stills misleading.
+    let tone_mapped = find_preset_node(&serde_json::from_str::<serde_json::Value>(&json)?["nodes"], &|node| {
+        node["typeId"] == "node.tone_map"
+    })
+    .is_some();
+    let options = &CaptureOptions { solver: preset.solver, linear: options.linear || tone_mapped, ..options.clone() };
     let instrumented_json = instrument_preset(&json, options.cinematic, options.supersample, options.solver)?;
     if options.cinematic {
         fs::write(
@@ -1088,7 +1155,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_dimensions(options.width, options.height, options.supersample);
     let mut offline_runtime =
         build_runtime(&instrumented_json, &device, render_width, render_height, options.solver)?;
-    let dump_arrays = options.gpu_surface || options.look_metrics;
+    let dump_arrays = options.gpu_surface || options.look_metrics || options.dump_mesh;
     offline_runtime.set_dump_all(options.cinematic || dump_arrays);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
@@ -1130,6 +1197,9 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     if options.stills_every.is_some() {
         fs::create_dir_all(options.output_dir.join("stills"))?;
     }
+    if options.dump_mesh {
+        fs::create_dir_all(options.output_dir.join("mesh"))?;
+    }
     let mut capture_ms = 0.0;
     let mut look = options.look_metrics.then(|| {
         let layout = domain_layout(None, preset.domain_size as f32, preset.resolution)
@@ -1149,6 +1219,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             frame_dt,
             options,
         )?;
+        let cpu_vertex_count = fluid.vertex_count as usize;
         if options.gpu_surface {
             if fluid.particle_count < 1.0 {
                 return Err(io::Error::other(format!(
@@ -1198,6 +1269,16 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         let should_capture = options
             .stills_every
             .is_none_or(|every| frame % every == 0 || frame == options.frames || frame == 1);
+        if should_capture && options.dump_mesh {
+            dump_surface_meshes(
+                &offline_runtime,
+                &device,
+                frame,
+                cpu_vertex_count,
+                &fluid,
+                &options.output_dir.join("mesh"),
+            )?;
+        }
         if should_capture {
             let capture_started = Instant::now();
             let rgba = readback_rgba(

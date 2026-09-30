@@ -8,7 +8,8 @@
 //! Gate: p95 of the group's summed GPU time ≤ 6.0 ms at resolution 64,
 //! scale 2 with the preset's look (M4 Max). Every other configuration is
 //! reported, not gated, including level-set smoothing at 1 and 3 passes at
-//! res 64 scale 2 (the group's `smoothing_passes`; the preset uses 2).
+//! res 64 scale 2 (the group's `smoothing_passes`; the preset uses 2) and
+//! the isotropic blob look (FLIP's sphere union) at res 64 scales 2 and 3.
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -44,20 +45,27 @@ const HEIGHT: u32 = 1080;
 /// GPU_FLUID_SURFACE_DESIGN.md D20, re-baselined from the unmeasured 3 ms (2026-09-30).
 const BUDGET_MS: f64 = 6.0;
 
-/// One simulation run: a resolution, Liquid Surface group params that differ
-/// from the preset's, and the Surface Details stepped live at tick 90.
+/// One simulation run: a resolution, Liquid Surface group params and Particle
+/// Blobs params that differ from the preset's, and the Surface Details
+/// stepped live at tick 90.
 struct Run {
     resolution: u32,
     group: &'static [(&'static str, f64)],
+    blobs: &'static [(&'static str, f64)],
     details: &'static [u32],
 }
 
-const RUNS: [Run; 5] = [
-    Run { resolution: 32, group: &[], details: &[0, 1, 2] },
-    Run { resolution: 48, group: &[], details: &[0, 1, 2] },
-    Run { resolution: 64, group: &[], details: &[0, 1, 2] },
-    Run { resolution: 64, group: &[("smoothing_passes", 1.0)], details: &[0] },
-    Run { resolution: 64, group: &[("smoothing_passes", 3.0)], details: &[0] },
+/// FLIP's sphere union through the same atoms (GPU_FLUID_SURFACE_DESIGN.md
+/// P6e, BUG-4snj (Liquid Surface default look)).
+const ISOTROPIC: &[(&str, f64)] = &[("stretch", 1.0), ("smoothing", 0.0), ("isolated_scale", 1.0)];
+
+const RUNS: [Run; 6] = [
+    Run { resolution: 32, group: &[], blobs: &[], details: &[0, 1, 2] },
+    Run { resolution: 48, group: &[], blobs: &[], details: &[0, 1, 2] },
+    Run { resolution: 64, group: &[], blobs: &[], details: &[0, 1, 2] },
+    Run { resolution: 64, group: &[("smoothing_passes", 1.0)], blobs: &[], details: &[0] },
+    Run { resolution: 64, group: &[("smoothing_passes", 3.0)], blobs: &[], details: &[0] },
+    Run { resolution: 64, group: &[], blobs: ISOTROPIC, details: &[0, 1] },
 ];
 
 /// The preset at `run`'s resolution and group params. Card bindings overwrite
@@ -73,6 +81,13 @@ fn preset(run: &Run) -> Value {
             for &(name, value) in run.group {
                 let param = &mut node["params"][name];
                 param["value"] = if param["type"] == "Int" { Value::from(value as i64) } else { Value::from(value) };
+            }
+            for inner in node["group"]["nodes"].as_array_mut().expect("group nodes") {
+                if inner["nodeId"] == "liquid_blobs" {
+                    for &(name, value) in run.blobs {
+                        inner["params"][name]["value"] = Value::from(value);
+                    }
+                }
             }
         }
     }
@@ -234,7 +249,8 @@ fn fluid_surface_perf() {
     let mut gated = None;
     for run in &RUNS {
         let resolution = run.resolution;
-        let look: String = run.group.iter().map(|(name, value)| format!(" {name} {value}")).collect();
+        let look: String =
+            run.group.iter().chain(run.blobs).map(|(name, value)| format!(" {name} {value}")).collect();
         let json = preset(run);
         let mut runtime = PresetRuntime::from_json_str_with_device(
             &json.to_string(),
@@ -323,7 +339,7 @@ fn fluid_surface_perf() {
                 surface.iter().all(|ms| *ms > 0.0),
                 "res {resolution} scale {scale}: every measured frame ran the surface atoms"
             );
-            if resolution == 64 && scale == 2 && run.group.is_empty() {
+            if resolution == 64 && scale == 2 && run.group.is_empty() && run.blobs.is_empty() {
                 assert!(
                     vertices <= capacity,
                     "res 64 scale 2 needs {vertices:.0} vertices; the preset's Mesh Capacity is {capacity:.0}, so the gate would time an empty mesh"

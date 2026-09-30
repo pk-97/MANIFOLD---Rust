@@ -166,9 +166,11 @@ fn body(
             basis = eigen.vectors;
         }
     }
-    // Reach at most one bin from the particle, so a lattice node searching
-    // its own ±1 bins sees every kernel that touches it.
-    axes = min(axes, vec3<f32>(max(cell_size - length(centre - x), 1e-6 * cell_size)));
+    // Reach at most (1 − band) of a bin from the particle, so any blob a lattice
+    // node's ±1-bin search misses is at least band·bin away: node.particle_volume
+    // caps its distance field at that band, which keeps the cap exact.
+    // The band (0.1) is shared with particle_volume_body.wgsl.
+    axes = min(axes, vec3<f32>(max(0.9 * cell_size - length(centre - x), 1e-6 * cell_size)));
     let inverse_axes = mat3x3<f32>(
         vec3<f32>(1.0 / axes.x, 0.0, 0.0),
         vec3<f32>(0.0, 1.0 / axes.y, 0.0),
