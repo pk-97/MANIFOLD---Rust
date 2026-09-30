@@ -85,6 +85,69 @@ fn capacity_follows<'a>(
     first.is_none() || MOVES[1..].iter().any(|&moved| answer(moved) != first)
 }
 
+/// Each resource's storage class, indexed by resource: a declared in-place
+/// alias (`aliased_array_io`) writes its input's storage, so both sides are
+/// one array. The value is the class representative.
+pub(crate) fn in_place_classes(graph: &Graph, plan: &ExecutionPlan) -> Vec<ResourceId> {
+    fn find(class: &mut [ResourceId], resource: ResourceId) -> ResourceId {
+        let mut root = resource;
+        while class[root.0 as usize] != root { root = class[root.0 as usize]; }
+        class[resource.0 as usize] = root;
+        root
+    }
+    let mut class: Vec<ResourceId> = (0..plan.resource_count() as u32).map(ResourceId).collect();
+    for step in plan.steps() {
+        let Some(node) = graph.get_node(step.node) else { continue };
+        for (input_port, output_port) in node.node.aliased_array_io() {
+            let input = step.inputs.iter().find(|(name, _)| name == input_port);
+            let output = step.outputs.iter().find(|(name, _)| name == output_port);
+            if let (Some(&(_, input)), Some(&(_, output))) = (input, output) {
+                let (a, b) = (find(&mut class, input), find(&mut class, output));
+                if a != b { class[b.0 as usize] = a; }
+            }
+        }
+    }
+    for index in 0..class.len() {
+        find(&mut class, ResourceId(index as u32));
+    }
+    class
+}
+
+/// Arrays whose storage a later step gives to a different array, so a host
+/// reading them after the frame reads that other array. `storage_of` names
+/// each array's physical storage (a backend slot, or a planned root). A
+/// declared in-place alias writes the same array and does not count.
+///
+/// A host that reads an array after the frame declares it with
+/// [`Graph::add_external_output`]; the planner then keeps it dedicated. The
+/// whole-graph dump reads every array, so it snapshots these instead.
+pub fn arrays_overwritten_later(
+    graph: &Graph,
+    plan: &ExecutionPlan,
+    storage_of: impl Fn(ResourceId) -> Option<u32>,
+) -> Vec<bool> {
+    let class = in_place_classes(graph, plan);
+    let mut writes: Vec<(u32, usize, ResourceId)> = Vec::new();
+    for (index, step) in plan.steps().iter().enumerate() {
+        for &(_, resource) in &step.outputs {
+            if matches!(plan.resource_type(resource), Some(PortType::Array(_)))
+                && let Some(storage) = storage_of(resource)
+            {
+                writes.push((storage, index, resource));
+            }
+        }
+    }
+    writes.sort_unstable_by_key(|&(storage, step, _)| (storage, step));
+    let mut overwritten = vec![false; plan.resource_count()];
+    for (at, &(storage, step, resource)) in writes.iter().enumerate() {
+        overwritten[resource.0 as usize] = writes[at + 1..]
+            .iter()
+            .take_while(|&&(other, _, _)| other == storage)
+            .any(|&(_, later, other)| later > step && class[other.0 as usize] != class[resource.0 as usize]);
+    }
+    overwritten
+}
+
 fn enqueue_reusable_root(reusable: &mut ReusableBuckets, key: ReusableKey, root: ResourceId) {
     let bucket = reusable.entry(key).or_default();
     if !bucket.contains(&root) {
@@ -558,30 +621,11 @@ pub(crate) mod lifetimes {
         allocation: &ArrayAllocationPlan,
     ) -> usize {
         let live = live_ranges(plan);
-        // Declared in-place pairs, merged into one storage class each.
-        let mut class: AHashMap<ResourceId, ResourceId> = AHashMap::default();
-        fn find(class: &mut AHashMap<ResourceId, ResourceId>, r: ResourceId) -> ResourceId {
-            let parent = *class.get(&r).unwrap_or(&r);
-            if parent == r { return r; }
-            let root = find(class, parent);
-            class.insert(r, root);
-            root
-        }
-        for step in plan.steps() {
-            let Some(node) = graph.get_node(step.node) else { continue };
-            for (input_port, output_port) in node.node.aliased_array_io() {
-                let input = step.inputs.iter().find(|(name, _)| name == input_port);
-                let output = step.outputs.iter().find(|(name, _)| name == output_port);
-                if let (Some((_, input)), Some((_, output))) = (input, output) {
-                    let (a, b) = (find(&mut class, *input), find(&mut class, *output));
-                    if a != b { class.insert(b, a); }
-                }
-            }
-        }
+        let class = in_place_classes(graph, plan);
         let mut ranges: AHashMap<(ResourceId, ResourceId), (usize, usize)> = AHashMap::default();
         for (&resource, storage) in &allocation.storage {
             let Some(&(lo, hi)) = live.get(&resource) else { continue };
-            let key = (storage.root, find(&mut class, resource));
+            let key = (storage.root, class[resource.0 as usize]);
             let range = ranges.entry(key).or_insert((lo, hi));
             *range = (range.0.min(lo), range.1.max(hi));
         }
@@ -1318,6 +1362,41 @@ mod tests {
         assert_eq!(root(grids[3]), root(grids[1]), "the fourth grid takes the second's storage");
         assert_eq!(root(follower), output_of(&plan, follower), "a growing array keeps its own storage");
         assert_eq!(lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned), 2);
+    }
+
+    /// A host reading an array after the frame reads whatever a later array
+    /// left in its storage, unless the host declares the read: an external
+    /// output keeps its own storage.
+    #[test]
+    fn declared_host_reads_keep_their_storage() {
+        let array = PortType::Array(ArrayType::of::<u32>());
+        let input = || vec![mock_port("in", array, PortKind::Input, true)];
+        let output = || vec![mock_port("out", array, PortKind::Output, false)];
+        let first_grid_overwritten = |declared: bool| {
+            let mut graph = Graph::new();
+            let mut grids = vec![graph.add_node(Box::new(FixedArrayNode::new("test.grid", vec![], output(), 8)))];
+            for _ in 0..3 {
+                let grid = graph.add_node(Box::new(FixedArrayNode::new("test.grid", input(), output(), 8)));
+                graph.connect((*grids.last().unwrap(), "out"), (grid, "in")).unwrap();
+                grids.push(grid);
+            }
+            let mut sink = FixedArrayNode::new("test.sink", input(), vec![], 1);
+            sink.root = true;
+            let sink = graph.add_node(Box::new(sink));
+            graph.connect((grids[3], "out"), (sink, "in")).unwrap();
+            if declared {
+                graph.add_external_output(grids[0], "out").unwrap();
+            }
+            let plan = compile(&graph).unwrap();
+            let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned);
+            let overwritten = arrays_overwritten_later(&graph, &plan, |r| planned.storage.get(&r).map(|s| s.root.0));
+            let later = |grid: usize| overwritten[output_of(&plan, grids[grid]).0 as usize];
+            assert!(!later(3), "nothing follows the last grid");
+            later(0)
+        };
+        assert!(first_grid_overwritten(false), "undeclared, the third grid takes the first's storage");
+        assert!(!first_grid_overwritten(true), "declared, the first grid keeps its storage");
     }
 
     /// A feedback node reads an array produced later in the plan. Growth

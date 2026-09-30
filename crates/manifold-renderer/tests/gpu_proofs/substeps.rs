@@ -154,13 +154,8 @@ fn run(mut graph: Graph) -> Run {
         enc.commit_and_wait_completed();
     }
 
-    let backend = exec.backend();
-    let out = backend
-        .array_buffer(backend.slot_for(out_res).expect("state bound"))
-        .expect("state buffer");
-    let captured = backend
-        .array_buffer(backend.slot_for(in_res).expect("capture bound"))
-        .expect("capture buffer");
+    let out = exec.host_array_buffer(&graph, &plan, out_res).expect("state buffer");
+    let captured = exec.host_array_buffer(&graph, &plan, in_res).expect("capture buffer");
     let ptr = out.mapped_ptr().expect("shared state buffer");
     // SAFETY: the encoder completed; the buffer holds at least N particles.
     let particles =
@@ -432,9 +427,8 @@ fn run_nest(mut graph: Graph, frames: u32, boundary_type: &str, storage: Storage
         }
         enc.commit_and_wait_completed();
     }
-    let backend = exec.backend();
     let read = |res: ResourceId| {
-        let buffer = backend.array_buffer(backend.slot_for(res).expect("array bound")).expect("array buffer");
+        let buffer = exec.host_array_buffer(&graph, &plan, res).expect("array holds its own contents");
         let ptr = buffer.mapped_ptr().expect("shared array buffer");
         // SAFETY: the encoder completed; the buffer holds at least N particles.
         unsafe { std::slice::from_raw_parts(ptr.cast::<Particle>().cast_const(), N).to_vec() }
@@ -563,4 +557,115 @@ fn nested_region_shared_storage_matches_dedicated() {
     }
     let err = max_position_error(&shared.state, &nested_expected(FRAMES));
     assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
+}
+
+/// `seed → first → second → mover (in place) → third → sink`: `third` takes
+/// the storage `first` released, so after the frame that storage holds the
+/// moved particles.
+fn reused_storage_def() -> EffectGraphDef {
+    serde_json::from_value(serde_json::json!({
+        "version": 3,
+        "nodes": [
+            {"id": 0, "nodeId": "seed", "typeId": "test.particle_source",
+             "params": {"max_capacity": {"type": "Int", "value": N}}},
+            {"id": 1, "nodeId": "forces", "typeId": "test.force_source",
+             "params": {"max_capacity": {"type": "Int", "value": N}}},
+            {"id": 2, "nodeId": "first", "typeId": "test.particle_copy"},
+            {"id": 3, "nodeId": "second", "typeId": "test.particle_copy"},
+            {"id": 4, "nodeId": "mover", "typeId": "node.move_particles_3d"},
+            {"id": 5, "nodeId": "third", "typeId": "test.particle_copy"},
+            {"id": 6, "nodeId": "sink", "typeId": "test.particle_sink"},
+            {"id": 7, "nodeId": "output", "typeId": "system.final_output"}
+        ],
+        "wires": [
+            {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in"},
+            {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
+            {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"},
+            {"fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "forces"},
+            {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"},
+            {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+            {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in"}
+        ]
+    }))
+    .expect("reused storage def")
+}
+
+/// Arrays read after the frame read their own contents, not those of the
+/// array that later took their storage: the whole-graph dump shows `first`
+/// as the seed it copied, and the host reader refuses it.
+#[test]
+fn post_frame_readers_never_see_reused_storage() {
+    let registry = registry();
+    let mut graph = reused_storage_def().into_graph(&registry, &Default::default()).expect("builds");
+    // The test fills both sources before the frame, so both keep their storage.
+    graph.add_external_output(node_of(&graph, "test.particle_source"), "out").expect("seed output");
+    graph.add_external_output(node_of(&graph, "test.force_source"), "out").expect("force output");
+    let plan = compile(&graph).expect("compiles");
+    let harness = harness::shared();
+    let device = &harness.device;
+    let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
+    pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+    let copies: Vec<ResourceId> = plan
+        .steps()
+        .iter()
+        .filter(|s| graph.get_node(s.node).is_some_and(|n| n.node.type_id().as_str() == "test.particle_copy"))
+        .map(|s| s.outputs[0].1)
+        .collect();
+    let [first, _, third] = copies[..] else { panic!("three copies, got {copies:?}") };
+    assert_eq!(backend.slot_for(first), backend.slot_for(third), "premise: `third` takes `first`'s storage");
+    let seed_res = resource(&plan, node_of(&graph, "test.particle_source"), "out", true);
+    let force_res = resource(&plan, node_of(&graph, "test.force_source"), "out", true);
+    for (res, bytes) in [
+        (seed_res, bytemuck::cast_slice::<Particle, u8>(&seed_particles()).to_vec()),
+        (force_res, bytemuck::cast_slice::<[f32; 3], u8>(&forces()).to_vec()),
+    ] {
+        let buffer = Backend::array_buffer(&backend, backend.slot_for(res).expect("bound")).expect("array");
+        // SAFETY: shared-storage buffer, no GPU work in flight yet.
+        unsafe { buffer.write(0, &bytes) };
+    }
+
+    let mut exec = Executor::new(Box::new(backend));
+    exec.set_dump_all(true);
+    let time = FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 };
+    let mut enc = device.create_encoder("reused-storage-proof");
+    {
+        let mut gpu = GpuEncoder::new(&mut enc, device);
+        exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut StateStore::new(), 0);
+    }
+    enc.commit_and_wait_completed();
+
+    let particles = |buffer: &manifold_gpu::GpuBuffer| {
+        let ptr = buffer.mapped_ptr().expect("shared array buffer");
+        // SAFETY: the encoder completed; the buffer holds at least N particles.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<Particle>().cast_const(), N).to_vec() }
+    };
+    let bits = |p: &[Particle]| bytemuck::cast_slice::<Particle, u8>(p).to_vec();
+    let seed = seed_particles();
+    let backend = exec.backend();
+    let live_first = particles(backend.array_buffer(backend.slot_for(first).expect("bound")).expect("array"));
+    let moved = particles(exec.host_array_buffer(&graph, &plan, third).expect("`third` is last in its storage"));
+    let dt_scaled = (1.0f64 / 60.0) as f32 * 60.0;
+    let want: Vec<Particle> = seed
+        .iter()
+        .zip(forces())
+        .map(|(p, f)| {
+            let mut p = *p;
+            if p.life > 0.0 {
+                for (position, force) in p.position.iter_mut().zip(f) {
+                    *position += force * dt_scaled;
+                }
+            }
+            p
+        })
+        .collect();
+    assert!(max_position_error(&moved, &want) <= 1.0e-6, "the mover moved every live particle by its force");
+    assert!(bits(&live_first) == bits(&moved), "premise: `first`'s storage ends holding `third`");
+    assert!(exec.host_array_buffer(&graph, &plan, first).is_none(), "the host reader refuses `first`");
+
+    let dumped = |res: ResourceId| {
+        assert!(exec.dump_array_resources().iter().any(|&(_, _, r)| r == res), "{res:?} dumped");
+        particles(exec.dump_array_buffer(res).expect("dump buffer"))
+    };
+    assert!(bits(&dumped(first)) == bits(&seed), "the dump shows `first` as the seed it copied");
+    assert!(bits(&dumped(third)) == bits(&moved), "the dump shows `third` as written");
 }

@@ -231,14 +231,9 @@ fn render_and_readback(
         enc.commit_and_wait_completed();
     }
 
-    let slot = exec
-        .backend()
-        .slot_for(output_res)
-        .unwrap_or_else(|| panic!("output resource {output_res:?} must be bound"));
     let buf = exec
-        .backend()
-        .array_buffer(slot)
-        .unwrap_or_else(|| panic!("output slot {slot:?} must hold a buffer"));
+        .host_array_buffer(&graph, &plan, output_res)
+        .unwrap_or_else(|| panic!("output resource {output_res:?} must hold its own contents"));
     assert!(
         buf.size as usize >= VERTEX_COUNT * VERTEX_WORDS * 4,
         "the deformer output must hold at least the {VERTEX_COUNT}-vertex buffer, got {} bytes",
