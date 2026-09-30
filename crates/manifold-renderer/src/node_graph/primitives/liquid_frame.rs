@@ -1,9 +1,10 @@
 //! `node.liquid_frame` — publish a particle liquid on the particle-frame seam
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1): after every frame that
 //! ran a tick, the state becomes frame B and the previous B becomes A, with
-//! the frame lattice, the display blend and the solid lattice. Exempt from the
-//! codegen mandate as cross-frame state (ADDING_PRIMITIVES.md exclusion 2):
-//! it owns the A/B frame ring.
+//! the frame lattice, the display blend and the solid lattice, and the tick's
+//! face grid (section 3.2) when it is wired. Exempt from the codegen mandate
+//! as cross-frame state (ADDING_PRIMITIVES.md exclusion 2): it owns the A/B
+//! frame ring and the published faces.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
@@ -11,6 +12,7 @@ use super::liquid_stats::LIQUID_STATS_WORDS;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::liquid::frame_ring::{FrameRing, RING};
+use crate::node_graph::liquid::grid::{FACE_INPUT_PORTS, PublishedFaces};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -29,11 +31,12 @@ struct FrameParams {
 crate::primitive! {
     name: LiquidFrame,
     type_id: "node.liquid_frame",
-    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the frame lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick whose stats flag a non-finite record is never published.",
+    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the frame lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. A tick whose stats flag a non-finite record is never published.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
         solid: Array(f32) optional,
+        face_u_in: Array(f32) optional, face_v_in: Array(f32) optional, face_w_in: Array(f32) optional,
         count: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -49,12 +52,15 @@ crate::primitive! {
         solid_a: Array(f32), solid_b: Array(f32), grid_bounds: Transform,
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
         blend: ScalarF32, span: ScalarF32,
+        face_u: Array(f32), face_v: Array(f32), face_w: Array(f32),
+        face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32, face_valid_layers: ScalarF32,
     },
     params: [
         ParamDef { name: std::borrow::Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
+        ParamDef { name: std::borrow::Cow::Borrowed("face_valid_layers"), label: "Face Valid Layers", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; solid from node.liquid_solid_distance. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms read any solver unchanged. identity_a/b carry the domain epoch. Ids are 0: a particle solver may reorder its state every tick.",
+    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; solid from node.liquid_solid_distance; the face inputs from three node.face_sample_component on liquid_state's faces. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. face_valid_layers is how many face layers past the liquid the solver extended its velocity into; it reads 0 unless all three axes are wired. identity_a/b carry the domain epoch. Ids are 0: a particle solver may reorder its state every tick.",
     examples: [],
     picker: { label: "Liquid Frame", category: Atom },
     summary: "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",
@@ -69,12 +75,13 @@ crate::primitive! {
         solid_key: Option<([u32; 7], u32)> = None,
         solid_slots: Vec<GpuBuffer> = Vec::new(),
         solid_wired: bool = false,
+        faces: PublishedFaces = PublishedFaces::default(),
     },
 }
 
 impl Primitive for LiquidFrame {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b")
+        matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b") || PublishedFaces::provides(port)
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -84,7 +91,7 @@ impl Primitive for LiquidFrame {
             "solid_a" if self.solid_wired => self.solid_slots.get(self.ring.a()),
             "solid_b" if self.solid_wired => self.solid_slots.get(self.ring.b()),
             "solid_a" | "solid_b" => self.solid.as_ref(),
-            _ => None,
+            _ => self.faces.buffer(port),
         }
     }
 
@@ -95,7 +102,7 @@ impl Primitive for LiquidFrame {
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         // Provided storage: a one-record hint, grown at run time.
-        matches!(port_name, "particles_a" | "particles_b" | "solid_a" | "solid_b").then_some(1)
+        self.provides_array_output(port_name).then_some(1)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -109,6 +116,8 @@ impl Primitive for LiquidFrame {
         let stats = ctx.inputs.array("stats");
         let solid_in = ctx.inputs.array("solid");
         self.solid_wired = solid_in.is_some();
+        let faces_in = FACE_INPUT_PORTS.map(|port| ctx.inputs.array(port));
+        let face_valid_layers = ctx.scalar_or_param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
 
         let solid_key = (
             [
@@ -143,6 +152,7 @@ impl Primitive for LiquidFrame {
         } else {
             None
         };
+        let published = ring.is_some();
         if let (Some(slot), Some((particles, stats))) = (ring, ready) {
             let write = slot.write;
             let pipeline = self
@@ -198,8 +208,11 @@ impl Primitive for LiquidFrame {
             }
             self.ring.finish(slot, count, epoch, simulation_time);
         }
+        let faces_refused =
+            self.faces.publish(gpu, lattice.cells(), faces_in, ready.map(|(_, stats)| stats), published, "Liquid Frame");
 
         let (blend, span) = self.ring.blend(display_time);
+        let faces_published = self.faces.complete();
         for (name, value) in [
             ("count_a", self.ring.count_a() as f32),
             ("count_b", self.ring.count_b() as f32),
@@ -210,11 +223,15 @@ impl Primitive for LiquidFrame {
             ("grid_nodes_z", lattice.nodes()[2] as f32),
             ("blend", blend),
             ("span", span),
+            ("face_cells_x", lattice.cells()[0] as f32),
+            ("face_cells_y", lattice.cells()[1] as f32),
+            ("face_cells_z", lattice.cells()[2] as f32),
+            ("face_valid_layers", if faces_published { face_valid_layers } else { 0.0 }),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", lattice.bounds());
-        if let Some(error) = refused {
+        for error in [refused, faces_refused].into_iter().flatten() {
             ctx.error(error);
         }
     }

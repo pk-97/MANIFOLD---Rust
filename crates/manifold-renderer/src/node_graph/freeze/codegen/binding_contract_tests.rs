@@ -178,8 +178,9 @@ fn dispatch_tail_census_is_stable() {
     // chart_spread, collar_source, collar_gather and collar_pressure; P3 adds
     // liquid_fill, cells_with_particles, particles_to_faces, face_gravity,
     // face_divergence, subtract_pressure, extend_faces, faces_to_particles and
-    // density_source.
-    assert_eq!(total, 227, "standalone atom census drifted");
+    // density_source. The liquid face grid adds face_sample_component and
+    // matter_face_component, buffer atoms.
+    assert_eq!(total, 229, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

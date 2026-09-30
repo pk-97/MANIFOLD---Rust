@@ -3,18 +3,23 @@
 //! frames and has the executor run its region once per liquid tick the
 //! domain's clock is due. The region body is one whole tick. A non-finite
 //! tick (read back one frame late through a fenced ring) halts the liquid
-//! with a node error until the domain's epoch changes (Reset).
+//! with a node error until the domain's epoch changes (Reset). The last
+//! tick's face grid escapes beside the particles into storage this node owns,
+//! sized from the body's own faces, so it holds while the transport is paused.
 
 use manifold_gpu::GpuBuffer;
 
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid_particles::FluidParticle;
+use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 
-const RESULTS: &[SubstepResultPorts] = &[SubstepResultPorts { capture: "stats_in", output: "stats" }];
+const RESULTS: &[SubstepResultPorts] = &[
+    SubstepResultPorts { capture: "stats_in", output: "stats" },
+    SubstepResultPorts { capture: "faces_in", output: "faces" },
+];
 
 /// The region's contract. The one iteration scalar is the tick's index in
 /// the epoch.
@@ -42,11 +47,12 @@ pub struct ReadbackSlot {
 crate::primitive! {
     name: LiquidState,
     type_id: "node.liquid_state",
-    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats escape with them. A tick with non-finite values halts the liquid with an error until Reset.",
+    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats and its last tick's face grid escape with them; a new epoch's faces are zero. A tick with non-finite values halts the liquid with an error until Reset.",
     inputs: {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
         stats_in: Array(u32) required,
+        faces_in: Array(FaceSample) required,
         count: ScalarF32 optional,
         ticks: ScalarF32 optional,
         epoch: ScalarF32 optional,
@@ -54,13 +60,14 @@ crate::primitive! {
     outputs: {
         out: Array(FluidParticle),
         stats: Array(u32),
+        faces: Array(FaceSample),
         tick_index: ScalarF32,
         live_count: ScalarF32,
         fault: ScalarF32,
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in. out and stats escape to node.liquid_frame.",
+    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in; the last step's projected, extended faces close into faces_in. out and stats escape to node.liquid_frame; faces to three node.face_sample_component that feed the frame's face grid.",
     examples: [],
     picker: { label: "Liquid State", category: Atom },
     summary: "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -77,6 +84,7 @@ crate::primitive! {
         readback: Vec<ReadbackSlot> = Vec::new(),
         faulted: bool = false,
         last_stats: Option<LiquidTickStats> = None,
+        faces: Option<GpuBuffer> = None,
     },
 }
 
@@ -113,11 +121,19 @@ impl LiquidState {
 
 impl Primitive for LiquidState {
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in"]
+        &["in", "stats_in", "faces_in"]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
         &["out", "stats"]
+    }
+
+    fn provides_array_output(&self, port: &str) -> bool {
+        port == "faces"
+    }
+
+    fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        (port == "faces").then_some(self.faces.as_ref()).flatten()
     }
 
     fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
@@ -133,6 +149,9 @@ impl Primitive for LiquidState {
         match port_name {
             "out" => input_capacities.iter().find(|(p, _)| *p == "seed").map(|&(_, n)| n),
             "stats" => Some(LIQUID_STATS_WORDS),
+            // Provided storage: a one-record hint, sized at run time from the
+            // body's faces, which the plan allocates after this node.
+            "faces" => Some(1),
             _ => None,
         }
     }
@@ -145,11 +164,43 @@ impl Primitive for LiquidState {
         let seed = ctx.inputs.array("seed");
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
+        let faces_in = ctx.inputs.array("faces_in").filter(|_| ctx.outputs.array("faces").is_some());
+        let mut refused = None;
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
         let zero_stats = self.zero_stats.get_or_insert_with(|| gpu.device.create_buffer(stats_bytes));
 
+        // The faces are the body's size, held across frames; unwired, none.
+        let mut fresh_faces = false;
+        match faces_in {
+            None => self.faces = None,
+            Some(faces_in) if self.faces.as_ref().is_none_or(|f| f.size != faces_in.size) => {
+                let device = gpu.device;
+                self.faces = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    device.modifier_memory_snapshot(),
+                    faces_in.size,
+                )
+                .map_err(|error| error.to_string())
+                .and_then(|()| device.try_create_buffer_shared(faces_in.size))
+                .map_err(|error| {
+                    refused = Some(format!(
+                        "Liquid State: the face grid needs {} bytes the device cannot give: {error}. Lower Resolution.",
+                        faces_in.size
+                    ));
+                })
+                .ok();
+                fresh_faces = self.faces.is_some();
+            }
+            Some(_) => {}
+        }
+
+        if self.epoch != Some(epoch) || fresh_faces {
+            // A new epoch's faces are zero until its first tick.
+            if let Some(faces) = &self.faces {
+                gpu.native_enc.clear_buffer(faces);
+            }
+        }
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
             self.ticks_done = 0;
@@ -176,6 +227,9 @@ impl Primitive for LiquidState {
         if self.faulted {
             ctx.error("Liquid State: a tick produced non-finite values; the liquid is halted until Reset");
         }
+        if let Some(error) = refused {
+            ctx.error(error);
+        }
     }
 
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
@@ -199,6 +253,11 @@ impl Primitive for LiquidState {
         self.captures += 1;
         if self.captures != self.pending {
             return;
+        }
+        // Only the frame's last tick reaches the faces.
+        if let (Some(candidate), Some(faces)) = (ctx.inputs.array("faces_in"), self.faces.as_ref()) {
+            let size = candidate.size.min(faces.size);
+            ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, faces, size);
         }
         self.ticks_done += u64::from(self.pending);
         let Some(stats) = ctx.outputs.array("stats") else { return };

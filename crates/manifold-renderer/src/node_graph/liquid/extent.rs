@@ -33,6 +33,7 @@ use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::node_graph::liquid::frame_ring::RING;
+use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{
     ACCUM_WORDS_PER_NODE, MatterGridNode, MatterPoint, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes,
@@ -44,11 +45,13 @@ use crate::node_graph::primitives::chart_entries::{plane_len, sheet_count};
 use crate::node_graph::primitives::collar_cells::{cell_count, cell_lattice};
 use crate::node_graph::primitives::cosine_spectrum::{half_spectrum_len, lattice_nodes as transform_lattice, lattice_nodes_with};
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
+use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
 use crate::node_graph::primitives::krylov_givens::{pass_count, state_len};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, partial_bytes};
 use crate::node_graph::primitives::matter_domain::{fill_region, matter_geometry};
+use crate::node_graph::primitives::matter_face_component::matter_cells;
 use crate::node_graph::primitives::matter_fill::{fill_cells, fill_count};
 use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale};
 use crate::node_graph::primitives::particles_to_faces::face_count;
@@ -162,6 +165,11 @@ impl AtomExtent<'_> {
 
     pub fn wired(&self, port: &str) -> bool {
         self.input(port).is_some()
+    }
+
+    /// An output port some later node reads.
+    pub fn feeds(&self, port: &str) -> bool {
+        self.output(port).is_some()
     }
 
     /// `scalar_or_param`: the wire, else a Float param, else `default`.
@@ -536,6 +544,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.matter_stats", check: matter_stats },
     ExtentRule { type_id: "node.liquid_solid_distance", check: liquid_solid_distance },
     ExtentRule { type_id: "node.matter_frame", check: matter_frame },
+    ExtentRule { type_id: "node.matter_face_component", check: matter_face_component },
+    ExtentRule { type_id: "node.face_sample_component", check: face_sample_component },
     ExtentRule { type_id: SWASH_DOMAIN_TYPE_ID, check: swash_domain },
     ExtentRule { type_id: "node.liquid_fill", check: liquid_fill },
     ExtentRule { type_id: "node.liquid_state", check: liquid_state },
@@ -799,8 +809,56 @@ fn liquid_solid_distance(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     Ok(())
 }
 
+/// A frame's face grid storage: one array per wired axis over the domain's
+/// cells, the one-record hint otherwise. Provided before any check can stop
+/// the rule, since consumers size from it.
+fn provide_frame_faces(x: &mut AtomExtent<'_>, lattice: &LiquidLattice) {
+    for axis in 0..3 {
+        let bytes = face_len(lattice.cells(), axis) * 4;
+        if x.wired(FACE_INPUT_PORTS[axis]) {
+            x.provide(FACE_GRID_PORTS[axis], bytes);
+            x.hold(bytes);
+        } else {
+            x.provide(FACE_GRID_PORTS[axis], 4);
+        }
+    }
+    for (&port, n) in FACE_GRID_PORTS[3..6].iter().zip(lattice.cells()) {
+        x.publish(port, n as f32);
+    }
+}
+
+/// Each wired face input holds its whole axis: the copy never publishes a
+/// partial grid.
+fn cover_frame_faces(x: &AtomExtent<'_>, lattice: &LiquidLattice) -> Result<(), Verdict> {
+    for (axis, port) in FACE_INPUT_PORTS.into_iter().enumerate() {
+        if x.wired(port) {
+            x.covers(port, face_len(lattice.cells(), axis) * 4)?;
+        }
+    }
+    Ok(())
+}
+
+fn matter_face_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| whole(x, name, 71.0));
+    let (Some(cells), Some(axis)) = (matter_cells(nodes), axis_param(x.params())) else {
+        return Err(Verdict::Refused(format!("a {nodes:?} node lattice has no cells, or the axis is not X, Y or Z")));
+    };
+    x.covers("grid", grid_bytes(nodes))?;
+    x.covers("out", face_len(cells, axis) * 4)
+}
+
+fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = swash_cells(x)?;
+    let Some(axis) = axis_param(x.params()) else {
+        return Err(Verdict::Refused("the axis is not X, Y or Z".into()));
+    };
+    x.covers("faces", face_count(cells) * FACE)?;
+    x.covers("out", face_len(cells, axis) * 4)
+}
+
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice();
+    provide_frame_faces(x, &lattice);
     let count = x.count("count", 0.0)?;
     x.covers("points", u64::from(count) * size_of::<MatterPoint>() as u64)?;
     x.covers("stats", u64::from(STATS_WORDS) * 4)?;
@@ -823,7 +881,7 @@ fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (port, n) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes()) {
         x.publish(port, n as f32);
     }
-    Ok(())
+    cover_frame_faces(x, &lattice)
 }
 
 /// The sort's bin grid is searched with exactly the ranges it allocates, and
@@ -1000,6 +1058,13 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    // The faces are the body's own size (written later in the plan: the
+    // second pass sees it), held only while something reads them.
+    let faces = x.bytes("faces_in").unwrap_or(0);
+    x.provide("faces", faces);
+    if x.feeds("faces") {
+        x.hold(faces);
+    }
     let stats = u64::from(LIQUID_STATS_WORDS) * 4;
     // The zeroed stats a new epoch copies, and the readback ring.
     x.hold(4 * stats);
@@ -1025,6 +1090,7 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice();
+    provide_frame_faces(x, &lattice);
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = lattice.solid_bytes();
@@ -1043,7 +1109,10 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("particles", u64::from(count) * PARTICLE)?;
     x.covers("stats", u64::from(LIQUID_STATS_WORDS) * 4)?;
-    if wired { x.covers("solid", solid) } else { Ok(()) }
+    if wired {
+        x.covers("solid", solid)?;
+    }
+    cover_frame_faces(x, &lattice)
 }
 
 /// A SWASH atom's cell lattice, as its run() reads it.

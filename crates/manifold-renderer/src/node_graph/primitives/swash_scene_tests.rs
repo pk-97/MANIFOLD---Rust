@@ -7,7 +7,8 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::swash_preset::{REST_PER_CELL, WaterScene, water_def};
+use super::swash_preset::{EXTENDED_LAYERS, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
+use crate::node_graph::liquid::grid::face_len;
 use super::swash_volume::{VolumeDrift, volume_and_area};
 use super::swash_solve_tests::{node_named, output_of};
 use crate::gpu_encoder::GpuEncoder;
@@ -73,6 +74,9 @@ impl Run {
             watched.extend(["liquid_offsets", "liquid_mesh"].map(|name| node_ending(&graph, name)));
         }
         watched.push(node_named(&graph, "state"));
+        if scene.faces {
+            watched.extend(FACE_NODES.map(|name| node_named(&graph, name)));
+        }
         exec.set_dump_set(Some(watched.into_iter().collect()));
         let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 };
         // The domain's clock restarts on its first frame and ticks none: the
@@ -157,6 +161,13 @@ impl Run {
     #[cfg(feature = "water-race-probes")]
     pub(super) fn forced(&self, step: usize) -> Vec<FaceSample> {
         self.read(&format!("s{step}.gravity"), "out", (self.n() + 1).pow(3))
+    }
+
+    /// The seam face grid of the frame's last tick, x, y and z (a scene built
+    /// with `faces`).
+    pub(super) fn face_grid(&self) -> [Vec<f32>; 3] {
+        let cells = [self.n() as u32; 3];
+        std::array::from_fn(|axis| self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize))
     }
 
     pub(super) fn collar(&self, step: usize) -> u32 {
@@ -249,6 +260,34 @@ fn fft_water_free_fall_keeps_g() {
     assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "every particle lives and stays finite");
     assert!((stats.mean_velocity[1] - want).abs() <= 0.01 * want.abs(), "fall speed {} against {want}", stats.mean_velocity[1]);
     assert!(stats.mean_velocity[0].abs().max(stats.mean_velocity[2].abs()) <= 0.01 * want.abs(), "no sideways drift");
+}
+
+/// The tick hands the state its last step's extended faces, bit for bit, and
+/// the face components gather the seam's arrays from them: at 32 first, then
+/// at 64.
+#[test]
+fn fft_water_face_grid_is_the_last_ticks_faces() {
+    for n in [32, 64] {
+        let scene = WaterScene::dam_break(n).with_faces();
+        let mut run = Run::new(scene);
+        for _ in 0..12 {
+            run.frame();
+        }
+        let records = (n + 1).pow(3);
+        let state: Vec<FaceSample> = run.read("state", "faces", records);
+        let last: Vec<FaceSample> = run.read(&format!("s{}.new_extend_{EXTENDED_LAYERS}", scene.steps - 1), "out", records);
+        let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
+        let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
+        let grid = run.face_grid();
+        let expected = crate::node_graph::liquid::conformance::swash_faces(bytemuck::cast_slice(&state), [n as u32; 3]);
+        let gathered = (0..3)
+            .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
+            .sum::<usize>();
+        println!("SWASH face grid {n}³: {moving} of {records} face samples moving; state differs at {differ}, gather at {gathered}");
+        assert!(moving > records / 100, "{n}³: the faces barely move");
+        assert_eq!(differ, 0, "{n}³: the state's faces are not the last step's");
+        assert_eq!(gathered, 0, "{n}³: the face components differ from the state's faces");
+    }
 }
 
 /// I5: a pool at rest stays at rest. After 2 s the particle count is the

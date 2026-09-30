@@ -4729,6 +4729,12 @@
     {
       "id": 220,
       "nodeId": "frame",
+      "params": {
+        "face_valid_layers": {
+          "type": "Int",
+          "value": 2
+        }
+      },
       "typeId": "node.liquid_frame"
     },
     {
@@ -4768,6 +4774,26 @@
             {
               "name": "vertices",
               "portType": "Array(MeshVertex)"
+            },
+            {
+              "name": "level_set",
+              "portType": "Array(f32)"
+            },
+            {
+              "name": "level_set_bounds",
+              "portType": "Transform"
+            },
+            {
+              "name": "level_set_nodes_x",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "level_set_nodes_y",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "level_set_nodes_z",
+              "portType": "Scalar(F32)"
             }
           ],
           "params": [
@@ -4884,7 +4910,7 @@
             "params": {
               "resolution_scale": {
                 "type": "Int",
-                "value": 3
+                "value": 2
               }
             },
             "typeId": "node.particle_volume"
@@ -4918,7 +4944,7 @@
               },
               "resolution_scale": {
                 "type": "Int",
-                "value": 3
+                "value": 2
               }
             },
             "typeId": "node.volume_surface_mesh"
@@ -5294,6 +5320,36 @@
             "fromPort": "vertices",
             "toNode": 11,
             "toPort": "vertices"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "smoothed",
+            "toNode": 11,
+            "toPort": "level_set"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "bounds",
+            "toNode": 11,
+            "toPort": "level_set_bounds"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 11,
+            "toPort": "level_set_nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 11,
+            "toPort": "level_set_nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 11,
+            "toPort": "level_set_nodes_z"
           },
           {
             "fromNode": 1,
@@ -6199,7 +6255,7 @@
         "convert": {
           "type": "IntRound"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
         "offset": 2.0,
@@ -6213,7 +6269,7 @@
         "convert": {
           "type": "IntRound"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
         "offset": 2.0,
@@ -6280,7 +6336,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "formatString": "F0",
         "id": "surface_detail",
         "isToggle": false,
@@ -8706,6 +8762,12 @@
       "fromPort": "stats_out",
       "toNode": 3,
       "toPort": "stats_in"
+    },
+    {
+      "fromNode": 154,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "faces_in"
     },
     {
       "fromNode": 0,

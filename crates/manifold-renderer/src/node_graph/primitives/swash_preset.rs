@@ -18,6 +18,7 @@ use super::swash_domain::{SwashGeometry, swash_geometry};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
+use crate::node_graph::liquid::grid::FACE_INPUT_PORTS;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::transform::Transform;
 
@@ -92,9 +93,21 @@ pub(crate) struct WaterScene {
     /// of a solve every step (`fft_water_cadence_64`) and saves one solve.
     pub density_once: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
-    /// volume and mesh): the shipped Surface Detail 1 is 3.
+    /// volume and mesh): the shipped Surface Detail 0 is 2, which fits the
+    /// frame budget at 64 (BUG-mjhx, surface scale at SWASH 64).
     pub surface_scale: usize,
+    /// Publish the face grid: three node.face_sample_component named
+    /// [`FACE_NODES`] on the state's faces after the region, into the frame.
+    /// The tick always hands its last step's faces to the state.
+    pub faces: bool,
 }
+
+/// The face grid's nodes in a scene built with `faces`, x, y and z.
+pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
+
+/// Face layers past the water SWASH extends each step's faces by: the face
+/// grid's `face_valid_layers`.
+pub(crate) const EXTENDED_LAYERS: usize = 2;
 
 /// Particles per cell the fill seeds: one per half-cell site.
 pub(crate) const REST_PER_CELL: f64 = 8.0;
@@ -126,7 +139,8 @@ impl WaterScene {
             spread_rate: SPREAD_PER_STEP * 60.0 * STEPS_PER_TICK as f64,
             density_passes: DENSITY_PASSES,
             density_once: true,
-            surface_scale: 3,
+            surface_scale: 2,
+            faces: false,
         }
     }
 
@@ -153,6 +167,11 @@ impl WaterScene {
 
     pub fn with_surface(self) -> Self {
         Self { surface: true, ..self }
+    }
+
+    /// Publish the face grid (section 3.2 (Grid outputs) of the seam).
+    pub fn with_faces(self) -> Self {
+        Self { faces: true, ..self }
     }
 
     /// Meshed at `scale` surface nodes per cell.
@@ -481,10 +500,11 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire(count, state, "count");
     b.wires(domain, state, &["ticks", "epoch"]);
     let mut particles: Port = (state, "out");
+    let mut faces = particles;
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        particles = water_step(&mut b, scene, particles, count, domain, density);
+        (particles, faces) = water_step(&mut b, scene, particles, count, domain, density);
     }
     b.prefix.clear();
     let stats = b.node("stats", "node.liquid_stats", json!({}));
@@ -494,18 +514,28 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((domain, "particle_mass"), stats, "particle_mass");
     b.wire(particles, state, "in");
     b.wire((stats, "stats_out"), state, "stats_in");
+    // The tick's last faces leave the region beside its particles.
+    b.wire(faces, state, "faces_in");
 
     let solid = b.node("solid", "node.liquid_solid_distance", json!({}));
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, solid, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), solid, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({}));
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(EXTENDED_LAYERS)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((solid, "solid"), frame, "solid");
     b.wire(count, frame, "count");
     b.wires(domain, frame, &LATTICE_WIRES);
     b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch"]);
+    if scene.faces {
+        for (axis, name) in FACE_NODES.into_iter().enumerate() {
+            let params = Builder::lattice([scene.pressure.n; 3], &[("axis", json!({"type": "Enum", "value": axis}))]);
+            let id = b.node(name, "node.face_sample_component", params);
+            b.wire((state, "faces"), id, "faces");
+            b.wire((id, "out"), frame, FACE_INPUT_PORTS[axis]);
+        }
+    }
 
     let output = b.node("output", "system.final_output", json!({}));
     let sink = if scene.surface {
@@ -546,7 +576,8 @@ fn built_by_water_def(node_id: &str) -> bool {
     let step = node_id.split_once('.').is_some_and(|(step, _)| {
         step.len() > 1 && step.starts_with('s') && step[1..].bytes().all(|b| b.is_ascii_digit())
     });
-    step || matches!(node_id, "domain" | "initial_column" | "fill" | "state" | "stats" | "solid" | "frame" | "surface")
+    step || FACE_NODES.contains(&node_id)
+        || matches!(node_id, "domain" | "initial_column" | "fill" | "state" | "stats" | "solid" | "frame" | "surface")
 }
 
 /// Surface Detail adds this to its value to give the surface nodes' scale.
@@ -685,7 +716,15 @@ fn lattice_box(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
 /// One water step (section 3): sort, the water lattice, particles to faces,
 /// the domain's gravity, the pressure solve, the projection, the density
 /// solve on the same collar when `density`, faces back to particles.
-fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port, domain: usize, density: bool) -> Port {
+/// Returns the moved particles and the step's projected, extended faces.
+fn water_step(
+    b: &mut Builder,
+    scene: WaterScene,
+    particles: Port,
+    count: Port,
+    domain: usize,
+    density: bool,
+) -> (Port, Port) {
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -754,7 +793,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port, 
     b.wire(new, moved, "faces");
     b.wire(old, moved, "old");
     b.wire(advect, moved, "advect");
-    (moved, "out")
+    ((moved, "out"), new)
 }
 
 /// `faces` minus the gradient of `pressure` on the water's faces.
@@ -767,10 +806,10 @@ fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Por
     (id, "out")
 }
 
-/// Two layers of face extension into the air around the water.
+/// [`EXTENDED_LAYERS`] layers of face extension into the air around the water.
 fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
     let mut faces = faces;
-    for layer in 1..=2 {
+    for layer in 1..=EXTENDED_LAYERS {
         let id = b.node(&format!("{name}_extend_{layer}"), "node.extend_faces", Builder::lattice(n, &[]));
         b.wire(faces, id, "faces");
         faces = (id, "out");
@@ -1165,8 +1204,10 @@ pub(super) mod tests {
             WaterScene { density_once: false, ..WaterScene::dam_break(64) },
             WaterScene { steps: 1, spread_rate: SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) },
         ];
+        // The published face grid, at every lattice.
+        let faces = LATTICES.into_iter().map(|n| WaterScene::dam_break(n).with_faces());
         let registry = PrimitiveRegistry::with_builtin();
-        for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).chain(coarser).chain(detail).chain(cadence) {
+        for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).chain(coarser).chain(detail).chain(cadence).chain(faces) {
             let n = scene.pressure.n;
             let def = render_def(scene);
             let (_, plan) = built(&def);
@@ -1305,6 +1346,24 @@ pub(super) mod tests {
             (end("fromNode"), port("fromPort"), end("toNode"), port("toPort"))
         });
         def
+    }
+
+    /// The tick hands the state its last step's projected faces, extended by
+    /// the face grid's valid layers, whatever the step count.
+    #[test]
+    fn fft_water_state_takes_the_last_steps_extended_faces() {
+        for scene in [WaterScene::dam_break(64), WaterScene { steps: 1, ..WaterScene::dam_break(64) }] {
+            let def = serde_json::to_value(water_def(scene)).expect("def");
+            let name = |id: &Value| -> String {
+                let nodes = def["nodes"].as_array().expect("nodes");
+                nodes.iter().find(|n| n["id"] == *id).expect("wired node")["nodeId"].as_str().expect("name").to_string()
+            };
+            let wires = def["wires"].as_array().expect("wires");
+            let into: Vec<_> = wires.iter().filter(|w| w["toPort"] == "faces_in").collect();
+            assert_eq!(into.len(), 1, "one faces_in wire");
+            assert_eq!(name(&into[0]["toNode"]), "state");
+            assert_eq!(name(&into[0]["fromNode"]), format!("s{}.new_extend_{EXTENDED_LAYERS}", scene.steps - 1));
+        }
     }
 
     /// The shipped `WaterDamBreakSwash.json` is the builder's Dam Break at 64,
