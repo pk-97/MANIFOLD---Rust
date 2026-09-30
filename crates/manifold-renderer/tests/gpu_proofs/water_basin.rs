@@ -174,8 +174,8 @@ fn warmup_mesh_roles(
 ) {
     // Async geometry preparation is pumped at unchanged transport time, as
     // export pre-roll does. Only complete frames advance simulation time.
-    let mut complete = false;
-    for _ in 0..200 {
+    let wait = crate::harness::BackgroundWait::new("mesh role warmup");
+    loop {
         let mut encoder = device.create_encoder("mesh-role-warmup");
         let status = {
             let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
@@ -185,12 +185,10 @@ fn warmup_mesh_roles(
         encoder.commit_and_wait_completed();
         assert!(!matches!(status, FrameRenderStatus::Failed(_)), "role warmup: {status:?}");
         if status == FrameRenderStatus::Complete && !runtime.warmup_pending() {
-            complete = true;
-            break;
+            return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        wait.hold();
     }
-    assert!(complete, "mesh role preparation must finish within bounded pre-roll");
 }
 
 fn assert_finite_and_nonempty(bytes: &[u8], frame: u32) {

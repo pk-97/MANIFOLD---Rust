@@ -169,9 +169,19 @@ fn render_until_lit(
     #[allow(unused_assignments)]
     let mut px = Vec::new();
     let mut frac = 0.0f64;
-    let mut f = start_frame;
-    while f < start_frame + POLL_BUDGET_FRAMES {
+    // Frames rendered while the rerun build is in flight don't count toward
+    // the budget: that window's length depends on machine load.
+    let wait = harness::BackgroundWait::new(format!("bug-majv {phase}"));
+    let mut settled = 0;
+    let mut next = start_frame;
+    while settled < POLL_BUDGET_FRAMES {
+        let f = next;
+        next += 1;
         frame(runtime, h, target, f, manifest);
+        if wait.pending(runtime) {
+            continue;
+        }
+        settled += 1;
         // Settle a few frames past the flip, then check every 5th.
         if f >= start_frame + 4 && (f - start_frame) % 5 == 4 {
             px = crate::rt_t2b_temporal_wiring::readback_rgba_f32(&h.device, target);
@@ -184,10 +194,9 @@ fn render_until_lit(
                 return (px, f);
             }
         }
-        f += 1;
     }
     panic!(
-        "bug-majv {phase}: never lit within {POLL_BUDGET_FRAMES} frames (best non-black fraction {frac:.4})"
+        "bug-majv {phase}: never lit within {POLL_BUDGET_FRAMES} settled frames (best non-black fraction {frac:.4})"
     );
 }
 
@@ -232,18 +241,23 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     // frames before RT is admitted — the 30155c607 readiness contract made
     // a single early assert frame fire before publication landed (same fix
     // shape as 4942c6f3d's neutral-lens wait).
+    let wait = harness::BackgroundWait::new("bug-majv dispatch");
     let mut dispatched = false;
-    for _ in 0..POLL_BUDGET_FRAMES {
+    let mut settled = 0;
+    while settled < POLL_BUDGET_FRAMES {
         f += 1;
         let caps = harness::capture_rt_channels(|| frame(&mut runtime, h, &target.texture, f, &manifest));
         if !caps.is_empty() {
             dispatched = true;
             break;
         }
+        if !wait.pending(&runtime) {
+            settled += 1;
+        }
     }
     assert!(
         dispatched,
-        "bug-majv: the RT kernel never dispatched within {POLL_BUDGET_FRAMES} frames — \
+        "bug-majv: the RT kernel never dispatched within {POLL_BUDGET_FRAMES} settled frames — \
          every number this test reports is a pure-raster measurement. Drive RT through \
          `import_rt_manifest`, not the def's node params."
     );

@@ -286,14 +286,13 @@ impl Run {
         runtime.set_dump_all(true);
         let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "matter-coupling");
         let mut run = Self { runtime, target, device, frame: 0, stride, last_simulation_time: 0.0, _offline: offline };
-        let started = std::time::Instant::now();
+        let wait = crate::harness::BackgroundWait::new("matter coupling asset warmup");
         loop {
             run.render(0, true);
             if !run.runtime.warmup_pending() {
                 break;
             }
-            assert!(started.elapsed().as_secs() < 60, "asset warmup did not finish");
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            wait.hold();
         }
         run
     }

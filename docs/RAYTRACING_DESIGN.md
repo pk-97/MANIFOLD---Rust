@@ -2304,6 +2304,22 @@ probe — "they will be better than previous."
   `m4_temporal_scaler_encodes_one_frame` (create + encode + nonzero
   readback) green; the MTL4 temporal upscaler wired in DN-L now
   actually runs.
+- **DN-P — temporal scaler back to classic MTLFX (2026-10-01,
+  BUG-ca67 (RT proofs time out the GPU)).** Reverses DN-K's MTL4
+  preference for the temporal scaler, same shape as the denoiser in
+  DN-O: off unless `MANIFOLD_MTL4FX_TEMPORAL=1`. On macOS 26.6.1 (M4
+  Max), an MTL4 temporal scaler that follows an earlier one on the same
+  device hangs its MTL4 command buffer until the MTL4 queue's watchdog
+  kills it at about 4 s. The classic frame waiting on it stalls those
+  4 s or times out, and one classic timeout makes macOS ignore the
+  process's queue. A 4 s stall mid-show decides it. Evidence:
+  `rt_p4_metalfx_temporal` then `rt_t2b_temporal_wiring` in one serial
+  process stalled 4 of 4 runs and timed out 2 of 4, each module alone
+  clean; the hang reproduces clean under the Metal validation layer,
+  and every MTL4 signal is committed in order. Classic MTLFX runs the
+  same repro clean 3 of 3, and the parallel RT set 2 of 2. Re-test
+  after each macOS update: BUG-rinn (MTL4 temporal scaler re-test)
+  holds the repro and two bridge races to fix first.
 - **DN-N — re-look gate (Peter).** Fused path, conditioned, Metal 4
   networks. PASS → default-flip + effect-card button + noise-gate
   re-baseline land (default-on denoise implies temporal_upscale —

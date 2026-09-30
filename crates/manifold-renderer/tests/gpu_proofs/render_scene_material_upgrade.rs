@@ -106,9 +106,12 @@ fn render_graph(def: EffectGraphDef, label: &str) -> Vec<u8> {
     )
     .unwrap_or_else(|error| panic!("{label} graph must build: {error:?}"));
     let target = h.make_target(label);
+    let wait = harness::BackgroundWait::new(label);
     let mut previous = None;
     let mut stable = 0u32;
-    for frame in 0..180i64 {
+    let mut settled_frames = 0u32;
+    let mut frame = 0i64;
+    while settled_frames < 180 {
         let ctx = PresetContext {
             time: 0.0,
             beat: 0.0,
@@ -135,13 +138,15 @@ fn render_graph(def: EffectGraphDef, label: &str) -> Vec<u8> {
             );
         }
         enc.commit_and_wait_completed();
+        frame += 1;
+        if wait.pending(&runtime) {
+            stable = 0;
+            previous = None;
+            continue;
+        }
+        settled_frames += 1;
         let pixels = readback_tonemapped_rgba8(&h.device, &target.texture, h.width, h.height);
-        let is_nonblank = non_black_fraction(&pixels) > 0.01;
-        if is_nonblank
-            && !runtime.warmup_pending()
-            && !runtime.io_pending()
-            && previous.as_ref() == Some(&pixels)
-        {
+        if non_black_fraction(&pixels) > 0.01 && previous.as_ref() == Some(&pixels) {
             stable += 1;
             if stable >= 3 {
                 return pixels;
@@ -150,11 +155,8 @@ fn render_graph(def: EffectGraphDef, label: &str) -> Vec<u8> {
             stable = 0;
         }
         previous = Some(pixels);
-        if runtime.warmup_pending() || runtime.io_pending() {
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
     }
-    panic!("{label} graph did not produce a stable nonblank frame");
+    panic!("{label} graph did not produce a stable nonblank frame in {settled_frames} settled frames");
 }
 
 fn mean_abs_diff(a: &[u8], b: &[u8]) -> f64 {
