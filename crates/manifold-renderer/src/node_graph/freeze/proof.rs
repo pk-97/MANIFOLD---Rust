@@ -4384,3 +4384,183 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
         r.over_fraction()
     );
 }
+
+/// BUG-agfh (Codegen: buffer atom with several outputs, one atomic): an atom
+/// with an aliased pointwise particle output AND an atomic fixed-point side
+/// output (`test.multi_output_atomic`, the `grid_to_matter` + reaction shape)
+/// sits between two fusable particle regions. Fusion must cut at it — both
+/// neighbouring regions fuse, the atom itself stays a standalone node — and
+/// the fused graph must match the unfused one exactly: the atomic momentum
+/// sums word for word, and the rendered density bit for bit.
+///
+/// Exactness is owed, not hoped for: the upstream region is a fused buffer
+/// region (bit-exact to unfused by the precision contract's tier 3), so the
+/// atom sees identical particles either way, and integer `atomicAdd` is
+/// order-independent.
+#[test]
+fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
+    use super::install::fuse_generator_view;
+    use crate::node_graph::graph_loader::{
+        BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
+    };
+    use crate::node_graph::mesh_change::PreparedMeshRules;
+    use crate::node_graph::primitives::test_multi_output_atomic_fixture::{
+        MOMENTUM_WORDS, TYPE_ID as FIXTURE, TestMultiOutputAtomic,
+    };
+
+    let test_device = crate::test_device();
+    let device = test_device.arc();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    registry.register(FIXTURE, || Box::new(TestMultiOutputAtomic::new()));
+    let (w, h) = (128u32, 128u32);
+
+    let def: EffectGraphDef = serde_json::from_str(&format!(
+        r#"{{
+        "version": 1, "name": "AtomicSideOutputCut", "nodes": [
+            {{ "id": 0, "typeId": "system.generator_input", "nodeId": "input" }},
+            {{ "id": 1, "typeId": "node.spawn_particles", "nodeId": "spawn", "params": {{
+                "max_capacity": {{ "type": "Int", "value": 4096 }},
+                "active_count": {{ "type": "Int", "value": 4096 }} }} }},
+            {{ "id": 2, "typeId": "node.spread_out", "nodeId": "kick_a", "params": {{
+                "diffusion": {{ "type": "Float", "value": 0.05 }},
+                "active_count": {{ "type": "Int", "value": 4096 }} }} }},
+            {{ "id": 3, "typeId": "node.wrap_around", "nodeId": "wrap_a", "params": {{
+                "active_count": {{ "type": "Int", "value": 4096 }} }} }},
+            {{ "id": 4, "typeId": "{FIXTURE}", "nodeId": "drag", "params": {{
+                "drag": {{ "type": "Float", "value": 0.5 }},
+                "fixed_point_scale": {{ "type": "Float", "value": 65536.0 }} }} }},
+            {{ "id": 5, "typeId": "node.spread_out", "nodeId": "kick_b", "params": {{
+                "diffusion": {{ "type": "Float", "value": 0.03 }},
+                "active_count": {{ "type": "Int", "value": 4096 }} }} }},
+            {{ "id": 6, "typeId": "node.wrap_around", "nodeId": "wrap_b", "params": {{
+                "active_count": {{ "type": "Int", "value": 4096 }} }} }},
+            {{ "id": 7, "typeId": "node.draw_particles", "nodeId": "splat", "params": {{
+                "active_count": {{ "type": "Int", "value": 4096 }},
+                "scaled_energy": {{ "type": "Int", "value": 4096 }} }} }},
+            {{ "id": 8, "typeId": "node.resolve_scatter", "nodeId": "resolve", "params": {{
+                "fixed_point_scale": {{ "type": "Float", "value": 4096.0 }} }} }},
+            {{ "id": 9, "typeId": "system.final_output", "nodeId": "final_output" }}
+        ], "wires": [
+            {{ "fromNode": 1, "fromPort": "particles", "toNode": 2, "toPort": "in" }},
+            {{ "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }},
+            {{ "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "points" }},
+            {{ "fromNode": 4, "fromPort": "points_out", "toNode": 5, "toPort": "in" }},
+            {{ "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }},
+            {{ "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "particles" }},
+            {{ "fromNode": 0, "fromPort": "output_width", "toNode": 7, "toPort": "width" }},
+            {{ "fromNode": 0, "fromPort": "output_height", "toNode": 7, "toPort": "height" }},
+            {{ "fromNode": 7, "fromPort": "accum", "toNode": 8, "toPort": "accum" }},
+            {{ "fromNode": 8, "fromPort": "density", "toNode": 9, "toPort": "in" }}
+        ]
+    }}"#
+    ))
+    .expect("parse the atomic-side-output def");
+
+    let fused_view = fuse_generator_view(&def, &registry).expect("the particle regions fuse");
+    let fused_def: &EffectGraphDef = &fused_view.def;
+    // Non-vacuous: both neighbouring regions fused, the atom did not.
+    let fused_kernels = fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count();
+    assert_eq!(fused_kernels, 2, "kick+wrap on each side of the atom must fuse into its own kernel");
+    for gone in ["node.spread_out", "node.wrap_around"] {
+        assert!(
+            !fused_def.nodes.iter().any(|n| n.type_id == gone),
+            "{gone} must be absorbed into a fused region"
+        );
+    }
+    assert_eq!(
+        fused_def.nodes.iter().filter(|n| n.type_id == FIXTURE).count(),
+        1,
+        "the atomic-side-output atom must stay a standalone node (region cut)"
+    );
+
+    // Render `frames` frames; return the atom's momentum words and the
+    // resolved density copied out.
+    let render = |def: &EffectGraphDef, rules: &PreparedMeshRules| -> (Vec<i32>, RenderTarget) {
+        let mut graph = Graph::new();
+        let inst = instantiate_def(
+            &mut graph,
+            def,
+            &registry,
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            rules,
+        )
+        .expect("instantiate");
+        let node_of = |type_id: &str| -> NodeInstanceId {
+            let id = def.nodes.iter().find(|n| n.type_id == type_id).map(|n| n.id).unwrap();
+            *inst.id_map.get(&id).unwrap()
+        };
+        let atom = node_of(FIXTURE);
+        // No atom on main reads an i32 array yet; the test is the reader, so
+        // the side output is an external output (else it gets no resource).
+        graph.add_external_output(atom, "momentum").expect("momentum is an output");
+        let plan = compile(&graph).expect("compile");
+        let resolve = node_of("node.resolve_scatter");
+        let gen_in = node_of("system.generator_input");
+        let momentum_res = resource_for_output(&plan, atom, "momentum");
+
+        let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), w, h, FMT);
+        pre_allocate_resources(&graph, &plan, &device, &mut backend).expect("pre-allocate");
+        let mut exec = Executor::new(Box::new(backend));
+        exec.set_preview_target(Some(resolve));
+        let mut state = StateStore::new();
+        for i in 0..2u32 {
+            let t = f64::from(i) / 60.0;
+            for (name, v) in [("output_width", w as f32), ("output_height", h as f32)] {
+                graph.set_param(gen_in, name, ParamValue::Float(v)).expect("host param");
+            }
+            let ft = FrameTime {
+                seconds: Seconds(t),
+                beats: Beats(t * 2.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: i64::from(i),
+            };
+            let mut enc = device.create_encoder("agfh-frame");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
+            }
+            enc.commit_and_wait_completed();
+        }
+
+        let slot = exec.backend().slot_for(momentum_res).expect("momentum slot");
+        let buf = exec.backend().array_buffer(slot).expect("momentum buffer");
+        let momentum = unsafe {
+            std::slice::from_raw_parts(
+                buf.mapped_ptr().expect("shared momentum buffer").cast::<i32>(),
+                MOMENTUM_WORDS as usize,
+            )
+        }
+        .to_vec();
+
+        let res = exec.preview_resource().expect("preview resource");
+        let tex = exec.backend().texture_2d(exec.backend().slot_for(res).unwrap()).unwrap();
+        let out = RenderTarget::new(&device, tex.width, tex.height, tex.format, "agfh-capture");
+        let mut enc = device.create_encoder("agfh-copy");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            gpu.copy_texture_to_texture(tex, &out.texture, tex.width, tex.height);
+        }
+        enc.commit_and_wait_completed();
+        (momentum, out)
+    };
+
+    let (u_momentum, u_img) = render(&def, &PreparedMeshRules::default());
+    let (f_momentum, f_img) = render(fused_def, &fused_view.mesh_rules);
+
+    assert!(
+        u_momentum.iter().any(|&m| m != 0),
+        "the atom must accumulate non-zero momentum (non-vacuous): {u_momentum:?}"
+    );
+    assert_eq!(f_momentum, u_momentum, "atomic side output must match unfused word for word");
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 0.0, 0.0);
+    assert!(
+        r.over_count == 0 && r.max_abs == 0.0,
+        "fused density must match unfused bit for bit: max_abs={}, over={}/{}",
+        r.max_abs,
+        r.over_count,
+        r.total
+    );
+}

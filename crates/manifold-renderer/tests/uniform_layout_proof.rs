@@ -321,6 +321,8 @@ fn primitive_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+const CFG_TEST_FIXTURES: &[&str] = &["test_multi_output_atomic_fixture.rs"];
+
 #[test]
 fn hand_uniform_structs_match_codegen_layout() {
     let registry = PrimitiveRegistry::with_builtin();
@@ -333,6 +335,12 @@ fn hand_uniform_structs_match_codegen_layout() {
     files.sort();
 
     for path in &files {
+        // cfg(test) fixtures never reach this registry, so they can't be
+        // constructed here. Each one proves its own Params layout in its unit tests.
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        if CFG_TEST_FIXTURES.contains(&file_name.as_ref()) {
+            continue;
+        }
         let text = std::fs::read_to_string(path).expect("readable source");
         let (type_ids, structs) = parse_source(&text);
         if structs.is_empty() {

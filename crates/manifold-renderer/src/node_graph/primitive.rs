@@ -231,10 +231,13 @@ pub trait PrimitiveSpec: Send {
     /// NOT through the wrapper's single-element `buf_out[idx] = body(...)`
     /// assignment. A scatter atom's output index is data-dependent (the splat
     /// target), so it can't be a coincident write; the body computes the cell
-    /// and accumulates. The wrapper then calls `body(...)` as a statement (no
-    /// return value). Empty (the default) for every coincident/gather buffer
-    /// atom. Set via the macro's `atomic_outputs:` field. The element must be a
-    /// single-channel u32 / i32 (WGSL atomics are integer-only).
+    /// and accumulates. The body returns only the NON-atomic outputs: with none
+    /// the wrapper calls `body(...)` as a statement; with one plain output next
+    /// to an atomic side output it writes `buf_<plain>[idx] = body(...)`.
+    /// Any atomic output makes the atom a region Boundary. Empty (the default)
+    /// for every coincident/gather buffer atom. Set via the macro's
+    /// `atomic_outputs:` field. The element must be a single-channel u32 / i32
+    /// (WGSL atomics are integer-only).
     const ATOMIC_OUTPUTS: &'static [&'static str] = &[];
 
     /// How this primitive propagates the depth companion channel the "3D

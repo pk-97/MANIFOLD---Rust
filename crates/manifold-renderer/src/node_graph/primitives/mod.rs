@@ -299,6 +299,11 @@ mod tube_from_path;
 // module doc comment).
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod test_camera_pointwise_fixture;
+// BUG-agfh (Codegen: buffer atom with several outputs, one atomic) test fixture,
+// kept out of the global registry the same way. Not gpu-proofs-gated: its
+// codegen tests run without a device.
+#[cfg(test)]
+pub(crate) mod test_multi_output_atomic_fixture;
 mod twist_mesh;
 mod trigger_ease_to;
 mod trigger_gate;
