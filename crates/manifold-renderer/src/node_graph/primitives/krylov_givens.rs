@@ -2,7 +2,7 @@
 //! the new Hessenberg column rotated by the earlier Givens rotations, the new
 //! rotation, and the residual vector g (docs/FFT_WATER_SOLVER_DESIGN.md D10).
 //! A per-element atom on the codegen path: each thread re-derives column j
-//! (at most 32 rotations), so no thread waits on another.
+//! (at most [`MAX_PASSES`] rotations), so no thread waits on another.
 
 use std::borrow::Cow;
 
@@ -14,8 +14,12 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Passes the fixed-size local arrays of the Krylov atoms hold.
-pub(super) const MAX_PASSES: u32 = 32;
+/// Passes the fixed-size local arrays of the Krylov kernels hold, and the
+/// passes param's max on node.krylov_basis, node.krylov_givens and
+/// node.krylov_solve. More is refused when the graph is built
+/// ([`pass_refusal`]), never clamped. The WGSL mirrors it as
+/// `KRYLOV_GIVENS_MAX_PASSES` and `KRYLOV_SOLVE_MAX_PASSES`.
+pub(super) const MAX_PASSES: u32 = 64;
 
 /// Floats in the small state for `passes`: the Hessenberg matrix
 /// ((passes + 1) × passes, column-major), cs and sn (passes each), g (passes + 1).
@@ -28,11 +32,20 @@ pub(super) fn residual_offset(passes: u32) -> u32 {
     passes * (passes + 1) + 2 * passes
 }
 
+/// The passes param, rounded, at least 1. It can be past [`MAX_PASSES`]:
+/// the atoms refuse that by name instead of running fewer.
 pub(super) fn pass_count(params: &ParamValues) -> u32 {
     match params.get("passes") {
-        Some(ParamValue::Float(v)) => (v.round().max(1.0) as u32).min(MAX_PASSES),
+        Some(ParamValue::Float(v)) => v.round().max(1.0) as u32,
         _ => 24,
     }
+}
+
+/// The Krylov atoms' refusal, at build and at run: a pass count past what
+/// the kernels hold.
+pub(super) fn pass_refusal(params: &ParamValues) -> Option<String> {
+    let passes = pass_count(params);
+    (passes > MAX_PASSES).then(|| format!("passes {passes} is past the {MAX_PASSES} the Krylov kernels hold"))
 }
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -60,8 +73,8 @@ crate::primitive! {
         out: Array(f32),
     },
     params: [
-        int_param!("passes", "Passes", 24.0, 1.0, 32.0),
-        int_param!("column", "Column", 0.0, 0.0, 31.0),
+        int_param!("passes", "Passes", 24.0, 1.0, MAX_PASSES as f32),
+        int_param!("column", "Column", 0.0, 0.0, (MAX_PASSES - 1) as f32),
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Krylov loop: state from node.krylov_basis's out, column from its per-pass `pass` scalar, first and second from the two node.dot_products projections, norm from the node.dot_products length of the new vector; out closes back into node.krylov_basis's in. node.krylov_solve reads the final state.",
@@ -81,7 +94,15 @@ impl Primitive for KrylovGivens {
         (port == "out").then(|| state_len(pass_count(params)))
     }
 
+    fn params_refusal(&self, params: &ParamValues) -> Option<String> {
+        pass_refusal(params)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if let Some(reason) = pass_refusal(ctx.params) {
+            ctx.error(format!("Krylov Givens: {reason}"));
+            return;
+        }
         let passes = pass_count(ctx.params);
         let column = ctx.scalar_or_param("column", 0.0).round().max(0.0) as u32;
         let gpu = ctx.gpu_encoder();
@@ -116,5 +137,28 @@ impl Primitive for KrylovGivens {
             [len.div_ceil(256), 1, 1],
             "node.krylov_givens",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The kernels' local arrays are sized from these consts, so they must be
+    /// the cap the params declare and the build refuses past.
+    #[test]
+    fn krylov_kernels_hold_max_passes() {
+        let givens = include_str!("shaders/krylov_givens_body.wgsl");
+        let solve = include_str!("shaders/krylov_solve_body.wgsl");
+        assert!(givens.contains(&format!("const KRYLOV_GIVENS_MAX_PASSES: u32 = {MAX_PASSES}u;")));
+        assert!(solve.contains(&format!("const KRYLOV_SOLVE_MAX_PASSES: u32 = {MAX_PASSES}u;")));
+    }
+
+    #[test]
+    fn krylov_passes_past_the_cap_are_refused_not_clamped() {
+        let at = |v: u32| ParamValues::from_iter([(Cow::Borrowed("passes"), ParamValue::Float(v as f32))]);
+        assert!(pass_refusal(&at(MAX_PASSES)).is_none());
+        assert_eq!(pass_count(&at(MAX_PASSES + 1)), MAX_PASSES + 1);
+        assert!(pass_refusal(&at(MAX_PASSES + 1)).is_some_and(|r| r.starts_with("passes 65 ")));
     }
 }

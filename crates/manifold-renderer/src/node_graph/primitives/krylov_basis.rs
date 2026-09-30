@@ -6,7 +6,7 @@
 
 use manifold_gpu::GpuBuffer;
 
-use super::krylov_givens::{pass_count, residual_offset, state_len};
+use super::krylov_givens::{MAX_PASSES, pass_count, pass_refusal, residual_offset, state_len};
 use super::sort_particles_into_cells::int_param;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -50,7 +50,7 @@ crate::primitive! {
         passes: ScalarF32,
     },
     params: [
-        int_param!("passes", "Passes", 24.0, 1.0, 32.0),
+        int_param!("passes", "Passes", 24.0, 1.0, MAX_PASSES as f32),
         int_param!("row_length", "Row Length", 1024.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
@@ -114,7 +114,16 @@ impl Primitive for KrylovBasis {
         }
     }
 
+    fn params_refusal(&self, params: &ParamValues) -> Option<String> {
+        pass_refusal(params)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if let Some(reason) = pass_refusal(ctx.params) {
+            ctx.error(format!("Krylov Basis: {reason}"));
+            self.passes = 0;
+            return;
+        }
         let passes = pass_count(ctx.params);
         let length = row_length(ctx.params);
         let row_bytes = u64::from(length) * 4;

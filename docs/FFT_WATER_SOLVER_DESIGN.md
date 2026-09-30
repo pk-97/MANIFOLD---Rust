@@ -229,6 +229,8 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 
   The engine's water spreads out: at rest its interior cells are short of the fill's 8 by about a fifth of its particle count, which its mesh reads as volume gained. The three-column look record is `swash_race_clips_64` (SWASH, the engine with whitewater, MPM; one camera, material and tone map; studio floor and obstacle out).
 
+  The 128³ divergence is too few passes for the collar, not a wrong target (`fft_water_refined_leftover_passes`, measured against the step's own right-hand side). All of it sits in water cells beside air; wall and interior cells hold 2.5e-4 /s rms at every pass count. rms median / max worst is 1.1e-2 / 59 /s at 24 passes, 1.4e-3 / 14 at 32 and 1.6e-4 / 1.1 at 48, so 48 at 128³ matches 24 at 64³. The passes a step needs grow with its collar, so a fixed count does not hold as the lattice grows: the proposed rule is on BUG-m632 (swash-residual-bar).
+
 ### P3b — Solid objects in the water
 
 - **Amended by LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve) and D12 (solids through the shared distance lattice):** body mass goes inside the pressure solve, since FLIP measured 16–24× body energy growth with the body held fixed during the solve; solids come from the shared distance lattice; the analytic box clip below is rejected. P3b starts only after seam P7a (SWASH on the contract) has landed. Where this section and the seam doc disagree, the seam doc wins.

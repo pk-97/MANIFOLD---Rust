@@ -1,16 +1,19 @@
 // node.krylov_solve — fusable BUFFER body, GATHER. R y = g by
 // back-substitution, R[k][l] = state[l·(m + 1) + k], g at m(m + 1) + 2m.
 // Each thread runs the whole solve and returns its own y; a diagonal under
-// 1e-30 in size gives y = 0. m is clamped to the 32 the local array holds;
-// a state shorter than m needs, or a thread past m, gives 0.
+// 1e-30 in size gives y = 0. More passes than the local array holds, a state
+// shorter than m needs, or a thread past m, gives 0.
+
+// Mirrors krylov_givens::MAX_PASSES.
+const KRYLOV_SOLVE_MAX_PASSES: u32 = 64u;
 
 fn body(idx: u32, count: u32, passes: i32) -> f32 {
-    let m = min(u32(max(passes, 1)), 32u);
-    if idx >= m || m * m + 4u * m + 1u > arrayLength(&buf_state) {
+    let m = u32(max(passes, 1));
+    if m > KRYLOV_SOLVE_MAX_PASSES || idx >= m || m * m + 4u * m + 1u > arrayLength(&buf_state) {
         return 0.0;
     }
     let off_g = m * (m + 1u) + 2u * m;
-    var y: array<f32, 32>;
+    var y: array<f32, KRYLOV_SOLVE_MAX_PASSES>;
     for (var step = 0u; step < m; step = step + 1u) {
         let k = m - 1u - step;
         var acc = buf_state[off_g + k];

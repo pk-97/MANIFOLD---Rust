@@ -54,7 +54,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "project", "collar_total"] {
+            for name in ["water", "gravity", "project", "collar_total"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -150,6 +150,12 @@ impl Run {
 
     pub(super) fn faces(&self, step: usize) -> Vec<FaceSample> {
         self.read(&format!("s{step}.project"), "out", (self.n() + 1).pow(3))
+    }
+
+    /// The face grid the pressure solve starts from: gravity added, walls 0.
+    /// Its divergence over the water cells is the solve's right-hand side.
+    pub(super) fn forced(&self, step: usize) -> Vec<FaceSample> {
+        self.read(&format!("s{step}.gravity"), "out", (self.n() + 1).pow(3))
     }
 
     pub(super) fn collar(&self, step: usize) -> u32 {

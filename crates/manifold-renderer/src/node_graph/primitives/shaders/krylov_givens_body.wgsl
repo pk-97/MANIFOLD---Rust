@@ -5,12 +5,15 @@
 // in row j + 1, rotated by the stored rotations 0 .. j − 1. The new rotation
 // (c, s) zeroes row j + 1; g[j], g[j + 1] become c·g[j], −s·g[j]. A column
 // shorter than 1e-30 gets the identity rotation. Entries outside column j,
-// cs[j], sn[j], g[j] and g[j + 1] pass through. m is clamped to the 32 the
-// local column holds, and arrays shorter than m needs leave the state as it
-// is, so no uniform value can index out of bounds.
+// cs[j], sn[j], g[j] and g[j + 1] pass through. More passes than the local
+// column holds, or arrays shorter than m needs, leave the state as it is, so
+// no uniform value can index out of bounds.
+
+// Mirrors krylov_givens::MAX_PASSES.
+const KRYLOV_GIVENS_MAX_PASSES: u32 = 64u;
 
 fn body(idx: u32, count: u32, passes: i32, column: i32) -> f32 {
-    let m = min(u32(max(passes, 1)), 32u);
+    let m = u32(max(passes, 1));
     let len = m * m + 4u * m + 1u;
     let state_len = arrayLength(&buf_state);
     if idx >= state_len {
@@ -18,14 +21,14 @@ fn body(idx: u32, count: u32, passes: i32, column: i32) -> f32 {
     }
     let old = buf_state[idx];
     let j = u32(max(column, 0));
-    if j >= m || len > state_len || j + 1u > min(arrayLength(&buf_first), arrayLength(&buf_second))
-        || arrayLength(&buf_norm) == 0u {
+    if m > KRYLOV_GIVENS_MAX_PASSES || j >= m || len > state_len
+        || j + 1u > min(arrayLength(&buf_first), arrayLength(&buf_second)) || arrayLength(&buf_norm) == 0u {
         return old;
     }
     let off_c = m * (m + 1u);
     let off_s = off_c + m;
     let off_g = off_s + m;
-    var col: array<f32, 34>;
+    var col: array<f32, KRYLOV_GIVENS_MAX_PASSES + 2u>;
     for (var i = 0u; i <= j; i = i + 1u) {
         col[i] = buf_first[i] + buf_second[i];
     }
