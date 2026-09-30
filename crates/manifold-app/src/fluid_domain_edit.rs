@@ -9,6 +9,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, ParamSpecDef, SerializedParamValue,
 };
 use manifold_core::effects::{ParamConvert, apply_card_reshape, invert_card_reshape};
+use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::{GraphTarget, LayerId, NodeId, project::Project};
 use manifold_editing::command::Command;
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
@@ -121,7 +122,7 @@ pub(crate) fn apply_runtime_domains(
         }
         let accepted = row.fluid_node_ids.iter()
             .filter_map(|id| find_node_by_doc_id(&def.nodes, *id))
-            .find(|node| node.type_id == "node.fluid_surface")
+            .find(|node| is_liquid_domain(&node.type_id))
             .and_then(|node| domains.iter().find(|(id, _)| id == &node.node_id))
             .and_then(|(_, snapshot)| (snapshot.state == FluidDomainState::Ready)
                 .then_some(snapshot.accepted_layout).flatten());
@@ -231,7 +232,7 @@ fn fluid_surface_node<'a>(
     row.fluid_node_ids
         .iter()
         .find_map(|id| {
-            find_node_by_doc_id(&def.nodes, *id).filter(|node| node.type_id == "node.fluid_surface")
+            find_node_by_doc_id(&def.nodes, *id).filter(|node| is_liquid_domain(&node.type_id))
         })
         .ok_or("Fluid surface node is no longer present".into())
 }
@@ -660,7 +661,7 @@ mod tests {
         }).unwrap();
         let layout = row.fluid_domain.unwrap();
         let fluid = row.fluid_node_ids.iter().filter_map(|id| find_node_by_doc_id(&def.nodes, *id))
-            .find(|node| node.type_id == "node.fluid_surface").unwrap().node_id.clone();
+            .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).unwrap().node_id.clone();
 
         for state in [FluidDomainState::Initializing, FluidDomainState::PendingInputs, FluidDomainState::Failed] {
             let mut scene = authored.clone();
@@ -703,7 +704,7 @@ mod tests {
         }).unwrap();
         let layout = row.fluid_domain.unwrap();
         let fluid = row.fluid_node_ids.iter().filter_map(|id| find_node_by_doc_id(&def.nodes, *id))
-            .find(|node| node.type_id == "node.fluid_surface").unwrap();
+            .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).unwrap();
         assert!(!def.nodes.iter().any(|node| node.node_id == fluid.node_id));
         apply_runtime_domains(&mut scene, &def, &[(fluid.node_id.clone(), FluidDomainSnapshot {
             epoch: 4, state: FluidDomainState::Ready, accepted_layout: Some(layout),
@@ -819,7 +820,7 @@ mod tests {
         let mut command = AddSceneFluidCommand::new(
             target.clone(),
             scene_id,
-            metadata_for_node_type("node.fluid_surface"),
+            metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
             metadata_for_node_type("node.transform_3d"),
             metadata_for_node_type("node.pbr_material"),
             metadata_for_node_type("node.scene_object"),

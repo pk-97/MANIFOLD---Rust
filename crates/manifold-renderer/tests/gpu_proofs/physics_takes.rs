@@ -87,7 +87,7 @@ fn instance(id: &str, cache_path: &std::path::Path, gravity: f32) -> PresetInsta
     let fluid = serde_json::json!({
         "id": 3,
         "nodeId": FLUID,
-        "typeId": "node.fluid_surface",
+        "typeId": manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
         "handle": FLUID,
         "params": {
             "resolution": {"type": "Int", "value": 8},

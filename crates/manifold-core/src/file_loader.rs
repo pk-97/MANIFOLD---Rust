@@ -41,8 +41,12 @@ pub enum NodeFileLoad {
 /// The table: `type_id` → what that node reads from disk. Names only nodes
 /// whose path comes via an outer-card string binding (`stringParams` +
 /// `stringBindings`), per PROJECT_FOLDERS_DESIGN P5.
+use crate::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+
+// `tt`, not `literal`: a key may be a `&str` constant, which is both a match
+// pattern and an array element.
 macro_rules! table {
-    ($($type_id:literal => $load:expr),* $(,)?) => {
+    ($($type_id:tt => $load:expr),* $(,)?) => {
         /// Look up what a node type loads from disk, if it loads anything.
         ///
         /// The one enumeration the whole design reads. A string param whose
@@ -78,7 +82,7 @@ table! {
     // A folder of still images, copied as a tree.
     "node.image_folder" => NodeFileLoad::Folder(AssetFamily::Images),
     // A fluid simulation take/cache directory, copied as a tree.
-    "node.fluid_surface" => NodeFileLoad::Folder(AssetFamily::Physics),
+    FLIP_DOMAIN_TYPE_ID => NodeFileLoad::Folder(AssetFamily::Physics),
 }
 
 #[cfg(test)]
@@ -100,7 +104,7 @@ mod tests {
             Some(NodeFileLoad::File(AssetFamily::Hdri))
         );
         assert_eq!(
-            file_loader_kind("node.fluid_surface"),
+            file_loader_kind(FLIP_DOMAIN_TYPE_ID),
             Some(NodeFileLoad::Folder(AssetFamily::Physics))
         );
     }

@@ -37,6 +37,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use manifold_core::NodeId;
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_renderer::frame_status::FrameRenderStatus;
@@ -132,7 +133,7 @@ impl Solver {
 
     fn frame_producer(self) -> &'static str {
         match self {
-            Solver::Flip => "node.fluid_surface",
+            Solver::Flip => FLIP_DOMAIN_TYPE_ID,
             Solver::Matter => "node.matter_frame",
         }
     }
@@ -299,7 +300,7 @@ fn find_preset_node<'a>(
 fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let document: serde_json::Value = serde_json::from_str(json)?;
     let Some(fluid) = find_preset_node(&document["nodes"], &|node| node["nodeId"] == "fluid_surface") else {
-        let domain = find_preset_node(&document["nodes"], &|node| node["typeId"] == "node.matter_domain")
+        let domain = find_preset_node(&document["nodes"], &|node| node["typeId"] == MATTER_DOMAIN_TYPE_ID)
             .ok_or_else(|| io::Error::other("preset has no fluid_surface node and no node.matter_domain"))?;
         let resolution = preset_number(domain, "resolution")?;
         let domain_size = preset_number(domain, "domain_size")?;
@@ -787,8 +788,8 @@ fn dump_surface_meshes(
                     array.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
                 format!("gpu-{name}")
             }
-            ("node.fluid_surface", "vertices") => "cpu".to_string(),
-            ("node.fluid_surface" | "node.matter_frame", "particles_b") => "particles".to_string(),
+            (FLIP_DOMAIN_TYPE_ID, "vertices") => "cpu".to_string(),
+            (FLIP_DOMAIN_TYPE_ID | "node.matter_frame", "particles_b") => "particles".to_string(),
             _ => continue,
         };
         let size = array.buffer.size();
@@ -1602,7 +1603,7 @@ mod tests {
     fn cinematic_graph_inserts_average_and_spatial_resolve() {
         let source = serde_json::json!({
             "nodes": [
-                {"id": 0, "nodeId": "fluid_surface", "typeId": "node.fluid_surface", "params": {
+                {"id": 0, "nodeId": "fluid_surface", "typeId": FLIP_DOMAIN_TYPE_ID, "params": {
                     "resolution": {"type": "Int", "value": 24},
                     "domain_size": {"type": "Float", "value": 4.0},
                     "surface_subdivisions": {"type": "Int", "value": 0}

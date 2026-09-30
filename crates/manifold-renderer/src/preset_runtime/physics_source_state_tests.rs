@@ -58,11 +58,11 @@ fn string_observations_are_scoped_retained_and_reinstalled_after_rebuild() {
     let mut graph = Graph::new();
     let first = graph.add_node(Box::new(SourceObserver(
         0,
-        EffectNodeType::new("node.fluid_surface"),
+        EffectNodeType::new(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
     )));
     let second = graph.add_node(Box::new(SourceObserver(
         1,
-        EffectNodeType::new("node.fluid_surface"),
+        EffectNodeType::new(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
     )));
     let nodes = [
         (NodeId::new("c0.fluid"), first),
@@ -163,11 +163,11 @@ fn duplicate_local_ids_and_segment_prefixes_install_only_the_owning_card() {
         let mut graph = Graph::new();
         let first = graph.add_node(Box::new(SourceObserver(
             0,
-            EffectNodeType::new("node.fluid_surface"),
+            EffectNodeType::new(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
         )));
         let second = graph.add_node(Box::new(SourceObserver(
             1,
-            EffectNodeType::new("node.fluid_surface"),
+            EffectNodeType::new(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
         )));
         let first_id = NodeId::new(if prefixed { "c0.fluid" } else { "fluid" });
         let second_id = NodeId::new(if prefixed { "c1.fluid" } else { "fluid" });

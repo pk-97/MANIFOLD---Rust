@@ -28,7 +28,6 @@ const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
 
 const RENDER_SCENE_TYPE_ID_FOR_OWNERSHIP: &str = "node.render_scene";
 const PHYSICS_WORLD_TYPE_ID_FOR_OWNERSHIP: &str = "node.physics_world";
-const FLUID_SURFACE_TYPE_ID_FOR_OWNERSHIP: &str = "node.fluid_surface";
 
 /// Return the exclusive upstream ownership of a loose scene object.
 ///
@@ -56,12 +55,12 @@ pub fn loose_scene_object_owned_ids(
                 continue;
             };
             let boundary = source.type_id.starts_with("system.")
+                || crate::liquid_domain::is_liquid_domain(&source.type_id)
                 || matches!(
                     source.type_id.as_str(),
                     SCENE_OBJECT_TYPE_ID
                         | RENDER_SCENE_TYPE_ID_FOR_OWNERSHIP
                         | PHYSICS_WORLD_TYPE_ID_FOR_OWNERSHIP
-                        | FLUID_SURFACE_TYPE_ID_FOR_OWNERSHIP
                         | GROUP_INPUT_TYPE_ID
                         | GROUP_OUTPUT_TYPE_ID
                 );

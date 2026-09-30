@@ -333,7 +333,7 @@ fn builtin_scene_object_with_fluid_role(mesh_type: &str) -> EffectGraphDef {
     let fluid = EffectGraphNode {
         id: 30,
         node_id: NodeId::new("builtin_fluid"),
-        type_id: "node.fluid_surface".into(),
+        type_id: manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID.into(),
         handle: Some("Fluid".into()),
         params: BTreeMap::new(),
         exposed_params: Default::default(),
