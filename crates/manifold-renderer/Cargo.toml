@@ -172,6 +172,9 @@ matter-perf-proofs = ["gpu-proofs"]
 # FFT water race probes (FFT_WATER_SOLVER_DESIGN.md P3): minutes-long Dam
 # Break runs of SWASH and the FLIP Fluids engine, opt-in.
 water-race-probes = ["gpu-proofs"]
+# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
+# opt-in: builds FLIP's oracle entries into manifold-fluids.
+whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
 
 [lints]
 workspace = true

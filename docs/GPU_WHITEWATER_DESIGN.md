@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-09-30 · Opus 5.5 · P1 built on `feat/gpu-whitewater`, P2–P6 not built · owed: approval.
+**Status:** PROPOSED · 2026-09-30 · Opus 5.5 · P1 built on `feat/gpu-whitewater`; P2 atoms and oracle built, O1 red, P3–P6 wait on BUG-7o8f (whitewater O1 red) · owed: approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step (FFT_WATER_SOLVER_DESIGN.md P3) on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -83,7 +83,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D3 — The liquid field is the Liquid Surface group's level set, re-distanced on the whitewater grid** (seam D5). It is the field the mesh is drawn from, after smoothing, so foam sits on the surface the audience sees. Rejected: FLIP's particle level set rebuilt from `particles_b`, because it is a second distance field (seam D5) and foam would float on a surface nobody sees. **Consequence:** a smoothed surface has calmer curvature than FLIP's union of spheres, so small crests may emit less. The side-by-side decides; tuning is Peter's call (section 8).
 
-**D4 — Re-distance by nearest crossing.** Crossings come from the refined lattice, where the field is a true distance up to the cap; three passes spread each cell's nearest crossing to its 26 neighbours; the signed distance is clamped at 4 cells. FLIP's liquid-into-solid rule (`F/particlelevelset.cpp:170`) is kept: solid cells touching liquid read negative, and edges touching solid carry no crossing, so a submerged wall is not a surface. Rejected: FLIP's upwind reinit from the capped field, because its sign speed outside the cap is about 0.1, so 6–8 passes leave the air side near half a cell and spray reads as foam. Rejected: a brute-force search of every edge within 3 cells, at about 50× the reads.
+**D4 — Re-distance by nearest crossing.** Crossings come from the refined lattice, where the field is a true distance up to the cap; three passes spread each cell's nearest crossing to its 26 neighbours; the signed distance is clamped at 4 cells. FLIP's liquid-into-solid rule (`F/particlelevelset.cpp:170`) is kept: a cell centred in a solid within half a cell of the surface reads −½ cell, and edges touching solid carry no crossing, so a submerged wall is not a surface. Rejected: FLIP's upwind reinit from the capped field, because its sign speed outside the cap is about 0.1, so 6–8 passes leave the air side near half a cell and spray reads as foam. Rejected: a brute-force search of every edge within 3 cells, at about 50× the reads.
 
 **D5 — Emission is per tick, from the frame's last tick.** n = T · (int)(rate · Ie · Iwc · TICK · 8/ppc + 0.5) with T the domain clock's ticks this frame and ppc the solver's particles per cell. FLIP's rate is calibrated at 8 markers per cell, so the 8/ppc factor keeps the amount independent of a solver's sampling density. Rejected: emitting inside the tick region, because the lifecycle runs on the CPU between ticks and live cannot stop the GPU for it. **Consequence:** when a frame runs T > 1 ticks (30 fps export), all T ticks' spawns come from the last tick's state; 30 and 60 fps exports agree statistically, not tick for tick.
 
@@ -132,16 +132,16 @@ These are the ports the seam's P10 entry asks this design to name.
 
 ### 3.3 Atoms
 
-Every atom is `fusion_kind: Pointwise` on the codegen path with `BufferGather` inputs, unless marked. Grid atoms run once per whitewater cell (343,000 at 64), particle atoms once per `particles_b` slot, spawn atoms once per spawn slot (C).
+Every atom is `fusion_kind: Pointwise` on the codegen path with `BufferGather` inputs, unless marked. Grid atoms run once per whitewater cell (343,000 at 64), particle atoms once per `particles_b` slot, spawn atoms once per spawn slot (C). Grid atoms take the solid lattice's node counts (`grid_nodes_x/y/z` into `nodes_x/y/z`) and derive the cells (nodes − 1) and the refinement; positions are in grid cells, distances in metres through a `cell_size` input. Their records live in `R/whitewater.rs`: `SurfaceCrossing` (crossing, level; 16 B) and `KnownValue` (value, known; 8 B).
 
 | Atom | Runs over | In → out | Rule |
 |---|---|---|---|
-| `node.surface_crossings` | grid | level set, solid → `Array(Vec4)` | xyz: nearest zero crossing on refined edges inside the cell's footprint (144 edges at s = 3), edges touching solid skipped; none = (1e6, 1e6, 1e6). w: the level set at the cell centre, trilinear |
-| `node.nearest_crossing` | grid | crossings → crossings | the nearest of the cell's and its 26 neighbours' crossings; w kept. Run 3 times |
-| `node.crossing_distance` | grid | crossings, solid → `Array(f32)` | sign(w) · min(distance, 4h); a solid cell with a liquid 6-neighbour reads −0.5h (D4) |
+| `node.surface_crossings` | grid | level set, solid → `Array(SurfaceCrossing)` | crossing: nearest zero crossing on refined edges inside the cell's footprint (144 edges at s = 3), edges touching solid skipped; none = (1e6, 1e6, 1e6). level: the level set at the cell centre, trilinear. A level set that is not a whole refinement of 1 to 4, equal on every axis, is a named refusal |
+| `node.nearest_crossing` | grid | crossings → crossings | the nearest of the cell's and its 26 neighbours' crossings; level kept. Run 3 times |
+| `node.crossing_distance` | grid | crossings, solid → `Array(f32)` | sign(level) · min(distance, 4h); then FLIP's post-process (`F/particlelevelset.cpp:170`): a cell whose centre is in a solid (8-corner mean < 0) with distance under 0.5h reads −0.5h, and \|d\| < 0.005h moves out to ±0.005h (D4) |
 | `node.liquid_cells` | grid | distance, solid → `Array(u32)` | solid if the solid at the centre (8-node mean) < 0, else liquid if distance < 0, else air; then FLIP's shrink: liquid with an air 6-neighbour becomes air (`F/diffuseparticlesimulation.cpp:1609`) |
-| `node.lattice_curvature` | grid | distance → `Array(Vec4)` | x: FLIP's formula (`F/particlelevelset.cpp:728`), clamped ±1/h, on cells where it and its 6 neighbours have \|d\| < 2h, off the border; y: 1 there, else 0 |
-| `node.extend_lattice` | grid | `Vec4` → `Vec4` | one layer of FLIP's extrapolation: an unknown cell with known 6-neighbours takes their mean. Run 3 times |
+| `node.lattice_curvature` | grid | distance → `Array(KnownValue)` | value: FLIP's formula (`F/particlelevelset.cpp:728`), clamped ±1/h, on cells where it and its 6 neighbours have \|d\| < 2h, off the border; known: 1 there, else 0 |
+| `node.extend_lattice` | grid | `KnownValue` → `KnownValue` | one layer of FLIP's extrapolation: an unknown cell with known 6-neighbours takes their mean; border cells are read, never filled. Run 3 times |
 | `node.jitter_particles` | particles | `FluidParticle` → same | position ± 0.25·(1 − 1e-3)·h per axis, uniform (`:1557`) |
 | `node.sample_faces_at_particles` | particles | particles, faces → particles | velocity = FLIP's MAC trilinear (`F/macvelocityfield.h` `evaluateVelocityAtPositionLinear`): out-of-range corners read 0 |
 | `node.energy_potential` | particles | particles → `Array(f32)` | Ie = (clamp(½\|v\|², min, max) − min)/(max − min); 0.1 and 60 by default (`:1768`) |
@@ -296,7 +296,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Entry state:** P1 on the branch; `F/particlelevelset.cpp:196` and `:728` re-read.
 - **Read-back:** D2–D4; section 3.1, 3.3 (grid atoms), 3.7 O1. Restate them.
 - **Deliverables:** `surface_crossings`, `nearest_crossing`, `crossing_distance`, `liquid_cells`, `lattice_curvature`, `extend_lattice` with gpu_tests and fused proofs; `whitewater_common.wgsl`; the `whitewater-oracle` feature with `manifold_fluids_oracle_curvature`; the O1 tests; the grid half of `whitewater_extent_tests.rs`.
-- **Gate:** O1 green; `scripts/gpu_proofs_gate.py` green; `cargo clippy -p manifold-renderer -p manifold-fluids --features manifold-fluids/whitewater-oracle -- -D warnings`. Negative: I8's diff empty.
+- **Gate:** O1 green (`cargo test -p manifold-renderer --features whitewater-oracle --lib -- whitewater_field_tests --test-threads=1`); `scripts/gpu_proofs_gate.py` green; `cargo clippy -p manifold-renderer --tests --features whitewater-oracle -- -D warnings`. Negative: I8's diff empty.
 - **Demo:** none — L1 (fields only; P6 shows them).
 - **Forbidden:** FLIP's reinit on the capped field; a particle-built field; widening an O1 tolerance.
 - **Test scope:** focused renderer and manifold-fluids; GPU proofs.

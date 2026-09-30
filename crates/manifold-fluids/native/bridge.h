@@ -132,6 +132,16 @@ int manifold_fluids_world_whitewater(void *world, ManifoldFluidsWhitewaterPartic
                                      size_t capacity, size_t *count_out);
 const char *manifold_fluids_last_error(void);
 
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+// FLIP's own curvature of a cell-centred level set `phi` (isize·jsize·ksize,
+// x fastest, cell size dx): ParticleLevelSet::calculateCurvatureGrid. Writes
+// the reinitialised field its validity rule reads and the extended curvature.
+// Test oracle only (the whitewater-oracle cargo feature).
+int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t jsize,
+                                     uint32_t ksize, double dx, float *surface_phi_out,
+                                     float *curvature_out);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

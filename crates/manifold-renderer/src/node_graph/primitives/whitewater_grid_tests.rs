@@ -52,7 +52,7 @@ fn refined_level(grid: &Grid, s: u32, rng: &mut Rng) -> Vec<f32> {
         .collect()
 }
 
-fn run<P: Primitive, T: bytemuck::Pod + crate::node_graph::ports::KnownItem>(
+pub(super) fn run<P: Primitive, T: bytemuck::Pod + crate::node_graph::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
     inputs: &[(&'static str, crate::node_graph::bindings::Slot)],

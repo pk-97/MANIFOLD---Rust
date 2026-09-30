@@ -1916,3 +1916,38 @@ extern "C" int manifold_fluids_world_whitewater(void *world,
 extern "C" const char *manifold_fluids_last_error(void) {
     return LAST_ERROR.c_str();
 }
+
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+#include "particlelevelset.h"
+
+extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t jsize,
+                                                uint32_t ksize, double dx,
+                                                float *surface_phi_out, float *curvature_out) {
+    return guarded([&] {
+        if (phi == nullptr || surface_phi_out == nullptr || curvature_out == nullptr) {
+            throw std::invalid_argument("oracle curvature pointers must be non-null");
+        }
+        const uint32_t largest = static_cast<uint32_t>(std::numeric_limits<int>::max());
+        if (isize < 3 || jsize < 3 || ksize < 3 || isize > largest || jsize > largest ||
+            ksize > largest) {
+            throw std::invalid_argument("oracle curvature grid needs 3 or more cells a side");
+        }
+        if (!std::isfinite(dx) || !(dx > 0.0)) {
+            throw std::invalid_argument("oracle curvature cell size must be finite and positive");
+        }
+        const size_t count = checked_product(
+            checked_product(isize, jsize, "oracle curvature grid is too large"), ksize,
+            "oracle curvature grid is too large");
+        const int i = static_cast<int>(isize);
+        const int j = static_cast<int>(jsize);
+        const int k = static_cast<int>(ksize);
+        ParticleLevelSet levelset(i, j, k, dx);
+        std::memcpy(levelset.getPhiGrid()->getRawArray(), phi, count * sizeof(float));
+        Array3d<float> surface_phi(i, j, k, 0.0f);
+        Array3d<float> curvature(i, j, k, 0.0f);
+        levelset.calculateCurvatureGrid(surface_phi, curvature);
+        std::memcpy(surface_phi_out, surface_phi.getRawArray(), count * sizeof(float));
+        std::memcpy(curvature_out, curvature.getRawArray(), count * sizeof(float));
+    });
+}
+#endif

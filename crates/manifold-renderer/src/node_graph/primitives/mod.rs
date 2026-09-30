@@ -371,6 +371,8 @@ mod extend_lattice;
 mod whitewater_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_grid_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_field_tests;
 #[cfg(test)]
 mod whitewater_extent_tests;
 #[cfg(test)]
