@@ -23,7 +23,7 @@ Water that does not squash. A dam of water collapses, sloshes and settles into a
 | `node.sort_particles_into_cells` → `sorted`, `cell_ranges: Array(CellRange)`, `order` | `primitives/sort_particles_into_cells.rs` | main | every particle→grid transfer is a gather over `cell_ranges` |
 | `node.particle_volume` (level set from particles) + GPU surface pipeline | `primitives/particle_volume.rs`, `docs/GPU_FLUID_SURFACE_DESIGN.md` | main | acceptance-demo rendering |
 | `node.running_total` (prefix scan, barriered, exempt class 1) | `primitives/running_total.rs` | main | collar compaction and chart sorting |
-| Substep repeat regions: boundary node + region body run `count` times with per-iteration scalars; never nested | `crates/manifold-renderer/src/node_graph/substeps.rs:1-13` | main | the fixed Krylov pass loop |
+| Substep repeat regions: boundary node + region body run `count` times with per-iteration scalars; nest to depth 2, inner regions clockless (LIQUID_SOLVER_SEAM_DESIGN.md D10, shipped in P5 and P6) | `crates/manifold-renderer/src/node_graph/substeps.rs:1-13` | main | the fixed Krylov pass loop |
 | `GpuFft::new_r2c` / `new_c2c` / `encode` — MPSGraph, 1D, `axes = [0]` | `crates/manifold-gpu/src/metal/fft.rs:86,96,129,217` | main | extended to 3D and batched 2D (MPSGraph takes several axes) |
 | Face-grid (MAC) prototype atoms: `mac_scatter_mass_momentum` (hand kernel, atomics), `mac_apply_gravity` / `mac_pressure_rows` (codegen Source), `mac_pressure_relax` (hand SOR; sweeps unrolled as parity nodes in the preset), `mac_extrapolate`, `mac_gather_advect` (RK3, codegen Pointwise) | branch `wave/live-water` (`8f3cdd23f`), not main | reference for the face layout and RK3 advect; ported, not merged |
 | MPM Dam Break cost probe | `crates/manifold-renderer/tests/gpu_proofs/matter_cost_probe.rs` on `feat/gpu-mpm-build-b` | MPM branch | the race opponent, run unchanged |
@@ -47,7 +47,7 @@ Genuinely new: 3D/batched FFT and the cosine transform, collar classification an
 
 **D7 — Gather-form transfers, no atomics.** Particle→face uses `cell_ranges`: each face reads the particles in its neighbouring cells and sums weights and momentum itself. MPM's scatter-with-atomics P2G is 45 of its 54.5 ms (BUG-u3ov (MPM solver budget)); this path has no atomics by construction. Particles use a PIC/FLIP blend (param `flip`, default 0.95) on the existing `FluidParticle`, so no new record. APIC is deferred.
 
-**D8 — Loop shape.** One simulation step = one copy of the step subgraph. The Krylov passes are the substep region (the pass index is its per-iteration scalar). Steps per frame is fixed at 2 in the preset by two copies of the step subgraph. Rejected: nesting regions (the compiler forbids it and MPM's D7 owns that contract); unrolling 24 passes as nodes (the preset becomes unreadable, which is where `mac_pressure_relax`'s parity-node unroll was already heading).
+**D8 — Loop shape.** One simulation step = one copy of the step subgraph. The Krylov passes are the substep region (the pass index is its per-iteration scalar). Steps per frame is fixed at 2 in the preset by two copies of the step subgraph. Rejected: nesting regions (the compiler forbade it when this was written; LIQUID_SOLVER_SEAM_DESIGN.md D10 amends this and depth-2 nesting is now shipped); unrolling 24 passes as nodes (the preset becomes unreadable, which is where `mac_pressure_relax`'s parity-node unroll was already heading).
 
 **D9 — Exemption classes, named per atom.** 3D FFT, batched 2D FFT: class 1 (multi-pass cross-element transform), one MPSGraph call each. Dot products and norms for Arnoldi: class 1 (barriered reduction). Compaction place and chart sort: class 1 (scan-then-place, precedent `spawn_from_mesh`). Everything else is a barrier-free per-element atom on the codegen path with a CPU-value `gpu_tests` proof: cosine-transform permutation and twiddle, eigenvalue divide, collar source build, collar gather, chart gather-sum and spread, symbol scale, axpy, Givens update, cell classification, face gather, divergence, pressure-gradient update, particle gather and advect.
 
@@ -93,7 +93,7 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 
 ### P1 — The collar solve on saved Dam Break problems
 
-- **Entry state:** P0 landed on the branch. `rg -n "never nested" crates/manifold-renderer/src/node_graph/substeps.rs` still matches. Confirm two sibling regions in one graph compile, with a unit test in `substeps.rs`'s test module. If they don't, stop and escalate: D8 depends on it.
+- **Entry state:** P0 landed on the branch. Regions nest to depth 2 on main (`MAX_REGION_DEPTH` in `crates/manifold-renderer/src/node_graph/substeps.rs`), and sibling regions still compile. Confirm two sibling regions in one graph compile, with a unit test in `substeps.rs`'s test module. If they don't, stop and escalate: D8 depends on it.
 - **Read-back:** findings doc sections "The method" and "Why splashes cost more passes"; `cap3d.py` (`build_charts`, `chart_apply`) and `dambreak_mlx.py` (`charts_setup`, `charts_apply`, `pressure`, the GMRES guards). Restate D3–D6 and D8.
 - **Deliverables:** atoms for step 2's collar flag, step 5, steps 6–7. Preset fragment `fft_water_pressure.json`. Fixture: the seven Dam Break problems from `dambreak_snaps.npz` (frames 0, 15, 30, 45, 60, 90, 120), converted to a binary fixture under `crates/manifold-renderer/tests/fixtures/`. Proof `fft_water_matches_reference`: at 24 passes, the true masked-equation residual per fixture is within 2× of the MLX number.
 - **Gate:** proof passes. Report per fixture: passes, residual, ms per pass, ms per solve. Target 24 passes in under 10 ms at 64³ (MLX: 20.0 ms with the column helper).
@@ -140,7 +140,7 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 | Solid objects inside the water (collar on the solid boundary; the helper divides by \|k\| there) | P4 win |
 | APIC on faces (needs an affine record) | P4 win and a visible PIC/FLIP noise complaint in the P2 demo |
 | Snow, sand and goo coupling through augmented MPM's volumetric split | P4 win and the MPM seam brief |
-| Nested substep regions (steps per frame above 2) | the P2 demo needs more than 2 steps to stay stable |
+| A step-count loop around the step subgraph (steps per frame above 2; the compiler now nests regions to depth 2, LIQUID_SOLVER_SEAM_DESIGN.md D10) | the P2 demo needs more than 2 steps to stay stable |
 | Subcell (ghost-fluid) surface to cut splash passes | P1 misses its pass target on the violent fixtures |
 | NL = 4 sheet-cap aliasing check | P1 residual misses on the fixtures with stacked sheets |
 | Vulkan and large-GPU scaling (dispatch count per pass is the limit there) | the Vulkan backend exists |
