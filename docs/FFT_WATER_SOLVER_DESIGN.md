@@ -2,7 +2,7 @@
 
 <!-- index: Benchmark-gated challenger to the FLIP Fluids CPU engine for water: particles on a face (MAC) grid with pressure solved each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced end to end against the FLIP Fluids engine, solid objects in the water, the active region, then Peter's call. MPM is secondary information; nothing MPM owns is touched. -->
 
-**Status:** APPROVED · 2026-09-30 · P0–P1 built on `feat/fft-water`: the collar solve matches the f64 reference on all seven Dam Break problems, 9.4 ms per solve at 64³ and 51.7 ms at 128³ (24 passes) · P2 dropped by Peter · P3, P3b, P3c, P4 not built · owed: fusing the two cosine pairs, BUG-u8io (fft-water-fusion-param-capacity); the residual bar, BUG-m632 (swash-residual-bar) · race outcome is Peter's call at P4, tracked in BUG-wsim (FFT pressure split research).
+**Status:** APPROVED · 2026-09-30 · P4 decided by Peter: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the density term · owed: the position-only density correction (128³ splash), the race table and clips (record, not gate), BUG-l2h3 (SWASH live-instrument epic) children .1 (mixed-radix lattices) and .2 (collar at its proven bound), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
 **Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record) and the P1 measurements below.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -15,6 +15,8 @@ Peter's decisions, 2026-09-30, not reopened:
 - Whitewater (spray, foam, bubbles) is out of scope here: it is BUG-imy3 (GPU whitewater on the particle-frame seam, solver-agnostic). The P3 demo says which part of any gap to FLIP Fluids is whitewater.
 - Solid objects in the water are a phase before P4 (P3b): his scenes have boxes and obstacles in the water, and the FLIP Fluids engine handles them with fractional solid face weights, so equal-or-better accuracy can't be judged on an empty tank.
 - Skipping empty space is a first-class lever: phase P3c.
+- P4 is decided: SWASH is the water solver. GPU_MPM_SOLVER_DESIGN.md D1 and D2 are reopened for water through LIQUID_SOLVER_SEAM_DESIGN.md. The race table and the three-column clips are still made, as his look check and the record, not as a gate.
+- No hard resolution ceiling: he plays at any size. Safety is the CPU extent proof at every size the scene allows, plus named refusals for what can't run: lengths the FFT can't transform (until mixed radix lands) and device memory.
 
 ## What it is on stage
 
@@ -57,6 +59,7 @@ Genuinely new: 3D/batched FFT and the cosine transform, collar classification an
 **D7 — Gather-form transfers, no atomics.** Particle→face uses `cell_ranges`: each face reads the particles in its neighbouring cells and sums weights and momentum itself. MPM's scatter-with-atomics P2G is 45 of its 54.5 ms (BUG-u3ov (MPM solver budget)); this path has no atomics by construction. Particles use a PIC/FLIP blend (param `flip`, default 0.95) on the existing `FluidParticle`, so no new record. APIC is deferred.
 
 **D8 — Loop shape.** One simulation step = one copy of the step subgraph. The Krylov passes are the substep region (the pass index is its per-iteration scalar). Steps per frame is fixed at 2 in the preset by two copies of the step subgraph. Rejected: nesting regions (the compiler forbids it and MPM's D7 owns that contract); unrolling 24 passes as nodes (the preset becomes unreadable, which is where `mac_pressure_relax`'s parity-node unroll was already heading).
+- Amended by LIQUID_SOLVER_SEAM_DESIGN.md D10 (SWASH's tick loop is a substep region): the tick loop becomes a substep region with the Krylov regions nested inside it, at most two deep, once seam P5 and P6 (nested regions) are built. The two step copies go in seam P7a (SWASH on the contract).
 
 **D9 — Exemption classes, named per atom.** 3D FFT, batched 2D FFT: class 1 (multi-pass cross-element transform), one MPSGraph call each. Dot products and norms for Arnoldi: class 1 (barriered reduction). Compaction place: class 1 (scan-then-place, precedent `spawn_from_mesh`). Everything else is a barrier-free per-element atom on the codegen path with a CPU-value `gpu_tests` proof: cosine-transform permutation and twiddle, eigenvalue divide, collar source build, collar gather, chart gather-sum and spread, symbol scale, axpy, Givens update, cell classification, face gather, divergence, pressure-gradient update, particle gather and advect.
 
@@ -185,6 +188,7 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 
 ### P3b — Solid objects in the water
 
+- **Amended by LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve) and D12 (solids through the shared distance lattice):** body mass goes inside the pressure solve, since FLIP measured 16–24× body energy growth with the body held fixed during the solve; solids come from the shared distance lattice; the analytic box clip below is rejected. P3b starts only after seam P7a (SWASH on the contract) has landed. Where this section and the seam doc disagree, the seam doc wins.
 - **Why here:** Peter's scenes have boxes and obstacles in the water. The FLIP Fluids engine handles them with fractional solid face weights (`pressuresolver.cpp` `_solidBoundaryWeights`: each face carries the fraction of it open to fluid), so equal-or-better accuracy can't be judged on an empty tank. This phase comes before P4.
 - **Entry state:** P3 landed. `rg -n "_solidBoundaryWeights" crates/manifold-fluids/native/flip_engine/pressuresolver.cpp` and `rg -n "pub trait StepCoupling" crates/manifold-physics/src/stepping.rs` still match.
 - **Read-back:** `pressuresolver.cpp` `_calculateMatrixCoefficientsThread`, `_solidBoundaryWeights` and `computeSolidPressureImpulse`; `GPU_MPM_SOLVER_DESIGN.md` D12 and section 5 (the coupling protocol); `stepping.rs` whole; `advance_with_coupling`. Restate D3, the face collar below and I6.
@@ -218,12 +222,10 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 - **Demo:** none — L1, plus the re-run race table.
 - **Forbidden:** a CPU wait for this tick's bounds; reallocating buffers per tick; a dispatch count the CPU hasn't clamped to capacity; dropping the pad or the collar from B′.
 
-### P4 — Peter's call
+### P4 — Decided: SWASH is the water solver (Peter, 2026-09-30)
 
-- **Deliverables:** one page in BUG-wsim (FFT pressure split research) with the P3, P3b and P3c tables and the side-by-side PNGs; a `decision` bead for Peter.
-- **Wins means:** faster than the FLIP Fluids engine end to end, ms per tick at the same resolution, on the Dam Break without and with its obstacle box (P3, P3b), with residual (as Peter settles BUG-m632 (swash-residual-bar)), volume drift and look each equal or better. MPM rows are information only.
-- **If it wins:** a design for moving the water presets from the FLIP Fluids engine to SWASH, and a seam brief against `GPU_MPM_SOLVER_DESIGN.md` reopening D1 and D2 for water, written with the MPM lead. **If it loses:** this doc and the branch go to `docs/archive/` with the numbers.
-- **Demo:** the P3 and P3b side-by-sides.
+- The water presets move from the FLIP Fluids engine to SWASH through LIQUID_SOLVER_SEAM_DESIGN.md, which reopens `GPU_MPM_SOLVER_DESIGN.md` D1 and D2 for water.
+- Still made, as the record and Peter's look check, not as a gate: the P3 race table and three-column clips, and the P3b and P3c tables as those phases land, on one page in BUG-wsim (FFT pressure split research).
 
 ## 6. Decided — do not reopen
 

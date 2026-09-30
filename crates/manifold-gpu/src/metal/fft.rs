@@ -327,4 +327,141 @@ mod tests {
         let err = values.iter().zip(&round_trip).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
         assert!(err < 1e-5, "inverse plan does not return the input: {err}");
     }
+
+    /// Plans past the power-of-two assertion, with every buffer checked on
+    /// the CPU against the plan's byte lengths before anything runs. These
+    /// tests are the ground for relaxing that assertion (BUG-l2h3.1,
+    /// mixed-radix lattices); once relaxed they go through `new_nd`.
+    fn mixed_plans(device: &GpuDevice, shape: &[usize], values: &[f32]) -> (GpuFft, GpuFft, GpuBuffer, GpuBuffer, GpuBuffer) {
+        let axes: Vec<usize> = (0..shape.len()).collect();
+        let forward = build_plan(device.raw_device(), FftKind::RealToHermitean, shape, &axes);
+        let inverse = build_plan(device.raw_device(), FftKind::HermiteanToReal, shape, &axes);
+        let total: usize = shape.iter().product();
+        let last = shape.len() - 1;
+        let half: usize = shape[..last].iter().product::<usize>() * (shape[last] / 2 + 1);
+        assert_eq!(values.len(), total);
+        assert_eq!(forward.input_len_bytes(), (total * 4) as u64);
+        assert_eq!(forward.output_len_bytes(), (half * 8) as u64);
+        assert_eq!(inverse.input_len_bytes(), forward.output_len_bytes());
+        assert_eq!(inverse.output_len_bytes(), (total * 4) as u64);
+        let input = upload(device, values);
+        let spectrum = device.create_buffer_shared(forward.output_len_bytes());
+        let back = device.create_buffer_shared(inverse.output_len_bytes());
+        assert!(input.size >= forward.input_len_bytes() && spectrum.size >= forward.output_len_bytes());
+        assert!(back.size >= inverse.output_len_bytes());
+        (forward, inverse, input, spectrum, back)
+    }
+
+    /// MPSGraph transforms lengths with factors 3, 5 and 7, and a prime on a
+    /// leading axis, matching a direct DFT and round-tripping.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn nd_real_transform_at_mixed_radix_lengths() {
+        let device = GpuDevice::new();
+        for shape in [[7usize, 6, 10], [12, 10, 6], [5, 3, 96]] {
+            let total: usize = shape.iter().product();
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+            let values: Vec<f32> = (0..total)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 40) as f32 / (1u64 << 24) as f32 - 0.5
+                })
+                .collect();
+            let (forward, inverse, input, spectrum, back) = mixed_plans(&device, &shape, &values);
+            let mut enc = device.create_encoder("gpu-fft-mixed-test");
+            forward.encode(&mut enc, &input, &spectrum);
+            inverse.encode(&mut enc, &spectrum, &back);
+            enc.commit_and_wait_completed();
+            let spec = download(&spectrum, forward.output_element_count());
+            let half_x = shape[2] / 2 + 1;
+            let tau = std::f64::consts::TAU;
+            let mut worst = 0.0_f64;
+            for kz in 0..shape[0] {
+                for ky in 0..shape[1] {
+                    for kx in 0..half_x {
+                        let (mut re, mut im) = (0.0_f64, 0.0_f64);
+                        for z in 0..shape[0] {
+                            for y in 0..shape[1] {
+                                for x in 0..shape[2] {
+                                    let phase = -tau
+                                        * ((kz * z) as f64 / shape[0] as f64
+                                            + (ky * y) as f64 / shape[1] as f64
+                                            + (kx * x) as f64 / shape[2] as f64);
+                                    let v = f64::from(values[x + shape[2] * (y + shape[1] * z)]);
+                                    re += v * phase.cos();
+                                    im += v * phase.sin();
+                                }
+                            }
+                        }
+                        let i = 2 * (kx + half_x * (ky + shape[1] * kz));
+                        worst = worst.max((f64::from(spec[i]) - re).abs()).max((f64::from(spec[i + 1]) - im).abs());
+                    }
+                }
+            }
+            let round_trip = download(&back, total);
+            let err = values.iter().zip(&round_trip).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+            eprintln!("FFT {shape:?}: direct DFT error {worst:.2e}, round trip {err:.2e}");
+            assert!(worst < 1e-4, "{shape:?}: half spectrum differs from the direct DFT by {worst}");
+            assert!(err < 1e-5, "{shape:?}: inverse plan does not return the input: {err}");
+        }
+    }
+
+    /// A plane wave at 96³ and 80×112×96 lands on its one bin; the round trip
+    /// returns it. Prints forward-plus-inverse GPU time beside 64³ and 128³.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn nd_real_transform_plane_wave_and_cost_at_lattice_sizes() {
+        let device = GpuDevice::new();
+        for shape in [[64usize, 64, 64], [80, 112, 96], [96, 96, 96], [128, 128, 128]] {
+            let k = [3usize, 5, 7];
+            let total: usize = shape.iter().product();
+            let tau = std::f64::consts::TAU;
+            let mut values = vec![0.0f32; total];
+            for z in 0..shape[0] {
+                for y in 0..shape[1] {
+                    for x in 0..shape[2] {
+                        let phase = tau
+                            * ((k[0] * z) as f64 / shape[0] as f64
+                                + (k[1] * y) as f64 / shape[1] as f64
+                                + (k[2] * x) as f64 / shape[2] as f64);
+                        values[x + shape[2] * (y + shape[1] * z)] = phase.cos() as f32;
+                    }
+                }
+            }
+            let (forward, inverse, input, spectrum, back) = mixed_plans(&device, &shape, &values);
+            let mut enc = device.create_encoder("gpu-fft-plane-wave");
+            forward.encode(&mut enc, &input, &spectrum);
+            inverse.encode(&mut enc, &spectrum, &back);
+            enc.commit_and_wait_completed();
+            let spec = download(&spectrum, forward.output_element_count());
+            let half_x = shape[2] / 2 + 1;
+            let peak = 2 * (k[2] + half_x * (k[1] + shape[1] * k[0]));
+            let expected = total as f32 / 2.0;
+            let mut stray = 0.0f32;
+            for (i, pair) in spec.chunks_exact(2).enumerate() {
+                if 2 * i != peak {
+                    stray = stray.max(pair[0].abs()).max(pair[1].abs());
+                }
+            }
+            let round_trip = download(&back, total);
+            let err = values.iter().zip(&round_trip).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+            let mut ms = Vec::new();
+            for _ in 0..12 {
+                let mut enc = device.create_encoder("gpu-fft-cost");
+                forward.encode(&mut enc, &input, &spectrum);
+                inverse.encode(&mut enc, &spectrum, &back);
+                ms.push(enc.commit_and_wait_completed_timed() * 1000.0);
+            }
+            ms.sort_by(f64::total_cmp);
+            eprintln!(
+                "FFT {shape:?}: peak {:.1} of {expected:.1}, stray {stray:.2e}, round trip {err:.2e}, forward+inverse {:.3} ms median",
+                spec[peak], ms[ms.len() / 2]
+            );
+            assert!((spec[peak] - expected).abs() < expected * 1e-4 && spec[peak + 1].abs() < expected * 1e-4);
+            assert!(stray < expected * 1e-4, "{shape:?}: energy outside the plane wave's bin: {stray}");
+            assert!(err < 1e-4, "{shape:?}: round trip error {err}");
+        }
+    }
 }
