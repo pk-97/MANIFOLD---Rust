@@ -515,6 +515,10 @@ const NON_STANDALONE: &[&str] = &[
     // a generated standalone uniform mirror for its run() path.
     "node.detect_regions",
     "node.track_regions",
+    // Vendor FFT calls (MPSGraph through manifold_gpu::GpuFft): no WGSL
+    // kernel, so no uniform struct at all.
+    "node.fft_3d",
+    "node.inverse_fft_3d",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

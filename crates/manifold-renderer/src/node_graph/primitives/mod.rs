@@ -310,6 +310,13 @@ mod running_total;
 mod shape_particle_blobs;
 mod particle_volume;
 mod smooth_lattice;
+mod cosine_reorder;
+mod cosine_spectrum;
+mod cosine_half_spectrum;
+mod cosine_poisson_divide;
+mod fft_3d;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod swash_tests;
 mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

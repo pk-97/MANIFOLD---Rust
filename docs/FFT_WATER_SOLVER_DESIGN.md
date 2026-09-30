@@ -1,8 +1,8 @@
-# FFT Water Solver — a free-surface pressure solve made of FFTs, raced against MPM water
+# SWASH (Spectral Water via A Surface Helper) — a free-surface pressure solve made of FFTs, raced against MPM water
 
 <!-- index: Benchmark-gated challenger to GPU MLS-MPM water: particles on a face (MAC) grid with pressure solved exactly each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced against the MPM cost probe, a native multigrid baseline, then Peter's call. Touches nothing MPM owns until it wins. -->
 
-**Status:** APPROVED · 2026-09-30 · P0–P4 not built · race outcome is Peter's call at P4, tracked in BUG-wsim (FFT pressure split research).
+**Status:** APPROVED · 2026-09-30 · P0 built on `feat/fft-water` · P1–P4 not built · race outcome is Peter's call at P4, tracked in BUG-wsim (FFT pressure split research).
 **Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record; every number below comes from it).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -85,8 +85,8 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 
 - **Entry state:** `rg -n "axes = nsnumber_array" crates/manifold-gpu/src/metal/fft.rs` still shows the 1D plan at line 217.
 - **Read-back:** this doc sections 1–2; `docs/ADDING_PRIMITIVES.md` whole; `fft.rs` whole; `mlx_dct.py` from the findings artifact (the Makhoul permutation and twiddle, verified against scipy to 1e-7). Restate D9 and the forbidden moves.
-- **Deliverables:** `GpuFft::new_r2c_nd` / `new_c2c_nd` taking a shape and an axis list, with a batched 2D form. Atoms `node.dct_permute`, `node.dct_twiddle`, `node.idct_twiddle`, `node.idct_permute` (codegen Pointwise), `node.fft_nd` (class 1). A `gpu_tests` proof per atom against CPU values, plus a 3D DCT-II round-trip proof and a Poisson box-solve proof (random f, solve, apply the 7-point Laplacian, compare).
-- **Gate:** proofs pass with max relative error under 1e-5. Report: box-solve round-trip time at 64³ and 128³ (MLX: 0.42 ms and 1.30 ms for the FFT alone, with a mirror that doubled the cost).
+- **Deliverables:** `GpuFft::new_nd(device, kind, shape, axes)` with `FftKind::HermiteanToReal` (inverse, scaled by 1/volume). Atoms `node.cosine_reorder` (both directions), `node.cosine_spectrum` (half spectrum → DCT-II, four gathers), `node.cosine_half_spectrum` (DCT-II → half spectrum, eight gathers), `node.cosine_poisson_divide` (codegen); `node.fft_3d`, `node.inverse_fft_3d` (class 1). The 3D cosine transform is one real 3D FFT between a reorder and a twiddle, three dispatches each way. Proofs in `primitives/swash_tests.rs`: DCT-II against a direct f64 reference, round trip, and a box solve checked by applying the walled Laplacian back.
+- **Gate:** proofs pass with max relative error under 1e-5. Report: box-solve time at 64³ and 128³. **Measured (M4 Max, 50 solves in one command buffer): 0.41–0.46 ms at 64³, 1.18–1.29 ms at 128³ for the whole solve** (MLX took 0.42 and 1.30 ms for the FFT round trip alone).
 - **Kill check:** box solve at 64³ over 1.0 ms → stop and escalate to Peter before P1.
 - **Demo:** none — L1.
 - **Forbidden:** a hand WGSL cosine transform; a CPU FFT fallback; the y-mirror trick (it doubles the work).
@@ -95,7 +95,7 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 
 - **Entry state:** P0 landed on the branch. `rg -n "never nested" crates/manifold-renderer/src/node_graph/substeps.rs` still matches. Confirm two sibling regions in one graph compile, with a unit test in `substeps.rs`'s test module. If they don't, stop and escalate: D8 depends on it.
 - **Read-back:** findings doc sections "The method" and "Why splashes cost more passes"; `cap3d.py` (`build_charts`, `chart_apply`) and `dambreak_mlx.py` (`charts_setup`, `charts_apply`, `pressure`, the GMRES guards). Restate D3–D6 and D8.
-- **Deliverables:** atoms for step 2's collar flag, step 5, steps 6–7. Preset fragment `fft_water_pressure.json`. Fixture: the seven Dam Break problems from `dambreak_snaps.npz` (frames 0, 15, 30, 45, 60, 90, 120), converted to a binary fixture under `crates/manifold-renderer/tests/fixtures/`. Proof `fft_water_matches_reference`: at 24 passes, the true masked-equation residual per fixture is within 2× of the MLX number.
+- **Deliverables:** atoms for step 2's collar flag, step 5, steps 6–7. Preset fragment `fft_water_pressure.json`. Fixture: the seven Dam Break problems from `dambreak_snaps.npz` (frames 0, 15, 30, 45, 60, 90, 120), converted to a binary fixture under `crates/manifold-renderer/tests/fixtures/`. Proof `fft_water_matches_reference`: at 24 passes, the true masked-equation residual per fixture is within 2× of the MLX number. Fused-versus-unfused proof for the one fusable pair on the box-solve path (`cosine_spectrum` → `cosine_poisson_divide`), run through the frozen and unfrozen preset.
 - **Gate:** proof passes. Report per fixture: passes, residual, ms per pass, ms per solve. Target 24 passes in under 10 ms at 64³ (MLX: 20.0 ms with the column helper).
 - **Demo:** none — L1.
 - **Forbidden:** full-grid Krylov vectors (D6); a tolerance loop; keeping the column helper "for comparison" in shipped code (the comparison lives in the Python record).

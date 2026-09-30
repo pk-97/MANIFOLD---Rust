@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 318 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 324 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -367,7 +367,7 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (22)
+### Math & Convert (28)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -376,6 +376,12 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | Array Math | `node.array_math` | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
 | Combine XYZW | `node.combine_xyzw` | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
 | Connect Nearest | `node.connect_nearest` | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
+| Cosine Half Spectrum | `node.cosine_half_spectrum` | Map | Starts turning cosine-wave strengths back into a 3D grid. |
+| Cosine Poisson Divide | `node.cosine_poisson_divide` | Map | Solves for pressure in a walled box by dividing each smooth wave by how strongly the box resists it. |
+| Cosine Reorder | `node.cosine_reorder` | Map | Shuffles a 3D grid of numbers into the order a cosine transform needs, or back again. |
+| Cosine Spectrum | `node.cosine_spectrum` | Map | Finishes a 3D cosine transform, turning a grid into the strengths of its smooth wave patterns. |
+| FFT 3D | `node.fft_3d` | Map | Breaks a 3D grid of numbers into the waves it is made of. |
+| Inverse FFT 3D | `node.inverse_fft_3d` | Map | Adds a 3D grid's waves back together into the grid. |
 | Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
