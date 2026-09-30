@@ -95,6 +95,35 @@ pub(crate) fn splash(positions: impl Iterator<Item = [f32; 4]>, floor: f64) -> S
     }
 }
 
+/// The water running up the side walls (within 25 cm of z = ±2): the share
+/// of live particles above 2 m and above 3 m, the highest, the mean vertical
+/// speed of those above 2 m (up positive), and how thick the sheet is above
+/// 2.5 m as distance from its wall (mean and 90th percentile). BUG-h8or (lid
+/// slabs): whether one solver's sheet runs up faster or thicker.
+pub(crate) fn print_side_sheet(label: &str, frame: usize, particles: &[([f32; 4], [f32; 3])], floor: f64) {
+    let near: Vec<(f64, f64, f64)> = particles
+        .iter()
+        .map(|(p, v)| (f64::from(p[1]) - floor, 2.0 - f64::from(p[2]).abs(), f64::from(v[1])))
+        .filter(|&(_, gap, _)| gap < 0.25)
+        .collect();
+    let live = particles.len().max(1) as f64;
+    let above = |y: f64| near.iter().filter(|p| p.0 > y).count() as f64 / live;
+    let high: Vec<&(f64, f64, f64)> = near.iter().filter(|p| p.0 > 2.0).collect();
+    let rising = high.iter().map(|p| p.2).sum::<f64>() / high.len().max(1) as f64;
+    let highest = near.iter().map(|p| p.0).fold(0.0, f64::max);
+    let mut gaps: Vec<f64> = near.iter().filter(|p| p.0 > 2.5).map(|p| p.1).collect();
+    gaps.sort_by(f64::total_cmp);
+    let mean_gap = gaps.iter().sum::<f64>() / gaps.len().max(1) as f64;
+    let p90 = gaps.get(gaps.len() * 9 / 10).copied().unwrap_or(0.0);
+    println!(
+        "{label} sheet frame {frame:3}: above 2 m {:.3}%, above 3 m {:.3}%, highest {highest:.2} m, rising {rising:+.2} m/s, thickness above 2.5 m mean {:.1} p90 {:.1} cm",
+        100.0 * above(2.0),
+        100.0 * above(3.0),
+        100.0 * mean_gap,
+        100.0 * p90
+    );
+}
+
 /// The water within 10 cm of the lid: how many particles, their mean
 /// vertical speed (m/s, up positive), and how full their cells are on the
 /// solver's own grid (particles sharing the cell: 1–2, 3–5, 6–8, 9 or more).
@@ -327,11 +356,17 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         record.motion.push(particle_motion(&particles));
         let pack = swash_packing(&particles, n, h);
         packed.push(pack);
-        if frame % 15 == 14 {
+        let sheet = frame % 5 == 4 && frame < 90;
+        if frame % 15 == 14 || sheet {
             let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| (p.position_radius, p.velocity)).collect();
             let floor = super::swash_preset::DAM_MIN[1];
-            print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
-            print_lid_layer(label, frame, &live, super::swash_preset::DAM_MIN, [n; 3], h, floor);
+            if sheet {
+                print_side_sheet(label, frame, &live, floor);
+            }
+            if frame % 15 == 14 {
+                print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
+                print_lid_layer(label, frame, &live, super::swash_preset::DAM_MIN, [n; 3], h, floor);
+            }
         }
         if frame % 30 == 29 {
             let stats = particle_stats(&particles);
