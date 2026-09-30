@@ -86,9 +86,9 @@ impl Run {
         vertices.chunks_exact(3).map(|t| [0, 1, 2].map(|i| t[i].position)).collect()
     }
 
-    /// The volume the surface mesh encloses with the tank and its area.
+    /// The volume the surface mesh holds in the tank and its free surface's area.
     pub(super) fn surface_measure(&self) -> (f64, f64) {
-        volume_and_area(self.surface().into_iter(), super::swash_preset::DAM_MIN[1])
+        volume_and_area(self.surface().into_iter(), super::swash_preset::DAM_MIN, super::swash_preset::BOX_METRES)
     }
 
     /// The particles' own volume: `REST_PER_CELL` fill a cell.

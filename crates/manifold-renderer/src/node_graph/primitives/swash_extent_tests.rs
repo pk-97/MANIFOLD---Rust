@@ -389,10 +389,7 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
 #[test]
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
-    let all = [64, 96, 128]
-        .into_iter()
-        .flat_map(|n| scenes.map(|at| at(n)))
-        .flat_map(|scene| [scene, scene.with_surface(), scene.with_closed_surface()]);
+    let all = [64, 96, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
     for scene in all {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
@@ -422,7 +419,7 @@ fn fft_water_rendered_scenes_cover_every_dispatch() {
         assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
         let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
-        let corners = scene.with_closed_surface().surface_nodes() as u64;
+        let corners = scene.surface_nodes() as u64;
         let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles(), corners);
         assert!(checked > 150, "checked only {checked} nodes at {n}³");
     }
