@@ -2,7 +2,7 @@
 
 <!-- index: Benchmark-gated challenger to the FLIP Fluids CPU engine for water: particles on a face (MAC) grid with pressure solved each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced end to end against the FLIP Fluids engine, solid objects in the water, the active region, then Peter's call. MPM is secondary information; nothing MPM owns is touched. -->
 
-**Status:** APPROVED · 2026-09-30 · P4 decided 2026-09-30: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the position-only density solve · owed: the quiet race timing, the engine's water measure, the size-ladder table, the clips (record, not gate), BUG-l2h3 (SWASH live-instrument epic) children .1 (mixed-radix lattices), .2 (collar at its proven bound) and .3 (planner reuses no temporaries), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
+**Status:** APPROVED · 2026-09-30 · P4 decided 2026-09-30: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the position-only density solve · owed: the quiet race timing, BUG-h8or (lid slabs), BUG-l2h3 (SWASH live-instrument epic) children .1 (mixed-radix lattices), .2 (collar at its proven bound) and .3 (planner reuses no temporaries), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · P3b waits on LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), which amends D8 and P3b.
 **Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record) and the P1 measurements below.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -200,17 +200,34 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   - A collar past capacity is a named error every frame it lasts (`node.running_total`'s `capacity`: "needs N, holds M"). The collar is at most 6n³/7 (a collar cell is air beside water, and the 7-cell cross tiles space). Sizing to that bound is child .2 (collar at its proven bound) of BUG-l2h3 (SWASH live-instrument epic).
   - I6 covers every power-of-two lattice from 16 to 256, open and closed surface, surface scales 1–3, and the render graph. 512 is out: 176M particles is past `node.liquid_fill`'s 67M ceiling, and it needs 257 GB. Int params are f32, so capacities past 2²⁴ round up (`capacity` in `swash_preset.rs`); at 256³ the solid lattice was one float short before that.
   - Array census for the rendered Dam Break: 0.76, 1.29, 5.5 and 37.7 GB at 32, 64, 128 and 256³ with the shipped surface; 26.4 GB at 256³ with surface scale 1. The planner reuses none of its temporaries in these graphs, which is child .3 (planner reuses no temporaries) of BUG-l2h3 (SWASH live-instrument epic).
+  - Size ladder, the rendered Dam Break through `swash_render_smoke_tests` (GPU ms per frame, 2 steps, median over timestamped frames scaled to the plain frame; contended by other sessions, not the race):
+
+    | Stage | 32³ | 64³ | 128³ |
+    |---|---|---|---|
+    | particles and grid transfers | 0.57 | 3.46 | 29.2 |
+    | pressure solve | 9.84 | 20.9 | 135 |
+    | density solve | 3.84 | 7.96 | 57.2 |
+    | surface | 1.30 | 9.43 | 80.2 |
+    | scene render | 2.54 | 7.43 | 17.1 |
+    | whole frame, p50 | 16.6 | 45.9 | 329 |
+
+    The surface grows fastest, about 8× per doubling; its largest stage is the surface volume, 37 ms at 128³. At 128³ the mesh peaked at 7,012,956 of 8,388,606 vertices (83.6%, BUG-l2h3 child .4 (mesh capacity)). 256³ is refused at build by the runtime's device allowance (75% of the recommended working set, 22.61 GB on a 36 GB M4 Max): 22.70 GB projected at surface scale 1. Child .3's reuse should bring it well under.
+  - The stage split needs every dispatch timed. One Metal timestamp buffer holds 2,048 spans, and the profiler scales spans to the command buffer's total, so a frame past that mis-scales every stage. The sampler chains buffers (at most 32 per process), and the smoke fails by name on any untimed dispatch.
+  - Particles are kept 0.2 cells off the walls (`faces_to_particles::WALL_MARGIN_CELLS`, the FLIP Fluids engine's solid buffer). The walls sit on zero-velocity faces, so a particle held on a wall reads almost no velocity away from it: 0.001 cells off, water that hit the lid hung there (BUG-h8or (lid slabs)).
   - Probes and the render smoke are opt-in: `--features water-race-probes`.
-- **Measured so far.** Accuracy rows below; timing rows wait for a quiet device. Engine: Detail 1, whitewater off, `setMaxThreadCount` 4, 300 frames. SWASH: share 1, 8 density passes, 24 pressure passes; 300 frames at 64³, 150 at 128³.
+- **Measured so far.** Accuracy rows below; timing rows wait for a quiet device. Engine: Detail 1, whitewater off, `setMaxThreadCount` 4. SWASH: share 1, 8 density passes, 24 pressure passes, particles 0.2 cells off the walls. 300 frames each, both measured the same way (`fft_water_cost_probe*`, `fft_water_engine_race*`). The particle packing is the water, binned on each solver's own grid; the closed-surface meshed volume is the surface, which loses thin sheets.
 
   | Row | SWASH 64³ | Engine 64³ | SWASH 128³ | Engine 128³ |
   |---|---|---|---|---|
-  | particles past rest, mid-splash / settled (the water) | 8.4% / 6.3% | owed | 15.9% at frame 29, 8.4% at 89 | owed |
-  | meshed volume, max / last (the surface) | 19.5% / −0.4% | 13.9% / +13.9% | 9.0% / −1.8% | 11.1% / +10.4% |
-  | p99 speed at frame 59 | — | — | 3.94 m/s | 4.73 m/s |
-  | top speed over the run | 11.5 m/s | 12.2 m/s | 14.4 m/s | 17.3 m/s |
-  | settled speed, last 30 frames, p99 | 1.37 m/s | 1.75 m/s | — | — |
-  | ms per tick (contended, not the race) | — | 360 wall | about 260 GPU per frame | 2788 wall |
+  | particles past rest, worst / last 30 frames | 13.2% / 6.8% | 20.6% / 12.6% | 19.2% / 7.3% | 24.0% / 15.0% |
+  | particles missing inside, worst / last 30 frames | 10.3% / 5.5% | 22.2% / 21.6% | 12.0% / 6.7% | 22.8% / 22.5% |
+  | meshed volume, max / last | 2.13% / −0.74% | 13.9% / +13.9% | 8.05% / −0.89% | 11.1% / +10.4% |
+  | divergence left, rms median / max worst | 1.5e-4 / 0.27 /s | not measured | 1.1e-2 / 59 /s | not measured |
+  | top speed over the run | 12.6 m/s | 12.2 m/s | 14.8 m/s | 17.3 m/s |
+  | settled speed p99, last 30 frames | 1.32 m/s | 1.75 m/s | 1.43 m/s | 1.40 m/s |
+  | ms per tick, contended, not the race | 30 GPU step, 41 meshed | 509 wall | 176 GPU step, 254 meshed | 2978 wall |
+
+  The engine's water spreads out: at rest its interior cells are short of the fill's 8 by about a fifth of its particle count, which its mesh reads as volume gained. The three-column look record is `swash_race_clips_64` (SWASH, the engine with whitewater, MPM; one camera, material and tone map; studio floor and obstacle out).
 
 ### P3b — Solid objects in the water
 
