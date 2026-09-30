@@ -606,26 +606,39 @@ fn leftover_windows(scene: WaterScene, label: &str) {
     let (n, h) = (run.n(), scene.pressure.cell_size());
     let end = WINDOWS.iter().map(|(_, w)| w.end).max().expect("windows");
     let mut per_frame = Vec::with_capacity(end);
+    let mut last_collar: Option<Vec<bool>> = None;
     for _ in 0..end {
         let (gpu_ms, _) = run.frame();
-        let steps: Vec<(f64, f64)> = (0..scene.steps)
+        let steps: Vec<[f64; 4]> = (0..scene.steps)
             .map(|step| {
                 let (places, cell) = leftover_by_place(&run.faces(step), &run.water(step), n, h);
                 let cells: usize = places.iter().map(|p| p.cells).sum();
-                ((places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt(), cell.0)
+                let rms = (places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt();
+                // The share of this step's collar cells that were not collar
+                // cells the step before: the carry has nothing for them.
+                let collar = run.collar_cells(step);
+                let count = collar.iter().filter(|c| **c).count();
+                let new = last_collar
+                    .as_ref()
+                    .map_or(count, |last| collar.iter().zip(last).filter(|(now, before)| **now && !**before).count());
+                last_collar = Some(collar);
+                [rms, cell.0, f64::from(run.pressure_beta(step)), new as f64 / count.max(1) as f64]
             })
             .collect();
         per_frame.push((gpu_ms, steps));
     }
     for (name, window) in WINDOWS {
         let frames = &per_frame[window];
-        let rms: Vec<f64> = frames.iter().flat_map(|(_, s)| s.iter().map(|r| r.0)).collect();
-        let cell = frames.iter().flat_map(|(_, s)| s.iter().map(|r| r.1)).fold(0.0, f64::max);
+        let column = |i: usize| -> Vec<f64> { frames.iter().flat_map(|(_, s)| s.iter().map(move |r| r[i])).collect() };
+        let rms = column(0);
+        let cell = column(1).into_iter().fold(0.0, f64::max);
         let gpu: Vec<f64> = frames.iter().map(|f| f.0).collect();
         println!(
-            "{label} {name}: rms median {:.2e} worst {:.2e}, worst cell {cell:.2e} /s, GPU {:.1} ms/frame",
+            "{label} {name}: rms median {:.2e} worst {:.2e}, worst cell {cell:.2e} /s, |b| median {:.2e}, new collar cells {:.1}%, GPU {:.1} ms/frame",
             median(&rms),
             worst(&rms),
+            median(&column(2)),
+            100.0 * median(&column(3)),
             median(&gpu)
         );
     }
@@ -647,7 +660,7 @@ fn fft_water_warm_leftover_64() {
 #[test]
 fn fft_water_warm_leftover_128() {
     leftover_windows(WaterScene::dam_break(128).with_passes(48), "WARM cold 48 128³");
-    for passes in [16, 24, 32, 48] {
+    for passes in [32, 40, 48] {
         leftover_windows(WaterScene::dam_break(128).with_warm().with_passes(passes), &format!("WARM warm {passes} 128³"));
     }
 }

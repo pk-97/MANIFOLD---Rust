@@ -59,7 +59,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "gravity", "project", "collar_total"] {
+            for name in ["water", "gravity", "project", "collar_total", "beta"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -179,6 +179,19 @@ impl Run {
     pub(super) fn collar(&self, step: usize) -> u32 {
         let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
         *total.last().expect("a lattice")
+    }
+
+    /// Which cells are collar cells at `step`: where the running total steps up.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn collar_cells(&self, step: usize) -> Vec<bool> {
+        let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
+        (0..total.len()).map(|c| total[c] > if c == 0 { 0 } else { total[c - 1] }).collect()
+    }
+
+    /// |b| of the pressure solve at `step`: the start residual its passes reduce.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn pressure_beta(&self, step: usize) -> f32 {
+        self.read::<f32>(&format!("s{step}.beta"), "out", 1)[0]
     }
 }
 

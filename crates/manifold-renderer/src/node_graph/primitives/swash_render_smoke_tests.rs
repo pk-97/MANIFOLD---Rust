@@ -48,7 +48,7 @@ const PROFILE_EVERY: usize = 25;
 const STILLS: [usize; 4] = [90, 240, 600, 900];
 
 /// Stages in the order the table prints them.
-const STAGES: [&str; 23] = [
+const STAGES: [&str; 24] = [
     "fill + particle state",
     "particle sort",
     "classify cells",
@@ -57,6 +57,7 @@ const STAGES: [&str; 23] = [
     "extrapolation",
     "divergence",
     "solve setup (collar, charts, rhs box)",
+    "solve warm start (guess, carry)",
     "solve helper (passes)",
     "solve box (passes)",
     "solve Krylov (passes)",
@@ -95,11 +96,12 @@ fn stage(name: &str) -> &'static str {
             "h1" | "w1" | "h2" | "w2" | "norm" | "next" | "givens" | "krylov" => "solve Krylov (passes)",
             l if l.starts_with("final_helper_") || l.starts_with("final_box_") => "solve finish (λ, final box, p)",
             "final_source" | "y" | "u" | "pressure" => "solve finish (λ, final box, p)",
+            "guess_sum" | "guess" | "guess_source" | "guess_rest" | "carry" => "solve warm start (guess, carry)",
             _ => "solve setup (collar, charts, rhs box)",
         };
     }
     match name {
-        "fill" | "state" => "fill + particle state",
+        "fill" | "state" | "pressure_carry" | "density_carry" => "fill + particle state",
         "scene" => "scene render",
         "filmic_display" => "tone map + other",
         n if n.ends_with("liquid_sort") => "surface sort",

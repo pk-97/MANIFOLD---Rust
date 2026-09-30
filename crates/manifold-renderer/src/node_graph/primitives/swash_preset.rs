@@ -20,7 +20,7 @@ pub(super) const TREND_PASSES: [usize; 4] = [12, 16, 24, 32];
 
 /// Pass counts the warm-start probe runs at 64³ and 128³; the CPU size proof
 /// covers each.
-pub(super) const WARM_PROBE_PASSES: [usize; 6] = [8, 12, 16, 24, 32, 48];
+pub(super) const WARM_PROBE_PASSES: [usize; 7] = [8, 12, 16, 24, 32, 40, 48];
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PressureShape {

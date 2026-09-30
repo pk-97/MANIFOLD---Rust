@@ -161,8 +161,11 @@ so the dispatch writes the multiplied range (reflect_array's 2x mirror,
 analytic_echo_instances' 8x echo stride — BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity));
 the fresh `dst` is sized to the
 same expression via the `// @fused_output_capacity:` marker on the kernel.
-Undeclared/non-expressible capacities (conditional, max-selector) refuse the
-region — fail closed to unfused. And a
+Undeclared/non-expressible capacities (conditional, max-selector, one-input
+selector) refuse the region — fail closed to unfused. The probe runs twice,
+ascending and descending synthetics per slot, so a selector cannot pass as
+`MinInputs` by holding the smallest one (`node.collar_source`, sized by
+`total` alone, is the case it caught). And a
 gathered slot can never be an in-place alias (read-write race within one
 dispatch); the same refusal covers a widened region writing in place over a
 shorter loop buffer. **Derived uniforms, ANY declared
