@@ -22,6 +22,7 @@ use crate::node_graph::content_revision::{ContentVersion, StorageRevision};
 use crate::node_graph::light::Light;
 use crate::node_graph::material::Material;
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::ports::ArrayType;
 use crate::node_graph::atmosphere::Atmosphere;
 use crate::node_graph::render_mode::RenderMode;
 use crate::node_graph::physics::RigidBody;
@@ -77,6 +78,10 @@ pub struct NodeInputs<'a> {
     /// Missing and pending content remain `None` so consumers cannot invent
     /// a stable zero revision for unavailable bytes.
     content_versions: &'a [Option<ContentVersion>],
+    /// The producer's layout of each wired Array input, per port. A
+    /// `Channels[permissive]` port accepts any signature, so its node reads
+    /// named channels from this. Empty on test-constructed inputs.
+    array_layouts: &'a [(&'static str, ArrayType)],
 }
 
 impl<'a> NodeInputs<'a> {
@@ -93,7 +98,20 @@ impl<'a> NodeInputs<'a> {
             pending: &[],
             mesh_revisions: &[],
             content_versions: &[],
+            array_layouts: &[],
         }
+    }
+
+    /// Thread each wired Array input's producer layout through.
+    pub(crate) fn with_array_layouts(mut self, array_layouts: &'a [(&'static str, ArrayType)]) -> Self {
+        self.array_layouts = array_layouts;
+        self
+    }
+
+    /// The producer's layout of the named Array input, or `None` if the port
+    /// is unwired or the caller supplied no layouts.
+    pub fn array_layout(&self, port: &str) -> Option<ArrayType> {
+        self.array_layouts.iter().find(|(name, _)| *name == port).map(|&(_, layout)| layout)
     }
 
     /// Executor-only: thread the content-availability flags through.

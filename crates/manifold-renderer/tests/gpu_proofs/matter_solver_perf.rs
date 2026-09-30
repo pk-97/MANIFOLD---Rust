@@ -49,7 +49,6 @@ fn family(label: &str) -> &'static str {
         "node.grid_to_matter" => "G2P",
         l if l.starts_with("node.matter_stats") => "stats",
         "node.matter_frame" => "frame",
-        "node.matter_to_particles" => "as particles",
         l if l.starts_with("node.sort_particles_into_cells") || l.starts_with("prefix_scan") => "sort",
         _ => "other",
     }
@@ -118,7 +117,7 @@ fn print(name: &str, report: &Report) {
         .drift
         .map_or("-".to_string(), |tile| format!("left tile {tile:.4}"));
     eprintln!(
-        "  {name}: {} points, n {} | p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms (budget {BUDGET_MS} ms) | {ns:.2} ns/point-substep | {drift} | {} dispatches | clear {:.2} as particles {:.2} sort {:.2} P2G {:.2} grid {:.2} G2P {:.2} stats {:.2} frame {:.2} other {:.2} (profiled means)",
+        "  {name}: {} points, n {} | p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms (budget {BUDGET_MS} ms) | {ns:.2} ns/point-substep | {drift} | {} dispatches | clear {:.2} sort {:.2} P2G {:.2} grid {:.2} G2P {:.2} stats {:.2} frame {:.2} other {:.2} (profiled means)",
         report.points,
         report.substeps,
         percentile(&report.frame_ms, 0.5),
@@ -126,7 +125,6 @@ fn print(name: &str, report: &Report) {
         report.frame_ms.last().copied().unwrap_or(0.0),
         report.dispatches,
         k("clear"),
-        k("as particles"),
         k("sort"),
         k("P2G"),
         k("grid update"),

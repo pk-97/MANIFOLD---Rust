@@ -1099,6 +1099,8 @@ Subtle implication: a primitive author adding a new channel to a typed family mu
 
 **Mitigation:** the allow-list is a `pub const PERMISSIVE_PRIMITIVE_ALLOWLIST: &[PrimitiveTypeId]` in `validation.rs`, and a CI test enumerates every primitive declaring Permissive on a port and asserts the primitive's `TYPE_ID` appears in that const. The const IS the canonical list — primitives can't sneak Permissive in without editing one specific, code-reviewed file. The test enforces the const, the const is human-readable next to the validator code that consumes it, and reviewers see Permissive additions as `pub const` diffs in the file that defines the rule.
 
+**Keyed readers (2026-09-30).** A second allowed kind: a primitive that reads a few named channels from whatever record flows in and never republishes the input's records under another type. It reads the producer's layout through `NodeInputs::array_layout` and finds each channel with `ports::std430_channel`; a missing channel is a named error at run time. Today's one is `node.sort_particles_into_cells` (position and liveness), so the matter solver sorts its own points without a converted copy each tick.
+
 ### 11.5 The compile-time-vs-runtime layout calculator
 
 **Risk:** I committed in section 4.4 to allowing either const-fn or runtime layout calculation. If the implementer goes runtime, lazy `OnceLock<ArrayType>` initialization adds a synchronization point on every primitive's first port type access. Compounded across hundreds of primitives, this could measurably slow chain build time.

@@ -38,7 +38,7 @@ pub(super) fn read_lattice(ctx: &EffectNodeContext<'_, '_>) -> MatterLattice {
 mod tests {
     const P2G: &str = include_str!("shaders/matter_to_grid.wgsl");
     const G2P: &str = include_str!("shaders/grid_to_matter_body.wgsl");
-    const M2P: &str = include_str!("shaders/matter_to_particles_body.wgsl");
+    const SORT: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
 
     /// The text of `fn <prefix>_<name>` (or `fn <name>` for the hand kernel's
     /// own module) up to its closing brace, with the prefix removed.
@@ -57,7 +57,7 @@ mod tests {
     fn matter_finite_helpers_are_identical() {
         let p2g = helper(P2G, "", "finite3");
         assert_eq!(p2g, helper(G2P, "g2m", "finite3"));
-        assert_eq!(p2g, helper(M2P, "m2p", "finite3"));
+        assert_eq!(p2g, helper(SORT, "", "finite3"));
     }
 
     #[test]

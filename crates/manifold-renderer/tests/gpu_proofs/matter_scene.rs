@@ -171,9 +171,7 @@ impl MatterScene {
         wire(&mut graph, (state, "substep_in_tick"), (p2g, "substep_in_tick"));
         let sort_node = settings.block_p2g.then(|| add(&mut graph, "node.sort_particles_into_cells"));
         if let Some(sort) = sort_node {
-            let m2p = add(&mut graph, "node.matter_to_particles");
-            wire(&mut graph, (state, "out"), (m2p, "points"));
-            wire(&mut graph, (m2p, "particles"), (sort, "particles"));
+            wire(&mut graph, (state, "out"), (sort, "particles"));
             wire(&mut graph, (fill, "count"), (sort, "count"));
             // Sort once per tick; later substeps reuse its order and ranges.
             wire(&mut graph, (state, "tick_start"), (sort, "enabled"));

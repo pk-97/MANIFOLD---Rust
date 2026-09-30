@@ -24,6 +24,7 @@ use crate::node_graph::execution_plan::{CompiledMeshRevisionRule, ExecutionPlan,
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevision};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::ports::{ArrayType, PortType};
 use crate::node_graph::physics::PhysicsAuthoredSampleScope;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
 
@@ -145,6 +146,8 @@ pub struct Executor {
     /// Scratch buffer reused across steps to avoid per-step allocation.
     /// (Per-frame allocation in tight loops is forbidden by CLAUDE.md.)
     input_scratch: Vec<(&'static str, Slot)>,
+    /// The producer layout of each bound Array input, beside `input_scratch`.
+    input_layout_scratch: Vec<(&'static str, ArrayType)>,
     output_scratch: Vec<(&'static str, Slot)>,
     growing_arrays: Vec<bool>,
     array_capacity_scratch: Vec<(&'static str, u32)>,
@@ -542,6 +545,7 @@ impl Executor {
         Self {
             backend,
             input_scratch: Vec::new(),
+            input_layout_scratch: Vec::new(),
             output_scratch: Vec::new(),
             growing_arrays: Vec::new(),
             array_capacity_scratch: Vec::with_capacity(8),
@@ -1899,12 +1903,7 @@ impl Executor {
             // a pruned input because the live-set walk only prunes
             // mux branches (the unselected `in_K`s on the mux's own
             // input list).
-            self.input_scratch.clear();
-            for &(port_name, res_id) in &step.inputs {
-                if let Some(slot) = self.backend.slot_for(res_id) {
-                    self.input_scratch.push((port_name, slot));
-                }
-            }
+            self.bind_step_inputs(plan, step);
 
             // 3. Evaluate (or skip-passthrough alias). The context holds
             // an immutable backend ref for typed accessor resolution and
@@ -2170,7 +2169,8 @@ impl Executor {
                         let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
                             .with_pending(&self.slot_pending)
                             .with_mesh_revisions(&self.slot_mesh_revisions)
-                            .with_content_versions(&self.slot_content_versions);
+                            .with_content_versions(&self.slot_content_versions)
+                            .with_array_layouts(&self.input_layout_scratch);
                         let outputs = NodeOutputs::new(
                             &self.output_scratch,
                             backend_ref,
@@ -2546,6 +2546,21 @@ impl Executor {
     /// inputs and writes state or persistent outputs, never a pooled slot.
     /// Typed writes drain exactly as after `evaluate`: a boundary's accept
     /// may land a scalar on its persistent state port.
+    /// The step's bound input slots, and the producer layout of each bound
+    /// Array input.
+    fn bind_step_inputs(&mut self, plan: &ExecutionPlan, step: &ExecutionStep) {
+        self.input_scratch.clear();
+        self.input_layout_scratch.clear();
+        for &(port_name, res_id) in &step.inputs {
+            if let Some(slot) = self.backend.slot_for(res_id) {
+                self.input_scratch.push((port_name, slot));
+                if let Some(PortType::Array(layout)) = plan.resource_type(res_id) {
+                    self.input_layout_scratch.push((port_name, layout));
+                }
+            }
+        }
+    }
+
     fn capture_step(
         &mut self,
         graph: &mut Graph,
@@ -2577,12 +2592,7 @@ impl Executor {
             // backed by persistent resources whose slots stay bound
             // across the frame, so the same slot the main pass saw is
             // still live and now holds the producer's frame-N write.
-            self.input_scratch.clear();
-            for &(port_name, res_id) in &step.inputs {
-                if let Some(slot) = self.backend.slot_for(res_id) {
-                    self.input_scratch.push((port_name, slot));
-                }
-            }
+            self.bind_step_inputs(plan, step);
             // Output scratch carries ONLY this node's PERSISTENT outputs —
             // those slots are never pool-released, so a late_capture write
             // (feedback's direct state landing: swap for same-format,
@@ -2613,7 +2623,8 @@ impl Executor {
                 let inputs = NodeInputs::new(&self.input_scratch, backend_ref, &self.slot_generations)
                     .with_pending(&self.slot_pending)
                     .with_mesh_revisions(&self.slot_mesh_revisions)
-                    .with_content_versions(&self.slot_content_versions);
+                    .with_content_versions(&self.slot_content_versions)
+                    .with_array_layouts(&self.input_layout_scratch);
                 let outputs = NodeOutputs::new(
                     &self.output_scratch,
                     backend_ref,

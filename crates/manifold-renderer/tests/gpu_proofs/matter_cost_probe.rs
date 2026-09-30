@@ -25,9 +25,7 @@ fn family(label: &str) -> &'static str {
         l if l.starts_with("node.matter_stats") => "stats",
         "node.matter_frame" => "frame",
         "node.matter_fill" => "fill",
-        l if l == "node.matter_to_particles"
-            || l.starts_with("node.sort_particles_into_cells")
-            || l.starts_with("prefix_scan") => "sort",
+        l if l.starts_with("node.sort_particles_into_cells") || l.starts_with("prefix_scan") => "sort",
         _ => "other",
     }
 }

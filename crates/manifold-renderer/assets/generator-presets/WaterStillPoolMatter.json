@@ -948,12 +948,6 @@
             "typeId": "system.group_output"
           },
           {
-            "id": 11,
-            "typeId": "node.matter_to_particles",
-            "handle": "Points As Particles",
-            "nodeId": "matter_points_as_particles"
-          },
-          {
             "id": 12,
             "typeId": "node.sort_particles_into_cells",
             "handle": "Sort Into Blocks",
@@ -1564,12 +1558,6 @@
           {
             "fromNode": 3,
             "fromPort": "out",
-            "toNode": 11,
-            "toPort": "points"
-          },
-          {
-            "fromNode": 11,
-            "fromPort": "particles",
             "toNode": 12,
             "toPort": "particles"
           },

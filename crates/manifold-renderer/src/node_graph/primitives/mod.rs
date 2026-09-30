@@ -196,7 +196,6 @@ mod matter_solid_distance;
 mod matter_state;
 mod matter_stats;
 mod matter_to_grid;
-mod matter_to_particles;
 mod particles_to_copies;
 mod zero_array;
 mod unlit_material;
@@ -518,7 +517,6 @@ pub use matter_solid_distance::MatterSolidDistance;
 pub use matter_state::{MATTER_STATE_PORTS, MatterState};
 pub use matter_stats::MatterStats;
 pub use matter_to_grid::MatterToGrid;
-pub use matter_to_particles::MatterToParticles;
 pub use particles_to_copies::ParticlesToCopies;
 pub use zero_array::ZeroArray;
 pub use melt_mesh::MeltMesh;
@@ -879,7 +877,9 @@ mod tests {
     /// scratch state). Allowed for `node.wgsl_compute*` (the wire
     /// shape derives from user WGSL via naga — `_pad*` fields skip,
     /// matrices and runtime arrays fall back to empty specs) and the
-    /// `node.__smoke_test_*` fixtures. Anywhere else it's a CI
+    /// `node.__smoke_test_*` fixtures. A `Channels[permissive]` port has
+    /// no fixed signature by design; the Permissive allow-list test in
+    /// `validation.rs` is its gate. Anywhere else it's a CI
     /// failure pointing at a missing `KnownItem::SPECS` or a missing
     /// inline `Channels[…]` declaration.
     ///
@@ -908,6 +908,7 @@ mod tests {
             let mut check_port = |kind_label: &str, port_name: &str, ty: &PortType| {
                 if let PortType::Array(layout) = ty
                     && layout.specs.is_empty()
+                    && layout.match_mode != super::super::ports::MatchMode::Permissive
                 {
                     violations.push(format!(
                         "{type_id}: {kind_label} `{port_name}` is Array<…> \

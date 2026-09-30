@@ -481,6 +481,21 @@ pub const fn std430_stride_and_align(specs: &[ChannelSpec]) -> (u32, u32) {
     (stride, max_align)
 }
 
+/// The std430 byte offset and type of the channel named `name`, or `None`
+/// when the signature has no such channel. Allocates nothing, so a node can
+/// call it every frame on its input's layout.
+pub fn std430_channel(specs: &[ChannelSpec], name: ChannelName) -> Option<(u32, ChannelElementType)> {
+    let mut offset: u32 = 0;
+    for spec in specs {
+        offset = round_up_align(offset, spec.ty.alignment());
+        if spec.name == name {
+            return Some((offset, spec.ty));
+        }
+        offset += spec.ty.size();
+    }
+    None
+}
+
 const fn round_up_align(value: u32, align: u32) -> u32 {
     (value + align - 1) & !(align - 1)
 }

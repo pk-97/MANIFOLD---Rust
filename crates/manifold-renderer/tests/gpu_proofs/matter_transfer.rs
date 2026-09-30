@@ -105,7 +105,7 @@ impl Chain {
     }
 
     /// With `sort_source`, P2G takes the block path: the source points go
-    /// through node.matter_to_particles and node.sort_particles_into_cells
+    /// through node.sort_particles_into_cells
     /// into the lattice's D6 block bins, and P2G reads `order` and `ranges`.
     /// A source other than `points` leaves points outside their sorted block.
     pub(crate) fn build(
@@ -127,10 +127,8 @@ impl Chain {
         let g2p = add(&mut graph, "node.grid_to_matter");
         let src_sort = sort_source.map(|source| {
             let src = graph.add_node(Box::new(HostArray::new::<MatterPoint>(source.len() as u32)));
-            let m2p = add(&mut graph, "node.matter_to_particles");
             let sort = add(&mut graph, "node.sort_particles_into_cells");
-            graph.connect((src, "out"), (m2p, "points")).unwrap();
-            graph.connect((m2p, "particles"), (sort, "particles")).unwrap();
+            graph.connect((src, "out"), (sort, "particles")).unwrap();
             graph.connect((sort, "order"), (p2g, "order")).unwrap();
             graph.connect((sort, "cell_ranges"), (p2g, "ranges")).unwrap();
             let (centre, size, bin) = lat.block_sort_box();

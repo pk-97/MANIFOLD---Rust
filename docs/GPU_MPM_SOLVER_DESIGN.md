@@ -1170,8 +1170,7 @@ at the end of the phase.
     now BUG-1ois (atomic scatter atoms declare Blocked). Fused codegen does not
     namespace member helpers, so shared helpers are duplicated with an atom prefix.
   - Built since: `particles_to_copies` (moved here from the surface design's deferred
-    P3) and `matter_to_particles` (index-keeping records for D6's sort), each with
-    value and fused proofs; `WaterDamBreakMatter.json` and `WaterStillPoolMatter.json` on
+    P3), with value and fused proofs; `WaterDamBreakMatter.json` and `WaterStillPoolMatter.json` on
     the Live Matter group (the moving box and whitewater wait for P2a and P6; the pool
     rounds to whole cells); `matter::look` and the gates in
     `tests/gpu_proofs/matter_look.rs`; helper-copy source tests.
@@ -1215,8 +1214,9 @@ at the end of the phase.
     global atomics, or, with `order`/`ranges`, one workgroup per 4³ block of stencil base
     nodes into a 6³-node workgroup tile. One call into the contribution code serves both
     modes; two entry points differed in 5 of 1370 words under fast math.
-    `node.matter_to_particles` feeds the surface's `node.sort_particles_into_cells`, boxed
-    by `node.matter_domain`'s block bins. `matter_block_p2g_bit_identical` passes with
+    `node.matter_state`'s points feed the surface's `node.sort_particles_into_cells`
+    directly (its particles port reads position and liveness by channel name from the
+    producer's layout), boxed by `node.matter_domain`'s block bins. `matter_block_p2g_bit_identical` passes with
     points in and out of their sorted blocks. The sort runs once per tick (its `enabled`
     input takes `tick_start`), and the Live Matter group and both presets take the block
     path. `matter_block_path_matches_per_point` runs 120 ticks of the small dam break on
@@ -1260,10 +1260,9 @@ at the end of the phase.
 
     Per-point P2G at 513,152, Stiffness 1: p95 65.2 ms. 128³ at 30 Hz (4.2M points, 68
     substeps a frame): p95 1140 ms. D20's 6 ms is missed at every point; the miss carries
-    to P4. `node.matter_to_particles` runs every substep over the whole point capacity
-    though only the tick-start sort reads it: 6.5 ms of the 37.1 at 513k. Gating it needs
-    a decision, because it is a fusable pointwise atom:
-    BUG-0pmv (matter_to_particles runs every substep; gate it to the tick-start sort).
+    to P4. The 6.5 ms of the 37.1 at 513k that a per-substep MatterPoint → particle
+    conversion cost is gone: the sort reads matter points directly, and the conversion
+    atom is deleted (BUG-0pmv (matter_to_particles runs every substep)).
 
 ### P2a — Colliders
 
@@ -1302,11 +1301,14 @@ at the end of the phase.
   - `examples/fluid_capture.rs` treats `PendingGeometry` as unfinished preparation during
     warm-up and a failure in the measured frames, per `FrameRenderStatus`: role distance
     lattices build on a worker (D25).
-  - BUG-0pmv (matter_to_particles runs every substep) is not fixable as the lead ruled it:
-    a region body is every node downstream of the boundary and upstream of the capture
-    (`node_graph/substeps.rs` module doc and `fn region_body`), and
-    `node.matter_to_particles` reads the per-tick state and feeds sort → P2G → capture.
-    The boundary runs once a frame, not once a tick, and regions do not nest.
+  - BUG-0pmv (matter_to_particles runs every substep): the one cell sort reads any record
+    with `position_radius`, or `position` and `id`, through the producer's layout
+    (`Channels[permissive]`, allow-listed per
+    CHANNEL_TYPE_SYSTEM.md section 11.4 (Per-port match-mode discipline));
+    `matter_state.out` wires straight in and `node.matter_to_particles` is deleted. The
+    surface still converts once a frame at `node.matter_frame`.
+    `fluid_sort_particles_into_cells_sorts_matter_points_in_place` proves byte-identical
+    ranges and order against the equivalent particle records.
 
 ### P2b — Two-way Box3D coupling
 

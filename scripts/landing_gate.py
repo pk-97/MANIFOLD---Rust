@@ -46,8 +46,8 @@ GPU_PROOFS_SCOPE = [
         (["freeze::"], []),
     ),
     # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs
-    # in. particles_to_copies and matter_to_particles keep their proofs in the
-    # lib binary, which a scoped run skips, so they stay uncovered (FULL).
+    # in. particles_to_copies and the cell sort keep their proofs in the lib
+    # binary, which a scoped run skips, so they stay uncovered (FULL).
     (
         (
             "crates/manifold-renderer/src/node_graph/matter.rs",
