@@ -11,7 +11,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::display_blend;
 use crate::node_graph::fluid_particles::FluidParticle;
-use crate::node_graph::matter::{MatterLattice, MatterPoint, PADDING_NODES};
+use crate::node_graph::matter::{MatterLattice, MatterPoint, PADDING_NODES, solid_bytes};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::matter_common::read_lattice;
@@ -159,6 +159,7 @@ impl Primitive for MatterFrame {
             ],
             closed_faces,
         );
+        let mut solid_refused = None;
         let gpu = ctx.gpu_encoder();
         if self.solid_key != Some(solid_key) {
             let distances = wall_distance_lattice(&lattice, closed_faces);
@@ -211,13 +212,23 @@ impl Primitive for MatterFrame {
             if let Some(solid_in) = solid_in {
                 // Each tick's solid lattice sits beside its frame, so A and B
                 // each carry the bodies where their particles were.
-                let bytes = u64::from(lattice.node_count()) * 4;
+                let bytes = solid_bytes(lattice.nodes);
                 let fresh = self.solid_slots.len() < RING || self.solid_slots.iter().any(|s| s.size < bytes);
                 if fresh {
-                    self.solid_slots = (0..RING).map(|_| gpu.device.create_buffer_shared(bytes.max(4))).collect();
+                    // A ring the device cannot give leaves none: this node
+                    // names it, and the surface atoms draw nothing without it.
+                    self.solid_slots = (0..RING)
+                        .map(|_| gpu.device.try_create_buffer_shared(bytes.max(4)))
+                        .collect::<Result<_, _>>()
+                        .unwrap_or_else(|error| {
+                            solid_refused = Some(format!(
+                                "Matter Frame: the solid lattice needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                            ));
+                            Vec::new()
+                        });
                 }
                 let bytes = bytes.min(solid_in.size);
-                let targets = if fresh { 0..RING } else { write..write + 1 };
+                let targets = if fresh { 0..self.solid_slots.len() } else { write..write + 1 };
                 for slot in targets {
                     gpu.native_enc.copy_buffer_to_buffer(solid_in, &self.solid_slots[slot], bytes);
                 }
@@ -250,6 +261,9 @@ impl Primitive for MatterFrame {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", lattice.bounds());
+        if let Some(error) = solid_refused {
+            ctx.error(error);
+        }
     }
 }
 

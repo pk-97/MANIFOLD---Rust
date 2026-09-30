@@ -328,6 +328,8 @@ mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
+#[cfg(test)]
+mod matter_extent_tests;
 mod transform_shake;
 mod scene_object;
 mod revolve_curve;

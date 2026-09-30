@@ -8,7 +8,9 @@
 //
 // ABI (buffer standalone codegen): `sorted` (FluidParticle → Element) and
 // `cell_ranges` (CellRange → Element2) are gathered through `buf_sorted` /
-// `buf_cell_ranges`; the output FluidBlob is Element3.
+// `buf_cell_ranges`; the output FluidBlob is Element3. The bin grid is the
+// sort's (`bins_x/y/z`), never ceil(size / cell_size) again: fast-math
+// division can land one bin past the ranges the sort wrote.
 
 struct SpbEigen {
     values: vec3<f32>,
@@ -53,10 +55,6 @@ fn spb_eigen(covariance: mat3x3<f32>) -> SpbEigen {
     return SpbEigen(vec3<f32>(a[0][0], a[1][1], a[2][2]), v);
 }
 
-fn spb_bins(size: vec3<f32>, cell_size: f32) -> vec3<i32> {
-    return max(vec3<i32>(1), vec3<i32>(ceil(size / cell_size)));
-}
-
 fn body(
     idx: u32,
     count: u32,
@@ -72,17 +70,20 @@ fn body(
     smoothing: f32,
     isolated_scale: f32,
     min_neighbours: i32,
+    bins_x: i32,
+    bins_y: i32,
+    bins_z: i32,
 ) -> Element3 {
     let inactive = Element3(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
     let self_particle = buf_sorted[idx].position_radius;
     let physical = self_particle.w;
-    if !(physical > 0.0) || !(cell_size > 0.0) {
+    let bins = vec3<i32>(bins_x, bins_y, bins_z);
+    if !(physical > 0.0) || !(cell_size > 0.0) || any(bins < vec3<i32>(1)) {
         return inactive;
     }
     let x = self_particle.xyz;
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let bins = spb_bins(size, cell_size);
     let home = clamp(vec3<i32>(floor((x - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
     // One home for the search radius: the kernel never reaches past one bin.
     let radius = min(particle_scale * physical, cell_size);

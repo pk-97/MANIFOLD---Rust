@@ -23,7 +23,8 @@ use crate::node_graph::matter::bodies::{BodiesStatus, MatterBodies};
 use crate::node_graph::matter::coupling::{ReactionSlot, RigidOwner};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, MatterBody, MatterClock, MatterLattice, MatterShape, REACTION_WORDS, WATER_DENSITY,
-    free_fall_speed, momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
+    free_fall_speed, lattice_nodes, momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda,
+    wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -272,6 +273,19 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
     // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
     // retired (the caller checked the frame clock or waited on the GPU).
     Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })
+}
+
+/// The Grid Budget gate: a lattice over `budget_mcells` million nodes is
+/// refused by name before anything downstream sizes or dispatches over it.
+pub(crate) fn admit_lattice(lattice: &MatterLattice, budget_mcells: f32) -> Result<(), String> {
+    let nodes = lattice_nodes(lattice.nodes) as f64;
+    if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6 {
+        return Err(format!(
+            "Matter lattice needs {:.3} million nodes; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
+            nodes / 1e6
+        ));
+    }
+    Ok(())
 }
 
 impl Coupling {
@@ -584,14 +598,7 @@ impl MatterDomain {
         let lattice = MatterLattice::from_layout(&layout);
         let blocks = lattice.blocks();
         let (block_centre, block_size, block_bin) = lattice.block_sort_box();
-        let budget = ctx.param_f32("grid_budget_mcells", 8.0);
-        let nodes = f64::from(lattice.node_count());
-        if !budget.is_finite() || budget <= 0.0 || nodes > f64::from(budget) * 1e6 {
-            return Err(format!(
-                "Matter lattice needs {:.3} million nodes; Grid Budget is {budget:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
-                nodes / 1e6
-            ));
-        }
+        admit_lattice(&lattice, ctx.param_f32("grid_budget_mcells", 8.0))?;
         let dx = f64::from(lattice.cell_size);
         let fill_height = ctx.scalar_or_param("fill_height", 0.4);
         if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {

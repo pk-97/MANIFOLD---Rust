@@ -125,7 +125,20 @@ impl Harness {
             }
             native.commit_and_wait_completed();
         }
+        // Storage a node provides replaces its slot's, as the executor installs it.
+        for &(port, slot) in outputs {
+            if prim.provides_array_output(port)
+                && let Some(buffer) = prim.provided_array_output(port)
+            {
+                assert!(Backend::install_array_buffer(&mut self.backend, slot, buffer.clone()), "{port}: install");
+            }
+        }
         (scalars, errors)
+    }
+
+    /// The storage a slot holds now: a provided output's, after its run.
+    pub fn buffer(&self, slot: Slot) -> GpuBuffer {
+        self.backend.array_buffer(slot).expect("array slot").clone()
     }
 }
 
@@ -163,7 +176,10 @@ pub(super) struct Lattice {
 }
 
 impl Lattice {
+    /// The box, and the bin grid the sort publishes for it (searchers take
+    /// it as params here, as they take the sort's wires in a graph).
     pub fn params(&self, extra: &[(&'static str, f32)]) -> ParamValues {
+        let bins = bin_counts(self.size, self.cell);
         let mut values = vec![
             ("center_x", self.center[0]),
             ("center_y", self.center[1]),
@@ -172,6 +188,9 @@ impl Lattice {
             ("size_y", self.size[1]),
             ("size_z", self.size[2]),
             ("cell_size", self.cell),
+            ("bins_x", bins[0] as f32),
+            ("bins_y", bins[1] as f32),
+            ("bins_z", bins[2] as f32),
         ];
         values.extend_from_slice(extra);
         params(&values)
@@ -215,7 +234,7 @@ pub(super) fn sort_and_shape(
     let bin_total = bins.iter().product::<u32>() as usize;
     let (input, _) = harness.array(particles, particles.len());
     let (sorted_slot, sorted_buf) = harness.array::<FluidParticle>(&[], particles.len());
-    let (ranges_slot, ranges_buf) = harness.array::<CellRange>(&[], bin_total);
+    let (ranges_slot, _) = harness.array::<CellRange>(&[], 1);
     let count_slot = harness.scalar_input(count as f32);
     let mut sort = SortParticlesIntoCells::new();
     let (_, errors) = harness.run(
@@ -236,7 +255,7 @@ pub(super) fn sort_and_shape(
     assert!(errors.is_empty(), "{errors:?}");
     (
         read(&sorted_buf, particles.len()),
-        read(&ranges_buf, bin_total),
+        read(&harness.buffer(ranges_slot), bin_total),
         read(&blobs_buf, particles.len()),
         (sorted_slot, ranges_slot, blobs_slot),
     )
@@ -323,20 +342,93 @@ fn fluid_sort_particles_into_cells_is_a_binned_permutation() {
     }
 }
 
+/// The sort sizes its ranges from the bin grid it publishes, at any grid.
 #[test]
-fn fluid_sort_particles_into_cells_rejects_too_many_cells() {
+fn fluid_sort_particles_into_cells_sizes_ranges_to_its_bins() {
     let mut harness = Harness::new();
-    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
     let (input, _) = harness.array(&[particle([0.0; 3], 0.02, 1)], 1);
     let (sorted, _) = harness.array::<FluidParticle>(&[], 1);
-    let (ranges, _) = harness.array::<CellRange>(&[], 100);
+    let (ranges, _) = harness.array::<CellRange>(&[], 1);
+    let bins_out: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let mut sort = SortParticlesIntoCells::new();
+    // 8³, then 67³ (the storage grows to it), then back down.
+    for cell in [0.25_f32, 0.03, 0.5] {
+        let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell };
+        let bins = bin_counts(lattice.size, lattice.cell);
+        let (scalars, errors) = harness.run(
+            &mut sort,
+            &[("particles", input)],
+            &[
+                ("sorted", sorted),
+                ("cell_ranges", ranges),
+                ("bins_x", bins_out[0]),
+                ("bins_y", bins_out[1]),
+                ("bins_z", bins_out[2]),
+            ],
+            &lattice.params(&[]),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        for (slot, n) in bins_out.iter().zip(bins) {
+            assert!(scalars.contains(&(*slot, ParamValue::Float(n as f32))), "cell {cell}: {scalars:?}");
+        }
+        let holds = harness.buffer(ranges).size / std::mem::size_of::<CellRange>() as u64;
+        assert!(holds >= bins.iter().map(|&n| u64::from(n)).product::<u64>(), "cell {cell}: {holds} ranges");
+    }
+}
+
+/// A searcher never reads past the ranges it was wired: a bin grid larger than
+/// cell_ranges holds, or one with an empty axis, is a named error before any
+/// dispatch. Bins wired at 0 (the sort has no lattice yet) run nothing, silently.
+#[test]
+fn fluid_searchers_refuse_bins_past_their_ranges() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
+    let (sorted, _) = harness.array(&[particle([0.0; 3], 0.05, 1)], 1);
+    let (short, _) = harness.array::<CellRange>(&[CellRange { start: 0, count: 1 }; 511], 511);
+    let (blobs, blobs_buf) = harness.array::<FluidBlob>(&[], 1);
+    let untouched = |harness: &Harness| read::<u8>(&harness.buffer(blobs), blobs_buf.size as usize).iter().all(|&b| b == 0);
+    let shape = |harness: &mut Harness, ranges: Slot, extra_inputs: &[(&'static str, Slot)], params: &ParamValues| {
+        let mut inputs = vec![("sorted", sorted), ("cell_ranges", ranges)];
+        inputs.extend_from_slice(extra_inputs);
+        harness.run(&mut ShapeParticleBlobs::new(), &inputs, &[("blobs", blobs)], params).1
+    };
+
+    let errors = shape(&mut harness, short, &[], &lattice.params(&[]));
+    assert!(errors.iter().any(|e| e.contains("needs 512 cell ranges") && e.contains("holds 511")), "{errors:?}");
+    assert!(untouched(&harness), "a refused search dispatches nothing");
+
+    let (ranges, _) = harness.array::<CellRange>(&[CellRange { start: 0, count: 1 }; 512], 512);
+    let errors = shape(&mut harness, ranges, &[], &lattice.params(&[("bins_y", 0.0)]));
+    assert!(errors.iter().any(|e| e.contains("whole and at least 1")), "{errors:?}");
+    assert!(untouched(&harness), "no bins, no dispatch");
+
+    let zero: [Slot; 3] = std::array::from_fn(|_| harness.scalar_input(0.0));
+    let wired = [("bins_x", zero[0]), ("bins_y", zero[1]), ("bins_z", zero[2])];
+    let errors = shape(&mut harness, short, &wired, &lattice.params(&[]));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(untouched(&harness), "a sort without a lattice leaves the search idle");
+
+    // A graph saved before the bins wires: the sort's rule on the shared box,
+    // checked the same way.
+    let legacy = lattice.params(&[("bins_x", 0.0), ("bins_y", 0.0), ("bins_z", 0.0)]);
+    let errors = shape(&mut harness, short, &[], &legacy);
+    assert!(errors.iter().any(|e| e.contains("needs 512 cell ranges")), "{errors:?}");
+    assert!(untouched(&harness), "a refused legacy search dispatches nothing");
+    let errors = shape(&mut harness, ranges, &[], &legacy);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!untouched(&harness), "the fixture does dispatch when the bins fit");
+
+    let solid_nodes = 9.0;
+    let (solid, _) = harness.array(&[1.0_f32; 729], 729);
+    let (levelset, _) = harness.array::<f32>(&[], 17 * 17 * 17);
+    let volume = lattice.params(&[("nodes_x", solid_nodes), ("nodes_y", solid_nodes), ("nodes_z", solid_nodes)]);
     let (_, errors) = harness.run(
-        &mut SortParticlesIntoCells::new(),
-        &[("particles", input)],
-        &[("sorted", sorted), ("cell_ranges", ranges)],
-        &lattice.params(&[]),
+        &mut ParticleVolume::new(),
+        &[("blobs", blobs), ("cell_ranges", short), ("solid", solid)],
+        &[("levelset", levelset)],
+        &volume,
     );
-    assert!(errors.iter().any(|e| e.contains("512 cells") && e.contains("Max Cells")), "{errors:?}");
+    assert!(errors.iter().any(|e| e.starts_with("Particle Volume") && e.contains("holds 511")), "{errors:?}");
 }
 
 /// Determinism is an invariant (bakes, bit-reproducible export): runs on the same
@@ -357,7 +449,7 @@ fn fluid_sort_particles_into_cells_is_deterministic() {
         let mut runs = Vec::new();
         for _ in 0..3 {
             let (sorted, sorted_buf) = harness.array::<FluidParticle>(&[], particles.len());
-            let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+            let (ranges, _) = harness.array::<CellRange>(&[], 1);
             let (order, order_buf) = harness.array::<u32>(&[], particles.len());
             let (_, errors) = harness.run(
                 &mut SortParticlesIntoCells::new(),
@@ -369,7 +461,7 @@ fn fluid_sort_particles_into_cells_is_deterministic() {
             runs.push((
                 read::<u8>(&sorted_buf, sorted_buf.size as usize),
                 read::<u8>(&order_buf, order_buf.size as usize),
-                read::<CellRange>(&ranges_buf, bins),
+                read::<CellRange>(&harness.buffer(ranges), bins),
             ));
         }
         let (sorted, order, ranges) = &runs[0];
@@ -399,7 +491,7 @@ fn fluid_sort_particles_into_cells_runs_with_sorted_unwired() {
     let (input, _) = harness.array(&particles, particles.len());
     let run = |harness: &mut Harness, wire_sorted: bool| {
         let (sorted, _) = harness.array::<FluidParticle>(&[], particles.len());
-        let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+        let (ranges, _) = harness.array::<CellRange>(&[], 1);
         let (order, order_buf) = harness.array::<u32>(&[], particles.len());
         let mut outputs = vec![("cell_ranges", ranges), ("order", order)];
         if wire_sorted {
@@ -407,7 +499,7 @@ fn fluid_sort_particles_into_cells_runs_with_sorted_unwired() {
         }
         let (_, errors) = harness.run(&mut SortParticlesIntoCells::new(), &[("particles", input)], &outputs, &lattice.params(&[]));
         assert!(errors.is_empty(), "{errors:?}");
-        let ranges: Vec<CellRange> = read(&ranges_buf, bins);
+        let ranges: Vec<CellRange> = read(&harness.buffer(ranges), bins);
         let order: Vec<u32> = read(&order_buf, particles.len());
         let members: Vec<Vec<u32>> = ranges
             .iter()
@@ -465,7 +557,7 @@ fn fluid_sort_particles_into_cells_sorts_matter_points_in_place() {
         .collect();
     let count = 2900;
     let run = |harness: &mut Harness, input: Slot| {
-        let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+        let (ranges, _) = harness.array::<CellRange>(&[], 1);
         let (order, order_buf) = harness.array::<u32>(&[], points.len());
         let count_slot = harness.scalar_input(count as f32);
         let (_, errors) = harness.run(
@@ -475,6 +567,8 @@ fn fluid_sort_particles_into_cells_sorts_matter_points_in_place() {
             &lattice.params(&[]),
         );
         assert!(errors.is_empty(), "{errors:?}");
+        let ranges_buf = harness.buffer(ranges);
+        assert_eq!(ranges_buf.size, (bins * std::mem::size_of::<CellRange>()) as u64, "one range per bin");
         (read::<u8>(&ranges_buf, ranges_buf.size as usize), read::<u8>(&order_buf, order_buf.size as usize))
     };
     let (matter_input, _) = harness.array(&points, points.len());
@@ -528,7 +622,7 @@ fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
     };
     let (first, second) = (cloud(1.0), cloud(0.5));
     let (sorted, sorted_buf) = harness.array::<FluidParticle>(&[], first.len());
-    let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+    let (ranges, _) = harness.array::<CellRange>(&[], 1);
     let (order, order_buf) = harness.array::<u32>(&[], first.len());
     let mut sort = SortParticlesIntoCells::new();
     let mut run = |harness: &mut Harness, particles: &[FluidParticle], enabled: f32| {
@@ -541,9 +635,10 @@ fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
             &lattice.params(&[]),
         );
         assert!(errors.is_empty(), "{errors:?}");
+        let ranges_buf = harness.buffer(ranges);
         (
             read::<u8>(&sorted_buf, sorted_buf.size as usize),
-            read::<u8>(&ranges_buf, ranges_buf.size as usize),
+            read::<u8>(&ranges_buf, bins * std::mem::size_of::<CellRange>()),
             read::<u8>(&order_buf, order_buf.size as usize),
         )
     };

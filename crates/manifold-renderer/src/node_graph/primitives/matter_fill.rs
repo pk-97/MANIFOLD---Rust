@@ -111,6 +111,13 @@ pub(crate) fn fill_cells(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3]) -> u
     pool_count + column_count
 }
 
+/// Points a fill seeds at `points_per_cell`, refused by name past the 32-bit
+/// count every point kernel dispatches over.
+pub(crate) fn fill_count(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3], points_per_cell: u32) -> Result<u32, String> {
+    let count = fill_cells(cells, pool, column) * u64::from(points_per_cell);
+    u32::try_from(count).map_err(|_| format!("Matter fill: {count} points exceed 32-bit indexing"))
+}
+
 impl Primitive for MatterFill {
     fn provides_array_output(&self, port: &str) -> bool {
         port == "points"
@@ -150,10 +157,12 @@ impl Primitive for MatterFill {
             [column[d][0].min(cells[d]), column[d][1].min(cells[d])]
         });
         let pool = pool.min(cells[1]);
-        let count = fill_cells(cells, pool, column) * u64::from(ppc);
-        let Ok(count) = u32::try_from(count) else {
-            ctx.error(format!("Matter fill: {count} points exceed 32-bit indexing"));
-            return;
+        let count = match fill_count(cells, pool, column, ppc) {
+            Ok(count) => count,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
         };
         ctx.outputs.set_scalar("count", ParamValue::Float(count as f32));
         if count == 0 {

@@ -13,7 +13,7 @@ use super::matter_common::read_lattice;
 use super::standalone_pipeline::active_elements;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::CellRange;
-use crate::node_graph::matter::{MatterPoint, momentum_unit_fits};
+use crate::node_graph::matter::{MatterPoint, grid_accum_bytes, lattice_nodes, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -149,6 +149,13 @@ impl Primitive for MatterToGrid {
         if !momentum_unit_fits(momentum_unit, lattice.cell_size, step_dt) {
             ctx.error(format!(
                 "Matter to Grid: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
+            ));
+            return;
+        }
+        if accum.size < grid_accum_bytes(lattice.nodes) {
+            ctx.error(format!(
+                "Matter to Grid: the accumulator holds fewer than this lattice's {} nodes; wire accum from the node.matter_state fed by the same node.matter_domain",
+                lattice_nodes(lattice.nodes)
             ));
             return;
         }

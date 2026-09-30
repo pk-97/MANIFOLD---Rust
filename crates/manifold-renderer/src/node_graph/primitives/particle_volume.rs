@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::sort_particles_into_cells::float_param;
+use super::sort_particles_into_cells::{bin_param, float_param, read_searched_bins};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob};
@@ -30,10 +30,10 @@ struct VolumeUniforms {
     cell_size: f32,
     resolution_scale: i32,
     threshold: f32,
+    bins_x: i32,
+    bins_y: i32,
+    bins_z: i32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -61,6 +61,7 @@ crate::primitive! {
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         threshold: ScalarF32 optional,
+        bins_x: ScalarF32 optional, bins_y: ScalarF32 optional, bins_z: ScalarF32 optional,
     },
     outputs: {
         levelset: Array(f32),
@@ -86,9 +87,12 @@ crate::primitive! {
             enum_values: &[],
         },
         float_param!("threshold", "Threshold", 0.5, 0.01, 8.0),
+        bin_param!("bins_x", "Bins X"),
+        bin_param!("bins_y", "Bins Y"),
+        bin_param!("bins_z", "Bins Z"),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges from the same node.sort_particles_into_cells, and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. Raising threshold thins the liquid. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. Raising threshold thins the liquid. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
     summary: "Turns liquid particles into a smooth density field on a grid, the step before the surface mesh is drawn.",
@@ -139,10 +143,10 @@ impl Primitive for ParticleVolume {
             cell_size: ctx.scalar_or_param("cell_size", 0.0625),
             resolution_scale: scale as i32,
             threshold: ctx.scalar_or_param("threshold", 0.5),
+            bins_x: 0,
+            bins_y: 0,
+            bins_z: 0,
             dispatch_count: 0,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -167,7 +171,16 @@ impl Primitive for ParticleVolume {
             ));
             return;
         }
-        let uniforms = VolumeUniforms { dispatch_count: total as u32, ..uniforms };
+        let bins = match read_searched_bins(ctx, ranges.size, "Particle Volume") {
+            Ok(Some(bins)) => bins,
+            Ok(None) => return,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        let [bins_x, bins_y, bins_z] = bins.map(|n| n as i32);
+        let uniforms = VolumeUniforms { bins_x, bins_y, bins_z, dispatch_count: total as u32, ..uniforms };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
