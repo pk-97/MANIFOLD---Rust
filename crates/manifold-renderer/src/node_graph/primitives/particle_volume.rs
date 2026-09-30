@@ -33,6 +33,7 @@ struct VolumeUniforms {
     bins_y: i32,
     bins_z: i32,
     dispatch_count: u32,
+    _pad0: u32,
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -143,6 +144,7 @@ impl Primitive for ParticleVolume {
             bins_y: 0,
             bins_z: 0,
             dispatch_count: 0,
+            _pad0: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
