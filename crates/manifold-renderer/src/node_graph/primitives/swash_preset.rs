@@ -82,11 +82,12 @@ pub(super) const REST_PER_CELL: f64 = 8.0;
 
 /// The share of a cell's crowding the density solve removes per step:
 /// spread_rate × step dt. Linear theory says crowding goes as (1 − share)
-/// per step, but particles are discrete: an overshoot crowds the next cell.
-/// On the Dam Break (`fft_water_density_sweep`, `fft_water_refined_splash`)
-/// share 1.5 leaves more particles past rest than 5/6 at 64³ (10% against
-/// 8% mid-splash) and far more at 128³ (32% against 15% at frame 29).
-pub(super) const SPREAD_PER_STEP: f64 = 5.0 / 6.0;
+/// per step, so 1 removes it in one step; particles are discrete, so an
+/// overshoot crowds the next cell. Dam Break volume drift, max over the run
+/// (`fft_water_density_sweep`, `fft_water_refined_splash`): share 1 gives
+/// 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5 leaves
+/// twice the particles past rest at 128³ (32% against 16% at frame 29).
+pub(super) const SPREAD_PER_STEP: f64 = 1.0;
 
 /// The density solve's passes. It moves particles and is never kept as
 /// velocity, so its leftover error shows as a slightly uneven spread, not
