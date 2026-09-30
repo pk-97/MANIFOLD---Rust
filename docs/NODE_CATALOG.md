@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 364 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 370 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (48)
+### Particles 3D (54)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -306,10 +306,12 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Collar Gather | `node.collar_gather` | Filter | Reads the grid back at the water's edge for the pressure solver. |
 | Collar Pressure | `node.collar_pressure` | Filter | Finishes the water's pressure from the solver's answer, zero in the air. |
 | Collar Source | `node.collar_source` | Filter | Places the pressure solver's values back on the grid cells at the water's edge. |
+| Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Density Source | `node.density_source` | Filter | Pushes apart liquid particles that have bunched up, so the water keeps its volume. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Extend Face Velocity | `node.extend_faces` | Filter | Carries the liquid's motion one cell out into the air, so particles at the surface move smoothly. |
+| Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
 | Face Divergence | `node.face_divergence` | Filter | Measures how much liquid each cell is trying to push out or suck in. |
 | Face Gravity | `node.face_gravity` | Filter | Pulls the liquid down for one step and stops it going through the tank walls. |
 | Face Grid Component | `node.face_sample_component` | Filter | Hands one direction of the water's velocity grid to effects that follow the water. |
@@ -317,6 +319,8 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
+| Lattice Curvature | `node.lattice_curvature` | Filter | Measures how sharply the liquid's surface bends at each grid cell, which is where wave crests throw foam. |
+| Liquid Cells | `node.liquid_cells` | Filter | Sorts every grid cell into air, liquid or wall, the map whitewater uses to decide where spray and foam can form. |
 | Liquid Feedback | `node.liquid_feedback` | Filter | Keeps the liquid's particles from one frame to the next. |
 | Liquid Fill | `node.liquid_fill` | Source | Places the liquid's starting particles: a pool on the floor plus one block of water. |
 | Liquid Solid Distance | `node.liquid_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
@@ -331,6 +335,7 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Nearest Crossing | `node.nearest_crossing` | Filter | Passes each grid cell the closest known point on the liquid's surface from its neighbours. |
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Particles To Faces | `node.particles_to_faces` | Filter | Spreads the liquid particles' motion onto a grid so the solver can make it incompressible. |
@@ -343,6 +348,7 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | Subtract Pressure | `node.subtract_pressure` | Filter | Uses the pressure to push the liquid so it neither squashes nor stretches. |
+| Surface Crossings | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 

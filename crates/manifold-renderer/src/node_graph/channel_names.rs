@@ -217,6 +217,11 @@ pub mod well_known {
         // FFT_WATER_SOLVER_DESIGN.md D2: the three face velocities a padded cell owns
         FACE_VELOCITY = "face_velocity";
         FACE_WEIGHT = "face_weight";
+        // GPU_WHITEWATER_DESIGN.md section 3.3: a cell's nearest surface
+        // crossing and the level at its centre; a value still to extrapolate
+        CROSSING = "crossing";
+        LEVEL = "level";
+        KNOWN = "known";
 
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's

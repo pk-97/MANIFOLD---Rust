@@ -361,6 +361,18 @@ mod extend_faces;
 mod faces_to_particles;
 mod face_sample_component;
 mod matter_face_component;
+mod surface_crossings;
+mod nearest_crossing;
+mod crossing_distance;
+mod liquid_cells;
+mod lattice_curvature;
+mod extend_lattice;
+#[cfg(test)]
+mod whitewater_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_grid_tests;
+#[cfg(test)]
+mod whitewater_extent_tests;
 #[cfg(test)]
 mod face_grid_extent_tests;
 #[cfg(test)]

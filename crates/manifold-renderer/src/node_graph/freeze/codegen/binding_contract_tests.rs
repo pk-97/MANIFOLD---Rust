@@ -178,8 +178,10 @@ fn dispatch_tail_census_is_stable() {
     // liquid_fill, cells_with_particles, particles_to_faces, face_gravity,
     // face_divergence, subtract_pressure, extend_faces, faces_to_particles and
     // density_source. The liquid face grid adds face_sample_component and
-    // matter_face_component, buffer atoms.
-    assert_eq!(total, 228, "standalone atom census drifted");
+    // matter_face_component, buffer atoms. The whitewater grid adds
+    // surface_crossings, nearest_crossing, crossing_distance, liquid_cells,
+    // lattice_curvature and extend_lattice, buffer atoms.
+    assert_eq!(total, 234, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"
