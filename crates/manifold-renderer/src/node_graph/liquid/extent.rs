@@ -42,7 +42,8 @@ use crate::node_graph::matter::{
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::chart_entries::{plane_len, sheet_count};
-use crate::node_graph::primitives::collar_cells::{cell_count, cell_lattice};
+use crate::node_graph::primitives::cells_with_particles::{cell_count, cell_lattice};
+use crate::node_graph::primitives::coarse_pressure_solve::coarse_refusal;
 use crate::node_graph::primitives::cosine_spectrum::{half_spectrum_len, lattice_nodes as transform_lattice, lattice_nodes_with};
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
 use crate::node_graph::primitives::face_sample_component::axis_param;
@@ -570,6 +571,14 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.dot_products", check: dot_products },
     ExtentRule { type_id: "node.combine_rows", check: combine_rows },
     ExtentRule { type_id: "node.divide_by_value", check: divide_by_value },
+    ExtentRule { type_id: "node.zero_lattice", check: zero_lattice },
+    ExtentRule { type_id: "node.coarsen_water", check: coarsen_water },
+    ExtentRule { type_id: "node.pressure_smooth", check: pressure_sweep },
+    ExtentRule { type_id: "node.pressure_residual", check: pressure_sweep },
+    ExtentRule { type_id: "node.restrict_lattice", check: restrict_lattice },
+    ExtentRule { type_id: "node.prolong_lattice", check: prolong_lattice },
+    ExtentRule { type_id: "node.coarse_pressure_solve", check: coarse_pressure_solve },
+    ExtentRule { type_id: "node.conjugate_gradient", check: conjugate_gradient },
     ExtentRule { type_id: "node.krylov_basis", check: krylov_basis },
     ExtentRule { type_id: "node.krylov_givens", check: krylov_givens },
     ExtentRule { type_id: "node.krylov_solve", check: krylov_solve },
@@ -1275,6 +1284,76 @@ fn combine_rows(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn divide_by_value(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("divisor", 4)?;
     x.covers("out", x.bytes("values").unwrap_or(0))
+}
+
+fn zero_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = cell_count(swash_cells(x)?);
+    x.covers("out", cells * 4)
+}
+
+/// A coarse-lattice atom reading the lattice twice as long per axis: every
+/// fine cell under a coarse one, and for the restriction one more each side.
+fn coarsen_water(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = cell_count(swash_cells(x)?);
+    x.covers("fine", cells * 32)?;
+    x.covers("out", cells * 4)
+}
+
+/// One red-black sweep or one residual: every array on the lattice.
+fn pressure_sweep(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = cell_count(swash_cells(x)?);
+    for port in ["water", "rhs", "value", "out"] {
+        x.covers(port, cells * 4)?;
+    }
+    Ok(())
+}
+
+fn restrict_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = cell_count(swash_cells(x)?);
+    x.covers("fine", cells * 32)?;
+    x.covers("water", cells * 4)?;
+    x.covers("out", cells * 4)
+}
+
+fn prolong_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = swash_cells(x)?;
+    if nodes.iter().any(|&n| n % 2 != 0) {
+        return Err(x.uncovered(format!("a {nodes:?} lattice has an odd side; the coarse level can't cover it")));
+    }
+    let cells = cell_count(nodes);
+    x.covers("coarse", cells / 8 * 4)?;
+    for port in ["value", "water", "out"] {
+        x.covers(port, cells * 4)?;
+    }
+    Ok(())
+}
+
+/// Its workgroup array holds MAX_COARSE_CELLS; the atom refuses a larger
+/// lattice, and so does this walk.
+fn coarse_pressure_solve(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    if let Some(reason) = coarse_refusal(x.params()) {
+        return Err(x.uncovered(reason));
+    }
+    let cells = cell_count(swash_cells(x)?);
+    for port in ["water", "rhs", "out"] {
+        x.covers(port, cells * 4)?;
+    }
+    Ok(())
+}
+
+/// Every carried vector is rhs long; late_capture copies a whole state from
+/// its capture, which must be as long.
+fn conjugate_gradient(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let length = x.bytes("rhs").ok_or_else(|| x.uncovered("rhs is unbound".into()))?;
+    for port in ["residual", "solution", "direction"] {
+        x.covers(port, length)?;
+    }
+    x.covers("rz", 4)?;
+    // The captures are written later in the plan: the second iteration sees them.
+    for port in ["residual_in", "solution_in", "direction_in"] {
+        x.covers(port, x.bytes(port.trim_end_matches("_in")).unwrap_or(length))?;
+    }
+    x.covers("rz_in", x.bytes("rz").unwrap_or(4))
 }
 
 fn krylov_basis(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

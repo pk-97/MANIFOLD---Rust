@@ -6,8 +6,6 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::collar_cells::{cell_count, cell_lattice};
-use super::cosine_spectrum::LATTICE_PARAMS;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
@@ -15,6 +13,23 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::CellRange;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+
+/// The lattice params whose product is a lattice atom's cell count.
+pub(super) const LATTICE_PARAMS: [&str; 3] = ["nodes_x", "nodes_y", "nodes_z"];
+
+/// Lattice lengths of the liquid's cell atoms, 1 to 1024 per axis, or `None`.
+pub(crate) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
+    let nodes = LATTICE_PARAMS.map(|name| match params.get(name) {
+        Some(ParamValue::Float(n)) => n.round() as i64,
+        _ => 64,
+    });
+    nodes.iter().all(|n| (1..=1024).contains(n)).then(|| nodes.map(|n| n as u32))
+}
+
+/// Cells in a lattice, as u64 so a bad size cannot wrap.
+pub(crate) fn cell_count(nodes: [u32; 3]) -> u64 {
+    nodes.iter().map(|&n| u64::from(n)).product()
+}
 
 /// Lattice cells for a param set, for `array_output_capacity`: the sort
 /// sizes its ranges only at run time, so the lattice sizes this output.
