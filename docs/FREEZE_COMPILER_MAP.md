@@ -247,11 +247,13 @@ gathered producer stays an external the body samples); same element space
 (texture only); and the merge keeps the *collapsed* forward graph acyclic
 (convexity — Watercolor's out-through-a-blur-and-back shape). State-capture
 wires are excluded from the forward graph, matching the planner, or legal
-feedback loops would read as cycles. Both endpoints must also sit on the same
-side of every substep region border (`substep_sides`, computed with the plan
-compiler's own `substeps::region_body`); stencil absorption obeys the same
-border. A kernel spanning it would repeat outside work per iteration or leak a
-body intermediate.
+feedback loops would read as cycles. Both endpoints must also sit in the same
+innermost substep region, or both outside every region (`substep_sides`, from
+the plan compiler's own nest, `substeps::nest_regions`), so no kernel crosses
+an outer or an inner border; stencil absorption obeys the same borders. A
+kernel spanning one would repeat outside work per iteration or leak a body
+intermediate. A nest the compiler refuses gives every node its own side, so
+nothing fuses.
 
 **Region gates (`build_region`):** members topo-sort (cycle ⇒ refuse);
 required/gather/buffer inputs must be wired (optional coincident unwired is OK
@@ -462,10 +464,19 @@ invariant a fused def must respect:
     the same step evaluator the frame pass uses, capturing after each
     iteration. Fused body kernels run per iteration and read that iteration's
     scalars; they never contain a node from outside the body (section 4).
+    Regions nest at most two deep (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D10):
+    an outer body holds whole inner regions, and the executor runs an inner
+    region its own count times on every outer iteration through the same
+    driver, each level writing its own scalars from its own scratch. A fused
+    kernel lies in one innermost region (`nested_region_fusion_stays_inside`).
     A boundary may opt in to host syncs by naming a clock port; offline only,
     the executor may then commit, wait and run the clock owner's host step
-    between two iterations. A region that has not opted in never commits or
-    waits mid-region, so a fused body can rely on one uninterrupted encode.
+    between two iterations. Only an outer region may name a clock (an inner
+    one is a compile error), so syncs fall only between outer iterations. A
+    region that has not opted in never commits or waits mid-region, so a
+    fused body can rely on one uninterrupted encode. The fused-def caches key
+    on the def's content and the nest is a function of the def, so the keys
+    already cover nesting (`nested_region_freeze_key_includes_nesting`).
 
 ## 10. Test surface & how to debug
 

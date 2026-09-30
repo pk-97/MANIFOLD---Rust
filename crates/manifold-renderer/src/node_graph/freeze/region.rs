@@ -2600,23 +2600,31 @@ fn is_state_capture_wire(
     node.state_capture_input_ports().contains(&w.to_port.as_str())
 }
 
-/// Which substep region each node belongs to: boundary and body nodes map to
-/// the boundary's doc id, every other node is absent. Membership is the plan
-/// compiler's own rule ([`crate::node_graph::substeps::region_body`]) over the
-/// same forward wires, so the finder and the executor agree on the border.
+/// The innermost substep region each node belongs to: boundary and body nodes
+/// map to that region's boundary doc id, every other node is absent. Two
+/// nodes fuse only with equal sides, so no kernel crosses an outer or an inner
+/// border. Membership is the plan compiler's own nest
+/// ([`crate::node_graph::substeps::nest_regions`]) over the same forward
+/// wires, so the finder and the executor agree on every border. A nest the
+/// compiler refuses gives every node its own side: nothing fuses.
 fn substep_sides(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     forward: &[(u32, u32)],
 ) -> AHashMap<u32, u32> {
     let mut sides = AHashMap::default();
-    let boundaries: Vec<(u32, crate::node_graph::substeps::SubstepBoundaryPorts)> = def
+    let boundaries: Vec<(u32, Vec<u32>)> = def
         .nodes
         .iter()
         .filter_map(|n| {
-            configured_construct(registry, n)
-                .and_then(|node| node.substep_boundary())
-                .map(|ports| (n.id, ports))
+            let ports = configured_construct(registry, n).and_then(|node| node.substep_boundary())?;
+            let producers = def
+                .wires
+                .iter()
+                .filter(|w| w.to_node == n.id && ports.capture_ports().any(|p| p == w.to_port))
+                .map(|w| w.from_node)
+                .collect();
+            Some((n.id, producers))
         })
         .collect();
     if boundaries.is_empty() {
@@ -2628,16 +2636,21 @@ fn substep_sides(
         fwd.entry(from).or_default().push(to);
         rev.entry(to).or_default().push(from);
     }
-    for (boundary, ports) in boundaries {
-        let producers: Vec<u32> = def
-            .wires
-            .iter()
-            .filter(|w| w.to_node == boundary && ports.capture_ports().any(|p| p == w.to_port))
-            .map(|w| w.from_node)
-            .collect();
-        sides.insert(boundary, boundary);
-        for node in crate::node_graph::substeps::region_body(boundary, &producers, &fwd, &rev) {
-            sides.insert(node, boundary);
+    let Ok(nest) = crate::node_graph::substeps::nest_regions(&boundaries, &fwd, &rev) else {
+        for node in &def.nodes {
+            sides.insert(node.id, node.id);
+        }
+        return sides;
+    };
+    // Outer regions first, so an inner region's nodes end on the inner side.
+    let outer_first = nest
+        .iter()
+        .filter(|region| region.parent.is_none())
+        .chain(nest.iter().filter(|region| region.parent.is_some()));
+    for region in outer_first {
+        sides.insert(region.boundary, region.boundary);
+        for &node in &region.body {
+            sides.insert(node, region.boundary);
         }
     }
     sides
