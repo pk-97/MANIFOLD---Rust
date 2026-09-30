@@ -103,11 +103,15 @@ fn face_grid_fusion_in_host_graphs() {
     let mut swash = serde_json::to_value(water_def(WaterScene::dam_break(64).with_faces())).expect("def");
     let nodes = swash["nodes"].as_array().expect("nodes");
     let face_u = nodes.iter().find(|n| n["nodeId"] == FACE_NODES[0]).expect("face_u")["id"].clone();
+    let face_v = nodes.iter().find(|n| n["nodeId"] == FACE_NODES[1]).expect("face_v")["id"].clone();
     let next = nodes.iter().filter_map(|n| n["id"].as_u64()).max().expect("ids") + 1;
     swash["nodes"].as_array_mut().expect("nodes").push(serde_json::json!({
-        "id": next, "nodeId": "face_u_consumer", "typeId": "node.cosine_poisson_divide", "params": {},
+        "id": next, "nodeId": "face_u_consumer", "typeId": "node.divide_by_value", "params": {},
     }));
-    swash["wires"].as_array_mut().expect("wires").push(serde_json::json!({"fromNode": face_u, "fromPort": "out", "toNode": next, "toPort": "values"}));
+    swash["wires"].as_array_mut().expect("wires").extend([
+        serde_json::json!({"fromNode": face_u, "fromPort": "out", "toNode": next, "toPort": "values"}),
+        serde_json::json!({"fromNode": face_v, "fromPort": "out", "toNode": next, "toPort": "divisor"}),
+    ]);
     let swash = report(serde_json::from_value(swash).expect("def"));
     let sampled = of_type(&swash, "node.face_sample_component");
     assert_eq!(sampled.len(), 3);
@@ -125,7 +129,7 @@ fn face_grid_fusion_in_host_graphs() {
     let region = &consumed.regions[fused[0].region_index.expect("region")];
     let members: Vec<_> = consumed.nodes.iter().filter(|n| region.member_node_ids.contains(&n.node_id)).map(|n| n.type_id.as_str()).collect();
     assert_eq!(members.len(), 2, "component and consumer only: {members:?}");
-    assert!(members.contains(&"node.cosine_poisson_divide"), "the consumer shares the region: {members:?}");
+    assert!(members.contains(&"node.divide_by_value"), "the consumer shares the region: {members:?}");
 }
 
 /// I2: whitewater reads face velocity at least one layer past the liquid.

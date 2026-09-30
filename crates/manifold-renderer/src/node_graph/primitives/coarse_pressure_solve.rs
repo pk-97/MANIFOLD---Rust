@@ -73,6 +73,31 @@ fn whole(params: &ParamValues, name: &str, default: u32) -> u32 {
     }
 }
 
+/// A V-cycle halves the lattice while every side is even and one is over
+/// this.
+pub(crate) const COARSEST_SIDE: u32 = 8;
+
+/// The V-cycle's lattices, finest first: halved while every side is even and
+/// one is over [`COARSEST_SIDE`].
+pub(crate) fn multigrid_levels(cells: [u32; 3]) -> Vec<[u32; 3]> {
+    let mut levels = vec![cells];
+    while let Some(&last) = levels.last().filter(|l| l.iter().all(|&n| n % 2 == 0) && l.iter().any(|&n| n > COARSEST_SIDE)) {
+        levels.push(last.map(|n| n / 2));
+    }
+    levels
+}
+
+/// Why a lattice can't be solved: its coarsest level is past one workgroup.
+pub(crate) fn multigrid_refusal(cells: [u32; 3]) -> Option<String> {
+    let coarsest = *multigrid_levels(cells).last().expect("a level");
+    let count = cell_count(coarsest);
+    (count > MAX_COARSE_CELLS).then(|| {
+        format!(
+            "a {cells:?} cell lattice halves only to {coarsest:?}, {count} cells, past the {MAX_COARSE_CELLS} the pressure solve's coarsest level holds; every side must halve evenly down to {COARSEST_SIDE} or so"
+        )
+    })
+}
+
 /// The refusal at build and at run: a lattice past one workgroup.
 pub(crate) fn coarse_refusal(params: &ParamValues) -> Option<String> {
     let Some(nodes) = cell_lattice(params) else {
@@ -140,5 +165,15 @@ impl Primitive for CoarsePressureSolve {
             [1, 1, 1],
             "node.coarse_pressure_solve",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The liquid conformance suite checks codegen bodies for atomics; this
+    /// hand shader has no codegen body, so it is checked here.
+    #[test]
+    fn coarse_solve_uses_no_atomics() {
+        assert!(!super::SHADER.contains("atomic"));
     }
 }

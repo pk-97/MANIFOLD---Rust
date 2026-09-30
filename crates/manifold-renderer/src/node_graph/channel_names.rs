@@ -209,12 +209,8 @@ pub mod well_known {
         ATLAS_OFFSET      = "atlas_offset";
         SCALE_MIN         = "scale_min";
 
-        // ─── Liquid pressure solve (FFT_WATER_SOLVER_DESIGN.md D11 chart entries)
-        VIEW_PLUS = "view_plus";
-        VIEW_MINUS = "view_minus";
-        SHEETS = "sheets";
-        CELL = "cell";
-        // FFT_WATER_SOLVER_DESIGN.md D2: the three face velocities a padded cell owns
+        // ─── Liquid face grid (GPU_FLIP_PRESSURE_SOLVE.md): the three face
+        // velocities a padded cell owns
         FACE_VELOCITY = "face_velocity";
         FACE_WEIGHT = "face_weight";
         // GPU_WHITEWATER_DESIGN.md section 3.3: a cell's nearest surface

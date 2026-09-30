@@ -14,6 +14,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::SWASH_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
+use super::coarse_pressure_solve::multigrid_levels;
 use super::swash_domain::{SwashGeometry, swash_geometry};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 use crate::node_graph::effect_node::ParamValues;
@@ -53,9 +54,6 @@ const SMOOTH_SWEEPS: usize = 2;
 /// settle in far fewer; 4 and 64 give the same iterations to 1e-3.
 const COARSE_SWEEPS: usize = 8;
 
-/// A V-cycle halves the lattice while a side is even and over this.
-const COARSEST_SIDE: usize = 8;
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PressureShape {
     /// Cells per side of the cubic lattice.
@@ -77,13 +75,10 @@ impl PressureShape {
         BOX_METRES / self.n as f64
     }
 
-    /// The V-cycle's lattice sides, finest first.
+    /// The V-cycle's lattice sides, finest first, as the domain's refusal
+    /// counts them.
     pub fn levels(&self) -> Vec<usize> {
-        let mut sides = vec![self.n];
-        while let Some(&side) = sides.last().filter(|&&side| side > COARSEST_SIDE && side % 2 == 0) {
-            sides.push(side / 2);
-        }
-        sides
+        multigrid_levels([self.n as u32; 3]).iter().map(|level| level[0] as usize).collect()
     }
 }
 

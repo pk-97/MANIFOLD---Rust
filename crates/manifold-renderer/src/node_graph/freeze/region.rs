@@ -4183,34 +4183,31 @@ mod tests {
 
     /// BUG-2efy (capacity probe admits an output that follows slot 0): a
     /// member whose output follows one input, declared MinInputs, never fuses.
-    /// collar_source's output follows `total`, the region's first external;
-    /// fused, the count would be the min over total, value and divisor, the
-    /// divisor's one element. One ascending probe order agrees with the
-    /// black box by accident; the descending order catches it.
+    /// test.follow_first's output follows `a`, the region's first external;
+    /// fused, the count would be the min over a and b. One ascending probe
+    /// order agrees with the black box by accident; the descending order
+    /// catches it. The divide's gathered divisor puts the region through the
+    /// probe.
     #[test]
     fn output_following_one_input_is_refused_under_min_inputs() {
         let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version": 3,
             "nodes": [
-                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                {"id": 1, "nodeId": "collar", "typeId": "node.collar_cells", "params": {"nodes_x": {"type": "Float", "value": 16.0}, "nodes_y": {"type": "Float", "value": 16.0}, "nodes_z": {"type": "Float", "value": 16.0}}},
-                {"id": 2, "nodeId": "total", "typeId": "node.running_total", "params": {"capacity": {"type": "Int", "value": 2048}}},
-                {"id": 3, "nodeId": "value", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 2049}}},
-                {"id": 4, "nodeId": "source", "typeId": "node.collar_source"},
-                {"id": 5, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
-                {"id": 6, "nodeId": "divide", "typeId": "node.divide_by_value"},
-                {"id": 7, "nodeId": "sink", "typeId": "test.value_sink"},
-                {"id": 8, "nodeId": "output", "typeId": "system.final_output"}
+                {"id": 0, "nodeId": "a", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 2049}}},
+                {"id": 1, "nodeId": "b", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 2048}}},
+                {"id": 2, "nodeId": "follow", "typeId": "test.follow_first"},
+                {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
+                {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
+                {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
             ],
             "wires": [
-                {"fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "water"},
-                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in"},
-                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "total"},
-                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "value"},
-                {"fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "values"},
-                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "divisor"},
-                {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "values"},
-                {"fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in"}
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
             ]
         }))
         .expect("selector fixture");
@@ -4219,9 +4216,40 @@ mod tests {
         let regions = partition_regions(&def, &registry);
         let fused: Vec<Vec<u32>> = regions.iter().map(|r| r.members.iter().map(|m| m.doc_id).collect()).collect();
         assert!(
-            fused.iter().all(|members| !members.contains(&4)),
-            "collar_source's output follows total alone, so it must not fuse as MinInputs: {fused:?}"
+            fused.iter().all(|members| !members.contains(&2)),
+            "follow_first's output follows a alone, so it must not fuse as MinInputs: {fused:?}"
         );
+        // Declared honestly (FromInput), the same shape fuses: the refusal
+        // above is the probe's, not a gate the chain trips anyway.
+        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a residual into the divide fuses");
+    }
+
+    /// The same chain with an honest producer: node.pressure_residual (its
+    /// output follows its coincident rhs, declared FromInput) into the divide.
+    fn honest_chain() -> EffectGraphDef {
+        let lattice = |n: f64| serde_json::json!({"type": "Float", "value": n});
+        serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
+                {"id": 1, "nodeId": "rhs", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
+                {"id": 2, "nodeId": "residual", "typeId": "node.pressure_residual", "params": {"nodes_x": lattice(8.0), "nodes_y": lattice(8.0), "nodes_z": lattice(8.0)}},
+                {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
+                {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
+                {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "water"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "rhs"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "value"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
+            ]
+        }))
+        .expect("honest fixture")
     }
 
     /// A lattice's params, `n` a side, as def params.
@@ -4239,36 +4267,36 @@ mod tests {
 
     /// BUG-u8io (fft-water-fusion-param-capacity): a lattice-sized member
     /// (`ParamProduct`) fuses with what reads it, and the region counts its
-    /// lattice from the fused uniforms: the twiddle stage and the eigenvalue
-    /// divide of a cosine transform.
+    /// lattice from the fused uniforms: the multigrid's coarse water feeding
+    /// the restriction's mask.
     #[test]
     fn lattice_sized_region_counts_its_lattice() {
         let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version": 3,
             "nodes": [
-                {"id": 0, "nodeId": "values", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
-                {"id": 1, "nodeId": "fft", "typeId": "node.fft_3d", "params": lattice_params([8.0; 3])},
-                {"id": 2, "nodeId": "twiddle", "typeId": "node.cosine_spectrum", "params": lattice_params([8.0; 3])},
-                {"id": 3, "nodeId": "divide", "typeId": "node.cosine_poisson_divide", "params": lattice_params([8.0; 3])},
+                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                {"id": 1, "nodeId": "values", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                {"id": 2, "nodeId": "coarse", "typeId": "node.coarsen_water", "params": lattice_params([8.0; 3])},
+                {"id": 3, "nodeId": "restrict", "typeId": "node.restrict_lattice", "params": lattice_params([8.0; 3])},
                 {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
                 {"id": 5, "nodeId": "output", "typeId": "system.final_output"}
             ],
             "wires": [
-                {"fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "values"},
-                {"fromNode": 1, "fromPort": "spectrum", "toNode": 2, "toPort": "spectrum"},
-                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "values"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "fine"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "fine"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},
                 {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
                 {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
             ]
         }))
-        .expect("cosine fixture");
+        .expect("multigrid fixture");
         let mut registry = registry();
         crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
         let regions = partition_regions(&def, &registry);
-        assert_eq!(regions.len(), 1, "the twiddle and the divide fuse");
+        assert_eq!(regions.len(), 1, "the coarse water and the restriction fuse");
         let region = &regions[0];
         assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
-        assert_eq!(region.output_capacity, Some(lattice_field_product(0)), "the count is the twiddle's lattice");
+        assert_eq!(region.output_capacity, Some(lattice_field_product(0)), "the count is the coarse water's lattice");
     }
 
     /// A lattice-sized region clamps its count by every lattice that does

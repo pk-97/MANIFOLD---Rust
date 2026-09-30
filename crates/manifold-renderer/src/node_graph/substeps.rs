@@ -885,7 +885,42 @@ pub mod test_nodes {
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
     }
 
+    /// A fusable per-element sum of two f32 arrays whose output follows `a`
+    /// alone while it declares the default capacity (the min of its inputs):
+    /// the dishonest declaration the freeze compiler's capacity probe must
+    /// refuse (BUG-2efy, capacity probe admits an output that follows one
+    /// input). Never run.
+    struct FollowFirst {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+    }
+
+    impl EffectNode for FollowFirst {
+        node_basics!();
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
+            crate::node_graph::freeze::classify::FusionKind::MultiInputCoincident
+        }
+        fn wgsl_body(&self) -> Option<&'static str> {
+            Some("fn body(idx: u32, count: u32, e_a: f32, e_b: f32) -> f32 {\n    return e_a + e_b;\n}\n")
+        }
+        fn array_output_capacity(&self, port: &str, _: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
+            (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "a").map(|&(_, n)| n)).flatten()
+        }
+    }
+
     pub fn register_substep_test_nodes(registry: &mut PrimitiveRegistry) {
+        registry.register("test.follow_first", || {
+            let f32s = || PortType::Array(ArrayType::of_known::<f32>());
+            Box::new(FollowFirst {
+                type_id: EffectNodeType::new("test.follow_first"),
+                inputs: vec![port("a", f32s(), PortKind::Input, true), port("b", f32s(), PortKind::Input, true)],
+                outputs: vec![port("out", f32s(), PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
         registry.register("test.particle_source", || {
             Box::new(ArraySource::new(
                 "test.particle_source",

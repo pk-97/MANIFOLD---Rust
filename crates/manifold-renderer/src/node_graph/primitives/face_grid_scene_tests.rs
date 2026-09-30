@@ -6,8 +6,9 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use super::cosine_poisson_divide::CosinePoissonDivide;
-use super::face_grid_scenes::{CONSUMER_LATTICE, matter_dam_break_faces};
+use super::divide_by_value::DivideByValue;
+use super::dot_products::DotProducts;
+use super::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
 use super::liquid_surface_tests::{Harness, params, read};
 use super::matter_face_component::MatterFaceComponent;
 use super::swash_preset::WaterScene;
@@ -208,16 +209,22 @@ fn matter_face_component_fused_matches_unfused() {
     let grid: Vec<MatterGridNode> = run.read(run.output_of("node.matter_state", "grid"), nodes.iter().product::<u32>() as usize);
     let mut harness = Harness::new();
     let input = harness.array(&grid, grid.len());
-    let faces = harness.array::<f32>(&[], grid.len());
-    let mut component = params(&[("nodes_x", nodes[0] as f32), ("nodes_y", nodes[1] as f32), ("nodes_z", nodes[2] as f32)]);
-    component.insert("axis".into(), ParamValue::Enum(1));
-    let (_, errors) = harness.run(&mut MatterFaceComponent::new(), &[("grid", input.0)], &[("out", faces.0)], &component);
+    let component_faces = |harness: &mut Harness, axis: u32| {
+        let faces = harness.array::<f32>(&[], grid.len());
+        let mut component = params(&[("nodes_x", nodes[0] as f32), ("nodes_y", nodes[1] as f32), ("nodes_z", nodes[2] as f32)]);
+        component.insert("axis".into(), ParamValue::Enum(axis));
+        let (_, errors) = harness.run(&mut MatterFaceComponent::new(), &[("grid", input.0)], &[("out", faces.0)], &component);
+        assert!(errors.is_empty(), "{errors:?}");
+        faces
+    };
+    let (u, v) = (component_faces(&mut harness, 0), component_faces(&mut harness, 1));
+    assert_eq!(face_len(CELLS, 0), u64::from(DIVISOR_ROW), "the divisor's row is the u faces");
+    let length = harness.array::<f32>(&[], 1);
+    let dot = params(&[("row_length", DIVISOR_ROW as f32), ("rows", 1.0), ("max_rows", 1.0), ("root", 1.0)]);
+    let (_, errors) = harness.run(&mut DotProducts::new(), &[("matrix", u.0), ("vector", u.0)], &[("out", length.0)], &dot);
     assert!(errors.is_empty(), "{errors:?}");
     let out = harness.array::<f32>(&[], grid.len());
-    let [x, y, z] = CONSUMER_LATTICE;
-    assert_eq!((x * y * z) as usize, len, "the consumer covers the v faces");
-    let consumer = params(&[("nodes_x", x), ("nodes_y", y), ("nodes_z", z)]);
-    let (_, errors) = harness.run(&mut CosinePoissonDivide::new(), &[("values", faces.0)], &[("out", out.0)], &consumer);
+    let (_, errors) = harness.run(&mut DivideByValue::new(), &[("values", v.0), ("divisor", length.0)], &[("out", out.0)], &params(&[]));
     assert!(errors.is_empty(), "{errors:?}");
     let unfused: Vec<f32> = read(&out.1, len);
 

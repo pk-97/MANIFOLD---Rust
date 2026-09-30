@@ -536,6 +536,31 @@ fn gpu_flip_residual_into_sweep_fuses() {
     assert_close(&got, &cpu_sweep(&water, &mid, &start64, FINE, h, 1), "fused residual into sweep");
 }
 
+/// A residual fused into a divide by one GPU value: the fused count follows
+/// the residual, not the one-element divisor (BUG-sk62, divide_by_value
+/// fused region shrinks to its divisor).
+#[test]
+fn gpu_flip_residual_into_divide_fuses() {
+    let cells: usize = FINE.iter().product();
+    let h = 0.3;
+    let (water, rhs, value) = (random_water(cells, 0xd1), random_values(cells, 0xd2), random_values(cells, 0xd3));
+    let mut chain = Chain::new();
+    let w = chain.source("water", water.clone());
+    let r = chain.source("rhs", rhs.clone());
+    let v = chain.source("value", value.clone());
+    let d = chain.source("divisor", vec![-2.5]);
+    let residual = chain.node("residual", "node.pressure_residual", lattice_json(FINE, &[("cell_size", h)]));
+    chain.wire(w, "out", residual, "water");
+    chain.wire(r, "out", residual, "rhs");
+    chain.wire(v, "out", residual, "value");
+    let divide = chain.node("divide", "node.divide_by_value", json!({}));
+    chain.wire(residual, "out", divide, "values");
+    chain.wire(d, "out", divide, "divisor");
+    let got = chain.fused_matches_unfused(divide, cells);
+    let want: Vec<f64> = cpu_residual(&water, &rhs, &value, FINE, h).iter().map(|&v| v / -2.5).collect();
+    assert_close(&got, &want, "fused residual into divide");
+}
+
 /// The coarse water fused into the restriction's mask.
 #[test]
 fn gpu_flip_coarsen_into_restrict_fuses() {

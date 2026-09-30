@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::collar_cells::{cell_count, cell_lattice};
+use super::cells_with_particles::{cell_count, cell_lattice};
 use super::particles_to_faces::{face_capacity, face_count};
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
@@ -50,7 +50,7 @@ crate::primitive! {
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "faces is node.face_gravity's output (the field node.face_divergence measured), pressure the FFT water solve's node.collar_pressure, water node.cells_with_particles. Follow with node.extend_faces so particles near the surface read valid faces.",
+    composition_notes: "faces is node.face_gravity's output (the field node.face_divergence measured), pressure node.conjugate_gradient's solution, water node.cells_with_particles. Follow with node.extend_faces so particles near the surface read valid faces.",
     examples: [],
     picker: { label: "Subtract Pressure", category: Atom },
     summary: "Uses the pressure to push the liquid so it neither squashes nor stretches.",

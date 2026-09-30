@@ -11,7 +11,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBuffer;
 
-use super::cosine_spectrum::transformable_cells;
+use super::coarse_pressure_solve::multigrid_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -124,11 +124,8 @@ pub(crate) fn swash_geometry(
 ) -> Result<SwashGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
-    if !transformable_cells(layout.cells) {
-        let [x, y, z] = layout.cells;
-        return Err(format!(
-            "SWASH: a {x}×{y}×{z} cell lattice cannot be solved; the pressure solve's transforms need an even count of 2 to 1024 cells on every axis. Change Resolution."
-        ));
+    if let Some(reason) = multigrid_refusal(layout.cells) {
+        return Err(format!("SWASH: {reason}. Change Resolution."));
     }
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);

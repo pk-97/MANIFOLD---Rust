@@ -1,6 +1,6 @@
-//! `node.combine_rows` — a vector plus a weighted sum of matrix rows, the
-//! Krylov update w − V h and the final V y (docs/FFT_WATER_SOLVER_DESIGN.md
-//! D10). A per-element gather on the codegen path.
+//! `node.combine_rows` — a vector plus a weighted sum of matrix rows: the
+//! conjugate gradient's x − α p and r − α s (docs/GPU_FLIP_PRESSURE_SOLVE.md).
+//! A per-element gather on the codegen path.
 
 use std::borrow::Cow;
 
@@ -46,7 +46,7 @@ crate::primitive! {
         float_param!("base_scale", "Base Scale", 1.0, -1e6, 1e6),
     ],
     depth_rule: Terminal,
-    composition_notes: "With node.dot_products it is Gram–Schmidt: w − V h is base = w, matrix = the Krylov basis, coef = the dots, scale −1. The solution V y is base_scale 0, coef = node.krylov_solve's y, rows = the pass count. rows can be wired from node.krylov_basis's per-pass rows.",
+    composition_notes: "The conjugate gradient's vector updates (node.conjugate_gradient): x − α p is base = x, matrix = p, coef = α from node.divide_by_value, rows 1, scale −1. With node.dot_products and several rows it is Gram–Schmidt: w − V h is base = w, matrix = the basis, coef = the dots, scale −1.",
     examples: [],
     picker: { label: "Combine Rows", category: Atom },
     summary: "Adds weighted rows of a table onto a list of numbers.",

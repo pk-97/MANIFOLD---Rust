@@ -534,15 +534,13 @@ const NON_STANDALONE: &[&str] = &[
     // a generated standalone uniform mirror for its run() path.
     "node.detect_regions",
     "node.track_regions",
-    // Vendor FFT calls (MPSGraph through manifold_gpu::GpuFft): no WGSL
-    // kernel, so no uniform struct at all.
-    "node.fft_3d",
-    "node.inverse_fft_3d",
-    // The Krylov reduction's two-pass hand shader (its DotParams are
-    // reflected in uniform_layout_extended) and the Krylov loop boundary,
-    // which only issues blits.
+    // The pressure solve's hand shaders, barriered (their DotParams and
+    // CoarseParams are reflected in uniform_layout_extended): the two-pass
+    // reduction and the one-workgroup coarsest level. And the conjugate
+    // gradient loop boundary, which only issues blits.
     "node.dot_products",
-    "node.krylov_basis",
+    "node.coarse_pressure_solve",
+    "node.conjugate_gradient",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

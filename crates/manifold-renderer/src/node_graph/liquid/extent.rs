@@ -41,14 +41,11 @@ use crate::node_graph::matter::{
 };
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
-use crate::node_graph::primitives::chart_entries::{plane_len, sheet_count};
 use crate::node_graph::primitives::cells_with_particles::{cell_count, cell_lattice};
 use crate::node_graph::primitives::coarse_pressure_solve::coarse_refusal;
-use crate::node_graph::primitives::cosine_spectrum::{half_spectrum_len, lattice_nodes as transform_lattice, lattice_nodes_with};
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
-use crate::node_graph::primitives::krylov_givens::{pass_count, state_len};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, partial_bytes};
 use crate::node_graph::primitives::matter_domain::{fill_region, matter_geometry};
@@ -56,7 +53,6 @@ use crate::node_graph::primitives::matter_face_component::matter_cells;
 use crate::node_graph::primitives::matter_fill::{fill_cells, fill_count};
 use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale};
 use crate::node_graph::primitives::particles_to_faces::face_count;
-use crate::node_graph::primitives::select_flagged::capacity as flagged_capacity;
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
 use crate::node_graph::primitives::swash_domain::swash_geometry;
 use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
@@ -567,14 +563,6 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.subtract_pressure", check: subtract_pressure },
     ExtentRule { type_id: "node.density_source", check: density_source },
     ExtentRule { type_id: "node.faces_to_particles", check: faces_to_particles },
-    ExtentRule { type_id: "node.collar_cells", check: collar_cells },
-    ExtentRule { type_id: "node.select_flagged", check: select_flagged },
-    ExtentRule { type_id: "node.chart_entries", check: chart_entries },
-    ExtentRule { type_id: "node.chart_sums", check: chart_sums },
-    ExtentRule { type_id: "node.chart_spread", check: chart_spread },
-    ExtentRule { type_id: "node.collar_source", check: collar_source },
-    ExtentRule { type_id: "node.collar_gather", check: collar_gather },
-    ExtentRule { type_id: "node.collar_pressure", check: collar_pressure },
     ExtentRule { type_id: "node.dot_products", check: dot_products },
     ExtentRule { type_id: "node.combine_rows", check: combine_rows },
     ExtentRule { type_id: "node.divide_by_value", check: divide_by_value },
@@ -586,16 +574,6 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.prolong_lattice", check: prolong_lattice },
     ExtentRule { type_id: "node.coarse_pressure_solve", check: coarse_pressure_solve },
     ExtentRule { type_id: "node.conjugate_gradient", check: conjugate_gradient },
-    ExtentRule { type_id: "node.krylov_basis", check: krylov_basis },
-    ExtentRule { type_id: "node.krylov_givens", check: krylov_givens },
-    ExtentRule { type_id: "node.krylov_solve", check: krylov_solve },
-    ExtentRule { type_id: "node.cosine_reorder", check: lattice_map },
-    ExtentRule { type_id: "node.cosine_poisson_divide", check: lattice_map },
-    ExtentRule { type_id: "node.cosine_surface_scale", check: cosine_surface_scale },
-    ExtentRule { type_id: "node.cosine_spectrum", check: cosine_spectrum },
-    ExtentRule { type_id: "node.cosine_half_spectrum", check: to_spectrum },
-    ExtentRule { type_id: "node.fft_3d", check: to_spectrum },
-    ExtentRule { type_id: "node.inverse_fft_3d", check: inverse_fft_3d },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
     ExtentRule { type_id: "node.particle_volume", check: particle_volume },
@@ -1210,71 +1188,7 @@ fn faces_to_particles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.bytes("particles").unwrap_or(0))
 }
 
-fn collar_cells(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
-    x.covers("water", cells * 4)?;
-    x.covers("out", cells * 4)
-}
-
-fn select_flagged(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    x.covers("total", 4)?;
-    x.covers("out", u64::from(flagged_capacity(x.params())) * 4)
-}
-
-fn chart_entries(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?) * 4;
-    for port in ["water", "smoothed", "collar"] {
-        x.covers(port, cells)?;
-    }
-    // One 32-byte chart record per entry.
-    let entries = x.items("entries").unwrap_or(0);
-    if entries == 0 {
-        return Err(x.uncovered("no collar entries".into()));
-    }
-    x.covers("out", entries * 32)
-}
-
-fn chart_sums(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
-    x.covers("total", cell_count(nodes) * 4)?;
-    x.covers("out", plane_len(nodes, sheet_count(x.params())) * 4)?;
-    x.covers("entries", 32)?;
-    x.covers("value", 4)
-}
-
-fn chart_spread(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
-    x.covers("planes", plane_len(nodes, sheet_count(x.params())) * 4)?;
-    x.covers("entries", 32)?;
-    x.covers("value", 4)?;
-    x.covers("out", x.bytes("value").unwrap_or(0))
-}
-
-fn collar_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    x.covers("total", 4)?;
-    x.covers("value", 4)?;
-    x.covers("out", x.bytes("total").unwrap_or(0))
-}
-
-fn collar_gather(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    for port in ["grid", "vector", "sum"] {
-        x.covers(port, 4)?;
-    }
-    // One value per entry plus the constant.
-    x.covers("out", (x.items("entries").unwrap_or(0) + 1) * 4)
-}
-
-fn collar_pressure(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let water = x.bytes("water").unwrap_or(0);
-    x.covers("water", 4)?;
-    x.covers("vector", 4)?;
-    for port in ["solved", "correction", "out"] {
-        x.covers(port, water)?;
-    }
-    Ok(())
-}
-
-/// A whole-number param, as the Krylov atoms round it.
+/// A whole-number param, as the vector atoms round it.
 fn whole_param(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
     x.param(name, default).round().max(0.0) as u32
 }
@@ -1379,89 +1293,6 @@ fn conjugate_gradient(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.covers(port, x.bytes(port.trim_end_matches("_in")).unwrap_or(length))?;
     }
     x.covers("rz_in", x.bytes("rz").unwrap_or(4))
-}
-
-fn krylov_basis(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let passes = pass_count(x.params());
-    let row = u64::from(whole_param(x, "row_length", 1024.0).max(1)) * 4;
-    let state = u64::from(state_len(passes)) * 4;
-    let basis = row * u64::from(passes + 1);
-    x.provide("basis", basis);
-    x.provide("current", row);
-    x.hold(basis + row);
-    // The last pass's iteration scalars: the most rows the body reads.
-    x.publish("passes", passes as f32);
-    x.publish("pass", passes.saturating_sub(1) as f32);
-    x.publish("rows", passes as f32);
-    x.covers("seed", 4)?;
-    x.covers("start", row)?;
-    x.covers("out", state)?;
-    // The captures are written later in the plan: the second pass sees them.
-    x.covers("in", state)?;
-    x.covers("next_in", row)?;
-    x.covers_if_bound("last", row)
-}
-
-fn krylov_givens(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let passes = pass_count(x.params());
-    let state = u64::from(state_len(passes)) * 4;
-    x.covers("state", state)?;
-    x.covers("out", state)?;
-    x.covers("first", u64::from(passes + 1) * 4)?;
-    x.covers("second", u64::from(passes + 1) * 4)?;
-    x.covers("norm", 4)
-}
-
-fn krylov_solve(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let passes = pass_count(x.params());
-    x.covers("state", u64::from(state_len(passes)) * 4)?;
-    x.covers("out", u64::from(passes) * 4)
-}
-
-/// A cosine-transform atom's lattice from its params, as its run() reads it.
-fn transform_nodes(x: &AtomExtent<'_>, nodes: Option<[u32; 3]>) -> Result<[u32; 3], Verdict> {
-    nodes.ok_or_else(|| x.uncovered("every transformed length must be even, 2 to 1024".into()))
-}
-
-fn real_bytes(nodes: [u32; 3]) -> u64 {
-    cell_count(nodes) * 4
-}
-
-fn spectrum_bytes(nodes: [u32; 3]) -> u64 {
-    u64::from(half_spectrum_len(nodes)) * 8
-}
-
-/// Lattice values in, lattice values out.
-fn lattice_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = transform_nodes(x, transform_lattice(x.params()))?;
-    x.covers("values", real_bytes(nodes))?;
-    x.covers("out", real_bytes(nodes))
-}
-
-fn cosine_surface_scale(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = transform_nodes(x, lattice_nodes_with(x.params(), 2))?;
-    x.covers("values", real_bytes(nodes))?;
-    x.covers("out", real_bytes(nodes))
-}
-
-fn cosine_spectrum(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = transform_nodes(x, transform_lattice(x.params()))?;
-    x.covers("spectrum", spectrum_bytes(nodes))?;
-    x.covers("out", real_bytes(nodes))
-}
-
-/// Lattice values to their half spectrum (the real FFT, and the cosine
-/// transform's inverse twiddle).
-fn to_spectrum(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = transform_nodes(x, transform_lattice(x.params()))?;
-    x.covers("values", real_bytes(nodes))?;
-    x.covers("spectrum", spectrum_bytes(nodes))
-}
-
-fn inverse_fft_3d(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = transform_nodes(x, transform_lattice(x.params()))?;
-    x.covers("spectrum", spectrum_bytes(nodes))?;
-    x.covers("values", real_bytes(nodes))
 }
 
 // ── Whitewater ──────────────────────────────────────────────────────────────

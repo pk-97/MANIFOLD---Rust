@@ -232,9 +232,10 @@ const SWASH_COUPLES_IN_P3B: &str = "owed to SWASH P3b (bodies join the pressure 
 
 const GPU_IMPULSES_IN_P8: &str = "owed to P8: GPU liquids refuse impulses until P8 routes them (LIQUID_SCENE_OWED)";
 
-/// SWASH's step atoms that gather instead of scattering (FFT_WATER_SOLVER_DESIGN.md
-/// D7 (gather-form transfers, no atomics), D11 (chart sums by column walk)).
-const SWASH_ATOMIC_FREE: [&str; 11] = [
+/// GPU FLIP's step atoms that gather instead of scattering, the pressure
+/// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
+/// coarse solve has no codegen body; its own test checks it.
+const SWASH_ATOMIC_FREE: [&str; 14] = [
     "node.cells_with_particles",
     "node.particles_to_faces",
     "node.face_gravity",
@@ -243,9 +244,12 @@ const SWASH_ATOMIC_FREE: [&str; 11] = [
     "node.subtract_pressure",
     "node.density_source",
     "node.faces_to_particles",
-    "node.chart_entries",
-    "node.chart_sums",
-    "node.chart_spread",
+    "node.coarsen_water",
+    "node.pressure_smooth",
+    "node.pressure_residual",
+    "node.restrict_lattice",
+    "node.prolong_lattice",
+    "node.zero_lattice",
 ];
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[

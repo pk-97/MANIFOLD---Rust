@@ -1,11 +1,12 @@
 //! `node.divide_by_value` — divide every element by one value held on the
-//! GPU (a Krylov vector by its length, docs/FFT_WATER_SOLVER_DESIGN.md D10).
+//! GPU (the conjugate gradient's step sizes, docs/GPU_FLIP_PRESSURE_SOLVE.md).
 //! A per-element atom on the codegen path.
 
 use manifold_gpu::GpuBinding;
 
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::primitive::Primitive;
 
 /// Codegen uniform layout: no params, then `dispatch_count`.
@@ -41,6 +42,8 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/divide_by_value_body.wgsl"),
     input_access: [Coincident, BufferGather],
+    // The output follows values; the one-element divisor must not count it.
+    output_capacity: FusedOutputCapacity::FromInput { input: "values" },
 }
 
 impl Primitive for DivideByValue {

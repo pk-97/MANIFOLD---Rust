@@ -116,4 +116,3 @@ mod matter_coupling;
 mod liquid_conformance;
 mod smoke;
 mod substeps;
-mod swash_krylov;
