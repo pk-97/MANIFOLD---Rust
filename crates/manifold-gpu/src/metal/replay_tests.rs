@@ -1,7 +1,8 @@
 //! GPU proofs for encode replay (`docs/ENCODE_REPLAY_DESIGN.md` I1–I4):
 //! a replayed chain writes exactly what direct encoding writes, through
-//! changing uniforms, structural changes, texture work, blits and indirect
-//! dispatches between stretches; an entry is never written while in
+//! changing uniforms, structural changes, texture work and indirect
+//! dispatches between stretches and word copies inside them (D9); an entry
+//! is never written while in
 //! flight; a warm ring records and allocates nothing; and the CPU probe
 //! reports the cost of a replayed stretch against direct encoding.
 
@@ -202,10 +203,11 @@ fn read_u32s(buffer: &GpuBuffer) -> Vec<u32> {
     unsafe { std::slice::from_raw_parts(ptr, buffer.size as usize / 4) }.to_vec()
 }
 
-/// Recordable dispatches per frame of `shape`: the mixes, minus the
-/// indirect one and whatever the shape leaves out.
+/// Recordable dispatches per frame of `shape`: the mixes and the copy
+/// (a word copy inside a span records, D9), minus the texture pair, the
+/// indirect dispatch and whatever the shape leaves out.
 fn recordable(shape: Shape) -> u64 {
-    let breaks = [10, 15, 20];
+    let breaks = [10, 20];
     (0..STEPS).filter(|s| !breaks.contains(s) && shape.skip != Some(*s)).count() as u64
 }
 
@@ -227,9 +229,9 @@ fn replay_matches_direct_bit_for_bit() {
         } else {
             assert_eq!((recorded, replayed), (0, recordable(Shape::default())), "frame {frame} replays");
         }
-        // Breaks at the texture pair, the blit and the indirect dispatch:
-        // four stretches a frame.
-        assert_eq!(after.executes - before.executes, 4, "frame {frame}: one execute per stretch");
+        // Breaks at the texture pair and the indirect dispatch; the copy
+        // joins its stretch: three stretches a frame.
+        assert_eq!(after.executes - before.executes, 3, "frame {frame}: one execute per stretch");
         assert_eq!(after.direct - before.direct, 3, "frame {frame}: texture pair and indirect run directly");
     }
     assert_eq!(replay.stats().ring_busy, 0);
@@ -354,6 +356,65 @@ fn replay_cache_dropped_in_flight_is_safe() {
     tail.commit_and_wait_completed();
     retire_queue.drain();
     assert_eq!(direct.contents(), replay.contents());
+}
+
+/// Word copies inside a span run as the copy kernel and match the blit a
+/// direct encoder issues, byte for byte: random word offsets and sizes,
+/// between two buffers and within one (disjoint ranges), chained so every
+/// frame reads what the last one wrote.
+#[test]
+fn replay_copy_matches_blit() {
+    const WORDS: u64 = 16 * 1024;
+    let device = GpuDevice::new();
+    let mut seed = 0x9e37_79b9_u64;
+    let mut next = move |bound: u64| {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) % bound
+    };
+    // (source is the second buffer, source word, destination word, words).
+    let mut copies = Vec::new();
+    while copies.len() < 40 {
+        let (within, words) = (next(3) == 0, 1 + next(WORDS / 8));
+        let (src, dst) = (next(WORDS - words), next(WORDS - words));
+        if within && src < dst + words && dst < src + words {
+            continue;
+        }
+        copies.push((within, src, dst, words));
+    }
+    let run = |replay: bool| {
+        let buffers: [GpuBuffer; 2] = std::array::from_fn(|b| {
+            let buffer = device.create_buffer_shared(WORDS * 4);
+            write_u32s(&buffer, &(0..WORDS as u32).map(|i| i.wrapping_mul(2_246_822_519).wrapping_add(b as u32)).collect::<Vec<_>>());
+            buffer
+        });
+        let mut cache = replay.then(GpuReplayCache::default);
+        let mut stats = Vec::new();
+        for _ in 0..3 {
+            let mut enc = device.create_encoder("replay-copy proof");
+            if let Some(cache) = cache.take() {
+                enc.begin_replay(&device, cache);
+            }
+            for &(within, src, dst, words) in &copies {
+                let (from, to) = if within { (&buffers[1], &buffers[1]) } else { (&buffers[0], &buffers[1]) };
+                enc.copy_buffer_range(from, src * 4, to, dst * 4, words * 4);
+            }
+            enc.copy_buffer_to_buffer(&buffers[1], &buffers[0], WORDS * 2);
+            if enc.replay.is_some() {
+                let done = enc.end_replay();
+                stats.push(done.stats());
+                cache = Some(done);
+            }
+            enc.commit_and_wait_completed();
+        }
+        (buffers.iter().map(read_u32s).collect::<Vec<_>>(), stats)
+    };
+    let (direct, _) = run(false);
+    let (replayed, stats) = run(true);
+    assert!(direct == replayed, "a replayed word copy differs from the blit");
+    let n = copies.len() as u64 + 1;
+    assert_eq!((stats[0].recorded, stats[0].replayed), (n, 0), "the first frame records every copy");
+    assert_eq!((stats[2].recorded, stats[2].replayed), (n, 2 * n), "later frames replay them");
+    assert_eq!(stats[2].executes, 3, "one stretch a frame");
 }
 
 /// Reports CPU µs to encode one stretch of 2, 6 and 26 dispatches directly

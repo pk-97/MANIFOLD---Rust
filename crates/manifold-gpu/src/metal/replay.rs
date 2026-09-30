@@ -326,7 +326,26 @@ pub(crate) struct ReplaySpan {
     /// for one execute.
     pending_start: usize,
     mode: SpanMode,
+    /// The device's word-copy kernel while the span replays (D9).
+    copy_kernel: Option<std::sync::Arc<GpuComputePipeline>>,
 }
+
+/// The word copy a replaying span turns buffer copies into (D9): one thread
+/// per 4-byte word; offsets and count in words.
+pub(super) const COPY_KERNEL_WGSL: &str = r#"
+struct CopyWords { src_offset: u32, dst_offset: u32, words: u32, pad: u32 };
+@group(0) @binding(0) var<storage, read> src: array<u32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<u32>;
+@group(0) @binding(2) var<uniform> copy: CopyWords;
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= copy.words) { return; }
+    dst[copy.dst_offset + id.x] = src[copy.src_offset + id.x];
+}
+"#;
+
+const COPY_KERNEL_GROUP: u64 = 256;
 
 impl GpuEncoder {
     /// Open a replay span. Until `end_replay`, recordable compute dispatches
@@ -338,7 +357,48 @@ impl GpuEncoder {
         debug_assert!(self.replay.is_none(), "replay spans never nest");
         let enabled = self.profile.is_none() && !super::gpu_fault::diagnostics_enabled() && replay_allowed_by_env();
         let entry = if enabled { cache.enter(device) } else { None };
-        self.replay = Some(ReplaySpan { cache, entry, cursor: 0, pending_start: 0, mode: SpanMode::Validate });
+        let copy_kernel = entry.is_some().then(|| device.replay_copy_kernel().clone());
+        self.replay = Some(ReplaySpan { cache, entry, cursor: 0, pending_start: 0, mode: SpanMode::Validate, copy_kernel });
+    }
+
+    /// Offer a buffer copy to the open span as a word-copy dispatch (D9), so
+    /// it joins the recording instead of ending the stretch. True when it
+    /// went that way; false leaves it to the blit. Only a replaying span
+    /// takes copies, only word-aligned ones, and never one whose source and
+    /// destination ranges overlap.
+    pub(super) fn replay_copy(&mut self, src: &GpuBuffer, src_offset: u64, dst: &GpuBuffer, dst_offset: u64, size: u64) -> bool {
+        let Some(kernel) = self.replay.as_ref().and_then(|span| span.copy_kernel.clone()) else {
+            return false;
+        };
+        let aligned = src_offset.is_multiple_of(4) && dst_offset.is_multiple_of(4) && size.is_multiple_of(4);
+        let overlap =
+            std::ptr::eq(&*src.raw, &*dst.raw) && src_offset < dst_offset + size && dst_offset < src_offset + size;
+        let words = size / 4;
+        let (Ok(src_word), Ok(dst_word), Ok(count), Ok(groups)) = (
+            u32::try_from(src_offset / 4),
+            u32::try_from(dst_offset / 4),
+            u32::try_from(words),
+            u32::try_from(words.div_ceil(COPY_KERNEL_GROUP)),
+        ) else {
+            return false;
+        };
+        if !aligned || overlap || words == 0 {
+            return false;
+        }
+        let params = [src_word, dst_word, count, 0];
+        // SAFETY: plain u32 data, read for the length of the call.
+        let bytes = unsafe { std::slice::from_raw_parts(params.as_ptr().cast::<u8>(), std::mem::size_of_val(&params)) };
+        self.dispatch_compute(
+            &kernel,
+            &[
+                GpuBinding::Buffer { binding: 0, buffer: src, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: dst, offset: 0 },
+                GpuBinding::Bytes { binding: 2, data: bytes },
+            ],
+            [groups, 1, 1],
+            "replay copy",
+        );
+        true
     }
 
     /// Run the pending stretch and hand the cache back.

@@ -2299,6 +2299,9 @@ impl GpuEncoder {
             "copy_buffer_to_buffer: copy size {size} exceeds destination buffer ({} bytes)",
             dst.size,
         );
+        if self.replay_copy(src, 0, dst, 0, size) {
+            return;
+        }
         self.end_current();
         let enc = self.make_blit_encoder("copy_buffer_to_buffer");
         unsafe {
@@ -2307,6 +2310,51 @@ impl GpuEncoder {
                 0,
                 &dst.raw,
                 0,
+                size as usize,
+            );
+        }
+        enc.endEncoding();
+    }
+
+    /// Copy `size` bytes from `src` at `src_offset` to `dst` at
+    /// `dst_offset` via blit encoder: one row of a row-major array into
+    /// another. Offsets and size are multiples of 4 (Metal's rule on macOS);
+    /// both ranges are asserted in bounds, as in `copy_buffer_to_buffer`.
+    /// Inside a replaying span the copy is a word-copy dispatch instead
+    /// (docs/ENCODE_REPLAY_DESIGN.md D9).
+    pub fn copy_buffer_range(
+        &mut self,
+        src: &GpuBuffer,
+        src_offset: u64,
+        dst: &GpuBuffer,
+        dst_offset: u64,
+        size: u64,
+    ) {
+        assert!(
+            src_offset.is_multiple_of(4) && dst_offset.is_multiple_of(4) && size.is_multiple_of(4),
+            "copy_buffer_range: offsets {src_offset}, {dst_offset} and size {size} must be multiples of 4",
+        );
+        assert!(
+            src_offset + size <= src.size,
+            "copy_buffer_range: {size} bytes at {src_offset} exceed source buffer ({} bytes)",
+            src.size,
+        );
+        assert!(
+            dst_offset + size <= dst.size,
+            "copy_buffer_range: {size} bytes at {dst_offset} exceed destination buffer ({} bytes)",
+            dst.size,
+        );
+        if self.replay_copy(src, src_offset, dst, dst_offset, size) {
+            return;
+        }
+        self.end_current();
+        let enc = self.make_blit_encoder("copy_buffer_range");
+        unsafe {
+            enc.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                &src.raw,
+                src_offset as usize,
+                &dst.raw,
+                dst_offset as usize,
                 size as usize,
             );
         }

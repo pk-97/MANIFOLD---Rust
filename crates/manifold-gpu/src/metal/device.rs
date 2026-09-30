@@ -162,6 +162,9 @@ pub struct GpuDevice {
     /// `MTLSamplerState` per frame. Mirrors the `clear_pipelines`
     /// lazy-cache pattern.
     linear_sampler: std::sync::OnceLock<GpuSampler>,
+    /// The word-copy kernel a replay span turns buffer copies into
+    /// (docs/ENCODE_REPLAY_DESIGN.md D9). Built on the first replaying span.
+    replay_copy_kernel: std::sync::OnceLock<std::sync::Arc<GpuComputePipeline>>,
     /// Device-level Xcode capture scope. A scope only defines capture
     /// boundaries through begin/end calls, so it must be retained and
     /// driven per frame — see `capture_scope_begin`/`capture_scope_end`.
@@ -220,6 +223,7 @@ impl GpuDevice {
             clear_pipelines: std::sync::OnceLock::new(),
             rt_pipelines: std::sync::OnceLock::new(),
             linear_sampler: std::sync::OnceLock::new(),
+            replay_copy_kernel: std::sync::OnceLock::new(),
             capture_scope: std::sync::OnceLock::new(),
             mtl4_bridge: std::sync::OnceLock::new(),
             retirement: std::sync::OnceLock::new(),
@@ -1305,6 +1309,13 @@ impl GpuDevice {
     pub fn rt_pipelines(&self) -> &super::raytrace::RtPipelines {
         self.rt_pipelines
             .get_or_init(|| super::raytrace::RtPipelines::compile(self))
+    }
+
+    /// The replay word-copy kernel, compiled on first use.
+    pub(super) fn replay_copy_kernel(&self) -> &std::sync::Arc<GpuComputePipeline> {
+        self.replay_copy_kernel.get_or_init(|| {
+            std::sync::Arc::new(self.create_compute_pipeline(super::replay::COPY_KERNEL_WGSL, "cs_main", "replay copy"))
+        })
     }
 
     /// Get or lazily compile all compute clear pipelines.

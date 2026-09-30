@@ -77,7 +77,7 @@ Rejected: argument buffers for textures, because nothing recordable in the measu
 **D8 — Fault attribution per stretch.** Each execute is wrapped in one debug group and one signpost named after its first command's node label: `replay: node.x`. The string is made when that command is recorded, not per frame. A fault inside a replayed stretch names the stretch. Per-dispatch attribution comes back with `MANIFOLD_ENCODE_REPLAY=0` or diagnostics on.
 Rejected: dropping debug labels everywhere to save their 0.9 µs, because fault attribution reads them.
 
-**D9 — Buffer copies join recordings (P2).** Inside an open span, `copy_buffer_to_buffer` and `copy_buffer_range` whose offsets and size are multiples of 4 encode as a dispatch of a built-in `manifold-gpu` copy kernel (WGSL, one thread per word, through `create_compute_pipeline`), so they record like any other dispatch. Other copies, and all copies outside spans, stay blits. A word copy is exact, so output is unchanged.
+**D9 — Buffer copies join recordings (P2).** Inside a span that replays (it took a ring entry), `copy_buffer_to_buffer` and `copy_buffer_range` whose offsets and size are multiples of 4 encode as a dispatch of a built-in `manifold-gpu` copy kernel (WGSL, one thread per word, through `create_compute_pipeline`), so they record like any other dispatch. Other copies stay blits: part-word copies, a copy within one buffer whose ranges overlap, copies outside spans, and copies in a span that runs direct (ring busy, profiling, diagnostics, `MANIFOLD_ENCODE_REPLAY=0`). A word copy is exact, so output is unchanged.
 
 **D10 — The Vulkan equivalent** (named, not built; the Vulkan backend has no command buffers yet). An entry is a secondary `VkCommandBuffer`, compute only, recorded outside any render pass with push descriptors (VULKAN_BACKEND_DESIGN.md D4 (Descriptors)) and the hazard barriers the encoder's tracker emits (D6 (Synchronization)) baked in. Bytes go to an entry-owned host-visible uniform buffer, the same way D5 (Bytes) maps them. The entry executes through `vkCmdExecuteCommands` in the frame's primary. Idle means the device timeline semaphore passed the submitting commit's value (D9 (GpuEvent)). The ring removes any need for `SIMULTANEOUS_USE`. `VK_EXT_device_generated_commands` is the GPU-driven alternative and is not needed. On Vulkan the FFT is compute (no MPSGraph), so FFTs record too.
 
@@ -133,7 +133,7 @@ The cache moves into the encoder for the span and back out, so `GpuEncoder` gets
 Hooks in `metal/encoder.rs`:
 - `dispatch_compute_grid`: with a span open and the dispatch recordable, hand it to the span and return. Otherwise flush and encode as today.
 - `ensure_compute`, `end_current`, `compute_memory_barrier_buffers`: flush first. The span's own execute uses a non-flushing twin of `ensure_compute`.
-- `copy_buffer_to_buffer`, `copy_buffer_range`: in P2, a word-aligned copy inside a span becomes a copy-kernel dispatch.
+- `copy_buffer_to_buffer`, `copy_buffer_range`: after their bounds asserts, offer the copy to `GpuEncoder::replay_copy` (`metal/replay.rs`), which dispatches the device's word-copy kernel when the span replays and the copy qualifies (D9), and otherwise leaves it to the blit. The span holds the kernel only while it has an entry, so a copy outside one can't reach it.
 
 ### 3.3 Executor integration (`manifold-renderer`)
 
