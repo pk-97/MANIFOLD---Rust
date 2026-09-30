@@ -1,6 +1,6 @@
 # Encode Replay — record a repeat region's dispatches once, replay them every frame
 
-**Status:** IN PROGRESS · 2026-10-01 · Opus 5.5 (worker seat, slot-4). P1a and P1b built on feat/encode-replay, P1b's FFT half on feat/fft-encode-cache; P2 open; P3 blocked on the FFT decision in section 8 (Deferred).
+**Status:** IN PROGRESS · 2026-10-01 · Opus 5.5 (worker seat, slot-4). P1a, P1b and P2 built on feat/encode-replay, P1b's FFT half on feat/fft-encode-cache; P3 blocked on the FFT decision in section 8 (Deferred).
 **Prerequisites:** feat/planner-reuse (array slots static after `pre_allocate_resources`).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -173,6 +173,19 @@ The first visit inserts into the map; later frames never allocate. The offline h
 - The first visit records while it encodes. SWASH's first frame is 75–110 ms with replay on and 75–91 ms off, one-time setup either way, so recording is lost in that noise. The Dam Break's recording frame costs 2.0 ms against 1.5–1.9 ms direct.
 - What is left at 64: 280 FFT encodes at 19 µs each, 5.3 ms, over half the frame; the 319 executes at about 3.4 µs; validation at about 0.3 µs a dispatch.
 
+**Measured in P2** (SWASH 64³, FFT tensor data kept, same session, alternating builds with P2's copy hook on and off, 12 warm frames per run):
+
+| | Frame CPU | GPU ms | Executes per frame (steady) |
+|---|---|---|---|
+| Replay off | 13.7–14.2 ms | 30.3–31.2 | 0 |
+| Replay on, copies as blits (P1b) | 8.9–9.3 ms | 30.1–30.5 | 319 |
+| Replay on, word copies recorded (P2) | 8.1–8.3 ms | 28.6–28.8 | 262 |
+
+- P2 saves 0.8–1.0 ms of frame CPU, more than the 0.6 ms estimate, and about 1.5 ms of GPU time, since the copies no longer switch to a blit encoder between compute passes.
+- Steady frames replay all 1856 region dispatches, copies included, with none direct. The first visit records 1488 and runs the 368 its new entry can't hold directly; the second visit records those, and after that nothing is recorded.
+- Particles and every step's water and faces still match replay off bit for bit, at 64 and at 128.
+- The 262 remaining stretches are the FFT breaks: an FFT is not a dispatch, so it still ends a stretch.
+
 ## 4. Invariants & enforcement
 
 - **I1 — A replayed command is exactly the command direct encoding would have issued.** Enforcement: the comparison runs on every visit (D2). Tests: `replay_key_detects_every_field` (`manifold-gpu`, CPU-only: change each field of a dispatch in turn; each change must miss); `replay_matches_direct_bit_for_bit` (`manifold-gpu`, GPU); `encode_replay_parity` (renderer GPU proof; section 6 (Phasing), P1b).
@@ -263,6 +276,7 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
     - The P1b gates pass again.
     - On the SWASH 64 merge, stretches inside regions per frame drop from 320 toward 256 (read from `executes`), and frame CPU is reported.
   - Negative: no copy-kernel use outside an open span: `rg -n 'copy_kernel' crates/manifold-gpu/src/metal/encoder.rs` hits only inside the span branch.
+  - As measured: `replay_copy_matches_blit` and the other replay tests pass, also under `MTL_DEBUG_LAYER=1 MTL_VALIDATION=1`. The negative `rg` has no hits at all: the kernel lives on the span (`ReplaySpan::copy_kernel`, set only when the span took an entry), and the encoder reaches it only through `replay_copy`. Stretches went from 319 to 262 per frame; the numbers are in section 3.4 (Consequences). The P1b gates pass again, except the RT modules of the GPU proof suite, which were skipped: they time out the GPU and cascade into dozens of reds without replay too, BUG-ca67 (RT proofs time out the GPU).
 - **Demo:** none — L1.
 - **Forbidden:** converting blits outside spans, and non-word copies.
 - **Test scope:** as P1b.
@@ -290,7 +304,7 @@ Blocked on the FFT decision in section 8 (Deferred), decider Peter via the lead.
   - (a) Keep MPSGraph and cache the per-call wrappers in `GpuFft::encode` (`metal/fft.rs:129` makes two tensor data objects, two arrays, a command-buffer wrapper and an execution descriptor per call). That saves about 5 of the 22–27 µs per call: about 1.4 ms at 64. FFTs keep breaking stretches.
   - (b) Replace MPSGraph with `manifold-gpu` compute FFT kernels, mixed radix like MPSGraph so every even side still runs. The FFTs then record with everything else: one stretch per region visit, and SWASH's encode drops to roughly the executor's own cost. It is also what the Vulkan backend needs anyway, since MPSGraph is Metal-only. It reverses FFT_WATER_SOLVER_DESIGN.md D9 (exemption classes), which names each FFT as one MPSGraph call.
   - (a) is built in P1b (the lead's call); (b) is decided on the P1b numbers.
-  - The P1b numbers (section 3.4 (Consequences)): with replay and (a), SWASH 64 is 8.9–9.1 ms of frame CPU. The FFTs are 5.3 ms of it (280 × 19 µs, all inside MPSGraph's own encode, which (a) can't touch), and each FFT also ends a stretch: 319 executes at about 3.4 µs, 1.1 ms. Path (b) removes both, leaving roughly 2.5 ms.
+  - The numbers (section 3.4 (Consequences)): with replay, (a) and P2, SWASH 64 is 8.1–8.3 ms of frame CPU. The FFTs are 5.3 ms of it (280 × 19 µs, all inside MPSGraph's own encode, which (a) can't touch), and each FFT also ends a stretch: 262 executes at about 3.4 µs, 0.9 ms. Path (b) removes both, leaving roughly 2 ms.
 - **Whole-frame spans.** Revive when a graph without regions shows more than 1 ms of recordable top-level dispatch per frame.
 - **Texture dispatches through argument buffers.** Revive when a region that matters spends more than 1 ms per frame on texture-bound compute.
 - **Vulkan store (D10).** Built with the Vulkan backend's command-buffer phase.
