@@ -102,7 +102,7 @@ fn add_empty_fluid(def: &mut EffectGraphDef) {
         id: 900,
         handle: Some("test_fluid".into()),
         node_id: NodeId::new("test_fluid"),
-        type_id: "node.fluid_surface".into(),
+        type_id: manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID.into(),
         params: BTreeMap::new(),
         exposed_params: BTreeSet::new(),
         editor_pos: None,

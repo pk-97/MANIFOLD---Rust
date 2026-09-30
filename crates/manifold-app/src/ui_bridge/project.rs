@@ -616,7 +616,7 @@ pub(super) fn dispatch_project(
                 let command = manifold_editing::commands::graph::AddSceneFluidCommand::new(
                     manifold_core::GraphTarget::Generator(layer_id.clone()),
                     *render_scene_node_id,
-                    metadata_for_node_type("node.fluid_surface"),
+                    metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
                     metadata_for_node_type("node.transform_3d"),
                     metadata_for_node_type("node.pbr_material"),
                     metadata_for_node_type("node.scene_object"),

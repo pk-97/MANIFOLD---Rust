@@ -1,7 +1,7 @@
 // node.matter_move_bodies — fusable BUFFER body, GATHER (GPU_MPM_SOLVER_DESIGN.md
 // section 4.1 step 2). One thread per body: its pose at the end of this
 // substep s, t = (s + 1)·dt after the tick starts, from the domain's row for
-// this tick. Matches matter::body_pose_at for prescribed bodies.
+// this tick. Matches liquid::bodies::body_pose_at for prescribed bodies.
 //
 // Prescribed (w of position_inv_mass = 0): translation along the linear
 // velocity, rotation by the constant angular velocity, which is the slerp
@@ -20,7 +20,7 @@
 // inverse inertia. The row carries v_s and ω_s out, the body's velocity for
 // the collider projection.
 //
-// ABI: `bodies` (MatterBody → Element) is gathered at row
+// ABI: `bodies` (LiquidBody → Element) is gathered at row
 // (tick_index − first_tick)·body_count + idx; a row past `rows` comes out
 // disabled (accel_shape.w = −1). `reaction` (16 words per body) is read only
 // when dynamic_count > 0.
@@ -62,7 +62,7 @@ fn body(
             b.position_inv_mass.xyz + b.linear_velocity.xyz * t,
             b.position_inv_mass.w,
         );
-        b.rotation = matter_turn(b.rotation, b.angular_velocity.xyz, t);
+        b.rotation = liquid_turn(b.rotation, b.angular_velocity.xyz, t);
         return b;
     }
 
@@ -102,7 +102,7 @@ fn body(
     let turn = step_dt * (steps * w0 + step_dt * ramp * alpha + s * dw - n * ww);
 
     b.position_inv_mass = vec4<f32>(b.position_inv_mass.xyz + moved, inv_mass);
-    b.rotation = matter_turn(b.rotation, turn, 1.0);
+    b.rotation = liquid_turn(b.rotation, turn, 1.0);
     b.linear_velocity = vec4<f32>(velocity, b.linear_velocity.w);
     b.angular_velocity = vec4<f32>(omega, b.angular_velocity.w);
     return b;

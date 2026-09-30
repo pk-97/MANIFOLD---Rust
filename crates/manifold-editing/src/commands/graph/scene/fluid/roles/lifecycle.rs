@@ -14,6 +14,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
     GROUP_TYPE_ID,
 };
+use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 
@@ -25,7 +26,7 @@ use super::super::super::super::{
 };
 use super::super::super::{prune_scene_object_metadata, prune_scene_target_params, restore_scene_owner_graph};
 use super::{
-    FLUID_TYPE_ID, ROLE_SOURCE_TYPE_ID, collision_free_export_port, first_free_role_port,
+    ROLE_SOURCE_TYPE_ID, collision_free_export_port, first_free_role_port,
     graph_level as level_ref,
     resolve_domain_ref, route_role_to_domain,
 };
@@ -95,7 +96,7 @@ pub fn scene_fluid_role_assignments(
             && outgoing.all(|wire| {
                 body.nodes
                     .iter()
-                    .any(|node| node.id == wire.to_node && node.type_id == FLUID_TYPE_ID)
+                    .any(|node| node.id == wire.to_node && is_liquid_domain(&node.type_id))
             })
         {
             continue;
@@ -696,7 +697,7 @@ fn trace_connections(
             .iter()
             .find(|node| node.id == wire.to_node)
             .ok_or_else(|| "Fluid role route targets a missing node".to_string())?;
-        if target.type_id == FLUID_TYPE_ID {
+        if is_liquid_domain(&target.type_id) {
             let Some(index) = wire
                 .to_port
                 .strip_prefix("role_")

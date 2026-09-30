@@ -90,7 +90,7 @@ impl MatterScene {
         let registry = PrimitiveRegistry::with_builtin();
         let mut graph = Graph::new();
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
-        let domain = add(&mut graph, "node.matter_domain");
+        let domain = add(&mut graph, manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
         let fill = add(&mut graph, "node.matter_fill");
         let state = add(&mut graph, "node.matter_state");
         let zero = add(&mut graph, "node.zero_array");
@@ -285,7 +285,7 @@ impl MatterScene {
     /// Collider roles as the presets wire them: a transform into a built-in
     /// unit cube role source into the domain, which the fill seeds around;
     /// node.matter_move_bodies in the
-    /// region feeding the grid update; node.matter_solid_distance feeding the
+    /// region feeding the grid update; node.liquid_solid_distance feeding the
     /// frame's solid lattice. Returns each collider's transform node.
     fn wire_colliders(
         graph: &mut Graph,
@@ -345,7 +345,7 @@ impl MatterScene {
         for port in ["shapes", "atlas", "body_count"] {
             wire(graph, (domain, port), (g2p, port));
         }
-        let solid = add(graph, "node.matter_solid_distance");
+        let solid = add(graph, "node.liquid_solid_distance");
         for port in [
             "bodies", "shapes", "atlas", "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size",
             "nodes_x", "nodes_y", "nodes_z", "closed_faces", "body_count",

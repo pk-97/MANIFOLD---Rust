@@ -43,7 +43,7 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     let mut def = fixture();
     def.nodes.push(
         serde_json::from_value(serde_json::json!({
-            "id":14,"nodeId":"fluid","typeId":"node.fluid_surface","params":{
+            "id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,"params":{
                 "resolution":{"type":"Int","value":8},
                 "fill_height":{"type":"Float","value":0.0},
                 "emission":{"type":"Float","value":0.0}

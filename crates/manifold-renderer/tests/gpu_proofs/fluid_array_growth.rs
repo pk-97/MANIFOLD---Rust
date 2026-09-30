@@ -47,7 +47,7 @@ fn make_runtime(harness: &harness::ParityHarness, max_capacity: f32) -> Runtime 
     let mut graph = Graph::new();
     let fluid = graph.add_node(
         registry
-            .construct("node.fluid_surface")
+            .construct(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
             .expect("FluidSurface primitive"),
     );
     let wave = graph.add_node(Box::new(WaveShearMesh::new()));

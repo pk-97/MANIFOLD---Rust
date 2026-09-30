@@ -12,6 +12,7 @@ use manifold_core::effect_graph_def::{
     StringBindingDef,
 };
 use manifold_core::flatten::flatten_groups;
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use sha2::{Digest, Sha256};
 
 use crate::node_graph::PrimitiveRegistry;
@@ -52,7 +53,7 @@ pub(super) fn prepare(
         {
             node.node_id = NodeId::new(handle);
         }
-        if node.type_id == "node.fluid_surface" && node.node_id.is_empty() {
+        if node.type_id == FLIP_DOMAIN_TYPE_ID && node.node_id.is_empty() {
             return Err(
                 "fluid source has no stable node identity or legacy handle; recording provenance is unsupported"
                     .into(),
@@ -62,7 +63,7 @@ pub(super) fn prepare(
     let has_fluid = flat
         .nodes
         .iter()
-        .any(|node| node.type_id == "node.fluid_surface");
+        .any(|node| node.type_id == FLIP_DOMAIN_TYPE_ID);
 
     // A normal generator must retain all of its existing load behaviour.  In
     // particular, do not validate unrelated malformed wires or invoke the
@@ -75,7 +76,7 @@ pub(super) fn prepare(
     let fluids: Vec<NodeId> = graph
         .nodes
         .values()
-        .filter(|node| node.type_id == "node.fluid_surface")
+        .filter(|node| node.type_id == FLIP_DOMAIN_TYPE_ID)
         .map(|node| node.node_id.clone())
         .collect();
     let coupled = prepare_coupled_scenes(canonical, registry)
@@ -725,7 +726,7 @@ fn is_fluid_cache_param(graph: &SourceGraph, node_id: &NodeId, param: &str) -> b
         && graph
             .nodes
             .get(node_id.as_str())
-            .is_some_and(|node| node.type_id == "node.fluid_surface")
+            .is_some_and(|node| node.type_id == FLIP_DOMAIN_TYPE_ID)
 }
 
 fn is_source_asset(type_id: &str) -> bool {

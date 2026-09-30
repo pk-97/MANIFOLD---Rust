@@ -67,7 +67,7 @@ impl PresetRuntime {
             // Do not move arbitrary GPU primitives or copy backend slot IDs.
             if matches!(
                 new.node.type_id().as_str(),
-                "node.fluid_surface"
+                manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
                     | "node.physics_world"
                     | "node.rigid_body"
                     | "node.fluid_role_source"

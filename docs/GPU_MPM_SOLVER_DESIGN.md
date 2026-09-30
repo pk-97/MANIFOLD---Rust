@@ -481,7 +481,7 @@ only the `Arc` of the prepared geometry; no channel, mutex or long-lived thread.
 **D26 — A role's scale applies at use.** A lattice is built once in the geometry's own
 unscaled frame. Samplers map a world point through the pose and divide by the per-axis
 scale (world → local); a local distance becomes metres by the smallest scale, which
-never overstates the gap for a non-uniform scale. `MatterShape` is 48 bytes: origin and
+never overstates the gap for a non-uniform scale. `LiquidShape` is 48 bytes: origin and
 spacing, dims, atlas offset, and the scale with its minimum in w.
 
 **D27 — One lattice per geometry: the longest extent over 32, two spacings of padding.**
@@ -494,13 +494,13 @@ corners by up to a spacing; P4 decides whether to raise the count for large coll
 
 **D28 — Bodies are per-tick rows; the pose is evaluated per substep.**
 `node.matter_domain` records each collider's transform once per display frame into
-`InputHistory` at the frame's target time and publishes one `MatterBody` row per body
+`InputHistory` at the frame's target time and publishes one `LiquidBody` row per body
 per tick of the frame: the tick-start pose, and the linear and angular velocity that
 carry it to the tick-end pose. A restart publishes the first tick's rows with no tick
 run, so the fill sees the starting pose. Rows upload through the inline uniform path in
 encoder order. `node.matter_move_bodies` poses each body at the end of its substep,
 `t = (substep_in_tick + 1)·step_dt`, the slerp between the tick's end poses;
-`node.matter_solid_distance` poses the last row at the frame's end.
+`node.liquid_solid_distance` poses the last row at the frame's end.
 
 **D29 — Colliders are projected on the grid and pushed out on the points (amends
 section 4.1 steps 4 and 6).** The grid projection alone leaves points up to about a cell
@@ -511,9 +511,9 @@ point at local distance φ < 0 steps along the lattice normal onto the surface
 largest possible gap), and the inward normal part of its velocity relative to the
 body is removed. Tangential motion is untouched and relative speed never grows. The
 removed velocity is momentum the body takes (D30). The four collider atoms share one sampler: the
-`matter_pose.wgsl` and `matter_collider.wgsl` includes; each body defines only the
+`liquid_pose.wgsl` and `liquid_collider.wgsl` includes; each body defines only the
 atlas read over its own gathered binding. Gate: no point ends a tick more than 0.5·dx
-inside a collider. **MatterClock epochs start at 1**, 0 meaning not started: with the
+inside a collider. **LiquidClock epochs start at 1**, 0 meaning not started: with the
 first epoch at 0, a domain holding zeros while a lattice built looked like a started
 epoch, and the state never seeded.
 
@@ -577,7 +577,8 @@ pub struct MatterMaterial {
 }
 
 /// A collider, source, drain or coupled body during a tick. 128 bytes. Up to 64.
-pub struct MatterBody {
+/// Shared by every GPU liquid: `liquid::bodies` (LIQUID_SOLVER_SEAM_DESIGN.md P1).
+pub struct LiquidBody {
     pub position_inv_mass: [f32; 4],   // world centre of mass; w = 1/m (0 = prescribed)
     pub rotation: [f32; 4],            // quaternion xyzw
     pub linear_velocity: [f32; 4],     // w = friction
@@ -590,7 +591,7 @@ pub struct MatterBody {
 
 /// Body-local distance lattice descriptor. 48 bytes (P2a: grew from 32 to carry the
 /// role's scale, which roles apply at use, not at preparation).
-pub struct MatterShape {
+pub struct LiquidShape {
     pub origin_spacing: [f32; 4],      // local lattice min xyz, unscaled; w = spacing (m)
     pub dims_x: u32, pub dims_y: u32, pub dims_z: u32,
     pub atlas_offset: u32,             // index of node (0, 0, 0) in the atlas's halves
@@ -623,7 +624,7 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | `node.matter_stats` | `points`, `grid`, `accum`, `material`, `tick_end` → `stats: Array(u32)` | P1 |
 | `node.matter_frame` | `points`, `stats`, `material`, lattice wires, optional `solid`, `simulation_time` → the surface seam outputs: `particles_a`, `particles_b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span` | P1 |
 | `node.matter_move_bodies` | `bodies` (the domain's tick rows), `tick_index`, `first_tick`, `substep_in_tick`, `step_dt`, `body_count`, `rows`; P2b adds `reaction: Array(i32)`, `substeps_per_tick`, `momentum_unit`, `cell_size`, `dynamic_count` → `bodies_out` | P2a, P2b |
-| `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask, `body_count`, `rows`, `tick_seconds` → `solid: Array(f32)`; once per frame after the region, poses at the last tick's end | P2a |
+| `node.liquid_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask, `body_count`, `rows`, `tick_seconds` → `solid: Array(f32)`; once per frame after the region, poses at the last tick's end | P2a |
 | `node.matter_body_reaction` | `grid`, `bodies` (from `matter_move_bodies`), `shapes`, `atlas`, lattice wires, `step_dt`, `gravity_x/y/z`, closed-face mask, `momentum_unit`, `body_count`, `dynamic_count`, `substeps_per_tick`, `tick_index`, `substep_in_tick`, `reaction: Array(i32)` → `reaction_out` (aliased atomic, into `grid_to_matter.reaction`) | P2b |
 | `node.matter_emit` | `points`, `bodies`, `shapes`, `atlas`, lattice wires, `tick_start`, `material`, `points_per_cell` → `points_out` | P3b |
 | `node.matter_drain` | `points`, `bodies`, `shapes`, `atlas`, lattice wires → `points_out` | P3b |
@@ -772,7 +773,7 @@ Per display frame N, inside the contracted coupled group (liquid side first, as
    holds and republishes the previous pair. Lag grows and is reported.
 2. Complete → read the per-body accumulators, convert to world impulses, and run
    `RigidSimulation::advance_with_coupling` with `AdvancementPolicy::Worker { max_ticks: 1 }`
-   and a `StepCoupling` implementation (`MatterCoupling`) whose single `exchange` applies
+   and a `StepCoupling` implementation (`LiquidCoupling`) whose single `exchange` applies
    the impulses through `PhysicsWorld::apply_impulses` and whose `finish` captures each
    body's pose, velocities, inverse mass, world inverse inertia and predicted external
    acceleration (`PhysicsWorld::dynamics`, as FLIP's exchange does). Box3D steps tick k
@@ -956,7 +957,7 @@ module; the honest count.
 
 | Atom | Class | Proof |
 |---|---|---|
-| `zero_array`, `matter_grid_update`, `matter_move_bodies`, `matter_solid_distance`, `matter_drain`, `matter_update_deformation` | Barrier-free per element: `wgsl_body` + `fusion_kind` + `input_access` (`BufferGather` for lattice, atlas and body reads), pipeline from `standalone_for_spec::<Self>()` | Value `gpu_tests` against CPU-computed expected output; fused-vs-unfused proof for every pair `graph-tool fusion` places in one region. |
+| `zero_array`, `matter_grid_update`, `matter_move_bodies`, `liquid_solid_distance`, `matter_drain`, `matter_update_deformation` | Barrier-free per element: `wgsl_body` + `fusion_kind` + `input_access` (`BufferGather` for lattice, atlas and body reads), pipeline from `standalone_for_spec::<Self>()` | Value `gpu_tests` against CPU-computed expected output; fused-vs-unfused proof for every pair `graph-tool fusion` places in one region. |
 | `matter_to_grid`, `matter_body_reaction`, `grid_to_matter` | Atomic scatter, one atomic output each, declared exactly as `scatter_particles_3d.rs:95-98` (Boundary, `atomic_outputs`, standalone codegen); `grid_to_matter`'s is a side output next to its aliased points (D30); after L1, `matter_to_grid` uses workgroup memory and barriers (exclusion 1). ⚠ VERIFY-AT-IMPL the `boundary_reason` the precedent carries | Values against the f64 reference with the fixed-point tolerance; bit-identity between baseline and L1. |
 | `matter_emit`, `matter_compact`, `matter_stats` | Exempt, exclusion 1 of the ADDING_PRIMITIVES.md "The codegen path is mandatory" scope test (multi-pass scan, barriered reduction), `standalone_for_boundary_spec` | Values against CPU scans and sums, including sizes 1, 255, 256, 257 and 2²⁰+3. |
 | `matter_state`, `matter_frame` | Exempt, exclusion 2 (cross-frame state) | Clock and ring unit tests; frame value tests. |
@@ -1416,6 +1417,8 @@ at the end of the phase.
 
 ### P3a — The liquid-domain seam (seam brief)
 
+Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P2a (One list) and P2b (One walk and the scene contract).
+
 - **Entry state:** P2b merged. Re-derive the inventory: `rg -n '"node\.fluid_surface"' crates -g '*.rs'`. Snapshot at `c8961489d`: 94 hits in 46 files; 53 in 25 non-test files, about 40 outside inline test modules (section 1.1 row). If the count differs, list the new sites before touching anything.
 - **Read-back:** D17, D22; section 10.
 - **Old → new:** each production test `type_id == "node.fluid_surface"` meaning "a liquid
@@ -1466,6 +1469,8 @@ at the end of the phase.
 - **Forbidden:** atomic birth counters; reordering storage; matter role kinds.
 
 ### P3c — Forces and impulses (MIDI, OSC, beats)
+
+Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P8 (Forces and impulses for GPU liquids).
 
 - **Entry state:** P3b merged. Anchors: `rg -n 'pub fn enqueue_impulse' crates/manifold-renderer/src/node_graph/fluid/impulses.rs` (`:60` at `c8961489d`), `rg -n 'acceleration_field' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs`.
 - **Read-back:** D13; section 6; FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle).
@@ -1529,6 +1534,8 @@ the gate was; it does not run for water.
 
 ### P4b — Add Fluid authors matter (after Peter's go)
 
+Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liquid template).
+
 - **Entry state:** a closed `decision` bead with Peter's go from P4. Anchor: `rg -n 'pub struct AddSceneFluidCommand' crates/manifold-editing/src/commands/graph/scene/fluid.rs`.
 - **Read-back:** D17, D22, D23; GROUPING_GRAPHS.md.
 - **Deliverables:** `AddSceneFluidCommand` inserts the Live Matter and Liquid Surface
@@ -1560,6 +1567,8 @@ record types beyond `MatterDeformation`.
 
 ### P6 — Whitewater
 
+Superseded by BUG-imy3 (GPU whitewater, solver-agnostic) and LIQUID_SOLVER_SEAM_DESIGN.md P10 (Grid outputs).
+
 - **Entry state:** P4 go; the surface design's P8 whitewater path exists.
 - **Read-back:** D24; FLIP whitewater params in `WaterDamBreak.json`.
 - **Deliverables:** grid-based potentials (trapped air from velocity difference, wave
@@ -1574,6 +1583,8 @@ record types beyond `MatterDeformation`.
 - **Forbidden:** ids for whitewater; screen-space foam; a whitewater renderer.
 
 ### P7 — Particle-frame bake
+
+Keys on `is_liquid_domain` (LIQUID_SOLVER_SEAM_DESIGN.md section 3.5 (Scene recognition)), never on `MATTER_DOMAIN_TYPE_ID`.
 
 - **Entry state:** P4 go. ⚠ VERIFY-AT-IMPL the `fluid_cache.rs` writer and the take journal (`R/fluid/take.rs`) before pinning the payload.
 - **Read-back:** D24; the surface design's D12.

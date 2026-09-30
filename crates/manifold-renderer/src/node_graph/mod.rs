@@ -51,6 +51,7 @@ pub mod fluid;
 pub(crate) mod physics_scene;
 pub mod fluid_role;
 pub mod fluid_particles;
+pub mod liquid;
 pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;

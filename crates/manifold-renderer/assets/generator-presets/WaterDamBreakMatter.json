@@ -1002,9 +1002,9 @@
           },
           {
             "id": 14,
-            "typeId": "node.matter_solid_distance",
+            "typeId": "node.liquid_solid_distance",
             "handle": "Solid Distance",
-            "nodeId": "matter_solid_distance"
+            "nodeId": "liquid_solid_distance"
           },
           {
             "id": 15,
@@ -2165,15 +2165,15 @@
               },
               "stretch": {
                 "type": "Float",
-                "value": 4.0
+                "value": 1.0
               },
               "smoothing": {
                 "type": "Float",
-                "value": 0.9
+                "value": 0.0
               },
               "isolated_scale": {
                 "type": "Float",
-                "value": 0.6
+                "value": 1.0
               },
               "min_neighbours": {
                 "type": "Int",

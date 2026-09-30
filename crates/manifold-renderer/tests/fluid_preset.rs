@@ -171,7 +171,7 @@ fn water_basin_compiles_with_fluid_scene_and_stable_card_bindings() {
     let fluid = nodes
         .get("fluid_surface")
         .expect("fluid_surface node is authored");
-    assert_eq!(fluid.type_id, "node.fluid_surface");
+    assert_eq!(fluid.type_id, manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
     assert_eq!(int_param(fluid, "resolution"), 24);
     assert_eq!(float_param(fluid, "domain_size"), 4.0);
     assert_eq!(float_param(fluid, "fill_height"), 0.4);

@@ -8,6 +8,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
     GROUP_TYPE_ID, GroupDef, InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
+use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
@@ -21,7 +22,6 @@ use super::super::{
 };
 
 const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
-const FLUID_TYPE_ID: &str = "node.fluid_surface";
 const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 const CUBE_MESH_TYPE_ID: &str = "node.cube_mesh";
 const GLTF_MESH_TYPE_ID: &str = "node.gltf_mesh_source";
@@ -410,7 +410,7 @@ fn discover_role_object(
         .group
         .as_deref()
         .ok_or_else(|| "Assign Fluid Role selected object group is malformed".to_string())?;
-    if group.nodes.iter().any(|node| node.type_id == FLUID_TYPE_ID) {
+    if group.nodes.iter().any(|node| is_liquid_domain(&node.type_id)) {
         return Err("Assign Fluid Role cannot target a group containing a fluid surface".into());
     }
     if group
@@ -649,8 +649,8 @@ pub(super) fn resolve_domain_ref(
     }
     let fluid = nodes
         .iter()
-        .find(|node| node.node_id == domain.node && node.type_id == FLUID_TYPE_ID)
-        .ok_or_else(|| "Assign Fluid Role domain must resolve to node.fluid_surface".to_string())?;
+        .find(|node| node.node_id == domain.node && is_liquid_domain(&node.type_id))
+        .ok_or_else(|| "Assign Fluid Role domain must resolve to a liquid domain".to_string())?;
     Ok((runtime_scope, fluid.id))
 }
 
@@ -663,7 +663,7 @@ fn first_free_role_port(
         .ok_or_else(|| "Assign Fluid Role domain scope is unavailable".to_string())?;
     if !nodes
         .iter()
-        .any(|node| node.id == fluid_id && node.type_id == FLUID_TYPE_ID)
+        .any(|node| node.id == fluid_id && is_liquid_domain(&node.type_id))
     {
         return Err("Assign Fluid Role domain is unavailable".into());
     }
@@ -879,7 +879,7 @@ fn route_role_to_domain(
         if !body
             .nodes
             .iter()
-            .any(|node| node.id == fluid_id && node.type_id == FLUID_TYPE_ID)
+            .any(|node| node.id == fluid_id && is_liquid_domain(&node.type_id))
         {
             return Err("Assign Fluid Role domain is unavailable inside its scope".into());
         }

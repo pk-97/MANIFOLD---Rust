@@ -8,10 +8,11 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
-use crate::node_graph::matter::{MatterBody, MatterGridNode, MatterShape, REACTION_WORDS, momentum_unit_fits};
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::matter::{MatterGridNode, REACTION_WORDS, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
+use super::matter_common::{MATTER_WALLS, read_lattice};
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -45,8 +46,8 @@ crate::primitive! {
     purpose: "Add the liquid's push on each dynamic body for this substep: repeat the grid's collider projection node by node and atomically add the momentum each body took from the node (and its turning moment about the body's centre of mass) to that body's reaction words, plus the same terms weighted by the substep's place in the tick.",
     inputs: {
         grid: Array(MatterGridNode) required,
-        bodies: Array(MatterBody) optional,
-        shapes: Array(MatterShape) optional,
+        bodies: Array(LiquidBody) optional,
+        shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         reaction: Array(i32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -96,7 +97,7 @@ crate::primitive! {
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/matter_body_reaction_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS],
     atomic_outputs: ["reaction_out"],
 }
 
@@ -145,7 +146,7 @@ impl Primitive for MatterBodyReaction {
             return;
         }
         let nodes = lattice.node_count().min((grid.size / std::mem::size_of::<MatterGridNode>() as u64) as u32);
-        let body_rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64)
+        let body_rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64)
             .min(reaction.size / (REACTION_WORDS as u64 * 4)) as i32;
         let body_count = body_count.min(body_rows);
         if nodes == 0 || body_count == 0 {

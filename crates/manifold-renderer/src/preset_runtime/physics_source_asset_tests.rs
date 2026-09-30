@@ -82,14 +82,14 @@ fn asset_graph() -> (
     let mut graph = Graph::new();
     let first_fluid = graph.add_node(Box::new(SourceObserver(
         0,
-        EffectNodeType::new("node.fluid_surface"),
+        EffectNodeType::new(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
     )));
     let first_asset = graph.add_node(Box::new(AssetProbe(EffectNodeType::new(
         "node.asset_probe",
     ))));
     let second_fluid = graph.add_node(Box::new(SourceObserver(
         1,
-        EffectNodeType::new("node.fluid_surface"),
+        EffectNodeType::new(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
     )));
     let second_asset = graph.add_node(Box::new(AssetProbe(EffectNodeType::new(
         "node.asset_probe",

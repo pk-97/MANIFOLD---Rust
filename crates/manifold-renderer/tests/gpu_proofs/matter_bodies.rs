@@ -7,10 +7,8 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
-use manifold_renderer::node_graph::matter::{
-    MatterBody, MatterGridNode, MatterLattice, MatterPoint, MatterShape, REACTION_WORDS, body_pose_at, momentum_unit,
-    pack_distance_atlas,
-};
+use manifold_renderer::node_graph::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use manifold_renderer::node_graph::matter::{MatterGridNode, MatterLattice, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
     PrimitiveRegistry, ResourceId, StateStore, compile, pre_allocate_resources,
@@ -105,13 +103,13 @@ fn matter_prescribed_pose_interpolates() {
     let tick = TICK as f32;
     let axis = [0.6f32, 0.0, 0.8];
     let turning = |rate: f32| [axis[0] * rate, axis[1] * rate, axis[2] * rate, 0.0];
-    let row = |position: [f32; 3], velocity: [f32; 3], angular: [f32; 4], shape: f32| MatterBody {
+    let row = |position: [f32; 3], velocity: [f32; 3], angular: [f32; 4], shape: f32| LiquidBody {
         position_inv_mass: [position[0], position[1], position[2], 0.0],
         rotation: [0.0, 0.3826834, 0.0, 0.9238795],
         linear_velocity: [velocity[0], velocity[1], velocity[2], 0.4],
         angular_velocity: angular,
         accel_shape: [0.0, 0.0, 0.0, shape],
-        ..MatterBody::default()
+        ..LiquidBody::default()
     };
     let rows = [
         // Tick 10 (first of the frame).
@@ -125,7 +123,7 @@ fn matter_prescribed_pose_interpolates() {
     ];
     let mut bench = Bench::new(
         "node.matter_move_bodies",
-        vec![("bodies", HostArray::new::<MatterBody>(rows.len() as u32))],
+        vec![("bodies", HostArray::new::<LiquidBody>(rows.len() as u32))],
         &["bodies_out"],
         |_, _| {},
     );
@@ -139,7 +137,7 @@ fn matter_prescribed_pose_interpolates() {
     for substep in 0..substeps {
         bench.set("substep_in_tick", substep as f32);
         bench.run();
-        let out: Vec<MatterBody> = bench.read("bodies_out");
+        let out: Vec<LiquidBody> = bench.read("bodies_out");
         for (b, source) in rows[3..].iter().enumerate() {
             let (position, rotation) = body_pose_at(source, (substep + 1) as f32 * step_dt);
             let got = out[b];
@@ -156,7 +154,7 @@ fn matter_prescribed_pose_interpolates() {
     eprintln!("matter_prescribed_pose_interpolates: worst position {:e} m, rotation {:e}", worst.0, worst.1);
     assert!(worst.0 < 1e-6 && worst.1 < 1e-6, "{worst:?}");
     // At the tick's last substep the turning body has made the full slerp.
-    let out: Vec<MatterBody> = bench.read("bodies_out");
+    let out: Vec<LiquidBody> = bench.read("bodies_out");
     let half = 0.5 * 3.5 * tick;
     let q = rows[5].rotation;
     let d = [-axis[0] * half.sin(), 0.0, -axis[2] * half.sin(), half.cos()];
@@ -170,7 +168,7 @@ fn matter_prescribed_pose_interpolates() {
     // A row past `rows` is disabled.
     bench.set("rows", 4.0);
     bench.run();
-    let out: Vec<MatterBody> = bench.read("bodies_out");
+    let out: Vec<LiquidBody> = bench.read("bodies_out");
     assert_eq!(out[0].accel_shape[3], 0.0);
     assert_eq!(out[1].accel_shape[3], -1.0);
 }
@@ -202,7 +200,7 @@ fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
 }
 
 /// Trilinear distance from the packed atlas, as `gu_lattice` reads it.
-fn lattice_at(atlas: &[u32], shape: &MatterShape, g: [f32; 3]) -> f32 {
+fn lattice_at(atlas: &[u32], shape: &LiquidShape, g: [f32; 3]) -> f32 {
     let dims = [shape.dims_x, shape.dims_y, shape.dims_z];
     let value = |node: [u32; 3]| {
         let index = shape.atlas_offset + node[0] + dims[0] * (node[1] + dims[1] * node[2]);
@@ -234,7 +232,7 @@ fn matter_grid_update_projects_colliders() {
     let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
-    let shape = MatterShape {
+    let shape = LiquidShape {
         origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
         dims_x: lattice.dims[0],
         dims_y: lattice.dims[1],
@@ -243,12 +241,12 @@ fn matter_grid_update_projects_colliders() {
         scale_min: [1.2, 1.0, 1.5, 1.0],
     };
     let angle = std::f32::consts::FRAC_PI_6;
-    let body = MatterBody {
+    let body = LiquidBody {
         position_inv_mass: [0.5, 0.45, 0.5, 0.0],
         rotation: [0.0, (0.5 * angle).sin(), 0.0, (0.5 * angle).cos()],
         linear_velocity: [0.5, 0.0, 0.0, 0.3],
         angular_velocity: [0.0, 1.0, 0.0, 0.0],
-        ..MatterBody::default()
+        ..LiquidBody::default()
     };
     // Every node holds 8 mass units moving at v0.
     let v0 = [-1.0f32, 0.3, 0.2];
@@ -261,8 +259,8 @@ fn matter_grid_update_projects_colliders() {
         vec![
             ("accum", HostArray::new::<i32>(accum.len() as u32)),
             ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
-            ("bodies", HostArray::new::<MatterBody>(1)),
-            ("shapes", HostArray::new::<MatterShape>(1)),
+            ("bodies", HostArray::new::<LiquidBody>(1)),
+            ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
         ],
         &["grid_out"],
@@ -348,7 +346,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
     let mut atlas = Vec::new();
     pack_distance_atlas(&lattice.values, &mut atlas);
-    let shape = MatterShape {
+    let shape = LiquidShape {
         origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
         dims_x: lattice.dims[0],
         dims_y: lattice.dims[1],
@@ -357,12 +355,12 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         scale_min: [1.2, 1.0, 1.5, 1.0],
     };
     let angle = std::f32::consts::FRAC_PI_6;
-    let dynamic = MatterBody {
+    let dynamic = LiquidBody {
         position_inv_mass: [0.0, 0.5, 0.0, 2.0],
         rotation: [0.0, (0.5 * angle).sin(), 0.0, (0.5 * angle).cos()],
         linear_velocity: [0.5, 0.0, 0.0, 0.3],
         angular_velocity: [0.0, 1.0, 0.0, 0.0],
-        ..MatterBody::default()
+        ..LiquidBody::default()
     };
     // A 12³ block of points through the box, each moving at v0. The unit
     // domain spans x and z in [−0.5, 0.5] and y in [0, 1].
@@ -391,8 +389,8 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         vec![
             ("points", HostArray::new::<MatterPoint>(points.len() as u32)),
             ("grid", HostArray::new::<MatterGridNode>(nodes)),
-            ("bodies", HostArray::new::<MatterBody>(1)),
-            ("shapes", HostArray::new::<MatterShape>(1)),
+            ("bodies", HostArray::new::<LiquidBody>(1)),
+            ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
         ],
@@ -411,7 +409,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     ] {
         bench.set(name, value);
     }
-    let run = |bench: &mut Bench, body: MatterBody| -> (Vec<MatterPoint>, Vec<i32>) {
+    let run = |bench: &mut Bench, body: LiquidBody| -> (Vec<MatterPoint>, Vec<i32>) {
         bench.fill(0, &points);
         bench.fill(2, &[body]);
         bench.fill(5, &[0i32; REACTION_WORDS as usize]);
@@ -456,7 +454,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     assert!(worst < f64::from(pushed) + 1.0, "reaction words {words:?} against {expected:?}");
     assert!(words[12..16].iter().all(|&w| w == 0), "padding untouched: {words:?}");
 
-    let prescribed = MatterBody { position_inv_mass: [0.0, 0.5, 0.0, 0.0], ..dynamic };
+    let prescribed = LiquidBody { position_inv_mass: [0.0, 0.5, 0.0, 0.0], ..dynamic };
     let (unchanged, words) = run(&mut bench, prescribed);
     assert!(words.iter().all(|&w| w == 0), "a prescribed body takes no reaction: {words:?}");
     assert_eq!(bytemuck::cast_slice::<MatterPoint, u32>(&unchanged), bytemuck::cast_slice::<MatterPoint, u32>(&moved), "the push-out itself does not depend on the body's mass");
