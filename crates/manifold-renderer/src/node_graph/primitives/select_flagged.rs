@@ -24,7 +24,7 @@ struct SelectUniforms {
     _pad1: u32,
 }
 
-pub(super) fn capacity(params: &ParamValues) -> u32 {
+pub(crate) fn capacity(params: &ParamValues) -> u32 {
     match params.get("capacity") {
         Some(ParamValue::Float(v)) => v.round().clamp(1.0, 16_777_216.0) as u32,
         _ => 32_768,

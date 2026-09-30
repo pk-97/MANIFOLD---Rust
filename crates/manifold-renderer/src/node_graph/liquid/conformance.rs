@@ -6,10 +6,13 @@
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, SWASH_DOMAIN_TYPE_ID};
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
+use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS, WATER_DENSITY};
+use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use crate::node_graph::primitives::swash_preset::{SHIPPED_PRESET, WaterScene, render_def};
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -191,6 +194,27 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
      ticks, and no box scene a preset can carry";
 
+const SWASH_COUPLES_IN_P3B: &str = "owed to SWASH P3b (bodies join the pressure solve): until then the SWASH \
+     domain refuses Collider roles and a physics world by name, so no box scene exists";
+
+const GPU_IMPULSES_IN_P8: &str = "owed to P8: GPU liquids refuse impulses until P8 routes them (LIQUID_SCENE_OWED)";
+
+/// SWASH's step atoms that gather instead of scattering (FFT_WATER_SOLVER_DESIGN.md
+/// D7 (gather-form transfers, no atomics), D11 (chart sums by column walk)).
+const SWASH_ATOMIC_FREE: [&str; 11] = [
+    "node.cells_with_particles",
+    "node.particles_to_faces",
+    "node.face_gravity",
+    "node.extend_faces",
+    "node.face_divergence",
+    "node.subtract_pressure",
+    "node.density_source",
+    "node.faces_to_particles",
+    "node.chart_entries",
+    "node.chart_sums",
+    "node.chart_spread",
+];
+
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     LiquidSolverRow {
         type_id: MATTER_DOMAIN_TYPE_ID,
@@ -250,10 +274,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
             names: &["Mesh Capacity"],
         }),
-        exempt: &[(
-            Check::PauseDiscardsImpulses,
-            "owed to P8: GPU liquids refuse impulses until P8 routes them (LIQUID_SCENE_OWED)",
-        )],
+        exempt: &[(Check::PauseDiscardsImpulses, GPU_IMPULSES_IN_P8)],
     },
     LiquidSolverRow {
         type_id: FLIP_DOMAIN_TYPE_ID,
@@ -312,7 +333,98 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             ),
         ],
     },
+    LiquidSolverRow {
+        type_id: SWASH_DOMAIN_TYPE_ID,
+        fixture: swash_fixture,
+        gpu: true,
+        coupled: false,
+        atomic_free: &SWASH_ATOMIC_FREE,
+        refusals: &[
+            RefusalCase {
+                what: "Resolution 63 on Dam Break SWASH: an odd side the pressure solve's transforms cannot take",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 63 }),
+                names: &["resolution"],
+            },
+            RefusalCase {
+                what: "Resolution 256 on Dam Break SWASH: more particles than a count carries exactly",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
+                names: &["resolution", "fill_height"],
+            },
+            RefusalCase {
+                what: "Resolution 32 on Dam Break SWASH, whose solver is built for 64",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 32 }),
+                names: &["resolution", "domain_size"],
+            },
+            RefusalCase {
+                what: "Initial Fill Height at the top of Dam Break SWASH's domain",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
+                names: &["fill_height"],
+            },
+            RefusalCase {
+                what: "Dam Break SWASH's initial volume turned 0.3 rad",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_source_param(def, SWASH_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
+                names: &["initial_volume"],
+            },
+            RefusalCase {
+                what: "Dam Break SWASH's initial volume moved out of the domain",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_source_param(def, SWASH_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
+                names: &["initial_volume"],
+            },
+        ],
+        totals: Some(TotalsReadout {
+            type_id: "node.liquid_state",
+            port: "stats",
+            words: LIQUID_STATS_WORDS as usize,
+            read: liquid_totals,
+        }),
+        state: Some(StateArray {
+            type_id: "node.liquid_state",
+            port: "out",
+            record_bytes: std::mem::size_of::<FluidParticle>(),
+        }),
+        overflow: Some(OverflowCase {
+            what: "Mesh Capacity 3 on Dam Break SWASH's liquid surface",
+            fixture: Fixture::DamBreak,
+            edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
+            names: &["Mesh Capacity"],
+        }),
+        exempt: &[
+            (Check::CoupledWorldStepsOnce, SWASH_COUPLES_IN_P3B),
+            (Check::Collision, SWASH_COUPLES_IN_P3B),
+            (Check::FloatingDraft, SWASH_COUPLES_IN_P3B),
+            (Check::HydrostaticLift, SWASH_COUPLES_IN_P3B),
+            (Check::FreeFlight, SWASH_COUPLES_IN_P3B),
+            (Check::PauseDiscardsImpulses, GPU_IMPULSES_IN_P8),
+        ],
+    },
 ];
+
+/// A particle liquid's tick statistics: it stores no elastic energy.
+fn liquid_totals(words: &[u32]) -> LiquidTotals {
+    let stats = LiquidTickStats::from_words(words);
+    LiquidTotals {
+        mass: f64::from(stats.mass),
+        momentum: stats.momentum.map(f64::from),
+        energy: f64::from(stats.kinetic),
+        nonfinite: stats.nonfinite,
+    }
+}
+
+/// SWASH's scenes at the 64³ lattice its solver is built for, in the render
+/// graph the app shows. No box scene until SWASH P3b.
+fn swash_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
+    match fixture {
+        Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
+        Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
+        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox => None,
+    }
+}
 
 fn matter_totals(words: &[u32]) -> LiquidTotals {
     let stats = MatterTickStats::from_words(words);
@@ -542,7 +654,11 @@ mod tests {
                 assert!(!row.exempt[..i].iter().any(|(c, _)| c == check), "{}: {check:?} is exempt twice", row.type_id);
             }
             for atom in row.atomic_free {
-                assert!(registry.construct(atom).is_some(), "{}: atomic-free atom {atom} is not registered", row.type_id);
+                let node = registry.construct(atom).unwrap_or_else(|| panic!("{}: atomic-free atom {atom} is not registered", row.type_id));
+                // Codegen wraps the body and its includes; any atomic lives there.
+                let body = node.wgsl_body().unwrap_or_else(|| panic!("{}: {atom} has no codegen body to check", row.type_id));
+                let atomic = std::iter::once(body).chain(node.wgsl_includes().iter().copied()).any(|wgsl| wgsl.contains("atomic"));
+                assert!(!atomic, "{}: atomic-free atom {atom} uses an atomic", row.type_id);
             }
             let mut scenes: Vec<Fixture> = Vec::new();
             for check in Check::ALL {

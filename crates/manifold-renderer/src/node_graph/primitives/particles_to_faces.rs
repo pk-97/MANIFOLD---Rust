@@ -17,7 +17,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Padded cells of the face grid: one more than the lattice per axis.
-pub(super) fn face_count(nodes: [u32; 3]) -> u64 {
+pub(crate) fn face_count(nodes: [u32; 3]) -> u64 {
     nodes.iter().map(|&n| u64::from(n) + 1).product()
 }
 

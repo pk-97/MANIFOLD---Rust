@@ -37,7 +37,6 @@ fn body(
     box_z1: i32,
     jitter: f32,
     seed: i32,
-    max_capacity: i32,
 ) -> Element {
     var out = Element(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = 2u * vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));

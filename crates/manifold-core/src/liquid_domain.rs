@@ -12,9 +12,12 @@ use crate::scene_index::{FlatSceneIndex, SceneIndexError};
 pub const FLIP_DOMAIN_TYPE_ID: &str = "node.fluid_surface";
 /// The GPU MLS-MPM liquid domain.
 pub const MATTER_DOMAIN_TYPE_ID: &str = "node.matter_domain";
+/// The SWASH liquid domain: PIC/FLIP particles on a face grid with a
+/// pressure solve made of FFTs (`docs/FFT_WATER_SOLVER_DESIGN.md`).
+pub const SWASH_DOMAIN_TYPE_ID: &str = "node.swash_domain";
 
 /// Every liquid domain type.
-pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID];
+pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, SWASH_DOMAIN_TYPE_ID];
 
 pub fn is_liquid_domain(type_id: &str) -> bool {
     LIQUID_DOMAIN_TYPE_IDS.contains(&type_id)
@@ -47,6 +50,15 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
             "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
             "closed_neg_z", "closed_pos_z",
             "points_per_cell", "stiffness", "cohesion", "liveliness",
+        ],
+    ),
+    (
+        SWASH_DOMAIN_TYPE_ID,
+        &[
+            "domain_size", "fill_height",
+            "gravity_x", "gravity", "gravity_z",
+            "speed", "reset",
+            "resolution",
         ],
     ),
 ];
@@ -118,9 +130,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn liquid_domain_predicate_covers_both() {
+    fn liquid_domain_predicate_covers_every_solver() {
         assert!(is_liquid_domain(FLIP_DOMAIN_TYPE_ID));
         assert!(is_liquid_domain(MATTER_DOMAIN_TYPE_ID));
+        assert!(is_liquid_domain(SWASH_DOMAIN_TYPE_ID));
         assert!(!is_liquid_domain("node.physics_world"));
         assert!(!is_liquid_domain("node.matter_state"));
     }
@@ -150,6 +163,7 @@ mod tests {
             "manifold-core/src/type_id_migration.rs",
             "manifold-renderer/src/node_graph/primitives/fluid_surface.rs",
             "manifold-renderer/src/node_graph/primitives/matter_domain.rs",
+            "manifold-renderer/src/node_graph/primitives/swash_domain.rs",
         ];
         let patterns: Vec<String> = LIQUID_DOMAIN_TYPE_IDS
             .iter()

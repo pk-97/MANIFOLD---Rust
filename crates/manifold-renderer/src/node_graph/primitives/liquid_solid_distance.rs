@@ -12,7 +12,6 @@ use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::lattice::LiquidLattice;
-use crate::node_graph::matter::solid_bytes;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::standalone_pipeline::standalone_pipeline;
@@ -67,7 +66,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Once per frame, after the Live Matter region. bodies, shapes, atlas, body_count, rows, the lattice and closed faces come from node.matter_domain; solid feeds node.matter_frame's solid input, which publishes it as the seam's solid_a/solid_b. solid holds exactly one value per lattice node, sized every frame from the same node count the dispatch covers; a lattice the device cannot hold is a named error.",
+    composition_notes: "Once per frame, after the liquid's tick region. bodies, shapes, atlas, body_count, rows, the lattice and closed faces come from the liquid's domain (node.matter_domain, node.swash_domain); solid feeds its particle frame's (node.matter_frame, node.liquid_frame) solid input, which publishes it as the seam's solid_a/solid_b. solid holds exactly one value per lattice node, sized every frame from the same node count the dispatch covers; a lattice the device cannot hold is a named error.",
     examples: ["WaterDamBreakMatter"],
     picker: { label: "Liquid Solid Distance", category: Atom },
     summary: "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
@@ -112,7 +111,7 @@ impl Primitive for LiquidSolidDistance {
         let nodes = lattice.node_count();
         // The storage follows the node count the dispatch covers, before it
         // is encoded.
-        let bytes = solid_bytes(lattice.nodes());
+        let bytes = lattice.solid_bytes();
         if self.solid.as_ref().is_none_or(|solid| solid.size < bytes) {
             let device = ctx.gpu_encoder().device;
             let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
@@ -185,6 +184,18 @@ mod tests {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
         assert_eq!(std::mem::size_of::<SolidDistanceUniforms>(), 48);
+    }
+
+    /// The kernel puts the walls where `LiquidLattice` pads them: the
+    /// authored box starts PADDING_NODES in and spans nodes − 1 − 2·PADDING
+    /// cells. Change both together.
+    #[test]
+    fn liquid_solid_distance_walls_sit_at_the_lattice_padding() {
+        use crate::node_graph::liquid::lattice::PADDING_NODES;
+        let shader = include_str!("shaders/liquid_solid_distance_body.wgsl");
+        let inset = format!("vec3<f32>({}.0 * cell_size)", PADDING_NODES);
+        let span = format!("n - vec3<u32>({}u)", 1 + 2 * PADDING_NODES);
+        assert!(shader.contains(&inset) && shader.contains(&span), "the kernel's walls are not at padding {PADDING_NODES}");
     }
 
     /// The solid atom poses bodies the way node.matter_move_bodies does:

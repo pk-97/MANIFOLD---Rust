@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 363 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 366 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (47)
+### Particles 3D (50)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -317,9 +317,11 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
-| Liquid Feedback | `node.liquid_feedback` | Filter | Keeps the liquid's particles from one frame to the next. |
 | Liquid Fill | `node.liquid_fill` | Source | Places the liquid's starting particles: a pool on the floor plus one block of water. |
+| Liquid Frame | `node.liquid_frame` | Filter | Hands a simulated particle liquid to the liquid surface, one frame per simulation tick. |
 | Liquid Solid Distance | `node.liquid_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
+| Liquid State | `node.liquid_state` | Filter | Keeps a particle liquid between frames and runs one pass of its simulation per tick. |
+| Liquid Stats | `node.liquid_stats` | Filter | Measures a particle liquid once per tick: how much there is, how fast it moves, and whether anything went wrong. |
 | Matter Body Reaction | `node.matter_body_reaction` | Filter | Measures how hard the liquid pushes on each floating object so the physics world can move it. |
 | Matter Domain | `node.matter_domain` | Source | Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves. |
 | Matter Fill | `node.matter_fill` | Source | Places the liquid's starting particles in the domain: a pool on the floor plus one box. |
@@ -342,6 +344,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
 | Subtract Pressure | `node.subtract_pressure` | Filter | Uses the pressure to push the liquid so it neither squashes nor stretches. |
+| SWASH Domain | `node.swash_domain` | Source | Sets up a SWASH liquid: its box, resolution, starting fill, gravity and speed. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 
@@ -493,7 +496,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (94)
+### Effect & generator presets (95)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -586,6 +589,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
+| `WaterDamBreakSwash` | Water — Dam Break (SWASH) | generator | Sim | 747 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |

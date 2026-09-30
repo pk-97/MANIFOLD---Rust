@@ -23,7 +23,7 @@ pub(super) const MAX_PASSES: u32 = 64;
 
 /// Floats in the small state for `passes`: the Hessenberg matrix
 /// ((passes + 1) × passes, column-major), cs and sn (passes each), g (passes + 1).
-pub(super) fn state_len(passes: u32) -> u32 {
+pub(crate) fn state_len(passes: u32) -> u32 {
     passes * passes + 4 * passes + 1
 }
 
@@ -34,7 +34,7 @@ pub(super) fn residual_offset(passes: u32) -> u32 {
 
 /// The passes param, rounded, at least 1. It can be past [`MAX_PASSES`]:
 /// the atoms refuse that by name instead of running fewer.
-pub(super) fn pass_count(params: &ParamValues) -> u32 {
+pub(crate) fn pass_count(params: &ParamValues) -> u32 {
     match params.get("passes") {
         Some(ParamValue::Float(v)) => v.round().max(1.0) as u32,
         _ => 24,

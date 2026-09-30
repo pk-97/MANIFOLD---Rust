@@ -967,6 +967,11 @@ fn liquid_export_frame_rate_independent() {
                 assert_eq!(both.probe.get("ticks"), 2.0, "30 fps frame {frame} ran {} ticks", both.probe.get("ticks"));
                 assert_eq!(later.probe.get("ticks"), 1.0);
                 assert_eq!(both.rows.len(), 2 * earlier.rows.len(), "30 fps frame {frame} holds two ticks of body rows");
+                // Uncoupled, the display sits one tick behind the target
+                // (section 3.4), the same at every frame rate. Coupled, it is
+                // the tick Box3D settled before the frame's ticks, so a
+                // 30 fps frame shows what the 60 fps frame before it showed.
+                let shown = if row.coupled { &earlier } else { &later };
                 let checks = [
                     ("first tick's body rows", first_difference(&both.rows[..earlier.rows.len()], &earlier.rows)),
                     ("second tick's body rows", first_difference(&both.rows[earlier.rows.len()..], &later.rows)),
@@ -976,7 +981,7 @@ fn liquid_export_frame_rate_independent() {
                         "display and simulation time",
                         first_difference(
                             &[both.probe.get("display_time").to_bits(), both.probe.get("simulation_time").to_bits()],
-                            &[earlier.probe.get("display_time").to_bits(), later.probe.get("simulation_time").to_bits()],
+                            &[shown.probe.get("display_time").to_bits(), later.probe.get("simulation_time").to_bits()],
                         ),
                     ),
                 ];

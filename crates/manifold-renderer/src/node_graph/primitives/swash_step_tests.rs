@@ -446,6 +446,10 @@ fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // Two particles against the walls, so the clamp is exercised.
     particles[0].position_radius[0] = MIN[0] + 1e-4;
     particles[1].position_radius[1] = MIN[1] + N[1] as f32 * H - 1e-4;
+    // Two broken particles: the move must leave them non-finite, never clamp
+    // or zero them, so the tick's stats see them.
+    particles[2].position_radius[0] = f32::NAN;
+    particles[3].velocity[1] = f32::INFINITY;
     let (dt, flip) = (0.07f32, 0.9f32);
     let inputs = [
         ("particles", harness.array(&particles, particles.len()).0),
@@ -459,6 +463,14 @@ fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
         if p.position_radius[3] <= 0.0 {
             assert_eq!(g, p, "unused slot {i} passes through");
+            continue;
+        }
+        if i == 2 {
+            assert!(!g.position_radius[0].is_finite(), "a non-finite position stays non-finite: {:?}", g.position_radius);
+            continue;
+        }
+        if i == 3 {
+            assert!(!g.velocity[1].is_finite(), "a non-finite velocity stays non-finite: {:?}", g.velocity);
             continue;
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
@@ -491,8 +503,9 @@ fn swash_liquid_fill_places_pool_then_box() {
     let mut harness = Harness::new();
     // Sites are half cells: a 12 × 10 × 8 site lattice.
     let (pool, sites, seed, jitter) = (1u32, [[2u32, 8], [0, 4], [3, 9]], 7u32, 0.5f32);
-    // 96 pool sites (12 × 1 × 8) and 90 box sites (6 × 3 × 5), plus 5 spare slots.
-    let capacity = 96 + 90 + 5;
+    // 96 pool sites (12 × 1 × 8) and 90 box sites (6 × 3 × 5); the fill owns
+    // storage for exactly those.
+    let placed = 96 + 90;
     let out = harness.array::<FluidParticle>(&[], 1);
     let count = harness.scalar();
     let step = lattice(&[
@@ -505,14 +518,14 @@ fn swash_liquid_fill_places_pool_then_box() {
         ("box_z1", sites[2][1] as f32),
         ("jitter", jitter),
         ("seed", seed as f32),
-        ("max_capacity", capacity as f32),
     ]);
     let mut fill = LiquidFill::new();
     let (scalars, errors) = harness.run(&mut fill, &[], &[("particles", out.0), ("count", count)], &step);
     assert!(errors.is_empty(), "{errors:?}");
-    let placed = capacity - 5;
     assert!(scalars.iter().any(|(s, v)| *s == count && *v == ParamValue::Float(placed as f32)), "{scalars:?}");
-    let got: Vec<FluidParticle> = read(&harness.buffer(out.0), capacity);
+    let storage = harness.buffer(out.0);
+    assert_eq!(storage.size, (placed * std::mem::size_of::<FluidParticle>()) as u64, "the fill's storage holds the fill");
+    let got: Vec<FluidParticle> = read(&storage, placed);
     // The box clipped above the pool and to the lattice: x 2..8, y 1..4, z 3..8.
     let mut cells: Vec<[u32; 3]> = Vec::new();
     for z in 0..2 * N[2] as u32 {
@@ -529,10 +542,6 @@ fn swash_liquid_fill_places_pool_then_box() {
     }
     assert_eq!(cells.len(), placed);
     for (i, g) in got.iter().enumerate() {
-        if i >= placed {
-            assert_eq!(*g, FluidParticle::default(), "slot {i} past the fill is unused");
-            continue;
-        }
         let s = cells[i];
         let key = (i as u32).wrapping_mul(3).wrapping_add(seed.wrapping_mul(2_654_435_761));
         for a in 0..3 {

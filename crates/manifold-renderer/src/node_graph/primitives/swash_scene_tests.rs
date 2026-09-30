@@ -72,20 +72,13 @@ impl Run {
         if scene.surface {
             watched.extend(["liquid_offsets", "liquid_mesh"].map(|name| node_ending(&graph, name)));
         }
+        watched.push(node_named(&graph, "state"));
         exec.set_dump_set(Some(watched.into_iter().collect()));
-        Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 }
-    }
-
-    /// The surface's solid lattice (`WaterScene::surface_solid`). The planner
-    /// may recycle a source's storage, so it is written every frame.
-    fn write_solid(&self) {
-        let resource = output_of(&self.plan, node_named(&self.graph, "solid"), "out");
-        let backend = self.exec.backend();
-        let buffer = backend.array_buffer(backend.slot_for(resource).expect("solid bound")).expect("solid buffer");
-        let solid = self.scene.surface_solid();
-        assert!(buffer.size as usize >= solid.len() * 4, "the solid source holds the surface lattice");
-        // SAFETY: shared storage of at least this many floats; no frame is in flight.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&solid)) };
+        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 };
+        // The domain's clock restarts on its first frame and ticks none: the
+        // state takes the fill. Every later frame is one tick.
+        run.frame();
+        run
     }
 
     /// The surface mesh's live triangles.
@@ -99,7 +92,7 @@ impl Run {
 
     /// The volume the surface mesh holds in the tank and its free surface's area.
     pub(super) fn surface_measure(&self) -> (f64, f64) {
-        volume_and_area(self.surface().into_iter(), super::swash_preset::DAM_MIN, super::swash_preset::BOX_METRES)
+        volume_and_area(self.surface().into_iter(), self.scene.min(), super::swash_preset::BOX_METRES)
     }
 
     /// The particles' own volume: `REST_PER_CELL` fill a cell.
@@ -109,9 +102,6 @@ impl Run {
 
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     pub(super) fn frame(&mut self) -> (f64, f64) {
-        if self.scene.surface {
-            self.write_solid();
-        }
         let mut enc = self.device.create_encoder("swash-scene");
         let cpu_ms;
         {
@@ -151,8 +141,7 @@ impl Run {
     }
 
     pub(super) fn particles(&self) -> Vec<FluidParticle> {
-        let last = self.scene.steps - 1;
-        self.read(&format!("s{last}.move"), "out", self.scene.particles() as usize)
+        self.read("state", "out", self.scene.particles() as usize)
     }
 
     pub(super) fn water(&self, step: usize) -> Vec<f32> {

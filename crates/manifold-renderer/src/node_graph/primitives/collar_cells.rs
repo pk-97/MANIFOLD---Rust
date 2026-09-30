@@ -14,7 +14,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Lattice lengths of the SWASH cell atoms, 1 to 1024 per axis, or `None`.
-pub(super) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
+pub(crate) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
     let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| match params.get(name) {
         Some(ParamValue::Float(n)) => n.round() as i64,
         _ => 64,
@@ -23,7 +23,7 @@ pub(super) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
 }
 
 /// Cells in a lattice, as u64 so a bad size cannot wrap.
-pub(super) fn cell_count(nodes: [u32; 3]) -> u64 {
+pub(crate) fn cell_count(nodes: [u32; 3]) -> u64 {
     nodes.iter().map(|&n| u64::from(n)).product()
 }
 

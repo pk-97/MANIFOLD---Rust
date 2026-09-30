@@ -330,39 +330,40 @@ mod shape_particle_blobs;
 pub(crate) mod particle_volume;
 mod smooth_lattice;
 mod cosine_reorder;
-mod cosine_spectrum;
+pub(crate) mod cosine_spectrum;
 mod cosine_half_spectrum;
 mod cosine_poisson_divide;
 mod cosine_surface_scale;
 mod fft_3d;
-mod dot_products;
+pub(crate) mod dot_products;
 mod combine_rows;
 mod divide_by_value;
-mod krylov_givens;
+pub(crate) mod krylov_givens;
 mod krylov_solve;
 mod krylov_basis;
-mod collar_cells;
-mod select_flagged;
-mod chart_entries;
+pub(crate) mod collar_cells;
+pub(crate) mod select_flagged;
+pub(crate) mod chart_entries;
 mod chart_sums;
 mod chart_spread;
 mod collar_source;
 mod collar_gather;
 mod collar_pressure;
-mod liquid_fill;
-mod liquid_feedback;
+pub(crate) mod liquid_fill;
+pub(crate) mod liquid_state;
+pub(crate) mod liquid_stats;
+mod liquid_frame;
+pub(crate) mod swash_domain;
 mod cells_with_particles;
-mod particles_to_faces;
+pub(crate) mod particles_to_faces;
 mod face_gravity;
 mod face_divergence;
 mod density_source;
 mod subtract_pressure;
 mod extend_faces;
 mod faces_to_particles;
-#[cfg(test)]
-mod swash_preset;
-#[cfg(test)]
-mod swash_extent_tests;
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod swash_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

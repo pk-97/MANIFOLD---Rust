@@ -4,8 +4,8 @@
 //! run watches for GPU faults, non-finite particles, collar or mesh past
 //! capacity, a mesh leaving the tank, frame-time creep and memory growth; it
 //! splits each frame's GPU and CPU time by stage from timestamped frames, and
-//! checks what the transport can do to a liquid with no clock: pause, reset
-//! by trigger, `clear_state`. `fft_water_rendered_scenes_cover_every_dispatch`
+//! checks what the transport does to the liquid's clock: pause, Reset,
+//! `clear_state`. `fft_water_rendered_scenes_cover_every_dispatch`
 //! proves every array these graphs allocate at each lattice run here, and
 //! each run first checks its arrays fit the device. Hours long at the large
 //! lattices, so opt-in: `--features water-race-probes`.
@@ -19,13 +19,11 @@ use std::time::Instant;
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::params::ParamManifest;
+use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
-use super::swash_extent_tests::rendered_scene_bytes;
-use super::swash_preset::{DAM_MIN, WaterScene, render_def};
-use super::swash_solve_tests::output_of;
+use super::swash_preset::{WaterScene, render_def, rendered_scene_bytes};
 use crate::frame_status::FrameRenderStatus;
 use crate::generators::mesh_common::MeshVertex;
 use crate::gpu_encoder::GpuEncoder;
@@ -99,7 +97,7 @@ fn stage(name: &str) -> &'static str {
         };
     }
     match name {
-        "fill" | "state" => "fill + particle state",
+        "domain" | "initial_column" | "fill" | "state" | "stats" | "solid" | "frame" => "fill + particle state",
         "scene" => "scene render",
         "filmic_display" => "tone map + other",
         n if n.ends_with("liquid_sort") => "surface sort",
@@ -146,7 +144,7 @@ struct ParticleHealth {
     fastest: f64,
 }
 
-fn particle_health(particles: &[FluidParticle]) -> ParticleHealth {
+fn particle_health(particles: &[FluidParticle], min: [f64; 3]) -> ParticleHealth {
     let mut h = ParticleHealth::default();
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
         h.live += 1;
@@ -154,7 +152,7 @@ fn particle_health(particles: &[FluidParticle]) -> ParticleHealth {
             h.non_finite += 1;
             continue;
         }
-        let local: [f64; 3] = std::array::from_fn(|a| f64::from(p.position_radius[a]) - DAM_MIN[a]);
+        let local: [f64; 3] = std::array::from_fn(|a| f64::from(p.position_radius[a]) - min[a]);
         if local.iter().any(|&x| !(-1e-4..=TANK + 1e-4).contains(&x)) {
             h.outside_tank += 1;
         }
@@ -175,11 +173,10 @@ struct Smoke {
     step_names: Vec<String>,
     /// Each plan step's node type, for the small-dispatch census.
     step_types: Vec<String>,
-    solid: NodeInstanceId,
-    solid_values: Vec<f32>,
+    /// The preset's cards; Reset restarts the liquid from the fill.
+    manifest: ParamManifest,
     frame_count: i64,
     time: f64,
-    trigger: u32,
     critical: Vec<String>,
 }
 
@@ -234,6 +231,9 @@ impl Smoke {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let device = crate::test_device();
+        let manifest = ParamManifest::from_params(
+            def.preset_metadata.iter().flat_map(|metadata| metadata.params.iter().cloned().map(Param::bundled)).collect(),
+        );
         let runtime = PresetRuntime::from_def_with_device(
             def,
             &registry,
@@ -256,7 +256,6 @@ impl Smoke {
             runtime.graph.nodes().find(|n| n.id == id).map_or_else(String::new, |n| n.node.type_id().as_str().to_string())
         };
         let step_types = runtime.plan.steps().iter().map(|s| type_of(s.node)).collect();
-        let solid = runtime.graph.nodes().find(|n| n.node_id.as_str() == "solid").expect("solid source").id;
         let mut smoke = Self {
             device,
             runtime,
@@ -265,16 +264,13 @@ impl Smoke {
             sampler,
             step_names,
             step_types,
-            solid,
-            solid_values: scene.surface_solid(),
+            manifest,
             frame_count: 0,
             time: 0.0,
-            trigger: 0,
             critical: Vec::new(),
         };
         // Hold what is read after each frame past it.
-        let last = scene.steps - 1;
-        let mut watched: Vec<String> = vec!["solid".into(), "fill".into(), format!("s{last}.move")];
+        let mut watched: Vec<String> = vec!["fill".into(), "state".into()];
         watched.extend((0..scene.steps).map(|k| format!("s{k}.collar_total")));
         for suffix in ["liquid_offsets", "liquid_mesh"] {
             let found = smoke.runtime.graph.nodes().find(|n| n.node_id.as_str().ends_with(suffix)).expect("surface node");
@@ -285,15 +281,12 @@ impl Smoke {
         smoke
     }
 
-    /// The surface's solid lattice, the tank walls' distances; the planner may
-    /// recycle a source's storage, so it is written before every frame.
-    fn write_solid(&self) {
-        let resource = output_of(&self.runtime.plan, self.solid, "out");
-        let backend = self.runtime.backend_for_test();
-        let buffer = backend.array_buffer(backend.slot_for(resource).expect("solid bound")).expect("solid buffer");
-        assert!(buffer.size as usize >= self.solid_values.len() * 4, "the solid source holds the surface lattice");
-        // SAFETY: shared storage of at least this many floats; no frame is in flight.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&self.solid_values)) };
+    /// Press Reset: the next frame restarts the liquid from the fill and
+    /// ticks none.
+    fn reset(&mut self) {
+        let card = self.manifest.get_mut("reset").expect("the preset has a Reset card");
+        card.value += 1.0;
+        card.base = card.value;
     }
 
     /// One rendered frame. `dt` 0 with an unchanged clock is a paused
@@ -308,7 +301,6 @@ impl Smoke {
     }
 
     fn frame_inner(&mut self, dt: f64, profile: bool) -> FrameResult {
-        self.write_solid();
         if dt > 0.0 {
             self.time += dt;
             self.frame_count += 1;
@@ -326,7 +318,7 @@ impl Smoke {
             is_clip_level: false,
             frame_count: self.frame_count,
             anim_progress: 0.0,
-            trigger_count: self.trigger,
+            trigger_count: 0,
         };
         let mut enc = self.device.create_encoder("swash-smoke");
         if profile {
@@ -336,7 +328,7 @@ impl Smoke {
         let start = Instant::now();
         let status = {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &ParamManifest::default());
+            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
             gpu.frame_status()
         };
         let cpu_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -425,7 +417,7 @@ impl Smoke {
     }
 
     fn particles(&self) -> Vec<FluidParticle> {
-        self.dumped(&format!("s{}.move", self.scene.steps - 1), "out", self.scene.particles() as usize)
+        self.dumped("state", "out", self.scene.particles() as usize)
     }
 
     fn collar(&self, step: usize) -> u32 {
@@ -532,6 +524,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
 
 fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterScene) -> Smoke) {
     let n = scene.pressure.n;
+    let tank_min = scene.min();
     let dir = out_dir();
     let frames = frames();
     let tag = format!("{label}_{n}");
@@ -552,8 +545,8 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     println!("SMOKE {tag}: runtime built in {:.2} s, GPU memory {mem_before:.0} → {:.0} MB", started.elapsed().as_secs_f64(), smoke.memory_mb());
     let dt = 1.0 / 60.0;
 
-    // The first frame after the build starts from the fill; it is what every
-    // reset must reproduce.
+    // The first frame after the build restarts the clock and holds the fill;
+    // it is what every Reset must reproduce.
     let first_frame = smoke.frame(dt, false);
     let first = smoke.particles();
     let mut warmups = 0;
@@ -562,11 +555,14 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         warmups += 1;
     }
     println!("SMOKE {tag}: first frame status {:?}, {warmups} warm-up frames", first_frame.status);
-    // Restart from the fill by the generator trigger, as a clip relaunch does.
-    smoke.trigger += 1;
+    smoke.reset();
     let restart = smoke.frame(dt, false);
     let restarted = smoke.particles();
-    println!("SMOKE {tag}: trigger restart before the run: status {:?}, max |Δx| against the first frame {:.3e} m", restart.status, max_diff(&first, &restarted));
+    let moved = max_diff(&first, &restarted);
+    println!("SMOKE {tag}: Reset before the run: status {:?}, max |Δx| against the first frame {moved:.3e} m", restart.status);
+    if moved > 0.0 {
+        smoke.critical.push(format!("Reset moved particles {moved:.3e} m from the fill"));
+    }
 
     let ffmpeg = std::process::Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{WIDTH}x{HEIGHT}"), "-r", "60", "-i", "-"])
@@ -651,7 +647,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         for a in 0..3 {
             box_low[a] = box_low[a].min(low[a]);
             box_high[a] = box_high[a].max(high[a]);
-            if triangles > 0 && (low[a] < DAM_MIN[a] - reach || high[a] > DAM_MIN[a] + TANK + reach) {
+            if triangles > 0 && (low[a] < tank_min[a] - reach || high[a] > tank_min[a] + TANK + reach) {
                 smoke.critical.push(format!("frame {frame}: mesh axis {a} spans {:.4}..{:.4}, outside the tank", low[a], high[a]));
             }
         }
@@ -669,7 +665,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         .unwrap();
         if frame % 10 == 0 || frame == 1 {
             let particles = smoke.particles();
-            let h = particle_health(&particles);
+            let h = particle_health(&particles, tank_min);
             fastest = fastest.max(h.fastest);
             bucket_fastest = bucket_fastest.max(h.fastest);
             let faults = id_faults(&particles);
@@ -748,7 +744,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         3 * tri_peak,
         100.0 * 3.0 * f64::from(tri_peak) / mesh_capacity as f64
     );
-    println!("SMOKE {tag} mesh bounds over the run: {box_low:.3?} .. {box_high:.3?} (tank {DAM_MIN:?} + {TANK} m); fastest particle {fastest:.2} m/s");
+    println!("SMOKE {tag} mesh bounds over the run: {box_low:.3?} .. {box_high:.3?} (tank {tank_min:?} + {TANK} m); fastest particle {fastest:.2} m/s");
 
     // The stage split: median over the timestamped frames, then scaled to the
     // median unprofiled frame (per-dispatch timing adds encoder switches).
@@ -794,21 +790,28 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         let paused = smoke.particles();
         let paused_image = smoke.readback();
         let changed = image.chunks_exact(4).zip(paused_image.chunks_exact(4)).filter(|(a, b)| a != b).count();
+        let moved = max_diff(&before, &paused);
         println!(
-            "SMOKE {tag} transport: 3 paused renders moved particles by up to {:.3e} m and changed {changed} of {} pixels (a clocked liquid holds at 0)",
-            max_diff(&before, &paused),
+            "SMOKE {tag} transport: 3 paused renders moved particles by up to {moved:.3e} m and changed {changed} of {} pixels",
             WIDTH * HEIGHT
         );
+        if moved > 0.0 || changed > 0 {
+            smoke.critical.push(format!("paused renders moved particles {moved:.3e} m and changed {changed} pixels"));
+        }
         smoke.still(&dir.join(format!("{tag}_paused.png")));
         for _ in 0..30 {
             smoke.frame(dt, false);
         }
-        let resumed = particle_health(&smoke.particles());
+        let resumed = particle_health(&smoke.particles(), tank_min);
         println!("SMOKE {tag} transport: resumed 30 frames, {} live, {} not finite", resumed.live, resumed.non_finite);
-        smoke.trigger += 1;
+        smoke.reset();
         smoke.frame(dt, false);
-        let by_trigger = smoke.particles();
-        println!("SMOKE {tag} transport: trigger restart mid-run, max |Δx| against the first frame {:.3e} m", max_diff(&first, &by_trigger));
+        let by_reset = smoke.particles();
+        let moved = max_diff(&first, &by_reset);
+        println!("SMOKE {tag} transport: Reset mid-run, max |Δx| against the first frame {moved:.3e} m");
+        if moved > 0.0 {
+            smoke.critical.push(format!("Reset mid-run moved particles {moved:.3e} m from the fill"));
+        }
         for _ in 0..30 {
             smoke.frame(dt, false);
         }
@@ -951,8 +954,7 @@ fn record_preset(def: EffectGraphDef, name: &str, frames: usize, stills: &[usize
 }
 
 /// SWASH's first `frames` frames through `render_def` as `{name}.mp4`, with
-/// stills, started as `run` starts it: the first frame, warm-up, then a
-/// trigger restart from the fill.
+/// stills, started as `run` starts it: the first frame, warm-up, then Reset.
 fn record_swash(scene: WaterScene, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
     let dt = 1.0 / 60.0;
     let mut smoke = Smoke::with_def(scene, render_def(scene));
@@ -962,7 +964,7 @@ fn record_swash(scene: WaterScene, name: &str, frames: usize, stills: &[usize], 
         smoke.frame(dt, false);
         warmups += 1;
     }
-    smoke.trigger += 1;
+    smoke.reset();
     smoke.frame(dt, false);
     let clip = dir.join(format!("{name}.mp4"));
     let mut ffmpeg = encoder(&clip, 16);
@@ -1073,14 +1075,14 @@ fn swash_look_variants_64() {
             continue;
         }
         let mut smoke = Smoke::with_def(scene, with_params(render_def(scene), overrides));
-        // As `run`: the first frame, warm-up, then a trigger restart.
+        // As `run`: the first frame, warm-up, then Reset.
         smoke.frame(dt, false);
         let mut warmups = 0;
         while smoke.runtime.warmup_pending() && warmups < 600 {
             smoke.frame(dt, false);
             warmups += 1;
         }
-        smoke.trigger += 1;
+        smoke.reset();
         smoke.frame(dt, false);
         let mut ffmpeg = None;
         let clip_path = dir.join(format!("look_{name}_clip.mp4"));

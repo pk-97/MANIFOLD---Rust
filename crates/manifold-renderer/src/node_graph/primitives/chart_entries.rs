@@ -17,7 +17,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Sheets per view, 1 to 16 (4 bits each in `ChartEntry::sheets`).
-pub(super) fn sheet_count(params: &ParamValues) -> u32 {
+pub(crate) fn sheet_count(params: &ParamValues) -> u32 {
     match params.get("sheets") {
         Some(ParamValue::Float(v)) => v.round().clamp(1.0, 16.0) as u32,
         _ => 4,
@@ -30,7 +30,7 @@ pub(super) fn plane_side(nodes: [u32; 3]) -> u32 {
 }
 
 /// Floats in the stacked chart planes: six views × sheets × M².
-pub(super) fn plane_len(nodes: [u32; 3], sheets: u32) -> u64 {
+pub(crate) fn plane_len(nodes: [u32; 3], sheets: u32) -> u64 {
     let side = u64::from(plane_side(nodes));
     6 * u64::from(sheets) * side * side
 }
