@@ -189,7 +189,7 @@ mod math;
 mod grid_to_matter;
 mod matter_body_reaction;
 mod matter_common;
-mod matter_domain;
+pub(crate) mod matter_domain;
 mod matter_fill;
 mod matter_frame;
 mod matter_grid_update;

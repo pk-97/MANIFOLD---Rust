@@ -594,9 +594,12 @@ pub fn sync_inspector_data(
                                             physics_imported,
                                             ..
                                         } = known.as_ref();
+                                        // Water has no Physics row: the liquid moves it.
                                         let (physics_available, physics_unavailable_reason) =
                                             if physics.is_some() {
                                                 (true, None)
+                                            } else if known.liquid_domain_node_id.is_some() {
+                                                (false, None)
                                             } else {
                                                 match def.as_ref().map(|def| {
                                                     manifold_editing::commands::graph::scene_object_physics_eligibility(

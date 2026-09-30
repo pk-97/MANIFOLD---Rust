@@ -2193,6 +2193,73 @@ mod tests {
         assert_eq!(effective_def(&project, &layer_id), added, "redo keeps stable graph identities");
     }
 
+    /// LIQUID_SOLVER_SEAM_DESIGN.md P2b demo: a GPU liquid's water stays
+    /// water (its domain dials, no Physics row) through an edit that lifts
+    /// the layer's own graph, undo, redo, save and reload.
+    #[test]
+    fn scene_liquid_recognition_survives_edit_undo_save_and_reload() {
+        use manifold_core::effect_graph_def::EffectGraphDef;
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectKnownRow, SceneObjectVm, SceneVm};
+
+        fn water(def: &EffectGraphDef) -> SceneObjectKnownRow {
+            SceneVm::from_def(def).expect("matter scene").objects.into_iter().find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.liquid_domain_node_id.is_some() => Some(*row),
+                _ => None,
+            }).expect("the water is recognised")
+        }
+        fn assert_water(def: &EffectGraphDef, step: &str) {
+            let row = water(def);
+            let matter = def.nodes.iter()
+                .filter_map(|node| node.group.as_deref())
+                .flat_map(|group| &group.nodes)
+                .find(|node| node.type_id == manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID)
+                .expect("the scene keeps its matter domain").id;
+            assert_eq!(row.liquid_domain_node_id, Some(matter), "{step}");
+            assert!(row.physics.is_none(), "{step}: water carries no rigid body");
+            let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(Some(def), &row.fluid_node_ids);
+            assert!(sections.iter().any(|section| section.contains("Simulation")), "{step}: the water panel shows its dials");
+        }
+
+        let mut project = Project::default();
+        let idx = project.timeline.add_layer(
+            "Water", LayerType::Generator, PresetTypeId::from_string("WaterDamBreakMatter".to_string()),
+        );
+        let layer_id = project.timeline.layers[idx].layer_id.clone();
+        let original = effective_def(&project, &layer_id);
+        assert_water(&original, "bundled");
+        let render_scene_id = original.nodes.iter()
+            .find(|node| node.type_id == manifold_renderer::node_graph::scene_vm::RENDER_SCENE_TYPE_ID)
+            .expect("the matter scene has a render_scene node").id;
+        let lights = SceneVm::from_def(&original).unwrap().lights.len() as u32;
+
+        let (_, content_state, mut ui, mut selection, mut active_layer, mut user_prefs) = dispatch_harness();
+        let (content_tx, content_rx) = crossbeam_channel::unbounded();
+        dispatch_project(
+            &ProjectAction::SceneSetupAddLight(layer_id.clone(), render_scene_id, lights),
+            &mut project, &content_tx, &content_state, &mut ui, &mut selection,
+            &mut active_layer, &mut user_prefs,
+        );
+        let ContentCommand::ExecuteSelecting(mut command, _) = content_rx.try_recv().expect("queued light insertion")
+        else { panic!("the light insertion goes through content-owned editing"); };
+        command.execute(&mut project);
+        let edited = effective_def(&project, &layer_id);
+        assert_ne!(edited, original, "the edit lifts the layer's own graph");
+        assert_water(&edited, "edited");
+        command.undo(&mut project);
+        assert_water(&effective_def(&project, &layer_id), "undone");
+        command.execute(&mut project);
+        // Redo mints the light a fresh NodeId, so compare the water, not the whole graph.
+        let redone = effective_def(&project, &layer_id);
+        assert_water(&redone, "redone");
+        assert_eq!(water(&redone), water(&edited));
+
+        let reloaded: Project = serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        let reloaded_def = effective_def(&reloaded, &layer_id);
+        assert_eq!(reloaded_def, redone);
+        assert_water(&reloaded_def, "reloaded");
+        assert_eq!(water(&reloaded_def), water(&edited));
+    }
+
     #[test]
     fn scene_physics_assign_fluid_role_is_content_owned_and_reloadable() {
         use crate::content_command::ContentCommand;

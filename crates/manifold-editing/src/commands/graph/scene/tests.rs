@@ -404,6 +404,61 @@ fn builtin_scene_object_physics_rejects_assigned_fluid_role_atomically() {
     assert_eq!(graph_of(&project, &fx), &graph);
 }
 
+/// Water is refused by the walk forces and the scene panel use, whatever
+/// solver or surface builds it: a FLIP GPU surface and a GPU MPM surface,
+/// each through its Liquid Surface chain. The other objects keep their own
+/// answers.
+#[test]
+fn scene_physics_refuses_enable_physics_on_water() {
+    const WATER: &str = "Water cannot take Enable Physics";
+    for (name, json) in [
+        (
+            "WaterDamBreakGpu",
+            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpu.json"),
+        ),
+        (
+            "WaterDamBreakMatter",
+            include_str!("../../../../../manifold-renderer/assets/generator-presets/WaterDamBreakMatter.json"),
+        ),
+    ] {
+        let graph: EffectGraphDef = serde_json::from_str(json).expect("preset parses");
+        let scene = graph
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.render_scene")
+            .expect("root render scene");
+        let slot_of = |object: &str| {
+            let id = graph.nodes.iter().find(|node| node.node_id.as_str() == object)?.id;
+            graph.wires.iter().find(|wire| wire.from_node == id && wire.to_node == scene.id).and_then(|wire| {
+                wire.to_port.strip_prefix("object_").and_then(|slot| slot.parse::<u32>().ok())
+            })
+        };
+        let water = slot_of("water_object").expect("the preset's water object has a slot");
+        let refusal = scene_object_physics_eligibility(&graph, scene.id, water)
+            .expect_err("water must refuse Enable Physics");
+        assert!(refusal.starts_with(WATER), "{name}: {refusal}");
+
+        let (mut project, fx) = project_with_graph(graph.clone());
+        let mut enable = EnableSceneObjectPhysicsCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            scene.id,
+            water,
+            body_params(),
+            graph.clone(),
+        );
+        enable.execute(&mut project);
+        assert!(!enable.was_applied(), "{name}");
+        assert_eq!(graph_of(&project, &fx), &graph, "{name}");
+
+        let objects = graph.wires.iter().filter(|wire| wire.to_node == scene.id && wire.to_port.starts_with("object_")).count();
+        for slot in (0..objects as u32).filter(|&slot| slot != water) {
+            if let Err(reason) = scene_object_physics_eligibility(&graph, scene.id, slot) {
+                assert!(!reason.starts_with(WATER), "{name} slot {slot} is not water: {reason}");
+            }
+        }
+    }
+}
+
 fn compound_imported_group_scene_graph() -> EffectGraphDef {
     let mut def = imported_group_scene_graph();
     let render = def.nodes.iter_mut().find(|node| node.id == 0).unwrap();

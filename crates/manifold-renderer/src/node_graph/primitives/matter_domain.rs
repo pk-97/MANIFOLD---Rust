@@ -45,6 +45,11 @@ pub struct MatterSetup {
     seed: u32,
 }
 
+/// The refusal of an impulse on the liquid itself, owed to seam P8 (the
+/// scene contract test reads it).
+pub(crate) const FLUID_IMPULSES_UNSUPPORTED: &str =
+    "Matter coupling: impulses on the live liquid itself are not supported yet; target the bodies";
+
 const UPLOAD_SHADER: &str = include_str!("shaders/matter_domain_upload.wgsl");
 /// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
 const UPLOAD_GROUPS: usize = 254;
@@ -496,15 +501,11 @@ impl Primitive for MatterDomain {
         stamp: manifold_physics::input::EventStamp,
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
+        let ImpulseTarget::Rigid(targets) = impulse.target else {
+            return Err(FLUID_IMPULSES_UNSUPPORTED.into());
+        };
         let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
-        match impulse.target {
-            ImpulseTarget::Rigid(targets) => owner
-                .rigid_mut()
-                .enqueue_impulse(stamp, ResolvedRigidImpulse { field: impulse.field, targets }),
-            ImpulseTarget::Fluid | ImpulseTarget::FluidAndRigid(_) => {
-                Err("Matter coupling: impulses on the live liquid itself are not supported yet; target the bodies".into())
-            }
-        }
+        owner.rigid_mut().enqueue_impulse(stamp, ResolvedRigidImpulse { field: impulse.field, targets })
     }
 
     fn drain_physics_impulses(

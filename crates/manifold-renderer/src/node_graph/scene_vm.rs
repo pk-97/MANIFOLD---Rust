@@ -32,8 +32,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use manifold_core::LayerId;
-use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+use manifold_core::liquid_domain::liquid_domain_of;
+use manifold_core::scene_index::FlatSceneIndex;
+use manifold_core::{LayerId, SceneNodeRef};
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue,
 };
@@ -237,6 +238,10 @@ pub struct SceneObjectKnownRow {
     /// object group for imported models and at root for hand-built objects.
     pub physics: Option<PhysicsVm>,
     pub physics_imported: bool,
+    /// The liquid domain this object's surface is built from, by document id
+    /// (`manifold_core::liquid_domain::liquid_domain_of`, the walk forces and
+    /// pairing use).
+    pub liquid_domain_node_id: Option<u32>,
     /// Fluid domain or object-owned role nodes whose ordinary parameters belong
     /// to this object. Document IDs remain globally unique across groups.
     pub fluid_node_ids: Vec<u32>,
@@ -580,8 +585,11 @@ impl SceneVm {
         let scene_node = root.node(scene_root_node_id)?;
 
         let layer_id_set: HashSet<&str> = layer_ids.iter().map(|id| id.as_ref()).collect();
+        // A graph the index refuses has no stable paths, so nothing in it is
+        // recognised as water; forces and pairing refuse the same graph.
+        let index = FlatSceneIndex::build(def).ok();
         let (objects, vertex_count, vertex_count_exact) =
-            trace_objects(&root, scene_node, &layer_id_set);
+            trace_objects(&root, scene_node, &layer_id_set, index.as_ref());
         let lights = trace_lights(&root, scene_node);
         let camera = trace_camera(&root, scene_node);
         let environment = trace_environment(&root, scene_node);
@@ -795,10 +803,36 @@ fn assign_shared_material_counts(objects: &mut [SceneObjectVm]) {
 /// (`false` — at least one object's mesh source didn't resolve to a known
 /// count, e.g. a hand-wired procedural generator outside the closed-form
 /// table, or an unparseable chain).
+/// The liquid domain behind render slot `slot`, found by the core walk and
+/// located in the authored graph: its level, the group doc ids down to it,
+/// and the node.
+fn slot_liquid_domain<'a>(
+    root: &Level<'a>,
+    index: Option<&FlatSceneIndex>,
+    scene_node: &EffectGraphNode,
+    slot: usize,
+) -> Option<(Level<'a>, Vec<u32>, &'a EffectGraphNode)> {
+    let index = index?;
+    let scene = SceneNodeRef { scope: Vec::new(), node: scene_node.node_id.clone() };
+    let object = index.scene_object_at(&scene, slot as u32).ok()??;
+    let domain = liquid_domain_of(index, &object).ok()??;
+    let mut level = Level { nodes: root.nodes, wires: root.wires };
+    let mut scope = Vec::with_capacity(domain.scope.len());
+    for group_id in &domain.scope {
+        let group = level.nodes.iter().find(|node| &node.node_id == group_id)?;
+        let body = group.group.as_deref()?;
+        scope.push(group.id);
+        level = Level { nodes: &body.nodes, wires: &body.wires };
+    }
+    let node = level.nodes.iter().find(|node| node.node_id == domain.node)?;
+    Some((level, scope, node))
+}
+
 fn trace_objects(
     level: &Level,
     scene_node: &EffectGraphNode,
     layer_id_set: &HashSet<&str>,
+    index: Option<&FlatSceneIndex>,
 ) -> (Vec<SceneObjectVm>, u64, bool) {
     let objects = param_f32(scene_node, "objects", 0.0).max(0.0) as usize;
     let mut vertex_count: u64 = 0;
@@ -807,10 +841,11 @@ fn trace_objects(
     let mut seen_groups = HashSet::new();
     for k in 0..objects {
         let port = format!("object_{k}");
+        let liquid = slot_liquid_domain(level, index, scene_node, k);
         let (mut row, source_vertex_count) = match level.producer(scene_node.id, &port) {
             Some((producer_id, output_port)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
-                    trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set)
+                    trace_scene_object(level, Vec::new(), producer_node, None, k, layer_id_set, liquid)
                 }
                 Some(producer_node) if producer_node.type_id == GROUP_TYPE_ID => {
                     match producer_node
@@ -825,6 +860,7 @@ fn trace_objects(
                             Some(producer_id),
                             k,
                             layer_id_set,
+                            liquid,
                         ),
                         None => (SceneObjectVm::Custom { index: k }, None),
                     }
@@ -1127,6 +1163,7 @@ fn trace_scene_object(
     group_node_id: Option<u32>,
     k: usize,
     layer_id_set: &HashSet<&str>,
+    liquid: Option<(Level<'_>, Vec<u32>, &EffectGraphNode)>,
 ) -> (SceneObjectVm, Option<u32>) {
     let object_node_id = node.id;
     let object_scope_path = scope_path.clone();
@@ -1232,48 +1269,6 @@ fn trace_scene_object(
             continue;
         }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
-            if n.type_id == FLIP_DOMAIN_TYPE_ID {
-                (fluid_domain, fluid_domain_transform) =
-                    trace_fluid_domain(&current_level, &mesh_scope_path, n);
-                fluid_node_ids.push(n.id);
-                for port in ["domain", "emitter", "initial_volume"] {
-                    if let Some((_, _, source, _)) =
-                        resolve_producer_through_group(&current_level, n.id, port)
-                        && source.type_id == "node.transform_3d"
-                        && !fluid_node_ids.contains(&source.id)
-                    {
-                        fluid_node_ids.push(source.id);
-                    }
-                }
-                for index in 0..super::fluid_role::MAX_FLUID_ROLES {
-                    let role_port = format!("role_{index}");
-                    let Some((role_level, role_group, role, _)) =
-                        resolve_producer_through_group(&current_level, n.id, &role_port)
-                    else {
-                        continue;
-                    };
-                    if role.type_id != "node.fluid_role_source"
-                        || fluid_node_ids.contains(&role.id)
-                    {
-                        continue;
-                    }
-                    // A visible source object owns its role controls. Only
-                    // standalone source groups belong in the liquid's panel.
-                    if role_group.is_some() && role_level.nodes.iter().any(|node| node.type_id == "node.scene_object") {
-                        continue;
-                    }
-                    fluid_node_ids.push(role.id);
-                    for port in ["transform", "source_transform"] {
-                        if let Some((_, _, source, _)) =
-                            resolve_producer_through_group(&role_level, role.id, port)
-                            && source.type_id == "node.transform_3d"
-                            && !fluid_node_ids.contains(&source.id)
-                        {
-                            fluid_node_ids.push(source.id);
-                        }
-                    }
-                }
-            }
             source_vertex_count = node_source_vertex_count(n);
             break; // reached the mesh source (or something un-curated) — stop, still parseable.
         }
@@ -1281,6 +1276,47 @@ fn trace_scene_object(
         cursor = current_level.producer(n.id, "in");
     }
     chain.reverse(); // wire order: source → … → scene_object.
+
+    let liquid_domain_node_id = liquid.as_ref().map(|(_, _, domain)| domain.id);
+    if let Some((domain_level, domain_scope, n)) = liquid {
+        (fluid_domain, fluid_domain_transform) = trace_fluid_domain(&domain_level, &domain_scope, n);
+        fluid_node_ids.push(n.id);
+        for port in ["domain", "emitter", "initial_volume"] {
+            if let Some((_, _, source, _)) =
+                resolve_producer_through_group(&domain_level, n.id, port)
+                && source.type_id == "node.transform_3d"
+                && !fluid_node_ids.contains(&source.id)
+            {
+                fluid_node_ids.push(source.id);
+            }
+        }
+        for index in 0..super::fluid_role::MAX_FLUID_ROLES {
+            let role_port = format!("role_{index}");
+            let Some((role_level, role_group, role, _)) =
+                resolve_producer_through_group(&domain_level, n.id, &role_port)
+            else {
+                continue;
+            };
+            if role.type_id != "node.fluid_role_source" || fluid_node_ids.contains(&role.id) {
+                continue;
+            }
+            // A visible source object owns its role controls. Only
+            // standalone source groups belong in the liquid's panel.
+            if role_group.is_some() && role_level.nodes.iter().any(|node| node.type_id == "node.scene_object") {
+                continue;
+            }
+            fluid_node_ids.push(role.id);
+            for port in ["transform", "source_transform"] {
+                if let Some((_, _, source, _)) =
+                    resolve_producer_through_group(&role_level, role.id, port)
+                    && source.type_id == "node.transform_3d"
+                    && !fluid_node_ids.contains(&source.id)
+                {
+                    fluid_node_ids.push(source.id);
+                }
+            }
+        }
+    }
 
     if group_node_id.is_some() {
         for role in level.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source") {
@@ -1309,6 +1345,7 @@ fn trace_scene_object(
         skin,
         physics,
         physics_imported,
+        liquid_domain_node_id,
         fluid_node_ids,
         fluid_domain,
         fluid_domain_transform,
@@ -1620,12 +1657,15 @@ pub fn is_param_driven(def: &EffectGraphDef, node_doc_id: u32, param_id: &str) -
 mod tests {
     use super::*;
     use manifold_core::effect_graph_def::{EffectGraphWire, GroupDef, GroupInterface};
+    use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
     use std::collections::BTreeMap;
 
+    /// Every node gets a stable id, as authoring and loading give them: the
+    /// liquid walk resolves objects by stable path.
     fn node(id: u32, type_id: &str, handle: Option<&str>) -> EffectGraphNode {
         EffectGraphNode {
             id,
-            node_id: Default::default(),
+            node_id: manifold_core::NodeId::new(format!("n{id}")),
             type_id: type_id.to_string(),
             handle: handle.map(|s| s.to_string()),
             params: BTreeMap::new(),
@@ -1704,7 +1744,14 @@ mod tests {
             SerializedParamValue::Float { value: 1.0 });
         let mut source_group = node(10, GROUP_TYPE_ID, Some("Source"));
         source_group.group = Some(Box::new(GroupDef {
-            interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+            interface: GroupInterface {
+                inputs: vec![],
+                outputs: vec![manifold_core::effect_graph_def::InterfacePortDef {
+                    name: "role".into(),
+                    port_type: "FluidRole".into(),
+                }],
+                params: vec![],
+            },
             nodes: vec![node(11, "node.fluid_role_source", None),
                 node(12, "node.transform_3d", None), node(13, GROUP_OUTPUT_TYPE_ID, None)],
             wires: vec![wire(12, "transform", 11, "transform"),
@@ -2894,5 +2941,35 @@ mod tests {
             }
             other => panic!("expected Known object, got {other:?}"),
         }
+    }
+
+    /// The GPU liquid's water is found by the same walk forces use, through
+    /// its Liquid Surface group, so its object carries the domain's panel.
+    #[test]
+    fn scene_vm_traces_matter_domain() {
+        let def: EffectGraphDef = serde_json::from_str(include_str!(
+            "../../assets/generator-presets/WaterDamBreakMatter.json"
+        ))
+        .expect("preset parses");
+        let vm = SceneVm::from_def(&def).expect("scene resolves");
+        let domain_id = def
+            .nodes
+            .iter()
+            .filter_map(|node| node.group.as_deref())
+            .flat_map(|group| &group.nodes)
+            .find(|node| node.type_id == manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID)
+            .expect("the preset has a matter domain")
+            .id;
+        let water: Vec<_> = vm
+            .objects
+            .iter()
+            .filter_map(|row| match row {
+                SceneObjectVm::Known(row) if row.liquid_domain_node_id.is_some() => Some(row),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(water.len(), 1, "one water object");
+        assert_eq!(water[0].liquid_domain_node_id, Some(domain_id));
+        assert_eq!(water[0].fluid_node_ids.first(), Some(&domain_id));
     }
 }

@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::liquid_domain::liquid_domain_of;
+use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::node_graph::persistence::PrimitiveRegistry;
@@ -11,8 +13,7 @@ use crate::node_graph::physics::RigidImpulseTargets;
 use crate::node_graph::physics_events::ImpulseTarget;
 
 use super::SceneModifierExpandError;
-use super::acceleration::{impulse_recipients_with_index, liquid_domain_of};
-use super::index::FlatSceneIndex;
+use super::acceleration::impulse_recipients_with_index;
 
 /// One physical fluid domain and the rigid recipients coupled to it.
 #[derive(Clone, Debug, PartialEq, Eq)]

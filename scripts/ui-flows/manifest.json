@@ -143,6 +143,7 @@
   "flows": {
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",
+    "scene-liquid-recognition": "waterdambreakmatter",
     "scene-fluid-role-assignment": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",

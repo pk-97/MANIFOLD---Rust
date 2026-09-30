@@ -8,3 +8,5 @@ pub mod bodies;
 pub mod clock;
 pub mod coupling;
 pub mod frame_ring;
+#[cfg(test)]
+mod scene_contract;
