@@ -524,7 +524,13 @@ pub(crate) struct Reply {
     pub thinned: u64,
     pub worker_ms: f64,
     pub failure: Option<String>,
+    /// Tests only: the thread FLIP's update ran on.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub updated_on: std::thread::ThreadId,
 }
+
+/// The lifecycle's thread; FLIP's update runs on no other (D11).
+pub(crate) const LIFECYCLE_THREAD: &str = "whitewater-lifecycle";
 
 /// FLIP's lifecycle, owned by the worker thread alone.
 #[derive(Default)]
@@ -534,7 +540,13 @@ struct Lifecycle {
 }
 
 impl Lifecycle {
+    /// The one way into FLIP's update.
     fn process(&mut self, mut request: Request) -> Reply {
+        assert_eq!(
+            std::thread::current().name(),
+            Some(LIFECYCLE_THREAD),
+            "FLIP's whitewater update runs only on its own thread, never the content thread"
+        );
         #[cfg(all(test, feature = "gpu-proofs"))]
         if let Some(hold) = request.hold.take() {
             let _ = hold.recv();
@@ -549,6 +561,8 @@ impl Lifecycle {
             thinned: 0,
             worker_ms: 0.0,
             failure: None,
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            updated_on: std::thread::current().id(),
         };
         reply.failure = self.step(request.reset, &mut reply).and_then(|()| self.write(&mut reply)).err();
         reply.worker_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -608,7 +622,7 @@ impl Worker {
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let (sender, replies) = mpsc::sync_channel::<Reply>(1);
         std::thread::Builder::new()
-            .name("whitewater-lifecycle".into())
+            .name(LIFECYCLE_THREAD.into())
             .spawn(move || {
                 let mut lifecycle = Lifecycle::default();
                 while let Ok(request) = receiver.recv() {
@@ -641,5 +655,20 @@ impl Worker {
     /// Offline only: block until the worker finishes.
     pub fn reply(&self) -> Result<Reply, String> {
         self.replies.recv().map_err(|_| "the whitewater worker stopped".to_owned())
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod tests {
+    use super::*;
+
+    /// D11: FLIP's update refuses any thread but its own, so it can never
+    /// run on the content thread.
+    #[test]
+    #[should_panic(expected = "runs only on its own thread")]
+    fn whitewater_update_refuses_other_threads() {
+        let grid = WhitewaterGrid { cells: [4; 3], cell_size: 0.1, origin: [0.0; 3] };
+        let request = Request { reset: Some(Reset { grid, capacity: 8, epoch: 0 }), snapshots: Vec::new(), output: None, hold: None };
+        Lifecycle::default().process(request);
     }
 }

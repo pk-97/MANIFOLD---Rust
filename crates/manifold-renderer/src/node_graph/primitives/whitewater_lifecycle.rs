@@ -140,6 +140,9 @@ pub(crate) struct Handoff {
     /// Tests only: the next request's worker waits for this.
     #[cfg(all(test, feature = "gpu-proofs"))]
     hold: Option<std::sync::mpsc::Receiver<()>>,
+    /// Tests only: the thread the last reply's update ran on.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    updated_on: Option<std::thread::ThreadId>,
 }
 
 impl Default for Handoff {
@@ -163,6 +166,8 @@ impl Default for Handoff {
             failure: None,
             #[cfg(all(test, feature = "gpu-proofs"))]
             hold: None,
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            updated_on: None,
         }
     }
 }
@@ -207,6 +212,10 @@ impl Handoff {
     }
 
     fn accept(&mut self, mut reply: Reply) -> bool {
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        {
+            self.updated_on = Some(reply.updated_on);
+        }
         self.busy = false;
         self.loaned = (0, false);
         self.snapshots.give_back(&mut reply.snapshots);
@@ -361,6 +370,11 @@ impl Handoff {
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn outputs(&self) -> &OutputRing {
         &self.outputs
+    }
+
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn updated_on(&self) -> Option<std::thread::ThreadId> {
+        self.updated_on
     }
 }
 

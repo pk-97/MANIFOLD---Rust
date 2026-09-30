@@ -250,7 +250,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 - **Lifecycle** (CPU, manifold-fluids, `whitewater.rs`): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
 - **Handoff** (renderer, `gpu-proofs`, `whitewater_handoff_tests.rs`): what the node publishes equals the lifecycle run on the CPU with the same spawns and fields; pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts; an output slot is rewritten only after its readers retired. A hand-retired fence stands in for the frame clock; every frame still commits on the device.
 - **Extents** (`whitewater_extent_tests.rs`, CPU): every atom's dispatch and array lengths at 64, and the named refusals for a misplaced face grid, a fractional refinement and `face_valid_layers` < 1, before any GPU run at that size.
-- **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, `lifecycle_ms` live (content thread) and `worker_ms` (lifecycle thread); p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; content thread per D11, gated by `whitewater_lifecycle_stays_off_the_content_thread`.
+- **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, `lifecycle_ms` live (content thread) and `worker_ms` (lifecycle thread); p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; content thread per D11. Timings are printed, never asserted; what is asserted is structural: FLIP's update refuses any thread but its own (`whitewater_update_refuses_other_threads`, `whitewater_update_runs_on_its_own_thread`, and the live scene `whitewater_live_scene_updates_on_the_lifecycle_thread`).
 
 ### 3.8 Wrong turns, forbidden by name
 
@@ -406,6 +406,6 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 ## 8. Calls only Peter makes
 
-1. The side-by-side verdict (P6).
+1. The side-by-side verdict (P6). Judge with it the live trail: since the lifecycle moved to its own thread (D11), whitewater trails the water by two or three frames live, one more than before, and one offline. If foam visibly lags a fast front, the fix is presenting whitewater at display time (section 7), not moving the lifecycle back.
 2. Shipping the SWASH Dam Break preset with whitewater, which follows the SWASH P4 call. The `MANIFOLD_RENDER_TRACE=1` gate runs then.
 3. Emission tuning (wavecrest rate, curvature window) if the look differs from FLIP's; FLIP's defaults until then.

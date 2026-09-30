@@ -238,6 +238,22 @@ fn whitewater_handoff_matches_the_lifecycle() {
     assert!(report.lifecycle_ms >= 0.0 && report.worker_ms > 0.0, "{report:?}");
 }
 
+/// D11: FLIP's update runs on the lifecycle's thread, live and offline,
+/// never on the thread that runs the node.
+#[test]
+fn whitewater_update_runs_on_its_own_thread() {
+    let content = std::thread::current().id();
+    for offline in [false, true] {
+        let mut rig = Rig::new(64);
+        rig.emit(&[spray(0.0, 1.0)], 1);
+        rig.run(1, 0, offline);
+        rig.retire_all();
+        rig.run(1, 0, offline);
+        let updated_on = rig.node.handoff.updated_on().expect("the worker replied");
+        assert_ne!(updated_on, content, "offline {offline}: the update ran on the content thread");
+    }
+}
+
 /// I3: live never waits for the GPU. Unretired snapshots stay pending; once
 /// some retire, the worker takes those, oldest first, and the loan stops at
 /// the first that hasn't.
