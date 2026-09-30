@@ -160,6 +160,17 @@ fn int(v: usize) -> Value {
     json!({"type": "Int", "value": v})
 }
 
+/// An array capacity as an Int param. Params are f32, which counts exactly
+/// only to 2²⁴ (257³ is past it); above that the nearest f32 at or above `v`
+/// is used, so the array is never short.
+fn capacity(v: usize) -> Value {
+    let mut f = v as f32;
+    if (f as u64) < v as u64 {
+        f = f32::from_bits(f.to_bits() + 1);
+    }
+    json!({"type": "Int", "value": f as u64})
+}
+
 #[derive(Default)]
 struct Builder {
     nodes: Vec<Value>,
@@ -309,8 +320,8 @@ impl Builder {
 pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     let mut b = Builder::default();
     let cells = s.cells();
-    let water = b.node("water", "test.value_source", json!({"max_capacity": int(cells)}));
-    let f = b.node("f", "test.value_source", json!({"max_capacity": int(cells)}));
+    let water = b.node("water", "test.value_source", json!({"max_capacity": capacity(cells)}));
+    let f = b.node("f", "test.value_source", json!({"max_capacity": capacity(cells)}));
     let pressure = pressure(&mut b, s, (water, "out"), (f, "out"));
     let sink = b.node("sink", "test.value_sink", json!({}));
     b.wire(pressure, sink, "values");
@@ -341,7 +352,7 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
                 ("box_z1", int(sites[2][1] as usize)),
                 ("jitter", float(0.0)),
                 ("seed", int(0)),
-                ("max_capacity", int(scene.particles() as usize)),
+                ("max_capacity", capacity(scene.particles() as usize)),
             ],
         ),
     );
@@ -369,20 +380,95 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
     serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("water def")
 }
 
+fn gpu_surface_preset() -> Value {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpu.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses")
+}
+
 /// The `liquid_surface` group of `WaterDamBreakGpu.json`, so SWASH is meshed
 /// exactly as the shipped GPU surface meshes the engine's particles.
 fn surface_group() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpu.json");
-    let preset: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses");
+    let preset = gpu_surface_preset();
     let nodes = preset["nodes"].as_array().expect("preset nodes");
     nodes.iter().find(|node| node["nodeId"] == "liquid_surface").expect("liquid surface group").clone()
+}
+
+/// `WaterDamBreakGpu.json` nodes the render leaves out: the FLIP engine and
+/// its Liquid Surface copy (the scene brings its own), the engine's column,
+/// and the obstacle and whitewater objects the engine feeds. SWASH has no
+/// solids or whitewater yet.
+const RENDER_LEFT_OUT: [&str; 16] = [
+    "fluid_surface",
+    "liquid_surface",
+    "initial_column",
+    "obstacle_transform",
+    "obstacle_mesh",
+    "obstacle_material",
+    "obstacle_object",
+    "foam_mesh",
+    "foam_material",
+    "foam_object",
+    "bubble_mesh",
+    "bubble_material",
+    "bubble_object",
+    "spray_mesh",
+    "spray_material",
+    "spray_object",
+];
+
+/// A meshed scene through the render graph the app shows for the GPU liquid
+/// surface: `WaterDamBreakGpu.json`'s camera, lights, environment, tank, the
+/// water material with its volume optics, and the tone map, drawing SWASH's
+/// mesh in place of the engine's. The generator's trigger count restarts the
+/// liquid, as a clip relaunch would.
+pub(super) fn render_def(scene: WaterScene) -> EffectGraphDef {
+    let mut def = serde_json::to_value(water_def(scene.with_surface())).expect("water def serialises");
+    let preset = gpu_surface_preset();
+    let id_of = |graph: &Value, name: &str| -> u64 {
+        let nodes = graph["nodes"].as_array().expect("nodes");
+        let node = nodes.iter().find(|n| n["nodeId"] == name).unwrap_or_else(|| panic!("no node {name}"));
+        node["id"].as_u64().expect("numeric id")
+    };
+    let harness = [id_of(&def, "mesh_sink"), id_of(&def, "output")];
+    let ends = |wire: &Value| [wire["fromNode"].as_u64().expect("from"), wire["toNode"].as_u64().expect("to")];
+    def["nodes"].as_array_mut().expect("nodes").retain(|n| !harness.contains(&n["id"].as_u64().expect("id")));
+    def["wires"].as_array_mut().expect("wires").retain(|w| ends(w).iter().all(|id| !harness.contains(id)));
+    let offset = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    let kept: Vec<Value> = preset["nodes"]
+        .as_array()
+        .expect("preset nodes")
+        .iter()
+        .filter(|n| !RENDER_LEFT_OUT.iter().any(|name| n["nodeId"] == *name))
+        .cloned()
+        .collect();
+    let kept_ids: Vec<u64> = kept.iter().map(|n| n["id"].as_u64().expect("preset id")).collect();
+    for mut node in kept {
+        node["id"] = json!(offset + node["id"].as_u64().expect("preset id"));
+        def["nodes"].as_array_mut().expect("nodes").push(node);
+    }
+    for wire in preset["wires"].as_array().expect("preset wires") {
+        if ends(wire).iter().all(|id| kept_ids.contains(id)) {
+            let mut wire = wire.clone();
+            for end in ["fromNode", "toNode"] {
+                wire[end] = json!(offset + wire[end].as_u64().expect("end"));
+            }
+            def["wires"].as_array_mut().expect("wires").push(wire);
+        }
+    }
+    let extra = [
+        json!({"fromNode": id_of(&def, "surface"), "fromPort": "vertices", "toNode": offset + id_of(&preset, "water_object"), "toPort": "vertices"}),
+        json!({"fromNode": offset + id_of(&preset, "input"), "fromPort": "trigger_count", "toNode": id_of(&def, "state"), "toPort": "reset_trigger"}),
+    ];
+    def["wires"].as_array_mut().expect("wires").extend(extra);
+    def["name"] = json!("SWASH (GPU Surface)");
+    serde_json::from_value(def).expect("render def")
 }
 
 /// The liquid surface over the tank: its solid lattice is the cell corners,
 /// with no solid in it (`solid` is a test source the harness zeroes).
 fn surface(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
     let nodes = scene.surface_nodes();
-    let solid = b.node("solid", "test.value_source", json!({"max_capacity": int(nodes.pow(3))}));
+    let solid = b.node("solid", "test.value_source", json!({"max_capacity": capacity(nodes.pow(3))}));
     let half = 0.5 * BOX_METRES;
     let bounds = b.node(
         "tank",

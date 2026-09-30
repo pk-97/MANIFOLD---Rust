@@ -377,6 +377,8 @@ pub(crate) mod swash_volume;
 pub(crate) mod swash_race_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod swash_still;
+#[cfg(all(test, feature = "water-race-probes"))]
+mod swash_render_smoke_tests;
 mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

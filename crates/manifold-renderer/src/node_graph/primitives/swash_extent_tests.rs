@@ -6,7 +6,7 @@
 use ahash::AHashMap;
 
 use super::sort_particles_into_cells::range_storage_bytes;
-use super::swash_preset::{PressureShape, WaterScene, pressure_def, water_def};
+use super::swash_preset::{PressureShape, WaterScene, pressure_def, render_def, water_def};
 use crate::node_graph::effect_node::ParamValues;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, FluidParticle, bin_counts};
@@ -131,6 +131,12 @@ impl Sizes<'_> {
             match ty {
                 "test.value_source" | "test.value_sink" | "test.liquid_sink" | "test.mesh_sink" | "system.final_output"
                 | "node.transform_3d" | "node.transform_components" | "node.value" | "node.math" => continue,
+                // The shipped render graph of WaterDamBreakGpu.json around the
+                // surface (render_def): textures, scene objects and lights; the
+                // mesh it draws is checked at volume_surface_mesh.
+                "system.generator_input" | "node.orbit_camera" | "node.bake_environment" | "node.light"
+                | "node.pbr_material" | "node.scene_object" | "node.cube_mesh" | "node.render_scene"
+                | "node.tone_map" | "node.hdri_source" | "node.exposure" | "node.switch_texture" => continue,
                 "node.sort_particles_into_cells" if wired(step, "cell_size") => {
                     covers("particles", particle_bytes);
                     covers("sorted", particle_bytes);
@@ -363,17 +369,27 @@ impl Sizes<'_> {
     }
 }
 
+/// Every lattice a scene may use: the power-of-two sides the FFT atoms
+/// accept, 16 to 256. Each is proven here before any GPU run at it. 512 is
+/// not runnable: its Dam Break is 176M particles, past node.liquid_fill's
+/// 67M ceiling, and 257 GB of arrays.
+const LATTICES: [usize; 5] = [16, 32, 64, 128, 256];
+
+/// Krylov solves per step: the pressure, and the density solve when on.
+fn solves(scene: WaterScene) -> usize {
+    1 + usize::from(scene.spread_rate > 0.0)
+}
+
 fn plan_for(shape: PressureShape) -> (Graph, ExecutionPlan) {
     let graph = pressure_def(shape).into_graph(&registry(), &Default::default()).expect("pressure def builds");
     let plan = compile(&graph).expect("pressure def compiles");
     (graph, plan)
 }
 
-/// Every shape the GPU proofs run: both lattices, every pass count of the
-/// pass-count trend.
+/// Every lattice at every pass count of the pass-count trend.
 #[test]
 fn fft_water_pressure_arrays_cover_every_dispatch() {
-    for (n, passes) in [64, 128].into_iter().flat_map(|n| super::swash_preset::TREND_PASSES.map(|p| (n, p))) {
+    for (n, passes) in LATTICES.into_iter().flat_map(|n| super::swash_preset::TREND_PASSES.map(|p| (n, p))) {
         let shape = PressureShape { passes, ..PressureShape::at(n) };
         let (graph, plan) = plan_for(shape);
         assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
@@ -384,13 +400,13 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
     }
 }
 
-/// Every running scene the GPU proofs and probes run, at both lattices,
-/// before any GPU run of it: each step's particle, face and cell arrays and
-/// its solve.
+/// Every running scene at every lattice, and the probes' variants, before
+/// any GPU run of it: each step's particle, face and cell arrays and its
+/// solves.
 #[test]
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
-    let all = [64, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
+    let all = LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
     // The splash probes' scenes: the Krylov basis grows with passes, and
     // four steps a frame is four copies of the step.
     let refined = WaterScene::dam_break(128).with_surface();
@@ -399,8 +415,7 @@ fn fft_water_scenes_cover_every_dispatch() {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
-        let solves = 1 + usize::from(scene.spread_rate > 0.0);
-        assert_eq!(plan.substep_regions().len(), scene.steps * solves, "one Krylov region per solve");
+        assert_eq!(plan.substep_regions().len(), scene.steps * solves(scene), "one Krylov region per solve");
         let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
         let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
@@ -412,11 +427,55 @@ fn fft_water_scenes_cover_every_dispatch() {
     }
 }
 
+/// Device bytes a scene holds inside the render graph at 1920×1080: every
+/// array the planner allocates plus the Krylov bases and current vectors
+/// each solve provides itself. Textures are not counted.
+pub(super) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
+    let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
+    let plan = compile(&graph).expect("render def compiles");
+    let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
+    let planned: u64 = allocation.storage.values().map(|s| s.bytes).sum();
+    planned + krylov_bytes(scene)
+}
+
+fn krylov_bytes(scene: WaterScene) -> u64 {
+    let row = (scene.pressure.capacity as u64 + 1) * 4;
+    let density = if scene.spread_rate > 0.0 { scene.density_passes as u64 + 2 } else { 0 };
+    scene.steps as u64 * row * (scene.pressure.passes as u64 + 2 + density)
+}
+
+/// The rendered Dam Break's arrays at every lattice, for the size ladder,
+/// with the largest ports at the top one.
+#[test]
+fn fft_water_memory_at_every_lattice() {
+    for n in LATTICES {
+        let scene = WaterScene::dam_break(n);
+        let bytes = rendered_scene_bytes(scene);
+        println!("SWASH rendered Dam Break {n}³: {} particles, arrays {:.2} GB", scene.particles(), bytes as f64 / 1e9);
+        assert!(bytes > 0);
+    }
+    let n = LATTICES[LATTICES.len() - 1];
+    let graph = render_def(WaterScene::dam_break(n)).into_graph(&registry(), &Default::default()).expect("render def builds");
+    let plan = compile(&graph).expect("render def compiles");
+    let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
+    let names: AHashMap<_, _> = graph.nodes().map(|node| (node.id, node.node_id.as_str().to_string())).collect();
+    let mut ports: Vec<(String, u64)> = plan
+        .steps()
+        .iter()
+        .flat_map(|step| step.outputs.iter().map(move |(port, resource)| (step.node, *port, *resource)))
+        .filter_map(|(node, port, resource)| allocation.storage.get(&resource).map(|s| (format!("{}.{port}", names[&node]), s.bytes)))
+        .collect();
+    ports.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
+    for (port, bytes) in ports.iter().take(12) {
+        println!("SWASH {n}³ array {port}: {:.2} GB", *bytes as f64 / 1e9);
+    }
+}
+
 /// What the collar capacity costs in memory: every array the planner
 /// allocates for the meshed Dam Break, plus the Krylov bases and current
-/// vectors each step's solve provides itself, at today's 8n² and at the
-/// proven bound 6n³/7 (a collar cell is air beside water, and at most six
-/// air cells in seven can touch water).
+/// vectors each solve provides itself, at today's 8n² and at the proven
+/// bound 6n³/7 (a collar cell is air beside water, and at most six air
+/// cells in seven can touch water).
 #[test]
 fn fft_water_collar_capacity_memory() {
     let mb = |b: u64| b as f64 / 1e6;
@@ -429,9 +488,7 @@ fn fft_water_collar_capacity_memory() {
             let plan = compile(&graph).expect("water def compiles");
             let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
             let planned: u64 = allocation.storage.values().map(|s| s.bytes).sum();
-            let row = (capacity as u64 + 1) * 4;
-            let density = if scene.spread_rate > 0.0 { scene.density_passes as u64 + 2 } else { 0 };
-            let provided = scene.steps as u64 * row * (scene.pressure.passes as u64 + 2 + density);
+            let provided = krylov_bytes(scene);
             println!("{n}³ capacity {capacity}: planned {:.0} MB, Krylov bases {:.0} MB, total {:.0} MB", mb(planned), mb(provided), mb(planned + provided));
             let names: AHashMap<_, _> = graph.nodes().map(|node| (node.id, node.node.type_id().as_str().to_string())).collect();
             let mut ports = AHashMap::default();
@@ -466,6 +523,24 @@ fn fft_water_refuses_an_illegal_lattice_at_build() {
             }
             other => panic!("{n}³ must be refused at build, got {:?}", other.map(|_| "a plan")),
         }
+    }
+}
+
+/// The scenes as the render smoke runs them, inside the shipped render graph
+/// (`render_def`), at every lattice: the same coverage as the bare scenes,
+/// with the render around them.
+#[test]
+fn fft_water_rendered_scenes_cover_every_dispatch() {
+    let scenes = [WaterScene::dam_break, WaterScene::still_pool];
+    for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))) {
+        let n = scene.pressure.n;
+        let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
+        let plan = compile(&graph).expect("render def compiles");
+        assert_eq!(plan.substep_regions().len(), scene.steps * solves(scene), "one Krylov region per solve");
+        let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
+        let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
+        assert!(checked > 150, "checked only {checked} nodes at {n}³");
     }
 }
 

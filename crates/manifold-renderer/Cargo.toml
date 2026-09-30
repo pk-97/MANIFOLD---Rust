@@ -109,6 +109,12 @@ manifold-io = { path = "../manifold-io" }
 # test-only, exactly like the `manifold-io` dev-dependency above.
 manifold-editing = { path = "../manifold-editing" }
 
+# The SWASH render smoke drains Metal's autoreleased objects per frame, as the
+# content thread does (`content_thread.rs`), so host memory reads as the app's.
+# Already in the graph through manifold-gpu.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+
 [[bin]]
 name = "check-presets"
 path = "src/bin/check_presets.rs"
