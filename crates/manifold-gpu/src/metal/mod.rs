@@ -35,6 +35,8 @@ mod types;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod pipeline_cache_tests;
+#[cfg(test)]
+mod workgroup_zeroing_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod replay_tests;
 

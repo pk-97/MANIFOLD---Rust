@@ -10,7 +10,8 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor, MTLBuffer,
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
-    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
+    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor,
+    MTLComputePipelineState, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
     MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
@@ -377,12 +378,14 @@ impl GpuEncoder {
     fn begin_profiled_compute(
         &mut self,
         label: &str,
+        pipeline: &GpuComputePipeline,
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         self.end_current();
+        let threadgroup_bytes = pipeline.state.staticThreadgroupMemoryLength() as u32;
         let Some((start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Compute))
+            .and_then(|p| p.reserve(label, GpuWorkKind::Compute, threadgroup_bytes))
         else {
             return self.ensure_compute();
         };
@@ -416,7 +419,7 @@ impl GpuEncoder {
         if let Some((start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Render))
+            .and_then(|p| p.reserve(label, GpuWorkKind::Render, 0))
         {
             let sample_buffer = self
                 .profile
@@ -444,7 +447,7 @@ impl GpuEncoder {
         if let Some((start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Blit))
+            .and_then(|p| p.reserve(label, GpuWorkKind::Blit, 0))
         {
             let sample_buffer = self
                 .profile
@@ -479,7 +482,7 @@ impl GpuEncoder {
         if let Some((start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure))
+            .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure, 0))
         {
             let sample_buffer = self
                 .profile
@@ -555,7 +558,7 @@ impl GpuEncoder {
             self.end_current();
         }
         let enc = if self.profile.is_some() {
-            self.begin_profiled_compute(label)
+            self.begin_profiled_compute(label, pipeline)
         } else {
             self.ensure_compute()
         };
@@ -772,7 +775,7 @@ impl GpuEncoder {
         }
         self.end_current();
         let enc = if self.profile.is_some() {
-            self.begin_profiled_compute(label)
+            self.begin_profiled_compute(label, pipeline)
         } else {
             self.ensure_compute()
         };
