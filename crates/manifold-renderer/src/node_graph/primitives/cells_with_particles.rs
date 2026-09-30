@@ -2,34 +2,49 @@
 //! (docs/FFT_WATER_SOLVER_DESIGN.md section 3 step 2): a cell is water when
 //! the sort put a particle in it. A per-element atom on the codegen path.
 
+use std::borrow::Cow;
+
 use manifold_gpu::GpuBinding;
 
+use super::collar_cells::{cell_count, cell_lattice};
+use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::CellRange;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Codegen uniform layout: no params, then `dispatch_count`.
+/// Lattice cells for a param set, for `array_output_capacity`: the sort
+/// sizes its ranges only at run time, so the lattice sizes this output.
+pub(super) fn cell_capacity(params: &ParamValues) -> Option<u32> {
+    cell_lattice(params).and_then(|nodes| u32::try_from(cell_count(nodes)).ok())
+}
+
+/// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct CellsUniforms {
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
     name: CellsWithParticles,
     type_id: "node.cells_with_particles",
-    purpose: "Mark which bins of a particle sort hold particles: out[c] = 1 where cell_ranges[c].count > 0, else 0. One element per bin, in the sort's bin order.",
+    purpose: "Mark which cells of a lattice hold particles, from a sort whose bins are the lattice's cells: out[c] = 1 where cell_ranges[c].count > 0, else 0, for the nodes_x × nodes_y × nodes_z cells in the sort's bin order.",
     inputs: {
         cell_ranges: Array(CellRange) required,
     },
     outputs: {
         out: Array(f32),
     },
-    params: [],
+    params: [
+        float_param!("nodes_x", "Cells X", 64.0, 1.0, 1024.0),
+        float_param!("nodes_y", "Cells Y", 64.0, 1.0, 1024.0),
+        float_param!("nodes_z", "Cells Z", 64.0, 1.0, 1024.0),
+    ],
     depth_rule: Terminal,
     composition_notes: "After node.sort_particles_into_cells whose bins are the liquid's lattice cells (the box is the lattice, cell_size its cell): the 1/0 water lattice the FFT water pressure solve and node.face_divergence read.",
     examples: [],
@@ -44,21 +59,32 @@ crate::primitive! {
 }
 
 impl Primitive for CellsWithParticles {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "cell_ranges").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+        (port == "out").then(|| cell_capacity(params)).flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(nodes) = cell_lattice(ctx.params) else {
+            ctx.error("Cells With Particles: every lattice length must be 1 to 1024".to_string());
+            return;
+        };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let (Some(ranges), Some(out)) = (ctx.inputs.array("cell_ranges"), ctx.outputs.array("out")) else {
             return;
         };
-        let count = (ranges.size / std::mem::size_of::<CellRange>() as u64).min(out.size / 4) as u32;
-        if count == 0 {
+        let cells = cell_count(nodes);
+        if cells * std::mem::size_of::<CellRange>() as u64 > ranges.size || cells * 4 > out.size {
+            ctx.error(format!("Cells With Particles: a {nodes:?} lattice is larger than its arrays; bin the sort by the lattice's cells"));
             return;
         }
-        let uniforms = CellsUniforms { dispatch_count: count, _pad0: 0, _pad1: 0, _pad2: 0 };
+        let count = cells as u32;
+        let uniforms = CellsUniforms {
+            nodes_x: nodes[0] as f32,
+            nodes_y: nodes[1] as f32,
+            nodes_z: nodes[2] as f32,
+            dispatch_count: count,
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,

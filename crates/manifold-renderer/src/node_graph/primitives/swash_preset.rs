@@ -56,9 +56,13 @@ fn int(v: usize) -> Value {
     json!({"type": "Int", "value": v})
 }
 
+#[derive(Default)]
 struct Builder {
     nodes: Vec<Value>,
     wires: Vec<Value>,
+    /// Prepended to every node name: each water step's copy of the solve
+    /// needs its own.
+    prefix: String,
 }
 
 type Port = (usize, &'static str);
@@ -66,6 +70,7 @@ type Port = (usize, &'static str);
 impl Builder {
     fn node(&mut self, name: &str, type_id: &str, params: Value) -> usize {
         let id = self.nodes.len();
+        let name = format!("{}{name}", self.prefix);
         self.nodes.push(json!({"id": id, "nodeId": name, "typeId": type_id, "params": params}));
         id
     }
@@ -195,25 +200,36 @@ impl Builder {
     }
 }
 
-/// The whole solve for one step: setup, right-hand side, the GMRES region,
-/// and the pressure.
+/// The whole solve for one step, from the water lattice and its divergence:
+/// setup, right-hand side, the GMRES region, and the pressure.
 pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
-    let mut b = Builder { nodes: Vec::new(), wires: Vec::new() };
+    let mut b = Builder::default();
+    let cells = s.cells();
+    let water = b.node("water", "test.value_source", json!({"max_capacity": int(cells)}));
+    let f = b.node("f", "test.value_source", json!({"max_capacity": int(cells)}));
+    let pressure = pressure(&mut b, s, (water, "out"), (f, "out"));
+    let sink = b.node("sink", "test.value_sink", json!({}));
+    b.wire(pressure, sink, "values");
+    let output = b.node("output", "system.final_output", json!({}));
+    b.wire((sink, "out"), output, "in");
+    serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("pressure def")
+}
+
+/// The solve's nodes, from the water lattice and its divergence f; returns
+/// the pressure.
+fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
     let n = [s.n; 3];
     let cells = s.cells();
 
-    let water = b.node("water", "test.value_source", json!({"max_capacity": int(cells)}));
-    let f = b.node("f", "test.value_source", json!({"max_capacity": int(cells)}));
-
     // Setup: the collar list and each entry's place in the six views.
     let collar = b.node("collar", "node.collar_cells", Builder::lattice(n, &[]));
-    b.wire((water, "out"), collar, "water");
+    b.wire(water, collar, "water");
     let total = b.node("collar_total", "node.running_total", json!({}));
     b.wire((collar, "out"), total, "in");
     let total = (total, "out");
     let entries = b.node("entries", "node.select_flagged", json!({"capacity": int(s.capacity)}));
     b.wire(total, entries, "total");
-    let mut smoothed: Port = (water, "out");
+    let mut smoothed: Port = water;
     for axis in 0..3 {
         let blur = b.node(
             &format!("smooth_{axis}"),
@@ -225,14 +241,14 @@ pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     }
     let charts = b.node("charts", "node.chart_entries", Builder::lattice(n, &[("sheets", int(s.sheets))]));
     b.wire((entries, "out"), charts, "entries");
-    b.wire((water, "out"), charts, "water");
+    b.wire(water, charts, "water");
     b.wire(smoothed, charts, "smoothed");
     b.wire((collar, "out"), charts, "collar");
     let charts = (charts, "out");
 
     // Right-hand side b = (G f at the collar, Σf / n³), β = |b|, start = b / β.
-    let gf = b.box_solve("rhs_box", (f, "out"), s);
-    let sum_f = b.dots("sum_f", (f, "out"), None, cells, 1, false);
+    let gf = b.box_solve("rhs_box", f, s);
+    let sum_f = b.dots("sum_f", f, None, cells, 1, false);
     let rhs = b.node("rhs", "node.collar_gather", json!({}));
     b.wire((entries, "out"), rhs, "entries");
     b.wire(gf, rhs, "grid");
@@ -296,14 +312,9 @@ pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     b.wire(lambda, final_source, "value");
     let correction = b.box_solve("final_box", (final_source, "out"), s);
     let pressure = b.node("pressure", "node.collar_pressure", json!({}));
-    b.wire((water, "out"), pressure, "water");
+    b.wire(water, pressure, "water");
     b.wire(gf, pressure, "solved");
     b.wire(correction, pressure, "correction");
     b.wire(lambda, pressure, "vector");
-    let sink = b.node("sink", "test.value_sink", json!({}));
-    b.wire((pressure, "out"), sink, "values");
-    let output = b.node("output", "system.final_output", json!({}));
-    b.wire((sink, "out"), output, "in");
-
-    serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("pressure def")
+    (pressure, "out")
 }

@@ -175,7 +175,7 @@ fn swash_cells_with_particles_marks_occupied_bins() {
     let ranges: Vec<CellRange> =
         (0..cell_len()).map(|c| CellRange { start: c as u32 * 3, count: u32::from(rng.unit() < 0.4) * 3 }).collect();
     let input = harness.array(&ranges, cell_len());
-    let got: Vec<f32> = run_into(&mut harness, &mut CellsWithParticles::new(), &[("cell_ranges", input.0)], cell_len(), &params(&[]));
+    let got: Vec<f32> = run_into(&mut harness, &mut CellsWithParticles::new(), &[("cell_ranges", input.0)], cell_len(), &lattice(&[]));
     for (c, (g, r)) in got.iter().zip(&ranges).enumerate() {
         assert_eq!(*g, f32::from(u8::from(r.count > 0)), "cell {c}");
     }

@@ -3296,13 +3296,44 @@
       "label": "Cells With Particles",
       "outputs": [
         {
-          "capacity": "follows:cell_ranges",
+          "capacity": "param:nodes_x+nodes_y+nodes_z=262144",
           "name": "out",
           "type": "Array"
         }
       ],
-      "params": [],
-      "purpose": "Mark which bins of a particle sort hold particles: out[c] = 1 where cell_ranges[c].count > 0, else 0. One element per bin, in the sort's bin order.",
+      "params": [
+        {
+          "default": "64",
+          "label": "Cells X",
+          "name": "nodes_x",
+          "range": [
+            "1",
+            "1024"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "64",
+          "label": "Cells Y",
+          "name": "nodes_y",
+          "range": [
+            "1",
+            "1024"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "64",
+          "label": "Cells Z",
+          "name": "nodes_z",
+          "range": [
+            "1",
+            "1024"
+          ],
+          "type": "float"
+        }
+      ],
+      "purpose": "Mark which cells of a lattice hold particles, from a sort whose bins are the lattice's cells: out[c] = 1 where cell_ranges[c].count > 0, else 0, for the nodes_x × nodes_y × nodes_z cells in the sort's bin order.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Marks the grid cells that have liquid in them.",
@@ -9107,7 +9138,7 @@
       "label": "Face Divergence",
       "outputs": [
         {
-          "capacity": "follows:water",
+          "capacity": "param:nodes_x+nodes_y+nodes_z=262144",
           "name": "out",
           "type": "Array"
         }

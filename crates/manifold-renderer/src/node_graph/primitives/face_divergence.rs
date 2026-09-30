@@ -6,6 +6,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use super::cells_with_particles::cell_capacity;
 use super::collar_cells::{cell_count, cell_lattice};
 use super::particles_to_faces::face_count;
 use super::sort_particles_into_cells::float_param;
@@ -61,8 +62,8 @@ crate::primitive! {
 }
 
 impl Primitive for FaceDivergence {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "water").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+        (port == "out").then(|| cell_capacity(params)).flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
