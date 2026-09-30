@@ -152,13 +152,6 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "cosine_line.rs",
-        rust_struct: "CosineLineUniforms",
-        shader: "shaders/cosine_line.wgsl",
-        shader_struct: "Params",
-        aliases: &[],
-    },
-    CustomAbiCase {
         source: "live_draw_args.rs",
         rust_struct: "LiveArgs",
         shader: "shaders/live_draw_args.wgsl",

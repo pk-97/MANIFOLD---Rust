@@ -310,7 +310,6 @@ mod running_total;
 mod shape_particle_blobs;
 mod particle_volume;
 mod smooth_lattice;
-mod cosine_line;
 mod cosine_reorder;
 mod cosine_spectrum;
 mod cosine_half_spectrum;
