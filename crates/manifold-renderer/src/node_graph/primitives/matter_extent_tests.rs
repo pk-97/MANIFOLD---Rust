@@ -13,8 +13,10 @@ use super::sort_particles_into_cells::range_storage_bytes;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid::domain_layout;
 use crate::node_graph::fluid_particles::{CellRange, MAX_BINS, bin_counts, bin_total, searched_bins};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{
-    ACCUM_WORDS_PER_NODE, MatterGridNode, MatterLattice, grid_accum_bytes, grid_bytes, lattice_nodes, solid_bytes,
+    ACCUM_WORDS_PER_NODE, MatterGridNode, block_sort_box, grid_accum_bytes, grid_bytes, lattice_blocks, lattice_nodes,
+    solid_bytes,
 };
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
@@ -43,8 +45,8 @@ fn matter_buffers_cover_their_dispatch_at_every_resolution() {
     let mut largest_default = 0;
     let mut first_past_old_cap = (None, None);
     for res in RESOLUTIONS {
-        let lattice = MatterLattice::from_layout(&domain_layout(None, 4.0, res).expect("layout"));
-        let nodes = lattice_nodes(lattice.nodes);
+        let lattice = LiquidLattice::from_layout(&domain_layout(None, 4.0, res).expect("layout"));
+        let nodes = lattice_nodes(lattice.nodes());
 
         // The domain admits a lattice or names the refusal; nothing downstream
         // ever sees a refused one (it holds the last good outputs).
@@ -67,25 +69,25 @@ fn matter_buffers_cover_their_dispatch_at_every_resolution() {
         assert_eq!(u64::from(lattice.node_count()), nodes, "res {res}");
         assert!(nodes <= i32::MAX as u64, "res {res}");
         assert!(nodes * u64::from(ACCUM_WORDS_PER_NODE) <= u64::from(u32::MAX), "res {res}: accumulator word index");
-        assert_eq!(grid_accum_bytes(lattice.nodes), nodes * u64::from(ACCUM_WORDS_PER_NODE) * 4, "res {res}");
-        assert_eq!(grid_bytes(lattice.nodes), nodes * size_of::<MatterGridNode>() as u64, "res {res}");
+        assert_eq!(grid_accum_bytes(lattice.nodes()), nodes * u64::from(ACCUM_WORDS_PER_NODE) * 4, "res {res}");
+        assert_eq!(grid_bytes(lattice.nodes()), nodes * size_of::<MatterGridNode>() as u64, "res {res}");
         // The solid lattice: node.liquid_solid_distance writes one f32 per
         // node and node.matter_frame's ring copies the same bytes.
-        assert_eq!(solid_bytes(lattice.nodes), nodes * 4, "res {res}");
+        assert_eq!(solid_bytes(lattice.nodes()), nodes * 4, "res {res}");
 
         // The block sort's bins are P2G's blocks exactly, so P2G's range check
         // passes and its last block reads a written range.
-        let (_, size, bin) = lattice.block_sort_box();
+        let (_, size, bin) = block_sort_box(&lattice);
         let blocks = bin_counts(size, bin);
-        assert_eq!(blocks, lattice.blocks(), "res {res}: block sort bins");
+        assert_eq!(blocks, lattice_blocks(&lattice), "res {res}: block sort bins");
         assert_search_fits(blocks, &format!("res {res} block sort"));
 
         // The Liquid Surface group sorts over grid_bounds with bins one
         // simulation cell wide (size_x / (nodes_x − 1) × Bin Cells 1).
         let bounds = lattice.bounds().scale;
-        let cell = bounds[0] / (lattice.nodes[0] - 1) as f32 * 1.0;
+        let cell = bounds[0] / (lattice.nodes()[0] - 1) as f32 * 1.0;
         let bins = bin_counts(bounds, cell);
-        assert!(bins.iter().zip(lattice.nodes).all(|(&b, n)| b == n - 1 || b == n), "res {res}: {bins:?}");
+        assert!(bins.iter().zip(lattice.nodes()).all(|(&b, n)| b == n - 1 || b == n), "res {res}: {bins:?}");
         assert_search_fits(bins, &format!("res {res} liquid sort"));
         if bin_total(bins) > OLD_CAP {
             first_past_old_cap.0.get_or_insert(res);
@@ -99,7 +101,7 @@ fn matter_buffers_cover_their_dispatch_at_every_resolution() {
         // Resolution Scale, or saturates and the executor refuses the growth
         // by name before the atom's own count check.
         for scale in 1..=4_u32 {
-            let refined = lattice_nodes(refined_nodes(lattice.nodes.map(|n| n as f32), scale));
+            let refined = lattice_nodes(refined_nodes(lattice.nodes().map(|n| n as f32), scale));
             let mut params = ParamValues::default();
             params.insert("resolution_scale".into(), ParamValue::Float(scale as f32));
             let capacity = ParticleVolume::new()
@@ -112,8 +114,8 @@ fn matter_buffers_cover_their_dispatch_at_every_resolution() {
         // either fits the u32 count every point kernel dispatches over, or
         // node.matter_fill refuses it by name.
         for points_per_cell in [8, 27] {
-            let full = u64::from(lattice.cells[0]) * u64::from(lattice.cells[1]) * u64::from(lattice.cells[2]);
-            match fill_count(lattice.cells, lattice.cells[1], [[0, 0]; 3], points_per_cell) {
+            let full = u64::from(lattice.cells()[0]) * u64::from(lattice.cells()[1]) * u64::from(lattice.cells()[2]);
+            match fill_count(lattice.cells(), lattice.cells()[1], [[0, 0]; 3], points_per_cell) {
                 Ok(count) => assert_eq!(u64::from(count), full * u64::from(points_per_cell), "res {res}"),
                 Err(error) => {
                     assert!(full * u64::from(points_per_cell) > u64::from(u32::MAX), "res {res}");

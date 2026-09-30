@@ -22,10 +22,11 @@ use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::LiquidClock;
 use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
 use crate::node_graph::matter::{
-    MAX_SUBSTEPS, MatterLattice, REACTION_WORDS, WATER_DENSITY, free_fall_speed, lattice_nodes, momentum_unit,
-    stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
+    MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
+    momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -37,7 +38,7 @@ use crate::node_graph::primitive::Primitive;
 /// Everything whose change restarts the simulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MatterSetup {
-    lattice: MatterLattice,
+    lattice: LiquidLattice,
     closed_faces: u32,
     pool_cells: u32,
     column: [[u32; 2]; 3],
@@ -286,8 +287,8 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
 
 /// The Grid Budget gate: a lattice over `budget_mcells` million nodes is
 /// refused by name before anything downstream sizes or dispatches over it.
-pub(crate) fn admit_lattice(lattice: &MatterLattice, budget_mcells: f32) -> Result<(), String> {
-    let nodes = lattice_nodes(lattice.nodes) as f64;
+pub(crate) fn admit_lattice(lattice: &LiquidLattice, budget_mcells: f32) -> Result<(), String> {
+    let nodes = lattice_nodes(lattice.nodes()) as f64;
     if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6 {
         return Err(format!(
             "Matter lattice needs {:.3} million nodes; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
@@ -600,16 +601,16 @@ impl MatterDomain {
         let resolution = ctx.scalar_or_param("resolution", 64.0).round().max(0.0) as u32;
         let domain_size = ctx.scalar_or_param("domain_size", 4.0);
         let layout = domain_layout(ctx.inputs.transform("domain"), domain_size, resolution)?;
-        let lattice = MatterLattice::from_layout(&layout);
-        let blocks = lattice.blocks();
-        let (block_centre, block_size, block_bin) = lattice.block_sort_box();
+        let lattice = LiquidLattice::from_layout(&layout);
+        let blocks = lattice_blocks(&lattice);
+        let (block_centre, block_size, block_bin) = block_sort_box(&lattice);
         admit_lattice(&lattice, ctx.param_f32("grid_budget_mcells", 8.0))?;
-        let dx = f64::from(lattice.cell_size);
+        let dx = f64::from(lattice.cell_size());
         let fill_height = ctx.scalar_or_param("fill_height", 0.4);
         if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
             return Err("Matter: fill height must lie within the domain height".into());
         }
-        let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(lattice.cells[1]);
+        let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(lattice.cells()[1]);
         let mut column = [[0u32; 2]; 3];
         if let Some(volume) = ctx.inputs.transform("initial_volume") {
             if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
@@ -626,7 +627,7 @@ impl MatterDomain {
                 return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
             }
             for (d, range) in column.iter_mut().enumerate() {
-                let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(lattice.cells[d]);
+                let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(lattice.cells()[d]);
                 *range = [
                     cell(volume.pos[d] - volume.scale[d] * 0.5),
                     cell(volume.pos[d] + volume.scale[d] * 0.5),
@@ -662,7 +663,7 @@ impl MatterDomain {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
-        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size)? == BodiesStatus::Pending {
+        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size())? == BodiesStatus::Pending {
             return Ok(None);
         }
         let setup_changed = self.setup != Some(setup);
@@ -738,12 +739,12 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) => body_limit(owner, lattice.cell_size, wave, v_est as f32)?,
+            Some(owner) => body_limit(owner, lattice.cell_size(), wave, v_est as f32)?,
             None => None,
         };
-        let substeps = substeps_per_tick(lattice.cell_size, wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
+        let substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
-        let unit = momentum_unit(lattice.cell_size, TICK / f64::from(substeps));
+        let unit = momentum_unit(lattice.cell_size(), TICK / f64::from(substeps));
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -757,7 +758,7 @@ impl MatterDomain {
                 let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
                 let scale = ReactionScale {
                     unit,
-                    cell_size: lattice.cell_size,
+                    cell_size: lattice.cell_size(),
                     offset: self.bodies.count() - owner.rows().len(),
                 };
                 owner.set_pending(pending);
@@ -774,13 +775,13 @@ impl MatterDomain {
         self.coupled.transport = Some(ctx.time.seconds.0);
 
         Ok(Some([
-            lattice.min[0],
-            lattice.min[1],
-            lattice.min[2],
-            lattice.cell_size,
-            lattice.nodes[0] as f32,
-            lattice.nodes[1] as f32,
-            lattice.nodes[2] as f32,
+            lattice.min()[0],
+            lattice.min()[1],
+            lattice.min()[2],
+            lattice.cell_size(),
+            lattice.nodes()[0] as f32,
+            lattice.nodes()[1] as f32,
+            lattice.nodes()[2] as f32,
             faces as f32,
             ctx.scalar_or_param("gravity_x", 0.0),
             ctx.scalar_or_param("gravity", -9.81),

@@ -8,7 +8,8 @@ use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
 use manifold_renderer::node_graph::fluid_particles::{CellRange, FluidParticle};
-use manifold_renderer::node_graph::matter::{MatterLattice, MatterPoint, MatterTickStats, STATS_WORDS};
+use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
+use manifold_renderer::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
     ParamValue, PrimitiveRegistry, ResourceId, StateStore, Transform, compile,
@@ -75,7 +76,7 @@ pub(crate) struct MatterScene {
     frame_b: ResourceId,
     /// The cell sort's `order` and `cell_ranges`, on the block path.
     sorted: Option<(ResourceId, ResourceId)>,
-    lattice: MatterLattice,
+    lattice: LiquidLattice,
     frame_count: u32,
     /// Seconds per display frame; one fixed tick unless set.
     frame_interval: f64,
@@ -254,7 +255,7 @@ impl MatterScene {
         let stats_res = output(state, "stats");
         let frame_b = output(frame, "particles_b");
         let sorted = sort_node.map(|sort| (output(sort, "order"), output(sort, "cell_ranges")));
-        let lattice = MatterLattice::from_layout(
+        let lattice = LiquidLattice::from_layout(
             &domain_layout(None, settings.domain_size, settings.resolution).expect("scene layout"),
         );
         let solid_b = (!settings.colliders.is_empty()).then(|| output(frame, "solid_b"));
@@ -363,7 +364,7 @@ impl MatterScene {
         self.read(self.solid_b.expect("a scene with colliders"))
     }
 
-    pub(crate) fn lattice(&self) -> MatterLattice {
+    pub(crate) fn lattice(&self) -> LiquidLattice {
         self.lattice
     }
 
@@ -503,7 +504,7 @@ impl MatterScene {
         let points = self.points();
         let order: Vec<u32> = self.read(order);
         let ranges: Vec<CellRange> = self.read(ranges);
-        let blocks = self.lattice.blocks();
+        let blocks = lattice_blocks(&self.lattice);
         let (mut live, mut left) = (0u64, 0u64);
         for (bin, range) in ranges.iter().take(blocks.iter().product::<u32>() as usize).enumerate() {
             let bin = bin as u32;
@@ -513,7 +514,7 @@ impl MatterScene {
                     continue;
                 };
                 let base: [i64; 3] = std::array::from_fn(|axis| {
-                    ((point.position[axis] - self.lattice.min[axis]) / self.lattice.cell_size - 0.5).floor() as i64
+                    ((point.position[axis] - self.lattice.min()[axis]) / self.lattice.cell_size() - 0.5).floor() as i64
                 });
                 live += 1;
                 left += u64::from((0..3).any(|axis| !(0..=3).contains(&(base[axis] - block[axis] * 4))));

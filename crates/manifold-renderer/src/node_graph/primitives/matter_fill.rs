@@ -9,10 +9,10 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::MatterPoint;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -139,7 +139,7 @@ impl Primitive for MatterFill {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let int = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let pool = int("pool_cells", 3.0);
         let column = [
@@ -153,7 +153,7 @@ impl Primitive for MatterFill {
         let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
         // With colliders the seeds depend on their pose at the epoch's start.
         let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
-        let cells = lattice.cells;
+        let cells = lattice.cells();
         let column = std::array::from_fn(|d| {
             [column[d][0].min(cells[d]), column[d][1].min(cells[d])]
         });
@@ -196,8 +196,8 @@ impl Primitive for MatterFill {
             _ => (buffer, buffer, buffer, 0),
         };
         let key = [
-            lattice.min[0].to_bits(), lattice.min[1].to_bits(), lattice.min[2].to_bits(),
-            lattice.cell_size.to_bits(), lattice.nodes[0], lattice.nodes[1], lattice.nodes[2],
+            lattice.min()[0].to_bits(), lattice.min()[1].to_bits(), lattice.min()[2].to_bits(),
+            lattice.cell_size().to_bits(), lattice.nodes()[0], lattice.nodes()[1], lattice.nodes()[2],
             pool, column[0][0], column[0][1], column[1][0], column[1][1], column[2][0], column[2][1],
             ppc, seed, body_count as u32, epoch,
         ];
@@ -207,13 +207,13 @@ impl Primitive for MatterFill {
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = FillUniforms {
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
-            cell_size: lattice.cell_size,
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
+            cell_size: lattice.cell_size(),
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
             pool_cells: pool as i32,
             column_x0: column[0][0] as i32,
             column_x1: column[0][1] as i32,

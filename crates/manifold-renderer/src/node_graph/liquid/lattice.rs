@@ -1,0 +1,235 @@
+//! The lattice a GPU liquid simulates, couples and meshes on: the domain
+//! layout's box grown by [`PADDING_NODES`] per side, with the walls as
+//! solid. It is built only from a padded layout, or read back from the
+//! wires such a lattice produced, so a solver built on it cannot hand the
+//! surface bare, unpadded bounds.
+
+use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::fluid::FluidDomainLayout;
+use crate::node_graph::transform::Transform;
+
+/// Nodes added outside the authored box on every side (taichi `padding = 3`).
+pub const PADDING_NODES: u32 = 3;
+
+/// Node (i, j, k) at `min + (i, j, k) · cell_size`. The fields are private:
+/// [`Self::from_layout`] is the only public way to make one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidLattice {
+    min: [f32; 3],
+    nodes: [u32; 3],
+    cell_size: f32,
+    /// Cells of the authored box per axis.
+    cells: [u32; 3],
+}
+
+impl LiquidLattice {
+    pub fn from_layout(layout: &FluidDomainLayout) -> Self {
+        let dx = layout.cell_size as f32;
+        let pad = PADDING_NODES as f32 * dx;
+        Self {
+            min: layout.min.map(|v| v - pad),
+            nodes: layout.cells.map(|n| n + 1 + 2 * PADDING_NODES),
+            cell_size: dx,
+            cells: layout.cells,
+        }
+    }
+
+    /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
+    /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
+    /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
+    /// at resolution 64, matching each atom's param defaults.
+    pub(crate) fn from_wires(ctx: &EffectNodeContext<'_, '_>) -> Self {
+        let nodes = |name: &str| ctx.scalar_or_param(name, 71.0).round().max(1.0) as u32;
+        let nodes = [nodes("nodes_x"), nodes("nodes_y"), nodes("nodes_z")];
+        Self {
+            min: [
+                ctx.scalar_or_param("lattice_min_x", -2.1875),
+                ctx.scalar_or_param("lattice_min_y", -0.1875),
+                ctx.scalar_or_param("lattice_min_z", -2.1875),
+            ],
+            nodes,
+            cell_size: ctx.scalar_or_param("cell_size", 0.0625),
+            cells: nodes.map(|n| n.saturating_sub(1 + 2 * PADDING_NODES)),
+        }
+    }
+
+    pub fn min(&self) -> [f32; 3] {
+        self.min
+    }
+
+    pub fn nodes(&self) -> [u32; 3] {
+        self.nodes
+    }
+
+    pub fn cell_size(&self) -> f32 {
+        self.cell_size
+    }
+
+    pub fn cells(&self) -> [u32; 3] {
+        self.cells
+    }
+
+    pub fn node_count(&self) -> u32 {
+        self.nodes[0] * self.nodes[1] * self.nodes[2]
+    }
+
+    /// Scene AABB of the lattice nodes (the seam's `grid_bounds`).
+    pub fn bounds(&self) -> Transform {
+        let size: [f32; 3] = std::array::from_fn(|i| (self.nodes[i] - 1) as f32 * self.cell_size);
+        Transform {
+            pos: std::array::from_fn(|i| self.min[i] + size[i] * 0.5),
+            scale: size,
+            ..Transform::default()
+        }
+    }
+
+    /// Signed distance from each node to the nearest closed wall of the
+    /// authored box (positive inside, negative past a closed face): the
+    /// seam's solid lattice for a domain whose only solids are its walls.
+    /// Open faces contribute nothing; with none closed, every node reads the
+    /// lattice diagonal.
+    pub fn wall_distance(&self, closed_faces: u32) -> Vec<f32> {
+        let dx = self.cell_size;
+        let low: [f32; 3] = std::array::from_fn(|d| self.min[d] + PADDING_NODES as f32 * dx);
+        let high: [f32; 3] = std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx);
+        let far = self.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
+        let [nx, ny, nz] = self.nodes;
+        let mut out = Vec::with_capacity(self.node_count() as usize);
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let p = [i, j, k].map(|c| c as f32 * dx);
+                    let mut distance = far;
+                    for d in 0..3 {
+                        let x = self.min[d] + p[d];
+                        if closed_faces & (1 << (2 * d)) != 0 {
+                            distance = distance.min(x - low[d]);
+                        }
+                        if closed_faces & (1 << (2 * d + 1)) != 0 {
+                            distance = distance.min(high[d] - x);
+                        }
+                    }
+                    out.push(distance);
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn liquid_lattice_pads_the_authored_box() {
+        let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 64).unwrap();
+        let lattice = LiquidLattice::from_layout(&layout);
+        assert_eq!(lattice.nodes(), [71; 3]);
+        assert_eq!(lattice.cell_size(), 0.0625);
+        assert_eq!(lattice.min(), [-2.1875, -0.1875, -2.1875]);
+        assert_eq!(lattice.bounds().scale, [4.375; 3]);
+    }
+
+    #[test]
+    fn liquid_wall_distance_is_signed_distance_to_closed_faces() {
+        let layout = crate::node_graph::fluid::domain_layout(None, 1.0, 8).unwrap();
+        let lattice = LiquidLattice::from_layout(&layout);
+        let dx = lattice.cell_size();
+        let all = lattice.wall_distance(63);
+        let n = lattice.nodes();
+        let at = |i: u32, j: u32, k: u32| all[((k * n[1] + j) * n[0] + i) as usize];
+        // The authored floor sits on node 3; one node below reads −dx.
+        assert!((at(7, 3, 7)).abs() < 1e-6);
+        assert!((at(7, 2, 7) + dx).abs() < 1e-6);
+        assert!((at(7, 5, 7) - 2.0 * dx).abs() < 1e-5);
+        // An open top: the node above the ceiling is not inside a solid.
+        let open_top = lattice.wall_distance(63 & !(1 << 3));
+        let top = n[1] - 1;
+        assert!(open_top[((7 * n[1] + top) * n[0] + 7) as usize] > 0.0);
+    }
+
+    /// With every face closed, every padding node is solid (a node or more
+    /// behind a wall) and no node of the authored box is, at every size and
+    /// resolution. The walls come from the layout alone, so no surface dial
+    /// can move them.
+    #[test]
+    fn liquid_lattice_padding_is_solid_behind_closed_walls() {
+        for domain in [0.5f32, 4.0, 20.0] {
+            for resolution in [8u32, 33, 64] {
+                let layout = crate::node_graph::fluid::domain_layout(None, domain, resolution).unwrap();
+                let lattice = LiquidLattice::from_layout(&layout);
+                let distance = lattice.wall_distance(63);
+                let half_cell = 0.5 * lattice.cell_size();
+                let [nx, ny, nz] = lattice.nodes();
+                let pad = PADDING_NODES;
+                for k in 0..nz {
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            let padding = [i, j, k]
+                                .iter()
+                                .zip(lattice.nodes())
+                                .any(|(&c, n)| c < pad || c > n - 1 - pad);
+                            let value = distance[(i + nx * (j + ny * k)) as usize];
+                            assert_eq!(
+                                value < -half_cell,
+                                padding,
+                                "domain {domain} resolution {resolution} node ({i}, {j}, {k}): distance {value}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every bundled Liquid Surface meshes on the lattice a solver's frame
+    /// node published: its solid, node counts and box are wired straight from
+    /// one node.fluid_surface or node.matter_frame, never a hand-made
+    /// transform or value that could drop the padding.
+    #[test]
+    fn liquid_surface_lattice_comes_from_the_frame() {
+        use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
+        use manifold_core::preset_def::PresetKind;
+
+        const FRAMES: [&str; 2] = ["node.fluid_surface", "node.matter_frame"];
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let mut checked = Vec::new();
+        // Scene-modifier recipes prepare only on a host scene, so the hosts
+        // are what this walks.
+        for kind in [PresetKind::Effect, PresetKind::Generator] {
+            for type_id in bundled_preset_type_ids(kind) {
+                let def = bundled_preset_def(&type_id).expect("bundled preset");
+                let expanded = crate::node_graph::scene_modifier_expand::expand_scene_modifiers(def, &registry)
+                    .unwrap_or_else(|error| panic!("{type_id}: {error}"));
+                let flat = manifold_core::flatten::flatten_groups(&expanded)
+                    .unwrap_or_else(|error| panic!("{type_id}: {error}"));
+                let type_of = |id: u32| flat.nodes.iter().find(|n| n.id == id).map(|n| n.type_id.as_str());
+                let source = |id: u32, port: &str| {
+                    let mut wires = flat.wires.iter().filter(|w| w.to_node == id && w.to_port == port);
+                    let wire = wires.next().unwrap_or_else(|| panic!("{type_id}: {port} is not wired"));
+                    assert!(wires.next().is_none(), "{type_id}: {port} has two sources");
+                    (wire.from_node, wire.from_port.as_str())
+                };
+                for volume in flat.nodes.iter().filter(|n| n.type_id == "node.particle_volume") {
+                    let (frame, port) = source(volume.id, "solid");
+                    assert!(FRAMES.contains(&type_of(frame).unwrap_or("")), "{type_id}: solid from {port}");
+                    assert!(matches!(port, "solid_a" | "solid_b"), "{type_id}: solid from {port}");
+                    let (box_node, _) = source(volume.id, "center_x");
+                    assert_eq!(type_of(box_node), Some("node.transform_components"), "{type_id}: lattice box");
+                    assert_eq!(source(box_node, "transform"), (frame, "grid_bounds"), "{type_id}: lattice box");
+                    for axis in ["x", "y", "z"] {
+                        let grid_nodes = format!("grid_nodes_{axis}");
+                        assert_eq!(source(volume.id, &format!("nodes_{axis}")), (frame, grid_nodes.as_str()), "{type_id}");
+                        for (to, from) in [("center", "pos"), ("size", "scale")] {
+                            let port = format!("{from}_{axis}");
+                            assert_eq!(source(volume.id, &format!("{to}_{axis}")), (box_node, port.as_str()), "{type_id}");
+                        }
+                    }
+                    checked.push(type_id.to_string());
+                }
+            }
+        }
+        assert!(!checked.is_empty(), "no bundled preset meshes a liquid surface");
+    }
+}

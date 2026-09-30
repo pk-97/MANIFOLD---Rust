@@ -1,12 +1,13 @@
 //! MLS-MPM matter (`docs/GPU_MPM_SOLVER_DESIGN.md`): the point and grid
-//! records the matter atoms share, the water constants, the lattice, the
-//! fixed-point encoding of grid accumulation (D5) and the substep rule (D4).
-//! The clock, bodies and rigid owner are every GPU liquid's: `liquid`.
+//! records the matter atoms share, the water constants, the block sort of
+//! the lattice, the fixed-point encoding of grid accumulation (D5) and the
+//! substep rule (D4). The clock, lattice, bodies and rigid owner are every
+//! GPU liquid's: `liquid`.
 
 use crate::node_graph::channel_names::well_known;
-use crate::node_graph::fluid::{FluidDomainLayout, TICK};
+use crate::node_graph::fluid::TICK;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
-use crate::node_graph::transform::Transform;
 
 pub mod coupling;
 /// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
@@ -283,66 +284,26 @@ pub fn stiffness_fitting_cap(dx: f64, unit_wave_speed: f64, v_est: f64) -> f64 {
     (max_wave / unit_wave_speed * (1.0 - 1e-5)).max(0.0)
 }
 
-/// Nodes added outside the authored box on every side (taichi `padding = 3`).
-pub const PADDING_NODES: u32 = 3;
-
-/// The matter lattice: the domain layout's box grown by [`PADDING_NODES`] per
-/// side (D5), node (i, j, k) at `min + (i, j, k) · cell_size`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MatterLattice {
-    pub min: [f32; 3],
-    pub nodes: [u32; 3],
-    pub cell_size: f32,
-    /// Cells of the authored box per axis.
-    pub cells: [u32; 3],
+/// D6 blocks per axis: 4 stencil base nodes each, covering every base a
+/// point can have (0..=nodes − 3).
+pub fn lattice_blocks(lattice: &LiquidLattice) -> [u32; 3] {
+    lattice.nodes().map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
 }
 
-impl MatterLattice {
-    pub fn from_layout(layout: &FluidDomainLayout) -> Self {
-        let dx = layout.cell_size as f32;
-        let pad = PADDING_NODES as f32 * dx;
-        Self {
-            min: layout.min.map(|v| v - pad),
-            nodes: layout.cells.map(|n| n + 1 + 2 * PADDING_NODES),
-            cell_size: dx,
-            cells: layout.cells,
-        }
-    }
-
-    pub fn node_count(&self) -> u32 {
-        self.nodes[0] * self.nodes[1] * self.nodes[2]
-    }
-
-    /// D6 blocks per axis: 4 stencil base nodes each, covering every base a
-    /// point can have (0..=nodes − 3).
-    pub fn blocks(&self) -> [u32; 3] {
-        self.nodes.map(|n| n.saturating_sub(2).div_ceil(BLOCK_NODES).max(1))
-    }
-
-    /// The cell-sort box whose bins are the D6 blocks: a point's bin is its
-    /// stencil base node's block, floor((q − 1/2) / 4) with q in cells.
-    /// Returns (centre, size, bin size) for `node.sort_particles_into_cells`.
-    /// The size stops half a cell short of the last block's far edge, so the
-    /// sort's ceil(size / bin) is exactly [`Self::blocks`] despite f32
-    /// rounding; points beyond it clamp into the last block.
-    pub fn block_sort_box(&self) -> ([f32; 3], [f32; 3], f32) {
-        let bin = BLOCK_NODES as f32 * self.cell_size;
-        let blocks = self.blocks();
-        let size: [f32; 3] = std::array::from_fn(|i| blocks[i] as f32 * bin - 0.5 * self.cell_size);
-        let centre = std::array::from_fn(|i| self.min[i] + 0.5 * self.cell_size + 0.5 * size[i]);
-        (centre, size, bin)
-    }
-
-    /// Scene AABB of the lattice nodes (the seam's `grid_bounds`).
-    pub fn bounds(&self) -> Transform {
-        let size: [f32; 3] =
-            std::array::from_fn(|i| (self.nodes[i] - 1) as f32 * self.cell_size);
-        Transform {
-            pos: std::array::from_fn(|i| self.min[i] + size[i] * 0.5),
-            scale: size,
-            ..Transform::default()
-        }
-    }
+/// The cell-sort box whose bins are the D6 blocks: a point's bin is its
+/// stencil base node's block, floor((q − 1/2) / 4) with q in cells.
+/// Returns (centre, size, bin size) for `node.sort_particles_into_cells`.
+/// The size stops half a cell short of the last block's far edge, so the
+/// sort's ceil(size / bin) is exactly [`lattice_blocks`] despite f32
+/// rounding; points beyond it clamp into the last block.
+pub fn block_sort_box(lattice: &LiquidLattice) -> ([f32; 3], [f32; 3], f32) {
+    let dx = lattice.cell_size();
+    let min = lattice.min();
+    let bin = BLOCK_NODES as f32 * dx;
+    let blocks = lattice_blocks(lattice);
+    let size: [f32; 3] = std::array::from_fn(|i| blocks[i] as f32 * bin - 0.5 * dx);
+    let centre = std::array::from_fn(|i| min[i] + 0.5 * dx + 0.5 * size[i]);
+    (centre, size, bin)
 }
 
 /// Nodes of a lattice with `nodes` per axis, in u64 so no byte size wraps.
@@ -424,17 +385,6 @@ mod tests {
         assert!(n_above > MAX_SUBSTEPS, "{n_above}");
     }
 
-    #[test]
-    fn matter_lattice_pads_the_authored_box() {
-        let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 64).unwrap();
-        let lattice = MatterLattice::from_layout(&layout);
-        assert_eq!(lattice.nodes, [71; 3]);
-        assert_eq!(lattice.cell_size, 0.0625);
-        assert_eq!(lattice.min, [-2.1875, -0.1875, -2.1875]);
-        let bounds = lattice.bounds();
-        assert_eq!(bounds.scale, [4.375; 3]);
-    }
-
     /// U sits at or above dx/dt, and with it the encode and decode scales
     /// round-trip exactly in f32 for every resolution and substep count.
     #[test]
@@ -473,25 +423,25 @@ mod tests {
         for domain in [0.5f32, 1.0, 4.0, 20.0] {
             for resolution in [8u32, 32, 63, 64, 100, 128, 512] {
                 let layout = crate::node_graph::fluid::domain_layout(None, domain, resolution).unwrap();
-                let lattice = MatterLattice::from_layout(&layout);
-                let (_, size, bin) = lattice.block_sort_box();
+                let lattice = LiquidLattice::from_layout(&layout);
+                let (_, size, bin) = block_sort_box(&lattice);
                 assert_eq!(
                     crate::node_graph::fluid_particles::bin_counts(size, bin),
-                    lattice.blocks(),
+                    lattice_blocks(&lattice),
                     "domain {domain} resolution {resolution}"
                 );
             }
         }
         let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 64).unwrap();
-        let lattice = MatterLattice::from_layout(&layout);
-        assert_eq!(lattice.blocks(), [18; 3]);
-        let (centre, size, bin) = lattice.block_sort_box();
-        let dx = lattice.cell_size;
+        let lattice = LiquidLattice::from_layout(&layout);
+        assert_eq!(lattice_blocks(&lattice), [18; 3]);
+        let (centre, size, bin) = block_sort_box(&lattice);
+        let dx = lattice.cell_size();
         let mut seed = 0x1234_5678u32;
         for _ in 0..10_000 {
             seed = rounding_hash(seed);
             let q = 1.5 + (seed >> 8) as f32 / 16_777_216.0 * 66.0;
-            let p = lattice.min[0] + q * dx;
+            let p = lattice.min()[0] + q * dx;
             let base = (q - 0.5).floor() as i64;
             let sorted = ((p - (centre[0] - 0.5 * size[0])) * (1.0 / bin)).floor() as i64;
             // f32 may put a point within an ulp of a block edge in the

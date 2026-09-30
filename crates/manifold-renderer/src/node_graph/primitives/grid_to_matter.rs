@@ -10,12 +10,12 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{
     MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
 use super::standalone_pipeline::{active_elements, standalone_pipeline};
 
 #[repr(C)]
@@ -137,7 +137,7 @@ impl Primitive for GridToMatter {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);
@@ -156,7 +156,7 @@ impl Primitive for GridToMatter {
         let grid = ctx.inputs.array("grid");
         let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
         let reaction = ctx.inputs.array("reaction");
-        let unit_fits = momentum_unit_fits(momentum_unit, lattice.cell_size, step_dt);
+        let unit_fits = momentum_unit_fits(momentum_unit, lattice.cell_size(), step_dt);
         if dynamic_count > 0 && reaction.is_some() && !unit_fits {
             ctx.error(format!(
                 "Grid to Matter: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
@@ -170,10 +170,10 @@ impl Primitive for GridToMatter {
         if active == 0 || step_dt <= 0.0 {
             return;
         }
-        if grid.size < grid_bytes(lattice.nodes) {
+        if grid.size < grid_bytes(lattice.nodes()) {
             ctx.error(format!(
                 "Grid to Matter: the grid holds fewer than this lattice's {} nodes; wire grid from the node.matter_state fed by the same node.matter_domain",
-                lattice_nodes(lattice.nodes)
+                lattice_nodes(lattice.nodes())
             ));
             return;
         }
@@ -195,13 +195,13 @@ impl Primitive for GridToMatter {
         let reaction = reaction.filter(|_| dynamic_count > 0).unwrap_or(grid);
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = ToMatterUniforms {
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
-            cell_size: lattice.cell_size,
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
+            cell_size: lattice.cell_size(),
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
             step_dt,
             liveliness,
             cohesion,
