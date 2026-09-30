@@ -11,7 +11,34 @@
 // centre: linearised about the kept crossing (gradient · offset) when the
 // cell has one, else trilinear on the refined nodes. The solid at a refined node is the
 // trilinear of the cell's eight solid corners. `level_set` and `solid` are
-// gathered; a lattice past its array gives no crossing and level 1e6.
+// gathered; a lattice past its array gives no crossing and level 1e6. Most
+// cells are far from the surface: a footprint whose nodes all share a sign
+// has no edge to cross, so it skips the solid and the edge walk.
+
+// The level set at the centre of the cell whose footprint starts at `base`:
+// trilinear on the eight refined nodes around it.
+fn sc_centre_level(base: vec3<u32>, s: u32, levels: vec3<u32>) -> f32 {
+    let centre = vec3<f32>(0.5 * f32(s));
+    let low = min(vec3<u32>(floor(centre)), vec3<u32>(s - 1u));
+    let f = centre - vec3<f32>(low);
+    var level = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let q = base + low + ww_corner(corner);
+        level = level + ww_corner_weight(f, corner) * buf_level_set[q.x + levels.x * (q.y + levels.y * q.z)];
+    }
+    return level;
+}
+
+// Whether footprint node `p` is clear of solids: the trilinear of the cell's
+// eight solid corners there is not negative.
+fn sc_clear(p: vec3<u32>, s: u32, corners: array<f32, 8>) -> bool {
+    let f = vec3<f32>(p) / f32(s);
+    var solid = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        solid = solid + ww_corner_weight(f, corner) * corners[corner];
+    }
+    return solid >= 0.0;
+}
 
 // The refined level set at `q`, clamped into the lattice.
 fn sc_level(q: vec3<i32>, levels: vec3<u32>) -> f32 {
@@ -86,30 +113,34 @@ fn body(
         return out;
     }
     let c = ww_cell(idx, cells);
+    let side = s + 1u;
+    let base = c * s;
+    // Which footprint nodes lie in the liquid, one bit each at
+    // x + side·(y + side·z). An edge crosses only between nodes of opposite
+    // sign.
+    var negative = array<u32, 4>(0u, 0u, 0u, 0u);
+    var below = false;
+    var above = false;
+    for (var z = 0u; z < side; z = z + 1u) {
+        for (var y = 0u; y < side; y = y + 1u) {
+            let row = base.x + levels.x * ((base.y + y) + levels.y * (base.z + z));
+            for (var x = 0u; x < side; x = x + 1u) {
+                let inside = buf_level_set[row + x] < 0.0;
+                let slot = x + side * (y + side * z);
+                negative[slot >> 5u] = negative[slot >> 5u] | (select(0u, 1u, inside) << (slot & 31u));
+                below = below || inside;
+                above = above || !inside;
+            }
+        }
+    }
+    if !(below && above) {
+        out.level = sc_centre_level(base, s, levels);
+        return out;
+    }
     var corners: array<f32, 8>;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
         let n = c + ww_corner(corner);
         corners[corner] = buf_solid[n.x + nodes.x * (n.y + nodes.y * n.z)];
-    }
-    // The footprint's level and whether each node is clear of solids.
-    let side = s + 1u;
-    let base = c * s;
-    var phi: array<f32, 125>;
-    var clear: array<bool, 125>;
-    for (var z = 0u; z < side; z = z + 1u) {
-        for (var y = 0u; y < side; y = y + 1u) {
-            for (var x = 0u; x < side; x = x + 1u) {
-                let slot = x + side * (y + side * z);
-                let q = base + vec3<u32>(x, y, z);
-                phi[slot] = buf_level_set[q.x + levels.x * (q.y + levels.y * q.z)];
-                let f = vec3<f32>(f32(x), f32(y), f32(z)) / f32(s);
-                var solid = 0.0;
-                for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-                    solid = solid + ww_corner_weight(f, corner) * corners[corner];
-                }
-                clear[slot] = solid >= 0.0;
-            }
-        }
     }
     let centre = vec3<f32>(0.5 * f32(s));
     var best = 3.0e38;
@@ -127,11 +158,15 @@ fn body(
                     let p1 = p0 + step;
                     let i0 = p0.x + side * (p0.y + side * p0.z);
                     let i1 = p1.x + side * (p1.y + side * p1.z);
-                    let v0 = phi[i0];
-                    let v1 = phi[i1];
-                    if !clear[i0] || !clear[i1] || (v0 < 0.0) == (v1 < 0.0) {
+                    let n0 = (negative[i0 >> 5u] >> (i0 & 31u)) & 1u;
+                    let n1 = (negative[i1 >> 5u] >> (i1 & 31u)) & 1u;
+                    if n0 == n1 || !sc_clear(p0, s, corners) || !sc_clear(p1, s, corners) {
                         continue;
                     }
+                    let q0 = base + p0;
+                    let q1 = base + p1;
+                    let v0 = buf_level_set[q0.x + levels.x * (q0.y + levels.y * q0.z)];
+                    let v1 = buf_level_set[q1.x + levels.x * (q1.y + levels.y * q1.z)];
                     let root = vec3<f32>(p0) + sc_root(v0, v1, base, p0, a, levels) * vec3<f32>(step);
                     let d = root - centre;
                     let dd = dot(d, d);
@@ -154,13 +189,6 @@ fn body(
         out.level = dot(g, centre - best_root);
         return out;
     }
-    let low = min(vec3<u32>(floor(centre)), vec3<u32>(s - 1u));
-    let f = centre - vec3<f32>(low);
-    var level = 0.0;
-    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
-        let q = low + ww_corner(corner);
-        level = level + ww_corner_weight(f, corner) * phi[q.x + side * (q.y + side * q.z)];
-    }
-    out.level = level;
+    out.level = sc_centre_level(base, s, levels);
     return out;
 }
