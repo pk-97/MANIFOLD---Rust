@@ -712,7 +712,7 @@ fn render_and_witness_controlled(
         if frame == 0 && label == "Shatter" {
             // Imported collision geometry is prepared asynchronously. Resolve
             // it at the initial time before requiring a resident RT scene.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let wait = harness::BackgroundWait::new(format!("{label} warmup"));
             loop {
                 let mut encoder = h.device.create_encoder("catalog-physics-warmup");
                 {
@@ -724,8 +724,7 @@ fn render_and_witness_controlled(
                 if !runtime.warmup_pending() {
                     break;
                 }
-                assert!(std::time::Instant::now() < deadline, "{label} warmup timed out");
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                wait.hold();
             }
         }
         let mut status = None;

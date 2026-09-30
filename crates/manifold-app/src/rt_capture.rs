@@ -31,12 +31,9 @@
 //! flags directly.
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 
 use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8};
-use manifold_renderer::node_graph::primitives::{
-    RtCaptureSlot, RT_CAPTURE_ARM, RT_CAPTURE_ARM_COMPOSITE, RT_CAPTURE_QUEUE,
-};
+use manifold_renderer::node_graph::primitives::{arm_rt_capture, take_rt_captures, RtCaptureSlot};
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
 
@@ -187,10 +184,7 @@ fn write_capture_png(cap: &RtCaptureSlot, pixels: &[[f32; 4]], stats: (f64, f64,
 pub(crate) fn drain_capture_stats(
     device: &manifold_gpu::GpuDevice,
 ) -> std::collections::BTreeMap<String, (f64, f64, f64)> {
-    let caps = {
-        let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
-        std::mem::take(&mut *q)
-    };
+    let caps = take_rt_captures();
     if caps.is_empty() { return Default::default(); }
     let mut map = std::collections::BTreeMap::new();
     for c in &caps {
@@ -258,15 +252,12 @@ fn drain_captures(
     frame: u32,
     // Running last-seen (hit, luma, sd) per channel label — the live-flip
     // verdict compares snapshots of this map. The per-frame drain empties
-    // RT_CAPTURE_QUEUE, so a drain AT verdict time always sees an empty
+    // capture queue, so a drain AT verdict time always sees an empty
     // queue; the running map is the only place the history survives.
     last_stats: &mut std::collections::BTreeMap<String, (f64, f64, f64)>,
 ) {
-    let caps = {
-        let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
-        for c in &mut *q { c.frame = frame; }
-        std::mem::take(&mut *q)
-    };
+    let mut caps = take_rt_captures();
+    for c in &mut caps { c.frame = frame; }
     if caps.is_empty() { return; }
     // Overridable because the default is a FIXED shared path: two captures
     // running at once interleave their PNGs into one pile, and a run that
@@ -286,9 +277,9 @@ fn drain_captures(
     }
 }
 
+/// Arms the next render on this thread; the caller renders on the same thread.
 pub(crate) fn arm_capture() {
-    RT_CAPTURE_ARM.store(true, Ordering::Relaxed);
-    RT_CAPTURE_ARM_COMPOSITE.store(true, Ordering::Relaxed);
+    arm_rt_capture(true);
 }
 
 pub fn run(args: &[String]) -> ! {

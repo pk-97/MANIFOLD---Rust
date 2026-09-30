@@ -37,9 +37,10 @@ mod imp {
     /// (src_dims, dst_dims); call `resize()` on dimension change — same
     /// lifecycle contract as `MetalFxFullFrameUpscaler`.
     ///
-    /// Internally prefers `Metal4FxTemporalScaler` (MTL4, GPU-side sync)
-    /// and falls back to `MetalFxTemporalScaler` (classic MTLFX) when
-    /// unavailable — same DN-K preference as `crate::denoiser::Denoiser`.
+    /// Uses `Metal4FxTemporalScaler` (MTL4, GPU-side sync) when
+    /// `metalfx_m4_temporal_available()` says so and classic
+    /// `MetalFxTemporalScaler` otherwise. MTL4 is off by default
+    /// (RAYTRACING_DESIGN.md section 17.7 (Metal 4 scaler migration), DN-P).
     pub struct MetalFxTemporalUpscaler {
         /// Classic MTLFX scaler (fallback).
         classic: Option<manifold_gpu::metalfx::MetalFxTemporalScaler>,
