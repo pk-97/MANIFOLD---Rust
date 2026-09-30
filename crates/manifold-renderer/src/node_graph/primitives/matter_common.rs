@@ -61,6 +61,14 @@ mod tests {
     }
 
     #[test]
+    fn matter_reaction_rounding_matches_p2g() {
+        const REACTION: &str = include_str!("shaders/matter_body_reaction_body.wgsl");
+        for name in ["hash", "encode"] {
+            assert_eq!(helper(P2G, "", name), helper(REACTION, "reaction", name));
+        }
+    }
+
+    #[test]
     fn matter_stencil_weights_are_identical() {
         let lines = |source: &str| {
             source

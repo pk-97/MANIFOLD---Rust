@@ -9,17 +9,21 @@ use manifold_gpu::GpuBuffer;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::{
-    ACCUM_WORDS_PER_NODE, MatterGridNode, MatterPoint, MatterTickStats, STATS_WORDS,
+    ACCUM_WORDS_PER_NODE, MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS,
 };
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 
-const RESULTS: &[SubstepResultPorts] = &[SubstepResultPorts {
-    capture: "stats_in",
-    output: "stats",
-}];
+/// `reaction_in` closes node.matter_body_reaction into the region, so the
+/// coupling sum runs every substep; the words themselves live in the domain's
+/// reaction slot, which the domain reads back.
+const RESULTS: &[SubstepResultPorts] = &[
+    SubstepResultPorts { capture: "stats_in", output: "stats" },
+    SubstepResultPorts { capture: "reaction_in", output: "reaction" },
+];
 
 /// The region's contract. Iteration scalars, in order: substep length in
 /// seconds, iteration index this frame, substep within its tick, 1 on a
@@ -58,6 +62,7 @@ crate::primitive! {
         seed: Array(MatterPoint) required,
         in: Array(MatterPoint) required,
         stats_in: Array(u32) required,
+        reaction_in: Array(i32) required,
         count: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         ticks: ScalarF32 optional,
@@ -67,6 +72,7 @@ crate::primitive! {
     outputs: {
         out: Array(MatterPoint),
         stats: Array(u32),
+        reaction: Array(i32),
         grid_accum: Array(i32),
         grid: Array(MatterGridNode),
         step_dt: ScalarF32,
@@ -80,8 +86,8 @@ crate::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; lattice size, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_to_grid → matter_grid_update → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in and stats_in. out and stats escape to node.matter_frame. Only live points (id ≠ 0) move.",
-    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; lattice size, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. Only live points (id ≠ 0) move.",
+    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
     category: Particles3D,
@@ -138,7 +144,7 @@ impl MatterState {
 
 impl Primitive for MatterState {
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in"]
+        &["in", "stats_in", "reaction_in"]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
@@ -170,6 +176,7 @@ impl Primitive for MatterState {
         match port_name {
             "out" => input_capacities.iter().find(|(p, _)| *p == "seed").map(|&(_, n)| n),
             "stats" => Some(STATS_WORDS),
+            "reaction" => Some(MAX_FLUID_ROLES as u32 * REACTION_WORDS),
             // Provided storage, sized to the lattice at run time.
             "grid_accum" | "grid" => Some(1),
             _ => None,
@@ -268,6 +275,14 @@ impl Primitive for MatterState {
         self.captures += 1;
         if self.captures != self.pending {
             return;
+        }
+        // The reaction words stay in the domain's slot for its fenced
+        // readback; the result carries only the region's final sums.
+        if let (Some(candidate), Some(state)) = (ctx.inputs.array("reaction_in"), ctx.outputs.array("reaction"))
+            && !candidate.ptr_eq(state)
+        {
+            let size = candidate.size.min(state.size);
+            ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, state, size);
         }
         self.ticks_done += u64::from(self.pending / self.substeps);
         let Some(stats) = ctx.outputs.array("stats") else { return };

@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); J bounded for BUG-8akp (MPM water J grows without bound); A2, A4, A6 and the still pool fail as look findings for Peter · P1b in progress (L1 built) · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P2a built on the branch · P2b–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); J bounded for BUG-8akp (MPM water J grows without bound); A2, A4, A6 and the still pool fail as look findings for Peter · P1b in progress (L1 built) · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P2a–P2b built on the branch · P3–P8 not built · phase notes under each brief in section 13.
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -568,8 +568,10 @@ pub struct MatterShape {
 }
 ```
 
-Per-body reaction accumulator: `Array(i32)`, 8 per body (linear xyz, angular xyz, 2
-padding), fixed point in `m_unit·U` and `m_unit·U·dx` at D5's momentum unit, scale and rounding. Per-tick stats: `Array(u32)`,
+Per-body reaction accumulator: `Array(i32)`, 16 per body: the body's velocity change
+Σ Δv (m/s), the same weighted by s/n (substep s of n), the angular impulse per unit mass
+over dx, the same weighted, 4 padding. Each word is value·2^24/U at D5's momentum unit
+with D5's hashed rounding (`REACTION_WORDS` in `matter.rs`). Per-tick stats: `Array(u32)`,
 16 words (non-finite count, clamp count, live count, max speed, min and max J, volume,
 max accumulator magnitude, mass, momentum xyz, kinetic, potential and elastic energy, tick
 index; floats as bits). Sums use a fixed reduction tree.
@@ -582,7 +584,7 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | Atom | Inputs → outputs | Phase |
 |---|---|---|
 | `node.matter_domain` (scene-facing CPU bridge) | the `node.fluid_surface` scene contract of D17, plus params Material (Enum), Points per Cell (Enum 8/27), Stiffness, Cohesion, Viscosity, Liveliness, Melt, and model params → lattice wires, `ticks`, `substeps_per_tick`, `epoch`, `points_per_cell`, `material: Array(MatterMaterial)`, `bodies: Array(MatterBody)`, `shapes: Array(MatterShape)`, `atlas: Array(u32)`, `forces: Array(u32)`, `impulses: Array(u32)`, `simulation_time`, `dropped_seconds`, `lag_seconds` | P1 (domain, walls, clock, water dials, box fill), P2a–P3d (bodies, roles, fields, impulses, coupling), P5 (Melt, models) |
-| `node.matter_state` (substep boundary) | `seed: Array(MatterPoint)`, capture `in: Array(MatterPoint)`, capture `stats_in: Array(u32)`, lattice wires, `ticks`, `substeps_per_tick`, `epoch` → `out: Array(MatterPoint)`; provided `grid_accum: Array(i32)`, `grid: Array(MatterGridNode)`; per-iteration `step_dt`, `step_index`, `substep_in_tick`, `tick_start`, `tick_end`; `live_count`, `fault` | P1 |
+| `node.matter_state` (substep boundary) | `seed: Array(MatterPoint)`, capture `in: Array(MatterPoint)`, capture `stats_in: Array(u32)`, capture `reaction_in: Array(i32)` (P2b), lattice wires, `ticks`, `substeps_per_tick`, `epoch` → `out: Array(MatterPoint)`, `reaction`; provided `grid_accum: Array(i32)`, `grid: Array(MatterGridNode)`; per-iteration `step_dt`, `step_index`, `substep_in_tick`, `tick_start`, `tick_end`; `live_count`, `fault` | P1 |
 | `node.matter_fill` | lattice wires, `bodies`, `shapes`, `atlas`, `material`, `points_per_cell`, `epoch` → `seed: Array(MatterPoint)`. Params `seed`, `max_capacity` | P1 (box and fill height), P3b (mesh fills) |
 | `node.zero_array` | `in: Array(i32)` → `out` (aliased) | P1 |
 | `node.matter_to_grid` | `points`, `material`, lattice wires, `step_dt`, optional `deformation`, optional `order: Array(u32)` (P1b), `accum: Array(i32)` → `accum_out` (aliased, the one atomic output) | P1, P1b |
@@ -590,9 +592,9 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | `node.grid_to_matter` | `points`, `grid` (BufferGather), `material`, lattice wires, `step_dt` → `points_out` | P1 |
 | `node.matter_stats` | `points`, `grid`, `accum`, `material`, `tick_end` → `stats: Array(u32)` | P1 |
 | `node.matter_frame` | `points`, `stats`, `material`, lattice wires, optional `solid`, `simulation_time` → the surface seam outputs: `particles_a`, `particles_b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span` | P1 |
-| `node.matter_move_bodies` | `bodies` (the domain's tick rows), `tick_index`, `first_tick`, `substep_in_tick`, `step_dt`, `body_count`, `rows`; P2b adds `reaction: Array(i32)` → `bodies_out` | P2a |
+| `node.matter_move_bodies` | `bodies` (the domain's tick rows), `tick_index`, `first_tick`, `substep_in_tick`, `step_dt`, `body_count`, `rows`; P2b adds `reaction: Array(i32)`, `substeps_per_tick`, `momentum_unit`, `cell_size`, `dynamic_count` → `bodies_out` | P2a, P2b |
 | `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask, `body_count`, `rows`, `tick_seconds` → `solid: Array(f32)`; once per frame after the region, poses at the last tick's end | P2a |
-| `node.matter_body_reaction` | `accum`, `grid`, `bodies`, `shapes`, `atlas`, lattice wires, `reaction: Array(i32)` → `reaction_out` (aliased atomic) | P2b |
+| `node.matter_body_reaction` | `grid`, `bodies` (from `matter_move_bodies`), `shapes`, `atlas`, lattice wires, `step_dt`, `gravity_x/y/z`, closed-face mask, `momentum_unit`, `body_count`, `dynamic_count`, `substeps_per_tick`, `tick_index`, `substep_in_tick`, `reaction: Array(i32)` → `reaction_out` (aliased atomic, captured by `matter_state.reaction_in`) | P2b |
 | `node.matter_emit` | `points`, `bodies`, `shapes`, `atlas`, lattice wires, `tick_start`, `material`, `points_per_cell` → `points_out` | P3b |
 | `node.matter_drain` | `points`, `bodies`, `shapes`, `atlas`, lattice wires → `points_out` | P3b |
 | `node.matter_compact` | `points`, `tick_end` → `points_out` | P3b |
@@ -609,7 +611,8 @@ surface design's "Liquid Surface" group, which feeds the scene object.
 
 The content thread owns every runtime value. `node.matter_domain` owns the clock, the
 prepared-geometry references, the pose table, the coupled `RigidSimulation` for a coupled
-pair, the event queue and the reaction readback ring. `node.matter_state` owns the
+pair, the event queue and the fenced reaction buffer (one slot: the one-tick cap never
+leaves two coupled ticks in flight). `node.matter_state` owns the
 persistent point buffer, the provided lattice arrays and the stats readback ring.
 `physics_world` in coupled mode republishes the accepted rigid frame as it does for FLIP.
 Serialized state is the graph JSON only; reload restarts the simulation (as FLIP and
@@ -733,8 +736,8 @@ one tick behind (surface D10), the content thread never waits.
 Per display frame N, inside the contracted coupled group (liquid side first, as
 `prepare_coupled_scenes` orders it today):
 
-1. `node.matter_domain` checks the reaction ring slot of fluid tick k (encoded in frame
-   N−1) with `FrameFence::is_completed`. Not complete → publish `ticks = 0`; the pair
+1. `node.matter_domain` checks the reaction buffer of fluid tick k (encoded in frame
+   N−1) with `FrameFence::is_completed` (offline: `FrameClock::wait`). Not complete → publish `ticks = 0`; the pair
    holds and republishes the previous pair. Lag grows and is reported.
 2. Complete → read the per-body accumulators, convert to world impulses, and run
    `RigidSimulation::advance_with_coupling` with `AdvancementPolicy::Worker { max_ticks: 1 }`
@@ -1329,6 +1332,32 @@ at the end of the phase.
   spins and settles.
 - **Forbidden:** blocking readback; Box3D per substep; damping or mass changes to pass
   energy tests; FLIP-style after-the-fact exchange.
+- **Phase notes (2026-09-30, Opus 5.5 worker):** built on `feat/gpu-mpm-build-b`.
+  `substeps.rs` is untouched: one region, nothing new escapes it.
+  - `matter_coupling_hydrostatic_force`: 625.1 N from the reaction, 625.4 N from the
+    body rows, against ρ0·g·V = 627.8 N (−0.44%).
+    `matter_coupling_floating_equilibrium` (32³, density 0.5): centre 0.5445 m against a
+    measured free surface of 0.5240 m, 0.328·dx, bob 0.0061 m. The gate reads the
+    waterline from the particles. The volume level Σ V0·J reads 0.5131 m because
+    Cohesion 0 caps J at 1 (D3), which drops expansion, so it is printed, not gated.
+    `matter_coupling_energy_light_body`: body energy peaks 0.0155× / 0.264× / 0.883× of
+    the initial total at ratios 0.1 / 1 / 10. Free flight matches Box3D exactly (worst
+    pose difference 0). The presented frame A equals the previous frame B.
+  - Momentum residual, D29 push-out on: −0.24 / −12.1 / −26.8 kg·m/s against
+    1.3 / 6.4 / 9.8 kg·m/s exchanged, and body plus liquid energy peaks at 1.12× at
+    ratio 10. About two thirds is the push-out's removed normal velocity, which the
+    reaction does not count. The fix is in
+    BUG-n97i (coupled MPM loses momentum at the collider push-out), blocked on
+    BUG-agfh (codegen: buffer atom with several outputs, one atomic).
+  - Physics history sampling seeded the paired world without its matter domain and
+    panicked on any coupled matter preset. A world paired with a liquid that does not
+    replay history now records once per display frame with it (D28).
+  - `examples/fluid_capture.rs` reads the presented frame's count, `count_b` or
+    `count_a`. Demo: `/tmp/manifold_matter_p2b`, 64³, 262,144 points, 300 frames. The box
+    settles half-submerged and tips onto an edge, the stable pose at density 0.5. GPU
+    time is about 29.5 ms a frame, over the 20 ms trace gate, see
+    BUG-u3ov (MPM solver budget). The computed waterline check is the floating test; the
+    capture has no body readout.
 
 ### P3a — The liquid-domain seam (seam brief)
 

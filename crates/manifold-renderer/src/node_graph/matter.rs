@@ -9,6 +9,7 @@ use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use crate::node_graph::transform::Transform;
 
 pub mod bodies;
+pub mod coupling;
 /// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
 pub mod look;
 #[cfg(any(test, feature = "gpu-proofs"))]
@@ -79,7 +80,8 @@ impl KnownItem for MatterGridNode {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MatterBody {
-    /// World position of the body's origin; w = 1/m (0 = prescribed).
+    /// World position of the shape's origin (a coupled body's centre of
+    /// mass); w = 1/m (0 = prescribed).
     pub position_inv_mass: [f32; 4],
     /// Unit quaternion xyzw, body to world.
     pub rotation: [f32; 4],
@@ -87,12 +89,13 @@ pub struct MatterBody {
     pub linear_velocity: [f32; 4],
     /// World rad/s; w = role (0 collider, 1 fill, 2 inflow, 3 drain).
     pub angular_velocity: [f32; 4],
-    /// World inverse inertia rows at tick start (zero when prescribed).
+    /// World inverse inertia rows at tick start (zero when prescribed); the
+    /// rows' w carry the predicted external angular acceleration x, y, z.
     pub inv_inertia_x: [f32; 4],
     pub inv_inertia_y: [f32; 4],
     pub inv_inertia_z: [f32; 4],
-    /// xyz predicted external acceleration; w = shape index, −1 when the
-    /// body is disabled.
+    /// xyz predicted external linear acceleration; w = shape index, −1 when
+    /// the body is disabled.
     pub accel_shape: [f32; 4],
 }
 
@@ -186,6 +189,15 @@ pub fn body_pose_at(body: &MatterBody, t: f32) -> ([f32; 3], [f32; 4]) {
 
 /// Accumulator words per grid node: momentum x, y, z, then mass.
 pub const ACCUM_WORDS_PER_NODE: u32 = 4;
+
+/// Reaction words per coupled body, written by `node.matter_body_reaction`
+/// and read by `node.matter_move_bodies` and the domain (section 5). Each is
+/// value·2^24/U with U the tick's momentum unit:
+/// [0..3) Σ Δv, the body's velocity change (m/s);
+/// [3..6) Σ (s/n)·Δv, s the substep, n the substeps per tick;
+/// [6..9) Σ I·Δω/dx·(1/m), the angular impulse times 1/m over dx;
+/// [9..12) Σ (s/n)· the same; [12..16) padding.
+pub const REACTION_WORDS: u32 = 16;
 
 /// Words of the per-tick stats array `node.matter_stats` writes (D14).
 pub const STATS_WORDS: u32 = 16;
@@ -482,9 +494,18 @@ pub struct MatterClock {
     target_time: f64,
     ticks_done: u64,
     dropped_seconds: f64,
+    tick_cap: Option<u32>,
 }
 
 impl MatterClock {
+    /// Cap the ticks of the frames that follow, live and offline alike: at most
+    /// `cap` run, one tick of debt is kept and the rest is dropped, reported.
+    /// A coupled domain caps at 0 while its body reaction is pending and at 1
+    /// otherwise (section 5). `None` restores the uncapped clock.
+    pub fn set_tick_cap(&mut self, cap: Option<u32>) {
+        self.tick_cap = cap;
+    }
+
     /// Advance by one display frame. `frame_interval` is this frame's host
     /// delta in seconds; it only sets the live tick allowance.
     pub fn advance(
@@ -514,12 +535,13 @@ impl MatterClock {
         }
         self.last_transport = transport;
         let due = ((self.target_time / TICK + 1e-9).floor() as u64).saturating_sub(self.ticks_done);
-        let ticks = if offline {
+        let ticks = if offline && self.tick_cap.is_none() {
             due
         } else {
-            let allowance = ((frame_interval / TICK) - 1e-6)
-                .ceil()
-                .clamp(1.0, f64::from(MAX_LIVE_TICKS)) as u64;
+            let allowance = match self.tick_cap {
+                Some(cap) => u64::from(cap),
+                None => ((frame_interval / TICK) - 1e-6).ceil().clamp(1.0, f64::from(MAX_LIVE_TICKS)) as u64,
+            };
             let run = due.min(allowance);
             // Keep one tick of scheduling jitter; drop the rest visibly.
             let dropped = due.saturating_sub(run).saturating_sub(1);
@@ -771,5 +793,28 @@ mod tests {
         let next = clock.advance(3.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!((next.display_time - 0.0).abs() < 1e-12);
         assert_eq!(next.ticks, 1);
+    }
+
+    /// A coupled domain's cap: 0 holds without dropping the owed tick, 1 runs
+    /// one; offline obeys the cap too and drops beyond one tick of debt.
+    #[test]
+    fn matter_clock_tick_cap_holds_and_limits() {
+        let mut clock = MatterClock::default();
+        clock.set_tick_cap(Some(1));
+        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        clock.set_tick_cap(Some(0));
+        let held = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
+        assert_eq!((held.ticks, held.dropped_seconds), (0, 0.0));
+        clock.set_tick_cap(Some(1));
+        let caught = clock.advance(2.0 * TICK, TICK, 1.0, 0.0, false, false);
+        assert_eq!((caught.ticks, caught.dropped_seconds), (1, 0.0));
+        let offline = clock.advance(5.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
+        assert_eq!(offline.ticks, 1);
+        // Four due (one still owed from the catch-up): one runs, one stays
+        // owed, two drop.
+        assert!((offline.dropped_seconds - 2.0 * TICK).abs() < 1e-9);
+        clock.set_tick_cap(None);
+        let uncapped = clock.advance(8.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
+        assert_eq!(uncapped.ticks, 4);
     }
 }

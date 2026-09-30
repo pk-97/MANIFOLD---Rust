@@ -563,7 +563,9 @@ fn read_fluid_metrics(runtime: &PresetRuntime, solver: Solver) -> CaptureResult<
             lag_seconds: 0.0,
             simulation_ms: 0.0,
             meshing_ms: 0.0,
-            particle_count: read(&outputs, "count_b")?,
+            // The count of the frame the preset presents: B, or A for a
+            // coupled preset (frame A carries the display-time bodies).
+            particle_count: read(&outputs, "count_b").or_else(|_| read(&outputs, "count_a"))?,
             vertex_count: 0.0,
             foam_count: 0.0,
             bubble_count: 0.0,

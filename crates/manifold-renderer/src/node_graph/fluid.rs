@@ -36,6 +36,7 @@ mod playback_tests;
 mod roles;
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
+pub(crate) use coupled::Layout as CoupledRigidLayout;
 pub use domain::{FluidDomainLayout, domain_layout};
 use impulses::IMPULSE_CAPACITY;
 use native::NativeSimulation;

@@ -2,13 +2,9 @@
 // section 4.1 step 4). One thread per lattice node, x fastest:
 //   v_before = momentum / mass                       (Liveliness reads it)
 //   v = v_before + dt · g
-// Closed faces (bits −X, +X, −Y, +Y, −Z, +Z) stop velocity into the wall on the
-// face node and the three padding nodes beyond it (the authored face sits on
-// node 3), frictionless (taichi_elements grid_bounding_box). Colliders (D11):
-// a node inside a body (φ < 0, sampled through the body's pose and scale from
-// its shape's lattice in the atlas) moving into it, v_rel · n < 0 with
-// v_rel = v − v_body(x), loses the normal part of v_rel and keeps
-// t̂·max(0, |t| + v_n·friction) of the tangential part; v = v_body + v_rel'.
+// then the closed walls and each collider in body order (matter_wall_stop and
+// matter_collider_project in matter_collider.wgsl, which
+// node.matter_body_reaction repeats to attribute each body's share).
 // Each component is then clamped to ±0.9·dx/dt; a clamped node sets
 // velocity_before.w.
 // `accum` is gathered (4 words per node: momentum xyz in m_unit·U at 2^27, U
@@ -61,12 +57,7 @@ fn body(
 
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
-    let faces = u32(closed_faces);
-    let low_closed = vec3<bool>((faces & 1u) != 0u, (faces & 4u) != 0u, (faces & 16u) != 0u);
-    let high_closed = vec3<bool>((faces & 2u) != 0u, (faces & 8u) != 0u, (faces & 32u) != 0u);
-    let stop_low = low_closed & (coord < vec3<u32>(4u)) & (v < vec3<f32>(0.0));
-    let stop_high = high_closed & (coord >= n - vec3<u32>(4u)) & (v > vec3<f32>(0.0));
-    v = select(v, vec3<f32>(0.0), stop_low | stop_high);
+    v = matter_wall_stop(v, coord, n, u32(closed_faces));
 
     let x = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + vec3<f32>(coord) * cell_size;
     for (var b = 0; b < body_count; b = b + 1) {
@@ -76,27 +67,11 @@ fn body(
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
-        let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let centre = bd.position_inv_mass.xyz;
-        let g = matter_lattice_coord(x, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
-        if !matter_lattice_holds(g, dims) || matter_lattice_distance(sh.atlas_offset, dims, g) >= 0.0 {
-            continue;
-        }
-        let grad = matter_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
-        let length_sq = dot(grad, grad);
-        if !(length_sq > 0.0) {
-            continue;
-        }
-        let normal = grad * inverseSqrt(length_sq);
-        let v_body = matter_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, centre, x);
-        let v_rel = v - v_body;
-        let v_n = dot(v_rel, normal);
-        if v_n < 0.0 {
-            let t = v_rel - v_n * normal;
-            let t_len = length(t);
-            let keep = max(0.0, t_len + v_n * bd.linear_velocity.w);
-            v = v_body + select(vec3<f32>(0.0), t * (keep / t_len), t_len > 0.0);
-        }
+        v = matter_collider_project(
+            v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
+            bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
+            vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
+        );
     }
 
     let limit = 0.9 * vel_unit;

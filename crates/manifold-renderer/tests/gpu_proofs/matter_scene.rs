@@ -162,6 +162,21 @@ impl MatterScene {
         wire(&mut graph, (g2p, "points_out"), (state, "in"));
         wire(&mut graph, (state, "stats"), (stats, "stats"));
         wire(&mut graph, (stats, "stats_out"), (state, "stats_in"));
+        // The coupling sum runs in every region; with no dynamic body it only
+        // passes the domain's reaction slot through.
+        let reaction = add(&mut graph, "node.matter_body_reaction");
+        wire(&mut graph, (update, "grid_out"), (reaction, "grid"));
+        wire(&mut graph, (domain, "reaction"), (reaction, "reaction"));
+        wire(&mut graph, (reaction, "reaction_out"), (state, "reaction_in"));
+        for port in LATTICE.into_iter().chain([
+            "gravity_x", "gravity", "gravity_z", "closed_faces", "momentum_unit", "body_count",
+            "substeps_per_tick", "dynamic_count",
+        ]) {
+            wire(&mut graph, (domain, port), (reaction, port));
+        }
+        for port in ["tick_index", "substep_in_tick", "step_dt"] {
+            wire(&mut graph, (state, port), (reaction, port));
+        }
         for node in [p2g, update, g2p] {
             wire(&mut graph, (state, "step_dt"), (node, "step_dt"));
         }
@@ -190,7 +205,8 @@ impl MatterScene {
         }
         wire(&mut graph, (state, "out"), (frame, "points"));
         wire(&mut graph, (state, "stats"), (frame, "stats"));
-        let colliders = Self::wire_colliders(&mut graph, &registry, settings, [domain, fill, state, update, g2p, frame]);
+        let colliders =
+            Self::wire_colliders(&mut graph, &registry, settings, [domain, fill, state, update, reaction, g2p, frame]);
         graph.add_external_output(frame, "particles_b").expect("frame output");
 
         let set = |graph: &mut Graph, name: &str, value: ParamValue| {
@@ -275,7 +291,7 @@ impl MatterScene {
         graph: &mut Graph,
         registry: &PrimitiveRegistry,
         settings: &SceneSettings,
-        [domain, fill, state, update, g2p, frame]: [NodeInstanceId; 6],
+        [domain, fill, state, update, reaction, g2p, frame]: [NodeInstanceId; 7],
     ) -> Vec<NodeInstanceId> {
         if settings.colliders.is_empty() {
             return Vec::new();
@@ -307,13 +323,21 @@ impl MatterScene {
         }
         let bodies = add(graph, "node.matter_move_bodies");
         wire(graph, (domain, "bodies"), (bodies, "bodies"));
-        for (from, to) in [("first_tick", "first_tick"), ("body_count", "body_count"), ("body_rows", "rows")] {
+        for (from, to) in [
+            ("first_tick", "first_tick"), ("body_count", "body_count"), ("body_rows", "rows"),
+            ("reaction", "reaction"), ("substeps_per_tick", "substeps_per_tick"),
+            ("momentum_unit", "momentum_unit"), ("cell_size", "cell_size"), ("dynamic_count", "dynamic_count"),
+        ] {
             wire(graph, (domain, from), (bodies, to));
         }
         for port in ["tick_index", "substep_in_tick", "step_dt"] {
             wire(graph, (state, port), (bodies, port));
         }
         wire(graph, (bodies, "bodies_out"), (update, "bodies"));
+        wire(graph, (bodies, "bodies_out"), (reaction, "bodies"));
+        for port in ["shapes", "atlas"] {
+            wire(graph, (domain, port), (reaction, port));
+        }
         for port in ["shapes", "atlas", "body_count", "lattice_min_x", "lattice_min_y", "lattice_min_z"] {
             wire(graph, (domain, port), (update, port));
         }

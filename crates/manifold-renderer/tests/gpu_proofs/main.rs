@@ -111,5 +111,6 @@ mod matter_look;
 mod matter_scene;
 mod matter_transfer;
 mod matter_bodies;
+mod matter_coupling;
 mod smoke;
 mod substeps;

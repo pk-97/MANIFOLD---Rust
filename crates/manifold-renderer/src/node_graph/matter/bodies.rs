@@ -80,6 +80,9 @@ pub enum BodiesStatus {
 #[derive(Default)]
 pub struct MatterBodies {
     roles: Vec<BodyRole>,
+    /// Coupled rigid bodies' hulls, in the rigid world's order, after the
+    /// roles: their shapes follow the roles' and their rows each tick's.
+    coupled: Vec<Arc<PreparedFluidGeometry>>,
     history: Option<InputHistory<Sample>>,
     epoch: Option<u32>,
     shapes: Vec<MatterShape>,
@@ -91,8 +94,9 @@ pub struct MatterBodies {
 }
 
 impl MatterBodies {
+    /// Roles and coupled bodies: the rows per tick.
     pub fn count(&self) -> usize {
-        self.roles.len()
+        self.roles.len() + self.coupled.len()
     }
 
     pub fn shapes(&self) -> &[MatterShape] {
@@ -108,12 +112,33 @@ impl MatterBodies {
         &self.rows
     }
 
-    /// Take this frame's roles. Collider roles are simulated; fills, inflows
-    /// and drains arrive in P3b and are refused rather than ignored. A new
-    /// geometry or scale rebuilds the shapes, and the atlas when the set of
-    /// geometries changed.
-    pub fn prepare(&mut self, roles: &[Option<FluidRole>], cell_size: f32) -> Result<BodiesStatus, String> {
-        let mut same = true;
+    /// Take this frame's roles and coupled bodies' hulls (body-local, about
+    /// the centre of mass, unscaled). Collider roles are simulated; fills,
+    /// inflows and drains arrive in P3b and are refused rather than ignored.
+    /// A new geometry or scale rebuilds the shapes, and the atlas when the set
+    /// of geometries changed.
+    pub fn prepare(
+        &mut self,
+        roles: &[Option<FluidRole>],
+        coupled: &[Arc<PreparedFluidGeometry>],
+        cell_size: f32,
+    ) -> Result<BodiesStatus, String> {
+        let occupied = roles.iter().flatten().count();
+        if occupied + coupled.len() > MAX_FLUID_ROLES {
+            return Err(format!(
+                "Matter: {occupied} roles and {} coupled bodies exceed the {MAX_FLUID_ROLES} bodies a liquid holds",
+                coupled.len()
+            ));
+        }
+        for (index, geometry) in coupled.iter().enumerate() {
+            match geometry.distance_lattice() {
+                DistanceState::Pending => return Ok(BodiesStatus::Pending),
+                DistanceState::Failed(error) => return Err(format!("Matter: coupled body {index}: {error}")),
+                DistanceState::Ready(_) => {}
+            }
+        }
+        let mut same = self.coupled.len() == coupled.len()
+            && self.coupled.iter().zip(coupled).all(|(a, b)| Arc::ptr_eq(a, b));
         let mut count = 0;
         for (slot, role) in roles.iter().enumerate() {
             let Some(role) = role else { continue };
@@ -139,21 +164,27 @@ impl MatterBodies {
         if same && count == self.roles.len() {
             return Ok(BodiesStatus::Ready);
         }
-        self.rebuild(roles, cell_size);
+        self.rebuild(roles, coupled, cell_size);
         Ok(BodiesStatus::Ready)
     }
 
-    fn rebuild(&mut self, roles: &[Option<FluidRole>], cell_size: f32) {
+    fn rebuild(&mut self, roles: &[Option<FluidRole>], coupled: &[Arc<PreparedFluidGeometry>], cell_size: f32) {
         self.roles.clear();
         self.shapes.clear();
         self.atlas.clear();
         let mut placed: Vec<(Arc<PreparedFluidGeometry>, MatterShape)> = Vec::new();
-        for (slot, role) in roles.iter().enumerate() {
-            let Some(role) = role else { continue };
-            let DistanceState::Ready(lattice) = role.geometry.distance_lattice() else {
+        let role_shapes = roles.iter().enumerate().filter_map(|(slot, role)| {
+            role.as_ref().map(|role| (format!("collider role {slot}"), Some(slot), &role.geometry, role.transform.scale))
+        });
+        let coupled_shapes = coupled
+            .iter()
+            .enumerate()
+            .map(|(index, geometry)| (format!("coupled body {index}"), None, geometry, [1.0; 3]));
+        for (name, slot, geometry, scale) in role_shapes.chain(coupled_shapes).collect::<Vec<_>>() {
+            let DistanceState::Ready(lattice) = geometry.distance_lattice() else {
                 unreachable!("prepare checked every lattice");
             };
-            let base = match placed.iter().find(|(geometry, _)| Arc::ptr_eq(geometry, &role.geometry)) {
+            let base = match placed.iter().find(|(known, _)| Arc::ptr_eq(known, geometry)) {
                 Some((_, shape)) => *shape,
                 None => {
                     let shape = MatterShape {
@@ -165,11 +196,10 @@ impl MatterBodies {
                         scale_min: [1.0; 4],
                     };
                     pack_distance_atlas(&lattice.values, &mut self.atlas);
-                    placed.push((Arc::clone(&role.geometry), shape));
+                    placed.push((Arc::clone(geometry), shape));
                     shape
                 }
             };
-            let scale = role.transform.scale;
             let smallest = scale[0].min(scale[1]).min(scale[2]);
             self.shapes.push(MatterShape { scale_min: [scale[0], scale[1], scale[2], smallest], ..base });
             // The geometry's extent without the lattice padding, scaled.
@@ -182,12 +212,16 @@ impl MatterBodies {
             if thinnest < THIN_COLLIDER_CELLS * cell_size && !self.warned_thin {
                 self.warned_thin = true;
                 log::warn!(
-                    "[matter] collider role {slot} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
+                    "[matter] {name} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
                     THIN_COLLIDER_CELLS * cell_size
                 );
             }
-            self.roles.push(BodyRole { slot, geometry: Arc::clone(&role.geometry), scale });
+            if let Some(slot) = slot {
+                self.roles.push(BodyRole { slot, geometry: Arc::clone(geometry), scale });
+            }
         }
+        self.coupled.clear();
+        self.coupled.extend(coupled.iter().cloned());
         self.version += 1;
     }
 
@@ -223,13 +257,18 @@ impl MatterBodies {
     }
 
     /// One row per body for each of this frame's ticks, `first_tick..`, tick
-    /// major: the pose at the tick's start and the velocities that reach the
-    /// pose at its end. Consumed samples are pruned afterwards.
-    pub fn rows(&mut self, first_tick: u64, ticks: u32) -> &[MatterBody] {
+    /// major: each role's pose at the tick's start and the velocities that
+    /// reach the pose at its end, then `coupled`, the coupled bodies'
+    /// tick-start state (coupled mode runs at most one tick per frame). A
+    /// coupled row's shape index counts from the first coupled body, or is −1.
+    /// Consumed samples are pruned afterwards.
+    pub fn rows(&mut self, first_tick: u64, ticks: u32, coupled: &[MatterBody]) -> &[MatterBody] {
         self.rows.clear();
         let Some(history) = &mut self.history else {
             return &self.rows;
         };
+        debug_assert_eq!(coupled.len(), self.coupled.len(), "one row per prepared coupled body");
+        let offset = self.roles.len() as f32;
         for tick in first_tick..first_tick + u64::from(ticks) {
             let start_time = Seconds(tick as f64 * TICK);
             let end_time = Seconds((tick + 1) as f64 * TICK);
@@ -242,6 +281,13 @@ impl MatterBodies {
                 let end = at(input_span_before(history.iter(), end_time));
                 self.rows.push(body_row(start, end, index as f32));
             }
+            self.rows.extend(coupled.iter().map(|row| {
+                let shape = row.accel_shape[3];
+                MatterBody {
+                    accel_shape: [row.accel_shape[0], row.accel_shape[1], row.accel_shape[2], if shape >= 0.0 { shape + offset } else { -1.0 }],
+                    ..*row
+                }
+            }));
         }
         let _ = history.prune_before(Seconds((first_tick + u64::from(ticks)) as f64 * TICK));
         &self.rows
@@ -317,8 +363,12 @@ mod tests {
     }
 
     fn ready(bodies: &mut MatterBodies, roles: &[Option<FluidRole>]) {
+        ready_coupled(bodies, roles, &[]);
+    }
+
+    fn ready_coupled(bodies: &mut MatterBodies, roles: &[Option<FluidRole>], coupled: &[Arc<PreparedFluidGeometry>]) {
         let start = std::time::Instant::now();
-        while bodies.prepare(roles, 0.0625).expect("colliders") == BodiesStatus::Pending {
+        while bodies.prepare(roles, coupled, 0.0625).expect("colliders") == BodiesStatus::Pending {
             assert!(start.elapsed().as_secs() < 30, "the lattice never arrived");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -342,7 +392,7 @@ mod tests {
         bodies.observe(&roles, 0, 0.0, 0.0).unwrap();
         roles[2] = collider(&geometry, [0.3, 1.0, -0.15], 0.6);
         bodies.observe(&roles, 0, 2.0 * TICK, 0.0).unwrap();
-        let rows = bodies.rows(0, 2).to_vec();
+        let rows = bodies.rows(0, 2, &[]).to_vec();
         assert_eq!(rows.len(), 2);
         let tick = TICK as f32;
         for (k, row) in rows.iter().enumerate() {
@@ -366,10 +416,38 @@ mod tests {
         // Consumed samples go; the last stays as the next frame's bracket.
         roles[2].as_mut().unwrap().enabled = false;
         bodies.observe(&roles, 0, 3.0 * TICK, 2.0 * TICK).unwrap();
-        let rows = bodies.rows(2, 1).to_vec();
+        let rows = bodies.rows(2, 1, &[]).to_vec();
         assert_eq!(rows[0].accel_shape[3], 0.0, "a switch takes effect at the later sample");
         bodies.observe(&roles, 0, 4.0 * TICK, 3.0 * TICK).unwrap();
-        assert_eq!(bodies.rows(3, 1)[0].accel_shape[3], -1.0);
+        assert_eq!(bodies.rows(3, 1, &[])[0].accel_shape[3], -1.0);
+    }
+
+    /// Coupled bodies' shapes follow the roles' at scale 1, and their rows
+    /// follow the roles' each tick with shape indices past the roles'.
+    #[test]
+    fn matter_bodies_append_coupled_bodies() {
+        let geometry = cube();
+        let hull = cube();
+        let roles = vec![collider(&geometry, [0.0; 3], 0.0), None];
+        let mut bodies = MatterBodies::default();
+        ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull), Arc::clone(&hull)]);
+        assert_eq!(bodies.count(), 3);
+        assert_eq!(bodies.shapes().len(), 3);
+        assert_eq!(bodies.shapes()[1].scale_min, [1.0; 4]);
+        assert_ne!(bodies.shapes()[0].atlas_offset, bodies.shapes()[1].atlas_offset);
+        assert_eq!(bodies.shapes()[1].atlas_offset, bodies.shapes()[2].atlas_offset);
+        let version = bodies.version;
+        ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull), Arc::clone(&hull)]);
+        assert_eq!(bodies.version, version, "unchanged hulls rebuild nothing");
+        bodies.observe(&roles, 0, TICK, 0.0).unwrap();
+        let body = |shape: f32| MatterBody { position_inv_mass: [0.0, 1.0, 0.0, 0.5], accel_shape: [0.0, -9.81, 0.0, shape], ..MatterBody::default() };
+        let rows = bodies.rows(0, 1, &[body(0.0), body(-1.0)]).to_vec();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].accel_shape, [0.0, -9.81, 0.0, 1.0]);
+        assert_eq!(rows[2].accel_shape[3], -1.0);
+        assert_eq!(rows[1].position_inv_mass, [0.0, 1.0, 0.0, 0.5]);
+        let many: Vec<_> = (0..MAX_FLUID_ROLES).map(|_| Arc::clone(&hull)).collect();
+        assert!(bodies.prepare(&roles, &many, 0.0625).unwrap_err().contains("exceed"));
     }
 
     /// Two roles sharing one geometry share its atlas block; a scale change
@@ -390,6 +468,6 @@ mod tests {
         assert_eq!((bodies.atlas().len(), bodies.version), (words, version + 1));
         assert_eq!(bodies.shapes()[1].scale_min, [1.0; 4]);
         roles[1] = Some(FluidRole { kind: FluidRoleKind::Inflow, ..roles[0].clone().unwrap() });
-        assert!(bodies.prepare(&roles, 0.0625).unwrap_err().contains("Collider roles only"));
+        assert!(bodies.prepare(&roles, &[], 0.0625).unwrap_err().contains("Collider roles only"));
     }
 }

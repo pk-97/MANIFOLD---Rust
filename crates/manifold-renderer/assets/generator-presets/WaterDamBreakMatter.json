@@ -1005,6 +1005,12 @@
             "typeId": "node.matter_solid_distance",
             "handle": "Solid Distance",
             "nodeId": "matter_solid_distance"
+          },
+          {
+            "id": 15,
+            "typeId": "node.matter_body_reaction",
+            "handle": "Body Reaction",
+            "nodeId": "matter_body_reaction"
           }
         ],
         "wires": [
@@ -1985,7 +1991,36 @@
             "fromPort": "solid",
             "toNode": 9,
             "toPort": "solid"
-          }
+          },
+          { "fromNode": 1, "fromPort": "reaction", "toNode": 13, "toPort": "reaction" },
+          { "fromNode": 1, "fromPort": "substeps_per_tick", "toNode": 13, "toPort": "substeps_per_tick" },
+          { "fromNode": 1, "fromPort": "momentum_unit", "toNode": 13, "toPort": "momentum_unit" },
+          { "fromNode": 1, "fromPort": "cell_size", "toNode": 13, "toPort": "cell_size" },
+          { "fromNode": 1, "fromPort": "dynamic_count", "toNode": 13, "toPort": "dynamic_count" },
+          { "fromNode": 6, "fromPort": "grid_out", "toNode": 15, "toPort": "grid" },
+          { "fromNode": 13, "fromPort": "bodies_out", "toNode": 15, "toPort": "bodies" },
+          { "fromNode": 1, "fromPort": "reaction", "toNode": 15, "toPort": "reaction" },
+          { "fromNode": 15, "fromPort": "reaction_out", "toNode": 3, "toPort": "reaction_in" },
+          { "fromNode": 1, "fromPort": "shapes", "toNode": 15, "toPort": "shapes" },
+          { "fromNode": 1, "fromPort": "atlas", "toNode": 15, "toPort": "atlas" },
+          { "fromNode": 1, "fromPort": "nodes_x", "toNode": 15, "toPort": "nodes_x" },
+          { "fromNode": 1, "fromPort": "nodes_y", "toNode": 15, "toPort": "nodes_y" },
+          { "fromNode": 1, "fromPort": "nodes_z", "toNode": 15, "toPort": "nodes_z" },
+          { "fromNode": 1, "fromPort": "cell_size", "toNode": 15, "toPort": "cell_size" },
+          { "fromNode": 1, "fromPort": "lattice_min_x", "toNode": 15, "toPort": "lattice_min_x" },
+          { "fromNode": 1, "fromPort": "lattice_min_y", "toNode": 15, "toPort": "lattice_min_y" },
+          { "fromNode": 1, "fromPort": "lattice_min_z", "toNode": 15, "toPort": "lattice_min_z" },
+          { "fromNode": 1, "fromPort": "gravity_x", "toNode": 15, "toPort": "gravity_x" },
+          { "fromNode": 1, "fromPort": "gravity", "toNode": 15, "toPort": "gravity" },
+          { "fromNode": 1, "fromPort": "gravity_z", "toNode": 15, "toPort": "gravity_z" },
+          { "fromNode": 1, "fromPort": "closed_faces", "toNode": 15, "toPort": "closed_faces" },
+          { "fromNode": 1, "fromPort": "momentum_unit", "toNode": 15, "toPort": "momentum_unit" },
+          { "fromNode": 1, "fromPort": "body_count", "toNode": 15, "toPort": "body_count" },
+          { "fromNode": 1, "fromPort": "substeps_per_tick", "toNode": 15, "toPort": "substeps_per_tick" },
+          { "fromNode": 1, "fromPort": "dynamic_count", "toNode": 15, "toPort": "dynamic_count" },
+          { "fromNode": 3, "fromPort": "tick_index", "toNode": 15, "toPort": "tick_index" },
+          { "fromNode": 3, "fromPort": "substep_in_tick", "toNode": 15, "toPort": "substep_in_tick" },
+          { "fromNode": 3, "fromPort": "step_dt", "toNode": 15, "toPort": "step_dt" }
         ]
       }
     },

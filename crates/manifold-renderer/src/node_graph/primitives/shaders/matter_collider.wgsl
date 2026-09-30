@@ -61,3 +61,53 @@ fn matter_lattice_gradient(
     ) / (2.0 * h * spacing);
     return matter_rotate(rotation, local / scale);
 }
+
+// Closed faces (bits −X, +X, −Y, +Y, −Z, +Z) stop velocity into the wall on the
+// face node (node 3) and the three padding nodes beyond it, frictionless
+// (taichi_elements grid_bounding_box).
+fn matter_wall_stop(v: vec3<f32>, coord: vec3<u32>, n: vec3<u32>, faces: u32) -> vec3<f32> {
+    let low_closed = vec3<bool>((faces & 1u) != 0u, (faces & 4u) != 0u, (faces & 16u) != 0u);
+    let high_closed = vec3<bool>((faces & 2u) != 0u, (faces & 8u) != 0u, (faces & 32u) != 0u);
+    let stop_low = low_closed & (coord < vec3<u32>(4u)) & (v < vec3<f32>(0.0));
+    let stop_high = high_closed & (coord >= n - vec3<u32>(4u)) & (v > vec3<f32>(0.0));
+    return select(v, vec3<f32>(0.0), stop_low | stop_high);
+}
+
+// Node velocity v at world x after one body (D11): inside the body (φ < 0)
+// and moving into it, v_rel · n < 0 with v_rel = v − v_body(x), v_rel loses
+// its normal part and keeps t̂·max(0, |t| + v_n·friction) of the tangential
+// part; v = v_body + v_rel'. Otherwise v is returned unchanged.
+fn matter_collider_project(
+    v: vec3<f32>,
+    x: vec3<f32>,
+    position: vec3<f32>,
+    rotation: vec4<f32>,
+    linear: vec3<f32>,
+    angular: vec3<f32>,
+    friction: f32,
+    origin_spacing: vec4<f32>,
+    dims: vec3<u32>,
+    atlas_offset: u32,
+    scale: vec3<f32>,
+) -> vec3<f32> {
+    let g = matter_lattice_coord(x, position, rotation, origin_spacing, scale);
+    if !matter_lattice_holds(g, dims) || matter_lattice_distance(atlas_offset, dims, g) >= 0.0 {
+        return v;
+    }
+    let grad = matter_lattice_gradient(atlas_offset, dims, g, origin_spacing.w, rotation, scale);
+    let length_sq = dot(grad, grad);
+    if !(length_sq > 0.0) {
+        return v;
+    }
+    let normal = grad * inverseSqrt(length_sq);
+    let v_body = matter_body_velocity(linear, angular, position, x);
+    let v_rel = v - v_body;
+    let v_n = dot(v_rel, normal);
+    if v_n >= 0.0 {
+        return v;
+    }
+    let t = v_rel - v_n * normal;
+    let t_len = length(t);
+    let keep = max(0.0, t_len + v_n * friction);
+    return v_body + select(vec3<f32>(0.0), t * (keep / t_len), t_len > 0.0);
+}
