@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::node_graph::persistence::PrimitiveRegistry;
@@ -31,6 +32,21 @@ pub(super) fn resolve(
     registry: &PrimitiveRegistry,
 ) -> Result<Option<Recipient>, SceneModifierExpandError> {
     let mut candidates = Vec::new();
+    if let Some(domain) = liquid_domain_of(index, object)? {
+        let type_id = &index.node(&domain)?.type_id;
+        let takes_forces = registry.construct(type_id).is_some_and(|primitive| {
+            primitive
+                .inputs()
+                .iter()
+                .any(|input| input.name.as_ref() == LIQUID_ACCELERATION_PORT)
+        });
+        if takes_forces {
+            candidates.push(Candidate {
+                node: domain,
+                port: LIQUID_ACCELERATION_PORT.into(),
+            });
+        }
+    }
     for input in ["transform", "parent_transform", "instances", "vertices"] {
         if let Some(wire) = index.input(object, input)? {
             let Some(producer) = index.by_id.get(&wire.from_node) else {
@@ -56,6 +72,59 @@ pub(super) fn resolve(
             "scene object resolves to multiple distinct physical recipients",
         )),
     }
+}
+
+/// The liquid domain input that receives scene forces. A domain that does not
+/// declare it yet is still water (pairing finds it) but takes no forces.
+const LIQUID_ACCELERATION_PORT: &str = "acceleration_field";
+
+/// The liquid domain an object's surface is built from. Water is recognised
+/// by its particle producer, not by the port that feeds the object: the walk
+/// starts at the object's `vertices` producer, follows every wired input
+/// upstream and stops at each liquid domain it meets. A CPU surface
+/// (`fluid_surface.vertices`) and a GPU surface (particles → sort → blobs →
+/// volume → marching cubes) both reach their domain.
+pub(super) fn liquid_domain_of(
+    index: &FlatSceneIndex,
+    object: &SceneNodeRef,
+) -> Result<Option<SceneNodeRef>, SceneModifierExpandError> {
+    let Some(wire) = index.input(object, "vertices")? else {
+        return Ok(None);
+    };
+    let mut pending = vec![wire.from_node];
+    let mut seen = BTreeSet::from([wire.from_node]);
+    let mut domains = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        let Some(node) = index.flat.nodes.iter().find(|node| node.id == id) else {
+            return Err(unsupported(
+                format!("{object:?}.vertices"),
+                "surface chain names a missing producer",
+            ));
+        };
+        if is_liquid_domain(&node.type_id) {
+            let reference = index.by_id.get(&id).ok_or_else(|| {
+                unsupported(
+                    format!("{object:?}.vertices"),
+                    "liquid domain has no stable scene reference",
+                )
+            })?;
+            domains.insert(reference.clone());
+            continue;
+        }
+        for wire in index.flat.wires.iter().filter(|wire| wire.to_node == id) {
+            if seen.insert(wire.from_node) {
+                pending.push(wire.from_node);
+            }
+        }
+    }
+    let domain = domains.pop_first();
+    if !domains.is_empty() {
+        return Err(unsupported(
+            format!("{object:?}"),
+            "scene object's surface is built from more than one liquid domain",
+        ));
+    }
+    Ok(domain)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,13 +175,6 @@ fn trace(
                 }
                 continue;
             }
-        }
-        if def.type_id == "node.fluid_surface" && port == "vertices" {
-            candidates.push(Candidate {
-                node,
-                port: "acceleration_field".into(),
-            });
-            continue;
         }
         let primitive = registry.construct(&def.type_id).ok_or_else(|| {
             unsupported(
@@ -264,7 +326,7 @@ pub(super) fn impulse_recipients_with_index(
             continue;
         };
         let node = index.node(&recipient.node)?;
-        let target = if node.type_id == "node.fluid_surface" {
+        let target = if is_liquid_domain(&node.type_id) {
             ImpulseTarget::Fluid
         } else {
             let mut targets = RigidImpulseTargets::default();
@@ -295,4 +357,65 @@ pub(super) fn impulse_recipients_with_index(
         .into_iter()
         .map(|(id, target)| (manifold_core::NodeId::new(id), target))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use manifold_core::NodeId;
+
+    use super::*;
+    use crate::node_graph::physics_events::ImpulseTarget;
+
+    fn preset(json: &str) -> EffectGraphDef {
+        serde_json::from_str(json).expect("preset parses")
+    }
+
+    fn top(node: &str) -> SceneNodeRef {
+        SceneNodeRef { scope: Vec::new(), node: NodeId::new(node) }
+    }
+
+    /// BUG-4lfm (GPU-surface water not recognised as water): the water object
+    /// is fed by particles_b → sort → blobs → volume → marching cubes, never
+    /// by fluid_surface.vertices, and must still reach its domain.
+    #[test]
+    fn gpu_surface_water_resolves_to_its_flip_domain() {
+        let def = preset(include_str!(
+            "../../../assets/generator-presets/WaterDamBreakGpu.json"
+        ));
+        let registry = PrimitiveRegistry::with_builtin();
+        let index = FlatSceneIndex::build(&def).unwrap();
+        let water = top("water_object");
+        assert_eq!(liquid_domain_of(&index, &water).unwrap(), Some(top("fluid_surface")));
+        assert_eq!(
+            recipient_key(&index, &water, &registry).unwrap(),
+            Some((top("fluid_surface"), "acceleration_field".to_string()))
+        );
+        assert!(authoring_objects(&def, &top("scene"), &registry).unwrap().contains(&water));
+        let recipients = impulse_recipients_with_index(
+            &index,
+            &top("scene"),
+            &SceneTargetSelection::Explicit { objects: vec![water] },
+            &registry,
+        )
+        .unwrap();
+        assert_eq!(recipients, vec![(NodeId::new("fluid_surface"), ImpulseTarget::Fluid)]);
+        for rigid in ["floor_object", "obstacle_object"] {
+            assert_eq!(liquid_domain_of(&index, &top(rigid)).unwrap(), None, "{rigid}");
+        }
+    }
+
+    /// A matter domain is found by the same walk, through its group, but
+    /// takes no scene forces until it declares an acceleration_field input.
+    #[test]
+    fn matter_surface_water_resolves_to_its_domain_without_force_port() {
+        let def = preset(include_str!(
+            "../../../assets/generator-presets/WaterDamBreakMatter.json"
+        ));
+        let registry = PrimitiveRegistry::with_builtin();
+        let index = FlatSceneIndex::build(&def).unwrap();
+        let water = top("water_object");
+        let domain = liquid_domain_of(&index, &water).unwrap().expect("matter water has a domain");
+        assert_eq!(domain.node, NodeId::new("matter_domain"));
+        assert_eq!(recipient_key(&index, &water, &registry).unwrap(), None);
+    }
 }

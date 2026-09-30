@@ -44,6 +44,10 @@ const PARTIAL_SHADERS: &[&str] = &[
     // `buf_levelset` binding. Their generated kernels are validated at
     // pipeline creation and by the liquid-surface GPU value tests.
     "marching_cubes_common.wgsl",
+    // `wgsl_includes` of the matter collider atoms: calls `matter_pose.wgsl`
+    // and the kernel's own `matter_atlas_half`. Their generated kernels are
+    // validated by each atom's codegen test and the matter GPU proofs.
+    "matter_collider.wgsl",
 ];
 
 const NOISE_COMMON: &str = include_str!("../src/generators/shaders/noise_common.wgsl");

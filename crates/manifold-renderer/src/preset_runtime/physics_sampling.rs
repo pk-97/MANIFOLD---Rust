@@ -144,13 +144,24 @@ pub(super) fn physics_sample_steps(
 ) -> Result<Option<Vec<bool>>, String> {
     use std::collections::HashSet;
 
+    let replays_history = |type_id: &str| matches!(type_id, "node.physics_world" | "node.fluid_surface");
+    // A coupled pair samples together or not at all. The matter domain records
+    // its controls once per display frame (GPU_MPM_SOLVER_DESIGN.md D28, bodies
+    // are per-tick rows) and owns its paired world, so neither replays history.
+    let frame_held_rigids: HashSet<_> = graph
+        .coupled_scenes()
+        .iter()
+        .filter(|pair| {
+            graph
+                .get_node(pair.fluid)
+                .is_some_and(|fluid| !replays_history(fluid.node.type_id().as_str()))
+        })
+        .map(|pair| pair.rigid)
+        .collect();
     let mut pending: Vec<_> = graph
         .nodes()
         .filter(|node| {
-            matches!(
-                node.node.type_id().as_str(),
-                "node.physics_world" | "node.fluid_surface"
-            )
+            replays_history(node.node.type_id().as_str()) && !frame_held_rigids.contains(&node.id)
         })
         .map(|node| node.id)
         .collect();
@@ -531,6 +542,17 @@ mod tests {
         assert!(sampled.iter().any(|kind| kind == "node.lfo"));
         assert!(!sampled.iter().any(|kind| kind == "node.scene_object"));
         assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));
+    }
+
+    #[test]
+    fn matter_coupled_world_records_per_frame_without_history_sampling() {
+        let runtime = PresetRuntime::from_json_str(
+            include_str!("../../assets/generator-presets/WaterFloatingBoxMatter.json"),
+            &PrimitiveRegistry::with_builtin(),
+        )
+        .expect("WaterFloatingBoxMatter loads");
+        assert!(!runtime.plan.coupled_scenes().is_empty(), "the box and the liquid are one coupled scene");
+        assert!(runtime.physics_sample_steps.is_none());
     }
 
     #[test]

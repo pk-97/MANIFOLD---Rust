@@ -5,7 +5,7 @@ use manifold_physics::input::AppliedEvent;
 use manifold_physics::stepping::{StepCoupling, SubstepExchange, Uncoupled};
 use manifold_physics::{BodyHandle, FieldInput, PhysicsWorld, Seconds, TickStamp};
 
-use crate::node_graph::physics::{MAX_BODIES, ResolvedRigidImpulse, RigidSimulation};
+use crate::node_graph::physics::{MAX_BODIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSimulation};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitives::quat_to_render_scene_euler;
 use crate::node_graph::transform::Transform;
@@ -13,7 +13,9 @@ use crate::node_graph::transform::Transform;
 use super::{CoupledRigidFrame, Request, Setup};
 use crate::node_graph::fluid::{FluidDomainLayout, TICK};
 
-struct Layout {
+/// How a prepared rigid world's bodies map onto a [`CoupledRigidFrame`]:
+/// shared by every liquid that owns a rigid world in-thread.
+pub(crate) struct Layout {
     bodies: [Option<BodyHandle>; MAX_BODIES],
     fragment_parents: [Option<usize>; MAX_BODIES],
     authored: [Transform; MAX_BODIES],
@@ -22,7 +24,35 @@ struct Layout {
 }
 
 impl Layout {
-    fn capture(&self, world: &PhysicsWorld, output: &mut CoupledRigidFrame) -> Result<(), String> {
+    /// The layout of `rigid`, prepared from `initial`.
+    pub(crate) fn new(rigid: &RigidSimulation, initial: &RigidSceneInputs) -> Self {
+        let (bodies, copies) = rigid.native_handles();
+        Self {
+            bodies: *bodies,
+            fragment_parents: std::array::from_fn(|index| {
+                initial.bodies[index]
+                    .as_ref()
+                    .and_then(|body| body.fragment_parent)
+            }),
+            authored: std::array::from_fn(|index| {
+                initial.bodies[index]
+                    .as_ref()
+                    .map_or(Transform::default(), |body| body.transform)
+            }),
+            copies: copies.iter().copied().flatten().collect(),
+            copy_scale: initial
+                .prototype
+                .as_ref()
+                .map_or([1.0; 3], |body| body.transform.scale),
+        }
+    }
+
+    /// Size `output`'s copy storage for this layout, before a tick captures into it.
+    pub(crate) fn prepare_output(&self, output: &mut CoupledRigidFrame) {
+        output.copies.resize(self.copies.len(), Transform::default());
+    }
+
+    pub(crate) fn capture(&self, world: &PhysicsWorld, output: &mut CoupledRigidFrame) -> Result<(), String> {
         for (index, destination) in output.poses.iter_mut().enumerate() {
             let Some(mut handle) = self.bodies[index] else {
                 *destination = self.authored[index];
@@ -87,25 +117,7 @@ impl Native {
             .native_world()
             .ok_or("Fluid coupling: rigid world was not prepared")?;
         let (bodies, copies) = rigid.native_handles();
-        let layout = Layout {
-            bodies: *bodies,
-            fragment_parents: std::array::from_fn(|index| {
-                setup.initial.bodies[index]
-                    .as_ref()
-                    .and_then(|body| body.fragment_parent)
-            }),
-            authored: std::array::from_fn(|index| {
-                setup.initial.bodies[index]
-                    .as_ref()
-                    .map_or(Transform::default(), |body| body.transform)
-            }),
-            copies: copies.iter().copied().flatten().collect(),
-            copy_scale: setup
-                .initial
-                .prototype
-                .as_ref()
-                .map_or([1.0; 3], |body| body.transform.scale),
-        };
+        let layout = Layout::new(&rigid, &setup.initial);
         let selected = bodies
             .iter()
             .enumerate()
@@ -168,9 +180,7 @@ impl Native {
     pub fn prepare_output(&self, output: &mut CoupledRigidFrame) {
         // The two recycled buffers acquire capacity on first use or topology
         // changes, before any native tick starts.
-        output
-            .copies
-            .resize(self.layout.copies.len(), Transform::default());
+        self.layout.prepare_output(output);
     }
 
     pub fn step(

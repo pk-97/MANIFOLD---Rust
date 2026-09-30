@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 318 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 331 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (17)
+### Particles 3D (29)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -301,9 +301,21 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
+| Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
+| Matter Body Reaction | `node.matter_body_reaction` | Filter | Measures how hard the liquid pushes on each floating object so the physics world can move it. |
+| Matter Domain | `node.matter_domain` | Source | Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves. |
+| Matter Fill | `node.matter_fill` | Source | Places the liquid's starting particles in the domain: a pool on the floor plus one box. |
+| Matter Frame | `node.matter_frame` | Filter | Hands the simulated liquid particles to the liquid surface, one frame per simulation tick. |
+| Matter Grid Update | `node.matter_grid_update` | Filter | Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls. |
+| Matter Move Bodies | `node.matter_move_bodies` | Filter | Moves the solid objects in a liquid to where they are at this instant of the simulation. |
+| Matter Solid Distance | `node.matter_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
+| Matter State | `node.matter_state` | Filter | Keeps the liquid's particles between frames and runs its simulation steps. |
+| Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
+| Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a smooth density field on a grid, the step before the surface mesh is drawn. |
+| Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
@@ -367,7 +379,7 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (22)
+### Math & Convert (23)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -393,6 +405,7 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | Transform Components | `node.transform_components` | Map | Breaks a transform into its separate position, rotation and scale numbers so each can drive something else. |
 | Vector Length | `node.vector_length` | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
 | Wrap | `node.wrap` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
+| Clear Array | `node.zero_array` | Filter | Resets a list of whole numbers to zero so it can be added into again. |
 
 ### Routing (10)
 
@@ -448,7 +461,7 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (91)
+### Effect & generator presets (94)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -540,6 +553,9 @@ _Generated from the node registry. Do not hand-edit. 318 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1378 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1371 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1046 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

@@ -191,6 +191,15 @@ impl KnownItem for f32 {
     }];
 }
 
+impl KnownItem for i32 {
+    // Signed fixed-point accumulators (the MPM grid, GPU_MPM_SOLVER_DESIGN.md
+    // D5): integer atomics are order-independent, so sums are deterministic.
+    const SPECS: &'static [ChannelSpec] = &[ChannelSpec {
+        name: ChannelName::from_str("value"),
+        ty: ChannelElementType::I32,
+    }];
+}
+
 impl KnownItem for [f32; 2] {
     // Paired scalars (x, y) at 4-byte alignment, not a single Vec2F —
     // preserves byte parity with the existing `[f32; 2]` layout per
@@ -470,6 +479,21 @@ pub const fn std430_stride_and_align(specs: &[ChannelSpec]) -> (u32, u32) {
     }
     let stride = round_up_align(offset, max_align);
     (stride, max_align)
+}
+
+/// The std430 byte offset and type of the channel named `name`, or `None`
+/// when the signature has no such channel. Allocates nothing, so a node can
+/// call it every frame on its input's layout.
+pub fn std430_channel(specs: &[ChannelSpec], name: ChannelName) -> Option<(u32, ChannelElementType)> {
+    let mut offset: u32 = 0;
+    for spec in specs {
+        offset = round_up_align(offset, spec.ty.alignment());
+        if spec.name == name {
+            return Some((offset, spec.ty));
+        }
+        offset += spec.ty.size();
+    }
+    None
 }
 
 const fn round_up_align(value: u32, align: u32) -> u32 {

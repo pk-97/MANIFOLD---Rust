@@ -185,6 +185,20 @@ mod lut1d;
 mod masked_mix;
 mod matcap_two_tone;
 mod math;
+mod grid_to_matter;
+mod matter_body_reaction;
+mod matter_common;
+mod matter_domain;
+mod matter_fill;
+mod matter_frame;
+mod matter_grid_update;
+mod matter_move_bodies;
+mod matter_solid_distance;
+mod matter_state;
+mod matter_stats;
+mod matter_to_grid;
+mod particles_to_copies;
+mod zero_array;
 mod unlit_material;
 mod pbr_material;
 mod cel_material;
@@ -499,6 +513,19 @@ pub use lut1d::ColorLut;
 pub use math::{MATH_OPS, Math};
 pub use masked_mix::MaskedMix;
 pub use matcap_two_tone::MatcapTwoTone;
+pub use grid_to_matter::GridToMatter;
+pub use matter_body_reaction::MatterBodyReaction;
+pub use matter_domain::MatterDomain;
+pub use matter_fill::MatterFill;
+pub use matter_frame::MatterFrame;
+pub use matter_grid_update::MatterGridUpdate;
+pub use matter_move_bodies::MatterMoveBodies;
+pub use matter_solid_distance::MatterSolidDistance;
+pub use matter_state::{MATTER_STATE_PORTS, MatterState};
+pub use matter_stats::MatterStats;
+pub use matter_to_grid::MatterToGrid;
+pub use particles_to_copies::ParticlesToCopies;
+pub use zero_array::ZeroArray;
 pub use melt_mesh::MeltMesh;
 pub use unlit_material::UnlitMaterial;
 pub use pbr_material::PbrMaterial;
@@ -857,7 +884,9 @@ mod tests {
     /// scratch state). Allowed for `node.wgsl_compute*` (the wire
     /// shape derives from user WGSL via naga — `_pad*` fields skip,
     /// matrices and runtime arrays fall back to empty specs) and the
-    /// `node.__smoke_test_*` fixtures. Anywhere else it's a CI
+    /// `node.__smoke_test_*` fixtures. A `Channels[permissive]` port has
+    /// no fixed signature by design; the Permissive allow-list test in
+    /// `validation.rs` is its gate. Anywhere else it's a CI
     /// failure pointing at a missing `KnownItem::SPECS` or a missing
     /// inline `Channels[…]` declaration.
     ///
@@ -886,6 +915,7 @@ mod tests {
             let mut check_port = |kind_label: &str, port_name: &str, ty: &PortType| {
                 if let PortType::Array(layout) = ty
                     && layout.specs.is_empty()
+                    && layout.match_mode != super::super::ports::MatchMode::Permissive
                 {
                     violations.push(format!(
                         "{type_id}: {kind_label} `{port_name}` is Array<…> \

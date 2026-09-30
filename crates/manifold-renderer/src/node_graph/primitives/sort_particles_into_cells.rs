@@ -4,19 +4,33 @@
 //! and none has another consumer; the scan is shared with `node.running_total`
 //! (`prefix_scan.rs`). Hand kernels under exclusion 1 of ADDING_PRIMITIVES.md,
 //! as `node.spawn_from_mesh`.
+//!
+//! The particles port accepts any record that names where a point is and
+//! whether it is live (`Channels[permissive]`, CHANNEL_TYPE_SYSTEM.md section
+//! 11.4 (Per-port match-mode discipline)): a liquid particle's
+//! `position_radius`, live when the radius is positive, or a `position` and an
+//! `id`, live when the id is non-zero and the position finite. So the matter
+//! solver sorts its own points in place of a converted copy each tick.
 
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::prefix_scan::PrefixScan;
+use crate::node_graph::channel_names::well_known;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid_particles::{CellRange, FluidParticle, bin_counts};
+use crate::node_graph::fluid_particles::{CellRange, FLUID_PARTICLE_SPECS, FluidParticle, bin_counts};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::ports::{ArrayType, ChannelElementType, std430_channel};
 use crate::node_graph::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
 const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "clear_tail", "scatter", "stabilise"];
+
+/// Live when the radius word is positive.
+const LIVE_BY_RADIUS: u32 = 0;
+/// Live when the id word is non-zero and the position finite.
+const LIVE_BY_ID: u32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,6 +43,40 @@ struct SortParams {
     sorted_capacity: u32,
     write_order: u32,
     write_sorted: u32,
+    stride_words: u32,
+    position_word: u32,
+    live_word: u32,
+    live_rule: u32,
+}
+
+/// Where the sort reads a record's position and liveness, in 4-byte words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RecordRead {
+    stride_words: u32,
+    position_word: u32,
+    live_word: u32,
+    live_rule: u32,
+}
+
+fn record_read(layout: &ArrayType) -> Option<RecordRead> {
+    let stride_words = layout.item_size / 4;
+    if let Some((offset, ChannelElementType::Vec4F)) = std430_channel(layout.specs, well_known::POSITION_RADIUS) {
+        return Some(RecordRead {
+            stride_words,
+            position_word: offset / 4,
+            live_word: offset / 4 + 3,
+            live_rule: LIVE_BY_RADIUS,
+        });
+    }
+    match (std430_channel(layout.specs, well_known::POSITION), std430_channel(layout.specs, well_known::ID)) {
+        (Some((position, ChannelElementType::Vec3F)), Some((id, ChannelElementType::U32))) => Some(RecordRead {
+            stride_words,
+            position_word: position / 4,
+            live_word: id / 4,
+            live_rule: LIVE_BY_ID,
+        }),
+        _ => None,
+    }
 }
 
 macro_rules! float_param {
@@ -48,9 +96,9 @@ pub(crate) use float_param;
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis.",
+    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
     inputs: {
-        particles: Array(FluidParticle) required,
+        particles: Channels[permissive] required,
         count: ScalarF32 optional,
         enabled: ScalarF32 optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
@@ -81,7 +129,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire count from the producer's live count (a fluid frame's count_b) so stale records past it are never sorted; records with radius 0 are skipped. Wire the box from a lattice's bounds through node.transform_components (position = centre, scale = size). Every atom that searches these bins must use the same box and cell_size, so wire one value into all of them. A box needing more bins than Max Cells is a named error. Inside a substep region, gate it with the boundary's tick_end so it sorts once per tick.",
+    composition_notes: "Wire count from the producer's live count (a fluid frame's count_b) so stale records past it are never sorted; records with radius 0 are skipped. Matter points wire straight in from node.matter_state's out; `sorted` holds liquid particle records, so leave it unwired and use `order` when sorting anything else. Wire the box from a lattice's bounds through node.transform_components (position = centre, scale = size). Every atom that searches these bins must use the same box and cell_size, so wire one value into all of them. A box needing more bins than Max Cells is a named error. Inside a substep region, gate it with the boundary's tick_end so it sorts once per tick.",
     examples: [],
     picker: { label: "Sort Particles Into Cells", category: Atom },
     summary: "Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly.",
@@ -158,8 +206,20 @@ impl Primitive for SortParticlesIntoCells {
         // Either per-slot output may be unwired; the slots are those every wired one holds.
         let sorted = ctx.outputs.array("sorted");
         let order = ctx.outputs.array("order");
+        let Some(layout) = ctx.inputs.array_layout("particles") else {
+            ctx.error("Sort Particles Into Cells: the particles wire carries no record layout");
+            return;
+        };
+        let Some(read) = record_read(&layout) else {
+            ctx.error("Sort Particles Into Cells: particles need a position_radius channel, or position and id channels");
+            return;
+        };
+        if sorted.is_some() && layout.specs != FLUID_PARTICLE_SPECS {
+            ctx.error("Sort Particles Into Cells: sorted holds liquid particle records; leave it unwired and use order for these points");
+            return;
+        }
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
-        let capacity = (particles.size / particle_size) as u32;
+        let capacity = (particles.size / u64::from(layout.item_size)) as u32;
         let sorted_capacity = [sorted.map(|b| b.size / particle_size), order.map(|b| b.size / 4)]
             .into_iter()
             .flatten()
@@ -201,6 +261,10 @@ impl Primitive for SortParticlesIntoCells {
             sorted_capacity,
             write_order: u32::from(order.is_some()),
             write_sorted: u32::from(sorted.is_some()),
+            stride_words: read.stride_words,
+            position_word: read.position_word,
+            live_word: read.live_word,
+            live_rule: read.live_rule,
         };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },

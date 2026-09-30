@@ -41,6 +41,7 @@ MATRIX = [
     ("manifold-recording", "recording-proofs"),
     ("manifold-renderer", "rt-perf-proofs"),
     ("manifold-renderer", "fluid-perf-proofs"),
+    ("manifold-renderer", "matter-perf-proofs"),
     ("manifold-spectral", "gpu-proofs"),
 ]
 
