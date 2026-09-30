@@ -5,7 +5,6 @@
 //! surface of amplitude 2 cells and wavelength 16.
 
 use super::crossing_distance::CrossingDistance;
-use super::lattice_curvature::LatticeCurvature;
 use super::liquid_surface_tests::{Harness, params};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
@@ -13,7 +12,7 @@ use super::whitewater_cpu::Grid;
 use super::whitewater_grid_tests::run;
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::effect_node::ParamValues;
-use crate::node_graph::whitewater::{KnownValue, SPREAD_STEPS, SurfaceCrossing};
+use crate::node_graph::whitewater::{SPREAD_STEPS, SurfaceCrossing};
 
 const NODES: [u32; 3] = [71; 3];
 /// The cell at 64: the 4 m tank over 64 cells.
@@ -106,6 +105,7 @@ fn grid_params(extra: &[(&'static str, f32)]) -> ParamValues {
 }
 
 /// The value at quantile `q` of `values`.
+#[cfg(feature = "whitewater-oracle")]
 fn quantile(values: &mut [f32], q: f64) -> f32 {
     values.sort_unstable_by(f32::total_cmp);
     values[((values.len() - 1) as f64 * q).round() as usize]
@@ -209,6 +209,7 @@ fn whitewater_redistance_matches_distance() {
 /// k·h, held at what was measured (0.2554 against FLIP's 0.2456,
 /// 2026-10-01); FLIP's own on the exact field is the bound the other spheres
 /// meet.
+#[cfg(feature = "whitewater-oracle")]
 const R4_CURVATURE_MISS: f32 = 0.2555;
 
 /// O1 as restated on BUG-7o8f (whitewater O1 red):
@@ -224,6 +225,8 @@ const R4_CURVATURE_MISS: f32 = 0.2555;
 #[test]
 fn whitewater_curvature_matches_flip() {
     use super::extend_lattice::ExtendLattice;
+    use super::lattice_curvature::LatticeCurvature;
+    use crate::node_graph::whitewater::KnownValue;
 
     let grid = Grid::new(NODES);
     let total = grid.total();
