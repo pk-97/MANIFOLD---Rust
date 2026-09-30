@@ -230,7 +230,7 @@ impl Smoke {
             sampler,
             step_names,
             solid,
-            solid_values: scene.with_closed_surface().surface_solid(),
+            solid_values: scene.surface_solid(),
             frame_count: 0,
             time: 0.0,
             trigger: 0,
@@ -473,14 +473,14 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let frames = frames();
     let tag = format!("{label}_{n}");
     println!("SMOKE {tag}: {} particles, collar capacity {}, {WIDTH}x{HEIGHT}", scene.particles(), scene.pressure.capacity);
-    // The CPU census gates the run: a scene whose arrays don't fit what the
-    // device can still hold is refused by name, never tried.
+    // The CPU census gates the run against the allowance the runtime itself
+    // admits graphs by (75% of the working set): a scene past it is refused
+    // by name, never tried.
     let needs = rendered_scene_bytes(scene);
     let snapshot = crate::test_device().modifier_memory_snapshot().expect("Metal reports its memory");
-    let free = snapshot.recommended_max_working_set_bytes.saturating_sub(snapshot.current_allocated_bytes);
-    println!("SMOKE {tag}: arrays need {:.2} GB; the device holds {:.2} GB more", needs as f64 / 1e9, free as f64 / 1e9);
-    if needs > free {
-        println!("SMOKE {tag}: refused, device memory: needs {:.2} GB, holds {:.2} GB", needs as f64 / 1e9, free as f64 / 1e9);
+    println!("SMOKE {tag}: arrays need {:.2} GB", needs as f64 / 1e9);
+    if let Err(refusal) = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(Some(snapshot), needs) {
+        println!("SMOKE {tag}: refused, device memory: {refusal:?}");
         return;
     }
     let mem_before = snapshot.current_allocated_bytes as f64 / 1048576.0;
