@@ -211,7 +211,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
 
     // Warm the imported convex hull on the same runtime that will receive the
     // release. A fresh released runtime would bypass the baseline latch.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let wait = harness::BackgroundWait::new("collider warmup");
     let mut frame = 0;
     loop {
         render_frame_with_params(
@@ -231,11 +231,7 @@ fn physics_imported_flower_shatter_release_preserves_authored_row_and_materials(
         if !runtime.warmup_pending() {
             break;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "collider warmup timed out"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        wait.hold();
     }
     let idle_image = h.readback(&target.texture);
     assert!(
@@ -618,13 +614,12 @@ fn warm_imported_runtime(
     params: &ParamManifest,
 ) {
     let h = harness::shared();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let wait = harness::BackgroundWait::new("import warmup");
     loop {
         render_frame_with_params(runtime, target, 0, h.width, h.height, &h.device, params);
         assert!(runtime.errors().is_empty(), "import errors: {:?}", runtime.errors());
         if !runtime.warmup_pending() { break; }
-        assert!(std::time::Instant::now() < deadline, "import warmup timed out");
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        wait.hold();
     }
 }
 

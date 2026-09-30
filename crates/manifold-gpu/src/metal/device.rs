@@ -32,6 +32,19 @@ pub(crate) fn alloc_log_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_LOG").is_some())
 }
 
+const BUFFER_ALLOCATION: usize = 0;
+const TEXTURE_ALLOCATION: usize = 1;
+const ACCEL_ALLOCATION: usize = 2;
+
+thread_local! {
+    /// Allocations made on this thread, per device: (resource scope id,
+    /// [buffers, textures, acceleration structures]). Per thread so a probe
+    /// that renders on its own thread counts only its own work while other
+    /// threads share the device (the parallel gpu-proofs binary).
+    static THREAD_ALLOCATIONS: std::cell::RefCell<Vec<(u64, [u64; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(crate) fn alloc_log_backtrace() {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_BT").is_some()) {
@@ -136,7 +149,6 @@ pub struct GpuDevice {
     /// Distinguishes resource ownership even when native devices or Rust
     /// addresses are reused by a later renderer.
     resource_scope_id: u64,
-    allocation_counts: [std::sync::atomic::AtomicU64; 3],
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
@@ -210,7 +222,6 @@ impl GpuDevice {
             .expect("Failed to create command queue");
         Self {
             resource_scope_id,
-            allocation_counts: [const { std::sync::atomic::AtomicU64::new(0) }; 3],
             device,
             queue,
             archive: std::sync::Mutex::new(None),
@@ -409,14 +420,34 @@ impl GpuDevice {
         retire_on_queue(&self.queue, obj, label);
     }
 
-    /// Successful Metal buffer, texture and RT acceleration-structure allocations.
-    /// Monotonic per-device counters for warmup/steady-state acceptance probes.
+    /// Successful Metal buffer, texture and RT acceleration-structure
+    /// allocations the calling thread made on this device. Monotonic counters
+    /// for warmup/steady-state probes; the probe must render on the thread
+    /// that reads them.
     pub fn allocation_counts(&self) -> [u64; 3] {
-        self.allocation_counts.each_ref().map(|count| count.load(std::sync::atomic::Ordering::Relaxed))
+        THREAD_ALLOCATIONS.with_borrow(|counts| {
+            counts
+                .iter()
+                .find(|(scope, _)| *scope == self.resource_scope_id)
+                .map_or([0; 3], |(_, count)| *count)
+        })
+    }
+
+    fn record_allocation(&self, kind: usize) {
+        THREAD_ALLOCATIONS.with_borrow_mut(|counts| {
+            match counts.iter_mut().find(|(scope, _)| *scope == self.resource_scope_id) {
+                Some((_, count)) => count[kind] += 1,
+                None => {
+                    let mut count = [0; 3];
+                    count[kind] = 1;
+                    counts.push((self.resource_scope_id, count));
+                }
+            }
+        });
     }
 
     pub(crate) fn record_accel_allocation(&self) {
-        self.allocation_counts[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(ACCEL_ALLOCATION);
     }
 
     /// Create a GPU texture via device allocation (kernel call per texture).
@@ -433,7 +464,7 @@ impl GpuDevice {
             .device
             .newTextureWithDescriptor(&mtl_desc)
             .expect("Metal: texture allocation failed — GPU memory exhausted");
-        self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(TEXTURE_ALLOCATION);
         GpuTexture {
             raw: raw.clone(),
             width: desc.width,
@@ -466,7 +497,7 @@ impl GpuDevice {
                     desc.width, desc.height, desc.depth, desc.format
                 )
             })?;
-        self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(TEXTURE_ALLOCATION);
         Ok(GpuTexture {
             raw: raw.clone(),
             width: desc.width,
@@ -489,7 +520,7 @@ impl GpuDevice {
             .unwrap_or_else(|| {
                 panic!("Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted")
             });
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         GpuBuffer {
             raw: raw.clone(),
             size,
@@ -508,7 +539,7 @@ impl GpuDevice {
             .device
             .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| format!("Metal: buffer allocation failed ({size} bytes)"))?;
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         Ok(GpuBuffer {
             raw: raw.clone(),
             size,
@@ -534,7 +565,7 @@ impl GpuDevice {
                 )
             });
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         GpuBuffer {
             raw: raw.clone(),
             size,
@@ -557,7 +588,7 @@ impl GpuDevice {
             .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
             .ok_or_else(|| format!("Metal: shared buffer allocation failed ({size} bytes)"))?;
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         Ok(GpuBuffer {
             raw: raw.clone(),
             size,
