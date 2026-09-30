@@ -112,6 +112,13 @@ pub enum GraphError {
         node: NodeInstanceId,
         reason: String,
     },
+    /// A node's params leave it unable to run on any frame
+    /// ([`EffectNode::params_refusal`](crate::node_graph::effect_node::EffectNode::params_refusal)):
+    /// refused once at build instead of every frame.
+    IllegalParams {
+        node: NodeInstanceId,
+        reason: String,
+    },
 }
 
 /// Payload for [`GraphError::ChannelMismatch`]. Boxed inside the
@@ -329,6 +336,7 @@ impl std::fmt::Display for GraphError {
                 f,
                 "malformed substep region at boundary {boundary:?} (node {node:?}): {reason}"
             ),
+            Self::IllegalParams { node, reason } => write!(f, "node {node:?} cannot run: {reason}"),
         }
     }
 }
@@ -750,6 +758,9 @@ pub fn validate(graph: &Graph) -> Result<(), GraphError> {
                     port: input.name.to_string(),
                 });
             }
+        }
+        if let Some(reason) = inst.node.params_refusal(&inst.params) {
+            return Err(GraphError::IllegalParams { node: inst.id, reason });
         }
     }
     // Per-node conditional-requirement sweep. Resolves the material's
@@ -1420,6 +1431,7 @@ mod tests {
             GraphError::PortFormatMismatch { .. } => "PortFormatMismatch",
             GraphError::ConditionalRequirementUnmet { .. } => "ConditionalRequirementUnmet",
             GraphError::MalformedSubstepRegion { .. } => "MalformedSubstepRegion",
+            GraphError::IllegalParams { .. } => "IllegalParams",
             GraphError::ChannelMismatch(_) => "ChannelMismatch",
             GraphError::TextureChannelMismatch(_) => "TextureChannelMismatch",
         }

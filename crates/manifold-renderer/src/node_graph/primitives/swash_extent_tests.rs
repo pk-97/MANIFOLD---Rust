@@ -13,6 +13,7 @@ use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, Fluid
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
+use crate::node_graph::validation::GraphError;
 use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, ResourceId, compile};
 
 const PARTICLE: u64 = std::mem::size_of::<FluidParticle>() as u64;
@@ -383,7 +384,11 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
     let all = [64, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
-    for scene in all {
+    // The splash probes' scenes: the Krylov basis grows with passes, and
+    // four steps a frame is four copies of the step.
+    let refined = WaterScene::dam_break(128).with_surface();
+    let probes = [refined.with_passes(16), refined.with_passes(32), WaterScene { steps: 4, ..refined }];
+    for scene in all.chain(probes) {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
@@ -396,6 +401,62 @@ fn fft_water_scenes_cover_every_dispatch() {
             graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
         });
         assert_eq!(meshed, scene.surface, "the surface is in the plan exactly when asked for");
+    }
+}
+
+/// What the collar capacity costs in memory: every array the planner
+/// allocates for the meshed Dam Break, plus the Krylov bases and current
+/// vectors each step's solve provides itself, at today's 8n² and at the
+/// proven bound 6n³/7 (a collar cell is air beside water, and at most six
+/// air cells in seven can touch water).
+#[test]
+fn fft_water_collar_capacity_memory() {
+    let mb = |b: u64| b as f64 / 1e6;
+    for n in [64, 128] {
+        let mut by_port: Vec<AHashMap<String, u64>> = Vec::new();
+        for capacity in [8 * n * n, 6 * n * n * n / 7] {
+            let scene = WaterScene::dam_break(n).with_surface();
+            let scene = WaterScene { pressure: PressureShape { capacity, ..scene.pressure }, ..scene };
+            let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
+            let plan = compile(&graph).expect("water def compiles");
+            let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
+            let planned: u64 = allocation.storage.values().map(|s| s.bytes).sum();
+            let row = (capacity as u64 + 1) * 4;
+            let provided = scene.steps as u64 * row * (scene.pressure.passes as u64 + 2);
+            println!("{n}³ capacity {capacity}: planned {:.0} MB, Krylov bases {:.0} MB, total {:.0} MB", mb(planned), mb(provided), mb(planned + provided));
+            let names: AHashMap<_, _> = graph.nodes().map(|node| (node.id, node.node.type_id().as_str().to_string())).collect();
+            let mut ports = AHashMap::default();
+            for step in plan.steps() {
+                for (port, resource) in &step.outputs {
+                    if let Some(storage) = allocation.storage.get(resource) {
+                        *ports.entry(format!("{}.{port}", names[&step.node])).or_default() += storage.bytes;
+                    }
+                }
+            }
+            by_port.push(ports);
+        }
+        let mut growth: Vec<(String, u64)> =
+            by_port[1].iter().map(|(k, &v)| (k.clone(), v.saturating_sub(by_port[0].get(k).copied().unwrap_or(0)))).collect();
+        growth.sort_by_key(|(_, g)| std::cmp::Reverse(*g));
+        for (port, g) in growth.iter().take(8) {
+            println!("{n}³ growth {port}: +{:.0} MB", mb(*g));
+        }
+    }
+}
+
+/// A lattice the FFT atoms can't transform is refused once, at build, naming
+/// the transform, never frame by frame: 80, 96 and 112 are not powers of two.
+#[test]
+fn fft_water_refuses_an_illegal_lattice_at_build() {
+    for n in [80, 96, 112] {
+        let graph = water_def(WaterScene::dam_break(n)).into_graph(&registry(), &Default::default()).expect("water def builds");
+        match compile(&graph) {
+            Err(GraphError::IllegalParams { node, reason }) => {
+                let kind = graph.get_node(node).expect("refused node exists").node.type_id().as_str().to_string();
+                assert!(kind.contains("fft_3d") && reason.contains("power of two"), "{n}³ refused by {kind}: {reason}");
+            }
+            other => panic!("{n}³ must be refused at build, got {:?}", other.map(|_| "a plan")),
+        }
     }
 }
 

@@ -222,6 +222,27 @@ fn fft_water_cost_probe_refined() {
     cost_probe(128);
 }
 
+/// The 128³ splash against the solve's pass count: if the fastest particle
+/// and the highest splash fall as passes rise, an under-converged solve is
+/// feeding the splash energy; if not, the splash is the scene's.
+#[test]
+fn fft_water_refined_splash_passes() {
+    for passes in [16, 24, 32] {
+        let scene = WaterScene::dam_break(128).with_surface().with_passes(passes);
+        dam_break(scene, &format!("PASSES {passes} 128³"), 150);
+    }
+}
+
+/// The 128³ splash against what else could feed it: the density source (rate
+/// 0) and the step length (four steps a frame, so a fast particle crosses
+/// half as many cells per step as the two-layer face extension covers).
+#[test]
+fn fft_water_refined_splash_causes() {
+    let refined = WaterScene::dam_break(128).with_surface();
+    dam_break(WaterScene { spread_rate: 0.0, ..refined }, "SPLASH rate 0 128³", 120);
+    dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
+}
+
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
 #[test]
 fn fft_water_dam_break_settles() {

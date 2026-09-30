@@ -100,6 +100,11 @@ impl WaterScene {
         Self { surface: true, ..self }
     }
 
+    /// The same scene with `passes` Krylov passes per solve.
+    pub fn with_passes(self, passes: usize) -> Self {
+        Self { pressure: PressureShape { passes, ..self.pressure }, ..self }
+    }
+
     /// Nodes per axis of the surface's solid lattice: the cell corners.
     pub fn surface_nodes(&self) -> usize {
         self.pressure.n + 1

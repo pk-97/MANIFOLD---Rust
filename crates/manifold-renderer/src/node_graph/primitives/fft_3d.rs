@@ -38,14 +38,25 @@ fn plan_for<'a>(
     &slot.as_ref().expect("plan built above").1
 }
 
-/// Every transformed length must be a power of two; a batched z need not be.
+/// Every transformed length must be a power of two, 2 to 1024; a batched z
+/// need not be.
+fn legal_key(params: &ParamValues) -> Option<PlanKey> {
+    let axes = transform_axes(params);
+    lattice_nodes(params).filter(|n| n[..axes as usize].iter().all(|v| v.is_power_of_two())).map(|n| (n, axes))
+}
+
+const ILLEGAL_LENGTH: &str = "every transformed length must be a power of two, 2 to 1024";
+
+fn refusal(params: &ParamValues, label: &str) -> Option<String> {
+    legal_key(params).is_none().then(|| format!("{label}: {ILLEGAL_LENGTH}"))
+}
+
+/// The build refuses an illegal lattice (`params_refusal`); a param changed
+/// since the build is refused here too.
 fn plan_key(ctx: &mut EffectNodeContext<'_, '_>, label: &str) -> Option<PlanKey> {
-    let axes = transform_axes(ctx.params);
-    let key = lattice_nodes(ctx.params)
-        .filter(|n| n[..axes as usize].iter().all(|v| v.is_power_of_two()))
-        .map(|n| (n, axes));
+    let key = legal_key(ctx.params);
     if key.is_none() {
-        ctx.error(format!("{label}: every transformed length must be a power of two, 2 to 1024"));
+        ctx.error(format!("{label}: {ILLEGAL_LENGTH}"));
     }
     key
 }
@@ -83,6 +94,10 @@ crate::primitive! {
 impl Primitive for Fft3d {
     fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
         (port == "spectrum").then(|| lattice_nodes(params).map(half_spectrum_len)).flatten()
+    }
+
+    fn params_refusal(&self, params: &ParamValues) -> Option<String> {
+        refusal(params, "FFT 3D")
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -134,6 +149,10 @@ crate::primitive! {
 impl Primitive for InverseFft3d {
     fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
         (port == "values").then(|| lattice_nodes(params).map(|n| n.iter().product())).flatten()
+    }
+
+    fn params_refusal(&self, params: &ParamValues) -> Option<String> {
+        refusal(params, "Inverse FFT 3D")
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
