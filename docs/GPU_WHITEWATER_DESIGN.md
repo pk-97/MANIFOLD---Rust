@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P4 built on `feat/gpu-whitewater`, O1 green as restated with the radius-4 miss recorded (section 3.7); P5 next · owed: approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P5 built on `feat/gpu-whitewater` with the chain on the Rust builder; O1 and O2 green; P6 rendered from the builder · owed: the Whitewater group in the SWASH Dam Break preset (BUG-imy3.4, under BUG-imy3 (GPU whitewater, solver-agnostic)), Peter's side-by-side verdict, approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step (FFT_WATER_SOLVER_DESIGN.md P3) on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -79,7 +79,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D1 — The split is at the emitter.** GPU atoms find emitters and write spawn records; the vendored `DiffuseParticleSimulation`, emission disabled, advances them. Peter's words above. Rejected: a GPU lifecycle, because it discards FLIP's tuned behaviour and is the port Peter declined. Rejected: FLIP's CPU emitter fed GPU fields, because the scan is the cost.
 
-**D2 — One whitewater grid: the frame's solid lattice cells.** At res n that is n+6 cells a side from m − 3h (70³ at 64), whose nodes are the solid lattice exactly. The level set, the solid and the faces all sit on it at integer offsets, and FLIP's boundary box (3 cells in) lands on the tank walls. Rejected: the seam's face grid (n cells at m), because the 3-cell box would kill whitewater within 19 cm of every wall at 64. Rejected: FLIP's own grid (n+3 cells at m − 1.5h), because it sits half a cell off every GPU lattice. **Consequence, stated honestly:** FLIP's box sits 1.5 cells inside the walls; ours reaches 1.5 cells closer to them.
+**D2 — One whitewater grid: the frame's solid lattice cells.** At res n that is n+6 cells a side from m − 3h (70³ at 64), whose nodes are the solid lattice exactly. The level set, the solid and the faces all sit on it at integer offsets. FLIP's boundary box, where the type rule turns everything outside it to spray, sits 1.625 cells inside the grid (3 cells smaller than the domain, then grown by a quarter cell), so on this grid it lies 1.375 cells outside the tank walls. Rejected: the seam's face grid (n cells at m), because the box would turn whitewater within 10 cm of every wall to spray at 64. Rejected: FLIP's own grid (n+3 cells at m − 1.5h), because it sits half a cell off every GPU lattice. **Consequence, stated honestly:** FLIP's box sits 0.125 cells inside the walls, so FLIP sprays an 8 mm strip along each wall at 64 that ours types by depth.
 
 **D3 — The liquid field is the Liquid Surface group's level set, re-distanced on the whitewater grid** (seam D5). It is the field the mesh is drawn from, after smoothing, so foam sits on the surface the audience sees. Rejected: FLIP's particle level set rebuilt from `particles_b`, because it is a second distance field (seam D5) and foam would float on a surface nobody sees. **Consequence:** a smoothed surface has calmer curvature than FLIP's union of spheres, so small crests may emit less. The side-by-side decides; tuning is Peter's call (section 8).
 
@@ -161,7 +161,7 @@ P1's atoms (the seam's P10):
 | `node.face_sample_component` | one axis of SWASH's `FaceSample` lattice into the seam array, padding skipped; param `axis` |
 | `node.matter_face_component` | one axis from the MPM grid: the mean of the four nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`); param `axis` |
 
-Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces.wgsl` (FLIP's MAC trilinear on the seam arrays) and `whitewater_common.wgsl` (hash, grid trilinear, 26-neighbour air test). The particle chain from `jitter_particles` to `emission_count` must fuse into at most two dispatches and `spawn_whitewater` + `whitewater_type` into one. With the counts its only outlet, all five particle atoms fold into one kernel (`whitewater_emitter_chain_fuses`, proven on the GPU by `whitewater_emitter_chain_fused_matches_unfused`). A fused buffer region writes one output, so P5's spawn, which reads the sampled particles and the energy, splits it; P5 measures that on the SWASH Dam Break preset with `graph-tool fusion`.
+Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces.wgsl` (FLIP's MAC trilinear on the seam arrays) and `whitewater_common.wgsl` (hash, grid trilinear, 26-neighbour air test). The particle chain from `jitter_particles` to `emission_count` must fuse into at most two dispatches and `spawn_whitewater` + `whitewater_type` into one. With the counts its only outlet, all five particle atoms fold into one kernel (`whitewater_emitter_chain_fuses`, proven on the GPU by `whitewater_emitter_chain_fused_matches_unfused`). Spawn reads the sampled particles and the energy as well, and the partitioner refuses a buffer region with more than one output leaving it, so with spawn wired the five run as five dispatches while spawn and type fuse into one (`whitewater_spawn_chain_fuses`, proven by `whitewater_spawn_chain_fused_matches_unfused`). Splitting such a region at its escaping outputs is BUG-imy3.5, under BUG-imy3 (GPU whitewater, solver-agnostic); the test takes the new count when it lands.
 
 ### 3.4 Committed types and ports
 
@@ -246,7 +246,7 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
   - *Re-distance* (`whitewater_redistance_matches_distance`): the fields in `particle_volume`'s capped form on the refined lattice; |φ − d| ≤ 0.1h wherever |d| ≤ 3h. Measured worst: 0.077h at 8h, 0.035h at 16h, 0.070h on the sine.
   - *Recorded miss, not a loosened bound:* the 4h sphere. Re-distance: 14 of 1,426 cells over 0.1h, worst 0.162h, all 1–3 cells out, where even the nearest of all stored crossings misses (one crossing per cell leaves the nearest up to 0.9 cell to the side, and the plane then errs by about r·l²/(2R²)). Curvature: 0.255 against FLIP's 0.246. Both are held at the measured value so they can only shrink. Why it is accepted: droplets of 4 cells (25 cm at 64) are not where wavecrest emission comes from, and O2 is the binding gate; a curvature error that matters shows there.
   - The earlier criterion, ours against FLIP on the exact field (p99 ≤ 0.05), measured FLIP's reinit noise rather than our port: FLIP is off 2/r by 0.25/0.13/0.06 there, ours by 0.012/0.001/0.0001. Ours on the exact field stays asserted within 0.05 of 2/r.
-- **O2, emitter against FLIP** (`whitewater_emitter_matches_flip`): SWASH Dam Break at 64, frames 30, 60, 90 and 120. The same particles, faces, distance, curvature and solid go to FLIP's emitter (through the oracle) and to our atoms; both then take one lifecycle step. Lifetime variance 0 on both, so lifetime encodes Ie. Over 16 seeds a side: total within 5%; each type within 10% where FLIP's mean is ≥ 200; spatial histogram (8³ bins over the tank) L1 ≤ 0.15; lifetime histogram (10 bins) L1 ≤ 0.1. If the seed spread is over half a tolerance, add seeds; tolerances only tighten.
+- **O2, emitter against FLIP** (`whitewater_emitter_matches_flip`): SWASH Dam Break at 64, frames 30, 60, 90 and 120. The same particles, faces, distance, curvature and solid go to FLIP's emitter (through the oracle) and to our atoms; both then take one lifecycle step. Lifetime variance 0 on both, so lifetime encodes Ie. Over 16 seeds a side: total within 5%; each type within 10% where FLIP's mean is ≥ 200; spatial histogram (8³ bins over the tank) L1 ≤ 0.15; lifetime histogram (10 bins) L1 ≤ 0.1. If the seed spread is over half a tolerance, add seeds; tolerances only tighten. FLIP's default emitter generation bounds are infinite and read as NaN, so the oracle sets them to the domain box as the engine bridge does.
 - **Lifecycle** (CPU, manifold-fluids, `whitewater.rs`): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
 - **Handoff** (renderer, `gpu-proofs`, `whitewater_handoff_tests.rs`): what the node publishes equals the lifecycle run on the CPU with the same spawns and fields; pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts; an output slot is rewritten only after its readers retired. A hand-retired fence stands in for the frame clock; every frame still commits on the device.
 - **Extents** (`whitewater_extent_tests.rs`, CPU): every atom's dispatch and array lengths at 64, and the named refusals for a misplaced face grid, a fractional refinement and `face_valid_layers` < 1, before any GPU run at that size.
@@ -340,6 +340,16 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Demo:** L2: SWASH Dam Break with whitewater at 1.5 s and 3 s, PNG.
 - **Forbidden:** widening an O2 tolerance; an MPM whitewater scene; editing the SWASH preset beyond the group, its wires and the copies objects.
 - **Test scope:** focused renderer and manifold-fluids; GPU proofs.
+- **Notes (2026-10-01):** the preset did not exist at entry, so the lead split P5. Built: both atoms with CPU, GPU and fused proofs; the oracle; O2; the chain on the Rust builder (`whitewater_scene_tests.rs`: atoms wired onto `render_def`, drawn by `WaterDamBreakGpu.json`'s own foam, bubble and spray objects, seed the generator's frame count, epoch its trigger count). `swash_builder_whitewater_emits` runs it frozen: 1,307 foam, 290 bubbles, 108 spray at 1.5 s, 3,486 emitted, nothing thinned. The group, the copies objects, the preset run, the round trip and the preset's `graph-tool` checks are BUG-imy3.4, under BUG-imy3 (GPU whitewater, solver-agnostic). O2 (16 seeds, more until every measure's seed spread is under half its tolerance; the per-type floor taken on FLIP's pool over the seeds, which gates more than the mean would):
+
+  | Frame | Seeds | Total GPU / FLIP | Foam | Spray | Spatial L1 | Lifetime L1 |
+  |---|---|---|---|---|---|---|
+  | 30 | 96 | 28.2 / 28.5 (−0.9%) | −5.9% | +3.4% | 0.047 | 0.008 |
+  | 60 | 80 | 49.2 / 47.8 (+3.0%) | +7.3% | −1.2% | 0.043 | 0.032 |
+  | 90 | 1,200 | 3.74 / 3.73 (+0.3%) | +0.9% | −1.7% | 0.054 | 0.007 |
+  | 120 | 160 | 81.9 / 79.6 (+2.9%) | +3.7% | +1.4% | 0.066 | 0.022 |
+
+  Bubbles stay under the floor in a single emission (FLIP 0.37 a seed at frame 120, ours 0.54). One emission is 4 to 80 particles here, so FLIP's per-seed mean never reaches the design's 200.
 
 ### P6 — Side by side and cost
 
@@ -351,6 +361,18 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Gesture:** pause mid-splash; the foam freezes with the water and moves on when play resumes.
 - **Forbidden:** tuning FLIP's constants toward the look; judging the look by agent.
 - **Test scope:** focused renderer; GPU proofs.
+- **Notes (2026-10-01):** rendered with the SWASH side from the builder (P5's notes); the preset render and the pause gesture wait for BUG-imy3.4, under BUG-imy3 (GPU whitewater, solver-agnostic), since the builder has no domain clock (ticks fixed at 1). The test also writes `counts.csv`, the stills at 1.5 s and 3 s, and a phone copy (6.2 MB). Counts: SWASH carries a quarter to a half of FLIP's whitewater (frame 90: foam 1,307 against 5,031, bubbles 290 against 1,896, spray 108 against 1,441). O2 holds the emitter to FLIP's on identical fields, so the gap is the water itself: at frame 90 SWASH's splash climbs the walls as sheets where FLIP's breaks into jets and drops. That is section 8's verdict and tuning call. Cost, frames 11–211, p50 / p95 ms, both runs on a machine shared with other GPU proof runs, so the numbers are provisional until a quiet rerun:
+
+  | Measure | Run 1 (encoder running) | Run 2 (no encoder, other GPU load) |
+  |---|---|---|
+  | SWASH whole frame, GPU | 53.9 / 78.6 | 457 / 834 (contended; GPU rows void) |
+  | Whitewater GPU total (target p95 ≤ 2) | 2.60 / 3.61 | 6.23 / 19.0 |
+  | of it `surface_crossings` | 1.44 / 1.59 | 1.69 / 8.07 |
+  | of it the lifecycle's snapshot and output copies | 0.22 / 1.11 | 0.17 / 1.57 |
+  | `lifecycle_ms` (target p95 ≤ 3) | 3.17 / 42.2 | 3.58 / 12.5 |
+  | FLIP `simulation_ms`, whitewater on / off | 216 / 399 (off run invalid) | 217 / 531 against 235 / 473 |
+
+  The 42–55 ms FLIP whitewater cost does not reproduce here: the engine's whole step reads over 200 ms under this load and on minus off is lost in it (p50 +5 ms). Verdict: the GPU side misses 2 ms on the cleaner run, mostly `surface_crossings` walking 144 edges in every cell; `lifecycle_ms` sits at 3 ms at p50 on every run, so D11's escalation is raised with the lead.
 
 Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase above or in section 7.
 

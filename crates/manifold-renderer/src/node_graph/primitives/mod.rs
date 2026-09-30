@@ -410,6 +410,8 @@ mod swash_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_scene_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod swash_volume;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod swash_race_tests;
