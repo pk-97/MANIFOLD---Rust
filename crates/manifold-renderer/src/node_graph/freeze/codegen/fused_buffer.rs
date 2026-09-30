@@ -513,10 +513,6 @@ pub(super) fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<Generat
         .collect();
     let count_anchor = *array_ext.first().ok_or(CodegenError::BadInput)?;
     let anchor_expr = match &region.output_capacity {
-        // A lattice count reads params, and a wired param can change it per
-        // frame while `dst` stays sized for the params' own values: never
-        // past `dst` (the host refuses a longer lattice by name first).
-        Some(expr) if expr.reads_params() => format!("min({}, arrayLength(&dst))", expr.to_wgsl()),
         Some(expr) => expr.to_wgsl(),
         None if array_ext.len() == 1 => format!("arrayLength(&src_{count_anchor})"),
         None => {

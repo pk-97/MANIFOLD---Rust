@@ -49,29 +49,7 @@ impl PressureShape {
     pub fn planes(&self) -> usize {
         6 * self.sheets * self.n * self.n
     }
-
-    /// The active region's pad in cells: REGION_PAD_METRES plus the collar.
-    pub fn region_pad(&self) -> usize {
-        (REGION_PAD_METRES / self.cell_size()).round() as usize + 1
-    }
-
-    /// The active region's sides are multiples of this: n / REGION_RUNGS,
-    /// even.
-    pub fn region_step(&self) -> usize {
-        (self.n / REGION_RUNGS).next_multiple_of(2).max(2)
-    }
 }
-
-/// How far water can travel between the reading of its bounds and the solve
-/// that uses them, with margin: one 8³ block at 64³, more than 4× the fastest
-/// Dam Break water's travel per frame (docs/FFT_WATER_SOLVER_DESIGN.md P3c).
-pub(super) const REGION_PAD_METRES: f64 = 0.5;
-/// Sizes on the active region's ladder per side: few shapes, few FFT plans.
-pub(super) const REGION_RUNGS: usize = 8;
-/// Frames a larger active region is kept before it may shrink.
-pub(super) const REGION_HOLD: usize = 30;
-/// Frames old a bounds reading may be and still set the active region.
-pub(super) const REGION_MAX_AGE: usize = 3;
 
 /// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`) with its
 /// obstacle unwired: a 4 m cube over the floor, a 0.16 m pool, and the
@@ -253,24 +231,6 @@ struct Builder {
 
 type Port = (usize, &'static str);
 
-/// Where a box solve runs this frame: a window of the lattice, wired into
-/// every atom of its transform (docs/FFT_WATER_SOLVER_DESIGN.md P3c).
-#[derive(Clone, Copy)]
-struct Window {
-    origin: [Port; 3],
-    size: [Port; 3],
-}
-
-const LATTICE_PORTS: [&str; 3] = ["nodes_x", "nodes_y", "nodes_z"];
-const ORIGIN_PORTS: [&str; 3] = ["origin_x", "origin_y", "origin_z"];
-
-/// A fixed window: origin and size in cells per axis.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Clip {
-    pub origin: [usize; 3],
-    pub size: [usize; 3],
-}
-
 impl Builder {
     fn node(&mut self, name: &str, type_id: &str, params: Value) -> usize {
         let id = self.nodes.len();
@@ -298,25 +258,13 @@ impl Builder {
 
     /// Forward cosine transform, `middle`, inverse: the box solve (axes 3,
     /// middle cosine_poisson_divide) or the surface operator (axes 2, middle
-    /// cosine_surface_scale). With a window, the transform runs on it and
-    /// the result is 0 outside it; the arrays stay sized for `nodes`.
-    fn cosine_sandwich(
-        &mut self,
-        prefix: &str,
-        input: Port,
-        nodes: [usize; 3],
-        axes: usize,
-        middle: (&str, Value),
-        window: Option<Window>,
-    ) -> Port {
-        let reorder = |direction: usize| {
-            let mut extra = vec![("direction", int(direction)), ("axes", int(axes))];
-            if window.is_some() {
-                extra.extend([("outer_x", float(nodes[0] as f64)), ("outer_y", float(nodes[1] as f64)), ("outer_z", float(nodes[2] as f64))]);
-            }
-            Self::lattice(nodes, &extra)
-        };
-        let fwd = self.node(&format!("{prefix}_order"), "node.cosine_reorder", reorder(0));
+    /// cosine_surface_scale).
+    fn cosine_sandwich(&mut self, prefix: &str, input: Port, nodes: [usize; 3], axes: usize, middle: (&str, Value)) -> Port {
+        let fwd = self.node(
+            &format!("{prefix}_order"),
+            "node.cosine_reorder",
+            Self::lattice(nodes, &[("direction", int(0)), ("axes", int(axes))]),
+        );
         self.wire(input, fwd, "values");
         let fft = self.node(&format!("{prefix}_fft"), "node.fft_3d", Self::lattice(nodes, &[("axes", int(axes))]));
         self.wire((fwd, "out"), fft, "values");
@@ -331,37 +279,19 @@ impl Builder {
         let ifft =
             self.node(&format!("{prefix}_ifft"), "node.inverse_fft_3d", Self::lattice(nodes, &[("axes", int(axes))]));
         self.wire((half, "spectrum"), ifft, "spectrum");
-        let back = self.node(&format!("{prefix}_unorder"), "node.cosine_reorder", reorder(1));
+        let back = self.node(
+            &format!("{prefix}_unorder"),
+            "node.cosine_reorder",
+            Self::lattice(nodes, &[("direction", int(1)), ("axes", int(axes))]),
+        );
         self.wire((ifft, "values"), back, "values");
-        if let Some(window) = window {
-            for id in [fwd, fft, spectrum, scale, half, ifft, back] {
-                for (axis, port) in LATTICE_PORTS.into_iter().enumerate() {
-                    self.wire(window.size[axis], id, port);
-                }
-            }
-            for id in [fwd, back] {
-                for (axis, port) in ORIGIN_PORTS.into_iter().enumerate() {
-                    self.wire(window.origin[axis], id, port);
-                }
-            }
-        }
         (back, "out")
     }
 
-    fn box_solve(&mut self, prefix: &str, input: Port, s: PressureShape, window: Option<Window>) -> Port {
+    fn box_solve(&mut self, prefix: &str, input: Port, s: PressureShape) -> Port {
         let n = [s.n; 3];
         let divide = Self::lattice(n, &[("cell_size", float(s.cell_size()))]);
-        self.cosine_sandwich(prefix, input, n, 3, ("node.cosine_poisson_divide", divide), window)
-    }
-
-    /// A fixed window from constants.
-    fn clip(&mut self, clip: Clip) -> Window {
-        let mut constant = |name: &str, v: usize| -> Port {
-            (self.node(name, "node.value", json!({"value": float(v as f64)})), "out")
-        };
-        let origin = [0, 1, 2].map(|a| constant(&format!("clip_{}", ORIGIN_PORTS[a]), clip.origin[a]));
-        let size = [0, 1, 2].map(|a| constant(&format!("clip_{}", LATTICE_PORTS[a]), clip.size[a]));
-        Window { origin, size }
+        self.cosine_sandwich(prefix, input, n, 3, ("node.cosine_poisson_divide", divide))
     }
 
     /// The six-view surface helper applied to a collar vector.
@@ -385,7 +315,7 @@ impl Builder {
                 ("offset", float(2.0 / h)),
             ],
         );
-        let smoothed = self.cosine_sandwich(prefix, (sums, "out"), planes, 2, ("node.cosine_surface_scale", surface), None);
+        let smoothed = self.cosine_sandwich(prefix, (sums, "out"), planes, 2, ("node.cosine_surface_scale", surface));
         let spread = self.node(
             &format!("{prefix}_spread"),
             "node.chart_spread",
@@ -437,17 +367,11 @@ impl Builder {
 /// The whole solve for one step, from the water lattice and its divergence:
 /// setup, right-hand side, the GMRES region, and the pressure.
 pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
-    pressure_def_in(s, None)
-}
-
-/// [`pressure_def`] with every box solve on a fixed window.
-pub(super) fn pressure_def_in(s: PressureShape, clip: Option<Clip>) -> EffectGraphDef {
     let mut b = Builder::default();
     let cells = s.cells();
     let water = b.node("water", "test.value_source", json!({"max_capacity": capacity(cells)}));
     let f = b.node("f", "test.value_source", json!({"max_capacity": capacity(cells)}));
-    let window = clip.map(|clip| b.clip(clip));
-    let pressure = pressure(&mut b, s, (water, "out"), (f, "out"), window);
+    let pressure = pressure(&mut b, s, (water, "out"), (f, "out"));
     let sink = b.node("sink", "test.value_sink", json!({}));
     b.wire(pressure, sink, "values");
     let output = b.node("output", "system.final_output", json!({}));
@@ -484,11 +408,10 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let state = b.node("state", "node.liquid_feedback", json!({}));
     b.wire((fill, "particles"), state, "seed");
     let mut particles: Port = (state, "out");
-    let mut window = None;
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        particles = water_step(&mut b, scene, particles, (fill, "count"), density, &mut window);
+        particles = water_step(&mut b, scene, particles, (fill, "count"), density);
     }
     b.prefix.clear();
     b.wire(particles, state, "in");
@@ -590,7 +513,6 @@ pub(super) fn render_def(scene: WaterScene) -> EffectGraphDef {
     let extra = [
         json!({"fromNode": id_of(&def, "surface"), "fromPort": "vertices", "toNode": offset + id_of(&preset, "water_object"), "toPort": "vertices"}),
         json!({"fromNode": offset + id_of(&preset, "input"), "fromPort": "trigger_count", "toNode": id_of(&def, "state"), "toPort": "reset_trigger"}),
-        json!({"fromNode": offset + id_of(&preset, "input"), "fromPort": "trigger_count", "toNode": id_of(&def, "region"), "toPort": "reset_trigger"}),
     ];
     def["wires"].as_array_mut().expect("wires").extend(extra);
     def["name"] = json!("SWASH (GPU Surface)");
@@ -659,48 +581,10 @@ fn lattice_box(s: PressureShape, extra: &[(&str, Value)]) -> Value {
     params
 }
 
-/// The active region (P3c): where the first step's water was, read back a
-/// frame or more late, as the window every box solve of the frame runs on.
-fn active_region(b: &mut Builder, s: PressureShape, water: Port) -> Window {
-    let prefix = std::mem::take(&mut b.prefix);
-    let n = [s.n; 3];
-    let bounds = b.node("water_bounds", "node.occupied_bounds", Builder::lattice(n, &[]));
-    b.wire(water, bounds, "values");
-    let region = b.node(
-        "region",
-        "node.active_region",
-        Builder::lattice(
-            n,
-            &[
-                ("pad", int(s.region_pad())),
-                ("step", int(s.region_step())),
-                ("hold", int(REGION_HOLD)),
-                ("max_age", int(REGION_MAX_AGE)),
-            ],
-        ),
-    );
-    for port in ["min_x", "min_y", "min_z", "end_x", "end_y", "end_z", "count", "age"] {
-        b.wire((bounds, port), region, port);
-    }
-    b.prefix = prefix;
-    Window {
-        origin: [(region, "origin_x"), (region, "origin_y"), (region, "origin_z")],
-        size: [(region, "size_x"), (region, "size_y"), (region, "size_z")],
-    }
-}
-
 /// One water step (section 3): sort, the water lattice, particles to faces,
 /// gravity, the pressure solve, the projection, the density solve on the
-/// same collar when `density`, faces back to particles. The first step also
-/// builds the frame's active region.
-fn water_step(
-    b: &mut Builder,
-    scene: WaterScene,
-    particles: Port,
-    count: Port,
-    density: bool,
-    window: &mut Option<Window>,
-) -> Port {
+/// same collar when `density`, faces back to particles.
+fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port, density: bool) -> Port {
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -724,7 +608,6 @@ fn water_step(
     let water = b.node("water", "node.cells_with_particles", Builder::lattice(n, &[]));
     b.wire((sort, "cell_ranges"), water, "cell_ranges");
     let water = (water, "out");
-    let window = *window.get_or_insert_with(|| active_region(b, s, water));
     let gather = b.node("faces", "node.particles_to_faces", lattice_box(s, &[]));
     b.wire((sort, "sorted"), gather, "sorted");
     b.wire((sort, "cell_ranges"), gather, "cell_ranges");
@@ -735,7 +618,7 @@ fn water_step(
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
     let setup = collar(b, s, water);
-    let p = solve(b, s, &setup, water, (divergence, "out"), Some(window));
+    let p = solve(b, s, &setup, water, (divergence, "out"));
     let projected = subtract(b, "project", (forced, "out"), p, water, s);
     let new = extend(b, "new", projected, n);
     // The density solve moves particles apart through `advect` and is never
@@ -749,7 +632,7 @@ fn water_step(
             Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
         );
         b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
-        let q = solve(b, PressureShape { passes: scene.density_passes, ..s }, &setup, water, (crowding, "out"), Some(window));
+        let q = solve(b, PressureShape { passes: scene.density_passes, ..s }, &setup, water, (crowding, "out"));
         let spread = subtract(b, "project", projected, q, water, s);
         let advect = extend(b, "advect", spread, n);
         b.prefix = outer;
@@ -792,9 +675,9 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
 
 /// The solve's nodes, from the water lattice and its divergence f; returns
 /// the pressure.
-fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port, window: Option<Window>) -> Port {
+fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
     let setup = collar(b, s, water);
-    solve(b, s, &setup, water, f, window)
+    solve(b, s, &setup, water, f)
 }
 
 /// What every solve on one water lattice shares: the collar's running total,
@@ -836,15 +719,12 @@ fn collar(b: &mut Builder, s: PressureShape, water: Port) -> Collar {
 }
 
 /// One solve on a set-up collar, for right-hand side f; returns the pressure.
-/// Every box solve runs on `window` when there is one: the answer on the
-/// water is the same for any window that holds the water and its collar
-/// (docs/FFT_WATER_SOLVER_DESIGN.md P3c), only the pass count moves.
-fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port, window: Option<Window>) -> Port {
+fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port) -> Port {
     let cells = s.cells();
     let Collar { total, entries, charts } = *setup;
 
     // Right-hand side b = (G f at the collar, Σf / n³), β = |b|, start = b / β.
-    let gf = b.box_solve("rhs_box", f, s, window);
+    let gf = b.box_solve("rhs_box", f, s);
     let sum_f = b.dots("sum_f", f, None, cells, 1, false);
     let rhs = b.node("rhs", "node.collar_gather", json!({}));
     b.wire(entries, rhs, "entries");
@@ -870,7 +750,7 @@ fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port
     let source = b.node("pass_source", "node.collar_source", json!({}));
     b.wire(total, source, "total");
     b.wire(z, source, "value");
-    let gz = b.box_solve("pass_box", (source, "out"), s, window);
+    let gz = b.box_solve("pass_box", (source, "out"), s);
     let sum_z = b.dots("sum_z", z, None, s.capacity, 1, false);
     let w = b.node("w", "node.collar_gather", json!({}));
     b.wire(entries, w, "entries");
@@ -907,7 +787,7 @@ fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port
     let final_source = b.node("final_source", "node.collar_source", json!({}));
     b.wire(total, final_source, "total");
     b.wire(lambda, final_source, "value");
-    let correction = b.box_solve("final_box", (final_source, "out"), s, window);
+    let correction = b.box_solve("final_box", (final_source, "out"), s);
     let pressure = b.node("pressure", "node.collar_pressure", json!({}));
     b.wire(water, pressure, "water");
     b.wire(gf, pressure, "solved");

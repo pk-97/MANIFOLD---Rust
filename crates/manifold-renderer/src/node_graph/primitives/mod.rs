@@ -335,8 +335,6 @@ mod cosine_half_spectrum;
 mod cosine_poisson_divide;
 mod cosine_surface_scale;
 mod fft_3d;
-mod occupied_bounds;
-mod active_region;
 mod dot_products;
 mod combine_rows;
 mod divide_by_value;

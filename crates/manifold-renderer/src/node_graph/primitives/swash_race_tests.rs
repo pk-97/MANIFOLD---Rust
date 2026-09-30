@@ -331,24 +331,10 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut collar_max, mut blocks_max, mut water_max) = (0u32, 0.0_f64, 0.0_f64);
     let (mut raw, mut oracle, mut packed) = (Vec::new(), None, Vec::new());
-    // The box solves' window (P3c) and the frames that built FFT plans. The
-    // plan cache is the device's, so a later run in the process reuses plans.
-    let (mut plans, mut misses, mut shapes, mut share_sum) = (run.fft_plans(), Vec::new(), Vec::new(), 0.0);
     for frame in 0..frames {
         let (g, c) = run.frame();
         record.gpu.push(g);
         record.cpu.push(c);
-        let region = run.region();
-        let share = region.size.iter().product::<usize>() as f64 / n.pow(3) as f64;
-        share_sum += share;
-        if !shapes.contains(&region.size) {
-            shapes.push(region.size);
-        }
-        let now = run.fft_plans();
-        if now > plans {
-            misses.push((frame, now - plans, (c * 10.0).round() / 10.0));
-        }
-        plans = now;
         for step in 0..scene.steps {
             let collar = run.collar(step);
             collar_max = collar_max.max(collar);
@@ -398,11 +384,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
                 println!("{label} frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%", 100.0 * v, 100.0 * (raw[frame] / raw[0] - 1.0));
             }
             println!("{label} frame {frame:3}: particles past rest {:.1}%, missing inside {:.1}%", 100.0 * pack.crowded, 100.0 * pack.hollow);
-            println!("{label} frame {frame:3}: box solve on {:?} at {:?}, {:.0}% of the box", region.size, region.origin, 100.0 * share);
         }
     }
-    println!("{label}: box solve on {:.0}% of the box on average, shapes {shapes:?}", 100.0 * share_sum / frames as f64);
-    println!("{label}: FFT plan misses (frame, plans, CPU encode ms) {misses:?}");
     report_packing(&run.particles(), n, h);
     report_water(label, &packed);
     println!("{label}: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&record.gpu), median(&record.cpu));
