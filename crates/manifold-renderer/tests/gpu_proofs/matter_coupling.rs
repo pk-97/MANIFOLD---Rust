@@ -657,10 +657,20 @@ fn matter_coupling_export_frame_rate_independent() {
     assert!(contact_frames >= 30, "the box touched the water in only {contact_frames} of 60 frames");
 }
 
+/// How far body plus liquid momentum, less gravity's impulse on the body, may
+/// drift over the 8 ticks, as a fraction of the momentum exchanged. The run is
+/// deterministic (integer atomics, hashed rounding, fixed reduction trees), so
+/// only rounding remains: it measures at most 0.08% (ratio 10). A missing
+/// exchange term shows as a share of the exchange; the smallest measured, the
+/// uncounted D29 push-out at ratio 0.1, was 4.8% (BUG-n97i (coupled MPM loses
+/// momentum at the collider push-out)).
+const MOMENTUM_BALANCE: f64 = 0.01;
+
 /// A box falls onto a still, weightless pool at 0.1, 1 and 10 times the
-/// water's density: from first contact, the body's energy never rises above
-/// 1.01 × the initial total (body plus liquid) over 8 ticks. The same runs
-/// report the momentum the exchange loses.
+/// water's density: from first contact, over 8 ticks, neither the body's
+/// energy nor body plus liquid rises above 1.01 × the initial total, and body
+/// plus liquid momentum less gravity's impulse holds within
+/// [`MOMENTUM_BALANCE`] of the momentum exchanged.
 #[test]
 fn matter_coupling_energy_light_body() {
     for ratio in [0.1f32, 1.0, 10.0] {
@@ -681,14 +691,17 @@ fn matter_coupling_energy_light_body() {
         let mut run = Run::new(&scene, false);
         // Fall until the bottom face is within a cell of the surface.
         let mut before_contact: Option<(MatterBody, MatterTickStats)> = None;
+        let mut liquid: Option<MatterTickStats> = None;
         for _ in 0..60 {
             run.step();
             let body = run.body();
+            let stats = run.stats();
             let bottom = f64::from(body.position_inv_mass[1]) - 0.5 * f64::from(edge);
             if bottom - f64::from(scene.fill) <= dx {
+                liquid = Some(stats);
                 break;
             }
-            before_contact = Some((body, run.stats()));
+            before_contact = Some((body, stats));
         }
         let (start_body, start_liquid) = before_contact.expect("the box starts above the pool");
         let y_ref = f64::from(start_body.position_inv_mass[1]);
@@ -696,8 +709,10 @@ fn matter_coupling_energy_light_body() {
         let momentum = |body: &MatterBody, liquid: &MatterTickStats| -> [f64; 3] {
             std::array::from_fn(|i| mass * f64::from(body.linear_velocity[i]) + f64::from(liquid.momentum[i]))
         };
-        // Liquid stats are at the tick's end; the next frame's row is the body then.
-        let mut liquid = start_liquid;
+        // Frame n's body row is Box3D at the end of the tick frame n−1's
+        // liquid ran (section 5 (Coupling protocol)), so a body row pairs with
+        // the previous frame's stats, the contact frame's included.
+        let mut liquid = liquid.expect("the box reaches the pool");
         let mut total_start: Option<[f64; 3]> = None;
         let (mut worst, mut worst_total) = (f64::MIN, f64::MIN);
         let (mut transferred, mut residual) = (0.0f64, [0.0f64; 3]);
@@ -729,6 +744,13 @@ fn matter_coupling_energy_light_body() {
         );
         assert!(initial > 0.0);
         assert!(worst <= 1.01, "ratio {ratio}: body energy reached {worst:.4}× the initial total");
+        assert!(worst_total <= 1.01, "ratio {ratio}: body plus liquid energy reached {worst_total:.4}× the initial total");
+        assert!(transferred > 0.5, "ratio {ratio}: the box barely touched the pool ({transferred:.3} kg·m/s)");
+        assert!(
+            residual_norm <= MOMENTUM_BALANCE * transferred,
+            "ratio {ratio}: body plus liquid momentum drifted {residual:?} (|R| {residual_norm:.4e}) against \
+             {transferred:.4e} kg·m/s exchanged"
+        );
     }
 }
 

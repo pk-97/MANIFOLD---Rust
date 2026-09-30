@@ -1500,6 +1500,15 @@ fn classify_buffer_node(
 ) -> NodeClass {
     let arr_in = n.inputs().iter().filter(|i| matches!(i.ty, PortType::Array(_))).count();
     let arr_out = n.outputs().iter().filter(|o| matches!(o.ty, PortType::Array(_))).count();
+    // Any atomic output — a scatter's sole output, or a side output next to a
+    // coincident one (BUG-agfh, Codegen: buffer atom with several outputs, one
+    // atomic) — is a cut. The body `atomicAdd`s at data-dependent cells, and the
+    // accumulator only holds its value after the whole dispatch, so nothing
+    // downstream can share the kernel. The standalone kernel still comes from
+    // `wgsl_body`; the atom is excused from fusion, not from codegen.
+    if !n.atomic_outputs().is_empty() {
+        return NodeClass::Boundary;
+    }
     // v1 codegen shape: ≥1 Array input, exactly one Array output (fan-out buffer
     // regions are a follow-on).
     if arr_in < 1 || arr_out != 1 {
@@ -1564,11 +1573,6 @@ fn classify_buffer_node(
     // (`derived_uniform_registry::has_recompute`). Proven by
     // `fluidsim_buffer_fusion_renders_like_unfused`.
     //
-    // Atomic-accumulator outputs (scatter) write via `atomicAdd`, not a coincident
-    // element write — boundary.
-    if !n.atomic_outputs().is_empty() {
-        return NodeClass::Boundary;
-    }
     // Wire gate: an Array input wire is a region edge (threads or stays external);
     // a texture input wire is a gathered external (bound + sampled by the body);
     // a scalar-param wire is re-anchored onto the fused port-shadow; any other

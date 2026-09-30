@@ -17,9 +17,10 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 
-/// `reaction_in` closes node.matter_body_reaction into the region, so the
-/// coupling sum runs every substep; the words themselves live in the domain's
-/// reaction slot, which the domain reads back.
+/// `reaction_in` closes the reaction chain (node.matter_body_reaction, then
+/// node.grid_to_matter) into the region, so the coupling sum runs every
+/// substep; the words themselves live in the domain's reaction slot, which
+/// the domain reads back.
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts { capture: "stats_in", output: "stats" },
     SubstepResultPorts { capture: "reaction_in", output: "reaction" },

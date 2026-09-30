@@ -191,7 +191,8 @@ pub fn body_pose_at(body: &MatterBody, t: f32) -> ([f32; 3], [f32; 4]) {
 pub const ACCUM_WORDS_PER_NODE: u32 = 4;
 
 /// Reaction words per coupled body, written by `node.matter_body_reaction`
-/// and read by `node.matter_move_bodies` and the domain (section 5). Each is
+/// (grid projection) and `node.grid_to_matter` (point push-out, D30), and
+/// read by `node.matter_move_bodies` and the domain (section 5). Each is
 /// value·2^24/U with U the tick's momentum unit:
 /// [0..3) Σ Δv, the body's velocity change (m/s);
 /// [3..6) Σ (s/n)·Δv, s the substep, n the substeps per tick;
