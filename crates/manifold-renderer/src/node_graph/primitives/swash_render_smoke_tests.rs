@@ -189,6 +189,9 @@ struct FrameResult {
     stages: Option<Vec<(f64, f64)>>,
     profiled_total: f64,
     unattributed_spans: usize,
+    /// Dispatches the sampler couldn't time. Above zero the split is wrong:
+    /// the timed spans stretch to the whole frame and the rest read as zero.
+    untimed: usize,
 }
 
 impl Smoke {
@@ -211,7 +214,9 @@ impl Smoke {
         )
         .expect("render def builds on the device");
         let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "swash-smoke");
-        let sampler = device.create_timestamp_sampler(32_768).expect("timestamp sampling");
+        // A frame here runs about 2,700 dispatches; one sample buffer holds
+        // 2,048 spans, so this chains four.
+        let sampler = device.create_timestamp_sampler(8_192).expect("timestamp sampling");
         let name_of = |id: NodeInstanceId| {
             runtime.graph.nodes().find(|n| n.id == id).map_or_else(String::new, |n| n.node_id.as_str().to_string())
         };
@@ -331,11 +336,18 @@ impl Smoke {
                     }
                 }
             }
-            unattributed += result.overflow + result.invalid;
             stages = Some(split);
         }
         self.runtime.set_profiling(false);
-        FrameResult { gpu_ms: result.total_ms, cpu_ms, status, stages, profiled_total: result.total_ms, unattributed_spans: unattributed }
+        FrameResult {
+            gpu_ms: result.total_ms,
+            cpu_ms,
+            status,
+            stages,
+            profiled_total: result.total_ms,
+            unattributed_spans: unattributed,
+            untimed: result.overflow + result.invalid,
+        }
     }
 
     fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
@@ -507,7 +519,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let mut cpu: Vec<(usize, f64)> = Vec::new();
     let mut stage_gpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let mut stage_cpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
-    let (mut profiled_totals, mut unattributed) = (Vec::new(), 0usize);
+    let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
     let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
@@ -529,6 +541,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
             }
             profiled_totals.push(r.profiled_total);
             unattributed += r.unattributed_spans;
+            untimed += r.untimed;
         } else {
             gpu.push((frame, r.gpu_ms));
             cpu.push((frame, r.cpu_ms));
@@ -661,9 +674,15 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let unprofiled_median = percentile(&all_g, 0.5);
     let scale = unprofiled_median / profiled_median;
     println!(
-        "SMOKE {tag} stage split over {} timestamped frames (median {profiled_median:.2} ms timestamped, {unprofiled_median:.2} ms plain; {unattributed} unattributed spans):",
+        "SMOKE {tag} stage split over {} timestamped frames (median {profiled_median:.2} ms timestamped, {unprofiled_median:.2} ms plain; {unattributed} unattributed spans, {untimed} untimed dispatches):",
         profiled_totals.len()
     );
+    if untimed > 0 {
+        smoke.critical.push(format!(
+            "stage split: {untimed} dispatches untimed (the sampler holds {} spans a frame), so the split is scaled wrong",
+            smoke.sampler.max_spans()
+        ));
+    }
     println!("SMOKE {tag}   {:<40} {:>9} {:>9} {:>9}", "stage", "GPU ms", "scaled", "CPU ms");
     let mut stage_rows = String::from("stage,gpu_ms_timestamped,gpu_ms_scaled,cpu_ms\n");
     for (i, name) in STAGES.iter().enumerate() {

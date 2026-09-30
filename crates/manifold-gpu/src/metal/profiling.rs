@@ -52,13 +52,16 @@ impl GpuWorkKind {
     }
 }
 
-/// A reusable timestamp counter sample buffer. Cheap to clone (retains the
-/// underlying Metal object); one sampler can be re-attached to a fresh
-/// encoder every profiled frame.
+/// A reusable chain of timestamp counter sample buffers. Cheap to clone
+/// (retains the underlying Metal objects); one sampler can be re-attached to
+/// a fresh encoder every profiled frame. Metal caps one buffer's sample
+/// count, so capacity past the cap comes from more buffers, filled in order.
 #[derive(Clone)]
 pub struct GpuTimestampSampler {
-    pub(crate) buffer: Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>,
-    /// Capacity in *samples* (two per span).
+    pub(crate) buffers: Vec<Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>>,
+    /// Samples per buffer. Even, so a span's pair never straddles two buffers.
+    pub(crate) per_buffer: usize,
+    /// Capacity in *samples* across every buffer (two per span).
     pub(crate) capacity: usize,
 }
 
@@ -68,6 +71,11 @@ impl GpuTimestampSampler {
     /// Maximum number of spans (encoder start/end pairs) one frame can record.
     pub fn max_spans(&self) -> usize {
         self.capacity / 2
+    }
+
+    /// The buffer holding frame-wide sample `index`, and the index inside it.
+    fn slot(&self, index: usize) -> (&Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>, usize) {
+        (&self.buffers[index / self.per_buffer], index % self.per_buffer)
     }
 }
 
@@ -93,7 +101,9 @@ pub struct GpuFrameProfile {
     /// Whole-command-buffer GPU time (`GPUEndTime - GPUStartTime`), ms.
     pub total_ms: f64,
     pub spans: Vec<GpuProfiledSpan>,
-    /// Dispatches that ran unprofiled because the sample buffer filled up.
+    /// Dispatches that ran unprofiled because the sampler filled up. Above
+    /// zero, span times are scaled wrong: the timed spans are stretched to
+    /// the whole command buffer's time and the untimed tail reads as zero.
     pub overflow: usize,
     /// Spans whose samples resolved to `COUNTER_ERROR` (dropped).
     pub invalid: usize,
@@ -129,8 +139,9 @@ pub(crate) struct ProfileState {
 }
 
 impl ProfileState {
-    /// Reserve the next span's sample-index pair, or `None` when full.
-    pub(crate) fn reserve(&mut self, label: &str, kind: GpuWorkKind) -> Option<(usize, usize)> {
+    /// Reserve the next span's sample buffer and its start/end indices inside
+    /// that buffer, or `None` when every buffer is full.
+    pub(crate) fn reserve(&mut self, label: &str, kind: GpuWorkKind) -> Option<SpanSlot> {
         let idx = self.spans.len() * 2;
         if idx + 1 >= self.sampler.capacity {
             self.overflow += 1;
@@ -141,9 +152,13 @@ impl ProfileState {
             label: label.to_string(),
             kind,
         });
-        Some((idx, idx + 1))
+        let (buffer, start) = self.sampler.slot(idx);
+        Some((buffer.clone(), start, start + 1))
     }
 }
+
+/// A reserved span's sample buffer and its start/end sample indices.
+pub(crate) type SpanSlot = (Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>, usize, usize);
 
 #[repr(C)]
 struct MachTimebaseInfo {
@@ -192,35 +207,66 @@ pub(crate) fn timestamp_counter_set(
         .find(|set| set.name().isEqualToString(want))
 }
 
-/// Create a shared-storage timestamp sample buffer with capacity for
-/// `max_spans` start/end pairs. Halves the request on failure (device caps
-/// vary) down to a floor of 64 spans.
+/// Create shared-storage timestamp sample buffers with capacity for
+/// `max_spans` start/end pairs. One buffer's size halves on failure (device
+/// caps vary) down to a floor of 64 spans; more buffers of that size make up
+/// the rest. A later buffer failing leaves a smaller sampler, which shows as
+/// `overflow` on frames that outgrow it. Measured on M4 Max: one buffer holds
+/// 2,048 spans and a process holds 32 buffers, so ask for what a frame needs.
 pub(crate) fn create_sampler(
     device: &ProtocolObject<dyn MTLDevice>,
     max_spans: usize,
 ) -> Option<GpuTimestampSampler> {
+    create_sampler_capped(device, max_spans, usize::MAX)
+}
+
+/// [`create_sampler`] with one buffer held to at most `buffer_spans` spans,
+/// so a test can force the chain on any device.
+pub(crate) fn create_sampler_capped(
+    device: &ProtocolObject<dyn MTLDevice>,
+    max_spans: usize,
+    buffer_spans: usize,
+) -> Option<GpuTimestampSampler> {
     let counter_set = timestamp_counter_set(device)?;
-    let mut spans = max_spans.max(64);
-    loop {
+    let make = |samples: usize| {
         let desc = MTLCounterSampleBufferDescriptor::new();
         desc.setCounterSet(Some(&counter_set));
         desc.setStorageMode(MTLStorageMode::Shared);
-        unsafe { desc.setSampleCount(spans * 2) };
+        unsafe { desc.setSampleCount(samples) };
         desc.setLabel(&NSString::from_str("manifold-dispatch-profiler"));
-        match device.newCounterSampleBufferWithDescriptor_error(&desc) {
-            Ok(buffer) => {
-                return Some(GpuTimestampSampler {
-                    buffer,
-                    capacity: spans * 2,
-                });
-            }
+        device.newCounterSampleBufferWithDescriptor_error(&desc)
+    };
+    let wanted = max_spans.max(64);
+    let mut spans = wanted.min(buffer_spans.max(64));
+    let first = loop {
+        match make(spans * 2) {
+            Ok(buffer) => break buffer,
             Err(_) if spans > 64 => spans /= 2,
             Err(e) => {
                 log::warn!("counter sample buffer creation failed: {e}");
                 return None;
             }
         }
+    };
+    let mut buffers = vec![first];
+    while buffers.len() * spans < wanted {
+        match make(spans * 2) {
+            Ok(buffer) => buffers.push(buffer),
+            Err(e) => {
+                log::warn!(
+                    "counter sample buffer {} of {spans} spans failed ({e}); profiling holds {} spans",
+                    buffers.len() + 1,
+                    buffers.len() * spans
+                );
+                break;
+            }
+        }
     }
+    Some(GpuTimestampSampler {
+        capacity: buffers.len() * spans * 2,
+        per_buffer: spans * 2,
+        buffers,
+    })
 }
 
 /// Resolve a frame's pending spans into wall-clock milliseconds.
@@ -244,29 +290,29 @@ pub(crate) fn resolve(
         return profile;
     }
 
-    let Some(data) = (unsafe {
-        state
-            .sampler
-            .buffer
-            .resolveCounterRange(NSRange::new(0, span_count * 2))
-    }) else {
-        profile.invalid = span_count;
-        return profile;
-    };
-    let bytes = unsafe { data.as_bytes_unchecked() };
-    let expect = span_count * 2 * std::mem::size_of::<MTLCounterResultTimestamp>();
-    if bytes.len() < expect {
-        profile.invalid = span_count;
-        return profile;
+    let used = span_count * 2;
+    let mut stamps: Vec<u64> = Vec::with_capacity(used);
+    for buffer in &state.sampler.buffers {
+        let count = (used - stamps.len()).min(state.sampler.per_buffer);
+        if count == 0 {
+            break;
+        }
+        let Some(data) = (unsafe { buffer.resolveCounterRange(NSRange::new(0, count)) }) else {
+            profile.invalid = span_count;
+            return profile;
+        };
+        let bytes = unsafe { data.as_bytes_unchecked() };
+        if bytes.len() < count * std::mem::size_of::<MTLCounterResultTimestamp>() {
+            profile.invalid = span_count;
+            return profile;
+        }
+        // Safety: MTLCounterResultTimestamp is repr(C) { u64 }; the resolved
+        // blob is `count` consecutive entries.
+        let resolved: &[MTLCounterResultTimestamp] = unsafe {
+            std::slice::from_raw_parts(bytes.as_ptr().cast::<MTLCounterResultTimestamp>(), count)
+        };
+        stamps.extend(resolved.iter().map(|s| s.timestamp));
     }
-    // Safety: MTLCounterResultTimestamp is repr(C) { u64 }; the resolved blob
-    // is span_count*2 consecutive entries.
-    let stamps: &[MTLCounterResultTimestamp] = unsafe {
-        std::slice::from_raw_parts(
-            bytes.as_ptr().cast::<MTLCounterResultTimestamp>(),
-            span_count * 2,
-        )
-    };
 
     // GPU-tick → ms conversion. The Apple-silicon GPU timestamp clock can
     // PAUSE while the GPU is idle, so calibrating against a CPU wall-clock
@@ -281,12 +327,7 @@ pub(crate) fn resolve(
     let (cpu2, gpu2) = calib_end;
     let tick_ns = mach_tick_nanos();
 
-    let valid = || {
-        stamps
-            .iter()
-            .map(|s| s.timestamp)
-            .filter(|&t| t != COUNTER_ERROR && t != 0)
-    };
+    let valid = || stamps.iter().copied().filter(|&t| t != COUNTER_ERROR && t != 0);
     let origin = valid().min().unwrap_or(0);
     let last = valid().max().unwrap_or(0);
     let ns_per_gpu_tick = if last > origin && total_ms > 0.0 {
@@ -298,8 +339,8 @@ pub(crate) fn resolve(
     };
 
     for (i, span) in state.spans.iter().enumerate() {
-        let start = stamps[i * 2].timestamp;
-        let end = stamps[i * 2 + 1].timestamp;
+        let start = stamps[i * 2];
+        let end = stamps[i * 2 + 1];
         if start == COUNTER_ERROR || end == COUNTER_ERROR || end < start {
             profile.invalid += 1;
             continue;
