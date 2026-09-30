@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use super::prefix_scan::PrefixScan;
+use super::prefix_scan::{INTO_SPAN, PrefixScan};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -112,7 +112,7 @@ impl Primitive for RunningTotal {
         };
         {
             let gpu = ctx.gpu_encoder();
-            self.scan.prepare(gpu.device);
+            self.scan.prepare_into(gpu.device);
             if self.read_total.is_none() {
                 self.read_total = Some(gpu.device.create_compute_pipeline(
                     include_str!("shaders/running_total.wgsl"),
@@ -149,28 +149,19 @@ impl Primitive for RunningTotal {
         let whole = (input.size / 4).min(out.size / 4);
         let n = requested.map_or(whole, |count| (count.max(0.0) as u64).min(whole)) as usize;
         let gpu = ctx.gpu_encoder();
-        let values = match self.scan.buffer(gpu.device, n) {
-            Ok(buffer) => buffer.clone(),
-            Err(error) => {
-                ctx.error(format!("Running Total: {error}"));
-                return;
-            }
-        };
-        let bytes = (n * 4) as u64;
+        // The storage holds only the block totals; the scan writes `out`.
+        if let Err(error) = self.scan.buffer(gpu.device, n.div_ceil(INTO_SPAN)) {
+            ctx.error(format!("Running Total: {error}"));
+            return;
+        }
         let encoder = &mut *gpu.native_enc;
-        if bytes > 0 {
-            encoder.copy_buffer_to_buffer(input, &values, bytes);
-        }
-        self.scan.encode(encoder, n);
-        if bytes > 0 {
-            encoder.copy_buffer_to_buffer(&values, out, bytes);
-        }
+        self.scan.encode_into(encoder, input, out, n);
         let uniforms = TotalParams { n: n as u32, per_item, _pad: [0; 2] };
         encoder.dispatch_compute(
             self.read_total.as_ref().expect("total pipeline created"),
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &values, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: out, offset: 0 },
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: self.total_cell.as_ref().expect("total cell allocated"),

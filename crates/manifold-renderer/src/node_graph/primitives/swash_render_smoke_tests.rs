@@ -198,6 +198,14 @@ struct FrameResult {
     /// their own ms, every dispatch's own ms, and the gaps between them (the
     /// untimed MPSGraph FFTs plus idle time).
     census: Option<[f64; 5]>,
+    /// On a profiled frame: surface and render stage GPU ms by dispatch
+    /// label, so a lever is judged on its own kernels.
+    detail: Vec<(String, f64)>,
+}
+
+/// Stages the per-dispatch detail table breaks down.
+fn detailed(stage: &str) -> bool {
+    stage.starts_with("surface") || stage.starts_with("scene") || stage.starts_with("tone map")
 }
 
 /// A dispatch this short is mostly launch cost, not work: what fusing it
@@ -323,6 +331,7 @@ impl Smoke {
         let mut stages = None;
         let mut unattributed = 0;
         let mut census = None;
+        let mut detail: Vec<(String, f64)> = Vec::new();
         if profile {
             let steps = self.runtime.take_step_profiles();
             let mut split = vec![(0.0, 0.0); STAGES.len()];
@@ -349,7 +358,21 @@ impl Smoke {
                 counts[3] += span.millis;
                 counts[4] += gap;
                 match step_of(&span.tag) {
-                    Some(idx) if idx < self.step_names.len() => split[index(&self.step_names[idx])].0 += charged,
+                    Some(idx) if idx < self.step_names.len() => {
+                        let name = &self.step_names[idx];
+                        split[index(name)].0 += charged;
+                        if detailed(stage(name)) {
+                            let key = format!("{} | {name} | {}", stage(name), span.label);
+                            match detail.iter_mut().find(|(k, _)| *k == key) {
+                                Some(entry) => entry.1 += charged,
+                                None => detail.push((key, charged)),
+                            }
+                            // `SWASH_SMOKE_SPANS` prints each long span, to tell repeats apart.
+                            if span.millis > 0.05 && std::env::var_os("SWASH_SMOKE_SPANS").is_some() {
+                                println!("SPAN frame {} | {name} | {} | {:.3} ms at {:.3} ms", self.frame_count, span.label, span.millis, span.start_ms);
+                            }
+                        }
+                    }
                     _ => {
                         unattributed += 1;
                         split[STAGES.len() - 1].0 += charged;
@@ -369,6 +392,7 @@ impl Smoke {
             unattributed_spans: unattributed,
             untimed: result.overflow + result.invalid,
             census,
+            detail,
         }
     }
 
@@ -543,6 +567,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let mut stage_cpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
     let mut census: [Vec<f64>; 5] = Default::default();
+    let mut detail: Vec<(String, Vec<f64>)> = Vec::new();
     let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
@@ -570,6 +595,12 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
             if let Some(counts) = r.census {
                 for (column, value) in census.iter_mut().zip(counts) {
                     column.push(value);
+                }
+            }
+            for (key, ms) in r.detail {
+                match detail.iter_mut().find(|(k, _)| *k == key) {
+                    Some(entry) => entry.1.push(ms),
+                    None => detail.push((key, vec![ms])),
                 }
             }
         } else {
@@ -722,6 +753,12 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         stage_rows.push_str(&format!("{name},{g:.4},{:.4},{c:.4}\n", g * scale));
     }
     std::fs::write(dir.join(format!("{tag}_stages.csv")), stage_rows).expect("stage csv");
+    println!("SMOKE {tag} surface and render by dispatch (median timestamped GPU ms; stage | node | dispatch):");
+    let mut rows: Vec<(f64, &str)> = detail.iter().map(|(key, ms)| (percentile(ms, 0.5), key.as_str())).collect();
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (ms, key) in rows {
+        println!("SMOKE {tag}   {ms:8.3}  {key}");
+    }
     let [dispatches, small, small_ms, own_ms, gap_ms] = census.map(|column| percentile(&column, 0.5));
     println!(
         "SMOKE {tag} dispatches per timestamped frame: {dispatches:.0} timed, {small:.0} under {} µs ({small_ms:.2} ms of their own); every dispatch's own time {own_ms:.2} ms, gaps between them {gap_ms:.2} ms",
@@ -1116,6 +1153,202 @@ fn swash_race_clips_64() {
         let row: Vec<PathBuf> = ["swash", "engine", "mpm"].iter().map(|c| dir.join(format!("race_{c}_64_frame{frame:04}.png"))).collect();
         contact_sheet(&row, 3, 0.5, &dir.join(format!("race_64_frame{frame:04}.png")));
     }
+}
+
+/// GPU ms of whatever `encode` puts in one command buffer, timed per dispatch.
+fn timed(smoke: &Smoke, encode: impl FnOnce(&mut manifold_gpu::GpuEncoder)) -> f64 {
+    let mut enc = smoke.device.create_encoder("surface-kernel-ab");
+    enc.enable_dispatch_profiling(smoke.sampler.clone(), &smoke.device);
+    encode(&mut enc);
+    let result = enc.commit_and_wait_profiled(&smoke.device);
+    assert_eq!(result.failed_command_buffers, 0);
+    result.spans.iter().map(|s| s.millis).sum()
+}
+
+fn shared_copy<T: bytemuck::Pod>(device: &manifold_gpu::GpuDevice, values: &[T], len: usize) -> manifold_gpu::GpuBuffer {
+    let buffer = device.create_buffer_shared((len.max(1) * std::mem::size_of::<T>()) as u64);
+    buffer.zero_fill();
+    // SAFETY: a fresh shared buffer of at least `values` bytes; nothing in flight.
+    unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+    buffer
+}
+
+/// (median, p10, p90) of GPU ms.
+fn spread(ms: &[f64]) -> (f64, f64, f64) {
+    (percentile(ms, 0.5), percentile(ms, 0.1), percentile(ms, 0.9))
+}
+
+/// Surface kernels old against new on one Dam Break frame at 64 (frame 90),
+/// dispatched in alternation so a shared GPU loads both alike, each checked
+/// against the other value for value. `SURFACE_AB_OLD_VOLUME` names the old
+/// `particle_volume` body (WGSL); the old scan is the in-place scan between
+/// two copies. No-op unset.
+#[test]
+fn swash_surface_kernels_ab_64() {
+    use super::particle_volume::ParticleVolume;
+    use super::prefix_scan::{INTO_SPAN, PrefixScan};
+    use crate::node_graph::fluid_particles::{CellRange, FluidBlob};
+    use crate::node_graph::freeze::codegen;
+    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_gpu::GpuBinding;
+
+    let Some(old_body) = std::env::var_os("SURFACE_AB_OLD_VOLUME").map(|path| std::fs::read_to_string(path).expect("old volume body")) else {
+        return;
+    };
+    let rounds: usize = std::env::var("SURFACE_AB_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    let scene = WaterScene::dam_break(64);
+    let mut smoke = Smoke::new(scene);
+    let names = ["liquid_sort", "liquid_blobs", "liquid_volume", "liquid_count"].map(|suffix| smoke.surface_name(suffix));
+    let ids: Vec<NodeId> = names.iter().map(|name| NodeId::from(name.as_str())).collect();
+    for frame in 1..=90 {
+        if frame == 90 {
+            smoke.runtime.set_dump_visible(None, &ids);
+        }
+        smoke.frame(1.0 / 60.0, false);
+    }
+    println!("AB load average before: {}", load_average());
+
+    // The volume's inputs as the graph ran them.
+    let lattice = scene.surface_lattice();
+    let bounds = lattice.bounds();
+    let solid_nodes = lattice.nodes;
+    let size = bounds.scale;
+    let cell_size = size[0] / (solid_nodes[0] - 1) as f32;
+    let bins = size.map(|s| (s / cell_size).round() as u32);
+    let bin_total = bins.iter().product::<u32>() as usize;
+    let particles = scene.particles() as usize;
+    let blobs: Vec<FluidBlob> = smoke.dumped(&names[1], "blobs", particles);
+    let ranges: Vec<CellRange> = smoke.dumped(&names[0], "cell_ranges", bin_total);
+    let scale = 3u32;
+    let refined = solid_nodes.map(|n| (n - 1) * scale + 1);
+    let total = refined.iter().product::<u32>() as usize;
+    let graph_level: Vec<f32> = smoke.dumped(&names[2], "levelset", total);
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct VolumeUniforms {
+        center: [f32; 3],
+        size: [f32; 3],
+        nodes: [f32; 3],
+        cell_size: f32,
+        resolution_scale: i32,
+        bins: [i32; 3],
+        dispatch_count: u32,
+        _pad0: u32,
+    }
+    let uniforms = VolumeUniforms {
+        center: bounds.pos,
+        size,
+        nodes: solid_nodes.map(|n| n as f32),
+        cell_size,
+        resolution_scale: scale as i32,
+        bins: bins.map(|n| n as i32),
+        dispatch_count: total as u32,
+        _pad0: 0,
+    };
+    let device: &manifold_gpu::GpuDevice = &smoke.device;
+    let blobs_buf = shared_copy(device, &blobs, blobs.len());
+    let ranges_buf = shared_copy(device, &ranges, ranges.len());
+    let solid_buf = shared_copy(device, &smoke.solid_values, smoke.solid_values.len());
+    let out = [shared_copy::<f32>(device, &[], total), shared_copy::<f32>(device, &[], total)];
+    let new_text = codegen::standalone_for_spec::<ParticleVolume>().expect("volume codegen");
+    let new_body = ParticleVolume::WGSL_BODY.expect("volume body");
+    assert!(new_text.contains(new_body), "the standalone kernel carries its body verbatim");
+    let old_text = new_text.replace(new_body, &old_body);
+    let pipelines = [
+        device.create_compute_pipeline(&old_text, codegen::ENTRY, "volume old"),
+        device.create_compute_pipeline(&new_text, codegen::ENTRY, "volume new"),
+    ];
+    let mut volume_ms = [Vec::new(), Vec::new()];
+    for round in 0..rounds {
+        for variant in [round % 2, 1 - round % 2] {
+            volume_ms[variant].push(timed(&smoke, |enc| {
+                enc.dispatch_compute(
+                    &pipelines[variant],
+                    &[
+                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                        GpuBinding::Buffer { binding: 1, buffer: &blobs_buf, offset: 0 },
+                        GpuBinding::Buffer { binding: 2, buffer: &ranges_buf, offset: 0 },
+                        GpuBinding::Buffer { binding: 3, buffer: &solid_buf, offset: 0 },
+                        GpuBinding::Buffer { binding: 4, buffer: &out[variant], offset: 0 },
+                    ],
+                    [(total as u32).div_ceil(256), 1, 1],
+                    "volume ab",
+                );
+            }));
+        }
+    }
+    let old_level: Vec<f32> = super::liquid_surface_tests::read(&out[0], total);
+    let new_level: Vec<f32> = super::liquid_surface_tests::read(&out[1], total);
+    let differ = old_level.iter().zip(&new_level).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+    let graph_differ = new_level.iter().zip(&graph_level).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+    let (o, n) = (spread(&volume_ms[0]), spread(&volume_ms[1]));
+    println!(
+        "AB particle_volume ({total} nodes, {} blobs): old {:.3} ms [p10 {:.3} p90 {:.3}], new {:.3} ms [p10 {:.3} p90 {:.3}]; {differ} nodes differ old/new, {graph_differ} new/graph",
+        blobs.len(),
+        o.0,
+        o.1,
+        o.2,
+        n.0,
+        n.1,
+        n.2
+    );
+
+    // The triangle-count scan, old (copy, in-place scan, copy) against new.
+    let cells = refined.map(|n| n - 1).iter().product::<u32>() as usize;
+    let counts: Vec<u32> = smoke.dumped(&names[3], "counts", cells);
+    let input = shared_copy(device, &counts, cells);
+    let scanned = [shared_copy::<u32>(device, &[], cells), shared_copy::<u32>(device, &[], cells)];
+    let mut old_scan = PrefixScan::default();
+    old_scan.prepare(device);
+    let storage = old_scan.buffer(device, cells).expect("old scan storage").clone();
+    let mut new_scan = PrefixScan::default();
+    new_scan.prepare_into(device);
+    new_scan.buffer(device, cells.div_ceil(INTO_SPAN)).expect("new scan storage");
+    let bytes = (cells * 4) as u64;
+    let mut scan_ms = [Vec::new(), Vec::new()];
+    for round in 0..rounds {
+        for variant in [round % 2, 1 - round % 2] {
+            scan_ms[variant].push(timed(&smoke, |enc| {
+                if variant == 0 {
+                    enc.copy_buffer_to_buffer(&input, &storage, bytes);
+                    old_scan.encode(enc, cells);
+                    enc.copy_buffer_to_buffer(&storage, &scanned[0], bytes);
+                } else {
+                    new_scan.encode_into(enc, &input, &scanned[1], cells);
+                }
+            }));
+        }
+    }
+    let old_out: Vec<u32> = super::liquid_surface_tests::read(&scanned[0], cells);
+    let new_out: Vec<u32> = super::liquid_surface_tests::read(&scanned[1], cells);
+    let mut running = 0u32;
+    let wrong = counts.iter().zip(&new_out).filter(|(c, n)| {
+        running += **c;
+        running != **n
+    });
+    let wrong = wrong.count();
+    let (o, n) = (spread(&scan_ms[0]), spread(&scan_ms[1]));
+    println!(
+        "AB running_total ({cells} counts, total {running}): old {:.3} ms [p10 {:.3} p90 {:.3}], new {:.3} ms [p10 {:.3} p90 {:.3}]; {} differ old/new, {wrong} wrong against the CPU",
+        o.0,
+        o.1,
+        o.2,
+        n.0,
+        n.1,
+        n.2,
+        old_out.iter().zip(&new_out).filter(|(a, b)| a != b).count()
+    );
+    println!("AB load average after: {}", load_average());
+    assert_eq!(differ, 0, "old and new volume kernels agree");
+    assert_eq!(wrong, 0, "the new scan is the running total");
+}
+
+fn load_average() -> String {
+    std::process::Command::new("sysctl")
+        .args(["-n", "vm.loadavg"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 #[test]

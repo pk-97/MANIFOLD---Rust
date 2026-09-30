@@ -64,7 +64,8 @@ fn body(
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
 
     var phi = band;
-    let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
+    let g = (p - lattice_min) / cell_size;
+    let home = clamp(vec3<i32>(floor(g)), vec3<i32>(0), bins - vec3<i32>(1));
     for (var dz = -1; dz <= 1; dz = dz + 1) {
         for (var dy = -1; dy <= 1; dy = dy + 1) {
             for (var dx = -1; dx <= 1; dx = dx + 1) {
@@ -72,18 +73,28 @@ fn body(
                 if any(b < vec3<i32>(0)) || any(b >= bins) {
                     continue;
                 }
+                // A blob reaches at most 0.9 bin − its centre's offset from
+                // its particle, so it goes below the cap only within one bin
+                // of that particle: a bin whose box is a bin or more away
+                // holds nothing that changes this node.
+                let low = vec3<f32>(b);
+                let gap = max(max(low - g, g - (low + vec3<f32>(1.0))), vec3<f32>(0.0));
+                if dot(gap, gap) >= 1.0 {
+                    continue;
+                }
                 let range = buf_cell_ranges[u32(b.x + bins.x * (b.y + bins.y * b.z))];
                 for (var k = range.start; k < range.start + range.count; k = k + 1u) {
-                    let blob = buf_blobs[k];
-                    let reach = blob.center_radius.w;
-                    let d = p - blob.center_radius.xyz;
+                    // The shape is read only for a blob within reach.
+                    let centre = buf_blobs[k].center_radius;
+                    let reach = centre.w;
+                    let d = p - centre.xyz;
                     // Past reach + band the blob cannot go below the cap.
                     let limit = reach + band;
                     if !(reach > 0.0) || dot(d, d) >= limit * limit {
                         continue;
                     }
-                    let diag = blob.shape_diag;
-                    let off = blob.shape_off;
+                    let diag = buf_blobs[k].shape_diag;
+                    let off = buf_blobs[k].shape_off;
                     let v = vec3<f32>(
                         diag.x * d.x + off.x * d.y + off.y * d.z,
                         off.x * d.x + diag.y * d.y + off.z * d.z,
@@ -94,9 +105,12 @@ fn body(
             }
         }
     }
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
-        phi = max(phi, 0.0);
+    // The solid clamp only ever raises a negative value.
+    if phi < 0.0 {
+        let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+        if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
+            phi = 0.0;
+        }
     }
     return phi;
 }

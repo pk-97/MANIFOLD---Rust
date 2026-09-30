@@ -1,14 +1,25 @@
 //! The multi-level inclusive prefix sum shared by `node.sort_particles_into_cells`
 //! (bin starts) and `node.running_total`. One storage buffer holds every level:
 //! level 0 at offset 0 (the values to scan), each later level the 256-wide
-//! block totals of the one before. Not a primitive — a scan is barriered and
-//! multi-dispatch, so its atoms are fusion boundaries (ADDING_PRIMITIVES.md,
-//! exclusion 1).
+//! block totals of the one before. `encode_into` scans a large array out of
+//! place instead: the storage holds only its 1024-value block totals. Not a
+//! primitive — a scan is barriered and multi-dispatch, so its atoms are fusion
+//! boundaries (ADDING_PRIMITIVES.md, exclusion 1).
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 const SHADER: &str = include_str!("shaders/prefix_scan.wgsl");
+const INTO_SHADER: &str = include_str!("shaders/prefix_scan_into.wgsl");
 const BLOCK: usize = 256;
+/// Values per `encode_into` block: 256 threads of 4.
+pub(crate) const INTO_SPAN: usize = 1024;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct IntoParams {
+    n: u32,
+    _pad: [u32; 3],
+}
 /// 256⁴ values; every array in the graph is far below this.
 const MAX_LEVELS: usize = 4;
 
@@ -49,6 +60,8 @@ pub(crate) fn storage_words(n: usize) -> usize {
 pub(crate) struct PrefixScan {
     blocks: Option<GpuComputePipeline>,
     add: Option<GpuComputePipeline>,
+    reduce_into: Option<GpuComputePipeline>,
+    scan_into: Option<GpuComputePipeline>,
     buffer: Option<GpuBuffer>,
     words: usize,
 }
@@ -62,6 +75,42 @@ impl PrefixScan {
         if self.add.is_none() {
             self.add = Some(device.create_compute_pipeline(SHADER, "add_block_totals", "prefix_scan.add"));
         }
+    }
+
+    /// Also create the `encode_into` pipelines.
+    pub(crate) fn prepare_into(&mut self, device: &GpuDevice) {
+        self.prepare(device);
+        if self.reduce_into.is_none() {
+            self.reduce_into = Some(device.create_compute_pipeline(INTO_SHADER, "reduce_blocks", "prefix_scan.reduce"));
+        }
+        if self.scan_into.is_none() {
+            self.scan_into = Some(device.create_compute_pipeline(INTO_SHADER, "scan_blocks_into", "prefix_scan.into"));
+        }
+    }
+
+    /// Scan `input[0, n)` into `out[0, n)`, leaving `input` as it was. The
+    /// storage holds the block totals: `prepare_into` and
+    /// `buffer(device, n.div_ceil(INTO_SPAN))` first.
+    pub(crate) fn encode_into(&self, encoder: &mut manifold_gpu::GpuEncoder, input: &GpuBuffer, out: &GpuBuffer, n: usize) {
+        if n == 0 {
+            return;
+        }
+        let reduce = self.reduce_into.as_ref().expect("scan pipelines prepared");
+        let scan = self.scan_into.as_ref().expect("scan pipelines prepared");
+        let totals = self.buffer.as_ref().expect("scan storage prepared");
+        let blocks = n.div_ceil(INTO_SPAN);
+        let uniforms = IntoParams { n: n as u32, _pad: [0; 3] };
+        let bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: input, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: totals, offset: 0 },
+        ];
+        encoder.dispatch_compute(reduce, &bindings, [blocks as u32, 1, 1], "prefix_scan.reduce");
+        encoder.compute_memory_barrier_buffers();
+        self.encode(encoder, blocks);
+        encoder.dispatch_compute(scan, &bindings, [blocks as u32, 1, 1], "prefix_scan.into");
+        encoder.compute_memory_barrier_buffers();
     }
 
     /// The storage buffer, sized for `n` values. Level 0 starts at offset 0.
