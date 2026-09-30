@@ -65,7 +65,10 @@ mod tests {
         const REACTION: &str = include_str!("shaders/matter_body_reaction_body.wgsl");
         for name in ["hash", "encode"] {
             assert_eq!(helper(P2G, "", name), helper(REACTION, "reaction", name));
+            assert_eq!(helper(P2G, "", name), helper(G2P, "g2m", name));
         }
+        // The body-reaction words take the push-out's share the same way.
+        assert_eq!(helper(REACTION, "", "reaction_add").replace("reaction_", ""), helper(G2P, "g2m", "reaction_add").replace("reaction_", ""));
     }
 
     #[test]
