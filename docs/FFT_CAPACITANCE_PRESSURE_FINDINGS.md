@@ -82,6 +82,7 @@ Solids inside the water: the same collar trick on the solid boundary with a no-f
 - **Warm start from last frame.** Useless (35 → 38 at 32²): cells flip between air and water each frame exactly where the hard part is. A subcell (ghost-fluid) surface would make frames resemble each other; not tried.
 - **Exact local solve on a 2-cell surface band.** Only 15–20%: the error is long-range along the surface, not local.
 - **Grid-transported water fraction for the demos.** The drop fell at a third of gravity and smeared away before landing; particles fixed it.
+- **MINRES in place of GMRES** (`minres_check.py`, the seven Dam Break problems). The collar system is symmetric once the sum constraint is scaled, so short-memory MINRES would drop the stored basis. With the constant scaled by 1/n³ it stalls near 4e-3; with the constant preconditioned by 1/(σ²·1ᵀP1) it converges but needs 1.5–2× the passes (median error at 24/32/40 passes: 9.1e-3/1.3e-3/9.9e-5, against GMRES 1.1e-3/4.1e-5/1.7e-5). The basis GMRES keeps is about 4 MB at 64³, cheap next to a box solve.
 
 ## Math found on the way
 
