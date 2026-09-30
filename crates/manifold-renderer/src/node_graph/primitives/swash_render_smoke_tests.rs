@@ -194,7 +194,15 @@ struct FrameResult {
     /// Dispatches the sampler couldn't time. Above zero the split is wrong:
     /// the timed spans stretch to the whole frame and the rest read as zero.
     untimed: usize,
+    /// On a profiled frame: timed dispatches, those under `SMALL_SPAN_MS`,
+    /// their own ms, every dispatch's own ms, and the gaps between them (the
+    /// untimed MPSGraph FFTs plus idle time).
+    census: Option<[f64; 5]>,
 }
+
+/// A dispatch this short is mostly launch cost, not work: what fusing it
+/// into a neighbour would save.
+const SMALL_SPAN_MS: f64 = 0.02;
 
 impl Smoke {
     fn new(scene: WaterScene) -> Self {
@@ -314,6 +322,7 @@ impl Smoke {
         );
         let mut stages = None;
         let mut unattributed = 0;
+        let mut census = None;
         if profile {
             let steps = self.runtime.take_step_profiles();
             let mut split = vec![(0.0, 0.0); STAGES.len()];
@@ -325,11 +334,20 @@ impl Smoke {
             let mut spans: Vec<_> = result.spans.iter().collect();
             spans.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
             let mut end = 0.0_f64;
+            let mut counts = [0.0; 5];
             for span in spans {
                 // Untimed vendor work (the MPSGraph FFTs) shows as the gap
                 // before the next timed dispatch; it is that dispatch's stage.
-                let charged = span.millis + (span.start_ms - end).max(0.0);
+                let gap = (span.start_ms - end).max(0.0);
+                let charged = span.millis + gap;
                 end = end.max(span.start_ms + span.millis);
+                counts[0] += 1.0;
+                if span.millis < SMALL_SPAN_MS {
+                    counts[1] += 1.0;
+                    counts[2] += span.millis;
+                }
+                counts[3] += span.millis;
+                counts[4] += gap;
                 match step_of(&span.tag) {
                     Some(idx) if idx < self.step_names.len() => split[index(&self.step_names[idx])].0 += charged,
                     _ => {
@@ -339,6 +357,7 @@ impl Smoke {
                 }
             }
             stages = Some(split);
+            census = Some(counts);
         }
         self.runtime.set_profiling(false);
         FrameResult {
@@ -349,6 +368,7 @@ impl Smoke {
             profiled_total: result.total_ms,
             unattributed_spans: unattributed,
             untimed: result.overflow + result.invalid,
+            census,
         }
     }
 
@@ -522,6 +542,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let mut stage_gpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let mut stage_cpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
+    let mut census: [Vec<f64>; 5] = Default::default();
     let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
@@ -546,6 +567,11 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
             profiled_totals.push(r.profiled_total);
             unattributed += r.unattributed_spans;
             untimed += r.untimed;
+            if let Some(counts) = r.census {
+                for (column, value) in census.iter_mut().zip(counts) {
+                    column.push(value);
+                }
+            }
         } else {
             gpu.push((frame, r.gpu_ms));
             cpu.push((frame, r.cpu_ms));
@@ -696,6 +722,11 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         stage_rows.push_str(&format!("{name},{g:.4},{:.4},{c:.4}\n", g * scale));
     }
     std::fs::write(dir.join(format!("{tag}_stages.csv")), stage_rows).expect("stage csv");
+    let [dispatches, small, small_ms, own_ms, gap_ms] = census.map(|column| percentile(&column, 0.5));
+    println!(
+        "SMOKE {tag} dispatches per timestamped frame: {dispatches:.0} timed, {small:.0} under {} µs ({small_ms:.2} ms of their own); every dispatch's own time {own_ms:.2} ms, gaps between them {gap_ms:.2} ms",
+        SMALL_SPAN_MS * 1000.0
+    );
 
     if transport {
         // Paused transport that keeps rendering: no time, no frame count.
