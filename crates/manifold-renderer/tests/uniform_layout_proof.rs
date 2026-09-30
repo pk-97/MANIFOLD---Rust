@@ -519,6 +519,9 @@ const NON_STANDALONE: &[&str] = &[
     // kernel, so no uniform struct at all.
     "node.fft_3d",
     "node.inverse_fft_3d",
+    // Barriered per-line FFT kernel; its Params are reflected against the hand
+    // shader in uniform_layout_extended.
+    "node.cosine_line",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

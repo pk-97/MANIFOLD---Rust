@@ -326,3 +326,122 @@ fn swash_box_solve_timing() {
         println!("SWASH box solve {n}³: {:.3} ms per solve ({repeats} solves in one command buffer)", ms / repeats as f64);
     }
 }
+
+/// The per-axis workgroup box solve: forward cosine_line on x, y, z, divide,
+/// inverse on z, y, x. Buffers ping-pong between `a` and `b`; the transform
+/// alone lands in `a`, the solve lands in `a`.
+struct LineSolve {
+    forward: [super::cosine_line::CosineLine; 3],
+    inverse: [super::cosine_line::CosineLine; 3],
+    divide: CosinePoissonDivide,
+}
+
+impl LineSolve {
+    fn new() -> Self {
+        use super::cosine_line::CosineLine;
+        Self {
+            forward: [CosineLine::new(), CosineLine::new(), CosineLine::new()],
+            inverse: [CosineLine::new(), CosineLine::new(), CosineLine::new()],
+            divide: CosinePoissonDivide::new(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        &mut self,
+        harness: &mut Harness,
+        input: Slot,
+        a: Slot,
+        b: Slot,
+        nodes: [usize; 3],
+        cell_size: f32,
+        solve: bool,
+        repeats: usize,
+    ) -> (f64, Vec<String>) {
+        let axis_params: Vec<ParamValues> = (0..6)
+            .map(|i| {
+                let axis = [0.0, 1.0, 2.0, 2.0, 1.0, 0.0][i];
+                lattice_params(nodes, &[("axis", axis), ("direction", if i < 3 { 0.0 } else { 1.0 })])
+            })
+            .collect();
+        let divide = lattice_params(nodes, &[("cell_size", cell_size)]);
+        let mut errors = Vec::new();
+        let mut native = harness.device.create_encoder("swash line solve");
+        let start = Instant::now();
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
+            let backend: &dyn Backend = &harness.backend;
+            let e = &mut errors;
+            for _ in 0..repeats {
+                step(&mut self.forward[0], &mut gpu, backend, e, ("values", input), ("out", a), &axis_params[0]);
+                step(&mut self.forward[1], &mut gpu, backend, e, ("values", a), ("out", b), &axis_params[1]);
+                step(&mut self.forward[2], &mut gpu, backend, e, ("values", b), ("out", a), &axis_params[2]);
+                if solve {
+                    step(&mut self.divide, &mut gpu, backend, e, ("values", a), ("out", b), &divide);
+                    step(&mut self.inverse[0], &mut gpu, backend, e, ("values", b), ("out", a), &axis_params[3]);
+                    step(&mut self.inverse[1], &mut gpu, backend, e, ("values", a), ("out", b), &axis_params[4]);
+                    step(&mut self.inverse[2], &mut gpu, backend, e, ("values", b), ("out", a), &axis_params[5]);
+                }
+            }
+        }
+        native.commit_and_wait_completed();
+        (start.elapsed().as_secs_f64() * 1000.0, errors)
+    }
+}
+
+#[test]
+fn swash_line_transform_matches_reference_and_solves_the_box() {
+    let mut harness = Harness::new();
+    let nodes = [16usize, 8, 4];
+    let total: usize = nodes.iter().product();
+    let values = random_values(total, 0x5eed_c05e);
+    let (input, _) = harness.array(&values, total);
+    let (a, a_buf) = harness.array::<f32>(&[], total);
+    let (b, _) = harness.array::<f32>(&[], total);
+    let (_, errors) = LineSolve::new().run(&mut harness, input, a, b, nodes, 1.0, false, 1);
+    assert!(errors.is_empty(), "{errors:?}");
+    let expected = reference_dct(&values, nodes);
+    let actual: Vec<f32> = read(&a_buf, total);
+    let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let worst = actual.iter().zip(&expected).map(|(x, e)| (f64::from(*x) - e).abs()).fold(0.0, f64::max);
+    assert!(worst < 1e-5 * scale.max(1.0), "line cosine transform off by {worst} (scale {scale})");
+
+    let nodes = [32usize, 16, 8];
+    let total: usize = nodes.iter().product();
+    let h = 0.0625_f32;
+    let mut values = random_values(total, 0xb0c5_5017);
+    let mean = values.iter().map(|&v| f64::from(v)).sum::<f64>() / total as f64;
+    for v in &mut values {
+        *v -= mean as f32;
+    }
+    let (input, _) = harness.array(&values, total);
+    let (a, a_buf) = harness.array::<f32>(&[], total);
+    let (b, _) = harness.array::<f32>(&[], total);
+    let (_, errors) = LineSolve::new().run(&mut harness, input, a, b, nodes, h, true, 1);
+    assert!(errors.is_empty(), "{errors:?}");
+    let p: Vec<f32> = read(&a_buf, total);
+    let lap = walled_laplacian(&p, nodes, f64::from(h));
+    let norm = values.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>().sqrt();
+    let resid = lap.iter().zip(&values).map(|(l, &f)| (l - f64::from(f)).powi(2)).sum::<f64>().sqrt();
+    assert!(resid / norm < 1e-4, "relative residual {}", resid / norm);
+}
+
+#[test]
+fn swash_line_box_solve_timing() {
+    let mut harness = Harness::new();
+    for n in [64usize, 128] {
+        let nodes = [n; 3];
+        let total = n * n * n;
+        let values = random_values(total, 0x7117);
+        let (input, _) = harness.array(&values, total);
+        let (a, _) = harness.array::<f32>(&[], total);
+        let (b, _) = harness.array::<f32>(&[], total);
+        let mut solve = LineSolve::new();
+        let (_, errors) = solve.run(&mut harness, input, a, b, nodes, 1.0, true, 2);
+        assert!(errors.is_empty(), "{errors:?}");
+        let repeats = 50;
+        let (ms, errors) = solve.run(&mut harness, input, a, b, nodes, 1.0, true, repeats);
+        assert!(errors.is_empty(), "{errors:?}");
+        println!("SWASH workgroup-line box solve {n}³: {:.3} ms per solve", ms / repeats as f64);
+    }
+}
