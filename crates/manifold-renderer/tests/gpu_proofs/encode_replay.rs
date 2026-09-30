@@ -26,15 +26,16 @@ const FRAMES: u32 = 30;
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Dump {
     None,
-    /// The editor's atlas dump over every node: copies inside the region.
+    /// The editor's atlas dump over every node: it pins textures and holds
+    /// them past the frame; replay stays on.
     Every,
-    /// The Cmd+D dump: replay stays off.
+    /// The Cmd+D dump, which also copies every array: replay stays off.
     All,
 }
 
 struct Outcome {
-    /// Per frame: the boundary state, what the sink read, and every dumped
-    /// array, concatenated.
+    /// Per frame: the boundary state, what the sink read, and every array
+    /// the Cmd+D dump copied, concatenated.
     frames: Vec<Vec<u8>>,
     stats: GpuReplayStats,
     /// Stats after each frame.
@@ -188,7 +189,7 @@ fn image_delta(a: &[u8], b: &[u8]) -> f64 {
 /// P1b, Defaulted). Two direct runs of the Dam Break in one process do not
 /// always agree: some pairs match in every byte, others differ from frame 2
 /// on, in the Matter frame and everything downstream, by the same few
-/// discrete amounts. A byte comparison can't tell replay from that, so the
+/// discrete amounts (BUG-4n2g). A byte comparison can't tell replay from that, so the
 /// Dam Break gate is what the solver conserves: the dump holds the same
 /// arrays at the same sizes, no point went non-finite, the live point count
 /// is exact, and mass holds. The byte spreads are printed. The bit-for-bit
