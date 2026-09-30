@@ -231,7 +231,7 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
 
   The 128³ divergence is too few passes for the collar, not a wrong target (`fft_water_refined_leftover_passes`, measured against the step's own right-hand side). All of it sits in water cells beside air; wall and interior cells hold 2.5e-4 /s rms at every pass count. rms median / max worst is 1.1e-2 / 59 /s at 24 passes, 1.4e-3 / 14 at 32 and 1.6e-4 / 1.1 at 48, so 48 at 128³ matches 24 at 64³. The passes a step needs grow with its collar, so a fixed count does not hold as the lattice grows: the proposed rule is on BUG-m632 (swash-residual-bar).
 
-  Warm start saves no passes (`fft_water_warm_leftover_64`, `_128`, 2026-10-01). Each solve starts from the last step's collar sources, read at this step's collar cells, and solves for the rest; the carry crosses frames through `node.field_feedback` and is zero on the first frame, a restart and a relaunch (`swash_warm_tests`). It cuts the start residual |b| 3× at the splash peak and 8× on the settled pool at 64³, but what is left converges more slowly per pass. The pass count is fixed at build, so the worst frame sets it, and there warm start gains 10% at 64³ and nothing at 128³:
+  Warm start saves no passes, so its code was removed (measured 2026-10-01; the measuring tests, `swash_warm_tests`, are in git history). Each solve started from the last step's collar sources, read at this step's collar cells, and solved for the rest. It cuts the start residual |b| 3× at the splash peak and 8× on the settled pool at 64³, but what is left converges more slowly per pass. The pass count is fixed at build, so the worst frame sets it, and there warm start gains 10% at 64³ and nothing at 128³:
 
   | Leftover divergence | 64³ cold 24 | 64³ warm 24 | 64³ warm 16 | 128³ cold 48 | 128³ warm 48 | 128³ warm 40 |
   |---|---|---|---|---|---|---|
@@ -239,7 +239,7 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   | splash, worst cell (/s) | 0.21 | 0.20 | 3.8 | 1.1 | 1.4 | 6.0 |
   | settled frames 260–300, rms median | 1.9e-5 | 6.6e-6 | 1.1e-4 | 9.0e-5 | 3.5e-5 | 2.0e-4 |
 
-  The collar is why: at the splash, 19% of a 64³ step's collar cells (42% at 128³) were not collar cells the step before, so the carry has nothing for them. The option is off (`WaterScene::warm`).
+  The collar is why: at the splash, 19% of a 64³ step's collar cells (42% at 128³) were not collar cells the step before, so the carry has nothing for them.
 
 ### P3b — Solid objects in the water
 

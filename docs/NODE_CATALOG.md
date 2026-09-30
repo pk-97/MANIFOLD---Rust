@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 363 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 362 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -396,7 +396,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (38)
+### Math & Convert (37)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -414,7 +414,6 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Divide By Value | `node.divide_by_value` | Map | Divides a list of numbers by one number the GPU just worked out. |
 | Dot Products | `node.dot_products` | Map | Measures how much a list of numbers lines up with each row of a table, all on the GPU. |
 | FFT 3D | `node.fft_3d` | Map | Breaks a 3D grid of numbers into the waves it is made of. |
-| Field Feedback | `node.field_feedback` | Filter | Keeps a list of numbers from one frame to the next, starting from zero. |
 | Inverse FFT 3D | `node.inverse_fft_3d` | Map | Adds a 3D grid's waves back together into the grid. |
 | Krylov Basis | `node.krylov_basis` | Filter | Runs the pressure solver's rounds and remembers every round's result. |
 | Krylov Givens | `node.krylov_givens` | Map | Updates the pressure solver's small bookkeeping table after each round. |

@@ -108,7 +108,7 @@ impl Primitive for ArrayFeedback {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        emit_delayed(ctx, &mut self.last_reset_trigger, DelayStart::Seed);
+        emit_delayed(ctx, &mut self.last_reset_trigger);
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -116,20 +116,10 @@ impl Primitive for ArrayFeedback {
     }
 }
 
-/// What a delay emits on its first frame and after a reset edge.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DelayStart {
-    /// A copy of `seed`; with `seed` unwired, the first frame copies `in` and
-    /// a reset edge does nothing.
-    Seed,
-    /// Zeros.
-    Zeros,
-}
-
 /// The emit half of a one-frame array delay with ports `in` (a state
 /// capture), `seed`, `reset_trigger` and `out`. Item layout is opaque, so
 /// every typed feedback atom shares it.
-pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigger: &mut Option<i32>, start: DelayStart) {
+pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigger: &mut Option<i32>) {
     {
         // `evaluate` (= `run`) phase: emit only. The capture lives in
         // `late_capture` because state-capture nodes run BEFORE their
@@ -192,9 +182,7 @@ pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigg
                 // is wired, copy its initial pattern (the bootstrap path for
                 // sims whose initial layout is meaningful); otherwise leave the
                 // pre-bound buffer as the allocator left it. No delay buffer.
-                if start == DelayStart::Zeros {
-                    gpu.native_enc.clear_buffer(out_buf);
-                } else if let Some(seed_buf) = ctx.inputs.array("seed") {
+                if let Some(seed_buf) = ctx.inputs.array("seed") {
                     let copy_size = seed_buf.size.min(size);
                     if copy_size > 0 {
                         gpu.native_enc.copy_buffer_to_buffer(seed_buf, out_buf, copy_size);
@@ -210,14 +198,10 @@ pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigg
                 // the wired `seed`, else fall back to `in` so first-frame
                 // output isn't an uninitialised buffer.
                 let prev = gpu.device.create_buffer(size);
-                if start == DelayStart::Zeros {
-                    gpu.native_enc.clear_buffer(&prev);
-                } else {
-                    let init_source = ctx.inputs.array("seed").unwrap_or(in_buf);
-                    let copy_size = init_source.size.min(size);
-                    if copy_size > 0 {
-                        gpu.native_enc.copy_buffer_to_buffer(init_source, &prev, copy_size);
-                    }
+                let init_source = ctx.inputs.array("seed").unwrap_or(in_buf);
+                let copy_size = init_source.size.min(size);
+                if copy_size > 0 {
+                    gpu.native_enc.copy_buffer_to_buffer(init_source, &prev, copy_size);
                 }
                 store.insert(
                     node_id,
@@ -240,15 +224,7 @@ pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigg
                 None => false,
             };
             *last_reset_trigger = Some(current);
-            if edge && start == DelayStart::Zeros {
-                if in_place {
-                    gpu.native_enc.clear_buffer(out_buf);
-                } else if let Some(state_mut) = store.get::<ArrayFeedbackState>(node_id, owner_key)
-                    && let Some(prev) = state_mut.prev.as_ref()
-                {
-                    gpu.native_enc.clear_buffer(prev);
-                }
-            } else if edge && let Some(seed_buf) = ctx.inputs.array("seed") {
+            if edge && let Some(seed_buf) = ctx.inputs.array("seed") {
                 if in_place {
                     let copy_size = seed_buf.size.min(size);
                     if copy_size > 0 {

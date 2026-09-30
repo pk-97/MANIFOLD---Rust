@@ -487,7 +487,6 @@ const NON_STANDALONE: &[&str] = &[
     "node.combine_xyzw",
     "node.connect_nearest",
     "node.edge_pairs",
-    "node.field_feedback",
     "node.grid_edges",
     "node.grid_points",
     "node.hypercube_edges",

@@ -162,6 +162,11 @@ pub(crate) fn print_lid_layer(
     );
 }
 
+/// The splash over time: the highest particle and the fastest.
+pub(crate) fn print_height(label: &str, frame: usize, m: &Motion) {
+    println!("{label} height frame {frame:3}: highest {:.2} m, top speed {:.2} m/s", m.highest, m.fastest);
+}
+
 pub(crate) fn print_splash(label: &str, frame: usize, s: &Splash) {
     let [side, far, back, middle] = s.where_high.map(|v| 100.0 * v);
     println!(
@@ -362,6 +367,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             let floor = super::swash_preset::DAM_MIN[1];
             if sheet {
                 print_side_sheet(label, frame, &live, floor);
+                print_height(label, frame, &record.motion[frame]);
             }
             if frame % 15 == 14 {
                 print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
@@ -386,6 +392,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));
     println!("{label}: collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks", scene.pressure.capacity, 100.0 * water_max, 100.0 * blocks_max);
     report_motion(label, &record.motion);
+    let top = record.motion.iter().map(|m| m.fastest).fold(0.0, f64::max);
+    println!("{label}: the top speed crosses {:.2} cells a step, {} steps a frame", top * scene.step_dt() / h, scene.steps);
     if let Some(oracle) = oracle {
         let drift: Vec<f64> = record.volume.iter().map(|v| v.abs()).collect();
         println!("{label}: particles hold {:.4} m³, mesh {:.4} m³ at frame 0, skin {:.2} mm", run.particle_volume(), raw[0], 1000.0 * oracle.skin());
@@ -447,6 +455,20 @@ fn fft_water_splash_causes_64() {
     let base = WaterScene::dam_break(64);
     dam_break(base, "LID share 1 64³", 150);
     dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
+}
+
+/// The step's cadence levers on the meshed 64³ Dam Break, beside the shipped
+/// cadence: the density solve once a frame (drift, packing, missing, the lid),
+/// and one water step a frame (the same plus the splash height over time and
+/// the cells a step the top speed crosses). The engine's side is
+/// `fft_water_engine_splash_64`.
+#[test]
+fn fft_water_cadence_64() {
+    let base = WaterScene::dam_break(64).with_surface();
+    dam_break(base, "CADENCE shipped 64³", 300);
+    dam_break(WaterScene { density_once: true, ..base }, "CADENCE density once 64³", 300);
+    let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
+    dam_break(one_step, "CADENCE one step 64³", 300);
 }
 
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
@@ -591,77 +613,6 @@ fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
     for (q, chunk) in by_collar.chunks(quarter.max(1)).take(4).enumerate() {
         let r: Vec<f64> = chunk.iter().map(|c| c.1).collect();
         println!("{label}: collar quarter {q} ({}..{} cells): rms median {:.2e}", chunk[0].0, chunk[chunk.len() - 1].0, median(&r));
-    }
-}
-
-/// The Dam Break's windows the warm start is judged on: the run-up sheet at
-/// the splash peak, and the settled pool.
-const WINDOWS: [(&str, std::ops::Range<usize>); 2] = [("splash 50-90", 50..90), ("settled 260-300", 260..300)];
-
-/// The pressure solve's leftover divergence in each window over a 300-frame
-/// Dam Break, per water step: rms median and worst, worst cell, and the GPU
-/// ms per frame.
-fn leftover_windows(scene: WaterScene, label: &str) {
-    let mut run = Run::new(scene);
-    let (n, h) = (run.n(), scene.pressure.cell_size());
-    let end = WINDOWS.iter().map(|(_, w)| w.end).max().expect("windows");
-    let mut per_frame = Vec::with_capacity(end);
-    let mut last_collar: Option<Vec<bool>> = None;
-    for _ in 0..end {
-        let (gpu_ms, _) = run.frame();
-        let steps: Vec<[f64; 4]> = (0..scene.steps)
-            .map(|step| {
-                let (places, cell) = leftover_by_place(&run.faces(step), &run.water(step), n, h);
-                let cells: usize = places.iter().map(|p| p.cells).sum();
-                let rms = (places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt();
-                // The share of this step's collar cells that were not collar
-                // cells the step before: the carry has nothing for them.
-                let collar = run.collar_cells(step);
-                let count = collar.iter().filter(|c| **c).count();
-                let new = last_collar
-                    .as_ref()
-                    .map_or(count, |last| collar.iter().zip(last).filter(|(now, before)| **now && !**before).count());
-                last_collar = Some(collar);
-                [rms, cell.0, f64::from(run.pressure_beta(step)), new as f64 / count.max(1) as f64]
-            })
-            .collect();
-        per_frame.push((gpu_ms, steps));
-    }
-    for (name, window) in WINDOWS {
-        let frames = &per_frame[window];
-        let column = |i: usize| -> Vec<f64> { frames.iter().flat_map(|(_, s)| s.iter().map(move |r| r[i])).collect() };
-        let rms = column(0);
-        let cell = column(1).into_iter().fold(0.0, f64::max);
-        let gpu: Vec<f64> = frames.iter().map(|f| f.0).collect();
-        println!(
-            "{label} {name}: rms median {:.2e} worst {:.2e}, worst cell {cell:.2e} /s, |b| median {:.2e}, new collar cells {:.1}%, GPU {:.1} ms/frame",
-            median(&rms),
-            worst(&rms),
-            median(&column(2)),
-            100.0 * median(&column(3)),
-            median(&gpu)
-        );
-    }
-}
-
-/// Warm start against cold (BUG-m632, residual bar): the pass count holds
-/// the worst frame, so passes saved are read at the splash peak as well as
-/// the settled pool. 64³ against its 24 cold passes.
-#[test]
-fn fft_water_warm_leftover_64() {
-    leftover_windows(WaterScene::dam_break(64), "WARM cold 24 64³");
-    for passes in [8, 12, 16, 24] {
-        leftover_windows(WaterScene::dam_break(64).with_warm().with_passes(passes), &format!("WARM warm {passes} 64³"));
-    }
-}
-
-/// The same at 128³ against its 48 cold passes (3n/8); run only after the
-/// 64³ probe is green.
-#[test]
-fn fft_water_warm_leftover_128() {
-    leftover_windows(WaterScene::dam_break(128).with_passes(48), "WARM cold 48 128³");
-    for passes in [32, 40, 48] {
-        leftover_windows(WaterScene::dam_break(128).with_warm().with_passes(passes), &format!("WARM warm {passes} 128³"));
     }
 }
 

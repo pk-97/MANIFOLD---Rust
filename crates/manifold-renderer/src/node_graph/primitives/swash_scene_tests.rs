@@ -42,14 +42,9 @@ pub(super) struct Run {
 
 impl Run {
     pub(super) fn new(scene: WaterScene) -> Self {
-        Self::from_def(scene, water_def(scene))
-    }
-
-    /// `def` is `water_def(scene)` with harness edits (extra controls).
-    pub(super) fn from_def(scene: WaterScene, def: manifold_core::effect_graph_def::EffectGraphDef) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let graph = def.into_graph(&registry, &Default::default()).expect("water def builds");
+        let graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
@@ -59,7 +54,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "gravity", "project", "collar_total", "beta"] {
+            for name in ["water", "gravity", "project", "collar_total"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -126,18 +121,6 @@ impl Run {
         (profile.total_ms, cpu_ms)
     }
 
-    /// Clears every node's cross-frame state, as a seek, project load or
-    /// restart does.
-    pub(super) fn restart(&mut self) {
-        self.state.cleanup_all();
-    }
-
-    /// Sets a `node.value`'s value, read on the next frame.
-    pub(super) fn set_value(&mut self, node: &str, value: f32) {
-        let id = node_named(&self.graph, node);
-        self.graph.set_param(id, "value", crate::node_graph::parameters::ParamValue::Float(value)).expect("value param");
-    }
-
     fn read<T: bytemuck::Pod>(&self, node: &str, port: &str, len: usize) -> Vec<T> {
         self.read_at(node_named(&self.graph, node), port, len)
     }
@@ -179,19 +162,6 @@ impl Run {
     pub(super) fn collar(&self, step: usize) -> u32 {
         let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
         *total.last().expect("a lattice")
-    }
-
-    /// Which cells are collar cells at `step`: where the running total steps up.
-    #[cfg(feature = "water-race-probes")]
-    pub(super) fn collar_cells(&self, step: usize) -> Vec<bool> {
-        let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
-        (0..total.len()).map(|c| total[c] > if c == 0 { 0 } else { total[c - 1] }).collect()
-    }
-
-    /// |b| of the pressure solve at `step`: the start residual its passes reduce.
-    #[cfg(feature = "water-race-probes")]
-    pub(super) fn pressure_beta(&self, step: usize) -> f32 {
-        self.read::<f32>(&format!("s{step}.beta"), "out", 1)[0]
     }
 }
 

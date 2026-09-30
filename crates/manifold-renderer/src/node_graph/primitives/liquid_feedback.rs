@@ -3,7 +3,7 @@
 //! step wrote become the next frame's input. `node.array_feedback` for
 //! `Array(FluidParticle)`; both share its emit and capture.
 
-use super::array_feedback::{DelayStart, capture_for_next_frame, emit_delayed};
+use super::array_feedback::{capture_for_next_frame, emit_delayed};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::primitive::Primitive;
@@ -50,7 +50,7 @@ impl Primitive for LiquidFeedback {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        emit_delayed(ctx, &mut self.last_reset_trigger, DelayStart::Seed);
+        emit_delayed(ctx, &mut self.last_reset_trigger);
     }
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

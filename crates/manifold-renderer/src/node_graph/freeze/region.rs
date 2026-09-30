@@ -4065,6 +4065,49 @@ mod tests {
         );
     }
 
+    /// BUG-2efy (capacity probe admits an output that follows slot 0): a
+    /// member whose output follows one input, declared MinInputs, never fuses.
+    /// collar_source's output follows `total`, the region's first external;
+    /// fused, the count would be the min over total, value and divisor, the
+    /// divisor's one element. One ascending probe order agrees with the
+    /// black box by accident; the descending order catches it.
+    #[test]
+    fn output_following_one_input_is_refused_under_min_inputs() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                {"id": 1, "nodeId": "collar", "typeId": "node.collar_cells", "params": {"nodes_x": {"type": "Float", "value": 16.0}, "nodes_y": {"type": "Float", "value": 16.0}, "nodes_z": {"type": "Float", "value": 16.0}}},
+                {"id": 2, "nodeId": "total", "typeId": "node.running_total", "params": {"capacity": {"type": "Int", "value": 2048}}},
+                {"id": 3, "nodeId": "value", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 2049}}},
+                {"id": 4, "nodeId": "source", "typeId": "node.collar_source"},
+                {"id": 5, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
+                {"id": 6, "nodeId": "divide", "typeId": "node.divide_by_value"},
+                {"id": 7, "nodeId": "sink", "typeId": "test.value_sink"},
+                {"id": 8, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "water"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "total"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "value"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "values"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "divisor"},
+                {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "values"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in"}
+            ]
+        }))
+        .expect("selector fixture");
+        let mut registry = registry();
+        crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+        let regions = partition_regions(&def, &registry);
+        let fused: Vec<Vec<u32>> = regions.iter().map(|r| r.members.iter().map(|m| m.doc_id).collect()).collect();
+        assert!(
+            fused.iter().all(|members| !members.contains(&4)),
+            "collar_source's output follows total alone, so it must not fuse as MinInputs: {fused:?}"
+        );
+    }
+
 }
 
 pub mod census;

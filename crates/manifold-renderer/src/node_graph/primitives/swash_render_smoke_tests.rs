@@ -48,7 +48,7 @@ const PROFILE_EVERY: usize = 25;
 const STILLS: [usize; 4] = [90, 240, 600, 900];
 
 /// Stages in the order the table prints them.
-const STAGES: [&str; 24] = [
+const STAGES: [&str; 23] = [
     "fill + particle state",
     "particle sort",
     "classify cells",
@@ -57,7 +57,6 @@ const STAGES: [&str; 24] = [
     "extrapolation",
     "divergence",
     "solve setup (collar, charts, rhs box)",
-    "solve warm start (guess, carry)",
     "solve helper (passes)",
     "solve box (passes)",
     "solve Krylov (passes)",
@@ -96,12 +95,11 @@ fn stage(name: &str) -> &'static str {
             "h1" | "w1" | "h2" | "w2" | "norm" | "next" | "givens" | "krylov" => "solve Krylov (passes)",
             l if l.starts_with("final_helper_") || l.starts_with("final_box_") => "solve finish (λ, final box, p)",
             "final_source" | "y" | "u" | "pressure" => "solve finish (λ, final box, p)",
-            "guess_sum" | "guess" | "guess_source" | "guess_rest" | "carry" => "solve warm start (guess, carry)",
             _ => "solve setup (collar, charts, rhs box)",
         };
     }
     match name {
-        "fill" | "state" | "pressure_carry" | "density_carry" => "fill + particle state",
+        "fill" | "state" => "fill + particle state",
         "scene" => "scene render",
         "filmic_display" => "tone map + other",
         n if n.ends_with("liquid_sort") => "surface sort",
@@ -175,6 +173,8 @@ struct Smoke {
     sampler: manifold_gpu::GpuTimestampSampler,
     /// Graph name of each plan step, for the stage split.
     step_names: Vec<String>,
+    /// Each plan step's node type, for the small-dispatch census.
+    step_types: Vec<String>,
     solid: NodeInstanceId,
     solid_values: Vec<f32>,
     frame_count: i64,
@@ -198,6 +198,8 @@ struct FrameResult {
     /// their own ms, every dispatch's own ms, and the gaps between them (the
     /// untimed MPSGraph FFTs plus idle time).
     census: Option<[f64; 5]>,
+    /// Dispatches under `SMALL_SPAN_MS` by node type: count and own ms.
+    small_by_type: Vec<(String, f64, f64)>,
 }
 
 /// A dispatch this short is mostly launch cost, not work: what fusing it
@@ -231,6 +233,10 @@ impl Smoke {
             runtime.graph.nodes().find(|n| n.id == id).map_or_else(String::new, |n| n.node_id.as_str().to_string())
         };
         let step_names = runtime.plan.steps().iter().map(|s| name_of(s.node)).collect();
+        let type_of = |id: NodeInstanceId| {
+            runtime.graph.nodes().find(|n| n.id == id).map_or_else(String::new, |n| n.node.type_id().as_str().to_string())
+        };
+        let step_types = runtime.plan.steps().iter().map(|s| type_of(s.node)).collect();
         let solid = runtime.graph.nodes().find(|n| n.node_id.as_str() == "solid").expect("solid source").id;
         let mut smoke = Self {
             device,
@@ -239,6 +245,7 @@ impl Smoke {
             scene,
             sampler,
             step_names,
+            step_types,
             solid,
             solid_values: scene.surface_solid(),
             frame_count: 0,
@@ -323,6 +330,7 @@ impl Smoke {
         let mut stages = None;
         let mut unattributed = 0;
         let mut census = None;
+        let mut small_by_type: Vec<(String, f64, f64)> = Vec::new();
         if profile {
             let steps = self.runtime.take_step_profiles();
             let mut split = vec![(0.0, 0.0); STAGES.len()];
@@ -345,6 +353,14 @@ impl Smoke {
                 if span.millis < SMALL_SPAN_MS {
                     counts[1] += 1.0;
                     counts[2] += span.millis;
+                    let ty = step_of(&span.tag).and_then(|idx| self.step_types.get(idx)).map_or("unattributed", |t| t.as_str());
+                    match small_by_type.iter_mut().find(|(t, _, _)| t == ty) {
+                        Some(row) => {
+                            row.1 += 1.0;
+                            row.2 += span.millis;
+                        }
+                        None => small_by_type.push((ty.to_string(), 1.0, span.millis)),
+                    }
                 }
                 counts[3] += span.millis;
                 counts[4] += gap;
@@ -369,6 +385,7 @@ impl Smoke {
             unattributed_spans: unattributed,
             untimed: result.overflow + result.invalid,
             census,
+            small_by_type,
         }
     }
 
@@ -543,6 +560,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let mut stage_cpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
     let mut census: [Vec<f64>; 5] = Default::default();
+    let mut small_by_type: Vec<(String, f64, f64)> = Vec::new();
     let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
@@ -570,6 +588,15 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
             if let Some(counts) = r.census {
                 for (column, value) in census.iter_mut().zip(counts) {
                     column.push(value);
+                }
+            }
+            for (ty, count, ms) in &r.small_by_type {
+                match small_by_type.iter_mut().find(|(t, _, _)| t == ty) {
+                    Some(row) => {
+                        row.1 += count;
+                        row.2 += ms;
+                    }
+                    None => small_by_type.push((ty.clone(), *count, *ms)),
                 }
             }
         } else {
@@ -727,6 +754,11 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         "SMOKE {tag} dispatches per timestamped frame: {dispatches:.0} timed, {small:.0} under {} µs ({small_ms:.2} ms of their own); every dispatch's own time {own_ms:.2} ms, gaps between them {gap_ms:.2} ms",
         SMALL_SPAN_MS * 1000.0
     );
+    let profiled = profiled_totals.len().max(1) as f64;
+    small_by_type.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (ty, count, ms) in small_by_type.iter().take(16) {
+        println!("SMOKE {tag}   under {} µs: {ty:<32} {:6.0} per frame, {:.2} ms", SMALL_SPAN_MS * 1000.0, count / profiled, ms / profiled);
+    }
 
     if transport {
         // Paused transport that keeps rendering: no time, no frame count.
@@ -1127,6 +1159,17 @@ fn swash_render_smoke_32() {
 fn swash_render_smoke_64() {
     run(WaterScene::dam_break(64), "dam_break", true);
     run(WaterScene::still_pool(64), "still_pool", true);
+}
+
+/// The step's cadence levers at 64³ beside the shipped cadence, for the stage
+/// table: the density solve once a frame, and one water step a frame.
+#[test]
+fn swash_render_smoke_64_cadence() {
+    let base = WaterScene::dam_break(64);
+    run(base, "dam_break", false);
+    run(WaterScene { density_once: true, ..base }, "density_once", false);
+    let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
+    run(one_step, "one_step", false);
 }
 
 /// A mixed-radix lattice (96 = 2⁵·3), between the powers of two.

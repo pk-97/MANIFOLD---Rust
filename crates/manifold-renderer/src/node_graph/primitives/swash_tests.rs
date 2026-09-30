@@ -946,25 +946,6 @@ fn swash_collar_source_gather_and_pressure_match_cpu() {
         assert_close(&grid, &want, &format!("collar source, {k} entries"));
     }
 
-    // With a base: base + scale · value at the collar cells, base elsewhere.
-    let value = random_values(collar.count + 1, 0xba5e);
-    let base = random_values(cells, 0xba5f);
-    let mut want: Vec<f64> = base.iter().map(|&b| f64::from(b)).collect();
-    for (e, &c) in cpu_entries(&collar.flags, collar.count).iter().enumerate().filter(|(_, c)| **c != u32::MAX) {
-        want[c as usize] -= 0.5 * f64::from(value[e]);
-    }
-    let value_in = harness.array(&value, collar.count + 1);
-    let base_in = harness.array(&base, cells);
-    let inputs = [("total", total.0), ("value", value_in.0), ("base", base_in.0)];
-    let grid: Vec<f32> = run_into(&mut harness, &mut CollarSource::new(), &inputs, cells, &params(&[("scale", -0.5)]));
-    assert_close(&grid, &want, "collar source onto a base");
-    // A base shorter than the lattice is refused, never read past its end.
-    let short = harness.array(&base[..cells / 2], cells / 2);
-    let out = harness.array::<f32>(&[], cells);
-    let inputs = [("total", total.0), ("value", value_in.0), ("base", short.0)];
-    let (_, errors) = harness.run(&mut CollarSource::new(), &inputs, &[("out", out.0)], &params(&[]));
-    assert!(errors.iter().any(|e| e.contains("shorter")), "a short base must be refused: {errors:?}");
-
     // Gather: grid at the entries minus c (vector[K], or 0 for a short vector), then sum / cells.
     let entries = cpu_entries(&collar.flags, collar.count + 4);
     let k = entries.len();

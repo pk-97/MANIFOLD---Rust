@@ -15,7 +15,8 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 use super::native::seeded_world;
 use super::{FluidSettings, Transform};
 use crate::node_graph::primitives::swash_race_tests::{
-    Motion, Packing, Splash, motion, packing, print_lid_layer, print_side_sheet, print_splash, report_motion, report_water, splash,
+    Motion, Packing, Splash, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_motion, report_water,
+    splash,
 };
 use crate::node_graph::primitives::swash_still::write_still;
 use crate::node_graph::primitives::swash_volume::{VolumeDrift, volume_and_area};
@@ -123,6 +124,7 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
             let floor = f64::from(domain.min[1]);
             if sheet {
                 print_side_sheet(&label, frame as usize, &live, floor);
+                print_height(&label, frame as usize, &m);
             }
             if frame % 15 == 14 {
                 print_splash(&label, frame as usize, &thrown);

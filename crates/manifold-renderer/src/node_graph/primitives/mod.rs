@@ -351,7 +351,6 @@ mod collar_gather;
 mod collar_pressure;
 mod liquid_fill;
 mod liquid_feedback;
-mod field_feedback;
 mod cells_with_particles;
 mod particles_to_faces;
 mod face_gravity;
@@ -372,8 +371,6 @@ mod swash_solve_tests;
 mod swash_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_scene_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod swash_warm_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod swash_volume;
 #[cfg(all(test, feature = "water-race-probes"))]
