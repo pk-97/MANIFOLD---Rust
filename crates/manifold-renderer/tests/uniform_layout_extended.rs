@@ -343,8 +343,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 102,
-            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, count_surface_triangles and volume_surface_mesh; GPU MPM adds zero_array, matter_grid_update, grid_to_matter, matter_fill and particles_to_copies, then matter_move_bodies and matter_solid_distance, then matter_body_reaction; the FFT water solver adds cosine_reorder, cosine_spectrum, cosine_half_spectrum, cosine_poisson_divide, cosine_surface_scale, combine_rows, divide_by_value, krylov_givens, krylov_solve, collar_cells, select_flagged, chart_entries, chart_sums, chart_spread, collar_source, collar_gather and collar_pressure; all covered by uniform_layout_proof)"
+            scalar_count, 110,
+            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, count_surface_triangles and volume_surface_mesh; GPU MPM adds zero_array, matter_grid_update, grid_to_matter, matter_fill and particles_to_copies, then matter_move_bodies and matter_solid_distance, then matter_body_reaction; the FFT water solver adds cosine_reorder, cosine_spectrum, cosine_half_spectrum, cosine_poisson_divide, cosine_surface_scale, combine_rows, divide_by_value, krylov_givens, krylov_solve, collar_cells, select_flagged, chart_entries, chart_sums, chart_spread, collar_source, collar_gather and collar_pressure, then liquid_fill, cells_with_particles, particles_to_faces, face_gravity, face_divergence, subtract_pressure, extend_faces and faces_to_particles; all covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(

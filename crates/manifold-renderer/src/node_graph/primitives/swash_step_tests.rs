@@ -1,0 +1,498 @@
+//! GPU value proofs for the FFT water step's particle and face atoms
+//! (docs/FFT_WATER_SOLVER_DESIGN.md P3) against CPU f64 references.
+
+use super::cells_with_particles::CellsWithParticles;
+use super::extend_faces::ExtendFaces;
+use super::face_divergence::FaceDivergence;
+use super::face_gravity::FaceGravity;
+use super::faces_to_particles::FacesToParticles;
+use super::liquid_fill::LiquidFill;
+use super::liquid_surface_tests::{Harness, params, read};
+use super::particles_to_faces::ParticlesToFaces;
+use super::subtract_pressure::SubtractPressure;
+use crate::node_graph::effect_node::ParamValues;
+use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
+use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::ports::KnownItem;
+use crate::node_graph::primitive::Primitive;
+
+/// A lattice with unequal sides, so a swapped axis shows.
+const N: [usize; 3] = [6, 5, 4];
+const H: f32 = 0.25;
+const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
+
+struct Stream(u64);
+
+impl Stream {
+    fn new(seed: u64) -> Self {
+        Self(seed | 1)
+    }
+
+    /// Uniform in [0, 1).
+    fn unit(&mut self) -> f32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    fn signed(&mut self, scale: f32) -> f32 {
+        (self.unit() - 0.5) * 2.0 * scale
+    }
+}
+
+fn padded() -> [usize; 3] {
+    N.map(|n| n + 1)
+}
+
+fn face_len() -> usize {
+    padded().iter().product()
+}
+
+fn cell_len() -> usize {
+    N.iter().product()
+}
+
+fn pad_index(p: [usize; 3]) -> usize {
+    let m = padded();
+    p[0] + m[0] * (p[1] + m[1] * p[2])
+}
+
+fn pad_coords(i: usize) -> [usize; 3] {
+    let m = padded();
+    [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])]
+}
+
+fn cell_index(p: [usize; 3]) -> usize {
+    p[0] + N[0] * (p[1] + N[1] * p[2])
+}
+
+fn cell_coords(c: usize) -> [usize; 3] {
+    [c % N[0], (c / N[0]) % N[1], c / (N[0] * N[1])]
+}
+
+/// Face a of padded cell p exists when its other two indices are inside.
+fn face_exists(p: [usize; 3], a: usize) -> bool {
+    (0..3).all(|b| b == a || p[b] < N[b])
+}
+
+fn lattice(extra: &[(&'static str, f32)]) -> ParamValues {
+    let mut all = vec![
+        ("nodes_x", N[0] as f32),
+        ("nodes_y", N[1] as f32),
+        ("nodes_z", N[2] as f32),
+        ("cell_size", H),
+        ("lattice_min_x", MIN[0]),
+        ("lattice_min_y", MIN[1]),
+        ("lattice_min_z", MIN[2]),
+    ];
+    all.extend_from_slice(extra);
+    params(&all)
+}
+
+fn run_into<P: Primitive, T: KnownItem + bytemuck::Pod>(
+    harness: &mut Harness,
+    prim: &mut P,
+    inputs: &[(&'static str, crate::node_graph::bindings::Slot)],
+    len: usize,
+    step_params: &ParamValues,
+) -> Vec<T> {
+    let out = harness.array::<T>(&[], len);
+    let (_, errors) = harness.run(prim, inputs, &[("out", out.0)], step_params);
+    assert!(errors.is_empty(), "{errors:?}");
+    read(&out.1, len)
+}
+
+fn close(got: f32, want: f64, scale: f64, what: &str) {
+    assert!((f64::from(got) - want).abs() <= 1e-5 * scale.max(1.0), "{what}: {got} vs {want}");
+}
+
+/// Random faces over the padded grid; faces that do not exist are zero.
+/// `valid` draws weights of 0 or 1 (a projected grid) instead of positive
+/// particle weights.
+fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
+    let mut rng = Stream::new(seed);
+    (0..face_len())
+        .map(|i| {
+            let p = pad_coords(i);
+            let mut face = FaceSample::default();
+            for a in 0..3 {
+                if face_exists(p, a) {
+                    face.velocity[a] = rng.signed(2.0);
+                    face.weight[a] = if valid { f32::from(u8::from(rng.unit() < 0.6)) } else { rng.unit() };
+                }
+            }
+            face
+        })
+        .collect()
+}
+
+fn random_water(seed: u64) -> Vec<f32> {
+    let mut rng = Stream::new(seed);
+    (0..cell_len()).map(|_| f32::from(u8::from(rng.unit() < 0.5))).collect()
+}
+
+/// Particles scattered through the box, a few unused slots among them.
+fn random_particles(seed: u64, count: usize) -> Vec<FluidParticle> {
+    let mut rng = Stream::new(seed);
+    (0..count)
+        .map(|i| {
+            let position: [f32; 3] = std::array::from_fn(|a| MIN[a] + rng.unit() * N[a] as f32 * H);
+            let velocity = [rng.signed(1.5), rng.signed(1.5), rng.signed(1.5)];
+            let radius = if i % 11 == 5 { 0.0 } else { 0.08 };
+            FluidParticle { position_radius: [position[0], position[1], position[2], radius], velocity, id: i as u32 + 1 }
+        })
+        .collect()
+}
+
+/// Counting sort by cell, stable: the contract node.sort_particles_into_cells
+/// publishes.
+fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>) {
+    let cell_of = |p: &FluidParticle| {
+        let c: [usize; 3] = std::array::from_fn(|a| {
+            (((p.position_radius[a] - MIN[a]) / H).floor() as i64).clamp(0, N[a] as i64 - 1) as usize
+        });
+        cell_index(c)
+    };
+    let mut order: Vec<usize> = (0..particles.len()).collect();
+    order.sort_by_key(|&i| cell_of(&particles[i]));
+    let sorted: Vec<FluidParticle> = order.iter().map(|&i| particles[i]).collect();
+    let mut ranges = vec![CellRange::default(); cell_len()];
+    for (s, p) in sorted.iter().enumerate() {
+        let r = &mut ranges[cell_of(p)];
+        if r.count == 0 {
+            r.start = s as u32;
+        }
+        r.count += 1;
+    }
+    (sorted, ranges)
+}
+
+#[test]
+fn swash_cells_with_particles_marks_occupied_bins() {
+    let mut harness = Harness::new();
+    let mut rng = Stream::new(0xce11);
+    let ranges: Vec<CellRange> =
+        (0..cell_len()).map(|c| CellRange { start: c as u32 * 3, count: u32::from(rng.unit() < 0.4) * 3 }).collect();
+    let input = harness.array(&ranges, cell_len());
+    let got: Vec<f32> = run_into(&mut harness, &mut CellsWithParticles::new(), &[("cell_ranges", input.0)], cell_len(), &params(&[]));
+    for (c, (g, r)) in got.iter().zip(&ranges).enumerate() {
+        assert_eq!(*g, f32::from(u8::from(r.count > 0)), "cell {c}");
+    }
+}
+
+#[test]
+fn swash_particles_to_faces_matches_the_tent_sum() {
+    let mut harness = Harness::new();
+    let particles = random_particles(0x9261, 400);
+    let (sorted, ranges) = cpu_sort(&particles);
+    let inputs = [
+        ("sorted", harness.array(&sorted, sorted.len()).0),
+        ("cell_ranges", harness.array(&ranges, ranges.len()).0),
+    ];
+    let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
+    let mut checked = 0;
+    for (i, face) in got.iter().enumerate() {
+        let p = pad_coords(i);
+        for a in 0..3 {
+            if !face_exists(p, a) {
+                assert_eq!((face.velocity[a], face.weight[a]), (0.0, 0.0), "missing face {p:?}/{a}");
+                continue;
+            }
+            let centre: [f64; 3] = std::array::from_fn(|b| p[b] as f64 + if b == a { 0.0 } else { 0.5 });
+            let (mut weight, mut momentum) = (0.0f64, 0.0f64);
+            for particle in particles.iter().filter(|q| q.position_radius[3] > 0.0) {
+                let w: f64 = (0..3)
+                    .map(|b| {
+                        let q = (f64::from(particle.position_radius[b]) - f64::from(MIN[b])) / f64::from(H);
+                        (1.0 - (q - centre[b]).abs()).max(0.0)
+                    })
+                    .product();
+                weight += w;
+                momentum += w * f64::from(particle.velocity[a]);
+            }
+            close(face.weight[a], weight, weight, &format!("weight {p:?}/{a}"));
+            let velocity = if weight > 0.0 { momentum / weight } else { 0.0 };
+            // A face at the edge of a particle's reach has a tiny weight; its
+            // ratio carries the f32 rounding of that weight.
+            if weight > 1e-3 {
+                close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 200, "the fixture reaches most faces, got {checked}");
+}
+
+#[test]
+fn swash_face_gravity_adds_gravity_and_holds_the_walls() {
+    let mut harness = Harness::new();
+    let faces = random_faces(0x96a7, false);
+    let input = harness.array(&faces, face_len());
+    let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
+    let step = lattice(&[("gravity_x", g[0]), ("gravity_y", g[1]), ("gravity_z", g[2]), ("step_dt", dt)]);
+    let got: Vec<FaceSample> = run_into(&mut harness, &mut FaceGravity::new(), &[("faces", input.0)], face_len(), &step);
+    for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
+        let p = pad_coords(i);
+        for a in 0..3 {
+            let (velocity, weight) = if !face_exists(p, a) {
+                (0.0, 0.0)
+            } else if p[a] == 0 || p[a] == N[a] {
+                (0.0, f64::from(before.weight[a]))
+            } else {
+                (f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt), f64::from(before.weight[a]))
+            };
+            close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
+            close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
+        }
+    }
+}
+
+#[test]
+fn swash_face_divergence_is_the_outflow_of_water_cells() {
+    let mut harness = Harness::new();
+    let faces = random_faces(0xd1f, false);
+    let water = random_water(0x3a7e);
+    let inputs = [("faces", harness.array(&faces, face_len()).0), ("water", harness.array(&water, cell_len()).0)];
+    let got: Vec<f32> = run_into(&mut harness, &mut FaceDivergence::new(), &inputs, cell_len(), &lattice(&[]));
+    for (c, g) in got.iter().enumerate() {
+        let p = cell_coords(c);
+        let want = if water[c] > 0.5 {
+            (0..3)
+                .map(|a| {
+                    let mut q = p;
+                    q[a] += 1;
+                    f64::from(faces[pad_index(q)].velocity[a]) - f64::from(faces[pad_index(p)].velocity[a])
+                })
+                .sum::<f64>()
+                / f64::from(H)
+        } else {
+            0.0
+        };
+        close(*g, want, 10.0, &format!("cell {p:?}"));
+    }
+}
+
+#[test]
+fn swash_subtract_pressure_projects_faces_touching_water() {
+    let mut harness = Harness::new();
+    let faces = random_faces(0x5b7, false);
+    let water = random_water(0xa7e2);
+    let mut rng = Stream::new(0x9e55);
+    let pressure: Vec<f32> = water.iter().map(|&w| if w > 0.5 { rng.signed(3.0) } else { 0.0 }).collect();
+    let inputs = [
+        ("faces", harness.array(&faces, face_len()).0),
+        ("pressure", harness.array(&pressure, cell_len()).0),
+        ("water", harness.array(&water, cell_len()).0),
+    ];
+    let got: Vec<FaceSample> = run_into(&mut harness, &mut SubtractPressure::new(), &inputs, face_len(), &lattice(&[]));
+    for (i, face) in got.iter().enumerate() {
+        let p = pad_coords(i);
+        for a in 0..3 {
+            let (velocity, weight) = if !face_exists(p, a) {
+                (0.0, 0.0)
+            } else if p[a] == 0 || p[a] == N[a] {
+                (0.0, 1.0)
+            } else {
+                let mut below = p;
+                below[a] -= 1;
+                let (up, down) = (cell_index(p), cell_index(below));
+                let u = f64::from(faces[i].velocity[a]);
+                if water[up] > 0.5 || water[down] > 0.5 {
+                    (u - (f64::from(pressure[up]) - f64::from(pressure[down])) / f64::from(H), 1.0)
+                } else {
+                    (u, 0.0)
+                }
+            };
+            close(face.velocity[a], velocity, 30.0, &format!("velocity {p:?}/{a}"));
+            close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
+        }
+    }
+}
+
+fn cpu_extend(faces: &[FaceSample]) -> Vec<FaceSample> {
+    (0..face_len())
+        .map(|i| {
+            let p = pad_coords(i);
+            let mut out = FaceSample::default();
+            for a in 0..3 {
+                if !face_exists(p, a) {
+                    continue;
+                }
+                out.velocity[a] = faces[i].velocity[a];
+                out.weight[a] = faces[i].weight[a];
+                if faces[i].weight[a] > 0.0 {
+                    continue;
+                }
+                let (mut sum, mut hits) = (0.0f64, 0.0f64);
+                for b in 0..3 {
+                    for d in [-1i64, 1] {
+                        let q = p[b] as i64 + d;
+                        let top = if b == a { N[b] as i64 } else { N[b] as i64 - 1 };
+                        if q < 0 || q > top {
+                            continue;
+                        }
+                        let mut r = p;
+                        r[b] = q as usize;
+                        let neighbour = faces[pad_index(r)];
+                        if neighbour.weight[a] > 0.0 {
+                            sum += f64::from(neighbour.velocity[a]);
+                            hits += 1.0;
+                        }
+                    }
+                }
+                if hits > 0.0 {
+                    out.velocity[a] = (sum / hits) as f32;
+                    out.weight[a] = 1.0;
+                }
+            }
+            out
+        })
+        .collect()
+}
+
+#[test]
+fn swash_extend_faces_fills_one_layer() {
+    let mut harness = Harness::new();
+    let faces = random_faces(0xe7e, true);
+    let input = harness.array(&faces, face_len());
+    let got: Vec<FaceSample> = run_into(&mut harness, &mut ExtendFaces::new(), &[("faces", input.0)], face_len(), &lattice(&[]));
+    let want = cpu_extend(&faces);
+    let mut filled = 0;
+    for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+        for a in 0..3 {
+            close(g.velocity[a], f64::from(w.velocity[a]), 1.0, &format!("velocity {:?}/{a}", pad_coords(i)));
+            assert_eq!(g.weight[a], w.weight[a], "weight {:?}/{a}", pad_coords(i));
+            filled += usize::from(faces[i].weight[a] == 0.0 && w.weight[a] > 0.0);
+        }
+    }
+    assert!(filled > 20, "the fixture fills faces, got {filled}");
+}
+
+/// The kernel's per-component trilinear sample over faces with weight > 0,
+/// in f64. q is in cells from the lattice minimum.
+fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
+    std::array::from_fn(|a| {
+        let top: [i64; 3] = std::array::from_fn(|b| if b == a { N[b] as i64 } else { N[b] as i64 - 1 });
+        let s: [f64; 3] = std::array::from_fn(|b| q[b] - if b == a { 0.0 } else { 0.5 });
+        let base: [i64; 3] = std::array::from_fn(|b| (s[b].floor() as i64).clamp(0, (top[b] - 1).max(0)));
+        let t: [f64; 3] = std::array::from_fn(|b| (s[b] - base[b] as f64).clamp(0.0, 1.0));
+        let (mut sum, mut total) = (0.0, 0.0);
+        for corner in 0..8 {
+            let bit = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
+            let c: [usize; 3] = std::array::from_fn(|b| (base[b] + bit[b] as i64).min(top[b]) as usize);
+            let face = field[pad_index(c)];
+            if face.weight[a] > 0.0 {
+                let w: f64 = (0..3).map(|b| if bit[b] == 1 { t[b] } else { 1.0 - t[b] }).product();
+                sum += w * f64::from(face.velocity[a]);
+                total += w;
+            }
+        }
+        if total > 1e-6 { sum / total } else { 0.0 }
+    })
+}
+
+#[test]
+fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
+    let mut harness = Harness::new();
+    let faces = random_faces(0xf1a5, true);
+    let old = random_faces(0x01d5, false);
+    let mut particles = random_particles(0x2b3, 300);
+    // Two particles against the walls, so the clamp is exercised.
+    particles[0].position_radius[0] = MIN[0] + 1e-4;
+    particles[1].position_radius[1] = MIN[1] + N[1] as f32 * H - 1e-4;
+    let (dt, flip) = (0.07f32, 0.9f32);
+    let inputs = [
+        ("particles", harness.array(&particles, particles.len()).0),
+        ("faces", harness.array(&faces, face_len()).0),
+        ("old", harness.array(&old, face_len()).0),
+    ];
+    let got: Vec<FluidParticle> =
+        run_into(&mut harness, &mut FacesToParticles::new(), &inputs, particles.len(), &lattice(&[("step_dt", dt), ("flip", flip)]));
+    let per_cell = f64::from(dt) / f64::from(H);
+    for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
+        if p.position_radius[3] <= 0.0 {
+            assert_eq!(g, p, "unused slot {i} passes through");
+            continue;
+        }
+        let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
+        let k1 = cpu_sample(q0, &faces);
+        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces);
+        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces);
+        let before = cpu_sample(q0, &old);
+        for a in 0..3 {
+            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0).clamp(0.001, N[a] as f64 - 0.001);
+            let position = f64::from(MIN[a]) + q1 * f64::from(H);
+            let velocity =
+                f64::from(flip) * (f64::from(p.velocity[a]) + k1[a] - before[a]) + (1.0 - f64::from(flip)) * k1[a];
+            assert!((f64::from(g.position_radius[a]) - position).abs() < 2e-5, "particle {i} position {a}: {} vs {position}", g.position_radius[a]);
+            assert!((f64::from(g.velocity[a]) - velocity).abs() < 1e-4, "particle {i} velocity {a}: {} vs {velocity}", g.velocity[a]);
+        }
+        assert_eq!((g.position_radius[3], g.id), (p.position_radius[3], p.id), "particle {i} keeps radius and id");
+    }
+}
+
+fn cpu_fill_hash(x: u32) -> u32 {
+    let s = x.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let w = ((s >> ((s >> 28) + 4)) ^ s).wrapping_mul(277_803_737);
+    (w >> 22) ^ w
+}
+
+#[test]
+fn swash_liquid_fill_places_pool_then_box() {
+    let mut harness = Harness::new();
+    let (pool, column, seed) = (1u32, [[1u32, 4], [0, 4], [2, 9]], 7u32);
+    // 24 pool cells (6 × 1 × 4) and 18 box cells (3 × 3 × 2), plus 5 spare slots.
+    let capacity = 8 * (24 + 18) + 5;
+    let out = harness.array::<FluidParticle>(&[], 1);
+    let count = harness.scalar();
+    let step = lattice(&[
+        ("pool_cells", pool as f32),
+        ("column_x0", column[0][0] as f32),
+        ("column_x1", column[0][1] as f32),
+        ("column_y0", column[1][0] as f32),
+        ("column_y1", column[1][1] as f32),
+        ("column_z0", column[2][0] as f32),
+        ("column_z1", column[2][1] as f32),
+        ("seed", seed as f32),
+        ("max_capacity", capacity as f32),
+    ]);
+    let mut fill = LiquidFill::new();
+    let (scalars, errors) = harness.run(&mut fill, &[], &[("particles", out.0), ("count", count)], &step);
+    assert!(errors.is_empty(), "{errors:?}");
+    let placed = capacity - 5;
+    assert!(scalars.iter().any(|(s, v)| *s == count && *v == ParamValue::Float(placed as f32)), "{scalars:?}");
+    let got: Vec<FluidParticle> = read(&harness.buffer(out.0), capacity);
+    // The box clipped above the pool and to the lattice: x 1..4, y 1..4, z 2..4.
+    let mut cells: Vec<[u32; 3]> = Vec::new();
+    for z in 0..N[2] as u32 {
+        for x in 0..N[0] as u32 {
+            cells.push([x, 0, z]);
+        }
+    }
+    for z in 2..4 {
+        for y in 1..4 {
+            for x in 1..4 {
+                cells.push([x, y, z]);
+            }
+        }
+    }
+    assert_eq!(cells.len() * 8, placed);
+    for (i, g) in got.iter().enumerate() {
+        if i >= placed {
+            assert_eq!(*g, FluidParticle::default(), "slot {i} past the fill is unused");
+            continue;
+        }
+        let c = cells[i / 8];
+        let sub = i as u32 % 8;
+        let key = (i as u32).wrapping_mul(3).wrapping_add(seed.wrapping_mul(2_654_435_761));
+        for a in 0..3 {
+            let unit = (cpu_fill_hash(key.wrapping_add(a as u32)) >> 8) as f32 / 16_777_216.0;
+            let local = 0.25 + 0.5 * ((sub >> a) & 1) as f32 + 0.25 * (unit - 0.5);
+            let want = MIN[a] + (c[a] as f32 + local) * H;
+            assert!((g.position_radius[a] - want).abs() < 1e-5, "particle {i} axis {a}: {} vs {want}", g.position_radius[a]);
+        }
+        assert!((g.position_radius[3] - 0.31017 * H).abs() < 1e-6);
+        assert_eq!((g.velocity, g.id), ([0.0; 3], i as u32 + 1), "particle {i}");
+    }
+}

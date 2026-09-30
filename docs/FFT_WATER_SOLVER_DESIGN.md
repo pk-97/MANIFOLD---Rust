@@ -101,9 +101,9 @@ Memory: the collar capacity is 8n² entries (32,768 at 64³, 131,072 at 128³; t
 
 ## 5. Phasing
 
-All phases on one branch `feat/fft-water` off main, via the slot ring. Order: P0 → P1 → P3 → P3b (solids) → P4. P3c (active region) needs only P3; the lead places it. Test scope for every phase: `cargo nextest run -p manifold-renderer fft_water` plus `scripts/gpu_proofs_gate.py` (every phase touches primitive kernels). Clippy `-p manifold-renderer -p manifold-gpu`.
+All phases on one branch `feat/fft-water` off main, via the slot ring. Order: P0 → P1 → P3 → P3b (solids) → P3c (active region) → P4. Test scope for every phase: `cargo nextest run -p manifold-renderer fft_water` plus `scripts/gpu_proofs_gate.py` (every phase touches primitive kernels). Clippy `-p manifold-renderer -p manifold-gpu`.
 
-GPU safety, every phase: an out-of-bounds write can freeze the whole Mac (naga's SPIR-V bounds policy is unchecked, and `arrayLength` ignores a binding's offset). Before the first GPU run of a new atom or preset at any size, a CPU test proves every buffer covers the extent its dispatch and indexing reach (I6). Step 64³ before 128³. MPM scenes run at 64³ only until BUG-bnp9 (MPM matter scenes above res 64 hard-lock the Mac) is fixed.
+GPU safety, every phase: an out-of-bounds write can freeze the whole Mac (naga's SPIR-V bounds policy is unchecked, and `arrayLength` ignores a binding's offset). Before the first GPU run of a new atom or preset at any size, a CPU test proves every buffer covers the extent its dispatch and indexing reach (I6). Step 64³ before 128³. Other solvers' water scenes (MPM, and the shared liquid surface) run at 64³ only until BUG-gwe4 (staged GPU check of the water presets above res 64) passes.
 
 ### P0 — Engine 3D FFT and cosine transform
 
@@ -158,21 +158,23 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   - Preset `FftWaterDamBreak.json`: the engine's Dam Break scene without its obstacle box (4 m domain, walls on all six sides, the `initial_column` block and the 0.16 m fill; where it differs from the P1 fixture's scene, the engine's wins, since accuracy is judged on the same scene), 8 particles per cell, 2 steps per frame, 24 passes, at 64³; and its 128³ twin. The shipped Dam Break has a box in the water (`obstacle_transform`, 0.6 × 1.16 × 0.85 m at (0.35, 0.58, −0.1)); SWASH has no solids until P3b, so P3's race runs the engine with the obstacle unwired and P3b races the scene as shipped.
   - Cost probe `fft_water_cost_probe.rs` on the MPM probe's timing method: GPU ms and CPU encode ms per tick, step and surface separately.
   - Engine probe: the same Dam Break through `FluidWorld::step` at the same resolution and frames, `simulation_ms` and `meshing_ms` per tick, whitewater off for the race and on for the look.
-  - Accuracy oracles, run on both solvers, each on its own water cells. Residual: RMS face divergence over water cells after projection, divided by the RMS before it, per tick. The engine's is read by a native test probe beside `coupling_boundary_probe.cpp`, with no engine edit. Volume: the signed volume inside each solver's surface mesh per frame, relative to frame 0.
+  - Accuracy oracles, judged by outcome and measured the same way on both solvers. Divergence: the face velocity field after projection, on the shared 64³ (or 128³) grid, one CPU divergence operator for both; RMS and max over each solver's water cells, per tick. The engine's field is read by a native test probe beside `coupling_boundary_probe.cpp` (a MANIFOLD-authored probe, one line in `PROVENANCE.md`, no engine edit). Volume: the signed volume inside each solver's surface mesh per frame, relative to frame 0. Each solver's internal residual is reported as information only.
   - Occupancy report, per frame over the 300-frame Dam Break: the fraction of the box that is water, the fraction of 8³ blocks holding water, and the height of the water's bounding box in cells. These size P3c. Also the collar size per frame against its capacity (8n²): a collar past capacity drops entries safely but solves the wrong problem, so the stats count overflow and the proofs require zero; splashes grow the collar past the P1 fixtures' 18,655, and the Krylov cost scales with capacity, so capacity is set from the measured maximum.
   - Still-pool proof (I5); momentum proof (a box of water in free fall keeps g within 1%).
 - **Gate:** both proofs pass. Race table, same machine, same session, at 64³ and 128³:
 
   | Row | SWASH | FLIP Fluids engine |
   |---|---|---|
-  | ms per tick, end to end (primary) | step + surface, GPU and CPU encode | `simulation_ms`, whitewater off |
+  | ms per tick, end to end (primary) | step + surface, GPU | `simulation_ms`, whitewater off |
+  | CPU encode ms per frame (content thread) | both steps + surface | — |
   | of which surface | surface pipeline | `meshing_ms` |
-  | residual, median and max over 300 frames | the oracle above | the oracle above |
+  | divergence after projection, median and max over 300 frames | the oracle above | the oracle above |
   | volume drift: max \|V/V₀ − 1\| over 300 frames, and at frame 300 | surface mesh | surface mesh |
   | whitewater cost (information) | none | `simulation_ms` with whitewater on minus off |
 
-  Secondary rows: MPM `matter_cost_probe` frame ms at 64³ (and 128³ only after BUG-bnp9 is fixed).
-- **Open (BUG-m632 (swash-residual-bar), Peter's call):** the engine solves in double to 1e-9 relative when it converges within 900 iterations. SWASH is single precision (f32) and reaches about 1e-3 at 24 passes and 6e-5 at 32. f32 keeps about 7 digits, so no f32 solve can even store a pressure good to 1e-9. A residual count read literally is lost before the race starts. The decision is whether the residual is judged by its visible effect (volume drift and the still pool) or at a stated threshold. P3 reports both residuals as measured either way.
+  Secondary rows: MPM `matter_cost_probe` frame ms at 64³ (128³ waits for BUG-gwe4).
+- **CPU encode:** P1 spends 5.6 ms of CPU per solve on encoding, and a frame runs two steps inside the content thread's 16.6 ms. Every P3 table reports encode ms per frame next to GPU ms, with the lever named (fewer dispatches per pass, a pre-encoded or indirect command buffer for the pass loop, or caching the encoded pass). None is built in P3 unless it is cheap and clearly the root cause.
+- **Open (BUG-m632 (swash-residual-bar), Peter's call):** the engine solves in double to 1e-9 relative when it converges within 900 iterations. SWASH is single precision (f32) and reaches about 1e-3 at 24 passes and 6e-5 at 32. f32 keeps about 7 digits, so no f32 solve can even store a pressure good to 1e-9: an internal residual count read literally is lost before the race starts. The lead recommends judging accuracy by outcome (the divergence and volume rows above), measured the same way on both.
 - **Kill check:** SWASH's volume drift over 2× the engine's at 64³ → stop and escalate before P3b: speed levers can't buy that back.
 - **Demo:** L2 — three columns, 300 frames each, headless to PNGs: SWASH through `particle_volume` and the surface pipeline; the FLIP Fluids engine's own Dam Break from `WaterDamBreak.json` (CPU-meshed, whitewater as shipped) at the same resolution and frames; MPM's Dam Break at 64³. Peter's exports `~/Downloads/waterExportTestVert80Res.mp4` and `~/Downloads/waterBoxTest64.mp4` are the look reference: read them, never write there. The demo says which part of any look gap to the engine is whitewater (BUG-imy3). **Performer gesture:** drop the block and watch the pool settle; the gate is the still-pool number after the slosh.
 - **Forbidden:** atomics in particle→face (D7); importing any `matter_*` type (I4); timing either solver on a contended GPU or CPU (re-run outliers); editing the engine to measure it.

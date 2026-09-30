@@ -214,6 +214,9 @@ pub mod well_known {
         VIEW_MINUS = "view_minus";
         SHEETS = "sheets";
         CELL = "cell";
+        // FFT_WATER_SOLVER_DESIGN.md D2: the three face velocities a padded cell owns
+        FACE_VELOCITY = "face_velocity";
+        FACE_WEIGHT = "face_weight";
 
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's

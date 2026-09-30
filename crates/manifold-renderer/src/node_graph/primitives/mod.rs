@@ -349,6 +349,15 @@ mod chart_spread;
 mod collar_source;
 mod collar_gather;
 mod collar_pressure;
+mod liquid_fill;
+mod liquid_feedback;
+mod cells_with_particles;
+mod particles_to_faces;
+mod face_gravity;
+mod face_divergence;
+mod subtract_pressure;
+mod extend_faces;
+mod faces_to_particles;
 #[cfg(test)]
 mod swash_preset;
 #[cfg(test)]
@@ -357,6 +366,8 @@ mod swash_extent_tests;
 mod swash_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_solve_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod swash_step_tests;
 mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

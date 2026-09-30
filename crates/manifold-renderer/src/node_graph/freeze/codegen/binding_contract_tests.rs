@@ -174,8 +174,10 @@ fn dispatch_tail_census_is_stable() {
     // cosine_half_spectrum and cosine_poisson_divide, buffer atoms; P1 adds
     // cosine_surface_scale, combine_rows, divide_by_value, krylov_givens,
     // krylov_solve, collar_cells, select_flagged, chart_entries, chart_sums,
-    // chart_spread, collar_source, collar_gather and collar_pressure.
-    assert_eq!(total, 217, "standalone atom census drifted");
+    // chart_spread, collar_source, collar_gather and collar_pressure; P3 adds
+    // liquid_fill, cells_with_particles, particles_to_faces, face_gravity,
+    // face_divergence, subtract_pressure, extend_faces and faces_to_particles.
+    assert_eq!(total, 225, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

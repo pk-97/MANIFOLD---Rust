@@ -768,7 +768,7 @@ fn view_sheet(entry: &ChartEntry, view: usize) -> usize {
 }
 
 /// Run one atom from harness arrays into a fresh `out` of `len` elements.
-fn run_into<P: Primitive, T: bytemuck::Pod>(
+fn run_into<P: Primitive, T: bytemuck::Pod + crate::node_graph::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
     inputs: &[(&'static str, Slot)],

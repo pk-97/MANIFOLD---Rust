@@ -491,6 +491,7 @@ const NON_STANDALONE: &[&str] = &[
     "node.grid_points",
     "node.hypercube_edges",
     "node.lightning_bolt",
+    "node.liquid_feedback",
     "node.mesh_edges",
     "node.one_euro_filter",
     "node.platonic_solid_edges",
