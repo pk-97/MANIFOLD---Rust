@@ -462,16 +462,6 @@ impl MatterScene {
             .unwrap_or_else(|| panic!("the frame node read no `{name}`"))
     }
 
-    /// Corrupt one point's position with NaN between frames (the GPU is idle:
-    /// every frame waits for completion).
-    pub(crate) fn poison_point(&self, index: usize) {
-        let backend = self.executor.backend();
-        let buffer = backend.array_buffer(backend.slot_for(self.points).expect("bound")).expect("array");
-        let offset = (index * std::mem::size_of::<MatterPoint>()) as u64;
-        // SAFETY: shared storage, no GPU work in flight.
-        unsafe { buffer.write(offset, bytemuck::bytes_of(&[f32::NAN; 3])) };
-    }
-
     /// Give every live point the same velocity and no affine motion, between
     /// frames (the GPU is idle).
     pub(crate) fn set_velocity(&self, velocity: [f32; 3]) {
@@ -675,35 +665,6 @@ fn matter_fixed_point_headroom() {
     eprintln!("matter_fixed_point_headroom: peak accumulator {peak} ({:.1}% of 2^30)", 100.0 * f64::from(peak) / f64::from(1u32 << 30));
     assert!(peak < 1 << 30, "accumulator reached {peak}");
     assert_eq!(scene.state_input("substeps_per_tick"), 34.0);
-}
-
-#[test]
-fn matter_nonfinite_tick_not_published() {
-    let mut scene = MatterScene::new(&small_dam_break());
-    for _ in 0..10 {
-        scene.tick();
-    }
-    let before = scene.frame();
-    scene.poison_point(100);
-    scene.tick();
-    assert!(scene.stats().nonfinite > 0, "a NaN point must show in the stats");
-    let published = scene.frame();
-    assert!(
-        published.iter().all(|p| p.position_radius.iter().all(|v| v.is_finite())),
-        "a non-finite tick reached the frame"
-    );
-    assert_eq!(bytemuck::cast_slice::<FluidParticle, u8>(&published), bytemuck::cast_slice::<FluidParticle, u8>(&before));
-    // The readback halts the solver: the state stops advancing.
-    scene.tick();
-    let halted = scene.points();
-    scene.tick();
-    assert_eq!(bytemuck::cast_slice::<MatterPoint, u8>(&halted), bytemuck::cast_slice::<MatterPoint, u8>(&scene.points()));
-    // Reset starts a fresh epoch that runs again.
-    scene.set_domain("reset", 1.0);
-    scene.tick();
-    scene.tick();
-    assert_eq!(scene.stats().nonfinite, 0);
-    assert!(scene.points().iter().all(|p| p.position.iter().all(|v| v.is_finite())));
 }
 
 /// Live (a preview budget in scope): a non-finite gravity holds the liquid

@@ -9,7 +9,7 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraph
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
-use crate::node_graph::matter::WATER_DENSITY;
+use crate::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS, WATER_DENSITY};
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,8 +18,8 @@ pub enum Fixture {
     StillPool,
     /// A column of liquid released into a shallow pool.
     DamBreak,
-    /// A box falling onto a weightless pool, `density_ratio` times as dense
-    /// as the liquid.
+    /// A box falling onto a weightless pool with open faces, `density_ratio`
+    /// times as dense as the liquid.
     Collision { density_ratio: f32 },
     /// A half-density box dropped into a pool.
     FloatingBox,
@@ -103,6 +103,50 @@ impl Check {
             _ => &[Fixture::DamBreak],
         }
     }
+
+    /// Whether the check reads the row's [`LiquidSolverRow::totals`].
+    pub fn needs_totals(self) -> bool {
+        matches!(self, Check::Collision | Check::ExportFrameRateIndependent | Check::NonfiniteTickNotPublished)
+    }
+}
+
+/// The liquid at the end of a tick, in SI units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiquidTotals {
+    /// kg.
+    pub mass: f64,
+    /// kg·m/s.
+    pub momentum: [f64; 3],
+    /// Kinetic plus stored elastic energy, joules.
+    pub energy: f64,
+    /// Records holding a non-finite position or velocity.
+    pub nonfinite: u32,
+}
+
+/// Where a row's solver publishes its end-of-tick totals: a node type's
+/// array output, its length in words and how to read it.
+pub struct TotalsReadout {
+    pub type_id: &'static str,
+    pub port: &'static str,
+    pub words: usize,
+    pub read: fn(&[u32]) -> LiquidTotals,
+}
+
+/// The solver state a check corrupts between frames: a node type's array
+/// output of records that each start with a position (three f32).
+pub struct StateArray {
+    pub type_id: &'static str,
+    pub port: &'static str,
+    pub record_bytes: usize,
+}
+
+/// A setup change that overflows a run-time capacity. The error must carry
+/// the count and each of `names`.
+pub struct OverflowCase {
+    pub what: &'static str,
+    pub fixture: Fixture,
+    pub edit: fn(&mut EffectGraphDef),
+    pub names: &'static [&'static str],
 }
 
 /// A setup change a row's domain refuses, and the controls the refusal
@@ -127,6 +171,12 @@ pub struct LiquidSolverRow {
     /// Atoms whose WGSL may not use atomics.
     pub atomic_free: &'static [&'static str],
     pub refusals: &'static [RefusalCase],
+    /// Needed by every check with [`Check::needs_totals`] the row runs.
+    pub totals: Option<TotalsReadout>,
+    /// Needed by [`Check::NonfiniteTickNotPublished`].
+    pub state: Option<StateArray>,
+    /// Needed by [`Check::OverflowReported`].
+    pub overflow: Option<OverflowCase>,
     /// A closed list, each with its reason.
     pub exempt: &'static [(Check, &'static str)],
 }
@@ -183,6 +233,23 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["initial_volume"],
             },
         ],
+        totals: Some(TotalsReadout {
+            type_id: "node.matter_state",
+            port: "stats",
+            words: STATS_WORDS as usize,
+            read: matter_totals,
+        }),
+        state: Some(StateArray {
+            type_id: "node.matter_state",
+            port: "out",
+            record_bytes: std::mem::size_of::<MatterPoint>(),
+        }),
+        overflow: Some(OverflowCase {
+            what: "Mesh Capacity 3 on Dam Break Matter's liquid surface",
+            fixture: Fixture::DamBreak,
+            edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
+            names: &["Mesh Capacity"],
+        }),
         exempt: &[(
             Check::PauseDiscardsImpulses,
             "owed to P8: GPU liquids refuse impulses until P8 routes them (LIQUID_SCENE_OWED)",
@@ -214,6 +281,9 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 names: &["initial_volume"],
             },
         ],
+        totals: None,
+        state: None,
+        overflow: None,
         exempt: &[
             (Check::CoupledWorldStepsOnce, FLIP_COUPLES_NATIVELY),
             (Check::Collision, FLIP_COUPLES_NATIVELY),
@@ -230,9 +300,29 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 Check::PauseDiscardsImpulses,
                 "BUG-xt71 (MIDI impulse during pause lands on resume): FLIP is frozen (D3)",
             ),
+            (
+                Check::NonfiniteTickNotPublished,
+                "FLIP conforms as built (D3): its state lives in the native engine on its worker, which no check \
+                 can reach to corrupt a tick",
+            ),
+            (
+                Check::OverflowReported,
+                "FLIP conforms as built (D3): it grows its mesh and particle storage to fit, so its only run-time \
+                 limit is device memory, which it refuses by name",
+            ),
         ],
     },
 ];
+
+fn matter_totals(words: &[u32]) -> LiquidTotals {
+    let stats = MatterTickStats::from_words(words);
+    LiquidTotals {
+        mass: f64::from(stats.mass),
+        momentum: stats.momentum.map(f64::from),
+        energy: f64::from(stats.kinetic) + f64::from(stats.elastic),
+        nonfinite: stats.nonfinite,
+    }
+}
 
 /// A box in a pool on the Floating Box preset: the MPM coupling proofs'
 /// scenes, with the numbers their checks measure against.
@@ -250,6 +340,9 @@ pub struct BoxScene {
 }
 
 const G: f32 = 9.81;
+
+/// Every fixture's liquid is water, kg/m³.
+pub const FIXTURE_DENSITY: f32 = WATER_DENSITY;
 
 /// The rigid body's cube edge per unit of transform scale.
 pub const CUBE_EDGE_PER_SCALE: f32 = 1.154_700_5;
@@ -288,10 +381,19 @@ impl BoxScene {
                 centre: [0.0, 0.75, 0.0],
                 rotation: [0.0; 3],
                 edge: 0.2,
-                mass: density_ratio * WATER_DENSITY * 0.2f32.powi(3),
+                mass: density_ratio * FIXTURE_DENSITY * 0.2f32.powi(3),
             }),
             Fixture::StillPool | Fixture::DamBreak => None,
         }
+    }
+
+    /// Whether a box centred at `centre` lies wholly inside the domain, by
+    /// the sphere around it.
+    pub fn holds_box(&self, centre: [f32; 3]) -> bool {
+        let reach = 0.5 * self.edge * 3f32.sqrt();
+        let half = 0.5 * self.domain_size;
+        let (min, max) = ([-half, 0.0, -half], [half, self.domain_size, half]);
+        (0..3).all(|i| centre[i] - reach >= min[i] && centre[i] + reach <= max[i])
     }
 
     /// The Floating Box preset set to this scene; its domain is `type_id`,
@@ -448,11 +550,30 @@ mod tests {
                     continue;
                 }
                 assert!(row.coupled || !check.coupled(), "{}: {check:?} needs a coupled row or an exemption", row.type_id);
+                assert!(!check.needs_totals() || row.totals.is_some(), "{}: {check:?} needs the row's totals", row.type_id);
+                assert!(
+                    check != Check::NonfiniteTickNotPublished || row.state.is_some(),
+                    "{}: {check:?} needs the row's state array",
+                    row.type_id
+                );
+                assert!(
+                    check != Check::OverflowReported || row.overflow.is_some(),
+                    "{}: {check:?} needs an overflow case",
+                    row.type_id
+                );
                 for &fixture in check.fixtures(row.coupled) {
                     if !scenes.contains(&fixture) {
                         scenes.push(fixture);
                     }
                 }
+            }
+            // An overflow is a run-time count, never a setup refusal.
+            if let Some(case) = &row.overflow {
+                let mut def = (row.fixture)(case.fixture).unwrap_or_else(|| panic!("{}: no {:?} scene", row.type_id, case.fixture));
+                (case.edit)(&mut def);
+                build(row, case.fixture, &def)
+                    .check_authored()
+                    .unwrap_or_else(|error| panic!("{}: {} is refused at setup: {error}", row.type_id, case.what));
             }
             for fixture in scenes {
                 let def = (row.fixture)(fixture)

@@ -28,6 +28,19 @@ thread_local! {
     static HISTORY_DRAIN_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+#[cfg(feature = "gpu-proofs")]
+thread_local! {
+    static NATIVE_TICKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// GPU proofs: fixed Box3D ticks every world has completed on this thread
+/// (the liquid conformance suite's I4 counter).
+#[cfg(feature = "gpu-proofs")]
+#[doc(hidden)]
+pub fn native_ticks_on_this_thread() -> u64 {
+    NATIVE_TICKS.get()
+}
+
 pub(crate) fn authored_sample_only() -> bool {
     SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
 }
@@ -1153,6 +1166,8 @@ impl RigidSimulation {
                 }
                 exchange.finish(self.world.as_ref().expect("world constructed above"))
                     .map_err(|error| format!("Physics coupling: {error}"))?;
+                #[cfg(feature = "gpu-proofs")]
+                NATIVE_TICKS.set(NATIVE_TICKS.get() + 1);
                 completed += 1;
                 self.physics_time += TICK;
                 self.apply_due_authored_edits()?;
