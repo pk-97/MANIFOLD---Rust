@@ -17,6 +17,8 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::generators::compute_common::Particle;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::freeze::install::fuse_generator_view;
+use manifold_renderer::node_graph::ports::PortType;
+use manifold_renderer::node_graph::resource_allocation::plan_array_allocations;
 use manifold_renderer::node_graph::substeps::test_nodes::{
     particle_step_dt, register_substep_test_nodes,
 };
@@ -363,12 +365,44 @@ fn unrolled_def() -> EffectGraphDef {
 
 /// Run `frames` frames and read back the persistent state of the one node of
 /// type `boundary_type`.
-fn run_state(mut graph: Graph, frames: u32, boundary_type: &str) -> Vec<Particle> {
+fn run_state(graph: Graph, frames: u32, boundary_type: &str) -> Vec<Particle> {
+    run_nest(graph, frames, boundary_type, Storage::Planned).state
+}
+
+/// Where arrays live: where the planner puts them, or each in its own
+/// buffer, pre-bound before planning so the planner reuses nothing.
+#[derive(Clone, Copy, PartialEq)]
+enum Storage {
+    Planned,
+    Dedicated,
+}
+
+struct NestRun {
+    /// The boundary's persistent state.
+    state: Vec<Particle>,
+    /// What the sink read.
+    sink: Vec<Particle>,
+    /// Distinct buffers behind every array.
+    buffers: usize,
+}
+
+fn run_nest(mut graph: Graph, frames: u32, boundary_type: &str, storage: Storage) -> NestRun {
     let harness = harness::shared();
     let device = &harness.device;
     let plan = compile(&graph).expect("proof def compiles");
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
+    if storage == Storage::Dedicated {
+        let planned = plan_array_allocations(&graph, &plan, (64, 64), &Default::default()).expect("plan allocates");
+        for (&resource, array) in &planned.storage {
+            backend.pre_bind_array(resource, device.create_buffer_shared(array.bytes));
+        }
+    }
     pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+    let buffers = (0..plan.resource_count() as u32)
+        .filter_map(|r| backend.slot_for(ResourceId(r)).filter(|_| matches!(plan.resource_type(ResourceId(r)), Some(PortType::Array(_)))))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let sink_res = resource(&plan, node_of(&graph, "test.particle_sink"), "particles", false);
     let seed_res = resource(&plan, node_of(&graph, "test.particle_source"), "out", true);
     let force_res = resource(&plan, node_of(&graph, "test.force_source"), "out", true);
     let state_res = resource(&plan, node_of(&graph, boundary_type), "out", true);
@@ -399,12 +433,13 @@ fn run_state(mut graph: Graph, frames: u32, boundary_type: &str) -> Vec<Particle
         enc.commit_and_wait_completed();
     }
     let backend = exec.backend();
-    let out = backend
-        .array_buffer(backend.slot_for(state_res).expect("state bound"))
-        .expect("state buffer");
-    let ptr = out.mapped_ptr().expect("shared state buffer");
-    // SAFETY: the encoder completed; the buffer holds at least N particles.
-    unsafe { std::slice::from_raw_parts(ptr.cast::<Particle>().cast_const(), N).to_vec() }
+    let read = |res: ResourceId| {
+        let buffer = backend.array_buffer(backend.slot_for(res).expect("array bound")).expect("array buffer");
+        let ptr = buffer.mapped_ptr().expect("shared array buffer");
+        // SAFETY: the encoder completed; the buffer holds at least N particles.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<Particle>().cast_const(), N).to_vec() }
+    };
+    NestRun { state: read(state_res), sink: read(sink_res), buffers }
 }
 
 /// CPU reference for `frames` frames of the nest.
@@ -482,5 +517,50 @@ fn nested_region_frozen_unfrozen_match() {
     let frozen_bytes: &[u8] = bytemuck::cast_slice(&frozen);
     assert!(unfused_bytes == frozen_bytes, "fused nest diverged from unfused (buffer regions are bit-exact)");
     let err = max_position_error(&frozen, &nested_expected(FRAMES));
+    assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
+}
+
+/// [`nested_def`] with three-copy chains of same-size temporaries before the
+/// nest (`seed` into `outer.seed`), in the outer body (`outer_b` into
+/// `inner.seed`) and after it (`outer.out` into the sink). A copy changes no
+/// value, so [`nested_expected`] still holds.
+fn nested_copy_chains_def() -> EffectGraphDef {
+    let mut def = serde_json::to_value(nested_def()).expect("nest serialises");
+    let mut chain = |ids: [u64; 3], from: u64, to: (u64, &str)| {
+        let mut previous = from;
+        for id in ids {
+            def["nodes"].as_array_mut().expect("nodes").push(
+                serde_json::json!({"id": id, "nodeId": format!("copy_{id}"), "typeId": "test.particle_copy"}),
+            );
+            def["wires"].as_array_mut().expect("wires").push(
+                serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": id, "toPort": "in"}),
+            );
+            previous = id;
+        }
+        let wires = def["wires"].as_array_mut().expect("wires");
+        wires.retain(|w| !(w["toNode"] == to.0 && w["toPort"] == to.1));
+        wires.push(serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": to.0, "toPort": to.1}));
+    };
+    chain([20, 21, 22], 0, (2, "seed"));
+    chain([25, 26, 27], 4, (5, "seed"));
+    chain([30, 31, 32], 2, (9, "particles"));
+    serde_json::from_value(def).expect("nest with copy chains")
+}
+
+/// Temporary reuse before, inside and after a nest changes no bit: the
+/// planner's shared storage against every array in its own buffer.
+#[test]
+fn nested_region_shared_storage_matches_dedicated() {
+    let registry = registry();
+    let build = || nested_copy_chains_def().into_graph(&registry, &Default::default()).expect("nest with chains builds");
+    let shared = run_nest(build(), FRAMES, "test.particle_boundary", Storage::Planned);
+    let dedicated = run_nest(build(), FRAMES, "test.particle_boundary", Storage::Dedicated);
+    eprintln!("nested chains: {} buffers shared, {} dedicated", shared.buffers, dedicated.buffers);
+    assert!(shared.buffers + 3 <= dedicated.buffers, "the chains reuse storage");
+    for (what, a, b) in [("state", &shared.state, &dedicated.state), ("sink", &shared.sink, &dedicated.sink)] {
+        let (a, b): (&[u8], &[u8]) = (bytemuck::cast_slice(a), bytemuck::cast_slice(b));
+        assert!(a == b, "shared storage changed the {what}");
+    }
+    let err = max_position_error(&shared.state, &nested_expected(FRAMES));
     assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
 }

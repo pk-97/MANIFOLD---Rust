@@ -16,21 +16,73 @@ use super::ports::PortType;
 type ReusableKey = (PortType, u64);
 type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
 
-/// Derive growing array lineage once during preparation. All participating
-/// storage remains dedicated so replacement cannot alter an unrelated array.
+/// Arrays whose size can change after planning because a provider hands in
+/// storage of its own size. Derived once during preparation. All of them
+/// keep dedicated storage so replacement cannot alter an unrelated array.
 pub(crate) fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Vec<bool> {
-    let mut growing = vec![false; plan.resource_count()];
-    for step in plan.steps() {
-        let Some(node) = graph.get_node(step.node) else { continue; };
-        let inherited = step.inputs.iter().any(|(_, id)| growing[id.0 as usize]);
-        for (port, id) in &step.outputs {
-            if matches!(plan.resource_type(*id), Some(PortType::Array(_)))
-                && (inherited || node.node.provides_array_output(port)) {
-                growing[id.0 as usize] = true;
+    capacity_lineage(graph, plan, |node, port| node.node.provides_array_output(port))
+}
+
+/// The seeded arrays, plus every array whose declared capacity moves when a
+/// member's capacity moves. Walked to a fixed point so a feedback input,
+/// produced later in the plan, carries the lineage too.
+///
+/// Membership follows capacity, not wires: an output sized from its params
+/// (a lattice grid fed by particles) never changes when an input does, so it
+/// stays an ordinary temporary. The capacity rule is opaque, so it is asked:
+/// see [`capacity_follows`].
+fn capacity_lineage(
+    graph: &Graph,
+    plan: &ExecutionPlan,
+    seeded: impl Fn(&super::graph::NodeInstance, &str) -> bool,
+) -> Vec<bool> {
+    let mut members = vec![false; plan.resource_count()];
+    let mut probe = Vec::with_capacity(8);
+    loop {
+        let mut changed = false;
+        for step in plan.steps() {
+            let Some(node) = graph.get_node(step.node) else { continue; };
+            for (port, id) in &step.outputs {
+                if members[id.0 as usize] || !matches!(plan.resource_type(*id), Some(PortType::Array(_))) {
+                    continue;
+                }
+                if seeded(node, port) || capacity_follows(node, port, &step.inputs, plan, &members, &mut probe) {
+                    members[id.0 as usize] = true;
+                    changed = true;
+                }
             }
         }
+        if !changed { return members; }
     }
-    growing
+}
+
+/// Whether `port`'s capacity follows any member input. Holds the other array
+/// inputs at one capacity and moves the members together across values below
+/// and above it: any change in the answer, or no answer, means it follows.
+/// Canvas-sized outputs are sized from the canvas, never from inputs.
+fn capacity_follows<'a>(
+    node: &super::graph::NodeInstance,
+    port: &str,
+    inputs: &[(&'a str, ResourceId)],
+    plan: &ExecutionPlan,
+    members: &[bool],
+    probe: &mut Vec<(&'a str, u32)>,
+) -> bool {
+    const HELD: u32 = 64;
+    const MOVES: [u32; 4] = [1, HELD - 1, HELD + 1, 1 << 16];
+    if node.node.canvas_sized_array_outputs().contains(&port)
+        || !inputs.iter().any(|(_, id)| members[id.0 as usize])
+    {
+        return false;
+    }
+    let mut answer = |moved: u32| {
+        probe.clear();
+        probe.extend(inputs.iter().filter(|(_, id)| matches!(plan.resource_type(*id), Some(PortType::Array(_))))
+            .map(|&(name, id)| (name, if members[id.0 as usize] { moved } else { HELD })));
+        node.node.array_output_capacity(port, &node.params, probe)
+    };
+    let first = answer(MOVES[0]);
+    first.is_none() || MOVES[1..].iter().any(|&moved| answer(moved) != first)
 }
 
 fn enqueue_reusable_root(reusable: &mut ReusableBuckets, key: ReusableKey, root: ResourceId) {
@@ -176,42 +228,16 @@ pub fn plan_array_allocations(
             }
         }
     }
-    // Staged resize retains prebound physical roots. Keep canvas-sized array
-    // families dedicated: two equally sized temporaries can require different
-    // capacities after resize, while a prebound root still names the old shared
-    // slot. Include connected array inputs/outputs (also across feedback edges)
-    // so indirect capacity propagation cannot introduce that split.
-    let mut canvas_arrays = AHashSet::default();
-    for step in plan.steps() {
-        if let Some(node) = graph.get_node(step.node) {
-            for (port, resource) in &step.outputs {
-                if node.node.canvas_sized_array_outputs().contains(port) {
-                    canvas_arrays.insert(*resource);
-                }
-            }
-        }
-    }
-    if !canvas_arrays.is_empty() {
-        loop {
-            let previous_count = canvas_arrays.len();
-            for step in plan.steps() {
-                if step.inputs.iter().chain(&step.outputs)
-                    .any(|(_, resource)| canvas_arrays.contains(resource))
-                {
-                    for (_, resource) in step.inputs.iter().chain(&step.outputs) {
-                        if matches!(plan.resource_type(*resource), Some(PortType::Array(_))) {
-                            canvas_arrays.insert(*resource);
-                        }
-                    }
-                }
-            }
-            if canvas_arrays.len() == previous_count { break; }
-        }
-        excluded_resources.extend(canvas_arrays);
-    }
-    // Growth must not enlarge an unrelated array sharing the same scratch slot.
-    for (index, dynamic) in growing_array_resources(graph, plan).into_iter().enumerate() {
-        if dynamic { excluded_resources.insert(ResourceId(index as u32)); }
+    // Staged resize retains prebound physical roots. Keep every array whose
+    // capacity follows the canvas dedicated: after a resize it needs a new
+    // size while a prebound root still names the old shared slot. Growth must
+    // likewise never enlarge an unrelated array sharing a scratch slot.
+    let canvas_sized = capacity_lineage(graph, plan, |node, port| {
+        node.node.canvas_sized_array_outputs().contains(&port)
+    });
+    let growing = growing_array_resources(graph, plan);
+    for (index, (resized, grows)) in canvas_sized.into_iter().zip(growing).enumerate() {
+        if resized || grows { excluded_resources.insert(ResourceId(index as u32)); }
     }
     let mut reusable: ReusableBuckets = AHashMap::default();
 
@@ -485,6 +511,101 @@ fn unbound_error(
     }
 }
 
+/// Test oracle for temporary reuse: no physical root is ever live for two
+/// logical arrays at once.
+#[cfg(test)]
+pub(crate) mod lifetimes {
+    use super::*;
+
+    /// Steps over which each array must keep its contents: producer to last
+    /// reader. A substep region repeats its steps, so an array any of them
+    /// touches lives across the whole outermost region. Persistent and held
+    /// arrays live the whole frame.
+    pub(crate) fn live_ranges(plan: &ExecutionPlan) -> AHashMap<ResourceId, (usize, usize)> {
+        let mut live: AHashMap<ResourceId, (usize, usize)> = AHashMap::default();
+        let mut widen = |resource: ResourceId, lo: usize, hi: usize| {
+            let range = live.entry(resource).or_insert((lo, hi));
+            *range = (range.0.min(lo), range.1.max(hi));
+        };
+        for (index, step) in plan.steps().iter().enumerate() {
+            for (_, resource) in step.inputs.iter().chain(&step.outputs) {
+                widen(*resource, index, index);
+            }
+        }
+        for region in plan.substep_regions() {
+            let (lo, hi) = (region.steps[0], region.steps[region.steps.len() - 1]);
+            for &index in &region.steps {
+                let step = &plan.steps()[index];
+                for (_, resource) in step.inputs.iter().chain(&step.outputs) {
+                    widen(*resource, lo, hi);
+                }
+            }
+        }
+        let last = plan.steps().len().saturating_sub(1);
+        for &resource in plan.persistent_resources().iter().chain(plan.held_resources()) {
+            widen(resource, 0, last);
+        }
+        live
+    }
+
+    /// Panics naming both arrays when two of them share a root while both
+    /// are live. A declared in-place alias is one array for this check: its
+    /// input and output are the same storage by contract. Returns how many
+    /// arrays took a root another array had released.
+    pub(crate) fn assert_shared_roots_never_overlap(
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        allocation: &ArrayAllocationPlan,
+    ) -> usize {
+        let live = live_ranges(plan);
+        // Declared in-place pairs, merged into one storage class each.
+        let mut class: AHashMap<ResourceId, ResourceId> = AHashMap::default();
+        fn find(class: &mut AHashMap<ResourceId, ResourceId>, r: ResourceId) -> ResourceId {
+            let parent = *class.get(&r).unwrap_or(&r);
+            if parent == r { return r; }
+            let root = find(class, parent);
+            class.insert(r, root);
+            root
+        }
+        for step in plan.steps() {
+            let Some(node) = graph.get_node(step.node) else { continue };
+            for (input_port, output_port) in node.node.aliased_array_io() {
+                let input = step.inputs.iter().find(|(name, _)| name == input_port);
+                let output = step.outputs.iter().find(|(name, _)| name == output_port);
+                if let (Some((_, input)), Some((_, output))) = (input, output) {
+                    let (a, b) = (find(&mut class, *input), find(&mut class, *output));
+                    if a != b { class.insert(b, a); }
+                }
+            }
+        }
+        let mut ranges: AHashMap<(ResourceId, ResourceId), (usize, usize)> = AHashMap::default();
+        for (&resource, storage) in &allocation.storage {
+            let Some(&(lo, hi)) = live.get(&resource) else { continue };
+            let key = (storage.root, find(&mut class, resource));
+            let range = ranges.entry(key).or_insert((lo, hi));
+            *range = (range.0.min(lo), range.1.max(hi));
+        }
+        let mut by_root: AHashMap<ResourceId, Vec<(usize, usize, ResourceId)>> = AHashMap::default();
+        for (&(root, member), &(lo, hi)) in &ranges {
+            by_root.entry(root).or_default().push((lo, hi, member));
+        }
+        let mut reused = 0;
+        for (root, mut owners) in by_root {
+            owners.sort();
+            reused += owners.len() - 1;
+            let (_, mut latest, mut holder) = owners[0];
+            for &(lo, hi, owner) in &owners[1..] {
+                assert!(
+                    latest < lo,
+                    "root {root:?}: {holder:?} lives to step {latest} but {owner:?} takes it at step {lo}"
+                );
+                if hi > latest { (latest, holder) = (hi, owner); }
+            }
+        }
+        reused
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,6 +629,12 @@ mod tests {
         outputs: Vec<NodeOutput>,
         capacity: u32,
         boundary: Option<BoundaryReason>,
+        /// Publishes its own output storage, like a solver or fill.
+        provides: bool,
+        /// Output capacity copies this input's instead of `capacity`.
+        follows: Option<&'static str>,
+        /// Keeps its upstream live when the graph has other liveness roots.
+        root: bool,
     }
 
     impl FixedArrayNode {
@@ -523,6 +650,9 @@ mod tests {
                 outputs,
                 capacity,
                 boundary: None,
+                provides: false,
+                follows: None,
+                root: false,
             }
         }
     }
@@ -554,16 +684,25 @@ mod tests {
 
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
 
+        fn provides_array_output(&self, _: &str) -> bool {
+            self.provides
+        }
+
+        fn is_liveness_root(&self) -> bool {
+            self.root
+        }
+
         fn array_output_capacity(
             &self,
             port: &str,
             _: &ParamValues,
-            _: &[(&str, u32)],
+            inputs: &[(&str, u32)],
         ) -> Option<u32> {
-            self.outputs
-                .iter()
-                .any(|output| output.name == port && matches!(output.ty, PortType::Array(_)))
-                .then_some(self.capacity)
+            let is_array = self.outputs.iter().any(|output| output.name == port && matches!(output.ty, PortType::Array(_)));
+            match self.follows {
+                Some(input) => inputs.iter().find(|(name, _)| *name == input).map(|&(_, n)| n),
+                None => is_array.then_some(self.capacity),
+            }
         }
     }
 
@@ -1130,5 +1269,146 @@ mod tests {
             error,
             PreAllocationError::UnsizedArrayOutput { .. }
         ));
+    }
+
+    fn output_of(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
+        let step = plan.steps().iter().find(|step| step.node == node).unwrap_or_else(|| {
+            panic!("{node:?} has no step; plan runs {:?}", plan.steps().iter().map(|s| s.node).collect::<Vec<_>>())
+        });
+        step.outputs[0].1
+    }
+
+    /// A provider's particles feeding a chain of lattice grids sized from
+    /// params, as SWASH's particles feed its face grids: only arrays whose
+    /// capacity follows the provider grow, and the grids reuse each other.
+    #[test]
+    fn param_sized_arrays_below_a_provider_are_temporaries() {
+        let array = PortType::Array(ArrayType::of::<u32>());
+        let input = || vec![mock_port("in", array, PortKind::Input, true)];
+        let output = || vec![mock_port("out", array, PortKind::Output, false)];
+        let mut graph = Graph::new();
+        let mut provider = FixedArrayNode::new("test.provider", vec![], output(), 4);
+        provider.provides = true;
+        let provider = graph.add_node(Box::new(provider));
+        let mut follower = FixedArrayNode::new("test.follower", input(), output(), 0);
+        follower.follows = Some("in");
+        let follower = graph.add_node(Box::new(follower));
+        graph.connect((provider, "out"), (follower, "in")).unwrap();
+        let mut grids = vec![graph.add_node(Box::new(FixedArrayNode::new("test.grid", input(), output(), 8)))];
+        graph.connect((provider, "out"), (grids[0], "in")).unwrap();
+        for _ in 0..3 {
+            let grid = graph.add_node(Box::new(FixedArrayNode::new("test.grid", input(), output(), 8)));
+            graph.connect((*grids.last().unwrap(), "out"), (grid, "in")).unwrap();
+            grids.push(grid);
+        }
+        for source in [*grids.last().unwrap(), follower] {
+            let sink = graph.add_node(Box::new(FixedArrayNode::new("test.sink", input(), vec![], 1)));
+            graph.connect((source, "out"), (sink, "in")).unwrap();
+        }
+
+        let plan = compile(&graph).unwrap();
+        let growing = growing_array_resources(&graph, &plan);
+        let grows = |node| growing[output_of(&plan, node).0 as usize];
+        assert!(grows(provider) && grows(follower), "provided storage and its followers grow");
+        assert!(grids.iter().all(|&grid| !grows(grid)), "a grid sized from params never grows");
+
+        let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+        let root = |node| planned.storage[&output_of(&plan, node)].root;
+        assert_eq!(root(grids[2]), root(grids[0]), "the third grid takes the first's storage");
+        assert_eq!(root(grids[3]), root(grids[1]), "the fourth grid takes the second's storage");
+        assert_eq!(root(follower), output_of(&plan, follower), "a growing array keeps its own storage");
+        assert_eq!(lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned), 2);
+    }
+
+    /// A feedback node reads an array produced later in the plan. Growth
+    /// still reaches it and everything that follows its capacity.
+    #[test]
+    fn growth_crosses_a_feedback_edge() {
+        let mut graph = Graph::new();
+        let feedback = graph.add_node(Box::new(ArrayFeedback::new()));
+        let array = graph.get_node(feedback).unwrap().node.outputs()[0].ty;
+        let mut provider = FixedArrayNode::new("test.provider", vec![], vec![mock_port("out", array, PortKind::Output, false)], 4);
+        provider.provides = true;
+        let provider = graph.add_node(Box::new(provider));
+        let follower = |graph: &mut Graph| {
+            let mut node = FixedArrayNode::new(
+                "test.follower",
+                vec![mock_port("in", array, PortKind::Input, true)],
+                vec![mock_port("out", array, PortKind::Output, false)],
+                0,
+            );
+            node.follows = Some("in");
+            graph.add_node(Box::new(node))
+        };
+        let upstream = follower(&mut graph);
+        let downstream = follower(&mut graph);
+        graph.connect((provider, "out"), (upstream, "in")).unwrap();
+        graph.connect((upstream, "out"), (feedback, "in")).unwrap();
+        graph.connect((feedback, "out"), (downstream, "in")).unwrap();
+        let mut sink = FixedArrayNode::new("test.sink", vec![mock_port("in", array, PortKind::Input, true)], vec![], 1);
+        sink.root = true;
+        let sink = graph.add_node(Box::new(sink));
+        graph.connect((downstream, "out"), (sink, "in")).unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let step = |node| plan.steps().iter().position(|step| step.node == node).unwrap();
+        assert!(step(feedback) < step(upstream), "premise: the feedback input is produced later");
+        let growing = growing_array_resources(&graph, &plan);
+        for node in [provider, upstream, feedback, downstream] {
+            assert!(growing[output_of(&plan, node).0 as usize], "{node:?} must grow");
+        }
+    }
+
+    /// Only arrays whose capacity follows the canvas change size on resize.
+    /// The particles a scatter reads are ordinary temporaries.
+    #[test]
+    fn canvas_lineage_follows_capacity_not_wires() {
+        let (graph, scatter) = scatter_graph();
+        let plan = compile(&graph).unwrap();
+        let canvas = capacity_lineage(&graph, &plan, |node, port| {
+            node.node.canvas_sized_array_outputs().contains(&port)
+        });
+        let step = plan.steps().iter().find(|step| step.node == scatter).unwrap();
+        let port = |ports: &[(&str, ResourceId)], name| ports.iter().find(|(p, _)| *p == name).unwrap().1;
+        assert!(canvas[port(&step.outputs, "accum").0 as usize]);
+        assert!(!canvas[port(&step.inputs, "particles").0 as usize]);
+    }
+
+    /// Every bundled preset's plan at 1080p: no shared root is ever live for
+    /// two arrays at once.
+    #[test]
+    fn bundled_presets_share_only_dead_roots() {
+        use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
+        use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
+        use manifold_core::preset_def::PresetKind;
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut planned = 0;
+        for kind in [PresetKind::Generator, PresetKind::Effect] {
+            for id in bundled_preset_type_ids(kind) {
+                let def = bundled_preset_def(&id).expect("bundled def").clone();
+                let Ok(graph) = def.into_graph(&registry, &Default::default()) else { continue };
+                let Ok(plan) = compile(&graph) else { continue };
+                let Ok(allocation) = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()) else {
+                    continue;
+                };
+                let reused = lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &allocation);
+                let fresh: Vec<u64> = allocation.actions.iter().filter_map(|action| match action {
+                    ArrayAllocationAction::Allocate(a) => Some(a.bytes),
+                    _ => None,
+                }).collect();
+                if allocation.storage.len() > 1 {
+                    let array = |r: &ResourceId| matches!(plan.resource_type(*r), Some(PortType::Array(_)));
+                    let frees = plan.steps().iter().flat_map(|s| &s.free_after).filter(|r| array(r)).count();
+                    let in_regions = plan.substep_regions().iter().flat_map(|r| &r.held_resources).filter(|r| array(r)).count();
+                    let growing = growing_array_resources(&graph, &plan).iter().filter(|g| **g).count();
+                    println!(
+                        "planner {}: {} arrays, {} fresh, {reused} reused, {:.2} MB; {frees} frees, {in_regions} region-held, {growing} growing",
+                        id.as_str(), allocation.storage.len(), fresh.len(), fresh.iter().sum::<u64>() as f64 / 1e6
+                    );
+                }
+                planned += 1;
+            }
+        }
+        assert!(planned > 40, "only {planned} presets planned");
     }
 }
