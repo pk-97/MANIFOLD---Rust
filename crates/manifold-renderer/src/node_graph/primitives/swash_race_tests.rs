@@ -56,6 +56,93 @@ pub(crate) fn report_motion(label: &str, motion: &[Motion]) {
     println!("{label}: last 30 frames speed mean {:.3} p99 {:.3} m/s", settled(|m| m.mean), settled(|m| m.p99));
 }
 
+/// How high the water throws, in scene metres (tank x, z in −2..2, floor at
+/// `floor`, lid 4 m above it): the share of live particles above 2 m (the
+/// column's top) and above 3 m, and the share within 10 cm of the lid. Of
+/// those above 3 m, the share against each wall region (within 0.5 m of the
+/// side walls z = ±2, the far wall x = 2, the column's wall x = −2) and in
+/// the middle.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Splash {
+    pub above_2: f64,
+    pub above_3: f64,
+    pub at_lid: f64,
+    /// Side walls, far wall, column wall, middle.
+    pub where_high: [f64; 4],
+}
+
+pub(crate) fn splash(positions: impl Iterator<Item = [f32; 4]>, floor: f64) -> Splash {
+    let (mut live, mut above_2, mut above_3, mut at_lid) = (0usize, 0usize, 0usize, 0usize);
+    let mut regions = [0usize; 4];
+    for p in positions {
+        live += 1;
+        let height = f64::from(p[1]) - floor;
+        above_2 += usize::from(height > 2.0);
+        at_lid += usize::from(height > 3.9);
+        if height > 3.0 {
+            above_3 += 1;
+            let (x, z) = (f64::from(p[0]), f64::from(p[2]));
+            let region = if z.abs() > 1.5 { 0 } else if x > 1.5 { 1 } else if x < -1.5 { 2 } else { 3 };
+            regions[region] += 1;
+        }
+    }
+    let share = |k: usize, of: usize| k as f64 / of.max(1) as f64;
+    Splash {
+        above_2: share(above_2, live),
+        above_3: share(above_3, live),
+        at_lid: share(at_lid, live),
+        where_high: regions.map(|k| share(k, above_3)),
+    }
+}
+
+/// The water within 10 cm of the lid: how many particles, their mean
+/// vertical speed (m/s, up positive), and how full their cells are on the
+/// solver's own grid (particles sharing the cell: 1–2, 3–5, 6–8, 9 or more).
+pub(crate) fn print_lid_layer(
+    label: &str,
+    frame: usize,
+    particles: &[([f32; 4], [f32; 3])],
+    origin: [f64; 3],
+    cells: [usize; 3],
+    h: f64,
+    floor: f64,
+) {
+    let index = |p: &[f32; 4]| {
+        let c: [usize; 3] = std::array::from_fn(|a| (((f64::from(p[a]) - origin[a]) / h).max(0.0) as usize).min(cells[a] - 1));
+        c[0] + cells[0] * (c[1] + cells[1] * c[2])
+    };
+    let mut per_cell = vec![0u32; cells.iter().product()];
+    for (p, _) in particles {
+        per_cell[index(p)] += 1;
+    }
+    let (mut count, mut vy, mut fill) = (0usize, 0.0_f64, [0usize; 4]);
+    for (p, v) in particles.iter().filter(|(p, _)| f64::from(p[1]) - floor > 3.9) {
+        count += 1;
+        vy += f64::from(v[1]);
+        let k = per_cell[index(p)];
+        fill[match k {
+            0..=2 => 0,
+            3..=5 => 1,
+            6..=8 => 2,
+            _ => 3,
+        }] += 1;
+    }
+    println!(
+        "{label} lid frame {frame:3}: {count} particles, mean vertical {:+.3} m/s, cells holding 1–2 / 3–5 / 6–8 / 9+: {fill:?}",
+        vy / count.max(1) as f64
+    );
+}
+
+pub(crate) fn print_splash(label: &str, frame: usize, s: &Splash) {
+    let [side, far, back, middle] = s.where_high.map(|v| 100.0 * v);
+    println!(
+        "{label} splash frame {frame:3}: above 2 m {:.2}%, above 3 m {:.3}%, at the lid {:.3}%; above 3 m by side walls {side:.0}%, far wall {far:.0}%, column wall {back:.0}%, middle {middle:.0}%",
+        100.0 * s.above_2,
+        100.0 * s.above_3,
+        100.0 * s.at_lid
+    );
+}
+
 /// The water measure over a run, one [`Packing`] per frame: at frame 0, the
 /// worst frame, and the median of the last 30.
 pub(crate) fn report_water(label: &str, packed: &[Packing]) {
@@ -240,6 +327,12 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         record.motion.push(particle_motion(&particles));
         let pack = swash_packing(&particles, n, h);
         packed.push(pack);
+        if frame % 15 == 14 {
+            let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| (p.position_radius, p.velocity)).collect();
+            let floor = super::swash_preset::DAM_MIN[1];
+            print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
+            print_lid_layer(label, frame, &live, super::swash_preset::DAM_MIN, [n; 3], h, floor);
+        }
         if frame % 30 == 29 {
             let stats = particle_stats(&particles);
             assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
@@ -309,6 +402,16 @@ fn fft_water_refined_splash_causes() {
     let refined = WaterScene::dam_break(128).with_surface();
     dam_break(WaterScene { spread_rate: 0.0, ..refined }, "SPLASH rate 0 128³", 120);
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
+}
+
+/// How high the 64³ splash throws and whether it stays at the lid (BUG-h8or,
+/// splash slabs along the lid), as shipped and with the density solve left
+/// out, against `fft_water_engine_race`'s splash lines.
+#[test]
+fn fft_water_splash_causes_64() {
+    let base = WaterScene::dam_break(64);
+    dam_break(base, "LID share 1 64³", 150);
+    dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
 }
 
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.

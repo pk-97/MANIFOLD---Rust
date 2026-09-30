@@ -14,7 +14,9 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 
 use super::native::seeded_world;
 use super::{FluidSettings, Transform};
-use crate::node_graph::primitives::swash_race_tests::{Motion, Packing, motion, packing, report_motion, report_water};
+use crate::node_graph::primitives::swash_race_tests::{
+    Motion, Packing, Splash, motion, packing, print_lid_layer, print_splash, report_motion, report_water, splash,
+};
 use crate::node_graph::primitives::swash_still::write_still;
 use crate::node_graph::primitives::swash_volume::{VolumeDrift, volume_and_area};
 
@@ -50,14 +52,15 @@ fn triangles(vertices: &[SurfaceVertex]) -> impl Iterator<Item = [[f32; 3]; 3]> 
 }
 
 /// The marker particles' motion after a step, read through the particle-frame
-/// seam in scene coordinates, and their packing on the engine's own grid
-/// (SWASH's water measure). The buffers grow to what the capture asks for.
+/// seam in scene coordinates, their packing on the engine's own grid (SWASH's
+/// water measure) and how high they throw. The buffers grow to what the
+/// capture asks for.
 fn engine_motion(
     world: &mut manifold_fluids::FluidWorld,
     domain: super::FluidDomainLayout,
     records: &mut Vec<ParticleRecord>,
     solid: &mut Vec<f32>,
-) -> (Motion, Packing) {
+) -> (Motion, Packing, Splash, usize) {
     let offset = domain.to_scene([0.0; 3]);
     let info = loop {
         match world.capture_particle_frame(offset, records, solid) {
@@ -70,10 +73,17 @@ fn engine_motion(
         }
     };
     let live = &records[..info.count as usize];
-    let origin = domain.native_origin().map(f64::from);
-    let cells = domain.config(FluidSettings::default()).cells.map(|n| n as usize);
+    let (origin, cells) = engine_grid(domain);
     let pack = packing(live.iter().map(|p| p.position_radius), origin, cells, domain.cell_size);
-    (motion(live.iter().map(|p| (p.position_radius, p.velocity)), f64::from(domain.min[1])), pack)
+    let floor = f64::from(domain.min[1]);
+    let thrown = splash(live.iter().map(|p| p.position_radius), floor);
+    (motion(live.iter().map(|p| (p.position_radius, p.velocity)), floor), pack, thrown, live.len())
+}
+
+/// The engine's own cells in scene coordinates: its native grid, 1.5 cells
+/// of solid padding past the authored box on every side.
+fn engine_grid(domain: super::FluidDomainLayout) -> ([f64; 3], [usize; 3]) {
+    (domain.native_origin().map(f64::from), domain.config(FluidSettings::default()).cells.map(|n| n as usize))
 }
 
 fn median(v: &[f64]) -> f64 {
@@ -103,9 +113,16 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
         wall.push(start.elapsed().as_secs_f64() * 1000.0);
         reported.push(stats.simulation_ms);
         substeps.push(f64::from(stats.substeps));
-        let (m, pack) = engine_motion(&mut world, domain, &mut records, &mut solid);
+        let (m, pack, thrown, count) = engine_motion(&mut world, domain, &mut records, &mut solid);
         motions.push(m);
         packed.push(pack);
+        if frame % 15 == 14 {
+            let label = format!("ENGINE {resolution}³");
+            print_splash(&label, frame as usize, &thrown);
+            let live: Vec<_> = records[..count].iter().map(|p| (p.position_radius, p.velocity)).collect();
+            let (origin, cells) = engine_grid(domain);
+            print_lid_layer(&label, frame as usize, &live, origin, cells, domain.cell_size, f64::from(domain.min[1]));
+        }
         world.surface(&mut surface).expect("engine surface");
         let measure = volume_and_area(triangles(&surface), tank_min, tank_size);
         raw.push(measure.0);
