@@ -135,6 +135,8 @@ pub use effect_node::{
     intern_name, EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,
     NodeRequires, NodeWire, ParamValues, RtQuality,
 };
+#[cfg(feature = "gpu-proofs")]
+pub use effect_node::NodeErrorTap;
 pub use execution::{Executor, StepProfile};
 pub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};
 pub use chain_spec::{SpliceResult, splice_def_into_chain};

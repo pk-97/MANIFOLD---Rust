@@ -964,6 +964,7 @@ mod tests {
     };
     use manifold_core::id::NodeId;
     use manifold_core::layer::Layer;
+    use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
     use manifold_core::preset_type_id::PresetTypeId;
     use manifold_core::types::LayerType;
     use manifold_core::video::VideoClip;
@@ -1852,7 +1853,7 @@ mod tests {
             "physics",
             vec![sp("cache_path", cache_paths[0], false)],
             bindings,
-            vec![node("fluid", "node.fluid_surface")],
+            vec![node("fluid", FLIP_DOMAIN_TYPE_ID)],
         ));
         let mut layer = Layer::new_generator("Fluid".into(), PresetTypeId::new("physics"), 0);
         for (index, cache_path) in cache_paths.iter().enumerate() {
@@ -1991,7 +1992,7 @@ mod tests {
             let (mut project, _, _) = scene_modifier_asset_project(host_exposes);
             let host = &mut project.embedded_presets[0].def;
             let local = &mut host.scene_modifiers[0].graph;
-            local.nodes[0].group.as_mut().unwrap().nodes[0].type_id = "node.fluid_surface".into();
+            local.nodes[0].group.as_mut().unwrap().nodes[0].type_id = FLIP_DOMAIN_TYPE_ID.into();
             let meta = local.preset_metadata.as_mut().unwrap();
             // Outer parameter IDs are arbitrary: the binding's primitive and
             // local parameter decide collection, rather than a special UI key.

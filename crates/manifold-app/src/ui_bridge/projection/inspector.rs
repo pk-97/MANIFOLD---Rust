@@ -19,7 +19,7 @@ use super::cards::{
     OscScope, SurfaceVisibility, attach_audio_sends, audio_send_choices, effects_to_surfaces,
     gen_params_to_surface, modifier_surfaces,
 };
-use super::scene::sections_for_doc_ids;
+use super::scene::sections_for_nodes;
 
 fn mark_selected_automation_row(surface: &mut ParamSurface, layer_id: &manifold_core::LayerId, target: &UiGraphTarget, param_id: &manifold_core::effects::ParamId) {
     let surface_target = match (surface.kind, surface.modifier.is_some()) {
@@ -288,8 +288,7 @@ pub fn sync_inspector_data(
                     match def.as_ref().and_then(|d| SceneVm::from_def_with_layers(d, &layer_ids)) {
                         None => SceneSetupState::NoScene { layer_id },
                         Some(vm) => {
-                            let fluid_domains = def.as_ref()
-                                .map(|def| super::scene::fluid_domains(def, &vm)).unwrap_or_default();
+                            let fluid_domains = super::scene::fluid_domains(&vm);
                             // Ranges transcribed from each primitive's own
                             // `ParamDef::range` (`bake_environment`'s
                             // intensity [0,4] / fill [0,2]; `atmosphere`'s
@@ -586,7 +585,6 @@ pub fn sync_inspector_data(
                                             visible_driven,
                                             transform,
                                             material,
-                                            transform_chain,
                                             transform_chain_parseable: _,
                                             modifier_chain,
                                             modifier_chain_parseable,
@@ -594,9 +592,12 @@ pub fn sync_inspector_data(
                                             physics_imported,
                                             ..
                                         } = known.as_ref();
+                                        // Water has no Physics row: the liquid moves it.
                                         let (physics_available, physics_unavailable_reason) =
                                             if physics.is_some() {
                                                 (true, None)
+                                            } else if known.liquid_domain.is_some() {
+                                                (false, None)
                                             } else {
                                                 match def.as_ref().map(|def| {
                                                     manifold_editing::commands::graph::scene_object_physics_eligibility(
@@ -608,43 +609,10 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        // P2 slice 2a: the real P1 section
-                                        // string(s) covering this object —
-                                        // its scene_object node, transform
-                                        // node, material node, and every
-                                        // modifier in its stack. Read
-                                        // straight off the layer's exposure
-                                        // metadata via doc-id cross-reference
-                                        // (`sections_for_doc_ids`) — never
-                                        // reconstructed from a naming
-                                        // convention (creation-time and
-                                        // load-migration stamping produce
-                                        // different strings for the same
-                                        // node kind).
-                                        let mut object_doc_ids = vec![*object_node_id];
-                                        object_doc_ids.extend_from_slice(&known.fluid_node_ids);
-                                        if parent_group_id.is_none() && let Some(def) = def.as_ref() {
-                                            object_doc_ids.extend(super::scene::group_fluid_role_ids(def, *group_node_id));
-                                        }
-                                        if let Some(physics) = physics {
-                                            if physics.enabled { object_doc_ids.push(physics.body_node_id); }
-                                        } else if let Some(body) = def.as_ref().filter(|_| visible_addr.scope_path.is_empty()).and_then(|def|
-                                            manifold_renderer::node_graph::scene_vm::physics_body_doc_id(def, *object_node_id)) {
-                                            object_doc_ids.push(body);
-                                        }
-                                        if let Some(t) = transform {
-                                            object_doc_ids.push(t.node_doc_id);
-                                        }
-                                        if let manifold_renderer::node_graph::scene_vm::MaterialVm::Known(m) =
-                                            material
-                                        {
-                                            object_doc_ids.push(m.node_doc_id);
-                                        }
-                                        object_doc_ids.extend(modifier_chain.iter().map(|m| m.node_doc_id));
-                                        object_doc_ids.extend(transform_chain.iter().map(|m| m.node_doc_id));
-                                        let sections = sections_for_doc_ids(def.as_ref(), &object_doc_ids);
-                                        let mut parameter_ids = super::scene::parameter_ids_for_doc_ids(
-                                            def.as_ref(), &object_doc_ids,
+                                        let owned = super::scene::object_controls(def.as_ref(), known);
+                                        let sections = sections_for_nodes(def.as_ref(), &owned);
+                                        let mut parameter_ids = super::scene::parameter_ids_for_nodes(
+                                            def.as_ref(), &owned,
                                         );
                                         super::scene::filter_inactive_physics_parameter_ids(
                                             def.as_ref(), physics.as_ref(), &mut parameter_ids,
@@ -715,8 +683,8 @@ pub fn sync_inspector_data(
                                                         index: i,
                                                         node_doc_id: m.node_doc_id,
                                                         display_name: modifier_display_name(&m.type_id),
-                                                        parameter_ids: super::scene::object_modifier_parameter_ids(
-                                                            def.as_ref(), *group_node_id, m.node_doc_id,
+                                                        parameter_ids: super::scene::parameter_ids_for_nodes(
+                                                            def.as_ref(), std::slice::from_ref(&m.node),
                                                         ),
                                                     })
                                                     .collect(),
@@ -834,7 +802,7 @@ pub fn sync_inspector_data(
                                                 // P2 slice 2a: see
                                                 // `ObjectKnownRow::sections`'s
                                                 // doc comment.
-                                                sections: sections_for_doc_ids(def.as_ref(), &[r.node_doc_id]),
+                                                sections: sections_for_nodes(def.as_ref(), std::slice::from_ref(&r.node)),
                                             },
                                         ))
                                     }
@@ -949,72 +917,18 @@ pub fn sync_inspector_data(
                             // BEFORE the consuming matches below (reads the
                             // VM's own case analysis, never re-derives graph
                             // topology).
-                            let (camera_sections, camera_param_doc_ids) = {
-                                use manifold_renderer::node_graph::scene_vm::CameraVm;
-                                let mut ids = match &vm.camera {
-                                    CameraVm::Orbit(c) => vec![c.node_doc_id],
-                                    CameraVm::Free(c) => vec![c.node_doc_id],
-                                    CameraVm::LookAt(c) => vec![c.node_doc_id],
-                                    CameraVm::Loop(_) => Vec::new(),
-                                    CameraVm::Custom { .. } | CameraVm::None => Vec::new(),
-                                };
-                                let lens_id = match &vm.camera {
-                                    CameraVm::Orbit(c) => c.lens.as_ref().map(|l| l.node_doc_id),
-                                    CameraVm::Free(c) => c.lens.as_ref().map(|l| l.node_doc_id),
-                                    CameraVm::LookAt(c) => c.lens.as_ref().map(|l| l.node_doc_id),
-                                    CameraVm::Loop(c) => c.lens.as_ref().map(|l| l.node_doc_id),
-                                    CameraVm::Custom { lens, .. } => lens.as_ref().map(|l| l.node_doc_id),
-                                    CameraVm::None => None,
-                                };
-                                if let Some(id) = lens_id {
-                                    ids.push(id);
-                                }
-                                // P4: the tail's motion_blur/bokeh doc ids —
-                                // their stamped Camera-section params
-                                // (max_blur_px, both `enabled` toggles)
-                                // render with the lens rows.
-                                let tail_ids = match &vm.camera {
-                                    CameraVm::Orbit(c) => c.lens.as_ref(),
-                                    CameraVm::Free(c) => c.lens.as_ref(),
-                                    CameraVm::LookAt(c) => c.lens.as_ref(),
-                                    CameraVm::Loop(c) => c.lens.as_ref(),
-                                    CameraVm::Custom { lens, .. } => lens.as_ref(),
-                                    CameraVm::None => None,
-                                };
-                                if let Some(lens) = tail_ids {
-                                    if let Some(id) = lens.motion_blur_doc_id {
-                                        ids.push(id);
-                                    }
-                                    if let Some(id) = lens.bokeh_doc_id {
-                                        ids.push(id);
-                                    }
-                                }
-                                let sections = sections_for_doc_ids(def.as_ref(), &ids);
-                                let shared_only = matches!(vm.camera, CameraVm::Custom { .. } | CameraVm::Loop(_));
-                                (sections, shared_only.then_some(ids))
-                            };
-                            let world_sections = {
-                                use manifold_renderer::node_graph::scene_vm::{AtmosphereVm, EnvironmentVm};
-                                let mut ids = Vec::new();
-                                // RAYTRACING_DESIGN.md D14/section 5.2: the scene
-                                // root's stamped "Rendering" section (RT
-                                // Enabled / Temporal Upscale) surfaces under
-                                // World — scene-global toggles, and World is
-                                // the panel's scene-global item.
-                                ids.push(vm.scene_root_node_id);
-                                if let Some(def) = def.as_ref() {
-                                    ids.extend(manifold_renderer::node_graph::scene_vm::physics_world_doc_ids(def));
-                                }
-                                match &vm.environment {
-                                    EnvironmentVm::Importer(e) => ids.push(e.bake_node_id),
-                                    EnvironmentVm::Bare(e) => ids.push(e.node_doc_id),
-                                    EnvironmentVm::Custom { .. } | EnvironmentVm::None => {}
-                                }
-                                if let AtmosphereVm::Wired(a) = &vm.atmosphere {
-                                    ids.push(a.node_doc_id);
-                                }
-                                sections_for_doc_ids(def.as_ref(), &ids)
-                            };
+                            // Custom and loop cameras share the "Camera"
+                            // section with an atom the panel doesn't drive,
+                            // so they show exactly the lens and tail's own
+                            // controls.
+                            let camera_sections = sections_for_nodes(def.as_ref(), &vm.camera_controls);
+                            let camera_parameter_ids = matches!(
+                                vm.camera,
+                                manifold_renderer::node_graph::scene_vm::CameraVm::Custom { .. }
+                                    | manifold_renderer::node_graph::scene_vm::CameraVm::Loop(_)
+                            )
+                            .then(|| super::scene::parameter_ids_for_nodes(def.as_ref(), &vm.camera_controls));
+                            let world_sections = sections_for_nodes(def.as_ref(), &vm.world_controls);
                             let environment = match vm.environment {
                                 manifold_renderer::node_graph::scene_vm::EnvironmentVm::Importer(e) => {
                                     EnvironmentRowVm::Importer {
@@ -1166,7 +1080,7 @@ pub fn sync_inspector_data(
                                 lights,
                                 camera,
                                 camera_sections,
-                                camera_param_doc_ids,
+                                camera_parameter_ids,
                                 world_sections,
                                 // SCENE_MODIFIER_FRAMEWORK P3 (D4): the Scene
                                 // Loop's panel surface is deleted — the loop

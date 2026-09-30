@@ -254,16 +254,16 @@ pub enum ProjectAction {
     /// Add a liquid domain to the existing scene, with a source and material.
     SceneSetupAddFluid(LayerId, u32),
     /// Assign a selected model to an explicit fluid domain. The app resolves
-    /// the domain snapshot id to a stable scoped graph reference before queuing.
+    /// the domain's stable id to a scoped graph reference before queuing.
     SceneSetupAssignFluidRole {
         layer_id: LayerId,
         render_scene_node_id: u32,
         object_index: u32,
-        domain_node_id: u32,
+        domain: NodeId,
         role: u32,
     },
     SceneSetupRemoveFluidRole { layer_id: LayerId, source_node_id: u32 },
-    SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain_node_id: u32 },
+    SceneSetupRetargetFluidRole { layer_id: LayerId, source_node_id: u32, domain: NodeId },
     /// P2 "+ Light" button: `(layer_id, render_scene_node_doc_id,
     /// next_index)`. Dispatches the EXISTING `AddSceneLightCommand`.
     SceneSetupAddLight(LayerId, u32, u32),

@@ -3,6 +3,8 @@
 //! The canonical snapshot is never mutated by preparation. Live controls are
 //! ordinary graph bindings; no per-frame attachment work belongs here.
 
+use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
+
 mod acceleration;
 pub(crate) use acceleration::impulse_recipients;
 mod coupling;
@@ -13,7 +15,7 @@ mod event_state;
 pub use bindings::SceneModifierBindingSource;
 pub use buffer_budget::{
     MODIFIER_MEMORY_OVERRIDE_ENV, ModifierBufferUsage, PreparedModifierBufferBudget,
-    admit_candidate_bytes,
+    admit_candidate_bytes, admit_scene_bytes,
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use impulses::SceneModifierImpulseRoute;
@@ -29,7 +31,6 @@ pub use control_state::PreparedModifierControlState;
 mod frames;
 mod fragment_cuts;
 pub(crate) use fragment_cuts::contains_fragments;
-mod index;
 mod namespace;
 mod parameter_guards;
 pub(crate) use parameter_guards::PreparedModifierParameterGuards;
@@ -117,7 +118,26 @@ pub(super) fn scene_objects_for_authoring(
     owner: &manifold_core::effect_graph_def::EffectGraphDef,
     scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
 ) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
-    index::FlatSceneIndex::build(owner)?.scene_objects(scene)
+    Ok(FlatSceneIndex::build(owner)?.scene_objects(scene)?)
+}
+
+impl From<SceneIndexError> for SceneModifierExpandError {
+    fn from(error: SceneIndexError) -> Self {
+        match error {
+            SceneIndexError::Duplicate { path, detail } => Self::DuplicateIdentity { path, detail },
+            SceneIndexError::MissingTarget { path, detail } => Self::MissingTarget { path, detail },
+            SceneIndexError::MissingScene { path, detail } => Self::MissingScene { path, detail },
+            SceneIndexError::MissingInput { path, detail } => Self::MissingInput { path, detail },
+            SceneIndexError::ConflictingSource { path, detail } => {
+                Self::ConflictingSource { path, detail }
+            }
+            SceneIndexError::Invalid { path, detail } => Self::InvalidRecipe { path, detail },
+            SceneIndexError::Capacity { path, detail } => Self::CapacityExceeded { path, detail },
+            SceneIndexError::Unsupported { path, detail } => {
+                Self::UnsupportedEndpoint { path, detail }
+            }
+        }
+    }
 }
 
 /// Physical scene objects available to a force target picker. Material parts

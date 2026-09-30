@@ -41,7 +41,8 @@ pub(crate) fn refined_nodes(solid_nodes: [f32; 3], scale: u32) -> [u32; 3] {
     solid_nodes.map(|n| (n.max(2.0) as u32 - 1) * scale + 1)
 }
 
-fn scale_param(params: &ParamValues) -> u32 {
+/// Resolution Scale: level-set nodes per solid-lattice cell.
+pub(crate) fn volume_scale(params: &ParamValues) -> u32 {
     match params.get("resolution_scale") {
         Some(ParamValue::Float(v)) => v.round().clamp(1.0, 8.0) as u32,
         _ => 2,
@@ -113,12 +114,12 @@ impl Primitive for ParticleVolume {
             return None;
         }
         let solid = inputs.iter().find(|(name, _)| *name == "solid").map(|&(_, n)| n)?;
-        Some(solid.saturating_mul(scale_param(params).pow(3)))
+        Some(solid.saturating_mul(volume_scale(params).pow(3)))
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
-        let scale = scale_param(ctx.params);
+        let scale = volume_scale(ctx.params);
         // A producer without a frame yet publishes no lattice: nothing to sum,
         // and downstream atoms see no lattice either.
         let refined = if nodes.iter().all(|&n| n >= 2.0) { refined_nodes(nodes, scale) } else { [0; 3] };

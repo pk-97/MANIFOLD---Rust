@@ -81,7 +81,7 @@ don't redesign.
 
 | Piece | Where | State |
 |---|---|---|
-| Section rendering | `manifold-app/src/ui_bridge/projection/scene.rs:71` (`sections_for_doc_ids`) | A section renders only because exposure metadata carries `spec.section == Some(name)`; stamped at creation AND at load migration — two paths that must produce the same string. |
+| Section rendering | `manifold-app/src/ui_bridge/projection/scene.rs` (`sections_for_nodes`) | A section renders only because exposure metadata carries `spec.section == Some(name)`; stamped at creation AND at load migration — two paths that must produce the same string. |
 | Rows | `scene_setup_panel.rs:1700` (`build_filtered_properties`), full surface built with `SurfaceVisibility::All` at `inspector.rs:960` | Rows are free once the section string lands: filter by `spec.section`, manifest-backed, no bespoke row code. |
 | Per-frame value sync | `scene_setup_panel.rs:1051` (`sync_properties_values`) | Id-joined via `row_id_index`; a row missing from the manifest trips the panel's INV-6 check (debug_assert dev / one-time warn + frozen row release). |
 | Write targeting | `manifold-app/src/ui_bridge/project.rs:949` (`apply_scene_param_write`) | Rows must target `GraphParamTarget::GeneratorOf(vm.layer_id)`, never plain Generator — BUG-292 (scene-panel-wrong-layer-target). |

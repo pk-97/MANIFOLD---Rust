@@ -7,6 +7,7 @@ use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID,
     SerializedParamValue,
 };
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::{GraphTarget, NodeId};
 
 fn render_scene_graph(objects: u32, occupied_next_slot: bool) -> EffectGraphDef {
@@ -159,7 +160,7 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
     let body = group.group.as_deref().unwrap();
     assert_eq!(body.nodes.len(), 8);
     for type_id in [
-        "node.fluid_surface",
+        FLIP_DOMAIN_TYPE_ID,
         "node.transform_3d",
         "node.fluid_role_source",
         "node.pbr_material",
@@ -182,7 +183,7 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
     assert_eq!(
         body.nodes
             .iter()
-            .find(|node| node.type_id == "node.fluid_surface")
+            .find(|node| node.type_id == FLIP_DOMAIN_TYPE_ID)
             .unwrap()
             .params["resolution"],
         SerializedParamValue::Int { value: 16 }
@@ -198,7 +199,7 @@ fn scene_physics_add_fluid_appends_after_compound_slots() {
         matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
             if node_id == &source_id && param == "rot_x")
     }));
-    let fluid = body.nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
+    let fluid = body.nodes.iter().find(|node| node.type_id == FLIP_DOMAIN_TYPE_ID).unwrap();
     assert_eq!(fluid.params["emission"], SerializedParamValue::Float { value: 0.0 });
     assert_eq!(fluid.params["domain_size"], SerializedParamValue::Float { value: 4.0 });
     let domain = body
@@ -353,7 +354,7 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     let group_node = result.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
     let group = group_node.group.as_deref().unwrap();
     let input = group.nodes.iter().find(|node| node.type_id == "system.group_input").unwrap();
-    let fluid = group.nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
+    let fluid = group.nodes.iter().find(|node| node.type_id == FLIP_DOMAIN_TYPE_ID).unwrap();
     let metadata = result.preset_metadata.as_ref().unwrap();
     for (world_param, fluid_param) in [("gravity_x", "gravity_x"), ("gravity_y", "gravity"),
         ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]

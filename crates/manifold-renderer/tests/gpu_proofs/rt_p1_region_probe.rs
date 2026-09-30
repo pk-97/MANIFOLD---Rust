@@ -53,14 +53,17 @@ use crate::harness;
 /// run where `median * STALL_FACTOR` doesn't clear it either. 30.0
 /// clears the observed noise ceiling with headroom while staying two
 /// orders of magnitude below a real stall (100-500ms class).
+#[cfg(feature = "rt-perf-proofs")]
 pub(crate) const STALL_ABS_FLOOR_MS: f64 = 30.0;
 /// A synchronous accel build/`commit()`+`waitUntilCompleted()` regression
 /// is a 100-500ms spike (observed: a real stall reads ~547ms against a
 /// ~2ms steady median) — 8x the steady median still catches that class
 /// while ordinary load noise on a ~2-17ms median passes.
+#[cfg(feature = "rt-perf-proofs")]
 pub(crate) const STALL_FACTOR: f64 = 8.0;
 /// How many of the tail (most-likely-settled) checked frames form the
 /// steady-state reference the ceiling is computed from.
+#[cfg(feature = "rt-perf-proofs")]
 pub(crate) const STEADY_TAIL_COUNT: usize = 5;
 /// Frames exempt from the stall assert while the ASYNC accel build settles.
 /// Was a per-test `2`; under full-suite contention the settling window
@@ -69,11 +72,13 @@ pub(crate) const STEADY_TAIL_COUNT: usize = 5;
 /// without blinding the gate: the regression class this assert hunts — a
 /// synchronous `commit()`+`waitUntilCompleted()` in the frame path — recurs
 /// on every rebuild/frame, so it still lands in the checked window.
+#[cfg(feature = "rt-perf-proofs")]
 pub(crate) const WARMUP_FRAMES_EXEMPT: i64 = 5;
 
 /// Ceiling = the greater of [`STALL_ABS_FLOOR_MS`] (the old fixed budget,
 /// kept as a floor so a uniformly-slow-but-stall-free run still passes)
 /// and [`STALL_FACTOR`] times `steady_ms`'s median.
+#[cfg(feature = "rt-perf-proofs")]
 pub(crate) fn stall_ceiling_ms(steady_ms: &[f64]) -> f64 {
     let mut sorted = steady_ms.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).expect("frame times are always finite"));
@@ -383,6 +388,11 @@ fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
 /// exceeds the 20ms/frame @ 60fps budget. Run with
 /// `MANIFOLD_RENDER_TRACE=1 ... --nocapture` to also see the engine's own
 /// per-stage breakdown for any frame that's slow.
+///
+/// A wall-clock probe, so it runs only under `rt-perf-proofs` with
+/// `--test-threads=1`: in the parallel correctness binary a frame time
+/// measures the other tests, not this one (BUG-ca67).
+#[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn rt_enable_first_frame_never_stalls_past_20ms() {
     let h = harness::shared();

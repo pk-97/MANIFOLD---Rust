@@ -28,11 +28,12 @@ use serde_json::Value;
 use crate::harness;
 
 const PRESET: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpu.json");
-const SURFACE_ATOMS: [&str; 7] = [
+const SURFACE_ATOMS: [&str; 8] = [
     "node.sort_particles_into_cells",
     "node.shape_particle_blobs",
     "node.particle_volume",
     "node.smooth_lattice",
+    "node.clamp_liquid_to_solids",
     "node.count_surface_triangles",
     "node.running_total",
     "node.volume_surface_mesh",

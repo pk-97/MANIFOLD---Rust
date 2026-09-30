@@ -103,12 +103,18 @@ use crate::node_graph::primitive::PrimitiveDescription;
 // motion→still transitions without a GUI session.
 //
 // Architecture:
-//   RT_CAPTURE_ARM / RT_CAPTURE_ARM_COMPOSITE = set by harness before a tick.
-//   RT_CAPTURE_QUEUE = render_scene pushes cloned MTLTexture refs + metadata.
-//   Harness drains queue after commit_and_wait, reads back via
-//   headless_readback::readback_raw_halves, computes stats, writes PNG.
-//   COPY_SRC on ensure_rt_irradiance textures makes GPU readback possible.
-use std::sync::{Mutex, OnceLock};
+//   `arm_rt_capture` = called by the harness before a tick.
+//   render_scene pushes cloned texture refs + metadata into the capture queue.
+//   The harness takes the queue (`take_rt_captures`) after commit_and_wait,
+//   reads back via headless_readback::readback_raw_halves, computes stats,
+//   writes PNG. COPY_SRC on ensure_rt_irradiance textures makes GPU readback
+//   possible.
+//   Arm and queue are per thread: render_scene runs on the thread that
+//   renders, so a capture belongs to the render on the arming thread and a
+//   render on another thread (parallel proofs) can neither take the arm nor
+//   fill the queue.
+use std::cell::{Cell, RefCell};
+use std::sync::OnceLock;
 
 fn rt_source_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -121,13 +127,36 @@ pub struct RtCaptureSlot {
     pub w: u32,
     pub h: u32,
 }
-pub static RT_CAPTURE_ARM: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-/// Set by harness to capture composited output at end of evaluate.
-pub static RT_CAPTURE_ARM_COMPOSITE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-pub static RT_CAPTURE_QUEUE: std::sync::LazyLock<Mutex<Vec<RtCaptureSlot>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+thread_local! {
+    static RT_CAPTURE_ARM: Cell<bool> = const { Cell::new(false) };
+    static RT_CAPTURE_ARM_COMPOSITE: Cell<bool> = const { Cell::new(false) };
+    static RT_CAPTURE_QUEUE: RefCell<Vec<RtCaptureSlot>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Arm a capture for the next render_scene evaluation on this thread: the RT
+/// channels, and with `composite` the composited output too.
+pub fn arm_rt_capture(composite: bool) {
+    RT_CAPTURE_ARM.set(true);
+    RT_CAPTURE_ARM_COMPOSITE.set(composite);
+}
+
+/// Clear an arm no render consumed, so it can't fire on a later render.
+pub fn disarm_rt_capture() {
+    RT_CAPTURE_ARM.set(false);
+    RT_CAPTURE_ARM_COMPOSITE.set(false);
+}
+
+/// Take everything this thread's render_scene evaluations captured since the
+/// last arm or take.
+pub fn take_rt_captures() -> Vec<RtCaptureSlot> {
+    RT_CAPTURE_QUEUE.with_borrow_mut(std::mem::take)
+}
+
+fn push_rt_capture(label: &str, tex: &manifold_gpu::GpuTexture) {
+    RT_CAPTURE_QUEUE.with_borrow_mut(|q| {
+        q.push(RtCaptureSlot { label: label.into(), tex: tex.clone(), frame: 0, w: tex.width, h: tex.height })
+    });
+}
 // ── end capture harness ─────────────────────────────────────────
 
 pub const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
@@ -4121,22 +4150,18 @@ impl RenderScene {
                     }
                 }
                 // ── RT capture: channel snapshots when armed ──
-                if RT_CAPTURE_ARM.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    let mut q = RT_CAPTURE_QUEUE.lock().unwrap();
+                if RT_CAPTURE_ARM.replace(false) {
                     let refl_write = self.rt_history_ping;
                     let refl_read = 1 - refl_write;
-                    if let Some(ref t) = self.rt_refl_full { q.push(RtCaptureSlot {
-                        label: "refl_raw".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
-                    if let Some(ref t) = self.rt_refl_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "refl_history_write".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
-                    if let Some(ref t) = self.rt_refl_history[refl_read] { q.push(RtCaptureSlot {
-                        label: "refl_history_read".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
-                    if let Some(ref t) = self.rt_irr_full { q.push(RtCaptureSlot {
-                        label: "irr_full".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    let capture = |label: &str, t: &Option<manifold_gpu::GpuTexture>| {
+                        if let Some(t) = t {
+                            push_rt_capture(label, t);
+                        }
+                    };
+                    capture("refl_raw", &self.rt_refl_full);
+                    capture("refl_history_write", &self.rt_refl_history[refl_write]);
+                    capture("refl_history_read", &self.rt_refl_history[refl_read]);
+                    capture("irr_full", &self.rt_irr_full);
                     // RT-Stage-3 P4 (BUG-eytk): the post-filtered irradiance
                     // capture — taps `rt_irr_filtered` when the filter ran
                     // this frame, falls back to the raw history slot when
@@ -4144,39 +4169,27 @@ impl RenderScene {
                     // the PRE-accumulation signal — never moved by the
                     // filter; this slot is the POST-accumulation output.
                     if *irr_filtered_valid {
-                        if let Some(ref t) = self.rt_irr_filtered { q.push(RtCaptureSlot {
-                            label: "irr_accum".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                        });}
+                        capture("irr_accum", &self.rt_irr_filtered);
                     } else {
-                        if let Some(ref t) = self.rt_irr_history[refl_write] { q.push(RtCaptureSlot {
-                            label: "irr_accum".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                        });}
+                        capture("irr_accum", &self.rt_irr_history[refl_write]);
                     }
-                    if let Some(ref t) = self.rt_moments_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "moments".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    capture("moments", &self.rt_moments_history[refl_write]);
                     // SV-ACCUM: the `mask` channel dumps the ACCUMULATED
                     // visibility (the texture binding 41 actually feeds the
                     // fragment shader) — the gate must measure what the show
                     // consumes, not the pre-accumulation atrous output.
                     // `rt_mask_full` stays in the chain (atrous scratch) but
                     // is no longer the consumed mask.
-                    if let Some(ref t) = self.rt_sv_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "mask".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    capture("mask", &self.rt_sv_history[refl_write]);
                     // BUG-fh95: the RAW pre-upsample/pre-denoise trace output
                     // (out_sv at trace res, R=vis G=ao) — the texture the
                     // original open-plane 0/0 was read from; the full-res
                     // mask above can't see it (post-atrous).
-                    if let Some(ref t) = self.rt_mask_half { q.push(RtCaptureSlot {
-                        label: "mask_half".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    capture("mask_half", &self.rt_mask_half);
                     // BUG-tr5o: the sv snap-HOLD counter — the direct
                     // observable of gate re-trips under camera motion
                     // (sustained >0 on penumbra = re-tripping; ~0 = healthy).
-                    if let Some(ref t) = self.rt_sv_hold_history[refl_write] { q.push(RtCaptureSlot {
-                        label: "sv_hold".into(), tex: t.clone(), frame: 0, w: t.width, h: t.height,
-                    });}
+                    capture("sv_hold", &self.rt_sv_hold_history[refl_write]);
                 }
             }
 
@@ -9389,17 +9402,10 @@ impl RenderScene {
             );
         }
         // ── RT capture: composited output snapshot ──
-        if RT_CAPTURE_ARM_COMPOSITE.swap(false, std::sync::atomic::Ordering::Relaxed) {
-            let nc = ctx.outputs.texture_2d("color");
-            if let Some(nc) = nc {
-                RT_CAPTURE_QUEUE.lock().unwrap().push(RtCaptureSlot {
-                    label: "composite".into(),
-                    tex: nc.clone(),
-                    frame: 0,
-                    w: nc.width,
-                    h: nc.height,
-                });
-            }
+        if RT_CAPTURE_ARM_COMPOSITE.replace(false)
+            && let Some(nc) = ctx.outputs.texture_2d("color")
+        {
+            push_rt_capture("composite", nc);
         }
     }
 }

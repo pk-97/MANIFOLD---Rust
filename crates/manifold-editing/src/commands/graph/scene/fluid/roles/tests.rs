@@ -7,6 +7,7 @@ use manifold_core::effect_graph_def::{
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
     PresetMetadata, SerializedParamValue, StringBindingDef,
 };
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::{EffectId, GraphTarget, NodeId};
@@ -74,7 +75,7 @@ fn cube_graph(nested: bool) -> EffectGraphDef {
     let mut nodes = vec![
         render,
         object_group,
-        node(20, "fluid", FLUID_TYPE_ID, Some("Fluid")),
+        node(20, "fluid", FLIP_DOMAIN_TYPE_ID, Some("Fluid")),
     ];
     let wires = vec![wire(10, "object", 0, "object_0")];
     if nested {
@@ -85,7 +86,7 @@ fn cube_graph(nested: bool) -> EffectGraphDef {
                 params: vec![],
             },
             nodes: vec![
-                node(31, "nested_fluid", FLUID_TYPE_ID, Some("Nested Fluid")),
+                node(31, "nested_fluid", FLIP_DOMAIN_TYPE_ID, Some("Nested Fluid")),
                 node(32, "domain_output", GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![],
@@ -180,7 +181,7 @@ fn imported_compound_graph(two_fluids_in_boundary: bool) -> EffectGraphDef {
     let mut nodes = vec![
         render,
         object_group,
-        node(30, "fluid_a", FLUID_TYPE_ID, Some("Fluid A")),
+        node(30, "fluid_a", FLIP_DOMAIN_TYPE_ID, Some("Fluid A")),
     ];
     let wires = vec![
         wire(10, "object", 0, "object_0"),
@@ -194,8 +195,8 @@ fn imported_compound_graph(two_fluids_in_boundary: bool) -> EffectGraphDef {
                 params: vec![],
             },
             nodes: vec![
-                node(41, "fluid_b", FLUID_TYPE_ID, Some("Fluid B")),
-                node(42, "fluid_c", FLUID_TYPE_ID, Some("Fluid C")),
+                node(41, "fluid_b", FLIP_DOMAIN_TYPE_ID, Some("Fluid B")),
+                node(42, "fluid_c", FLIP_DOMAIN_TYPE_ID, Some("Fluid C")),
                 node(43, "output", GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![],

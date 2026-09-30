@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 331 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 332 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,11 +293,12 @@ _Generated from the node registry. Do not hand-edit. 331 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (29)
+### Particles 3D (30)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
+| Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
@@ -553,9 +554,9 @@ _Generated from the node registry. Do not hand-edit. 331 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1378 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1371 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1046 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

@@ -196,7 +196,7 @@ pub fn gizmo_target_for(scene: &SceneVm, object_node_id: u32) -> Option<GizmoTar
             })
         }
         SceneObjectVm::Known(row)
-            if row.object_node_id == object_node_id && row.fluid_node_ids.is_empty() =>
+            if row.object_node_id == object_node_id && row.fluid_controls.is_empty() =>
         {
             let local = row.transform.as_ref().map(|t| [t.pos_value.0, t.pos_value.1, t.pos_value.2]).unwrap_or([0.0; 3]);
             let parent = row.parent_group_id.and_then(|id| scene.objects.iter().find_map(|o| match o {
@@ -227,7 +227,7 @@ pub fn pick_object(scene: &SceneVm, cam: &Camera, width: u32, height: u32, click
     for obj in &scene.objects {
         let SceneObjectVm::Known(row) = obj else { continue };
         if !row.visible_value || row.parent_group_id.is_some() { continue; }
-        let origin = if row.fluid_node_ids.is_empty() {
+        let origin = if row.fluid_controls.is_empty() {
             let Some(target) = gizmo_target_for(scene, row.object_node_id) else { continue };
             target.origin
         } else {
@@ -522,6 +522,7 @@ mod tests {
             parent_group_id: None,
             index: 0,
             object_node_id: id,
+            object: manifold_core::NodeId::new(format!("object{id}")),
             group_node_id: None,
             name: "Obj".to_string(),
             visible_addr: addr("visible"),
@@ -529,6 +530,7 @@ mod tests {
             visible_driven: false,
             transform: Some(TransformVm {
                 node_doc_id: 99,
+                node: manifold_core::NodeId::new("transform"),
                 pos_addr: (addr("pos_x"), addr("pos_y"), addr("pos_z")),
                 pos_value: pos,
                 pos_driven: driven,
@@ -547,7 +549,8 @@ mod tests {
             skin: None,
             physics: None,
             physics_imported: false,
-            fluid_node_ids: Vec::new(),
+            liquid_domain: None,
+            fluid_controls: Vec::new(),
             fluid_domain: None,
             fluid_domain_transform: None,
         }))
@@ -557,7 +560,7 @@ mod tests {
         let mut object = known_object(id, (0.0, 0.0, -5.0), (false, false, false));
         let SceneObjectVm::Known(row) = &mut object else { unreachable!() };
         row.transform = None;
-        row.fluid_node_ids.push(10);
+        row.fluid_controls.push(manifold_core::NodeId::new("domain"));
         row.fluid_domain = domain;
         object
     }
@@ -566,6 +569,7 @@ mod tests {
         let addr = |param_id: &str| ParamAddr { scope_path: scope_path.to_vec(), node_doc_id: 77, param_id: param_id.to_string() };
         TransformVm {
             node_doc_id: 77,
+            node: manifold_core::NodeId::new("domain_transform"),
             pos_addr: (addr("pos_x"), addr("pos_y"), addr("pos_z")),
             pos_value: pos,
             pos_driven: (false, false, false),
@@ -597,8 +601,10 @@ mod tests {
             objects,
             lights: Vec::new(),
             camera: crate::node_graph::scene_vm::CameraVm::None,
+            camera_controls: Vec::new(),
             environment: crate::node_graph::scene_vm::EnvironmentVm::None,
             atmosphere: crate::node_graph::scene_vm::AtmosphereVm::None,
+            world_controls: Vec::new(),
             scene_bounds: None,
         }
     }
@@ -765,6 +771,7 @@ mod tests {
             parent_group_id: None,
             index: 0,
             object_node_id: 5,
+            object: manifold_core::NodeId::new("bare"),
             group_node_id: None,
             name: "Bare".to_string(),
             visible_addr: addr("visible"),
@@ -779,7 +786,8 @@ mod tests {
             skin: None,
             physics: None,
             physics_imported: false,
-            fluid_node_ids: Vec::new(),
+            liquid_domain: None,
+            fluid_controls: Vec::new(),
             fluid_domain: None,
             fluid_domain_transform: None,
         }));

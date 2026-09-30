@@ -39,7 +39,7 @@ impl PreparedModifierParameterGuards {
         let mut sources = Vec::with_capacity(ids.len());
         // Read the calibrated host before expansion plants card defaults.
         // Otherwise a selector-changing default could become its own baseline.
-        let index = super::index::FlatSceneIndex::build(owner)?;
+        let index = manifold_core::scene_index::FlatSceneIndex::build(owner)?;
         for id in ids {
             let source = index
                 .flat
