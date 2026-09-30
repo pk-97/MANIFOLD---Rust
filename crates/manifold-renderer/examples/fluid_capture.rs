@@ -89,6 +89,10 @@ struct CaptureOptions {
     /// The preset meshes on the GPU (the Liquid Surface group): the fluid node
     /// publishes particle frames and its CPU mesh is off by design.
     gpu_surface: bool,
+    /// On still frames, write each surface mesh's live vertices (position then
+    /// normal, six little-endian f32 each) to `mesh/` for offline roughness
+    /// measurement.
+    dump_mesh: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -591,6 +595,56 @@ fn gpu_surface_vertices(runtime: &PresetRuntime, device: &GpuDevice, frame: u32)
     Ok(live)
 }
 
+/// Writes the live vertices of every surface mesh in the graph: the GPU
+/// Liquid Surface (`gpu`, live = nonzero normal) and the fluid node's CPU mesh
+/// (`cpu`, live = its first `cpu_count` vertices).
+fn dump_surface_meshes(
+    runtime: &PresetRuntime,
+    device: &GpuDevice,
+    frame: u32,
+    cpu_count: usize,
+    fluid: &FluidMetrics,
+    dir: &Path,
+) -> CaptureResult<()> {
+    for array in runtime.dump_arrays_all() {
+        let tag = match (array.type_id.as_str(), array.port.as_str()) {
+            ("node.volume_surface_mesh", "vertices") => "gpu",
+            ("node.fluid_surface", "vertices") => "cpu",
+            ("node.fluid_surface", "particles_b") => "particles",
+            _ => continue,
+        };
+        let size = array.buffer.size();
+        let staging = device.create_buffer_shared(size);
+        let mut encoder = device.create_encoder("surface-mesh-dump");
+        encoder.copy_buffer_to_buffer(array.buffer, &staging, size);
+        encoder.commit_and_wait_completed();
+        let ptr = staging.mapped_ptr().expect("shared staging buffer");
+        // SAFETY: the copy has completed and nothing else writes the staging buffer.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
+        if tag == "particles" {
+            // Raw FluidParticle slots; the name carries the live count.
+            let live = fluid.particle_count as usize;
+            fs::write(dir.join(format!("frame_{frame:06}_particles_{live}.bin")), bytes)?;
+            continue;
+        }
+        let mut out = Vec::new();
+        for (index, chunk) in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()).enumerate() {
+            let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
+            let live = match tag {
+                "gpu" => vertex.normal != [0.0; 3],
+                _ => index < cpu_count,
+            };
+            if live {
+                for value in vertex.position.iter().chain(&vertex.normal) {
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        fs::write(dir.join(format!("frame_{frame:06}_{tag}.f32")), out)?;
+    }
+    Ok(())
+}
+
 fn render_output_frame(
     runtime: &mut PresetRuntime,
     target: &RenderTarget,
@@ -765,6 +819,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         cinematic: false,
         supersample: 1,
         gpu_surface: false,
+        dump_mesh: false,
     };
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| -> CaptureResult<String> {
@@ -791,6 +846,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--linear" => options.linear = true,
             "--cinematic" => options.cinematic = true,
             "--gpu-surface" => options.gpu_surface = true,
+            "--dump-mesh" => options.dump_mesh = true,
             "--supersample" => {
                 options.supersample = parse_u32(&value("--supersample")?, "--supersample")?
             }
@@ -807,7 +863,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--gpu-surface] [--dump-mesh]",
         )
     })?;
     if options.width == 0
@@ -913,7 +969,8 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_dimensions(options.width, options.height, options.supersample);
     let mut offline_runtime =
         build_runtime(&instrumented_json, &device, render_width, render_height)?;
-    offline_runtime.set_dump_all(options.cinematic || options.gpu_surface);
+    let array_dumps = options.gpu_surface || options.dump_mesh;
+    offline_runtime.set_dump_all(options.cinematic || array_dumps);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
         &offline_target,
@@ -932,7 +989,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     )?;
     if options.cinematic {
         verify_cinematic_dimensions(&offline_runtime, options)?;
-        offline_runtime.set_dump_all(options.gpu_surface);
+        offline_runtime.set_dump_all(array_dumps);
     }
     if initial_fluid.simulation_time.abs() > 1e-4 {
         return Err(io::Error::other(format!(
@@ -953,6 +1010,9 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     if options.stills_every.is_some() {
         fs::create_dir_all(options.output_dir.join("stills"))?;
     }
+    if options.dump_mesh {
+        fs::create_dir_all(options.output_dir.join("mesh"))?;
+    }
     let mut capture_ms = 0.0;
     for frame in 1..=options.frames {
         ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
@@ -966,6 +1026,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             frame_dt,
             options,
         )?;
+        let cpu_vertex_count = fluid.vertex_count as usize;
         if options.gpu_surface {
             if fluid.particle_count < 1.0 {
                 return Err(io::Error::other(format!(
@@ -1004,6 +1065,16 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         let should_capture = options
             .stills_every
             .is_none_or(|every| frame % every == 0 || frame == options.frames || frame == 1);
+        if should_capture && options.dump_mesh {
+            dump_surface_meshes(
+                &offline_runtime,
+                &device,
+                frame,
+                cpu_vertex_count,
+                &fluid,
+                &options.output_dir.join("mesh"),
+            )?;
+        }
         if should_capture {
             let capture_started = Instant::now();
             let rgba = readback_rgba(
