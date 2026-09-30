@@ -152,6 +152,11 @@ impl Sizes<'_> {
                     covers("blobs", particles * BLOB);
                     covers("levelset", surface().pow(3) * 4);
                 }
+                // Sizes its counts to the sort's wired grid at run time and
+                // checks the ranges against it, as the surface sort does.
+                "node.particles_near_bins" => {
+                    assert!(wired(step, "bins_x"), "{} takes the sort's grid", node.node_id.as_str());
+                }
                 "node.smooth_lattice" if wired(step, "nodes_x") => {
                     covers("levelset", surface().pow(3) * 4);
                     covers("smoothed", surface().pow(3) * 4);

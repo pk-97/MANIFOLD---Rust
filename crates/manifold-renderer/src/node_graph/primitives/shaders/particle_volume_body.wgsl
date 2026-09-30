@@ -8,10 +8,11 @@
 // inside the liquid, as upstream's scalar field caps solid vertices — and the
 // lattice border is outside, so the surface closes (D15).
 //
-// ABI: `blobs` (FluidBlob → Element), `cell_ranges` (CellRange → Element2) and
-// `solid` (f32) are gathered; the output is one f32 per node. The bin grid is
-// the sort's (`bins_x/y/z`), never ceil(size / cell_size) again: fast-math
-// division can land one bin past the ranges the sort wrote.
+// ABI: `blobs` (FluidBlob → Element), `cell_ranges` (CellRange → Element2),
+// `solid` (f32) and `near` (u32 per bin, node.particles_near_bins) are
+// gathered; the output is one f32 per node. The bin grid is the sort's
+// (`bins_x/y/z`), never ceil(size / cell_size) again: fast-math division can
+// land one bin past the ranges the sort wrote. `near_len` is 0 unwired.
 
 fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
@@ -46,6 +47,7 @@ fn body(
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    near_len: u32,
 ) -> f32 {
     let band = 0.1 * cell_size;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
@@ -66,6 +68,11 @@ fn body(
     var phi = band;
     let g = (p - lattice_min) / cell_size;
     let home = clamp(vec3<i32>(floor(g)), vec3<i32>(0), bins - vec3<i32>(1));
+    // No particle within a bin of home: every bin the search reads is empty.
+    let home_bin = u32(home.x + bins.x * (home.y + bins.y * home.z));
+    if home_bin < near_len && buf_near[home_bin] == 0u {
+        return band;
+    }
     for (var dz = -1; dz <= 1; dz = dz + 1) {
         for (var dy = -1; dy <= 1; dy = dy + 1) {
             for (var dx = -1; dx <= 1; dx = dx + 1) {

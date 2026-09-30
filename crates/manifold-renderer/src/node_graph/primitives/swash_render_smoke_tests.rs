@@ -23,6 +23,7 @@ use manifold_core::params::ParamManifest;
 use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
+use super::particle_volume::VolumeUniforms;
 use super::swash_extent_tests::rendered_scene_bytes;
 use super::swash_preset::{DAM_MIN, WaterScene, render_def};
 use super::swash_solve_tests::output_of;
@@ -106,7 +107,7 @@ fn stage(name: &str) -> &'static str {
         "filmic_display" => "tone map + other",
         n if n.ends_with("liquid_sort") => "surface sort",
         n if n.ends_with("liquid_blobs") => "surface blobs",
-        n if n.ends_with("liquid_volume") => "surface volume",
+        n if n.ends_with("liquid_volume") || n.ends_with("liquid_near") => "surface volume",
         n if n.contains("liquid_smooth_") => "surface smoothing",
         n if n.ends_with("liquid_count") || n.ends_with("liquid_offsets") || n.ends_with("liquid_mesh") => {
             "surface marching cubes"
@@ -201,6 +202,13 @@ struct FrameResult {
     /// On a profiled frame: surface and render stage GPU ms by dispatch
     /// label, so a lever is judged on its own kernels.
     detail: Vec<(String, f64)>,
+    /// On a profiled frame, wall ms: the surface from its first dispatch's
+    /// start to its last's end, then the frame's end after that, then scene
+    /// work that finished before the surface did. The scene's opaque pass
+    /// needs no liquid, so the GPU runs it beside the solver or the surface
+    /// and a per-dispatch sum counts that time twice; the first two are what
+    /// the solver must leave room for.
+    windows: Option<[f64; 3]>,
 }
 
 /// Stages the per-dispatch detail table breaks down.
@@ -213,8 +221,28 @@ fn detailed(stage: &str) -> bool {
 const SMALL_SPAN_MS: f64 = 0.02;
 
 impl Smoke {
+    /// `SWASH_SMOKE_NO_NEAR` unwires the level set's `near`, so every node
+    /// searches: the empty-space skip's before.
     fn new(scene: WaterScene) -> Self {
-        Self::with_def(scene, render_def(scene))
+        let def = render_def(scene);
+        if std::env::var_os("SWASH_SMOKE_NO_NEAR").is_none() {
+            return Self::with_def(scene, def);
+        }
+        fn unwire(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    if let Some(Value::Array(wires)) = map.get_mut("wires") {
+                        wires.retain(|w| w["toPort"] != "near");
+                    }
+                    map.values_mut().for_each(unwire);
+                }
+                Value::Array(items) => items.iter_mut().for_each(unwire),
+                _ => {}
+            }
+        }
+        let mut json = serde_json::to_value(def).expect("def serialises");
+        unwire(&mut json);
+        Self::with_def(scene, serde_json::from_value(json).expect("def without near"))
     }
 
     fn with_def(scene: WaterScene, def: EffectGraphDef) -> Self {
@@ -332,6 +360,7 @@ impl Smoke {
         let mut unattributed = 0;
         let mut census = None;
         let mut detail: Vec<(String, f64)> = Vec::new();
+        let mut windows = None;
         if profile {
             let steps = self.runtime.take_step_profiles();
             let mut split = vec![(0.0, 0.0); STAGES.len()];
@@ -344,6 +373,23 @@ impl Smoke {
             spans.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
             let mut end = 0.0_f64;
             let mut counts = [0.0; 5];
+            let (mut surface_start, mut surface_end) = (f64::MAX, 0.0_f64);
+            let mut scene_spans: Vec<(f64, f64)> = Vec::new();
+            for span in &spans {
+                let Some(name) = step_of(&span.tag).and_then(|idx| self.step_names.get(idx)) else {
+                    continue;
+                };
+                let stage = stage(name);
+                if stage.starts_with("surface") {
+                    surface_start = surface_start.min(span.start_ms);
+                    surface_end = surface_end.max(span.start_ms + span.millis);
+                } else if stage == "scene render" {
+                    scene_spans.push((span.start_ms + span.millis, span.millis));
+                }
+            }
+            let frame_end = spans.iter().map(|s| s.start_ms + s.millis).fold(0.0, f64::max);
+            let early_scene: f64 = scene_spans.iter().filter(|(e, _)| *e <= surface_end).map(|(_, ms)| ms).sum();
+            windows = (surface_start < surface_end).then_some([surface_end - surface_start, frame_end - surface_end, early_scene]);
             for span in spans {
                 // Untimed vendor work (the MPSGraph FFTs) shows as the gap
                 // before the next timed dispatch; it is that dispatch's stage.
@@ -393,6 +439,7 @@ impl Smoke {
             untimed: result.overflow + result.invalid,
             census,
             detail,
+            windows,
         }
     }
 
@@ -518,7 +565,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let dir = out_dir();
     let frames = frames();
     let tag = format!("{label}_{n}");
-    println!("SMOKE {tag}: {} particles, collar capacity {}, {WIDTH}x{HEIGHT}", scene.particles(), scene.pressure.capacity);
+    println!("SMOKE {tag}: {} particles, collar capacity {}, {WIDTH}x{HEIGHT}, load average {}", scene.particles(), scene.pressure.capacity, load_average());
     // The CPU census gates the run against the allowance the runtime itself
     // admits graphs by (75% of the working set): a scene past it is refused
     // by name, never tried.
@@ -568,6 +615,7 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
     let mut census: [Vec<f64>; 5] = Default::default();
     let mut detail: Vec<(String, Vec<f64>)> = Vec::new();
+    let mut windows: [Vec<f64>; 3] = Default::default();
     let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
@@ -601,6 +649,11 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
                 match detail.iter_mut().find(|(k, _)| *k == key) {
                     Some(entry) => entry.1.push(ms),
                     None => detail.push((key, vec![ms])),
+                }
+            }
+            if let Some(w) = r.windows {
+                for (column, value) in windows.iter_mut().zip(w) {
+                    column.push(value);
                 }
             }
         } else {
@@ -763,6 +816,12 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     println!(
         "SMOKE {tag} dispatches per timestamped frame: {dispatches:.0} timed, {small:.0} under {} µs ({small_ms:.2} ms of their own); every dispatch's own time {own_ms:.2} ms, gaps between them {gap_ms:.2} ms",
         SMALL_SPAN_MS * 1000.0
+    );
+    let [surface_wall, tail_wall, early_scene] = windows.map(|column| percentile(&column, 0.5));
+    println!(
+        "SMOKE {tag} critical path (median timestamped wall ms): surface {surface_wall:.2}, then render to frame end {tail_wall:.2}, together {:.2}; scene work done beside the solver or surface {early_scene:.2}; load average {}",
+        surface_wall + tail_wall,
+        load_average()
     );
 
     if transport {
@@ -1178,27 +1237,30 @@ fn spread(ms: &[f64]) -> (f64, f64, f64) {
     (percentile(ms, 0.5), percentile(ms, 0.1), percentile(ms, 0.9))
 }
 
-/// Surface kernels old against new on one Dam Break frame at 64 (frame 90),
-/// dispatched in alternation so a shared GPU loads both alike, each checked
-/// against the other value for value. `SURFACE_AB_OLD_VOLUME` names the old
-/// `particle_volume` body (WGSL); the old scan is the in-place scan between
-/// two copies. No-op unset.
-#[test]
-fn swash_surface_kernels_ab_64() {
-    use super::particle_volume::ParticleVolume;
-    use super::prefix_scan::{INTO_SPAN, PrefixScan};
-    use crate::node_graph::fluid_particles::{CellRange, FluidBlob};
-    use crate::node_graph::freeze::codegen;
-    use crate::node_graph::primitive::PrimitiveSpec;
-    use manifold_gpu::GpuBinding;
+fn ab_rounds() -> usize {
+    std::env::var("SURFACE_AB_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(30)
+}
 
-    let Some(old_body) = std::env::var_os("SURFACE_AB_OLD_VOLUME").map(|path| std::fs::read_to_string(path).expect("old volume body")) else {
-        return;
-    };
-    let rounds: usize = std::env::var("SURFACE_AB_ROUNDS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+/// The surface volume's inputs and output on Dam Break frame 90 at 64, as
+/// the graph ran them, with the inputs in fresh buffers.
+struct VolumeFrame {
+    bins: [u32; 3],
+    refined: [u32; 3],
+    total: usize,
+    band: f32,
+    blobs: Vec<crate::node_graph::fluid_particles::FluidBlob>,
+    ranges: Vec<crate::node_graph::fluid_particles::CellRange>,
+    graph_level: Vec<f32>,
+    uniforms: VolumeUniforms,
+    blobs_buf: manifold_gpu::GpuBuffer,
+    ranges_buf: manifold_gpu::GpuBuffer,
+    solid_buf: manifold_gpu::GpuBuffer,
+}
+
+fn volume_frame_90() -> (Smoke, VolumeFrame) {
     let scene = WaterScene::dam_break(64);
     let mut smoke = Smoke::new(scene);
-    let names = ["liquid_sort", "liquid_blobs", "liquid_volume", "liquid_count"].map(|suffix| smoke.surface_name(suffix));
+    let names = ["liquid_sort", "liquid_blobs", "liquid_volume"].map(|suffix| smoke.surface_name(suffix));
     let ids: Vec<NodeId> = names.iter().map(|name| NodeId::from(name.as_str())).collect();
     for frame in 1..=90 {
         if frame == 90 {
@@ -1207,8 +1269,6 @@ fn swash_surface_kernels_ab_64() {
         smoke.frame(1.0 / 60.0, false);
     }
     println!("AB load average before: {}", load_average());
-
-    // The volume's inputs as the graph ran them.
     let lattice = scene.surface_lattice();
     let bounds = lattice.bounds();
     let solid_nodes = lattice.nodes;
@@ -1216,131 +1276,239 @@ fn swash_surface_kernels_ab_64() {
     let cell_size = size[0] / (solid_nodes[0] - 1) as f32;
     let bins = size.map(|s| (s / cell_size).round() as u32);
     let bin_total = bins.iter().product::<u32>() as usize;
-    let particles = scene.particles() as usize;
-    let blobs: Vec<FluidBlob> = smoke.dumped(&names[1], "blobs", particles);
-    let ranges: Vec<CellRange> = smoke.dumped(&names[0], "cell_ranges", bin_total);
-    let scale = 3u32;
+    let blobs = smoke.dumped(&names[1], "blobs", scene.particles() as usize);
+    let ranges = smoke.dumped(&names[0], "cell_ranges", bin_total);
+    let scale = scene.surface_scale as u32;
     let refined = solid_nodes.map(|n| (n - 1) * scale + 1);
     let total = refined.iter().product::<u32>() as usize;
-    let graph_level: Vec<f32> = smoke.dumped(&names[2], "levelset", total);
-    #[repr(C)]
-    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-    struct VolumeUniforms {
-        center: [f32; 3],
-        size: [f32; 3],
-        nodes: [f32; 3],
-        cell_size: f32,
-        resolution_scale: i32,
-        bins: [i32; 3],
-        dispatch_count: u32,
-        _pad0: u32,
-    }
+    let graph_level = smoke.dumped(&names[2], "levelset", total);
     let uniforms = VolumeUniforms {
-        center: bounds.pos,
-        size,
-        nodes: solid_nodes.map(|n| n as f32),
+        center_x: bounds.pos[0],
+        center_y: bounds.pos[1],
+        center_z: bounds.pos[2],
+        size_x: size[0],
+        size_y: size[1],
+        size_z: size[2],
+        nodes_x: solid_nodes[0] as f32,
+        nodes_y: solid_nodes[1] as f32,
+        nodes_z: solid_nodes[2] as f32,
         cell_size,
         resolution_scale: scale as i32,
-        bins: bins.map(|n| n as i32),
+        bins_x: bins[0] as i32,
+        bins_y: bins[1] as i32,
+        bins_z: bins[2] as i32,
+        near_len: 0,
         dispatch_count: total as u32,
-        _pad0: 0,
     };
     let device: &manifold_gpu::GpuDevice = &smoke.device;
     let blobs_buf = shared_copy(device, &blobs, blobs.len());
     let ranges_buf = shared_copy(device, &ranges, ranges.len());
     let solid_buf = shared_copy(device, &smoke.solid_values, smoke.solid_values.len());
-    let out = [shared_copy::<f32>(device, &[], total), shared_copy::<f32>(device, &[], total)];
-    let new_text = codegen::standalone_for_spec::<ParticleVolume>().expect("volume codegen");
-    let new_body = ParticleVolume::WGSL_BODY.expect("volume body");
-    assert!(new_text.contains(new_body), "the standalone kernel carries its body verbatim");
-    let old_text = new_text.replace(new_body, &old_body);
-    let pipelines = [
-        device.create_compute_pipeline(&old_text, codegen::ENTRY, "volume old"),
-        device.create_compute_pipeline(&new_text, codegen::ENTRY, "volume new"),
-    ];
-    let mut volume_ms = [Vec::new(), Vec::new()];
-    for round in 0..rounds {
-        for variant in [round % 2, 1 - round % 2] {
-            volume_ms[variant].push(timed(&smoke, |enc| {
-                enc.dispatch_compute(
-                    &pipelines[variant],
-                    &[
-                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                        GpuBinding::Buffer { binding: 1, buffer: &blobs_buf, offset: 0 },
-                        GpuBinding::Buffer { binding: 2, buffer: &ranges_buf, offset: 0 },
-                        GpuBinding::Buffer { binding: 3, buffer: &solid_buf, offset: 0 },
-                        GpuBinding::Buffer { binding: 4, buffer: &out[variant], offset: 0 },
-                    ],
-                    [(total as u32).div_ceil(256), 1, 1],
-                    "volume ab",
-                );
-            }));
+    let frame = VolumeFrame {
+        bins,
+        refined,
+        total,
+        band: 0.1 * cell_size,
+        blobs,
+        ranges,
+        graph_level,
+        uniforms,
+        blobs_buf,
+        ranges_buf,
+        solid_buf,
+    };
+    (smoke, frame)
+}
+
+/// Where the surface volume's time goes on Dam Break frame 90 at 64, each
+/// kernel dispatched in turn so a shared GPU loads them alike: the graph
+/// kernel with `near` unwired and wired (the same values, checked), on an
+/// empty lattice, and a kernel that only writes every node; how much of the
+/// lattice any blob reaches. With `SURFACE_PROBE` naming a WGSL file, also a
+/// candidate: a `fn body(` replaces the graph kernel's body, anything else is
+/// a module with entry `main` dispatched over `SURFACE_PROBE_GROUPS` ("x,y,z",
+/// default one 256-thread group per 256 nodes); either takes the graph
+/// kernel's bindings with `near` wired and is checked value for value.
+/// `SURFACE_PROBE` unset is a no-op; "1" runs without a candidate.
+#[test]
+fn swash_surface_volume_probe_64() {
+    use super::particle_volume::ParticleVolume;
+    use super::particles_near_bins::ParticlesNearBins;
+    use crate::node_graph::freeze::codegen;
+    use manifold_gpu::GpuBinding;
+
+    let Some(probe) = std::env::var_os("SURFACE_PROBE") else {
+        return;
+    };
+    let candidate = std::fs::read_to_string(&probe).ok();
+    let rounds = ab_rounds();
+    let (smoke, v) = volume_frame_90();
+    let device: &manifold_gpu::GpuDevice = &smoke.device;
+
+    // Which nodes any blob reaches, and which bins hold a particle.
+    let [inside, near, capped] = v.graph_level.iter().fold([0usize; 3], |[i, n, c], &phi| {
+        if phi.to_bits() == v.band.to_bits() {
+            [i, n, c + 1]
+        } else if phi < 0.0 {
+            [i + 1, n, c]
+        } else {
+            [i, n + 1, c]
+        }
+    });
+    let occupied = v.ranges.iter().filter(|r| r.count > 0).count();
+    let bin = |x: i64, y: i64, z: i64| {
+        let [bx, by, bz] = v.bins.map(i64::from);
+        (0..bx).contains(&x) && (0..by).contains(&y) && (0..bz).contains(&z) && v.ranges[(x + bx * (y + by * z)) as usize].count > 0
+    };
+    let [bx, by, bz] = v.bins.map(i64::from);
+    let mut reached_bins = 0usize;
+    for z in 0..bz {
+        for y in 0..by {
+            for x in 0..bx {
+                let any = (-1..=1).any(|dz| (-1..=1).any(|dy| (-1..=1).any(|dx| bin(x + dx, y + dy, z + dz))));
+                reached_bins += usize::from(any);
+            }
         }
     }
-    let old_level: Vec<f32> = super::liquid_surface_tests::read(&out[0], total);
-    let new_level: Vec<f32> = super::liquid_surface_tests::read(&out[1], total);
-    let differ = old_level.iter().zip(&new_level).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
-    let graph_differ = new_level.iter().zip(&graph_level).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
-    let (o, n) = (spread(&volume_ms[0]), spread(&volume_ms[1]));
+    let bin_total = v.ranges.len();
+    // node.particles_near_bins at reach 1, as the graph runs it, against the
+    // CPU's count of the particles in each bin's 27.
+    let near_kernel = device.create_compute_pipeline(
+        &codegen::standalone_for_spec::<ParticlesNearBins>().expect("near codegen"),
+        codegen::ENTRY,
+        "near probe",
+    );
+    let near_buf = shared_copy::<u32>(device, &[], bin_total);
+    let near_uniforms: [u32; 8] = [v.bins[0], v.bins[1], v.bins[2], 1, bin_total as u32, 0, 0, 0];
+    timed(&smoke, |enc| {
+        enc.dispatch_compute(
+            &near_kernel,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&near_uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &v.ranges_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &near_buf, offset: 0 },
+            ],
+            [(bin_total as u32).div_ceil(256), 1, 1],
+            "near probe",
+        );
+    });
+    let near_counts: Vec<u32> = super::liquid_surface_tests::read(&near_buf, bin_total);
+    let count_at = |x: i64, y: i64, z: i64| {
+        if (0..bx).contains(&x) && (0..by).contains(&y) && (0..bz).contains(&z) { v.ranges[(x + bx * (y + by * z)) as usize].count } else { 0 }
+    };
+    let mut near_wrong = 0usize;
+    for z in 0..bz {
+        for y in 0..by {
+            for x in 0..bx {
+                let expected: u32 = (-1..=1).flat_map(|dz| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dx| (dx, dy, dz)))).map(|(dx, dy, dz)| count_at(x + dx, y + dy, z + dz)).sum();
+                near_wrong += usize::from(near_counts[(x + bx * (y + by * z)) as usize] != expected);
+            }
+        }
+    }
     println!(
-        "AB particle_volume ({total} nodes, {} blobs): old {:.3} ms [p10 {:.3} p90 {:.3}], new {:.3} ms [p10 {:.3} p90 {:.3}]; {differ} nodes differ old/new, {graph_differ} new/graph",
-        blobs.len(),
-        o.0,
-        o.1,
-        o.2,
-        n.0,
-        n.1,
-        n.2
+        "PROBE lattice {:?} = {} nodes: {inside} inside ({:.1}%), {near} outside below the cap ({:.1}%), {capped} at the cap ({:.1}%); bins {bin_total}: {occupied} hold particles ({:.1}%), {reached_bins} have one in reach ({:.1}%)",
+        v.refined,
+        v.total,
+        100.0 * inside as f64 / v.total as f64,
+        100.0 * near as f64 / v.total as f64,
+        100.0 * capped as f64 / v.total as f64,
+        100.0 * occupied as f64 / bin_total as f64,
+        100.0 * reached_bins as f64 / bin_total as f64,
     );
 
-    // The triangle-count scan, old (copy, in-place scan, copy) against new.
-    let cells = refined.map(|n| n - 1).iter().product::<u32>() as usize;
-    let counts: Vec<u32> = smoke.dumped(&names[3], "counts", cells);
-    let input = shared_copy(device, &counts, cells);
-    let scanned = [shared_copy::<u32>(device, &[], cells), shared_copy::<u32>(device, &[], cells)];
-    let mut old_scan = PrefixScan::default();
-    old_scan.prepare(device);
-    let storage = old_scan.buffer(device, cells).expect("old scan storage").clone();
-    let mut new_scan = PrefixScan::default();
-    new_scan.prepare_into(device);
-    new_scan.buffer(device, cells.div_ceil(INTO_SPAN)).expect("new scan storage");
-    let bytes = (cells * 4) as u64;
-    let mut scan_ms = [Vec::new(), Vec::new()];
+    let graph_text = codegen::standalone_for_spec::<ParticleVolume>().expect("volume codegen");
+    let graph_kernel = device.create_compute_pipeline(&graph_text, codegen::ENTRY, "volume graph");
+    let spliced = candidate.as_ref().is_some_and(|c| c.contains("fn body("));
+    let candidate_kernel = candidate.as_ref().map(|c| {
+        if spliced {
+            use crate::node_graph::primitive::PrimitiveSpec;
+            let text = graph_text.replace(ParticleVolume::WGSL_BODY.expect("volume body"), c);
+            device.create_compute_pipeline(&text, codegen::ENTRY, "volume candidate")
+        } else {
+            device.create_compute_pipeline(c, "main", "volume candidate")
+        }
+    });
+    let write_only = device.create_compute_pipeline(
+        "struct P { a: vec4<f32>, b: vec4<f32>, c: vec4<f32>, d: vec4<u32> }
+         @group(0) @binding(0) var<uniform> params: P;
+         @group(0) @binding(5) var<storage, read_write> out: array<f32>;
+         @compute @workgroup_size(256)
+         fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+             if id.x < params.d.w { out[id.x] = 0.1 * params.c.y; }
+         }",
+        "main",
+        "volume write only",
+    );
+    let empty = shared_copy::<crate::node_graph::fluid_particles::CellRange>(device, &[], bin_total);
+    let one_per_node = [(v.total as u32).div_ceil(256), 1, 1];
+    let groups: [u32; 3] = std::env::var("SURFACE_PROBE_GROUPS").ok().map_or(one_per_node, |g| {
+        let n: Vec<u32> = g.split(',').map(|s| s.trim().parse().expect("group count")).collect();
+        [n[0], n[1], n[2]]
+    });
+    let wired = VolumeUniforms { near_len: bin_total as u32, ..v.uniforms };
+    let labels = ["graph kernel, near unwired", "graph kernel, near wired", "graph kernel, empty lattice", "write only", "candidate"];
+    let variants = if candidate_kernel.is_some() { 5 } else { 4 };
+    let outs: Vec<_> = (0..variants).map(|_| shared_copy::<f32>(device, &[], v.total)).collect();
+    let mut ms: [Vec<f64>; 5] = Default::default();
     for round in 0..rounds {
-        for variant in [round % 2, 1 - round % 2] {
-            scan_ms[variant].push(timed(&smoke, |enc| {
-                if variant == 0 {
-                    enc.copy_buffer_to_buffer(&input, &storage, bytes);
-                    old_scan.encode(enc, cells);
-                    enc.copy_buffer_to_buffer(&storage, &scanned[0], bytes);
-                } else {
-                    new_scan.encode_into(enc, &input, &scanned[1], cells);
-                }
+        for step in 0..variants {
+            let variant = (round + step) % variants;
+            let uniforms = if variant == 1 || variant == 4 { &wired } else { &v.uniforms };
+            let bindings = [
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: &v.blobs_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: if variant == 2 { &empty } else { &v.ranges_buf }, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: &v.solid_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: &near_buf, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: &outs[variant], offset: 0 },
+            ];
+            ms[variant].push(timed(&smoke, |enc| match (variant, &candidate_kernel) {
+                (0..=2, _) => enc.dispatch_compute(&graph_kernel, &bindings, one_per_node, "volume probe"),
+                (3, _) => enc.dispatch_compute(
+                    &write_only,
+                    &[
+                        GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&v.uniforms) },
+                        GpuBinding::Buffer { binding: 5, buffer: &outs[variant], offset: 0 },
+                    ],
+                    one_per_node,
+                    "volume probe",
+                ),
+                (_, Some(kernel)) => enc.dispatch_compute(kernel, &bindings, if spliced { one_per_node } else { groups }, "volume probe"),
+                (_, None) => unreachable!("no candidate variant without a candidate"),
             }));
         }
     }
-    let old_out: Vec<u32> = super::liquid_surface_tests::read(&scanned[0], cells);
-    let new_out: Vec<u32> = super::liquid_surface_tests::read(&scanned[1], cells);
-    let mut running = 0u32;
-    let wrong = counts.iter().zip(&new_out).filter(|(c, n)| {
-        running += **c;
-        running != **n
-    });
-    let wrong = wrong.count();
-    let (o, n) = (spread(&scan_ms[0]), spread(&scan_ms[1]));
+    // Nodes of `out` whose bits differ from the graph's own level set, and the worst gap.
+    let against_graph = |out: &manifold_gpu::GpuBuffer| {
+        let level: Vec<f32> = super::liquid_surface_tests::read(out, v.total);
+        let mut worst = 0.0_f32;
+        let differ = level
+            .iter()
+            .zip(&v.graph_level)
+            .filter(|(a, b)| {
+                worst = worst.max((**a - **b).abs());
+                a.to_bits() != b.to_bits()
+            })
+            .count();
+        (differ, worst)
+    };
+    for (label, times) in labels.iter().zip(&ms).take(variants) {
+        let (m, lo, hi) = spread(times);
+        println!("PROBE {label}: {m:.3} ms [p10 {lo:.3} p90 {hi:.3}]");
+    }
+    let (unwired_differ, _) = against_graph(&outs[0]);
+    let (wired_differ, _) = against_graph(&outs[1]);
     println!(
-        "AB running_total ({cells} counts, total {running}): old {:.3} ms [p10 {:.3} p90 {:.3}], new {:.3} ms [p10 {:.3} p90 {:.3}]; {} differ old/new, {wrong} wrong against the CPU",
-        o.0,
-        o.1,
-        o.2,
-        n.0,
-        n.1,
-        n.2,
-        old_out.iter().zip(&new_out).filter(|(a, b)| a != b).count()
+        "PROBE against the graph's level set: near unwired {unwired_differ} nodes differ, wired {wired_differ}; near counts {near_wrong} of {bin_total} bins wrong ({} blobs)",
+        v.blobs.len()
     );
+    if variants == 5 {
+        let (differ, worst) = against_graph(&outs[4]);
+        println!("PROBE candidate against the graph: {differ} nodes differ, worst |Δ| {worst:.3e} (band {:.3e})", v.band);
+    }
     println!("AB load average after: {}", load_average());
-    assert_eq!(differ, 0, "old and new volume kernels agree");
-    assert_eq!(wrong, 0, "the new scan is the running total");
+    assert_eq!(near_wrong, 0, "node.particles_near_bins counts every bin's 27");
+    assert_eq!(wired_differ, 0, "near changes no node of the level set");
 }
 
 fn load_average() -> String {
@@ -1356,10 +1524,16 @@ fn swash_render_smoke_32() {
     run(WaterScene::dam_break(32), "dam_break", true);
 }
 
+/// `SWASH_SMOKE_SCALE` sets the surface's resolution scale (3 when unset);
+/// `SWASH_SMOKE_DAM_ONLY` leaves out the still pool.
 #[test]
 fn swash_render_smoke_64() {
-    run(WaterScene::dam_break(64), "dam_break", true);
-    run(WaterScene::still_pool(64), "still_pool", true);
+    let scale = std::env::var("SWASH_SMOKE_SCALE").ok().map(|s| s.parse::<usize>().expect("surface scale"));
+    let scene = |s: WaterScene| scale.map_or(s, |k| s.with_surface_scale(k));
+    run(scene(WaterScene::dam_break(64)), "dam_break", true);
+    if std::env::var_os("SWASH_SMOKE_DAM_ONLY").is_none() {
+        run(scene(WaterScene::still_pool(64)), "still_pool", true);
+    }
 }
 
 /// A mixed-radix lattice (96 = 2⁵·3), between the powers of two.

@@ -1701,9 +1701,45 @@
                 "value": 2.0
               }
             }
+          },
+          {
+            "id": 16,
+            "typeId": "node.particles_near_bins",
+            "handle": "Particles Near Bins",
+            "nodeId": "liquid_near"
           }
         ],
         "wires": [
+          {
+            "fromNode": 5,
+            "fromPort": "cell_ranges",
+            "toNode": 16,
+            "toPort": "cell_ranges"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_x",
+            "toNode": 16,
+            "toPort": "bins_x"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_y",
+            "toNode": 16,
+            "toPort": "bins_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_z",
+            "toNode": 16,
+            "toPort": "bins_z"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "counts",
+            "toNode": 7,
+            "toPort": "near"
+          },
           {
             "fromNode": 0,
             "fromPort": "bounds",

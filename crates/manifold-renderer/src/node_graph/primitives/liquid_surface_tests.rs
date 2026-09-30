@@ -9,6 +9,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
 use super::particle_volume::ParticleVolume;
+use super::particles_near_bins::ParticlesNearBins;
 use super::running_total::RunningTotal;
 use super::shape_particle_blobs::ShapeParticleBlobs;
 use super::sort_particles_into_cells::SortParticlesIntoCells;
@@ -1033,6 +1034,80 @@ fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
     assert!(inside > 100, "the fixture has liquid ({inside} inside nodes)");
     assert!(in_band > 100, "the fixture has nodes inside the cap band ({in_band})");
     assert!(clamped > 100, "the solid covers part of the lattice ({clamped} nodes)");
+
+    // With `near` wired from node.particles_near_bins, the same bits: a node
+    // whose home bin has no particle within a bin is at the cap either way.
+    let bin_total = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
+    // A one-count slot: the atom provides storage sized to the grid.
+    let (near_slot, _) = harness.array::<u32>(&[], 1);
+    let (_, errors) = harness.run(
+        &mut ParticlesNearBins::new(),
+        &[("cell_ranges", ranges_slot)],
+        &[("counts", near_slot)],
+        &lattice.params(&[("reach", 1.0)]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let empty_bins = read::<u32>(&harness.buffer(near_slot), bin_total).iter().filter(|&&n| n == 0).count();
+    assert!(empty_bins > bin_total / 10, "the fixture has bins with no particle near ({empty_bins} of {bin_total})");
+    let (near_levelset_slot, near_levelset_buf) = harness.array::<f32>(&[], total);
+    let (_, errors) = harness.run(
+        &mut ParticleVolume::new(),
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("near", near_slot)],
+        &[("levelset", near_levelset_slot)],
+        &node_params,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let with_near: Vec<f32> = read(&near_levelset_buf, total);
+    let differ = levelset.iter().zip(&with_near).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+    assert_eq!(differ, 0, "near changes no node");
+}
+
+/// Each bin's count of the particles within `reach` bins, against the sort's
+/// ranges summed on the CPU, at reach 1 and 2; a reach of 0 counts as 1.
+#[test]
+fn fluid_particles_near_bins_counts_each_neighbourhood() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.0, 1.5], cell: 0.25 };
+    let bins = bin_counts(lattice.size, lattice.cell);
+    let bin_total = bins.iter().product::<u32>() as usize;
+    let min = lattice.min();
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    // A clump in one corner, so most bins have none nearby.
+    let particles: Vec<FluidParticle> = (0..600u32)
+        .map(|i| particle(std::array::from_fn(|axis| min[axis] + 0.1 + 0.6 * rng.next_f32()), 0.02, i + 1))
+        .collect();
+    let (_, ranges, _, (_, ranges_slot, _)) = sort_and_shape(&mut harness, &lattice, &particles, particles.len(), &[]);
+    let [bx, by, bz] = bins.map(i64::from);
+    for (reach, reads_as) in [(1.0, 1), (2.0, 2), (0.0, 1)] {
+        let (counts_slot, _) = harness.array::<u32>(&[], 1);
+        let (_, errors) = harness.run(
+            &mut ParticlesNearBins::new(),
+            &[("cell_ranges", ranges_slot)],
+            &[("counts", counts_slot)],
+            &lattice.params(&[("reach", reach)]),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let counts: Vec<u32> = read(&harness.buffer(counts_slot), bin_total);
+        let mut expected = Vec::with_capacity(bin_total);
+        for z in 0..bz {
+            for y in 0..by {
+                for x in 0..bx {
+                    let mut sum = 0;
+                    for nz in (z - reads_as).max(0)..=(z + reads_as).min(bz - 1) {
+                        for ny in (y - reads_as).max(0)..=(y + reads_as).min(by - 1) {
+                            for nx in (x - reads_as).max(0)..=(x + reads_as).min(bx - 1) {
+                                sum += ranges[(nx + bx * (ny + by * nz)) as usize].count;
+                            }
+                        }
+                    }
+                    expected.push(sum);
+                }
+            }
+        }
+        assert_eq!(counts, expected, "reach {reach}");
+        let empty = expected.iter().filter(|&&n| n == 0).count();
+        assert!(empty > bin_total / 4 && empty < bin_total, "reach {reach}: {empty} of {bin_total} bins have none near");
+    }
 }
 
 /// A lone sphere: the level set is the exact signed distance to it inside

@@ -327,6 +327,7 @@ pub(crate) mod prefix_scan;
 mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
+mod particles_near_bins;
 mod particle_volume;
 mod smooth_lattice;
 mod cosine_reorder;

@@ -14,26 +14,27 @@ use crate::node_graph::fluid_particles::{CellRange, FluidBlob};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
+/// Codegen uniform layout: params in PARAMS order, the derived `near_len`,
+/// then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct VolumeUniforms {
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    cell_size: f32,
-    resolution_scale: i32,
-    bins_x: i32,
-    bins_y: i32,
-    bins_z: i32,
-    dispatch_count: u32,
-    _pad0: u32,
+pub(crate) struct VolumeUniforms {
+    pub center_x: f32,
+    pub center_y: f32,
+    pub center_z: f32,
+    pub size_x: f32,
+    pub size_y: f32,
+    pub size_z: f32,
+    pub nodes_x: f32,
+    pub nodes_y: f32,
+    pub nodes_z: f32,
+    pub cell_size: f32,
+    pub resolution_scale: i32,
+    pub bins_x: i32,
+    pub bins_y: i32,
+    pub bins_z: i32,
+    pub near_len: u32,
+    pub dispatch_count: u32,
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -56,6 +57,7 @@ crate::primitive! {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
         solid: Array(f32) required,
+        near: Array(u32) optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -90,7 +92,7 @@ crate::primitive! {
         bin_param!("bins_z", "Bins Z"),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). Wire near from node.particles_near_bins on the same sort: a node whose home bin has no particle nearby is at the cap without searching, the same value faster; unwired, every node searches. resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
     summary: "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
@@ -99,7 +101,18 @@ crate::primitive! {
     aliases: ["level set", "signed distance", "liquid field", "scalar field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["near_len:u32"],
+}
+
+// A fused region's derived block: `near_len` is the wired `near` buffer's
+// length, 0 unwired (the body then searches every node, as `run` does).
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.particle_volume",
+        array_ports: &["near"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("near").unwrap_or(0) as f32]),
+    }
 }
 
 impl Primitive for ParticleVolume {
@@ -143,8 +156,8 @@ impl Primitive for ParticleVolume {
             bins_x: 0,
             bins_y: 0,
             bins_z: 0,
+            near_len: 0,
             dispatch_count: 0,
-            _pad0: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -178,7 +191,9 @@ impl Primitive for ParticleVolume {
             }
         };
         let [bins_x, bins_y, bins_z] = bins.map(|n| n as i32);
-        let uniforms = VolumeUniforms { bins_x, bins_y, bins_z, dispatch_count: total as u32, ..uniforms };
+        let near = ctx.inputs.array("near");
+        let near_len = near.map_or(0, |b| (b.size / 4) as u32);
+        let uniforms = VolumeUniforms { bins_x, bins_y, bins_z, near_len, dispatch_count: total as u32, ..uniforms };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -187,7 +202,9 @@ impl Primitive for ParticleVolume {
                 GpuBinding::Buffer { binding: 1, buffer: blobs, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: ranges, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: levelset, offset: 0 },
+                // Unwired, `near_len` 0 keeps the body from reading it.
+                GpuBinding::Buffer { binding: 4, buffer: near.unwrap_or(ranges), offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: levelset, offset: 0 },
             ],
             [(total as u32).div_ceil(256), 1, 1],
             "node.particle_volume",

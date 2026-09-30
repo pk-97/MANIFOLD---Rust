@@ -173,6 +173,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "prefix_scan.rs",
+        rust_struct: "IntoParams",
+        shader: "shaders/prefix_scan_into.wgsl",
+        shader_struct: "IntoParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "dot_products.rs",
         rust_struct: "DotParams",
         shader: "shaders/dot_products.wgsl",
