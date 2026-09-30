@@ -17,8 +17,9 @@
 //! `--linear`, `--cinematic`, `--supersample` and `--gpu-surface` flags. `--gpu-surface`
 //! is for presets meshed by the Liquid Surface group (e.g. WaterDamBreakGpu): each
 //! offline frame reads back the GPU mesh, fails on a non-finite vertex or an empty
-//! surface, and reports its live vertices as `vertex_count`. Defaults preserve the
-//! shipped Water Basin workflow.
+//! surface, and reports its live vertices as `vertex_count`. A preset with its own
+//! `node.tone_map` is always read back as `--linear` (sRGB of the graph output, what
+//! the app shows); otherwise defaults preserve the shipped Water Basin workflow.
 //!
 //! A preset may run CPU FLIP (`node.fluid_surface`) or the GPU matter solver (the
 //! Live Matter group, e.g. WaterDamBreakMatter); the matter solver has no CPU mesh
@@ -765,9 +766,11 @@ fn gpu_surface_vertices(runtime: &PresetRuntime, device: &GpuDevice, frame: u32)
     Ok(live)
 }
 
-/// Writes the live vertices of every surface mesh in the graph: the GPU
+/// Writes the live vertices of every surface mesh in the graph: each GPU
 /// Liquid Surface (`gpu`, live = nonzero normal) and the fluid node's CPU mesh
-/// (`cpu`, live = its first `cpu_count` vertices).
+/// (`cpu`, live = its first `cpu_count` vertices). A GPU mesh node other than
+/// the preset's `liquid_mesh` is tagged `gpu-<node id>`, so one run can mesh
+/// the same particles through several surface variants.
 fn dump_surface_meshes(
     runtime: &PresetRuntime,
     device: &GpuDevice,
@@ -778,9 +781,14 @@ fn dump_surface_meshes(
 ) -> CaptureResult<()> {
     for array in runtime.dump_arrays_all() {
         let tag = match (array.type_id.as_str(), array.port.as_str()) {
-            ("node.volume_surface_mesh", "vertices") => "gpu",
-            ("node.fluid_surface", "vertices") => "cpu",
-            ("node.fluid_surface" | "node.matter_frame", "particles_b") => "particles",
+            ("node.volume_surface_mesh", "vertices") if array.name == "liquid_mesh" => "gpu".to_string(),
+            ("node.volume_surface_mesh", "vertices") => {
+                let name: String =
+                    array.name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+                format!("gpu-{name}")
+            }
+            ("node.fluid_surface", "vertices") => "cpu".to_string(),
+            ("node.fluid_surface" | "node.matter_frame", "particles_b") => "particles".to_string(),
             _ => continue,
         };
         let size = array.buffer.size();
@@ -800,10 +808,7 @@ fn dump_surface_meshes(
         let mut out = Vec::new();
         for (index, chunk) in bytes.chunks_exact(std::mem::size_of::<MeshVertex>()).enumerate() {
             let vertex: MeshVertex = bytemuck::pod_read_unaligned(chunk);
-            let live = match tag {
-                "gpu" => vertex.normal != [0.0; 3],
-                _ => index < cpu_count,
-            };
+            let live = if tag.starts_with("gpu") { vertex.normal != [0.0; 3] } else { index < cpu_count };
             if live {
                 for value in vertex.position.iter().chain(&vertex.normal) {
                     out.extend_from_slice(&value.to_le_bytes());
@@ -1122,7 +1127,13 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     let json = read_preset(&options.preset_path)?;
     fs::write(options.output_dir.join("preset.json"), &json)?;
     let preset = preset_settings(&json)?;
-    let options = &CaptureOptions { solver: preset.solver, ..options.clone() };
+    // A graph with its own display transform is read back as the app presents
+    // it; a second Reinhard curve on top darkens it and makes stills misleading.
+    let tone_mapped = find_preset_node(&serde_json::from_str::<serde_json::Value>(&json)?["nodes"], &|node| {
+        node["typeId"] == "node.tone_map"
+    })
+    .is_some();
+    let options = &CaptureOptions { solver: preset.solver, linear: options.linear || tone_mapped, ..options.clone() };
     let instrumented_json = instrument_preset(&json, options.cinematic, options.supersample, options.solver)?;
     if options.cinematic {
         fs::write(
