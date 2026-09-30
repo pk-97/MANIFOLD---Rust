@@ -24,6 +24,10 @@ struct FaceParams {
 pub const FACE_GRID_PORTS: [&str; 7] =
     ["face_u", "face_v", "face_w", "face_cells_x", "face_cells_y", "face_cells_z", "face_valid_layers"];
 
+/// FLIP's MAC trilinear on the face arrays, for bodies that sample velocity
+/// at a point.
+pub(crate) const LIQUID_FACES: &str = include_str!("../primitives/shaders/liquid_faces.wgsl");
+
 /// A frame node's inputs for the grid it publishes, one array per axis
 /// (`FACE_GRID_PORTS[0..3]`).
 pub const FACE_INPUT_PORTS: [&str; 3] = ["face_u_in", "face_v_in", "face_w_in"];

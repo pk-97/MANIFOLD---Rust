@@ -2347,6 +2347,7 @@ dependencies = [
 name = "manifold-fluids"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cc",
  "manifold-foundation",
  "manifold-physics",

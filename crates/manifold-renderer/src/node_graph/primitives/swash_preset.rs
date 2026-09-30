@@ -530,7 +530,8 @@ const SURFACE_DETAIL_OFFSET: usize = 2;
 /// and surface, the preset's other nodes, and the preset's wires between the
 /// two, matched by node name.
 pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
-    let mut def = serde_json::to_value(water_def(scene.with_surface())).expect("water def serialises");
+    // The render's Whitewater group reads the face grid.
+    let mut def = serde_json::to_value(water_def(scene.with_surface().with_faces())).expect("water def serialises");
     let preset = shipped_preset();
     let id_of = |graph: &Value, name: &str| -> u64 {
         let nodes = graph["nodes"].as_array().expect("nodes");
@@ -1227,7 +1228,7 @@ pub(super) mod tests {
     #[test]
     fn fft_water_shipped_preset_is_the_builders_dam_break() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{SHIPPED_PRESET}.json"));
-        let built = serde_json::to_value(render_def(WaterScene::dam_break(64))).expect("serialise");
+        let built = serde_json::to_value(render_def(WaterScene::dam_break(64).with_faces())).expect("serialise");
         if std::env::var("UPDATE_SWASH_PRESET").is_ok() {
             let mut json = serde_json::to_string_pretty(&built).expect("serialise");
             json.push('\n');
@@ -1235,5 +1236,29 @@ pub(super) mod tests {
         }
         let shipped: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("the shipped preset reads")).expect("parses");
         assert!(canonical(&shipped) == canonical(&built), "{SHIPPED_PRESET}.json differs from the builder's Dam Break; rerun with UPDATE_SWASH_PRESET=1");
+    }
+
+    /// The shipped preset loads, saves and reloads unchanged, the Whitewater
+    /// group's params and its cards with it.
+    #[test]
+    fn swash_preset_round_trips_with_its_whitewater() {
+        let shipped = shipped_preset();
+        let def: EffectGraphDef = serde_json::from_value(shipped.clone()).expect("the preset loads");
+        let loaded = serde_json::to_value(&def).expect("serialise");
+        assert!(canonical(&loaded) == canonical(&shipped), "loading {SHIPPED_PRESET}.json dropped or changed a field");
+        // A save prints each f32 at its shortest; the reload is the same f32s.
+        let saved = serde_json::to_string_pretty(&def).expect("the preset saves");
+        let again: EffectGraphDef = serde_json::from_str(&saved).expect("the saved preset reloads");
+        let reloaded = serde_json::to_value(&again).expect("serialise");
+        assert!(canonical(&reloaded) == canonical(&loaded), "a save and reload changed {SHIPPED_PRESET}.json");
+        let nodes = reloaded["nodes"].as_array().expect("nodes");
+        let group = nodes.iter().find(|n| n["nodeId"] == "whitewater").expect("the Whitewater group");
+        for param in ["capacity", "wavecrest_emission", "min_energy", "max_energy"] {
+            assert!(group["params"][param]["value"].is_number(), "the group lost {param}");
+        }
+        let cards = reloaded["presetMetadata"]["bindings"].as_array().expect("bindings");
+        for card in ["whitewater_capacity", "foam_radius", "spray_radius", "bubble_density"] {
+            assert!(cards.iter().any(|c| c["id"] == card), "the preset lost the {card} card");
+        }
     }
 }

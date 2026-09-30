@@ -372,6 +372,34 @@ mod extend_faces;
 mod faces_to_particles;
 pub(crate) mod face_sample_component;
 pub(crate) mod matter_face_component;
+mod surface_crossings;
+mod nearest_crossing;
+mod crossing_distance;
+mod liquid_cells;
+mod lattice_curvature;
+mod extend_lattice;
+mod jitter_particles;
+mod sample_faces_at_particles;
+mod energy_potential;
+mod wavecrest_potential;
+mod emission_count;
+mod spawn_whitewater;
+mod whitewater_type;
+pub(crate) mod whitewater_lifecycle;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_handoff_tests;
+#[cfg(test)]
+mod whitewater_cpu;
+#[cfg(test)]
+mod whitewater_particle_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_particle_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_grid_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_field_tests;
+#[cfg(test)]
+mod whitewater_extent_tests;
 #[cfg(test)]
 mod face_grid_extent_tests;
 #[cfg(any(test, feature = "gpu-proofs"))]
@@ -390,6 +418,8 @@ mod swash_solve_tests;
 mod swash_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_scene_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod swash_volume;
 #[cfg(all(test, feature = "water-race-probes"))]

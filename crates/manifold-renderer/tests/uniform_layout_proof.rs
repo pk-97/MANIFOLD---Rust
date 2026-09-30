@@ -550,6 +550,9 @@ const NON_STANDALONE: &[&str] = &[
     "node.cut_mesh_cells",
     "node.remap_mesh_cut",
     "node.remap_cut_weights",
+    // The whitewater lifecycle runs FLIP's C++ on the CPU and writes its
+    // outputs from there: no GPU kernel of its own, only buffer copies.
+    "node.whitewater_lifecycle",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {

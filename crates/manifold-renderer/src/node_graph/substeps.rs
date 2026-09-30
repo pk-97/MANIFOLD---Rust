@@ -901,6 +901,20 @@ pub mod test_nodes {
         registry.register("test.value_source", || {
             Box::new(ArraySource::new("test.value_source", ArrayType::of_known::<f32>()))
         });
+        registry.register("test.liquid_source", || {
+            Box::new(ArraySource::new(
+                "test.liquid_source",
+                ArrayType::of_known::<crate::node_graph::fluid_particles::FluidParticle>(),
+            ))
+        });
+        registry.register("test.count_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.count_sink"),
+                inputs: vec![port("values", PortType::Array(ArrayType::of_known::<u32>()), PortKind::Input, true)],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
         registry.register("test.value_sink", || {
             Box::new(ParticleSink {
                 type_id: EffectNodeType::new("test.value_sink"),

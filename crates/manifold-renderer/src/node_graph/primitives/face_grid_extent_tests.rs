@@ -128,6 +128,18 @@ fn face_grid_fusion_in_host_graphs() {
     assert!(members.contains(&"node.cosine_poisson_divide"), "the consumer shares the region: {members:?}");
 }
 
+/// I2: whitewater reads face velocity at least one layer past the liquid.
+/// SWASH extends two; MPM's faces carry none past the liquid yet, so an MPM
+/// face grid is refused by name (GPU_WHITEWATER_DESIGN.md section 3.6).
+#[test]
+fn whitewater_refuses_unextended_faces() {
+    use crate::node_graph::whitewater::require_extended_faces;
+    assert!(require_extended_faces(super::swash_preset::EXTENDED_LAYERS as f32).is_ok());
+    assert!(require_extended_faces(1.0).is_ok());
+    let layers = super::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
+    assert!(require_extended_faces(layers).expect_err("MPM refused").contains("needs at least 1"));
+}
+
 /// The MPM face scene, at every Resolution its domain admits, with and
 /// without the moving box, either refuses by name or covers every dispatch
 /// under the liquid extent rules; the fused consumer's lattice is the one at
