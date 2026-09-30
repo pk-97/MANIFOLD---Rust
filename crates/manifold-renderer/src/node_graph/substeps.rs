@@ -759,17 +759,29 @@ pub mod test_nodes {
     /// A particle substep boundary with the same shape the MPM state node
     /// takes: `seed` copied in once, `out` the persistent state the body
     /// mutates, `in` the capture. `iterations` per frame, `step_dt` from
-    /// [`particle_step_dt`], `step_index` the iteration.
+    /// [`particle_step_dt`], `step_index` the iteration. The inner variant
+    /// (`test.particle_inner_boundary`) copies `seed` in on every evaluate:
+    /// nested in an outer body, it restarts from that body each outer
+    /// iteration, the way a Krylov boundary restarts from its start vector.
     struct ParticleBoundary {
         type_id: EffectNodeType,
         inputs: Vec<NodeInput>,
         outputs: Vec<NodeOutput>,
         params: Vec<ParamDef>,
         seeded: bool,
+        reseed: bool,
         pending: u32,
     }
 
     impl ParticleBoundary {
+        fn inner() -> Self {
+            Self {
+                type_id: EffectNodeType::new("test.particle_inner_boundary"),
+                reseed: true,
+                ..Self::new()
+            }
+        }
+
         fn new() -> Self {
             let particles = PortType::Array(ArrayType::of_known::<Particle>());
             let f32_ty = PortType::Scalar(ScalarType::F32);
@@ -786,6 +798,7 @@ pub mod test_nodes {
                 ],
                 params: vec![int_param("iterations", 4.0)],
                 seeded: false,
+                reseed: false,
                 pending: 0,
             }
         }
@@ -828,7 +841,7 @@ pub mod test_nodes {
             else {
                 return;
             };
-            if !self.seeded {
+            if !self.seeded || self.reseed {
                 self.seeded = true;
                 let size = seed.size.min(out.size);
                 let gpu = ctx.gpu.as_deref_mut().expect("particle boundary needs a GpuEncoder");
@@ -886,6 +899,7 @@ pub mod test_nodes {
             ))
         });
         registry.register("test.particle_boundary", || Box::new(ParticleBoundary::new()));
+        registry.register("test.particle_inner_boundary", || Box::new(ParticleBoundary::inner()));
         registry.register("test.particle_sink", || {
             Box::new(ParticleSink {
                 type_id: EffectNodeType::new("test.particle_sink"),
@@ -1801,9 +1815,34 @@ mod tests {
         accepted: f32,
         seeded: bool,
         ports: SubstepBoundaryPorts,
+        /// What evaluate logs; captures log `<capture_label> <value>`.
+        name: &'static str,
+        capture_label: &'static str,
+        /// Take `seed` on every evaluate, as an inner region restarting from
+        /// its outer body does.
+        reseed: bool,
+        step_dt: f32,
     }
 
     impl SimBoundary {
+        /// A labelled boundary for nests: its own log lines and `step_dt`,
+        /// reseeded on every evaluate when it is the inner one.
+        fn labelled(
+            log: Log,
+            count: Arc<Mutex<u32>>,
+            name: &'static str,
+            step_dt: f32,
+            reseed: bool,
+        ) -> Self {
+            Self {
+                name,
+                capture_label: if reseed { "inner capture" } else { "outer capture" },
+                step_dt,
+                reseed,
+                ..Self::new(log, count)
+            }
+        }
+
         fn new(log: Log, count: Arc<Mutex<u32>>) -> Self {
             let f32_ty = PortType::Scalar(ScalarType::F32);
             Self {
@@ -1824,6 +1863,10 @@ mod tests {
                 accepted: 0.0,
                 seeded: false,
                 ports: SIM_PORTS,
+                name: "boundary",
+                capture_label: "capture",
+                reseed: false,
+                step_dt: 0.5,
             }
         }
     }
@@ -1845,8 +1888,8 @@ mod tests {
             &[]
         }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-            self.log.lock().unwrap().push("boundary".into());
-            if !self.seeded {
+            self.log.lock().unwrap().push(self.name.into());
+            if !self.seeded || self.reseed {
                 self.seeded = true;
                 self.accepted = scalar_in(ctx, "seed").unwrap_or(0.0);
             }
@@ -1866,13 +1909,13 @@ mod tests {
             if iteration >= self.pending {
                 return false;
             }
-            scalars[0] = 0.5;
+            scalars[0] = self.step_dt;
             scalars[1] = iteration as f32;
             true
         }
         fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             let candidate = scalar_in(ctx, "in").expect("capture slot bound");
-            self.log.lock().unwrap().push(format!("capture {candidate}"));
+            self.log.lock().unwrap().push(format!("{} {candidate}", self.capture_label));
             self.accepted = candidate;
             ctx.outputs.set_scalar("out", ParamValue::Float(candidate));
         }
@@ -2370,5 +2413,462 @@ mod tests {
             r.members.iter().any(|m| m.doc_id == 3) && r.members.iter().any(|m| m.doc_id == 5)
         });
         assert!(fused_together, "control: the force atom and mover should fuse");
+    }
+
+    // ─── Nested regions: executor and freeze (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P6) ───
+    //
+    // ```text
+    // src ─▶ outer.seed                     outer.step_index ─▶ pre.b
+    // outer.out ─▶ pre.a ─▶ inner.seed      outer.step_dt ─▶ z.a     aux ─▶ z.b
+    // inner.out ─▶ in_a.a ─▶ in_b.a ─▶ (capture) inner.in
+    // inner.step_index ─▶ in_a.b    z.out ─▶ in_a.c    inner.step_dt ─▶ in_b.b
+    // inner.out ─▶ post.a ─▶ (capture) outer.in       outer.step_dt ─▶ post.b
+    // outer.out ─▶ consumer.a
+    // ```
+    //
+    // Per outer iteration o: `pre = s + o`, `z = 0.5`; the inner region
+    // restarts from `pre` and runs `c = c + i + z + 0.25` per inner iteration
+    // i; `post = c + 0.5` becomes the outer state. The outer boundary serves
+    // step_dt 0.5, the inner one 0.25, so a level reading the other's
+    // scalars shows in the log.
+
+    struct NestFixture {
+        graph: Graph,
+        plan: crate::node_graph::ExecutionPlan,
+        log: Log,
+        outer_count: Arc<Mutex<u32>>,
+        inner_count: Arc<Mutex<u32>>,
+        aux: NodeInstanceId,
+        z: NodeInstanceId,
+    }
+
+    fn nest_fixture(outer_clock: bool) -> NestFixture {
+        let log: Log = Arc::default();
+        let outer_count = Arc::new(Mutex::new(2));
+        let inner_count = Arc::new(Mutex::new(3));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
+        let aux = graph.add_node(Box::new(Adder::constant("aux", log.clone(), 0.0)));
+        let mut outer_node = SimBoundary::labelled(log.clone(), outer_count.clone(), "outer", 0.5, false);
+        if outer_clock {
+            outer_node.ports = SIM_CLOCK_PORTS;
+        }
+        let outer = graph.add_node(Box::new(outer_node));
+        let pre = graph.add_node(Box::new(Adder::new("pre", log.clone())));
+        let z = graph.add_node(Box::new(Adder::new("z", log.clone())));
+        let inner = graph.add_node(Box::new(SimBoundary::labelled(
+            log.clone(),
+            inner_count.clone(),
+            "inner",
+            0.25,
+            true,
+        )));
+        let in_a = graph.add_node(Box::new(Adder::new("in_a", log.clone())));
+        let in_b = graph.add_node(Box::new(Adder::new("in_b", log.clone())));
+        let post = graph.add_node(Box::new(Adder::new("post", log.clone())));
+        let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
+        if outer_clock {
+            let clock = graph.add_node(Box::new(EagerClock {
+                type_id: EffectNodeType::new("test.eager_clock"),
+                outputs: vec![output("out", PortType::Scalar(ScalarType::F32))],
+                log: log.clone(),
+            }));
+            graph.connect((clock, "out"), (outer, "clock")).unwrap();
+        }
+        graph.connect((src, "out"), (outer, "seed")).unwrap();
+        graph.connect((outer, "out"), (pre, "a")).unwrap();
+        graph.connect((outer, "step_index"), (pre, "b")).unwrap();
+        graph.connect((pre, "out"), (inner, "seed")).unwrap();
+        graph.connect((outer, "step_dt"), (z, "a")).unwrap();
+        graph.connect((aux, "out"), (z, "b")).unwrap();
+        graph.connect((inner, "out"), (in_a, "a")).unwrap();
+        graph.connect((inner, "step_index"), (in_a, "b")).unwrap();
+        graph.connect((z, "out"), (in_a, "c")).unwrap();
+        graph.connect((in_a, "out"), (in_b, "a")).unwrap();
+        graph.connect((inner, "step_dt"), (in_b, "b")).unwrap();
+        graph.connect((in_b, "out"), (inner, "in")).unwrap();
+        graph.connect((inner, "out"), (post, "a")).unwrap();
+        graph.connect((outer, "step_dt"), (post, "b")).unwrap();
+        graph.connect((post, "out"), (outer, "in")).unwrap();
+        graph.connect((outer, "out"), (consumer, "a")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].boundary, outer);
+        assert_eq!(regions[0].inner.len(), 1);
+        assert_eq!(regions[0].inner[0].boundary, inner);
+        NestFixture {
+            graph,
+            plan,
+            log,
+            outer_count,
+            inner_count,
+            aux,
+            z,
+        }
+    }
+
+    fn run_nest(fx: &mut NestFixture, exec: &mut Executor, outer: u32, inner: u32) -> Vec<String> {
+        *fx.outer_count.lock().unwrap() = outer;
+        *fx.inner_count.lock().unwrap() = inner;
+        fx.log.lock().unwrap().clear();
+        exec.execute_frame(&mut fx.graph, &fx.plan, frame_time());
+        fx.log.lock().unwrap().clone()
+    }
+
+    /// The outer state after `frames` frames, computed on the CPU.
+    fn nest_expected(frames: u32, outer: u32, inner: u32) -> f32 {
+        let mut state = 1.0f32;
+        for _ in 0..frames {
+            for o in 0..outer {
+                let mut c = state + o as f32;
+                for i in 0..inner {
+                    c = c + i as f32 + 0.5;
+                    c += 0.25;
+                }
+                state = c + 0.5;
+            }
+        }
+        state
+    }
+
+    fn without(log: &[String], prefixes: &[&str]) -> Vec<String> {
+        log.iter()
+            .filter(|e| !prefixes.iter().any(|p| e.starts_with(p)))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn nested_region_runs_inner_per_outer_iteration() {
+        let mut fx = nest_fixture(false);
+        let mut exec = Executor::with_mock();
+        let log = run_nest(&mut fx, &mut exec, 2, 3);
+        assert_eq!(
+            without(&log, &["src", "aux", "z "]),
+            vec![
+                "outer",
+                "pre a=1 b=0 c=none",
+                "inner",
+                "in_a a=1 b=0 c=0.5",
+                "in_b a=1.5 b=0.25 c=none",
+                "inner capture 1.75",
+                "in_a a=1.75 b=1 c=0.5",
+                "in_b a=3.25 b=0.25 c=none",
+                "inner capture 3.5",
+                "in_a a=3.5 b=2 c=0.5",
+                "in_b a=6 b=0.25 c=none",
+                "inner capture 6.25",
+                "post a=6.25 b=0.5 c=none",
+                "outer capture 6.75",
+                "pre a=6.75 b=1 c=none",
+                "inner",
+                "in_a a=7.75 b=0 c=0.5",
+                "in_b a=8.25 b=0.25 c=none",
+                "inner capture 8.5",
+                "in_a a=8.5 b=1 c=0.5",
+                "in_b a=10 b=0.25 c=none",
+                "inner capture 10.25",
+                "in_a a=10.25 b=2 c=0.5",
+                "in_b a=12.75 b=0.25 c=none",
+                "inner capture 13",
+                "post a=13 b=0.5 c=none",
+                "outer capture 13.5",
+                "consumer a=13.5 b=0 c=none",
+            ]
+        );
+        let z_runs = log.iter().filter(|e| e.starts_with("z ")).count();
+        assert_eq!(z_runs, 2, "z runs once per outer iteration: {log:?}");
+        assert_eq!(nest_expected(1, 2, 3), 13.5);
+
+        // The outer state carries across frames.
+        let log = run_nest(&mut fx, &mut exec, 2, 3);
+        assert_eq!(log.last().unwrap(), &format!("consumer a={} b=0 c=none", nest_expected(2, 2, 3)));
+
+        // No inner iterations: the inner boundary still restarts from `pre`
+        // each outer iteration and `post` reads that.
+        let log = run_nest(&mut fx, &mut exec, 1, 0);
+        let s = nest_expected(2, 2, 3);
+        assert_eq!(
+            without(&log, &["src", "aux", "z "]),
+            vec![
+                "outer".to_string(),
+                format!("pre a={s} b=0 c=none"),
+                "inner".to_string(),
+                format!("post a={s} b=0.5 c=none"),
+                format!("outer capture {}", s + 0.5),
+                format!("consumer a={} b=0 c=none", s + 0.5),
+            ]
+        );
+
+        // No outer iterations: nothing in the outer body runs.
+        let log = run_nest(&mut fx, &mut exec, 0, 3);
+        assert_eq!(
+            without(&log, &["src", "aux"]),
+            vec!["outer".to_string(), format!("consumer a={} b=0 c=none", s + 0.5)]
+        );
+    }
+
+    /// What the inner body reads from the outer body, and what the outer body
+    /// reads from outside, stays bound through every iteration of both
+    /// levels and is released once the outer region ends.
+    #[test]
+    fn nested_region_no_recycle_across_iterations() {
+        let mut fx = nest_fixture(false);
+        let mut exec = Executor::with_mock();
+        let output_of = |fx: &NestFixture, node| {
+            fx.plan
+                .steps()
+                .iter()
+                .find(|s| s.node == node)
+                .and_then(|s| s.outputs.first())
+                .map(|&(_, r)| r)
+                .unwrap()
+        };
+        let (aux_out, z_out) = (output_of(&fx, fx.aux), output_of(&fx, fx.z));
+        let region = &fx.plan.substep_regions()[0];
+        assert!(region.held_resources.contains(&aux_out) && region.held_resources.contains(&z_out));
+        let mut slot_counts = Vec::new();
+        for _ in 0..3 {
+            let log = run_nest(&mut fx, &mut exec, 3, 4);
+            let inner_reads: Vec<&String> = log.iter().filter(|e| e.starts_with("in_a")).collect();
+            assert_eq!(inner_reads.len(), 12);
+            assert!(inner_reads.iter().all(|e| e.ends_with("c=0.5")), "{inner_reads:?}");
+            let outer_reads: Vec<&String> = log.iter().filter(|e| e.starts_with("z ")).collect();
+            assert_eq!(outer_reads.len(), 3);
+            assert!(outer_reads.iter().all(|e| e.as_str() == "z a=0.5 b=0 c=none"), "{outer_reads:?}");
+            assert!(exec.backend().slot_for(aux_out).is_none());
+            assert!(exec.backend().slot_for(z_out).is_none());
+            slot_counts.push(exec.backend().slot_count());
+        }
+        assert!(
+            slot_counts.windows(2).all(|w| w[0] == w[1]),
+            "slot count grew across frames: {slot_counts:?}"
+        );
+    }
+
+    #[test]
+    fn nested_region_host_sync_only_between_outer_iterations() {
+        let _export = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        let mut fx = nest_fixture(true);
+        let mut exec = Executor::with_mock();
+        let log = run_nest(&mut fx, &mut exec, 3, 3);
+        let events: Vec<&str> = log
+            .iter()
+            .map(String::as_str)
+            .filter(|e| e.starts_with("host") || e.starts_with("pre") || e.contains("capture"))
+            .collect();
+        let mut expected = Vec::new();
+        for o in 0..3 {
+            if o > 0 {
+                expected.push(format!("host {o}"));
+            }
+            expected.push("pre".to_string());
+            expected.extend(["inner capture"; 3].map(String::from));
+            expected.push("outer capture".to_string());
+        }
+        let shapes: Vec<String> = events
+            .iter()
+            .map(|e| {
+                if e.starts_with("host") {
+                    e.to_string()
+                } else {
+                    e.rsplit_once(' ').map_or(e.to_string(), |(head, _)| head.to_string())
+                }
+            })
+            .map(|e| if e.starts_with("pre") { "pre".to_string() } else { e })
+            .collect();
+        assert_eq!(shapes, expected);
+        assert_eq!(exec.substep_host_syncs(), 2);
+        // The same state as a run without syncs.
+        assert_eq!(log.last().unwrap(), &format!("consumer a={} b=0 c=none", nest_expected(1, 3, 3)));
+        drop(_export);
+
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let log = run_nest(&mut fx, &mut exec, 3, 3);
+        assert!(log.iter().all(|e| !e.starts_with("host")), "{log:?}");
+        assert_eq!(exec.substep_host_syncs(), 2, "live never syncs");
+    }
+
+    #[test]
+    fn nested_region_truncation_keeps_inner_with_outer() {
+        let fx = nest_fixture(false);
+        let outer = &fx.plan.substep_regions()[0];
+        let last = *outer.steps.last().unwrap();
+        let whole = fx.plan.truncated(last + 1);
+        assert_eq!(whole.substep_regions(), fx.plan.substep_regions());
+        // A prefix past the inner region but inside the outer body drops
+        // both: the inner region never survives without its outer one.
+        let past_inner = *outer.inner[0].steps.last().unwrap() + 1;
+        assert!(past_inner <= last);
+        assert!(fx.plan.truncated(past_inner).substep_regions().is_empty());
+    }
+
+    /// ```text
+    /// seed ─▶ outside ─▶ outer_a.forces
+    /// outer.out ─▶ outer_a ─▶ outer_b ─▶ inner.seed
+    /// outer.out ─▶ z.particles, z.out ─▶ inner_a.forces
+    /// inner.out ─▶ inner_a ─▶ inner_b ─▶ (capture) inner.in
+    /// inner.out ─▶ post_a ─▶ post_b ─▶ (capture) outer.in
+    /// ```
+    /// `outside` (no region), `z` (outer body) and `inner_a` (inner body)
+    /// each meet a fusable neighbour across a border through a coincident
+    /// array wire; only the border gates keep them apart.
+    fn nested_particle_def() -> manifold_core::effect_graph_def::EffectGraphDef {
+        serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
+                {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                {"id": 2, "nodeId": "outer", "typeId": "test.particle_boundary"},
+                {"id": 3, "nodeId": "outer_a", "typeId": "node.move_particles_3d"},
+                {"id": 4, "nodeId": "outer_b", "typeId": "node.move_particles_3d"},
+                {"id": 5, "nodeId": "inner", "typeId": "test.particle_inner_boundary"},
+                {"id": 6, "nodeId": "z", "typeId": "node.push_from_walls_3d"},
+                {"id": 7, "nodeId": "inner_a", "typeId": "node.move_particles_3d"},
+                {"id": 8, "nodeId": "inner_b", "typeId": "node.move_particles_3d"},
+                {"id": 9, "nodeId": "post_a", "typeId": "node.move_particles_3d"},
+                {"id": 10, "nodeId": "post_b", "typeId": "node.move_particles_3d"},
+                {"id": 11, "nodeId": "outside", "typeId": "node.push_from_walls_3d"},
+                {"id": 12, "nodeId": "sink", "typeId": "test.particle_sink"},
+                {"id": 13, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "seed"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 11, "toPort": "in"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 11, "toPort": "particles"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
+                {"fromNode": 11, "fromPort": "out", "toNode": 3, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_dt", "toNode": 3, "toPort": "speed"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_index", "toNode": 4, "toPort": "speed"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "seed"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "in"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 7, "toPort": "in"},
+                {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "forces"},
+                {"fromNode": 5, "fromPort": "step_dt", "toNode": 7, "toPort": "speed"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "forces"},
+                {"fromNode": 5, "fromPort": "step_index", "toNode": 8, "toPort": "speed"},
+                {"fromNode": 8, "fromPort": "out", "toNode": 5, "toPort": "in"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 9, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 9, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_dt", "toNode": 9, "toPort": "speed"},
+                {"fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 10, "toPort": "forces"},
+                {"fromNode": 2, "fromPort": "step_index", "toNode": 10, "toPort": "speed"},
+                {"fromNode": 10, "fromPort": "out", "toNode": 2, "toPort": "in"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 12, "toPort": "particles"},
+                {"fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn particle_registry() -> crate::node_graph::PrimitiveRegistry {
+        let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        super::test_nodes::register_substep_test_nodes(&mut registry);
+        registry
+    }
+
+    /// I15: fusion never crosses a region border, nested or not.
+    #[test]
+    fn nested_region_fusion_stays_inside() {
+        use crate::node_graph::freeze::region::partition_regions;
+
+        let registry = particle_registry();
+        let def = nested_particle_def();
+        // The def compiles as a nest: the border the finder must respect.
+        let graph = crate::node_graph::EffectGraphDefExt::into_graph(def.clone(), &registry, &Default::default())
+            .expect("nested def builds");
+        let plan = compile(&graph).expect("nested def compiles");
+        assert_eq!(plan.substep_regions().len(), 1);
+        assert_eq!(plan.substep_regions()[0].inner.len(), 1);
+
+        let regions = partition_regions(&def, &registry);
+        let region_of = |id: u32| regions.iter().position(|r| r.members.iter().any(|m| m.doc_id == id));
+        for pair in [(3, 4), (7, 8), (9, 10)] {
+            assert!(region_of(pair.0).is_some(), "{pair:?} should fuse");
+            assert_eq!(region_of(pair.0), region_of(pair.1), "{pair:?} should fuse together");
+        }
+        assert_ne!(region_of(6), region_of(7), "an outer-body atom joined the inner body");
+        assert_ne!(region_of(11), region_of(3), "an outside atom joined the outer body");
+        // Every fused kernel lies on one side of every border.
+        let side = |id: u32| match id {
+            3 | 4 | 6 | 9 | 10 => Some(2),
+            7 | 8 => Some(5),
+            _ => None,
+        };
+        for region in &regions {
+            let sides: AHashSet<Option<u32>> = region.members.iter().map(|m| side(m.doc_id)).collect();
+            assert_eq!(sides.len(), 1, "a fused kernel crosses a border: {:?}", region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>());
+        }
+
+        // Control: the same force atom → mover wire with no boundaries
+        // fuses, so the inner border is what kept `z` and `inner_a` apart.
+        let control: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
+                {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                {"id": 6, "nodeId": "z", "typeId": "node.push_from_walls_3d"},
+                {"id": 7, "nodeId": "mover", "typeId": "node.move_particles_3d"},
+                {"id": 12, "nodeId": "sink", "typeId": "test.particle_sink"},
+                {"id": 13, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "in"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 6, "toPort": "particles"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 7, "toPort": "in"},
+                {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "forces"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 12, "toPort": "particles"},
+                {"fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "in"}
+            ]
+        }))
+        .unwrap();
+        let regions = partition_regions(&control, &registry);
+        assert!(
+            regions.iter().any(|r| r.members.iter().any(|m| m.doc_id == 6) && r.members.iter().any(|m| m.doc_id == 7)),
+            "control: the force atom and mover should fuse"
+        );
+    }
+
+    /// The fused-def cache is keyed by the def's content, and the nest is a
+    /// function of the def: the same atoms arranged as two sibling regions
+    /// instead of a nest key differently and fuse differently.
+    #[test]
+    fn nested_region_freeze_key_includes_nesting() {
+        use crate::node_graph::freeze::install::def_content_key;
+        use crate::node_graph::freeze::region::partition_regions;
+
+        let registry = particle_registry();
+        let nested = nested_particle_def();
+        // Siblings: the inner region seeds from the particle source instead
+        // of the outer body, and `post_a` reads `outer_b` instead of the
+        // inner state, so the inner region leaves the outer body.
+        let mut siblings = nested.clone();
+        for wire in &mut siblings.wires {
+            match (wire.from_node, wire.to_node, wire.to_port.as_str()) {
+                (4, 5, "seed") => wire.from_node = 0,
+                (5, 9, "in") => wire.from_node = 4,
+                _ => {}
+            }
+        }
+        assert_ne!(def_content_key(&nested), def_content_key(&siblings));
+        let members = |def| {
+            let mut regions: Vec<Vec<u32>> = partition_regions(def, &registry)
+                .iter()
+                .map(|r| {
+                    let mut ids: Vec<u32> = r.members.iter().map(|m| m.doc_id).collect();
+                    ids.sort();
+                    ids
+                })
+                .collect();
+            regions.sort();
+            regions
+        };
+        assert_ne!(members(&nested), members(&siblings));
     }
 }
