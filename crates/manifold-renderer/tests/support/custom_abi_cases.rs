@@ -187,6 +187,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "occupied_bounds.rs",
+        rust_struct: "BoundsParams",
+        shader: "shaders/occupied_bounds.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "live_draw_args.rs",
         rust_struct: "LiveArgs",
         shader: "shaders/live_draw_args.wgsl",

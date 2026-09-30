@@ -2375,6 +2375,10 @@ impl EffectNode for WgslCompute {
             }
         }
 
+        if let Some(refusal) = self.lattice_overflow(ctx) {
+            ctx.error(refusal);
+            return;
+        }
         // Resolve dispatch geometry from the chosen dispatch port.
         let (dx, dy, dz) = match self.compute_dispatch(ctx) {
             Some(d) => d,
@@ -2549,6 +2553,44 @@ impl WgslCompute {
     /// and the derived-uniform recompute's `count` sentinel (a region-internal
     /// register source's length IS the kernel's element count).
     fn buffer_element_count(&self, ctx: &EffectNodeContext<'_, '_>) -> Option<u32> {
+        let mut count = self.output_element_capacity(ctx)?;
+        // `// @dispatch_count_param`: cap the grid at the live element
+        // count (the fused particle integrators' `active_count`) — the
+        // kernel guards the same bound, so threads past it are pure waste.
+        // Missing/unwired param falls back to the capacity dispatch.
+        if let Some(p) = &self.dispatch_count_param {
+            let live = ctx.scalar_or_param(p, f32::MAX);
+            if live.is_finite() {
+                // Floor of one group: a zero live count still dispatches one
+                // (immediately-guarded) group rather than a zero-dim grid.
+                count = count.min(live.max(0.0).round() as u32).max(1);
+            }
+        }
+        // A wired lattice length: the kernel's own count, this frame.
+        if let Some(live) = self.live_lattice_count(ctx) {
+            count = count.min(live).max(1);
+        }
+        Some(count)
+    }
+
+    /// The kernel's count this frame when the fused output capacity is a
+    /// lattice of params: the same expression over the same packed uniform
+    /// values (`scalar_or_param(name, 0.0)`), so a wired length counts.
+    fn live_lattice_count(&self, ctx: &EffectNodeContext<'_, '_>) -> Option<u32> {
+        let expr = self.fused_output_capacity.as_ref().filter(|e| e.reads_params())?;
+        expr.eval_by(&|_| None, &|field| Some(ctx.scalar_or_param(field, 0.0)))
+    }
+
+    /// Named refusal for a wired lattice longer than the output array, which
+    /// is sized for the params' own lengths.
+    fn lattice_overflow(&self, ctx: &EffectNodeContext<'_, '_>) -> Option<String> {
+        let live = self.live_lattice_count(ctx)?;
+        let room = self.output_element_capacity(ctx)?;
+        (live > room).then(|| format!("{TYPE_ID}: a wired lattice of {live} elements is longer than its {room}-element output"))
+    }
+
+    /// Elements the dispatch port's output array holds.
+    fn output_element_capacity(&self, ctx: &EffectNodeContext<'_, '_>) -> Option<u32> {
         let port = self.dispatch_port.as_deref()?;
         let buf = ctx.outputs.array(port)?;
         // Look up the declared item_size for this port from our
@@ -2581,20 +2623,7 @@ impl WgslCompute {
             })
             .unwrap_or(4)
             .max(1);
-        let mut count = (buf.size() as u32) / item_size;
-        // `// @dispatch_count_param`: cap the grid at the live element
-        // count (the fused particle integrators' `active_count`) — the
-        // kernel guards the same bound, so threads past it are pure waste.
-        // Missing/unwired param falls back to the capacity dispatch.
-        if let Some(p) = &self.dispatch_count_param {
-            let live = ctx.scalar_or_param(p, f32::MAX);
-            if live.is_finite() {
-                // Floor of one group: a zero live count still dispatches one
-                // (immediately-guarded) group rather than a zero-dim grid.
-                count = count.min(live.max(0.0).round() as u32).max(1);
-            }
-        }
-        Some(count)
+        Some((buf.size() as u32) / item_size)
     }
 }
 

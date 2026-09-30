@@ -182,10 +182,37 @@ impl Chain {
         axes: usize,
         repeats: usize,
     ) -> (f64, Vec<String>) {
+        self.run_in(harness, slots, nodes, None, cell_size, middle, axes, repeats)
+    }
+
+    /// [`Self::run`] on a window (origin, size) of the `nodes` lattice, the
+    /// window's lengths and origin wired in as scalars.
+    #[allow(clippy::too_many_arguments)]
+    fn run_in(
+        &mut self,
+        harness: &mut Harness,
+        slots: &ChainSlots,
+        nodes: [usize; 3],
+        window: Option<([usize; 3], [usize; 3])>,
+        cell_size: f32,
+        middle: Middle,
+        axes: usize,
+        repeats: usize,
+    ) -> (f64, Vec<String>) {
         let axes = axes as f32;
         let lattice = lattice_params(nodes, &[("axes", axes)]);
-        let forward = lattice_params(nodes, &[("direction", 0.0), ("axes", axes)]);
-        let inverse = lattice_params(nodes, &[("direction", 1.0), ("axes", axes)]);
+        let outer = [("outer_x", nodes[0] as f32), ("outer_y", nodes[1] as f32), ("outer_z", nodes[2] as f32)];
+        let whole = if window.is_some() { &outer[..] } else { &[] };
+        let forward = lattice_params(nodes, &[&[("direction", 0.0), ("axes", axes)][..], whole].concat());
+        let inverse = lattice_params(nodes, &[&[("direction", 1.0), ("axes", axes)][..], whole].concat());
+        let mut wired = |ports: [&'static str; 3], values: Option<[usize; 3]>| -> Vec<(&'static str, Slot)> {
+            values.map_or_else(Vec::new, |v| ports.into_iter().zip(v).map(|(port, v)| (port, harness.scalar_input(v as f32))).collect())
+        };
+        let lengths = wired(["nodes_x", "nodes_y", "nodes_z"], window.map(|w| w.1));
+        let corner = wired(["origin_x", "origin_y", "origin_z"], window.map(|w| w.0));
+        let with = |port: (&'static str, Slot), extra: &[&[(&'static str, Slot)]]| -> Vec<(&'static str, Slot)> {
+            std::iter::once(port).chain(extra.iter().flat_map(|e| e.iter().copied())).collect()
+        };
         let divide = lattice_params(nodes, &[("cell_size", cell_size)]);
         let lowest_wave = match middle {
             Middle::Surface { lowest_wave } => lowest_wave,
@@ -202,22 +229,29 @@ impl Chain {
             let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
             let backend: &dyn Backend = &harness.backend;
             let e = &mut errors;
+            let (l, c) = (&lengths[..], &corner[..]);
             for _ in 0..repeats {
-                step(&mut self.reorder, &mut gpu, backend, e, ("values", slots.input.0), ("out", slots.reordered.0), &forward);
-                step(&mut self.fft, &mut gpu, backend, e, ("values", slots.reordered.0), ("spectrum", slots.spectrum.0), &lattice);
-                step(&mut self.spectrum, &mut gpu, backend, e, ("spectrum", slots.spectrum.0), ("out", slots.coeffs.0), &lattice);
+                step_ports(&mut self.reorder, &mut gpu, backend, e, &with(("values", slots.input.0), &[l, c]), &[("out", slots.reordered.0)], &forward);
+                step_ports(&mut self.fft, &mut gpu, backend, e, &with(("values", slots.reordered.0), &[l]), &[("spectrum", slots.spectrum.0)], &lattice);
+                step_ports(&mut self.spectrum, &mut gpu, backend, e, &with(("spectrum", slots.spectrum.0), &[l]), &[("out", slots.coeffs.0)], &lattice);
                 match middle {
                     Middle::Nothing => {}
-                    Middle::Poisson => {
-                        step(&mut self.divide, &mut gpu, backend, e, ("values", slots.coeffs.0), ("out", slots.divided.0), &divide)
-                    }
+                    Middle::Poisson => step_ports(
+                        &mut self.divide,
+                        &mut gpu,
+                        backend,
+                        e,
+                        &with(("values", slots.coeffs.0), &[l]),
+                        &[("out", slots.divided.0)],
+                        &divide,
+                    ),
                     Middle::Surface { .. } => {
                         step(&mut self.surface, &mut gpu, backend, e, ("values", slots.coeffs.0), ("out", slots.divided.0), &surface)
                     }
                 }
-                step(&mut self.half, &mut gpu, backend, e, ("values", middle_slot), ("spectrum", slots.half.0), &lattice);
-                step(&mut self.ifft, &mut gpu, backend, e, ("spectrum", slots.half.0), ("values", slots.back.0), &lattice);
-                step(&mut self.unorder, &mut gpu, backend, e, ("values", slots.back.0), ("out", slots.output.0), &inverse);
+                step_ports(&mut self.half, &mut gpu, backend, e, &with(("values", middle_slot), &[l]), &[("spectrum", slots.half.0)], &lattice);
+                step_ports(&mut self.ifft, &mut gpu, backend, e, &with(("spectrum", slots.half.0), &[l]), &[("values", slots.back.0)], &lattice);
+                step_ports(&mut self.unorder, &mut gpu, backend, e, &with(("values", slots.back.0), &[l, c]), &[("out", slots.output.0)], &inverse);
             }
         }
         (native.commit_and_wait_completed_timed() * 1000.0, errors)
@@ -428,6 +462,149 @@ fn swash_box_solve_inverts_the_walled_laplacian() {
     }
 }
 
+/// P3c: a transform on a window of a larger lattice is the same transform on
+/// the window alone, and the inverse writes it back at the window with 0
+/// around it. The FFT plans run on the window's shape inside arrays sized for
+/// the whole lattice. The box solve and a plain round trip (axes 3), and a
+/// plane round trip (axes 2).
+#[test]
+fn swash_windowed_transform_matches_the_window_alone() {
+    let outer = [24usize, 20, 16];
+    let (origin, size) = ([6usize, 4, 5], [12usize, 10, 8]);
+    let total: usize = outer.iter().product();
+    let compact: usize = size.iter().product();
+    let values = random_values(total, 0x3c1d);
+    let window: Vec<f32> = (0..compact)
+        .map(|i| {
+            let c = coords(i, size);
+            values[cell_of([c[0] + origin[0], c[1] + origin[1], c[2] + origin[2]], outer)]
+        })
+        .collect();
+    let h = 0.0625_f64;
+    for (middle, axes) in [(Middle::Nothing, 3), (Middle::Poisson, 3), (Middle::Nothing, 2)] {
+        let mut harness = Harness::new();
+        let slots = ChainSlots::new(&mut harness, &values, outer);
+        let (_, errors) = Chain::new().run_in(&mut harness, &slots, outer, Some((origin, size)), h as f32, middle, axes, 1);
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut coeffs = reference_dct(&window, size, axes);
+        let actual: Vec<f32> = read(&slots.coeffs.1, compact);
+        let scale = coeffs.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let worst = actual.iter().zip(&coeffs).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+        assert!(worst < 1e-5 * scale.max(1.0), "axes {axes}: windowed transform off by {worst} (scale {scale})");
+        if let Middle::Poisson = middle {
+            for (i, c) in coeffs.iter_mut().enumerate() {
+                let k = coords(i, size);
+                let s: f64 = (0..3).map(|a| (std::f64::consts::FRAC_PI_2 * k[a] as f64 / size[a] as f64).sin().powi(2)).sum();
+                *c = if i == 0 { 0.0 } else { *c / (-4.0 * s / (h * h)) };
+            }
+        }
+        let solved = reference_idct(&coeffs, size, axes);
+        let output: Vec<f32> = read(&slots.output.1, total);
+        let scale = solved.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        for (i, &got) in output.iter().enumerate() {
+            let c = coords(i, outer);
+            let inside = (0..3).all(|a| c[a] >= origin[a] && c[a] < origin[a] + size[a]);
+            let want = if inside { solved[cell_of([c[0] - origin[0], c[1] - origin[1], c[2] - origin[2]], size)] } else { 0.0 };
+            assert!((f64::from(got) - want).abs() <= 1e-5 * scale.max(1.0), "axes {axes}, node {c:?}: {got} vs {want}");
+        }
+    }
+}
+
+/// One frame of a stateful atom, committed and waited: its scalar writes and
+/// errors. Its state lives in `store`, as the executor keeps it.
+fn run_stateful<P: Primitive>(
+    harness: &mut Harness,
+    prim: &mut P,
+    store: &mut crate::node_graph::StateStore,
+    inputs: &[(&'static str, Slot)],
+    outputs: &[(&'static str, Slot)],
+    step_params: &ParamValues,
+) -> (Vec<(Slot, crate::node_graph::parameters::ParamValue)>, Vec<String>) {
+    let generations = [0_u64; 64];
+    let (mut scalars, mut camera, mut light, mut material, mut transform) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut atmosphere, mut render_mode, mut object) = (Vec::new(), Vec::new(), Vec::new());
+    let mut errors = Vec::new();
+    let mut native = harness.device.create_encoder("swash stateful atom");
+    {
+        let backend: &dyn Backend = &harness.backend;
+        let node_inputs = NodeInputs::new(inputs, backend, &generations);
+        let node_outputs = NodeOutputs::new(
+            outputs,
+            backend,
+            &mut scalars,
+            &mut camera,
+            &mut light,
+            &mut material,
+            &mut transform,
+            &mut atmosphere,
+            &mut render_mode,
+            &mut object,
+        );
+        let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
+        let time = FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(1.0 / 60.0), frame_count: 0 };
+        let mut ctx = EffectNodeContext::new(time, step_params, node_inputs, node_outputs, Some(&mut gpu)).with_errors(&mut errors);
+        ctx.state = Some(store);
+        Primitive::run(prim, &mut ctx);
+    }
+    native.commit_and_wait_completed();
+    (scalars, errors)
+}
+
+/// node.occupied_bounds against the CPU: no reading on its first frame, then
+/// the box and count of the nodes above the threshold from the frame before,
+/// one frame old. A lattice past one workgroup's share, a mixed one, and an
+/// empty one.
+#[test]
+fn swash_occupied_bounds_match_cpu() {
+    use super::occupied_bounds::{END_PORTS, MIN_PORTS, OccupiedBounds};
+    use crate::node_graph::parameters::ParamValue;
+    for (nodes, occupied) in [
+        ([64usize, 64, 64], Some(([5usize, 0, 17], [43usize, 12, 60]))),
+        ([24, 20, 16], Some(([0, 3, 2], [24, 4, 16]))),
+        ([32, 32, 32], None),
+    ] {
+        let mut harness = Harness::new();
+        let total: usize = nodes.iter().product();
+        // Scattered water inside the box, its corners always set so the box is exact.
+        let noise = random_values(total, 0xb0b0);
+        let values: Vec<f32> = (0..total)
+            .map(|i| {
+                let c = coords(i, nodes);
+                let Some((low, end)) = occupied else { return 0.0 };
+                let inside = (0..3).all(|a| c[a] >= low[a] && c[a] < end[a]);
+                let corner = (0..3).all(|a| c[a] == low[a]) || (0..3).all(|a| c[a] + 1 == end[a]);
+                if inside && (corner || noise[i] > 0.2) { 1.0 } else { 0.0 }
+            })
+            .collect();
+        let count = values.iter().filter(|&&v| v > 0.5).count() as f32;
+        let input = harness.array(&values, total);
+        let names = [MIN_PORTS[0], MIN_PORTS[1], MIN_PORTS[2], END_PORTS[0], END_PORTS[1], END_PORTS[2], "count", "age"];
+        let slots: Vec<(&'static str, Slot)> = names.iter().map(|&name| (name, harness.scalar())).collect();
+        let lattice = lattice_params(nodes, &[]);
+        let mut node = OccupiedBounds::new();
+        let mut store = crate::node_graph::StateStore::new();
+        let mut frame = |harness: &mut Harness| -> Vec<f32> {
+            let (scalars, errors) = run_stateful(harness, &mut node, &mut store, &[("values", input.0)], &slots, &lattice);
+            assert!(errors.is_empty(), "{errors:?}");
+            slots
+                .iter()
+                .map(|(_, slot)| match scalars.iter().find(|(s, _)| s == slot) {
+                    Some((_, ParamValue::Float(v))) => *v,
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(frame(&mut harness)[7], 0.0, "{nodes:?}: no reading on the first frame");
+        let got = frame(&mut harness);
+        let want: Vec<f32> = match occupied {
+            Some((low, end)) => low.iter().chain(&end).map(|&v| v as f32).chain([count, 1.0]).collect(),
+            None => vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        };
+        assert_eq!(got, want, "{nodes:?}");
+    }
+}
+
 /// Where the box-solve time goes: the vendor FFT call alone versus one
 /// codegen twiddle atom, at a tiny and a real lattice. Equal times at 16³ and
 /// 64³ mean fixed per-call overhead, not bandwidth.
@@ -498,6 +675,41 @@ fn swash_box_solve_timing() {
         let mut ms: Vec<f64> = (0..5).map(|_| chain.run(&mut harness, &slots, nodes, 1.0, Middle::Poisson, 3, repeats).0).collect();
         ms.sort_by(f64::total_cmp);
         println!("SWASH box solve {nodes:?}: {:.3} ms GPU per solve (median of 5 command buffers of {repeats})", ms[2] / repeats as f64);
+    }
+}
+
+/// P3c's plan-cache kill check: what a new FFT shape costs on the CPU,
+/// forward and inverse, for the clipped boxes a Dam Break uses: building the
+/// plan (an MPSGraph compile), then its first encode and a second one, each
+/// committed and waited, the first time a shape is seen and again.
+#[test]
+fn swash_fft_plan_build_cost() {
+    let harness = Harness::new();
+    for nodes in [[64usize, 64, 64], [64, 24, 64], [64, 48, 64], [128, 128, 128], [128, 40, 128], [128, 96, 128]] {
+        let shape = [nodes[2], nodes[1], nodes[0]];
+        let total: usize = nodes.iter().product();
+        let real = harness.device.create_buffer(total as u64 * 4);
+        let spectrum = harness.device.create_buffer(((nodes[0] / 2 + 1) * nodes[1] * nodes[2]) as u64 * 8);
+        for round in ["first", "again"] {
+            let ms = |start: Instant| start.elapsed().as_secs_f64() * 1000.0;
+            let mut line = String::new();
+            for (label, kind) in [("forward", manifold_gpu::FftKind::RealToHermitean), ("inverse", manifold_gpu::FftKind::HermiteanToReal)] {
+                let start = Instant::now();
+                let plan = manifold_gpu::GpuFft::new_nd(&harness.device, kind, &shape, &[0, 1, 2]);
+                let built = ms(start);
+                let (from, to) = if label == "forward" { (&real, &spectrum) } else { (&spectrum, &real) };
+                let mut encodes = Vec::new();
+                for _ in 0..2 {
+                    let mut native = harness.device.create_encoder("swash plan warm");
+                    let start = Instant::now();
+                    plan.encode(&mut native, from, to);
+                    encodes.push(ms(start));
+                    native.commit_and_wait_completed();
+                }
+                line += &format!(" {label} build {built:.2} ms, first encode {:.2} ms, second {:.2} ms;", encodes[0], encodes[1]);
+            }
+            println!("SWASH plan {nodes:?} {round}:{line}");
+        }
     }
 }
 

@@ -5,13 +5,16 @@
 //! class of the codegen exemption list (docs/ADDING_PRIMITIVES.md, exemption
 //! class 1; docs/FFT_WATER_SOLVER_DESIGN.md D9).
 //!
-//! The plan is compiled on the first run and again only when the lattice
-//! lengths or the transformed axes change. Axes 2 transforms x and y of every
-//! z slice on its own: one batched call, same half-spectrum layout.
+//! Plans come from the device's plan cache, one per shape, shared by every
+//! node: a node that changes shape pays a hash lookup, and a compile only for
+//! a shape no node has used yet. Axes 2 transforms x and y of every z slice
+//! on its own: one batched call, same half-spectrum layout.
 
-use manifold_gpu::{FftKind, GpuFft};
+use std::sync::Arc;
 
-use super::cosine_spectrum::{AXES_PARAM, half_spectrum_len, lattice_nodes, transform_axes};
+use manifold_gpu::{FftKind, FftPlanKey, GpuFft};
+
+use super::cosine_spectrum::{AXES_PARAM, half_spectrum_len, lattice_nodes, live_lattice, transform_axes};
 use super::sort_particles_into_cells::float_param;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -21,10 +24,10 @@ use std::borrow::Cow;
 /// Lattice lengths and transformed axes, the key a plan is built for.
 type PlanKey = ([u32; 3], u32);
 
-/// The plan for `key`, rebuilt when it changes. Lattice (i, j, k) at
-/// i + nx·(j + ny·k) is the row-major shape [nz, ny, nx].
+/// The plan for `key`, fetched from the device cache when it changes.
+/// Lattice (i, j, k) at i + nx·(j + ny·k) is the row-major shape [nz, ny, nx].
 fn plan_for<'a>(
-    slot: &'a mut Option<(PlanKey, GpuFft)>,
+    slot: &'a mut Option<(PlanKey, Arc<GpuFft>)>,
     device: &manifold_gpu::GpuDevice,
     kind: FftKind,
     key: PlanKey,
@@ -33,9 +36,9 @@ fn plan_for<'a>(
         let (nodes, axes) = key;
         let shape = [nodes[2] as usize, nodes[1] as usize, nodes[0] as usize];
         let transformed: &[usize] = if axes == 2 { &[1, 2] } else { &[0, 1, 2] };
-        *slot = Some((key, GpuFft::new_nd(device, kind, &shape, transformed)));
+        *slot = Some((key, device.fft_plan(FftPlanKey::new(kind, &shape, transformed))));
     }
-    &slot.as_ref().expect("plan built above").1
+    &slot.as_ref().expect("plan fetched above").1
 }
 
 /// Every transformed length must be even, 2 to 1024, with any other factors
@@ -52,10 +55,11 @@ fn refusal(params: &ParamValues, label: &str) -> Option<String> {
     legal_key(params).is_none().then(|| format!("{label}: {ILLEGAL_LENGTH}"))
 }
 
-/// The build refuses an illegal lattice (`params_refusal`); a param changed
-/// since the build is refused here too.
+/// This frame's key: wired lengths win over the params. The build refuses an
+/// illegal param lattice (`params_refusal`); an illegal wired one is refused
+/// here, every frame it lasts.
 fn plan_key(ctx: &mut EffectNodeContext<'_, '_>, label: &str) -> Option<PlanKey> {
-    let key = legal_key(ctx.params);
+    let key = live_lattice(ctx).map(|n| (n, transform_axes(ctx.params)));
     if key.is_none() {
         ctx.error(format!("{label}: {ILLEGAL_LENGTH}"));
     }
@@ -65,9 +69,12 @@ fn plan_key(ctx: &mut EffectNodeContext<'_, '_>, label: &str) -> Option<PlanKey>
 crate::primitive! {
     name: Fft3d,
     type_id: "node.fft_3d",
-    purpose: "Real FFT of a lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k), every transformed length even) into its half spectrum: nx/2 + 1 complex entries along x, unscaled, entry (kx, ky, kz) at kx + (nx/2 + 1)·(ky + ny·kz). Axes 3 transforms x, y and z; axes 2 transforms x and y of every z slice on its own. One vendor FFT call.",
+    purpose: "Real FFT of a lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k), every transformed length even) into its half spectrum: nx/2 + 1 complex entries along x, unscaled, entry (kx, ky, kz) at kx + (nx/2 + 1)·(ky + ny·kz). Axes 3 transforms x, y and z; axes 2 transforms x and y of every z slice on its own. One vendor FFT call. Wired lengths run a smaller lattice in arrays sized for the params'.",
     inputs: {
         values: Array(f32) required,
+        nodes_x: ScalarF32 optional,
+        nodes_y: ScalarF32 optional,
+        nodes_z: ScalarF32 optional,
     },
     outputs: {
         spectrum: Array([f32; 2]),
@@ -88,7 +95,7 @@ crate::primitive! {
     aliases: ["fft", "fourier transform", "spectrum"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
-        plan: Option<(PlanKey, GpuFft)> = None,
+        plan: Option<(PlanKey, Arc<GpuFft>)> = None,
     },
 }
 
@@ -120,9 +127,12 @@ impl Primitive for Fft3d {
 crate::primitive! {
     name: InverseFft3d,
     type_id: "node.inverse_fft_3d",
-    purpose: "Inverse of node.fft_3d: a half spectrum (nx/2 + 1 complex entries along x) back to the real lattice, scaled by one over the transformed lengths' product (nx·ny·nz with axes 3, nx·ny with axes 2) so the pair round-trips exactly. One vendor FFT call.",
+    purpose: "Inverse of node.fft_3d: a half spectrum (nx/2 + 1 complex entries along x) back to the real lattice, scaled by one over the transformed lengths' product (nx·ny·nz with axes 3, nx·ny with axes 2) so the pair round-trips exactly. One vendor FFT call. Wired lengths run a smaller lattice in arrays sized for the params'.",
     inputs: {
         spectrum: Array([f32; 2]) required,
+        nodes_x: ScalarF32 optional,
+        nodes_y: ScalarF32 optional,
+        nodes_z: ScalarF32 optional,
     },
     outputs: {
         values: Array(f32),
@@ -143,7 +153,7 @@ crate::primitive! {
     aliases: ["ifft", "inverse fourier transform"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
-        plan: Option<(PlanKey, GpuFft)> = None,
+        plan: Option<(PlanKey, Arc<GpuFft>)> = None,
     },
 }
 

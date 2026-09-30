@@ -64,6 +64,8 @@ impl Run {
         // Everything read after a frame is held past it.
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
+        // The region's window is read from the preview's live scalar outputs.
+        exec.set_preview_target(Some(node_named(&graph, "region")));
         for k in 0..scene.steps {
             for name in ["water", "gravity", "project", "collar_total"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
@@ -173,6 +175,50 @@ impl Run {
     pub(super) fn collar(&self, step: usize) -> u32 {
         let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
         *total.last().expect("a lattice")
+    }
+
+    /// The window this frame's box solves ran on (P3c), and the escapes the
+    /// region has seen when its count is wired anywhere.
+    pub(super) fn region(&self) -> Region {
+        let outputs = self.exec.preview_scalar_outputs();
+        let value = |port: &str| -> Option<usize> { outputs.iter().find(|(name, _)| name == port).map(|&(_, v)| v as usize) };
+        let axis = |prefix: &str| ["x", "y", "z"].map(|a| value(&format!("{prefix}_{a}")).expect("window output wired"));
+        Region { origin: axis("origin"), size: axis("size"), escapes: value("escapes") }
+    }
+
+    /// FFT plans the device holds, across every graph it has run.
+    pub(super) fn fft_plans(&self) -> usize {
+        self.device.fft_plan_cache_len()
+    }
+}
+
+/// One frame's active region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Region {
+    pub origin: [usize; 3],
+    pub size: [usize; 3],
+    pub escapes: Option<usize>,
+}
+
+impl Region {
+    /// Water cells that sit outside the window, or have a collar neighbour
+    /// outside it: each is a cell the clipped solve got wrong.
+    pub(super) fn water_outside(&self, water: &[f32], n: usize) -> usize {
+        let inside = |c: [i64; 3]| (0..3).all(|a| c[a] >= self.origin[a] as i64 && c[a] < (self.origin[a] + self.size[a]) as i64);
+        let in_box = |c: [i64; 3]| c.iter().all(|&v| (0..n as i64).contains(&v));
+        let mut outside = 0;
+        for (i, _) in water.iter().enumerate().filter(|(_, w)| **w > 0.5) {
+            let c = [(i % n) as i64, ((i / n) % n) as i64, (i / (n * n)) as i64];
+            let near = (0..3).flat_map(|a| [-1, 1].map(|d| {
+                let mut q = c;
+                q[a] += d;
+                q
+            }));
+            if !inside(c) || near.filter(|&q| in_box(q)).any(|q| !inside(q)) {
+                outside += 1;
+            }
+        }
+        outside
     }
 }
 
@@ -309,6 +355,63 @@ fn fft_water_still_pool_keeps_its_meshed_volume() {
     println!("SWASH still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
     println!("SWASH still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
+}
+
+/// P3c gate: over the 300-frame Dam Break, every water step's water and its
+/// collar sit inside the window the frame's box solves ran on, and the
+/// region counts no escape. Prints the window through the run, the shapes it
+/// took, and each frame that built new FFT plans with its CPU encode time.
+fn dam_break_region(n: usize) {
+    let scene = WaterScene::dam_break(n);
+    let mut run = Run::new(scene);
+    let mut plans = run.fft_plans();
+    let (mut shapes, mut bad, mut share_sum) = (Vec::new(), Vec::new(), 0.0);
+    let frames = 300;
+    for frame in 0..frames {
+        let (_, cpu) = run.frame();
+        let region = run.region();
+        for step in 0..scene.steps {
+            let outside = region.water_outside(&run.water(step), n);
+            if outside > 0 {
+                bad.push((frame, step, outside, region));
+            }
+        }
+        assert_eq!(region.escapes.unwrap_or(0), 0, "frame {frame}: the region saw an escape");
+        if !shapes.contains(&region.size) {
+            shapes.push(region.size);
+        }
+        let share = region.size.iter().product::<usize>() as f64 / n.pow(3) as f64;
+        share_sum += share;
+        let now = run.fft_plans();
+        if now > plans || frame % 15 == 0 {
+            println!(
+                "SWASH region {n}³ frame {frame:3}: {:?} at {:?}, {:.0}% of the box, {} new FFT plans, {cpu:.1} ms CPU encode",
+                region.size,
+                region.origin,
+                100.0 * share,
+                now - plans
+            );
+        }
+        plans = now;
+    }
+    println!(
+        "SWASH region {n}³: {:.0}% of the box on average, {} shapes {shapes:?}, {} ticks with water outside",
+        100.0 * share_sum / frames as f64,
+        shapes.len(),
+        bad.len()
+    );
+    assert!(bad.is_empty(), "water outside the window: {bad:?}");
+}
+
+#[test]
+fn fft_water_dam_break_stays_in_its_region() {
+    dam_break_region(64);
+}
+
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn fft_water_dam_break_stays_in_its_region_refined() {
+    dam_break_region(128);
 }
 
 /// The frozen 64³ Dam Break, every solve's cosine pairs fused (BUG-u8io,

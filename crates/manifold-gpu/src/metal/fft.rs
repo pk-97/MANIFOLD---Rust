@@ -33,7 +33,7 @@ use objc2_metal_performance_shaders_graph::{
 use super::GpuBuffer;
 use super::encoder::GpuEncoder;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FftKind {
     /// Real input → half spectrum (interleaved complex), unscaled.
     RealToHermitean,
@@ -41,6 +41,36 @@ pub enum FftKind {
     HermiteanToReal,
     /// Interleaved complex input and output, unscaled.
     ComplexToComplex { inverse: bool },
+}
+
+/// What a plan is compiled for: the kind, the real shape (row-major, at most
+/// four dimensions) and the transformed axes. Fixed size, so a lookup
+/// allocates nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FftPlanKey {
+    kind: FftKind,
+    shape: [usize; 4],
+    dims: usize,
+    /// Bit `a` set: axis `a` is transformed.
+    axes: u8,
+}
+
+impl FftPlanKey {
+    pub fn new(kind: FftKind, shape: &[usize], axes: &[usize]) -> Self {
+        assert!(!shape.is_empty() && shape.len() <= 4, "FftPlanKey: 1 to 4 dimensions (got {shape:?})");
+        let mut padded = [0; 4];
+        padded[..shape.len()].copy_from_slice(shape);
+        let mask = axes.iter().fold(0u8, |m, &a| {
+            assert!(a < shape.len(), "FftPlanKey: axis {a} past shape {shape:?}");
+            m | (1 << a)
+        });
+        Self { kind, shape: padded, dims: shape.len(), axes: mask }
+    }
+
+    pub(crate) fn build(&self, device: &super::GpuDevice) -> GpuFft {
+        let axes: Vec<usize> = (0..self.dims).filter(|a| self.axes & (1 << a) != 0).collect();
+        GpuFft::new_nd(device, self.kind, &self.shape[..self.dims], &axes)
+    }
 }
 
 /// Compiled FFT plan. Build once, encode many times.

@@ -48,10 +48,11 @@ const PROFILE_EVERY: usize = 25;
 const STILLS: [usize; 4] = [90, 240, 600, 900];
 
 /// Stages in the order the table prints them.
-const STAGES: [&str; 23] = [
+const STAGES: [&str; 24] = [
     "fill + particle state",
     "particle sort",
     "classify cells",
+    "active region (bounds, window)",
     "particle→face",
     "gravity + walls",
     "extrapolation",
@@ -100,6 +101,7 @@ fn stage(name: &str) -> &'static str {
     }
     match name {
         "fill" | "state" => "fill + particle state",
+        "water_bounds" | "region" => "active region (bounds, window)",
         "scene" => "scene render",
         "filmic_display" => "tone map + other",
         n if n.ends_with("liquid_sort") => "surface sort",
