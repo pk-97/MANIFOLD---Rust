@@ -489,6 +489,20 @@ pub(super) fn validate_wire_endpoints(
     Ok(())
 }
 
+/// The primitives that may declare a `Channels[permissive]` input
+/// (`docs/CHANNEL_TYPE_SYSTEM.md` section 11.4 (Per-port match-mode
+/// discipline)). A test walks the registry against it; adding a row is a
+/// reviewed change to the type system.
+#[cfg(test)]
+pub const PERMISSIVE_PRIMITIVE_ALLOWLIST: &[&str] = &[
+    // Reads each record's position and liveness by channel name through the
+    // producer's layout, so the matter solver's own points sort without a
+    // converted copy.
+    "node.sort_particles_into_cells",
+    // The macro's own smoke primitive, registered only in test builds.
+    "node.__smoke_test_channels_permissive",
+];
+
 /// Channels-aware compatibility check for two Array endpoints.
 ///
 /// Runs when both producer and consumer carry a non-empty Channels
@@ -2192,6 +2206,22 @@ mod tests {
             let matching_producer =
                 ArrayType::of_channels(EDGE_PAIR_SPECS, MatchMode::Exact);
             assert!(channels_compatible(matching_producer, permissive_consumer).is_ok());
+        }
+
+        #[test]
+        fn permissive_ports_are_allow_listed() {
+            use crate::node_graph::persistence::PrimitiveFactory;
+            for factory in inventory::iter::<PrimitiveFactory> {
+                let node = (factory.create)();
+                let permissive = node.inputs().iter().any(|port| {
+                    matches!(port.ty, PortType::Array(layout) if layout.match_mode == MatchMode::Permissive)
+                });
+                assert!(
+                    !permissive || super::super::PERMISSIVE_PRIMITIVE_ALLOWLIST.contains(&factory.type_id),
+                    "{} declares a Channels[permissive] input but is not in PERMISSIVE_PRIMITIVE_ALLOWLIST",
+                    factory.type_id,
+                );
+            }
         }
 
         #[test]

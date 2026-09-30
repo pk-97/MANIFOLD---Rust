@@ -1211,7 +1211,10 @@ pub fn instantiate_def(
     // Coupled physics is graph-owned runtime metadata. Resolve stable scene
     // identities against this exact def and this instantiation's id_map;
     // the graph-wide stable-id lookup is not valid for effect splices.
-    let has_fluid = def.nodes.iter().any(|node| node.type_id == "node.fluid_surface");
+    let has_fluid = def
+        .nodes
+        .iter()
+        .any(|node| manifold_core::liquid_domain::is_liquid_domain(&node.type_id));
     let has_rigid = def.nodes.iter().any(|node| node.type_id == "node.physics_world");
     if has_fluid && has_rigid {
         let bindings = super::scene_modifier_expand::prepare_coupled_scenes(def, registry)

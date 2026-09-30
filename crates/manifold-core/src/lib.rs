@@ -22,6 +22,7 @@ pub mod graph_target;
 pub mod group_edit;
 pub mod id;
 pub mod layer;
+pub mod liquid_domain;
 pub mod macro_bank;
 pub mod marker;
 pub mod material_inspector;

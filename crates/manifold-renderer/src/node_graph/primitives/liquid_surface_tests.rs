@@ -19,6 +19,7 @@ use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
 use crate::node_graph::execution_plan::ResourceId;
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, FluidParticle, bin_counts};
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::ports::{ArrayType, KnownItem};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::{MetalBackend, PortType, ScalarType};
 
@@ -26,6 +27,8 @@ pub(super) struct Harness {
     pub device: crate::TestDevice,
     pub backend: MetalBackend,
     next: u32,
+    /// Each array's record layout, as a producer port would declare it.
+    layouts: Vec<(Slot, ArrayType)>,
     /// Live extents the last `run` published.
     pub live_extents: Vec<(Slot, crate::node_graph::live_extent::LiveExtent)>,
 }
@@ -34,10 +37,10 @@ impl Harness {
     pub fn new() -> Self {
         let device = crate::test_device();
         let backend = MetalBackend::new(device.arc(), 1, 1, GpuTextureFormat::Rgba8Unorm);
-        Self { device, backend, next: 0, live_extents: Vec::new() }
+        Self { device, backend, next: 0, layouts: Vec::new(), live_extents: Vec::new() }
     }
 
-    pub fn array<T: bytemuck::Pod>(&mut self, values: &[T], capacity: usize) -> (Slot, GpuBuffer) {
+    pub fn array<T: KnownItem>(&mut self, values: &[T], capacity: usize) -> (Slot, GpuBuffer) {
         let bytes = (capacity.max(values.len()).max(1) * std::mem::size_of::<T>()) as u64;
         let buffer = self.device.create_buffer_shared(bytes);
         buffer.zero_fill();
@@ -47,6 +50,7 @@ impl Harness {
         }
         let slot = self.backend.pre_bind_array(ResourceId(self.next), buffer.clone());
         self.next += 1;
+        self.layouts.push((slot, ArrayType::of_known::<T>()));
         (slot, buffer)
     }
 
@@ -78,6 +82,12 @@ impl Harness {
         params: &ParamValues,
     ) -> (Vec<(Slot, ParamValue)>, Vec<String>) {
         let generations = vec![0_u64; self.next as usize + 1];
+        let layouts: Vec<(&'static str, ArrayType)> = inputs
+            .iter()
+            .filter_map(|&(port, slot)| {
+                self.layouts.iter().find(|(s, _)| *s == slot).map(|&(_, layout)| (port, layout))
+            })
+            .collect();
         let mut scalars = Vec::new();
         let mut errors = Vec::new();
         self.live_extents.clear();
@@ -86,7 +96,7 @@ impl Harness {
                 (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             let (mut atmosphere, mut render_mode, mut object) = (Vec::new(), Vec::new(), Vec::new());
             let backend: &dyn Backend = &self.backend;
-            let node_inputs = NodeInputs::new(inputs, backend, &generations);
+            let node_inputs = NodeInputs::new(inputs, backend, &generations).with_array_layouts(&layouts);
             let node_outputs = NodeOutputs::new(
                 outputs,
                 backend,
@@ -414,6 +424,93 @@ fn fluid_sort_particles_into_cells_runs_with_sorted_unwired() {
     let wired = run(&mut harness, true);
     assert!(wired.1.iter().any(|bin| !bin.is_empty()), "the fixture sorts live particles");
     assert_eq!(run(&mut harness, false), wired, "ranges and bin members do not depend on sorted being wired");
+}
+
+/// Matter points sort in place: ranges and order are byte-identical to sorting
+/// liquid particle records at the same positions, where a point is live exactly
+/// when its id is non-zero and its position finite. Wiring `sorted` for them is
+/// a named error, since it holds liquid particle records.
+#[test]
+fn fluid_sort_particles_into_cells_sorts_matter_points_in_place() {
+    use crate::node_graph::matter::MatterPoint;
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
+    let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
+    let mut rng = Rng(47);
+    let points: Vec<MatterPoint> = (0..3000u32)
+        .map(|i| {
+            let mut position: [f32; 3] = std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.9);
+            if i % 53 == 0 {
+                position[1] = f32::NAN;
+            }
+            if i % 71 == 0 {
+                position[2] = f32::INFINITY;
+            }
+            MatterPoint {
+                position,
+                id: if i % 9 == 4 { 0 } else { i + 1 },
+                velocity: [1.0, 2.0, 3.0],
+                volume_ratio: 1.0,
+                affine_y: [0.0, 0.0, 0.0, 1e-5],
+                ..MatterPoint::default()
+            }
+        })
+        .collect();
+    let particles: Vec<FluidParticle> = points
+        .iter()
+        .map(|p| {
+            let live = p.id != 0 && p.position.iter().all(|v| v.is_finite());
+            particle(p.position, if live { 0.02 } else { 0.0 }, p.id)
+        })
+        .collect();
+    let count = 2900;
+    let run = |harness: &mut Harness, input: Slot| {
+        let (ranges, ranges_buf) = harness.array::<CellRange>(&[], bins);
+        let (order, order_buf) = harness.array::<u32>(&[], points.len());
+        let count_slot = harness.scalar_input(count as f32);
+        let (_, errors) = harness.run(
+            &mut SortParticlesIntoCells::new(),
+            &[("particles", input), ("count", count_slot)],
+            &[("cell_ranges", ranges), ("order", order)],
+            &lattice.params(&[]),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        (read::<u8>(&ranges_buf, ranges_buf.size as usize), read::<u8>(&order_buf, order_buf.size as usize))
+    };
+    let (matter_input, _) = harness.array(&points, points.len());
+    let (particle_input, _) = harness.array(&particles, particles.len());
+    let matter = run(&mut harness, matter_input);
+    let liquid = run(&mut harness, particle_input);
+    let ranges: &[CellRange] = bytemuck::cast_slice(&liquid.0);
+    let live: u32 = ranges.iter().map(|r| r.count).sum();
+    assert!(live > 2000 && (live as usize) < count, "the fixture has live and dead points: {live}");
+    assert_eq!(matter, liquid, "matter points bin and order exactly as the equivalent liquid particles");
+
+    let (sorted, _) = harness.array::<FluidParticle>(&[], points.len());
+    let (ranges, _) = harness.array::<CellRange>(&[], bins);
+    let (_, errors) = harness.run(
+        &mut SortParticlesIntoCells::new(),
+        &[("particles", matter_input)],
+        &[("sorted", sorted), ("cell_ranges", ranges)],
+        &lattice.params(&[]),
+    );
+    assert!(errors.iter().any(|e| e.contains("sorted holds liquid particle records")), "{errors:?}");
+}
+
+/// A record with no position the sort can find is a named error.
+#[test]
+fn fluid_sort_particles_into_cells_rejects_records_without_a_position() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
+    let (input, _) = harness.array(&[CellRange { start: 0, count: 1 }], 1);
+    let (ranges, _) = harness.array::<CellRange>(&[], 512);
+    let (_, errors) = harness.run(
+        &mut SortParticlesIntoCells::new(),
+        &[("particles", input)],
+        &[("cell_ranges", ranges)],
+        &lattice.params(&[]),
+    );
+    assert!(errors.iter().any(|e| e.contains("position_radius") && e.contains("position and id")), "{errors:?}");
 }
 
 /// With `enabled` 0 the sort does nothing: after a changed input, every output
