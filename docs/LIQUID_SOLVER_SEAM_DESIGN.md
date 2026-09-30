@@ -458,7 +458,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P10 — Grid outputs (entry: the BUG-imy3 design approved)
 
-- **Entry state:** BUG-imy3's design names the ports it reads. P7a merged to main or the SWASH half waits on the branch.
+- **Entry state:** BUG-imy3's design names the ports it reads: GPU_WHITEWATER_DESIGN.md section 3.2 (What the whitewater reads), which builds this phase as its P1 (Grid outputs). P7a merged to main or the SWASH half waits on the branch.
 - **Read-back:** section 3.2 (Grid outputs); docs/ADDING_PRIMITIVES.md (codegen path).
 - **Deliverables:** `FACE_GRID_PORTS` on `node.matter_frame` and `node.liquid_frame`; atoms `node.matter_face_component` and `node.face_sample_component` (per-element gathers on the freeze codegen path, value-level `gpu_tests` against CPU-expected, fused-vs-unfused proofs); the Liquid Surface group's `level_set` outputs; `liquid_face_grid_layout` (I16); extent rules for the new arrays.
 - **Gate:** `scripts/gpu_proofs_gate.py` green; I9 covers the new arrays.

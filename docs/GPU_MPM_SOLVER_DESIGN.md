@@ -1567,7 +1567,7 @@ record types beyond `MatterDeformation`.
 
 ### P6 — Whitewater
 
-Superseded by BUG-imy3 (GPU whitewater, solver-agnostic) and LIQUID_SOLVER_SEAM_DESIGN.md P10 (Grid outputs).
+Superseded by BUG-imy3 (GPU whitewater, solver-agnostic), designed in [GPU_WHITEWATER_DESIGN.md](GPU_WHITEWATER_DESIGN.md), and LIQUID_SOLVER_SEAM_DESIGN.md P10 (Grid outputs).
 
 - **Entry state:** P4 go; the surface design's P8 whitewater path exists.
 - **Read-back:** D24; FLIP whitewater params in `WaterDamBreak.json`.
