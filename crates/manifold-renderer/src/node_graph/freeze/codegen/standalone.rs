@@ -472,6 +472,13 @@ pub fn generate_standalone(spec: &StandaloneKernelSpec<'_>) -> Result<String, Co
 /// (`read` inputs, `read_write` outputs), the body verbatim, and a 1D dispatch
 /// guarded on `dispatch_count`.
 ///
+/// Outputs named in `atomic_outputs` bind as `array<atomic<T>>` (integer `T`)
+/// and are never returned: the body `atomicAdd`s into `buf_<port>` (or
+/// `buf_out_<port>` when the name collides with an input) itself. The body
+/// returns the plain outputs only — one element, a `BufferOutputs` struct for
+/// ≥2, or nothing for a pure scatter. So an aliased pointwise output can carry
+/// an atomic side output (e.g. per-particle update + reaction accumulator).
+///
 /// Binding layout: `@binding(0)` uniform, then each Array input `read`, then each
 /// Array output `read_write`. Deterministic (PARAMS / port order), so the
 /// generated text is a stable pipeline-cache key.
@@ -519,11 +526,19 @@ pub(super) fn generate_standalone_buffer(
         // A buffer atom writes at least one storage array.
         return Err(CodegenError::NotFusable(FusionKind::Boundary));
     }
-    // ≥2 array outputs → the body returns a `BufferOutputs` struct the wrapper
+    // Atomic-accumulator outputs are never returned by the body: each is emitted
+    // as `array<atomic<T>>` and the body `atomicAdd`s into its global itself
+    // (scatter). Only the plain outputs are written by the wrapper at `[idx]`.
+    let is_atomic = |name: &str| atomic_outputs.contains(&name);
+    let plain_count = array_outputs
+        .iter()
+        .filter(|o| !is_atomic(o.name.as_ref()))
+        .count();
+    // ≥2 plain outputs → the body returns a `BufferOutputs` struct the wrapper
     // unpacks (the buffer analogue of the texture multi-output BodyOutputs path);
     // 1 keeps the direct `buf_out[idx] = body(...)` write — byte-identical for
-    // every existing single-output atom.
-    let multi_output = array_outputs.len() > 1;
+    // every existing single-output atom; 0 (pure scatter) is a bare `body(...)`.
+    let multi_output = plain_count > 1;
 
     // Resolve element type names (inputs then outputs) so struct naming is stable
     // and a same-typed in/out pair dedups to one struct.
@@ -555,17 +570,14 @@ pub(super) fn generate_standalone_buffer(
             format!("buf_{name}")
         }
     };
-    // Atomic-accumulator output (scatter, single-output only): emitted as
-    // `array<atomic<u32>>` and written by the body via `atomicAdd` on the global
-    // itself, not the wrapper's `[idx] = body(...)`. WGSL atomics are integer-only.
-    let out_is_atomic = !multi_output && atomic_outputs.contains(&array_outputs[0].name.as_ref());
-    if out_is_atomic && out_infos[0].1 != "u32" && out_infos[0].1 != "i32" {
-        return Err(CodegenError::AtomicNonInteger { ty: out_infos[0].1.clone() });
+    // WGSL atomics are integer-only.
+    for (name, ety) in &out_infos {
+        if is_atomic(name) && ety != "u32" && ety != "i32" {
+            return Err(CodegenError::AtomicNonInteger { ty: ety.clone() });
+        }
     }
-    // Multi-output atomic isn't a shape any atom needs yet.
-    if multi_output && array_outputs.iter().any(|o| atomic_outputs.contains(&o.name.as_ref())) {
-        return Err(CodegenError::NotFusable(FusionKind::Boundary));
-    }
+    let plain_outputs: Vec<&(&str, String)> =
+        out_infos.iter().filter(|(name, _)| !is_atomic(name)).collect();
 
     let mut out = String::new();
 
@@ -625,7 +637,7 @@ pub(super) fn generate_standalone_buffer(
         binding += 1;
     }
     for (name, ety) in &out_infos {
-        let storage_ty = if out_is_atomic {
+        let storage_ty = if is_atomic(name) {
             format!("atomic<{ety}>")
         } else {
             ety.clone()
@@ -640,11 +652,12 @@ pub(super) fn generate_standalone_buffer(
     }
     out.push('\n');
 
-    // Multi-output body returns a struct with one field per output array (in
-    // declaration order); the wrapper writes each `buf_<port>[idx] = result.<port>`.
+    // Multi-output body returns a struct with one field per PLAIN output array
+    // (in declaration order); the wrapper writes each
+    // `buf_<port>[idx] = result.<port>`. Atomic outputs get no field.
     if multi_output {
         out.push_str("struct BufferOutputs {\n");
-        for (name, ety) in &out_infos {
+        for (name, ety) in &plain_outputs {
             writeln!(out, "    {name}: {ety},").unwrap();
         }
         out.push_str("}\n\n");
@@ -698,24 +711,23 @@ pub(super) fn generate_standalone_buffer(
     for tex in &optional_textures {
         args.push(format!("params.use_{}", tex.name));
     }
-    if out_is_atomic {
-        // Scatter: the body computes its own target cell and `atomicAdd`s into
-        // the accumulator global — no coincident single-element write.
-        writeln!(out, "    body({});", args.join(", ")).unwrap();
-    } else if multi_output {
-        // The body returns one element per output array; unpack into each.
-        writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
-        for (name, _) in &out_infos {
-            writeln!(out, "    {}[idx] = result.{name};", out_global(name)).unwrap();
+    // Atomic outputs are written by the body itself (it computes its own target
+    // cells and `atomicAdd`s into the accumulator globals); the wrapper writes
+    // only the plain outputs, coincident at `[idx]`.
+    match plain_outputs.as_slice() {
+        [] => {
+            writeln!(out, "    body({});", args.join(", ")).unwrap();
         }
-    } else {
-        writeln!(
-            out,
-            "    {}[idx] = body({});",
-            out_global(out_infos[0].0),
-            args.join(", ")
-        )
-        .unwrap();
+        [(name, _)] => {
+            writeln!(out, "    {}[idx] = body({});", out_global(name), args.join(", ")).unwrap();
+        }
+        _ => {
+            // The body returns one element per plain output; unpack into each.
+            writeln!(out, "    let result = body({});", args.join(", ")).unwrap();
+            for (name, _) in &plain_outputs {
+                writeln!(out, "    {}[idx] = result.{name};", out_global(name)).unwrap();
+            }
+        }
     }
     out.push_str("}\n");
 

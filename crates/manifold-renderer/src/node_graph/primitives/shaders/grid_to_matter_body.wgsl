@@ -16,6 +16,12 @@
 // removed. Tangential motion is untouched and no relative speed is added.
 // `bodies`, `shapes` and `atlas` are gathered; sampling is
 // matter_collider.wgsl's.
+//
+// Reaction (D30): the momentum a point loses there, m·v_n·n with
+// m = V0·density, goes to a dynamic body (inv_mass > 0) as the same four
+// terms node.matter_body_reaction adds per node, into the same 16 words of
+// `reaction_out` (atomic; `reaction` aliases it and is never read). Only
+// when dynamic_count > 0, which run() clears without a covering slot.
 fn g2m_finite3(v: vec3<f32>) -> bool {
     let e = vec3<u32>(bitcast<u32>(v.x), bitcast<u32>(v.y), bitcast<u32>(v.z)) & vec3<u32>(0x7f800000u);
     return all(e != vec3<u32>(0x7f800000u));
@@ -24,6 +30,35 @@ fn g2m_finite3(v: vec3<f32>) -> bool {
 fn matter_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
+}
+
+fn g2m_hash(v: u32) -> u32 {
+    var x = v;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return x;
+}
+
+// floor(x + u) with the carry in integers: an f32 sum x + u would round first
+// and bias every word upward by about |x|·2^-24.
+fn g2m_encode(x: f32, key: u32, slot: u32) -> i32 {
+    let whole = floor(x);
+    let fraction = u32((x - whole) * 16777216.0);
+    let carry = (fraction + (g2m_hash(key ^ slot) >> 8u)) >> 24u;
+    return i32(whole) + i32(carry);
+}
+
+fn g2m_reaction_add(base: u32, value: vec3<f32>, key: u32) {
+    for (var c = 0u; c < 3u; c = c + 1u) {
+        let word = base + c;
+        let encoded = g2m_encode(value[c], key, word);
+        if encoded != 0 {
+            atomicAdd(&buf_reaction_out[word], encoded);
+        }
+    }
 }
 
 fn body(
@@ -42,6 +77,12 @@ fn body(
     cohesion: f32,
     active_count: i32,
     body_count: i32,
+    density: f32,
+    momentum_unit: f32,
+    tick_index: i32,
+    substep_in_tick: i32,
+    substeps_per_tick: i32,
+    dynamic_count: i32,
 ) -> Element {
     var p = e_points;
     if p.id == 0u || !g2m_finite3(p.position) {
@@ -96,6 +137,12 @@ fn body(
     let c2 = k * b2;
     p.velocity = liveliness * (p.velocity + flip_delta) + (1.0 - liveliness) * v_pic;
     p.position = p.position + step_dt * v_pic;
+    let mass = p.affine_y.w * density;
+    let counts = 16777216.0 / momentum_unit;
+    let weight = f32(substep_in_tick) / f32(max(substeps_per_tick, 1));
+    // Salted apart from node.matter_body_reaction's node keys, which share
+    // the words.
+    let key = g2m_hash(idx ^ 0x9e3779b9u ^ g2m_hash(u32(tick_index) * 4096u + u32(substep_in_tick)));
     for (var b = 0; b < body_count; b = b + 1) {
         let bd = buf_bodies[u32(b)];
         let shape_index = i32(bd.accel_shape.w);
@@ -126,6 +173,17 @@ fn body(
         let v_n = dot(v_rel, normal);
         if v_n < 0.0 {
             p.velocity = p.velocity - v_n * normal;
+            let inv_mass = bd.position_inv_mass.w;
+            if dynamic_count > 0 && inv_mass > 0.0 {
+                let impulse = mass * v_n * normal;
+                let dv = inv_mass * impulse * counts;
+                let dl = inv_mass * cross(p.position - centre, impulse) / cell_size * counts;
+                let words = u32(b) * 16u;
+                g2m_reaction_add(words, dv, key);
+                g2m_reaction_add(words + 3u, weight * dv, key);
+                g2m_reaction_add(words + 6u, dl, key);
+                g2m_reaction_add(words + 9u, weight * dl, key);
+            }
         }
     }
     // D3: tension-free water (Cohesion 0) stores no expansion; cohesive water
