@@ -2,7 +2,7 @@
 
 <!-- index: Research record for a free-surface liquid pressure solve built from FFTs: capacitance unknowns on a one-cell air collar, whole-box FFT/DCT solves, and a surface-FFT |k| helper that keeps the pass count flat as the grid grows. Measured 2D/3D/GPU results, the rejected routes with their numbers (Dodd-Ferrante air split, naive masked FFT helper, warm start, edge band), the math found on the way (split ringing, waterbed law), literature status, and what is owed before engine work. -->
 
-**Status: RESEARCH · 2026-09-30 · Claude + Peter, reviewed by Astra (Codex). Promising, not proven in the engine. Owed: per-piece surface helper, wall cosine transform, Rust MPSGraph benchmark against the MPM path. Tracker: BUG-wsim (FFT pressure split research).**
+**Status: RESEARCH · 2026-09-30 · Claude + Peter, reviewed by Astra (Codex). Beats multigrid ~1.5× on MPM's Dam Break in Python/MLX; not in the engine. Owed: per-surface helper, solid-object test, Rust benchmark. Tracker: BUG-wsim (FFT pressure split research).**
 
 ## The result
 
@@ -41,6 +41,38 @@ Pass counts to a relative tolerance of 1e-6 (2D) or 1e-5/1e-6 (3D); "exact" mean
 
 GPU cost per pass (MLX, M-series, float32): 64³ 0.77 ms, 128³ 2.15 ms, 256³ 13.3 ms including scatter and sync. Pure FFT round trip: 64³ 0.42 ms, 128³ 1.30 ms, 256³ 4.69 ms; the y-mirror used in place of a DCT doubles the 256³ cost. Projection for the engine with a real DCT and GPU-side Krylov: about 1.5 ms per pass at 128³, so about 7 ms per step at 1e-3 tolerance (about 5 passes) once the per-piece helper holds the count flat. Estimate, not measured.
 
+## Head-to-head on MPM's Dam Break
+
+Scene from the MPM cost probe, see BUG-u3ov (MPM solver budget): 64³, 4 m box with walls on all six sides, 3-cell pool plus block x 10..29, y 0..33, z 4..60, 8 particles per cell (353,664). PIC/FLIP with this solve, all on the GPU in MLX: walls by cosine transforms built from same-length FFTs, the collar as a full-grid mask, fixed-pass right-preconditioned GMRES with its small rotations kept on the GPU, one sync per display frame.
+
+- 2 steps per frame, 12 passes: 45–47 ms per frame (per step: particles to grid 4.9 ms, pressure 11.7 ms, back to particles 6.1 ms). MPM measured 54.5 ms per frame natively.
+- 12 passes leave up to 73% leftover error in the violent phase; 24 passes (82 ms) leave at most 3%.
+- Still pool, 20 cells deep: fastest particle under 0.5 mm/s after 2 s. MPM fails this look gate.
+
+Race against multigrid-preconditioned CG (McAdams, Sifakis, Teran 2010 style: damped Jacobi 2+2, trilinear prolongation and its transpose, coarse cell water if any child is) on 7 saved Dam Break pressure problems, same GPU, float32, both fused with `mx.compile`:
+
+| Leftover error (median) | FFT surface solve | Multigrid CG |
+|---|---|---|
+| ~1e-1 | 16 passes, 11.6 ms | 4 iterations, 16.0 ms |
+| ~6e-3 | 24 passes, 20.0 ms | 8 iterations, 31.3 ms |
+| ~2.5e-4 | 32 passes, 30.8 ms | 12 iterations, 47.2 ms |
+
+Headroom on our side: the MLX cosine transform costs about twice a real one, and the per-surface helper (below) targets about 12 passes where splashes now need 32. Multigrid's headroom: a better smoother and a tuned coarse solve.
+
+## Why splashes cost more passes
+
+The column helper sees every surface from above. Its within-column term (2/h) treats any variation that cancels inside a column as grid-scale, so a smooth ripple running up a vertical wall or around a drop gets the wrong scale, and the mismatch grows as 1/(|k|h) (Astra's derivation). Surfaces stacked in one column (a drop over the pool) collapse the same way.
+
+Oracle test (`oracle_blocks.py`): solving each surface patch exactly on its own gives 12, 12 and 11 passes at 20³, 28³ and 36³ on the drops case, while the column helper grows 16 → 18 → 25. So the growth is the helper's fault. Coupling between separate surfaces is a flat cost: about 4 dominant patterns for a far drop and 10–12 for a close one, constant with resolution. Coarse corrections from per-piece means and slopes, and even from the true coupling eigenvectors, did not help the helper.
+
+Failed helpers: layers per surface crossing (no gain); facing-direction groups (worse, since they lump opposite walls together); surface-Laplacian inverse (invalid test, because the collar face-graph splits into 5–24 disconnected pieces on stair-stepped surfaces); spray removal of pieces under 64 cells (mean 27.2 → 25.8 at 128³). The fix is a helper that follows each surface from its own side, with opposing sheets kept separate.
+
+## Unifying with MPM
+
+Augmented MPM (Stomakhin et al. 2014) splits each material's stress into a volumetric part and a shape part. The shape part (friction, elasticity, snow plasticity) stays as explicit per-particle stress. The volumetric part, which is what forces water MPM into ~34 substeps, becomes one implicit pressure-style solve on the shared grid, and that is where this solve fits. Compressible snow adds a per-cell diagonal term that the helper has not been tested with, and stiff solids still limit the step through their shape stress. The MPM lane keeps its volumetric response separable from the deviatoric stress for this. Its grid is node-based, so plugging in needs a node-to-face transfer.
+
+Solids inside the water: the same collar trick on the solid boundary with a no-flow condition. The planar symbol inverts, so that helper divides by |k| where the air one multiplies. Untested.
+
 ## Rejected routes, with the numbers that killed them
 
 - **Dodd–Ferrante constant-coefficient split with air as a real phase (one FFT per step).** Algebra exact except the extrapolated pressure p̃ = 2pⁿ − pⁿ⁻¹. At show-speed steps (32 per wave swing) the motion error is 102–144% at 100:1 and 1000:1; under 5% needs about 400 steps per swing at 100:1. Usable only near a 5:1 density ratio (13% at 32 steps, 3% at 64), which makes it a liquid-in-liquid tool (oil on water, lava lamp, ink layers), not water in air.
@@ -72,13 +104,14 @@ No paper found that kills the idea; thin sheets, splash crowns and droplet cloud
 
 ## Owed before any engine work
 
-1. **Per-piece surface helper.** Treat each connected piece of water as its own surface, so drops and splash fragments stop raising the count. Close paired surfaces (thin sheets) need explicit coupling.
-2. **Side walls.** A cosine transform in x and z; the prototypes wrap around.
-3. **Rust benchmark on the engine FFT.** Extend the MPSGraph plan to 3D, add the cosine-transform wrap, run the Krylov loop GPU-side, and time a pressure solve at 128³ and 256³ against the existing MPM path on the same scene. This is the only way to make "faster" a real claim.
+1. **Per-surface helper.** Follow each surface from its own side (overlapping patches, opposing sheets separate), aiming at the oracle's ~12 passes on splashes.
+2. **Solid object in the tank.** A floating box: pass count and correct bobbing.
+3. **Rust benchmark on the engine FFT.** Extend the MPSGraph plan to 3D with a real cosine transform, run the fixed-pass loop GPU-side, and time the Dam Break against the MPM path and a multigrid baseline.
 4. **Integration shape.** It would replace MPM's spring pressure for water inside the GPU MPM pipeline (`docs/GPU_MPM_SOLVER_DESIGN.md`), keeping particles, transfers, the repeat region, meshing and coupling. MPM stores velocity at grid corners and this solve is face-based; the earlier `mac_*` face-based prototype recorded in that doc is the starting point. The FFT would be new primitives: section 2.5 (primitive audit) of `docs/DECOMPOSING_GENERATORS.md` first, and it goes on the freeze exemption list because it is not a per-element atom.
 
 ## Where the evidence lives
 
 - Viewer (2D and 3D runs, pass-count charts, the 128³ GPU splash): https://claude.ai/artifact/1nvDRAGrQTTVYbm8KTEA6H
+- Dam Break scripts (not yet attached): `dambreak_mlx.py` (sim, both solvers), `mlx_dct.py` (GPU cosine transform), `bench_solvers.py` (the race), `oracle_blocks.py` (per-patch oracle).
 - Research scripts (Python; numpy/scipy, MLX for GPU) are published with that viewer under `scripts/`: `split2d.py` (air split model), `capacitance.py` (2D collar solve), `freesurf_sim.py` (2D tank), `cap3d.py` (3D solve), `sim3d_flip.py` / `sim3d_mix.py` (3D particle demos, CPU), `gpu_cap3d.py` / `gpu_breakdown.py` (GPU timings), `sim3d_mlx.py` (full GPU particle step).
 - Numbers and the running log: BUG-wsim (FFT pressure split research) notes.
