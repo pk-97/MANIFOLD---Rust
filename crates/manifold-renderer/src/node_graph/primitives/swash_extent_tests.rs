@@ -229,10 +229,12 @@ fn plan_for(shape: PressureShape) -> (Graph, ExecutionPlan) {
     (graph, plan)
 }
 
+/// Every shape the GPU proofs run: both lattices, every pass count of the
+/// pass-count trend.
 #[test]
 fn fft_water_pressure_arrays_cover_every_dispatch() {
-    for n in [64, 128] {
-        let shape = PressureShape::at(n);
+    for (n, passes) in [64, 128].into_iter().flat_map(|n| super::swash_preset::TREND_PASSES.map(|p| (n, p))) {
+        let shape = PressureShape { passes, ..PressureShape::at(n) };
         let (graph, plan) = plan_for(shape);
         assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
         let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
@@ -263,6 +265,19 @@ fn fft_water_pressure_region_is_one_pass() {
     .collect();
     want.sort();
     assert_eq!(body, want);
+}
+
+/// Nothing in the solve fuses yet. The design's two pairs, cosine_spectrum →
+/// cosine_poisson_divide and cosine_spectrum → cosine_surface_scale, are
+/// refused because cosine_spectrum's output is sized by its lattice params,
+/// which the fused count anchor cannot express: BUG-u8io
+/// (fft-water-fusion-param-capacity). When this fails, fusion has learned it:
+/// replace this with a frozen-against-unfrozen run of fft_water_matches_reference.
+#[test]
+fn fft_water_pressure_has_no_fused_region() {
+    let report = crate::node_graph::fusion_report(&pressure_def(PressureShape::at(64)), &registry());
+    let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
+    assert!(fused.is_empty(), "the pressure solve now fuses {fused:?}; prove the frozen solve matches the unfrozen one");
 }
 
 /// `tests/fixtures/presets/fft_water_pressure.json` is the 64³ graph.

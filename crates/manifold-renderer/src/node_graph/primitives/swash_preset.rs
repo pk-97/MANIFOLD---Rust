@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 /// The box is 4 m on its longest side; the lowest wave it holds is 2π / 4 m.
 pub(super) const BOX_METRES: f64 = 4.0;
 
+/// Pass counts the GPU pass-count trend runs; the CPU size proof covers each.
+pub(super) const TREND_PASSES: [usize; 4] = [12, 16, 24, 32];
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PressureShape {
     /// Cells per side of the cubic lattice.
