@@ -2911,7 +2911,8 @@ mod tests {
 
     /// Temporary array reuse around and inside a nest. Every array a region
     /// step touches keeps its storage for the whole outer region, every
-    /// iteration of both levels. Arrays before and after the nest still reuse
+    /// iteration of both levels, and the arrays the region holds hand their
+    /// storage on once it ends. Arrays before and after the nest still reuse
     /// each other.
     #[test]
     fn nested_region_arrays_keep_storage_across_iterations() {
@@ -2926,21 +2927,16 @@ mod tests {
         let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
         let reused = lifetimes::assert_shared_roots_never_overlap(&graph, &plan, &planned);
         assert!(reused >= 3, "the chains before, inside and after the nest reuse: {reused}");
-        // No array a region step touches ever hands its storage on.
+        // The chain after the nest takes storage the region held.
         let (first, last) = (region.steps[0], *region.steps.last().unwrap());
-        let touched: AHashSet<_> = region.steps.iter()
-            .flat_map(|&s| plan.steps()[s].inputs.iter().chain(&plan.steps()[s].outputs).map(|(_, r)| *r))
-            .filter(|r| planned.storage.contains_key(r))
+        let held_roots: AHashSet<_> = region.held_resources.iter()
+            .filter_map(|r| planned.storage.get(r).map(|s| s.root))
             .collect();
-        for step in &plan.steps()[last + 1..] {
-            for (_, resource) in &step.outputs {
-                let Some(storage) = planned.storage.get(resource) else { continue };
-                assert!(
-                    touched.iter().all(|t| planned.storage[t].root != storage.root),
-                    "{resource:?} after the nest takes storage a region array still names"
-                );
-            }
-        }
+        let after_in_held = plan.steps()[last + 1..].iter()
+            .flat_map(|step| &step.outputs)
+            .filter(|(_, r)| planned.storage.get(r).is_some_and(|s| held_roots.contains(&s.root)))
+            .count();
+        assert!(after_in_held > 0, "no array after the nest reuses storage the region released");
         // A region array that reuses storage takes it from before the region.
         let mut inside = 0;
         for step in &plan.steps()[first..=last] {

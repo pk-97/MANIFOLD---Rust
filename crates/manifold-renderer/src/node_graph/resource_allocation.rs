@@ -199,7 +199,8 @@ pub enum ArrayAllocationAction {
         root: ResourceId,
     },
     /// Bind to the same physical slot for either declared in-place IO or
-    /// temporary reuse after the prior logical resource's `free_after` step.
+    /// temporary reuse after the prior logical resource's `free_after` step
+    /// or, for an array a substep region holds, after the region ends.
     Alias {
         resource: ResourceId,
         input: ResourceId,
@@ -303,8 +304,16 @@ pub fn plan_array_allocations(
         if resized || grows { excluded_resources.insert(ResourceId(index as u32)); }
     }
     let mut reusable: ReusableBuckets = AHashMap::default();
+    // A substep region holds every array its steps read for the whole repeat,
+    // so none of them is in a step's `free_after`; they die when the region's
+    // last step ends. An outer region holds what its inner regions read.
+    let region_end: AHashMap<usize, &[ResourceId]> = plan
+        .substep_regions()
+        .iter()
+        .filter_map(|region| Some((*region.steps.last()?, region.held_resources.as_slice())))
+        .collect();
 
-    for step in plan.steps() {
+    for (index, step) in plan.steps().iter().enumerate() {
         let Some(node_inst) = graph.get_node(step.node) else {
             continue;
         };
@@ -527,7 +536,8 @@ pub fn plan_array_allocations(
         // Return only ordinary temporary roots after all outputs of this step
         // have been assigned. This ordering prevents same-step input/output
         // reuse, and roots still used by a current output remain unavailable.
-        for &resource in &step.free_after {
+        let region_frees = region_end.get(&index).copied().unwrap_or_default();
+        for &resource in step.free_after.iter().chain(region_frees) {
             let Some(entry) = storage.get(&resource).copied() else {
                 continue;
             };
