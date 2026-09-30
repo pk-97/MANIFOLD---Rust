@@ -117,11 +117,11 @@ struct Solver {
     frames: i64,
 }
 
-fn node_named(graph: &Graph, name: &str) -> NodeInstanceId {
+pub(super) fn node_named(graph: &Graph, name: &str) -> NodeInstanceId {
     graph.nodes().find(|n| n.node_id.as_str() == name).map(|n| n.id).unwrap_or_else(|| panic!("no node {name}"))
 }
 
-fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+pub(super) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
     let step = plan.steps().iter().find(|s| s.node == node).expect("node compiled");
     step.outputs.iter().find(|(name, _)| *name == port).map(|&(_, r)| r).expect("output port")
 }

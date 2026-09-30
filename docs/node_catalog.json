@@ -17004,74 +17004,84 @@
           "type": "float"
         },
         {
-          "default": "3",
-          "label": "Pool Height (cells)",
-          "name": "pool_cells",
+          "default": "5",
+          "label": "Pool Height (half cells)",
+          "name": "pool_sites",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
         },
         {
           "default": "0",
-          "label": "Box Min X (cell)",
-          "name": "column_x0",
+          "label": "Box Min X (half cell)",
+          "name": "box_x0",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
         },
         {
           "default": "0",
-          "label": "Box Max X (cell)",
-          "name": "column_x1",
+          "label": "Box Max X (half cell)",
+          "name": "box_x1",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
         },
         {
           "default": "0",
-          "label": "Box Min Y (cell)",
-          "name": "column_y0",
+          "label": "Box Min Y (half cell)",
+          "name": "box_y0",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
         },
         {
           "default": "0",
-          "label": "Box Max Y (cell)",
-          "name": "column_y1",
+          "label": "Box Max Y (half cell)",
+          "name": "box_y1",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
         },
         {
           "default": "0",
-          "label": "Box Min Z (cell)",
-          "name": "column_z0",
+          "label": "Box Min Z (half cell)",
+          "name": "box_z0",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
         },
         {
           "default": "0",
-          "label": "Box Max Z (cell)",
-          "name": "column_z1",
+          "label": "Box Max Z (half cell)",
+          "name": "box_z1",
           "range": [
             "0",
-            "1024"
+            "2048"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Jitter",
+          "name": "jitter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         },
         {
           "default": "0",
@@ -17094,7 +17104,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Place a liquid's starting particles at rest: every lattice cell below pool_cells, then the box of cells [column_x0, x1) × [max(column_y0, pool), y1) × [column_z0, z1), in lattice order, eight particles per cell, one per half-cell jittered by a hash of seed. The radius is the sphere of an eighth of a cell; ids count from 1. Holds max_capacity slots; slots past the fill are unused (radius 0), and a fill larger than the capacity is cut short. count is the number placed.",
+      "purpose": "Place a liquid's starting particles at rest, one per half-cell site (site j at (1/4 + j/2) cells along each axis, 2·nodes sites per axis): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. Holds max_capacity slots; slots past the fill are unused (radius 0), and a fill larger than the capacity is cut short. count is the number placed.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Places the liquid's starting particles: a pool on the floor plus one block of water.",

@@ -5,12 +5,18 @@
 
 use ahash::AHashMap;
 
-use super::swash_preset::{PressureShape, pressure_def};
+use super::sort_particles_into_cells::range_storage_bytes;
+use super::swash_preset::{PressureShape, WaterScene, pressure_def, water_def};
 use crate::node_graph::effect_node::ParamValues;
+use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle, bin_counts};
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
 use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, ResourceId, compile};
+
+const PARTICLE: u64 = std::mem::size_of::<FluidParticle>() as u64;
+const FACE: u64 = std::mem::size_of::<FaceSample>() as u64;
+const RANGE: u64 = std::mem::size_of::<CellRange>() as u64;
 
 fn registry() -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
@@ -41,22 +47,38 @@ struct Sizes<'a> {
     bytes: AHashMap<ResourceId, u64>,
 }
 
+/// The sort's bin grid from its params, as its run() computes it.
+fn sort_bins(params: &ParamValues) -> [u32; 3] {
+    let size = ["size_x", "size_y", "size_z"].map(|name| match params.get(name) {
+        Some(ParamValue::Float(v)) => *v,
+        other => panic!("param {name} is {other:?}"),
+    });
+    let cell = match params.get("cell_size") {
+        Some(ParamValue::Float(v)) => *v,
+        other => panic!("param cell_size is {other:?}"),
+    };
+    bin_counts(size, cell)
+}
+
 impl Sizes<'_> {
-    fn check(&self, shape: PressureShape) -> usize {
+    /// `particles` is the liquid's particle count; 0 for the bare solve.
+    fn check(&self, shape: PressureShape, particles: u64) -> usize {
         let names: AHashMap<_, _> = self.graph.nodes().map(|n| (n.id, n)).collect();
-        // Provided arrays: krylov_basis allocates them in run(), sized from its params.
+        // Provided arrays are allocated in run(), sized from params:
+        // krylov_basis's vectors, the fill's particles, the sort's ranges.
         let mut provided = AHashMap::default();
         for step in self.plan.steps() {
             let node = names[&step.node];
-            if node.node.type_id().as_str() == "node.krylov_basis" {
-                let row = param(&node.params, "row_length") * 4;
-                for (port, resource) in &step.outputs {
-                    match *port {
-                        "basis" => provided.insert(*resource, row * (param(&node.params, "passes") + 1)),
-                        "current" => provided.insert(*resource, row),
-                        _ => None,
-                    };
-                }
+            let p = &node.params;
+            for (port, resource) in &step.outputs {
+                let bytes = match (node.node.type_id().as_str(), *port) {
+                    ("node.krylov_basis", "basis") => param(p, "row_length") * 4 * (param(p, "passes") + 1),
+                    ("node.krylov_basis", "current") => param(p, "row_length") * 4,
+                    ("node.liquid_fill", "particles") => param(p, "max_capacity") * PARTICLE,
+                    ("node.sort_particles_into_cells", "cell_ranges") => range_storage_bytes(sort_bins(p)),
+                    _ => continue,
+                };
+                provided.insert(*resource, bytes);
             }
         }
         let mut checked = 0;
@@ -81,8 +103,67 @@ impl Sizes<'_> {
             let row = shape.row_length() as u64 * 4;
             let entries = shape.capacity as u64;
             let planes = shape.planes() as u64 * 4;
+            let side = shape.n as u64;
+            let faces = (side + 1).pow(3) * FACE;
+            let ranges = side.pow(3) * RANGE;
+            let particle_bytes = particles * PARTICLE;
+            let on_lattice = || assert_eq!(lattice(p), [side; 3], "{} is off the lattice", node.node_id.as_str());
             match ty {
-                "test.value_source" | "test.value_sink" | "system.final_output" => continue,
+                "test.value_source" | "test.value_sink" | "test.liquid_sink" | "system.final_output" => continue,
+                "node.liquid_fill" => {
+                    on_lattice();
+                    assert_eq!(param(p, "max_capacity"), particles, "the fill holds every particle it places");
+                    covers("particles", particle_bytes);
+                }
+                "node.liquid_feedback" => {
+                    for port in ["in", "seed", "out"] {
+                        covers(port, particle_bytes);
+                    }
+                }
+                "node.sort_particles_into_cells" => {
+                    assert_eq!(sort_bins(p), [shape.n as u32; 3], "the sort bins by the lattice's cells");
+                    covers("particles", particle_bytes);
+                    covers("sorted", particle_bytes);
+                    // Nothing reads the order, so the plan may leave it unbound.
+                    covers_if_bound("order", particles * 4);
+                    covers("cell_ranges", ranges);
+                }
+                "node.cells_with_particles" => {
+                    on_lattice();
+                    covers("cell_ranges", ranges);
+                    covers("out", cells);
+                }
+                "node.particles_to_faces" => {
+                    on_lattice();
+                    covers("sorted", particle_bytes);
+                    covers("cell_ranges", ranges);
+                    covers("out", faces);
+                }
+                "node.extend_faces" | "node.face_gravity" => {
+                    on_lattice();
+                    covers("faces", faces);
+                    covers("out", faces);
+                }
+                "node.face_divergence" => {
+                    on_lattice();
+                    covers("faces", faces);
+                    covers("water", cells);
+                    covers("out", cells);
+                }
+                "node.subtract_pressure" => {
+                    on_lattice();
+                    covers("faces", faces);
+                    covers("pressure", cells);
+                    covers("water", cells);
+                    covers("out", faces);
+                }
+                "node.faces_to_particles" => {
+                    on_lattice();
+                    covers("particles", particle_bytes);
+                    covers("out", particle_bytes);
+                    covers("faces", faces);
+                    covers("old", faces);
+                }
                 "node.collar_cells" => {
                     covers("water", cells);
                     covers("out", cells);
@@ -239,9 +320,41 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
         assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
         let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
-        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(shape);
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0);
         assert!(checked > 60, "checked only {checked} nodes at {n}³");
     }
+}
+
+/// Every running scene the GPU proofs and probes run, at both lattices,
+/// before any GPU run of it: each step's particle, face and cell arrays and
+/// its solve.
+#[test]
+fn fft_water_scenes_cover_every_dispatch() {
+    let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
+    for (n, scene) in [64, 128].into_iter().flat_map(|n| scenes.map(|at| (n, at(n)))) {
+        let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
+        let plan = compile(&graph).expect("water def compiles");
+        assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
+        let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
+        let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
+        assert!(checked > 150, "checked only {checked} nodes at {n}³");
+    }
+}
+
+/// The fill is the engine's: its site rule on the engine's boxes.
+#[test]
+fn fft_water_dam_break_fill_matches_the_engine_boxes() {
+    let at64 = WaterScene::dam_break(64);
+    assert_eq!((at64.pool_sites(), at64.box_sites()), (5, [[5, 43], [5, 67], [8, 120]]));
+    assert_eq!(at64.particles(), 128 * 5 * 128 + 38 * 62 * 112);
+    let at128 = WaterScene::dam_break(128);
+    assert_eq!((at128.pool_sites(), at128.box_sites()), (10, [[10, 86], [10, 133], [16, 240]]));
+    // The still pool is 1 m of floor and no box; the falling block is 1 m on a side.
+    let pool = WaterScene::still_pool(64);
+    assert_eq!((pool.pool_sites(), pool.particles()), (32, 128 * 32 * 128));
+    let block = WaterScene::free_fall(64);
+    assert_eq!((block.pool_sites(), block.particles()), (0, 32 * 32 * 32));
 }
 
 /// The Krylov region holds exactly one pass: the helper, the box solve, the

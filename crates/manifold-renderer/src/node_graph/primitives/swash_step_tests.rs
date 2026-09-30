@@ -441,19 +441,21 @@ fn cpu_fill_hash(x: u32) -> u32 {
 #[test]
 fn swash_liquid_fill_places_pool_then_box() {
     let mut harness = Harness::new();
-    let (pool, column, seed) = (1u32, [[1u32, 4], [0, 4], [2, 9]], 7u32);
-    // 24 pool cells (6 × 1 × 4) and 18 box cells (3 × 3 × 2), plus 5 spare slots.
-    let capacity = 8 * (24 + 18) + 5;
+    // Sites are half cells: a 12 × 10 × 8 site lattice.
+    let (pool, sites, seed, jitter) = (1u32, [[2u32, 8], [0, 4], [3, 9]], 7u32, 0.5f32);
+    // 96 pool sites (12 × 1 × 8) and 90 box sites (6 × 3 × 5), plus 5 spare slots.
+    let capacity = 96 + 90 + 5;
     let out = harness.array::<FluidParticle>(&[], 1);
     let count = harness.scalar();
     let step = lattice(&[
-        ("pool_cells", pool as f32),
-        ("column_x0", column[0][0] as f32),
-        ("column_x1", column[0][1] as f32),
-        ("column_y0", column[1][0] as f32),
-        ("column_y1", column[1][1] as f32),
-        ("column_z0", column[2][0] as f32),
-        ("column_z1", column[2][1] as f32),
+        ("pool_sites", pool as f32),
+        ("box_x0", sites[0][0] as f32),
+        ("box_x1", sites[0][1] as f32),
+        ("box_y0", sites[1][0] as f32),
+        ("box_y1", sites[1][1] as f32),
+        ("box_z0", sites[2][0] as f32),
+        ("box_z1", sites[2][1] as f32),
+        ("jitter", jitter),
         ("seed", seed as f32),
         ("max_capacity", capacity as f32),
     ]);
@@ -463,33 +465,32 @@ fn swash_liquid_fill_places_pool_then_box() {
     let placed = capacity - 5;
     assert!(scalars.iter().any(|(s, v)| *s == count && *v == ParamValue::Float(placed as f32)), "{scalars:?}");
     let got: Vec<FluidParticle> = read(&harness.buffer(out.0), capacity);
-    // The box clipped above the pool and to the lattice: x 1..4, y 1..4, z 2..4.
+    // The box clipped above the pool and to the lattice: x 2..8, y 1..4, z 3..8.
     let mut cells: Vec<[u32; 3]> = Vec::new();
-    for z in 0..N[2] as u32 {
-        for x in 0..N[0] as u32 {
+    for z in 0..2 * N[2] as u32 {
+        for x in 0..2 * N[0] as u32 {
             cells.push([x, 0, z]);
         }
     }
-    for z in 2..4 {
+    for z in 3..8 {
         for y in 1..4 {
-            for x in 1..4 {
+            for x in 2..8 {
                 cells.push([x, y, z]);
             }
         }
     }
-    assert_eq!(cells.len() * 8, placed);
+    assert_eq!(cells.len(), placed);
     for (i, g) in got.iter().enumerate() {
         if i >= placed {
             assert_eq!(*g, FluidParticle::default(), "slot {i} past the fill is unused");
             continue;
         }
-        let c = cells[i / 8];
-        let sub = i as u32 % 8;
+        let s = cells[i];
         let key = (i as u32).wrapping_mul(3).wrapping_add(seed.wrapping_mul(2_654_435_761));
         for a in 0..3 {
             let unit = (cpu_fill_hash(key.wrapping_add(a as u32)) >> 8) as f32 / 16_777_216.0;
-            let local = 0.25 + 0.5 * ((sub >> a) & 1) as f32 + 0.25 * (unit - 0.5);
-            let want = MIN[a] + (c[a] as f32 + local) * H;
+            let local = 0.25 + 0.5 * s[a] as f32 + 0.5 * jitter * (unit - 0.5);
+            let want = MIN[a] + local * H;
             assert!((g.position_radius[a] - want).abs() < 1e-5, "particle {i} axis {a}: {} vs {want}", g.position_radius[a]);
         }
         assert!((g.position_radius[3] - 0.31017 * H).abs() < 1e-6);

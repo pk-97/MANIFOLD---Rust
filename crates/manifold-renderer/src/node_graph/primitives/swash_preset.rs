@@ -48,6 +48,64 @@ impl PressureShape {
     }
 }
 
+/// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`) with its
+/// obstacle unwired: a 4 m cube over the floor, a 0.16 m pool, and the
+/// `initial_column` block, seeded by the engine's half-cell site rule.
+pub(super) const DAM_MIN: [f64; 3] = [-2.0, 0.0, -2.0];
+pub(super) const DAM_FILL_HEIGHT: f64 = 0.16;
+pub(super) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
+
+/// A liquid in the 4 m tank: a pool `fill_height` deep plus one box, both
+/// in metres.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WaterScene {
+    pub pressure: PressureShape,
+    /// Water steps per frame (D8): copies of the step subgraph.
+    pub steps: usize,
+    pub flip: f64,
+    pub fill_height: f64,
+    pub column: [[f64; 2]; 3],
+}
+
+impl WaterScene {
+    /// The engine's Dam Break, obstacle unwired.
+    pub fn dam_break(n: usize) -> Self {
+        Self { pressure: PressureShape::at(n), steps: 2, flip: 0.95, fill_height: DAM_FILL_HEIGHT, column: DAM_COLUMN }
+    }
+
+    /// A pool 1 m deep and nothing else (I5).
+    pub fn still_pool(n: usize) -> Self {
+        Self { fill_height: 1.0, column: [[0.0; 2]; 3], ..Self::dam_break(n) }
+    }
+
+    /// A 1 m block of water high in the tank, clear of every wall.
+    pub fn free_fall(n: usize) -> Self {
+        Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::dam_break(n) }
+    }
+
+    pub fn step_dt(&self) -> f64 {
+        1.0 / (60.0 * self.steps as f64)
+    }
+
+    fn range(&self, lo: f64, hi: f64, axis: usize) -> [u32; 2] {
+        let s = self.pressure;
+        super::liquid_fill::site_range(lo, hi, DAM_MIN[axis], s.cell_size(), s.n as u32)
+    }
+
+    pub fn pool_sites(&self) -> u32 {
+        self.range(DAM_MIN[1], DAM_MIN[1] + self.fill_height, 1)[1]
+    }
+
+    pub fn box_sites(&self) -> [[u32; 2]; 3] {
+        std::array::from_fn(|a| self.range(self.column[a][0], self.column[a][1], a))
+    }
+
+    /// Particles the fill places; the particle arrays hold exactly this many.
+    pub fn particles(&self) -> u64 {
+        super::liquid_fill::filled_sites([self.pressure.n as u32; 3], self.pool_sites(), self.box_sites())
+    }
+}
+
 fn float(v: f64) -> Value {
     json!({"type": "Float", "value": v})
 }
@@ -213,6 +271,121 @@ pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     let output = b.node("output", "system.final_output", json!({}));
     b.wire((sink, "out"), output, "in");
     serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("pressure def")
+}
+
+/// A scene as a running liquid: the fill seeds a particle state, each frame
+/// runs `steps` copies of the water step on it, and the last step's
+/// particles become the next frame's state. `sink` holds the particles.
+pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
+    let mut b = Builder::default();
+    let s = scene.pressure;
+    let sites = scene.box_sites();
+    let fill = b.node(
+        "fill",
+        "node.liquid_fill",
+        lattice_box(
+            s,
+            &[
+                ("pool_sites", int(scene.pool_sites() as usize)),
+                ("box_x0", int(sites[0][0] as usize)),
+                ("box_x1", int(sites[0][1] as usize)),
+                ("box_y0", int(sites[1][0] as usize)),
+                ("box_y1", int(sites[1][1] as usize)),
+                ("box_z0", int(sites[2][0] as usize)),
+                ("box_z1", int(sites[2][1] as usize)),
+                ("jitter", float(0.0)),
+                ("seed", int(0)),
+                ("max_capacity", int(scene.particles() as usize)),
+            ],
+        ),
+    );
+    let state = b.node("state", "node.liquid_feedback", json!({}));
+    b.wire((fill, "particles"), state, "seed");
+    let mut particles: Port = (state, "out");
+    for k in 0..scene.steps {
+        b.prefix = format!("s{k}.");
+        particles = water_step(&mut b, scene, particles, (fill, "count"));
+    }
+    b.prefix.clear();
+    b.wire(particles, state, "in");
+    let sink = b.node("sink", "test.liquid_sink", json!({}));
+    b.wire(particles, sink, "particles");
+    let output = b.node("output", "system.final_output", json!({}));
+    b.wire((sink, "out"), output, "in");
+    serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("dam break def")
+}
+
+/// Lattice params plus the lattice's box: cell size and lowest corner.
+fn lattice_box(s: PressureShape, extra: &[(&str, Value)]) -> Value {
+    let mut params = Builder::lattice([s.n; 3], extra);
+    params["cell_size"] = float(s.cell_size());
+    for (axis, name) in ["lattice_min_x", "lattice_min_y", "lattice_min_z"].into_iter().enumerate() {
+        params[name] = float(DAM_MIN[axis]);
+    }
+    params
+}
+
+/// One water step (section 3): sort, the water lattice, particles to faces,
+/// gravity, the pressure solve, the projection, faces back to particles.
+fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
+    let s = scene.pressure;
+    let n = [s.n; 3];
+    let h = s.cell_size();
+    let dt = scene.step_dt();
+    let side = BOX_METRES;
+    let sort = b.node(
+        "sort",
+        "node.sort_particles_into_cells",
+        json!({
+            "center_x": float(DAM_MIN[0] + 0.5 * side),
+            "center_y": float(DAM_MIN[1] + 0.5 * side),
+            "center_z": float(DAM_MIN[2] + 0.5 * side),
+            "size_x": float(side),
+            "size_y": float(side),
+            "size_z": float(side),
+            "cell_size": float(h),
+        }),
+    );
+    b.wire(particles, sort, "particles");
+    b.wire(count, sort, "count");
+    let water = b.node("water", "node.cells_with_particles", Builder::lattice(n, &[]));
+    b.wire((sort, "cell_ranges"), water, "cell_ranges");
+    let water = (water, "out");
+    let gather = b.node("faces", "node.particles_to_faces", lattice_box(s, &[]));
+    b.wire((sort, "sorted"), gather, "sorted");
+    b.wire((sort, "cell_ranges"), gather, "cell_ranges");
+    let old = extend(b, "old", (gather, "out"), n);
+    let forced = b.node("gravity", "node.face_gravity", Builder::lattice(n, &[("step_dt", float(dt))]));
+    b.wire(old, forced, "faces");
+    let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
+    b.wire((forced, "out"), divergence, "faces");
+    b.wire(water, divergence, "water");
+    let p = pressure(b, s, water, (divergence, "out"));
+    let projected = b.node("project", "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(h))]));
+    b.wire((forced, "out"), projected, "faces");
+    b.wire(p, projected, "pressure");
+    b.wire(water, projected, "water");
+    let new = extend(b, "new", (projected, "out"), n);
+    let moved = b.node(
+        "move",
+        "node.faces_to_particles",
+        lattice_box(s, &[("step_dt", float(dt)), ("flip", float(scene.flip))]),
+    );
+    b.wire((sort, "sorted"), moved, "particles");
+    b.wire(new, moved, "faces");
+    b.wire(old, moved, "old");
+    (moved, "out")
+}
+
+/// Two layers of face extension into the air around the water.
+fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
+    let mut faces = faces;
+    for layer in 1..=2 {
+        let id = b.node(&format!("{name}_extend_{layer}"), "node.extend_faces", Builder::lattice(n, &[]));
+        b.wire(faces, id, "faces");
+        faces = (id, "out");
+    }
+    faces
 }
 
 /// The solve's nodes, from the water lattice and its divergence f; returns

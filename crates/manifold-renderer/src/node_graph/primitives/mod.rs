@@ -368,6 +368,8 @@ mod swash_tests;
 mod swash_solve_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_step_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod swash_scene_tests;
 mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

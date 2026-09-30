@@ -606,6 +606,19 @@ pub mod test_nodes {
                 params: Vec::new(),
             })
         });
+        registry.register("test.liquid_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.liquid_sink"),
+                inputs: vec![port(
+                    "particles",
+                    PortType::Array(ArrayType::of_known::<crate::node_graph::fluid_particles::FluidParticle>()),
+                    PortKind::Input,
+                    true,
+                )],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
         registry.register("test.particle_boundary", || Box::new(ParticleBoundary::new()));
         registry.register("test.particle_sink", || {
             Box::new(ParticleSink {
