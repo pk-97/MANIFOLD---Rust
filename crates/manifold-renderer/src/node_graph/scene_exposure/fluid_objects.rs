@@ -7,11 +7,11 @@ use manifold_core::effect_graph_def::{
     GroupDef, SerializedParamValue,
 };
 use manifold_core::group_edit::group_selection;
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_object_migration::loose_scene_object_owned_ids;
 use manifold_core::{NodeId, short_id};
 
-const FLUID_TYPE_ID: &str = "node.fluid_surface";
 const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
 const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
 const CUBE_MESH_TYPE_ID: &str = "node.cube_mesh";
@@ -24,7 +24,7 @@ const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 /// migration chain; this function deliberately leaves malformed or shared
 /// shapes unchanged.
 pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
-    if !def.nodes.iter().any(|node| node.type_id == FLUID_TYPE_ID) {
+    if !def.nodes.iter().any(|node| node.type_id == FLIP_DOMAIN_TYPE_ID) {
         return false;
     }
     let mut candidate = def.clone();
@@ -52,7 +52,7 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
 
 fn find_legacy_obstacle(def: &EffectGraphDef, start: usize) -> Option<(u32, u32, u32)> {
     for fluid in def.nodes.iter().skip(start) {
-        if fluid.type_id != FLUID_TYPE_ID {
+        if fluid.type_id != FLIP_DOMAIN_TYPE_ID {
             continue;
         }
         let legacy_inputs: Vec<_> =
@@ -574,7 +574,7 @@ mod tests {
             matches!(object, SceneObjectVm::Known(row)
                 if row.name == "Moving Box"
                     && row.transform.is_some()
-                    && row.fluid_node_ids.contains(&role.id))
+                    && row.fluid_controls.contains(&role.node_id))
         }));
         flatten_groups(&def).unwrap_or_else(|error| panic!("migrated {label} graph must flatten: {error:?}"));
 

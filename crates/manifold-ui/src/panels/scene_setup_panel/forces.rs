@@ -364,7 +364,7 @@ mod tests {
             }],
             camera: CameraRowVm::None,
             camera_sections: Vec::new(),
-            camera_param_doc_ids: None,
+            camera_parameter_ids: None,
             world_sections: Vec::new(),
             scene_bounds: None,
         }

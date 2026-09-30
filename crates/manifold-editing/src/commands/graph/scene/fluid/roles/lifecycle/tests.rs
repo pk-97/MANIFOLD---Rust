@@ -9,6 +9,7 @@ use manifold_core::effect_graph_def::{
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
     InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::project::Project;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::{EffectId, GraphTarget, NodeId};
@@ -92,7 +93,7 @@ pub(super) fn role_graph(with_nested: bool, fanout: bool) -> EffectGraphDef {
     let mut nodes = vec![
         render,
         object,
-        node(20, "fluid", "node.fluid_surface", Some("Fluid")),
+        node(20, "fluid", FLIP_DOMAIN_TYPE_ID, Some("Fluid")),
     ];
     let mut wires = vec![
         wire(10, "object", 0, "object_0"),
@@ -113,7 +114,7 @@ pub(super) fn role_graph(with_nested: bool, fanout: bool) -> EffectGraphDef {
                 node(
                     31,
                     "nested_fluid",
-                    "node.fluid_surface",
+                    FLIP_DOMAIN_TYPE_ID,
                     Some("Nested Fluid"),
                 ),
                 node(32, "output", GROUP_OUTPUT_TYPE_ID, None),
@@ -823,7 +824,7 @@ fn scene_physics_role_lifecycle_rejects_self_target_and_stale_redo() {
     let mut graph = role_graph(false, false);
     body_mut(&mut graph, 10)
         .nodes
-        .push(node(55, "local_fluid", FLUID_TYPE_ID, None));
+        .push(node(55, "local_fluid", FLIP_DOMAIN_TYPE_ID, None));
     let (mut project, effect) = project_with_graph(graph.clone());
     let target = GraphTarget::Effect(effect.clone());
     let mut retarget = RetargetSceneFluidRoleCommand::new(

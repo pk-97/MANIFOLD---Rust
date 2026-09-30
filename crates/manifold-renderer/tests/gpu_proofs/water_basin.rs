@@ -477,7 +477,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
+        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
         baseline.clone()).with_world_metadata(metadata_for_node_type("node.physics_world"));
     add.execute(&mut project);
@@ -681,7 +681,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
+        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"), baseline.clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
     add_fluid.execute(&mut project);
@@ -693,14 +693,14 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let def = project.graph_for_target(&target_graph, None).unwrap();
     let vm = SceneVm::from_def(def).unwrap();
     let object = vm.objects.iter().filter_map(|object| match object {
-        SceneObjectVm::Known(row) if row.group_node_id.is_some() && row.fluid_node_ids.is_empty() => Some(row),
+        SceneObjectVm::Known(row) if row.group_node_id.is_some() && row.fluid_controls.is_empty() => Some(row),
         _ => None,
     }).max_by_key(|row| row.index).unwrap();
     let object_index = object.index as u32;
     let object_group_id = object.group_node_id.unwrap();
     let fluid_group = def.nodes.iter().find(|node| node.group.as_ref().is_some_and(|group|
-        group.nodes.iter().any(|node| node.type_id == "node.fluid_surface"))).unwrap();
-    let fluid = fluid_group.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
+        group.nodes.iter().any(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID))).unwrap();
+    let fluid = fluid_group.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).unwrap();
     let domain = SceneNodeRef { scope: vec![fluid_group.node_id.clone()], node: fluid.node_id.clone() };
     let mut assign = AssignSceneFluidRoleCommand::new(target_graph.clone(), render_id, object_index,
         domain, 0, vec![], baseline.clone());
@@ -713,7 +713,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
         let domain_node = body.wires.iter().find(|wire| wire.to_port == "domain").map(|wire| wire.from_node);
         for node in &mut body.nodes {
             match node.type_id.as_str() {
-                "node.fluid_surface" => {
+                manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID => {
                     for (name, value) in [("resolution", 12.0), ("fill_height", 0.0), ("emission", 0.0), ("gravity", 0.0)] {
                         node.params.insert(name.into(), SerializedParamValue::Float { value });
                     }
@@ -791,7 +791,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     assert!(changed_size > 100, "visible mesh size edit must change assigned liquid geometry: {changed_size} pixels");
     let scene = SceneVm::from_def(&edited).unwrap();
     let domain = scene.objects.iter().find_map(|row| match row {
-        SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => row.fluid_domain,
+        SceneObjectVm::Known(row) if !row.fluid_controls.is_empty() => row.fluid_domain,
         _ => None,
     }).expect("assigned domain bounds survive save/reload and mesh edit");
     assert_eq!(domain.size, [5.0, 3.125, 2.5]);

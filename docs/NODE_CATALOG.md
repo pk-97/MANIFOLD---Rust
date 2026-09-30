@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 362 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 363 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 362 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (46)
+### Particles 3D (47)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -302,6 +302,7 @@ _Generated from the node registry. Do not hand-edit. 362 nodes registered, group
 | Chart Entries | `node.chart_entries` | Filter | Works out which way each bit of water surface faces, so the pressure solver can look at it from the right side. |
 | Chart Spread | `node.chart_spread` | Filter | Brings the smoothed surface back from the six viewing planes onto the water's edge. |
 | Chart Sums | `node.chart_sums` | Filter | Flattens the water surface onto six viewing planes so the pressure solver can smooth it with a fast transform. |
+| Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
 | Collar Cells | `node.collar_cells` | Filter | Marks the layer of air cells touching the water, where the pressure solver works. |
 | Collar Gather | `node.collar_gather` | Filter | Reads the grid back at the water's edge for the pressure solver. |
 | Collar Pressure | `node.collar_pressure` | Filter | Finishes the water's pressure from the solver's answer, zero in the air. |
@@ -318,13 +319,13 @@ _Generated from the node registry. Do not hand-edit. 362 nodes registered, group
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Liquid Feedback | `node.liquid_feedback` | Filter | Keeps the liquid's particles from one frame to the next. |
 | Liquid Fill | `node.liquid_fill` | Source | Places the liquid's starting particles: a pool on the floor plus one block of water. |
+| Liquid Solid Distance | `node.liquid_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
 | Matter Body Reaction | `node.matter_body_reaction` | Filter | Measures how hard the liquid pushes on each floating object so the physics world can move it. |
 | Matter Domain | `node.matter_domain` | Source | Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves. |
 | Matter Fill | `node.matter_fill` | Source | Places the liquid's starting particles in the domain: a pool on the floor plus one box. |
 | Matter Frame | `node.matter_frame` | Filter | Hands the simulated liquid particles to the liquid surface, one frame per simulation tick. |
 | Matter Grid Update | `node.matter_grid_update` | Filter | Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls. |
 | Matter Move Bodies | `node.matter_move_bodies` | Filter | Moves the solid objects in a liquid to where they are at this instant of the simulation. |
-| Matter Solid Distance | `node.matter_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
 | Matter State | `node.matter_state` | Filter | Keeps the liquid's particles between frames and runs its simulation steps. |
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
@@ -584,9 +585,9 @@ _Generated from the node registry. Do not hand-edit. 362 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1378 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1371 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1046 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

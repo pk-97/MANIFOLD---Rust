@@ -35,7 +35,7 @@ fn prepared_uniform_force() -> (
     host.wires
         .retain(|wire| !(wire.to_node == scene_id && wire.to_port == "object_5"));
     host.nodes
-        .push(node(next_id, "fluid_event_test", "node.fluid_surface"));
+        .push(node(next_id, "fluid_event_test", manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID));
     host.nodes
         .push(node(next_id + 1, "fluid_event_object", "node.scene_object"));
     host.wires
@@ -105,7 +105,7 @@ fn graph() -> EffectGraphDef {
         scene_modifiers: Vec::new(),
         nodes: vec![
             node(1, "source", "node.value"),
-            node(2, "fluid", "node.fluid_surface"),
+            node(2, "fluid", manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
             node(3, "material", "node.value"),
         ],
         wires: vec![wire(1, "out", 2, "fill_height")],
@@ -121,7 +121,7 @@ fn coupled_graph(second_body: bool) -> EffectGraphDef {
         scene_modifiers: Vec::new(),
         nodes: vec![
             node(1, "scene", "node.render_scene"),
-            node(2, "fluid", "node.fluid_surface"),
+            node(2, "fluid", manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
             node(3, "fluid_object", "node.scene_object"),
             node(4, "world", "node.physics_world"),
             node(5, "body", "node.rigid_body"),

@@ -7,10 +7,8 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use serde_json::{Value, json};
 
-#[cfg(feature = "gpu-proofs")]
-use super::matter_frame::wall_distance_lattice;
 use crate::node_graph::fluid::domain_layout;
-use crate::node_graph::matter::MatterLattice;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 
 /// The box is 4 m on its longest side; the lowest wave it holds is 2π / 4 m.
 pub(super) const BOX_METRES: f64 = 4.0;
@@ -151,15 +149,15 @@ impl WaterScene {
     /// reaches the border, so the level set's smoothing cannot pull the border
     /// inside and the mesh closes, which the volume optics and the volume
     /// oracle both need.
-    pub fn surface_lattice(&self) -> MatterLattice {
+    pub fn surface_lattice(&self) -> LiquidLattice {
         let layout = domain_layout(None, BOX_METRES as f32, self.pressure.n as u32).expect("tank layout");
         assert!(layout.min.iter().zip(DAM_MIN).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-6), "the layout is the tank");
-        MatterLattice::from_layout(&layout)
+        LiquidLattice::from_layout(&layout)
     }
 
     /// Nodes per axis of the surface's solid lattice.
     pub fn surface_nodes(&self) -> usize {
-        self.surface_lattice().nodes[0] as usize
+        self.surface_lattice().nodes()[0] as usize
     }
 
     /// The seam's solid lattice for a tank closed on all six faces: each
@@ -167,7 +165,7 @@ impl WaterScene {
     /// GPU harnesses fill the lattice.
     #[cfg(feature = "gpu-proofs")]
     pub fn surface_solid(&self) -> Vec<f32> {
-        wall_distance_lattice(&self.surface_lattice(), 63)
+        self.surface_lattice().wall_distance(63)
     }
 
     /// A pool 1 m deep and nothing else (I5).

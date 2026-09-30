@@ -20,7 +20,10 @@ use super::super::{
 };
 use super::{collect_all_handles, max_node_id_over, restore_scene_owner_graph};
 
-const FLUID_TYPE_ID: &str = "node.fluid_surface";
+/// Add Fluid authors FLIP until the default liquid template lands
+/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P9 (Add Fluid authors the default
+/// liquid template)).
+const FLUID_TYPE_ID: &str = manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
 const MATERIAL_TYPE_ID: &str = "node.pbr_material";

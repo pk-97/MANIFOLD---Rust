@@ -318,6 +318,28 @@ pub fn admit_candidate_bytes(
     admit_candidate_bytes_with_limit(snapshot, candidate, allowed, &policy)
 }
 
+/// Admit a whole scene before any of its buffers is allocated: the bytes
+/// its plan allocates against what the device offers now (the allowance
+/// less what is already allocated), refused by name with both in MB.
+pub fn admit_scene_bytes(snapshot: Option<manifold_gpu::GpuMemorySnapshot>, needed: u64) -> Result<(), String> {
+    if needed == 0 {
+        return Ok(());
+    }
+    let snapshot = snapshot.ok_or("The scene's GPU buffers cannot be admitted: device memory limits are unavailable")?;
+    let (allowed, policy) = configured_limit(snapshot.recommended_max_working_set_bytes).map_err(|error| error.to_string())?;
+    let offers = allowed.saturating_sub(snapshot.current_allocated_bytes);
+    if needed > offers {
+        let mb = |bytes: u64| bytes.div_ceil(1 << 20);
+        return Err(format!(
+            "The scene needs {} MB of GPU buffers; the device offers {} MB ({policy}, {} MB already in use). Lower Resolution or the scene's sizes.",
+            mb(needed),
+            offers >> 20,
+            mb(snapshot.current_allocated_bytes),
+        ));
+    }
+    Ok(())
+}
+
 fn admit_candidate_bytes_with_limit(
     snapshot: manifold_gpu::GpuMemorySnapshot,
     candidate: u64,
@@ -523,6 +545,28 @@ mod tests {
         assert!(detail.contains("current 10 + candidate 180"));
         assert!(detail.contains("allowed 180"));
         assert!(detail.contains("available for this candidate: 170"));
+    }
+
+    /// The whole scene is refused before any buffer when it needs more than
+    /// the allowance left: SWASH's rendered 256³ Dam Break at surface scale
+    /// 3 (37.7 GB of arrays) on a 36 GB M4 Max (a 30.1 GB recommended
+    /// working set, so a 22.6 GB allowance) with 1 GB already in use.
+    #[test]
+    fn scene_admission_names_what_the_scene_needs_and_the_device_offers() {
+        let snapshot = |current| {
+            Some(manifold_gpu::GpuMemorySnapshot {
+                current_allocated_bytes: current,
+                recommended_max_working_set_bytes: 30_150_000_000,
+            })
+        };
+        let error = admit_scene_bytes(snapshot(1 << 30), 37_700_000_000).unwrap_err();
+        assert!(error.starts_with("The scene needs 35954 MB of GPU buffers; the device offers 20540 MB"), "{error}");
+        assert!(error.contains("1024 MB already in use") && error.contains("Resolution"), "{error}");
+        // What is left fits exactly; one byte more does not.
+        let left = 30_150_000_000 / 4 * 3 - (1 << 30);
+        assert_eq!(admit_scene_bytes(snapshot(1 << 30), left), Ok(()));
+        assert!(admit_scene_bytes(snapshot(1 << 30), left + 1).is_err());
+        assert!(admit_scene_bytes(None, 1).unwrap_err().contains("unavailable"));
     }
 
     #[test]

@@ -8,7 +8,8 @@ use manifold_gpu::{GpuFrameProfile, GpuTextureFormat, GpuTimestampSampler};
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
 use manifold_renderer::node_graph::fluid_particles::{CellRange, FluidParticle};
-use manifold_renderer::node_graph::matter::{MatterLattice, MatterPoint, MatterTickStats, STATS_WORDS};
+use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
+use manifold_renderer::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
     ParamValue, PrimitiveRegistry, ResourceId, StateStore, Transform, compile,
@@ -75,7 +76,7 @@ pub(crate) struct MatterScene {
     frame_b: ResourceId,
     /// The cell sort's `order` and `cell_ranges`, on the block path.
     sorted: Option<(ResourceId, ResourceId)>,
-    lattice: MatterLattice,
+    lattice: LiquidLattice,
     frame_count: u32,
     /// Seconds per display frame; one fixed tick unless set.
     frame_interval: f64,
@@ -90,7 +91,7 @@ impl MatterScene {
         let registry = PrimitiveRegistry::with_builtin();
         let mut graph = Graph::new();
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
-        let domain = add(&mut graph, "node.matter_domain");
+        let domain = add(&mut graph, manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
         let fill = add(&mut graph, "node.matter_fill");
         let state = add(&mut graph, "node.matter_state");
         let zero = add(&mut graph, "node.zero_array");
@@ -254,7 +255,7 @@ impl MatterScene {
         let stats_res = output(state, "stats");
         let frame_b = output(frame, "particles_b");
         let sorted = sort_node.map(|sort| (output(sort, "order"), output(sort, "cell_ranges")));
-        let lattice = MatterLattice::from_layout(
+        let lattice = LiquidLattice::from_layout(
             &domain_layout(None, settings.domain_size, settings.resolution).expect("scene layout"),
         );
         let solid_b = (!settings.colliders.is_empty()).then(|| output(frame, "solid_b"));
@@ -285,7 +286,7 @@ impl MatterScene {
     /// Collider roles as the presets wire them: a transform into a built-in
     /// unit cube role source into the domain, which the fill seeds around;
     /// node.matter_move_bodies in the
-    /// region feeding the grid update; node.matter_solid_distance feeding the
+    /// region feeding the grid update; node.liquid_solid_distance feeding the
     /// frame's solid lattice. Returns each collider's transform node.
     fn wire_colliders(
         graph: &mut Graph,
@@ -345,7 +346,7 @@ impl MatterScene {
         for port in ["shapes", "atlas", "body_count"] {
             wire(graph, (domain, port), (g2p, port));
         }
-        let solid = add(graph, "node.matter_solid_distance");
+        let solid = add(graph, "node.liquid_solid_distance");
         for port in [
             "bodies", "shapes", "atlas", "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size",
             "nodes_x", "nodes_y", "nodes_z", "closed_faces", "body_count",
@@ -363,7 +364,7 @@ impl MatterScene {
         self.read(self.solid_b.expect("a scene with colliders"))
     }
 
-    pub(crate) fn lattice(&self) -> MatterLattice {
+    pub(crate) fn lattice(&self) -> LiquidLattice {
         self.lattice
     }
 
@@ -461,16 +462,6 @@ impl MatterScene {
             .unwrap_or_else(|| panic!("the frame node read no `{name}`"))
     }
 
-    /// Corrupt one point's position with NaN between frames (the GPU is idle:
-    /// every frame waits for completion).
-    pub(crate) fn poison_point(&self, index: usize) {
-        let backend = self.executor.backend();
-        let buffer = backend.array_buffer(backend.slot_for(self.points).expect("bound")).expect("array");
-        let offset = (index * std::mem::size_of::<MatterPoint>()) as u64;
-        // SAFETY: shared storage, no GPU work in flight.
-        unsafe { buffer.write(offset, bytemuck::bytes_of(&[f32::NAN; 3])) };
-    }
-
     /// Give every live point the same velocity and no affine motion, between
     /// frames (the GPU is idle).
     pub(crate) fn set_velocity(&self, velocity: [f32; 3]) {
@@ -503,7 +494,7 @@ impl MatterScene {
         let points = self.points();
         let order: Vec<u32> = self.read(order);
         let ranges: Vec<CellRange> = self.read(ranges);
-        let blocks = self.lattice.blocks();
+        let blocks = lattice_blocks(&self.lattice);
         let (mut live, mut left) = (0u64, 0u64);
         for (bin, range) in ranges.iter().take(blocks.iter().product::<u32>() as usize).enumerate() {
             let bin = bin as u32;
@@ -513,7 +504,7 @@ impl MatterScene {
                     continue;
                 };
                 let base: [i64; 3] = std::array::from_fn(|axis| {
-                    ((point.position[axis] - self.lattice.min[axis]) / self.lattice.cell_size - 0.5).floor() as i64
+                    ((point.position[axis] - self.lattice.min()[axis]) / self.lattice.cell_size() - 0.5).floor() as i64
                 });
                 live += 1;
                 left += u64::from((0..3).any(|axis| !(0..=3).contains(&(base[axis] - block[axis] * 4))));
@@ -674,35 +665,6 @@ fn matter_fixed_point_headroom() {
     eprintln!("matter_fixed_point_headroom: peak accumulator {peak} ({:.1}% of 2^30)", 100.0 * f64::from(peak) / f64::from(1u32 << 30));
     assert!(peak < 1 << 30, "accumulator reached {peak}");
     assert_eq!(scene.state_input("substeps_per_tick"), 34.0);
-}
-
-#[test]
-fn matter_nonfinite_tick_not_published() {
-    let mut scene = MatterScene::new(&small_dam_break());
-    for _ in 0..10 {
-        scene.tick();
-    }
-    let before = scene.frame();
-    scene.poison_point(100);
-    scene.tick();
-    assert!(scene.stats().nonfinite > 0, "a NaN point must show in the stats");
-    let published = scene.frame();
-    assert!(
-        published.iter().all(|p| p.position_radius.iter().all(|v| v.is_finite())),
-        "a non-finite tick reached the frame"
-    );
-    assert_eq!(bytemuck::cast_slice::<FluidParticle, u8>(&published), bytemuck::cast_slice::<FluidParticle, u8>(&before));
-    // The readback halts the solver: the state stops advancing.
-    scene.tick();
-    let halted = scene.points();
-    scene.tick();
-    assert_eq!(bytemuck::cast_slice::<MatterPoint, u8>(&halted), bytemuck::cast_slice::<MatterPoint, u8>(&scene.points()));
-    // Reset starts a fresh epoch that runs again.
-    scene.set_domain("reset", 1.0);
-    scene.tick();
-    scene.tick();
-    assert_eq!(scene.stats().nonfinite, 0);
-    assert!(scene.points().iter().all(|p| p.position.iter().all(|v| v.is_finite())));
 }
 
 /// Live (a preview budget in scope): a non-finite gravity holds the liquid

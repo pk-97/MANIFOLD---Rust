@@ -2,8 +2,8 @@
 
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode};
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 
-const FLUID_SURFACE_TYPE_ID: &str = "node.fluid_surface";
 const RESOLUTION_PARAM: &str = "resolution";
 const LEGACY_MIN: f32 = 8.0;
 const LEGACY_MAX: f32 = 96.0;
@@ -18,7 +18,7 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
         return false;
     }
 
-    let Some((new_min, new_max)) = super::metadata_for_node_type(FLUID_SURFACE_TYPE_ID)
+    let Some((new_min, new_max)) = super::metadata_for_node_type(FLIP_DOMAIN_TYPE_ID)
         .into_iter()
         .find(|metadata| metadata.name == RESOLUTION_PARAM)
         .map(|metadata| (metadata.min, metadata.max))
@@ -66,7 +66,7 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
 
 fn collect_fluid_nodes(nodes: &[EffectGraphNode], out: &mut Vec<NodeId>) {
     for node in nodes {
-        if node.type_id == FLUID_SURFACE_TYPE_ID {
+        if node.type_id == FLIP_DOMAIN_TYPE_ID {
             out.push(node.node_id.clone());
         }
         if let Some(group) = node.group.as_deref() {
@@ -129,7 +129,7 @@ mod tests {
                 ]
             },
             "nodes": [
-                {"id": 1, "nodeId": "fluid", "typeId": "node.fluid_surface"}
+                {"id": 1, "nodeId": "fluid", "typeId": FLIP_DOMAIN_TYPE_ID}
             ],
             "wires": []
         }))
@@ -238,7 +238,7 @@ mod tests {
                 "id": 1, "nodeId": "fluid_group", "typeId": "group",
                 "group": {
                     "interface": {"inputs": [], "outputs": []},
-                    "nodes": [{"id": 2, "nodeId": "nested_fluid", "typeId": "node.fluid_surface"}],
+                    "nodes": [{"id": 2, "nodeId": "nested_fluid", "typeId": FLIP_DOMAIN_TYPE_ID}],
                     "wires": []
                 }
             }],

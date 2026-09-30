@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::{NodeId, Seconds};
 use manifold_physics::input::{AppliedEvent, EventStamp};
@@ -180,12 +181,13 @@ impl PresetRuntime {
                 format!("Impulse: recipient `{id}` is absent from the installed graph")
             })?;
             let node = self.graph.get_node(instance).expect("resolved recipient");
+            let type_id = node.node.type_id().as_str();
             let expected = match target {
-                ImpulseTarget::Fluid => "node.fluid_surface",
-                ImpulseTarget::Rigid(_) => "node.physics_world",
+                ImpulseTarget::Fluid => is_liquid_domain(type_id),
+                ImpulseTarget::Rigid(_) => type_id == "node.physics_world",
                 ImpulseTarget::FluidAndRigid(_) => unreachable!("authoring resolves individual owners"),
             };
-            if node.node.type_id().as_str() != expected {
+            if !expected {
                 return Err(format!("Impulse: recipient `{id}` changed type"));
             }
             if let Some(pair) = self.graph.coupled_scenes().iter()

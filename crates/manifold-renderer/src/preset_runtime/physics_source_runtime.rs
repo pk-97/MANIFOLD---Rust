@@ -69,7 +69,7 @@ impl PresetRuntime {
         if !self
             .graph
             .nodes()
-            .any(|node| node.node.type_id().as_str() == "node.fluid_surface")
+            .any(|node| node.node.type_id().as_str() == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
         {
             return;
         }

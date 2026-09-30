@@ -168,8 +168,9 @@ fn dispatch_tail_census_is_stable() {
     // matter_fill, matter_grid_update, grid_to_matter, particles_to_copies
     // (matter_to_grid is a hand kernel since D6's block tiles; the cell sort
     // reads matter points directly). Matter colliders add matter_move_bodies
-    // and matter_solid_distance, buffer atoms. Matter coupling adds
-    // matter_body_reaction, a buffer atom.
+    // and liquid_solid_distance, buffer atoms. Matter coupling adds
+    // matter_body_reaction, a buffer atom. The liquid surface's last step
+    // before meshing adds clamp_liquid_to_solids, a buffer atom.
     // FFT water solver P0 adds cosine_reorder, cosine_spectrum,
     // cosine_half_spectrum and cosine_poisson_divide, buffer atoms; P1 adds
     // cosine_surface_scale, combine_rows, divide_by_value, krylov_givens,
@@ -178,7 +179,7 @@ fn dispatch_tail_census_is_stable() {
     // liquid_fill, cells_with_particles, particles_to_faces, face_gravity,
     // face_divergence, subtract_pressure, extend_faces, faces_to_particles and
     // density_source.
-    assert_eq!(total, 226, "standalone atom census drifted");
+    assert_eq!(total, 227, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

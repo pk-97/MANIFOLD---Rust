@@ -8,6 +8,7 @@ use manifold_core::effect_graph_def::{
     GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
     SerializedParamValue,
 };
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::{GraphTarget, NodeId};
 
@@ -79,7 +80,7 @@ fn assigned_object_graph() -> EffectGraphDef {
             node(
                 61,
                 "nested_fluid",
-                "node.fluid_surface",
+                FLIP_DOMAIN_TYPE_ID,
                 Some("Nested Fluid"),
             ),
             node(62, "output", GROUP_OUTPUT_TYPE_ID, None),

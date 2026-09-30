@@ -1,6 +1,7 @@
-//! `node.matter_solid_distance` — the matter domain's solid lattice for the
+//! `node.liquid_solid_distance` — a liquid domain's solid lattice for the
 //! particle-frame seam: walls and bodies as one signed distance per lattice
-//! node (`docs/GPU_MPM_SOLVER_DESIGN.md` D11, section 3.2).
+//! node (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.1, amendment 3;
+//! GPU_MPM_SOLVER_DESIGN.md D11).
 
 use std::borrow::Cow;
 
@@ -9,10 +10,11 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
-use crate::node_graph::matter::{MatterBody, MatterShape, solid_bytes};
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::matter::solid_bytes;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -33,12 +35,12 @@ struct SolidDistanceUniforms {
 }
 
 crate::primitive! {
-    name: MatterSolidDistance,
-    type_id: "node.matter_solid_distance",
-    purpose: "Write a matter domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
+    name: LiquidSolidDistance,
+    type_id: "node.liquid_solid_distance",
+    purpose: "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
     inputs: {
-        bodies: Array(MatterBody) required,
-        shapes: Array(MatterShape) required,
+        bodies: Array(LiquidBody) required,
+        shapes: Array(LiquidShape) required,
         atlas: Array(u32) required,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -67,21 +69,21 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Once per frame, after the Live Matter region. bodies, shapes, atlas, body_count, rows, the lattice and closed faces come from node.matter_domain; solid feeds node.matter_frame's solid input, which publishes it as the seam's solid_a/solid_b. solid holds exactly one value per lattice node, sized every frame from the same node count the dispatch covers; a lattice the device cannot hold is a named error.",
     examples: ["WaterDamBreakMatter"],
-    picker: { label: "Matter Solid Distance", category: Atom },
+    picker: { label: "Liquid Solid Distance", category: Atom },
     summary: "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
     category: Particles3D,
     role: Filter,
     aliases: ["solid lattice", "collider distance", "solid field"],
     fusion_kind: Pointwise,
-    wgsl_body: include_str!("shaders/matter_solid_distance_body.wgsl"),
+    wgsl_body: include_str!("shaders/liquid_solid_distance_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         solid: Option<GpuBuffer> = None,
     },
 }
 
-impl Primitive for MatterSolidDistance {
+impl Primitive for LiquidSolidDistance {
     fn provides_array_output(&self, port: &str) -> bool {
         port == "solid"
     }
@@ -101,7 +103,7 @@ impl Primitive for MatterSolidDistance {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
@@ -110,7 +112,7 @@ impl Primitive for MatterSolidDistance {
         let nodes = lattice.node_count();
         // The storage follows the node count the dispatch covers, before it
         // is encoded.
-        let bytes = solid_bytes(lattice.nodes);
+        let bytes = solid_bytes(lattice.nodes());
         if self.solid.as_ref().is_none_or(|solid| solid.size < bytes) {
             let device = ctx.gpu_encoder().device;
             let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
@@ -126,7 +128,7 @@ impl Primitive for MatterSolidDistance {
                 }
                 Err(error) => {
                     ctx.error(format!(
-                        "Matter Solid Distance: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                        "Liquid Solid Distance: the lattice's {nodes} nodes need {bytes} bytes the device cannot give: {error}. Lower Resolution."
                     ));
                     return;
                 }
@@ -136,16 +138,16 @@ impl Primitive for MatterSolidDistance {
         let ((Some(bodies), Some(shapes), Some(atlas)), Some(solid)) = (inputs, self.solid.as_ref()) else {
             return;
         };
-        let rows = rows.min((bodies.size / std::mem::size_of::<MatterBody>() as u64).min(i32::MAX as u64) as i32);
+        let rows = rows.min((bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32);
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = SolidDistanceUniforms {
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
-            cell_size: lattice.cell_size,
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
+            cell_size: lattice.cell_size(),
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
             closed_faces,
             body_count,
             rows,
@@ -162,7 +164,7 @@ impl Primitive for MatterSolidDistance {
                 GpuBinding::Buffer { binding: 4, buffer: solid, offset: 0 },
             ],
             [nodes.div_ceil(256), 1, 1],
-            "node.matter_solid_distance",
+            "node.liquid_solid_distance",
         );
     }
 }
@@ -172,9 +174,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matter_solid_distance_generates_a_gathering_node_kernel() {
-        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<MatterSolidDistance>()
-            .expect("matter_solid_distance codegen");
+    fn liquid_solid_distance_generates_a_gathering_node_kernel() {
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<LiquidSolidDistance>()
+            .expect("liquid_solid_distance codegen");
         let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -188,11 +190,11 @@ mod tests {
     /// The solid atom poses bodies the way node.matter_move_bodies does:
     /// both turn through the shared pose library.
     #[test]
-    fn matter_solid_distance_poses_bodies_as_move_bodies() {
-        let solid = include_str!("shaders/matter_solid_distance_body.wgsl");
+    fn liquid_solid_distance_poses_bodies_as_move_bodies() {
+        let solid = include_str!("shaders/liquid_solid_distance_body.wgsl");
         let moving = include_str!("shaders/matter_move_bodies_body.wgsl");
-        assert!(solid.contains("matter_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds)"));
-        assert!(moving.contains("matter_turn(b.rotation, b.angular_velocity.xyz, t)"));
+        assert!(solid.contains("liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds)"));
+        assert!(moving.contains("liquid_turn(b.rotation, b.angular_velocity.xyz, t)"));
         assert!(!solid.contains("sin(0.5 * angle)") && !moving.contains("sin(0.5 * angle)"));
     }
 }

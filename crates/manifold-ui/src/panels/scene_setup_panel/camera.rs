@@ -17,10 +17,12 @@ impl ScenePanel {
             }
             CameraRowVm::Custom => {
                 if !vm.camera_sections.is_empty() {
-                    cy = self.build_filtered_properties_owned(
-                        tree, inner_x, inner_w, cy,
-                        (&vm.camera_sections, vm.camera_param_doc_ids.as_deref()),
-                    );
+                    cy = match vm.camera_parameter_ids.as_deref() {
+                        Some(owned) => self.build_filtered_properties_parameter_ids(
+                            tree, inner_x, inner_w, cy, (&vm.camera_sections, owned, &[]),
+                        ),
+                        None => self.build_filtered_properties(tree, inner_x, inner_w, cy, &vm.camera_sections),
+                    };
                 }
                 let message = if vm.camera_sections.is_empty() {
                     "Custom (edit in graph)"
@@ -55,7 +57,7 @@ mod tests {
         let (mut vm, mut surface) = world_transform_vm();
         vm.camera = CameraRowVm::Custom;
         vm.camera_sections = vec!["Camera".into()];
-        vm.camera_param_doc_ids = Some(vec![72, 73]);
+        vm.camera_parameter_ids = Some(vec!["72_enabled".into(), "73_enabled".into()]);
         let template = surface.rows[0].clone();
         surface.rows = [("72_enabled", "Motion Blur"), ("73_enabled", "Depth of Field")]
             .into_iter().map(|(id, name)| {
@@ -115,7 +117,7 @@ mod tests {
         let (mut vm, mut surface) = world_transform_vm();
         vm.camera = CameraRowVm::Custom;
         vm.camera_sections = vec!["Camera".into()];
-        vm.camera_param_doc_ids = Some(vec![71, 72, 73]);
+        vm.camera_parameter_ids = Some(["71_focus_distance", "72_enabled", "73_enabled"].map(String::from).to_vec());
         let template = surface.rows[0].clone();
         surface.rows = ["70_distance", "71_focus_distance", "72_enabled", "73_enabled"]
             .into_iter().map(|id| {

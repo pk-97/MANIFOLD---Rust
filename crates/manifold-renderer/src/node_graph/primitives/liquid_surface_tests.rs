@@ -1566,3 +1566,261 @@ fn fluid_smooth_lattice_matches_binomial_reference_and_passes_through() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(read::<f32>(&out, values.len()), values, "no lattice copies the input");
 }
+
+// --- BUG-koy0 (solid clamp before smoothing): the clamp after smoothing ---
+
+use super::clamp_liquid_to_solids::ClampLiquidToSolids;
+
+/// f64 trilinear sample of a solid lattice spanning `min`..`min + size`: the
+/// rule node.particle_volume and node.clamp_liquid_to_solids share.
+fn solid_sample(solid: &[f32], nodes: [u32; 3], min: [f32; 3], size: [f32; 3], p: [f64; 3]) -> f64 {
+    let n = nodes.map(|v| v as usize);
+    let mut base = [0usize; 3];
+    let mut frac = [0f64; 3];
+    for a in 0..3 {
+        let spacing = f64::from(size[a]) / (n[a] - 1) as f64;
+        let g = ((p[a] - f64::from(min[a])) / spacing).clamp(0.0, (n[a] - 1) as f64);
+        base[a] = (g.floor() as usize).min(n[a] - 2);
+        frac[a] = g - base[a] as f64;
+    }
+    (0..8usize)
+        .map(|corner| {
+            let o = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
+            let w: f64 = (0..3).map(|a| if o[a] == 1 { frac[a] } else { 1.0 - frac[a] }).product();
+            let at: [usize; 3] = std::array::from_fn(|a| base[a] + o[a]);
+            w * f64::from(solid[at[0] + n[0] * (at[1] + n[1] * at[2])])
+        })
+        .sum()
+}
+
+/// The clamp's wires as params: the box, the level-set lattice, the solid
+/// lattice and the bin size.
+fn clamp_params(center: [f32; 3], size: [f32; 3], nodes: [u32; 3], solid_nodes: [u32; 3], cell: f32) -> ParamValues {
+    params(&[
+        ("center_x", center[0]),
+        ("center_y", center[1]),
+        ("center_z", center[2]),
+        ("size_x", size[0]),
+        ("size_y", size[1]),
+        ("size_z", size[2]),
+        ("nodes_x", nodes[0] as f32),
+        ("nodes_y", nodes[1] as f32),
+        ("nodes_z", nodes[2] as f32),
+        ("solid_nodes_x", solid_nodes[0] as f32),
+        ("solid_nodes_y", solid_nodes[1] as f32),
+        ("solid_nodes_z", solid_nodes[2] as f32),
+        ("cell_size", cell),
+    ])
+}
+
+#[test]
+fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
+    let mut harness = Harness::new();
+    let (center, size, cell) = ([0.25_f32, 1.0, -0.5], [2.0_f32, 1.5, 2.5], 0.25_f32);
+    let solid_nodes = [6u32, 5, 7];
+    let nodes = solid_nodes.map(|n| (n - 1) * 3 + 1);
+    let total = nodes.iter().product::<u32>() as usize;
+    let min: [f32; 3] = std::array::from_fn(|a| center[a] - 0.5 * size[a]);
+    let mut rng = Rng(0xc1a3_9e11);
+    let solid: Vec<f32> = (0..solid_nodes.iter().product::<u32>()).map(|_| rng.next_f32() * 2.0 - 0.8).collect();
+    let values: Vec<f32> = (0..total + 20).map(|_| rng.next_f32() * 2.0 - 1.0).collect();
+    let (solid_slot, _) = harness.array(&solid, solid.len());
+    let (levelset_slot, _) = harness.array(&values, values.len());
+    let (clamped_slot, clamped_buf) = harness.array::<f32>(&[], values.len());
+    let run = |harness: &mut Harness, lattice: [u32; 3]| {
+        harness.run(
+            &mut ClampLiquidToSolids::new(),
+            &[("levelset", levelset_slot), ("solid", solid_slot)],
+            &[("clamped", clamped_slot)],
+            &clamp_params(center, size, lattice, solid_nodes, cell),
+        )
+    };
+    let (_, errors) = run(&mut harness, nodes);
+    assert!(errors.is_empty(), "{errors:?}");
+    let clamped: Vec<f32> = read(&clamped_buf, values.len());
+    let band = 0.1_f32 * cell;
+    let h: [f64; 3] = std::array::from_fn(|a| f64::from(size[a]) / f64::from(nodes[a] - 1));
+    let (mut border, mut raised, mut kept, mut ambiguous) = (0, 0, 0, 0);
+    for (idx, (&value, &out)) in values[..total].iter().zip(&clamped).enumerate() {
+        let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
+        if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
+            assert_eq!(out.to_bits(), band.to_bits(), "border node {ijk:?}: {out}");
+            border += 1;
+            continue;
+        }
+        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
+        let s = solid_sample(&solid, solid_nodes, min, size, p);
+        // f32 on the GPU, f64 here: the sign of a sample this close to 0 is not the rule's to settle.
+        if s.abs() < 1e-4 {
+            ambiguous += 1;
+            continue;
+        }
+        let expected = if s < 0.0 { value.max(0.0) } else { value };
+        if s < 0.0 && value < 0.0 {
+            raised += 1;
+        } else if s > 0.0 {
+            kept += 1;
+        }
+        assert_eq!(out.to_bits(), expected.to_bits(), "node {ijk:?}: solid {s}, in {value}, out {out}");
+    }
+    assert!(border > 100 && raised > 100 && kept > 100, "border {border}, raised {raised}, kept {kept}");
+    assert!(ambiguous < 20, "{ambiguous} nodes sit on the solid boundary");
+    assert_eq!(&clamped[total..], &values[total..], "values past the lattice pass through");
+
+    let (_, errors) = run(&mut harness, [0, nodes[1], nodes[2]]);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(read::<f32>(&clamped_buf, values.len()), values, "no lattice copies the input");
+
+    let (_, errors) = run(&mut harness, [nodes[0] * 2, nodes[1], nodes[2]]);
+    assert!(errors.iter().any(|e| e.contains("larger than its level set")), "{errors:?}");
+}
+
+/// On stage the clamp runs fused into the last smoothing pass; the editor and
+/// the thumbnail run it unfused. The Still Pool, where it holds the water face
+/// at the front glass, must render the same both ways.
+#[test]
+fn fluid_clamp_fused_with_smoothing_renders_like_unfused() {
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_core::preset_def::PresetKind;
+
+    let device = crate::test_device();
+    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+        "WaterStillPoolMatter",
+    ))
+    .expect("Still Pool bundled");
+    let canonical: EffectGraphDef = serde_json::from_str(&json).expect("Still Pool parses");
+    let fused = crate::node_graph::freeze::install::fuse_generator_view(&canonical, &registry)
+        .expect("the Still Pool fuses and builds");
+    assert!(
+        fused.def.nodes.iter().any(|n| n.type_id == "node.wgsl_compute"
+            && n.wgsl_source.as_deref().is_some_and(|s| s.contains("clamp_liquid_solid_at"))),
+        "the clamp must fuse into a kernel, or this proves nothing"
+    );
+    let arc = device.arc();
+    let render = |def: &EffectGraphDef| {
+        crate::preset_thumbnail::render_preset_thumbnail(&arc, PresetKind::Generator, def, 256, 144, false)
+            .expect("Still Pool renders")
+    };
+    let unfused = render(&canonical);
+    let fused = render(&fused.def);
+    assert!(unfused == fused, "the fused clamp must render bit for bit like the unfused one");
+}
+
+/// Every dial that widens the surface at its maximum: Smoothing 3 passes,
+/// Resolution Scale 4, Particle Scale 8. Water fills a padded 1 m lattice at
+/// resolution 8 against the floor and four closed walls and, through the open
+/// top, up to the lattice's top edge. After the clamp every padding node
+/// (behind a closed wall) reads air and every border node reads the band;
+/// before it, both kinds read liquid, or the fixture proves nothing.
+#[test]
+fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
+    use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
+
+    const OPEN_TOP: u32 = 63 & !(1 << 3);
+    let mut harness = Harness::new();
+    let layout = crate::node_graph::fluid::domain_layout(None, 1.0, 8).expect("layout");
+    let domain = LiquidLattice::from_layout(&layout);
+    let (cell, solid_nodes, cells) = (domain.cell_size(), domain.nodes(), domain.cells());
+    let bounds = domain.bounds();
+    let lattice = Lattice { center: bounds.pos, size: bounds.scale, cell };
+    let min = lattice.min();
+    let solid = domain.wall_distance(OPEN_TOP);
+
+    // Two particles per cell per axis: x and z across the authored box, y
+    // from the floor through the open top's padding.
+    let low: [f32; 3] = std::array::from_fn(|a| min[a] + PADDING_NODES as f32 * cell);
+    let layers = [2 * cells[0], 2 * (cells[1] + PADDING_NODES), 2 * cells[2]];
+    let mut rng = Rng(0xb0c0_4011);
+    let mut particles = Vec::new();
+    for k in 0..layers[2] {
+        for j in 0..layers[1] {
+            for i in 0..layers[0] {
+                let position: [f32; 3] = std::array::from_fn(|a| {
+                    let layer = [i, j, k][a] as f32;
+                    low[a] + (layer + 0.5 + 0.3 * (rng.next_f32() - 0.5)) * 0.5 * cell
+                });
+                particles.push(particle(position, 0.25 * cell, particles.len() as u32 + 1));
+            }
+        }
+    }
+    let shape = [("particle_scale", 8.0), ("stretch", 1.0), ("smoothing", 0.0), ("isolated_scale", 1.0), ("min_neighbours", 8.0)];
+    let (_, _, _, (_, ranges_slot, blobs_slot)) =
+        sort_and_shape(&mut harness, &lattice, &particles, particles.len(), &shape);
+
+    let scale = 4u32;
+    let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
+    let total = nodes.iter().product::<u32>() as usize;
+    let capacity = solid.len() * (scale * scale * scale) as usize;
+    let (solid_slot, _) = harness.array(&solid, solid.len());
+    let (levelset_slot, _) = harness.array::<f32>(&[], capacity);
+    let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let (_, errors) = harness.run(
+        &mut ParticleVolume::new(),
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[
+            ("levelset", levelset_slot),
+            ("volume_nodes_x", volume_nodes[0]),
+            ("volume_nodes_y", volume_nodes[1]),
+            ("volume_nodes_z", volume_nodes[2]),
+        ],
+        &lattice.params(&[
+            ("nodes_x", solid_nodes[0] as f32),
+            ("nodes_y", solid_nodes[1] as f32),
+            ("nodes_z", solid_nodes[2] as f32),
+            ("resolution_scale", scale as f32),
+        ]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut source = levelset_slot;
+    let mut smoothed = None;
+    for axis in 0..3 {
+        let (stage, buffer) = harness.array::<f32>(&[], capacity);
+        let smoothing = [
+            ("nodes_x", nodes[0] as f32),
+            ("nodes_y", nodes[1] as f32),
+            ("nodes_z", nodes[2] as f32),
+            ("passes", 3.0),
+            ("axis", axis as f32),
+        ];
+        let (_, errors) = harness.run(&mut SmoothLattice::new(), &[("levelset", source)], &[("smoothed", stage)], &params(&smoothing));
+        assert!(errors.is_empty(), "{errors:?}");
+        source = stage;
+        smoothed = Some(buffer);
+    }
+    let (clamped_slot, clamped_buf) = harness.array::<f32>(&[], capacity);
+    let (_, errors) = harness.run(
+        &mut ClampLiquidToSolids::new(),
+        &[("levelset", source), ("solid", solid_slot)],
+        &[("clamped", clamped_slot)],
+        &clamp_params(lattice.center, lattice.size, nodes, solid_nodes, cell),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let smoothed: Vec<f32> = read(&smoothed.expect("three passes"), total);
+    let clamped: Vec<f32> = read(&clamped_buf, total);
+    let band = 0.1_f32 * cell;
+    let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
+    let (mut border, mut padding) = (0, 0);
+    let (mut border_liquid_before, mut padding_liquid_before) = (0, 0);
+    for idx in 0..total {
+        let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
+        if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
+            assert_eq!(clamped[idx].to_bits(), band.to_bits(), "border node {ijk:?} reads {}", clamped[idx]);
+            border += 1;
+            border_liquid_before += usize::from(smoothed[idx] < 0.0);
+            continue;
+        }
+        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
+        if solid_sample(&solid, solid_nodes, min, lattice.size, p) < -1e-4 {
+            assert!(clamped[idx] >= 0.0, "padding node {ijk:?} reads liquid: {}", clamped[idx]);
+            padding += 1;
+            padding_liquid_before += usize::from(smoothed[idx] < 0.0);
+        }
+    }
+    assert!(border > 1000 && padding > 1000, "border {border}, padding {padding}");
+    assert!(
+        border_liquid_before > 0 && padding_liquid_before > 0,
+        "the unclamped surface must reach the border ({border_liquid_before}) and the padding ({padding_liquid_before})"
+    );
+}

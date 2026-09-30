@@ -16,15 +16,17 @@ use std::borrow::Cow;
 use manifold_gpu::{FrameClock, GpuBinding, GpuBuffer, GpuComputePipeline};
 use manifold_physics::Seconds;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK, domain_layout};
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
-use crate::node_graph::matter::bodies::{BodiesStatus, MatterBodies};
-use crate::node_graph::matter::coupling::{ReactionSlot, RigidOwner};
+use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::clock::LiquidClock;
+use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
+use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
 use crate::node_graph::matter::{
-    MAX_SUBSTEPS, MatterBody, MatterClock, MatterLattice, MatterShape, REACTION_WORDS, WATER_DENSITY,
-    free_fall_speed, lattice_nodes, momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda,
-    wave_speed,
+    MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
+    momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -32,17 +34,147 @@ use crate::node_graph::physics::{
 };
 use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse, map_rigid_receipt};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::transform::Transform;
 
 /// Everything whose change restarts the simulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MatterSetup {
-    lattice: MatterLattice,
-    closed_faces: u32,
-    pool_cells: u32,
-    column: [[u32; 2]; 3],
-    points_per_cell: u32,
-    seed: u32,
+    pub(crate) lattice: LiquidLattice,
+    pub(crate) closed_faces: u32,
+    pub(crate) pool_cells: u32,
+    pub(crate) column: [[u32; 2]; 3],
+    pub(crate) points_per_cell: u32,
+    pub(crate) seed: u32,
 }
+
+/// The domain's setup and the layout it came from, computed from params and
+/// wires alone: the node and the extent checker both call
+/// [`matter_geometry`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MatterGeometry {
+    pub(crate) layout: FluidDomainLayout,
+    pub(crate) setup: MatterSetup,
+}
+
+impl MatterGeometry {
+    /// The scalar outputs fixed by the setup, by name.
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 27] {
+        let MatterSetup { lattice, closed_faces, pool_cells, column, points_per_cell, seed } = self.setup;
+        let blocks = lattice_blocks(&lattice);
+        let (centre, size, bin) = block_sort_box(&lattice);
+        [
+            ("lattice_min_x", lattice.min()[0]),
+            ("lattice_min_y", lattice.min()[1]),
+            ("lattice_min_z", lattice.min()[2]),
+            ("cell_size", lattice.cell_size()),
+            ("nodes_x", lattice.nodes()[0] as f32),
+            ("nodes_y", lattice.nodes()[1] as f32),
+            ("nodes_z", lattice.nodes()[2] as f32),
+            ("closed_faces", closed_faces as f32),
+            ("pool_cells", pool_cells as f32),
+            ("column_x0", column[0][0] as f32),
+            ("column_x1", column[0][1] as f32),
+            ("column_y0", column[1][0] as f32),
+            ("column_y1", column[1][1] as f32),
+            ("column_z0", column[2][0] as f32),
+            ("column_z1", column[2][1] as f32),
+            ("points_per_cell", points_per_cell as f32),
+            ("fill_seed", seed as f32),
+            ("blocks_x", blocks[0] as f32),
+            ("blocks_y", blocks[1] as f32),
+            ("blocks_z", blocks[2] as f32),
+            ("block_center_x", centre[0]),
+            ("block_center_y", centre[1]),
+            ("block_center_z", centre[2]),
+            ("block_size_x", size[0]),
+            ("block_size_y", size[1]),
+            ("block_size_z", size[2]),
+            ("block_cell_size", bin),
+        ]
+    }
+}
+
+/// The fill in the layout's cells: the pool's height in cells and the
+/// initial volume's cell range per axis (empty without one), refused by name
+/// when either does not fit the domain.
+pub(crate) fn fill_region(
+    layout: &FluidDomainLayout,
+    fill_height: f32,
+    initial_volume: Option<Transform>,
+) -> Result<(u32, [[u32; 2]; 3]), String> {
+    // The lattice's f32 cell size, as every matter atom reads it.
+    let dx = f64::from(layout.cell_size as f32);
+    if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
+        return Err("Matter: Initial Fill Height must lie within the domain height".into());
+    }
+    let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
+    let mut column = [[0u32; 2]; 3];
+    if let Some(volume) = initial_volume {
+        if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
+            return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
+        }
+        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
+            || volume.scale.iter().any(|v| *v <= 0.0)
+            || (0..3).any(|d| {
+                let half = volume.scale[d] * 0.5;
+                volume.pos[d] - half < layout.min[d] - 1e-4
+                    || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
+            })
+        {
+            return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
+        }
+        for (d, range) in column.iter_mut().enumerate() {
+            let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d]);
+            *range = [
+                cell(volume.pos[d] - volume.scale[d] * 0.5),
+                cell(volume.pos[d] + volume.scale[d] * 0.5),
+            ];
+        }
+    }
+    Ok((pool_cells, column))
+}
+
+/// The domain box, lattice, walls and fill from the domain's params and
+/// wires (`read` is `scalar_or_param`), refused by name when the lattice is
+/// over Grid Budget or the fill does not fit the domain.
+pub(crate) fn matter_geometry(
+    read: impl Fn(&str, f32) -> f32,
+    params: &ParamValues,
+    domain: Option<Transform>,
+    initial_volume: Option<Transform>,
+) -> Result<MatterGeometry, String> {
+    let resolution = read("resolution", 64.0).round().max(0.0) as u32;
+    let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
+    let lattice = LiquidLattice::from_layout(&layout);
+    let budget = match params.get("grid_budget_mcells") {
+        Some(ParamValue::Float(budget)) => *budget,
+        _ => 8.0,
+    };
+    admit_lattice(&lattice, budget)?;
+    let (pool_cells, column) = fill_region(&layout, read("fill_height", 0.4), initial_volume)?;
+    let points_per_cell = match params.get("points_per_cell") {
+        Some(ParamValue::Enum(1)) => 27,
+        _ => 8,
+    };
+    let seed = match params.get("seed") {
+        Some(ParamValue::Float(seed)) => *seed,
+        _ => 0.0,
+    };
+    let setup = MatterSetup {
+        lattice,
+        closed_faces: closed_faces(params),
+        pool_cells,
+        column,
+        points_per_cell,
+        seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
+    };
+    Ok(MatterGeometry { layout, setup })
+}
+
+/// The refusal of an impulse on the liquid itself, owed to seam P8 (the
+/// scene contract test reads it).
+pub(crate) const FLUID_IMPULSES_UNSUPPORTED: &str =
+    "Matter coupling: impulses on the live liquid itself are not supported yet; target the bodies";
 
 const UPLOAD_SHADER: &str = include_str!("shaders/matter_domain_upload.wgsl");
 /// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
@@ -181,7 +313,7 @@ crate::primitive! {
         momentum_unit: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
-        bodies: Array(MatterBody), shapes: Array(MatterShape), atlas: Array(u32),
+        bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(i32),
     },
     params: [
@@ -207,7 +339,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -216,11 +348,11 @@ crate::primitive! {
     aliases: ["matter", "mpm", "live water", "gpu liquid", "liquid domain"],
     boundary_reason: NonGpu,
     extra_fields: {
-        clock: MatterClock = MatterClock::default(),
+        clock: LiquidClock = LiquidClock::default(),
         setup: Option<MatterSetup> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
-        bodies: MatterBodies = MatterBodies::default(),
+        bodies: LiquidBodies = LiquidBodies::default(),
         role_pending: bool = false,
         body_buffers: Option<BodyBuffers> = None,
         upload: Option<GpuComputePipeline> = None,
@@ -240,7 +372,9 @@ pub struct Coupling {
     colliders: RigidImpulseTargets,
     error: Option<String>,
     previous_reset: Option<f32>,
-    owner: Option<RigidOwner>,
+    owner: Option<LiquidRigidOwner>,
+    /// How the owner's pending tick's reaction words decode.
+    scale: Option<ReactionScale>,
     /// The owner was built since the clock last restarted: the next frame
     /// restarts the liquid with it.
     owner_fresh: bool,
@@ -262,8 +396,9 @@ pub struct Coupling {
 struct Exchange {
     substeps: u32,
     ticks: u32,
-    /// The frame's first tick's slot; later ticks differ only in `tick`.
-    slot: ReactionSlot,
+    /// The frame's first tick; later ticks differ only in `tick`.
+    pending: PendingTick,
+    scale: ReactionScale,
 }
 
 /// The reaction words, once their last GPU writer has retired.
@@ -277,8 +412,8 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
 
 /// The Grid Budget gate: a lattice over `budget_mcells` million nodes is
 /// refused by name before anything downstream sizes or dispatches over it.
-pub(crate) fn admit_lattice(lattice: &MatterLattice, budget_mcells: f32) -> Result<(), String> {
-    let nodes = lattice_nodes(lattice.nodes) as f64;
+pub(crate) fn admit_lattice(lattice: &LiquidLattice, budget_mcells: f32) -> Result<(), String> {
+    let nodes = lattice_nodes(lattice.nodes()) as f64;
     if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6 {
         return Err(format!(
             "Matter lattice needs {:.3} million nodes; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
@@ -295,12 +430,12 @@ impl Coupling {
     }
 }
 
-fn closed_faces(ctx: &EffectNodeContext<'_, '_>) -> u32 {
+fn closed_faces(params: &ParamValues) -> u32 {
     ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
         .iter()
         .enumerate()
         .fold(0, |mask, (bit, name)| {
-            let closed = !matches!(ctx.params.get(*name), Some(ParamValue::Bool(false)));
+            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
             mask | (u32::from(closed) << bit)
         })
 }
@@ -463,7 +598,7 @@ impl Primitive for MatterDomain {
         if !coupled.mode || self.role_pending || coupled.failed || coupled.observation.is_none() || coupled.error.is_some() {
             return None;
         }
-        coupled.owner.as_ref().map(RigidOwner::frame)
+        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
     }
 
     fn physics_impulse_epoch(&self) -> Option<u64> {
@@ -492,15 +627,11 @@ impl Primitive for MatterDomain {
         stamp: manifold_physics::input::EventStamp,
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
+        let ImpulseTarget::Rigid(targets) = impulse.target else {
+            return Err(FLUID_IMPULSES_UNSUPPORTED.into());
+        };
         let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
-        match impulse.target {
-            ImpulseTarget::Rigid(targets) => owner
-                .rigid_mut()
-                .enqueue_impulse(stamp, ResolvedRigidImpulse { field: impulse.field, targets }),
-            ImpulseTarget::Fluid | ImpulseTarget::FluidAndRigid(_) => {
-                Err("Matter coupling: impulses on the live liquid itself are not supported yet; target the bodies".into())
-            }
-        }
+        owner.rigid_mut().enqueue_impulse(stamp, ResolvedRigidImpulse { field: impulse.field, targets })
     }
 
     fn drain_physics_impulses(
@@ -550,11 +681,11 @@ impl MatterDomain {
             };
             let bodies = match self.body_buffers.take() {
                 Some(buffers) if !needs_bodies => buffers.bodies,
-                _ => gpu.device.create_buffer_shared(row_bytes.max(std::mem::size_of::<MatterBody>()) as u64),
+                _ => gpu.device.create_buffer_shared(row_bytes.max(std::mem::size_of::<LiquidBody>()) as u64),
             };
             self.body_buffers = Some(BodyBuffers {
                 bodies,
-                shapes: fresh(bytemuck::cast_slice(self.bodies.shapes()), std::mem::size_of::<MatterShape>()),
+                shapes: fresh(bytemuck::cast_slice(self.bodies.shapes()), std::mem::size_of::<LiquidShape>()),
                 atlas: fresh(bytemuck::cast_slice(self.bodies.atlas()), 4),
                 version,
             });
@@ -592,56 +723,15 @@ impl MatterDomain {
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let resolution = ctx.scalar_or_param("resolution", 64.0).round().max(0.0) as u32;
-        let domain_size = ctx.scalar_or_param("domain_size", 4.0);
-        let layout = domain_layout(ctx.inputs.transform("domain"), domain_size, resolution)?;
-        let lattice = MatterLattice::from_layout(&layout);
-        let blocks = lattice.blocks();
-        let (block_centre, block_size, block_bin) = lattice.block_sort_box();
-        admit_lattice(&lattice, ctx.param_f32("grid_budget_mcells", 8.0))?;
-        let dx = f64::from(lattice.cell_size);
-        let fill_height = ctx.scalar_or_param("fill_height", 0.4);
-        if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
-            return Err("Matter: fill height must lie within the domain height".into());
-        }
-        let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(lattice.cells[1]);
-        let mut column = [[0u32; 2]; 3];
-        if let Some(volume) = ctx.inputs.transform("initial_volume") {
-            if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
-                return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
-            }
-            if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
-                || volume.scale.iter().any(|v| *v <= 0.0)
-                || (0..3).any(|d| {
-                    let half = volume.scale[d] * 0.5;
-                    volume.pos[d] - half < layout.min[d] - 1e-4
-                        || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
-                })
-            {
-                return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
-            }
-            for (d, range) in column.iter_mut().enumerate() {
-                let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(lattice.cells[d]);
-                *range = [
-                    cell(volume.pos[d] - volume.scale[d] * 0.5),
-                    cell(volume.pos[d] + volume.scale[d] * 0.5),
-                ];
-            }
-        }
-        let points_per_cell = match ctx.params.get("points_per_cell") {
-            Some(ParamValue::Enum(1)) => 27,
-            _ => 8,
-        };
-        let seed = ctx.param_f32("seed", 0.0).round().clamp(0.0, 16_777_215.0) as u32;
-        let faces = closed_faces(ctx);
-        let setup = MatterSetup {
-            lattice,
-            closed_faces: faces,
-            pool_cells,
-            column,
-            points_per_cell,
-            seed,
-        };
+        let geometry = matter_geometry(
+            |name, default| ctx.scalar_or_param(name, default),
+            ctx.params,
+            ctx.inputs.transform("domain"),
+            ctx.inputs.transform("initial_volume"),
+        )?;
+        let MatterGeometry { layout, setup } = geometry;
+        let lattice = setup.lattice;
+        let dx = f64::from(lattice.cell_size());
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = ["gravity_x", "gravity", "gravity_z", "stiffness", "cohesion", "liveliness"]
             .map(|name| ctx.scalar_or_param(name, 0.0));
@@ -656,8 +746,8 @@ impl MatterDomain {
         if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
             return Ok(None);
         }
-        let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], RigidOwner::geometries);
-        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size)? == BodiesStatus::Pending {
+        let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
+        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size(), offline)? == BodiesStatus::Pending {
             return Ok(None);
         }
         let setup_changed = self.setup != Some(setup);
@@ -669,11 +759,15 @@ impl MatterDomain {
         let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
             (Some(owner), Some(observation)) if !restart => {
                 let reaction = self.reaction.as_ref();
+                let scale = self.coupled.scale;
                 // This frame's clear is encoded after this read.
                 let ticks = owner.settle(
                     &observation.inputs,
                     |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
-                    || reaction_words(reaction),
+                    |_, rows, impulses| {
+                        let scale = scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
+                        decode(scale, rows, reaction_words(reaction), impulses)
+                    },
                 )?;
                 if offline && ticks > 0 { None } else { Some(ticks) }
             }
@@ -702,7 +796,7 @@ impl MatterDomain {
         // without ticks keeps the last rows as the bodies' poses.
         let row_ticks = if frame.restarted { frame.ticks.max(1) } else { frame.ticks };
         self.rows_fresh = row_ticks > 0;
-        let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], RigidOwner::rows);
+        let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
         let rows = if row_ticks > 0 {
             let rows = self.bodies.rows(first_tick, row_ticks, coupled_rows).len() as f32;
             self.body_rows = rows;
@@ -710,10 +804,7 @@ impl MatterDomain {
         } else {
             self.body_rows
         };
-        let dynamic_count = coupled_rows
-            .iter()
-            .filter(|row| row.position_inv_mass[3] > 0.0 && row.accel_shape[3] >= 0.0)
-            .count();
+        let dynamic_count = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
 
         // D4: substeps from the stiffness/CFL rule, from parameters only.
         let longest = f64::from(layout.size.iter().copied().fold(0.0f32, f32::max));
@@ -732,12 +823,12 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) => owner.body_limit(lattice.cell_size, wave, v_est as f32)?,
+            Some(owner) => body_limit(owner, lattice.cell_size(), wave, v_est as f32)?,
             None => None,
         };
-        let substeps = substeps_per_tick(lattice.cell_size, wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
+        let substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
-        let unit = momentum_unit(lattice.cell_size, TICK / f64::from(substeps));
+        let unit = momentum_unit(lattice.cell_size(), TICK / f64::from(substeps));
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -748,16 +839,16 @@ impl MatterDomain {
                         owner.completed()
                     ));
                 }
-                let slot = ReactionSlot {
-                    tick: first_tick,
-                    stamp: clock.as_ref().map_or(0, FrameClock::stamp),
+                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
+                let scale = ReactionScale {
                     unit,
-                    cell_size: lattice.cell_size,
+                    cell_size: lattice.cell_size(),
                     offset: self.bodies.count() - owner.rows().len(),
                 };
-                owner.set_pending(slot);
+                owner.set_pending(pending);
+                self.coupled.scale = Some(scale);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, slot });
+                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, pending, scale });
                 }
             }
             // The liquid is shown at the tick Box3D has settled, with the
@@ -767,54 +858,36 @@ impl MatterDomain {
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
 
-        Ok(Some([
-            lattice.min[0],
-            lattice.min[1],
-            lattice.min[2],
-            lattice.cell_size,
-            lattice.nodes[0] as f32,
-            lattice.nodes[1] as f32,
-            lattice.nodes[2] as f32,
-            faces as f32,
-            ctx.scalar_or_param("gravity_x", 0.0),
-            ctx.scalar_or_param("gravity", -9.81),
-            ctx.scalar_or_param("gravity_z", 0.0),
-            pool_cells as f32,
-            column[0][0] as f32,
-            column[0][1] as f32,
-            column[1][0] as f32,
-            column[1][1] as f32,
-            column[2][0] as f32,
-            column[2][1] as f32,
-            points_per_cell as f32,
-            seed as f32,
-            frame.ticks as f32,
-            substeps as f32,
-            frame.epoch as f32,
-            frame.simulation_time as f32,
-            display_time as f32,
-            frame.dropped_seconds as f32,
-            lambda as f32,
-            ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0),
-            ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0),
-            WATER_DENSITY,
-            if limited { fitted as f32 } else { 0.0 },
-            blocks[0] as f32,
-            blocks[1] as f32,
-            blocks[2] as f32,
-            block_centre[0],
-            block_centre[1],
-            block_centre[2],
-            block_size[0],
-            block_size[1],
-            block_size[2],
-            block_bin,
-            unit,
-            self.bodies.count() as f32,
-            rows,
-            first_tick as f32,
-            dynamic_count as f32,
-        ]))
+        let per_frame = [
+            ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
+            ("gravity", ctx.scalar_or_param("gravity", -9.81)),
+            ("gravity_z", ctx.scalar_or_param("gravity_z", 0.0)),
+            ("ticks", frame.ticks as f32),
+            ("substeps_per_tick", substeps as f32),
+            ("epoch", frame.epoch as f32),
+            ("simulation_time", frame.simulation_time as f32),
+            ("display_time", display_time as f32),
+            ("dropped_seconds", frame.dropped_seconds as f32),
+            ("lambda", lambda as f32),
+            ("cohesion", ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0)),
+            ("liveliness", ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0)),
+            ("density", WATER_DENSITY),
+            ("limited_by_substeps", if limited { fitted as f32 } else { 0.0 }),
+            ("momentum_unit", unit),
+            ("body_count", self.bodies.count() as f32),
+            ("body_rows", rows),
+            ("first_tick", first_tick as f32),
+            ("dynamic_count", dynamic_count as f32),
+        ];
+        let mut values = [0.0; OUTPUTS.len()];
+        let mut written = 0u64;
+        for (name, value) in geometry.outputs().into_iter().chain(per_frame) {
+            let slot = OUTPUTS.iter().position(|output| *output == name).expect("every output has a slot");
+            values[slot] = value;
+            written |= 1 << slot;
+        }
+        debug_assert_eq!(written, (1 << OUTPUTS.len()) - 1, "every output written once");
+        Ok(Some(values))
     }
 
     /// Take the paired world's observation for this frame: check it shares
@@ -842,7 +915,7 @@ impl MatterDomain {
         *previous_reset = Some(observation.reset);
         if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *colliders)) {
             *epochs += 1;
-            *owner = Some(RigidOwner::new(&observation.inputs, *colliders, *epochs, owner.as_ref())?);
+            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *colliders, *epochs, owner.as_ref())?);
             *owner_fresh = true;
         }
         Ok(true)
@@ -855,7 +928,9 @@ impl MatterDomain {
         let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
         let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
-        owner.settle(&observation.inputs, |_| true, || reaction_words(Some(reaction)))?;
+        owner.settle(&observation.inputs, |_| true, |_, rows, impulses| {
+            decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
+        })?;
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
         let bodies = &self.body_buffers.as_ref().ok_or("Matter coupling: the body rows are missing")?.bodies;
         let bytes: &[u8] = bytemuck::cast_slice(rows);
@@ -867,7 +942,7 @@ impl MatterDomain {
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
-        owner.set_pending(ReactionSlot { tick: exchange.slot.tick + u64::from(tick), ..exchange.slot });
+        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), ..exchange.pending });
         Ok(())
     }
 
@@ -876,7 +951,7 @@ impl MatterDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let owner = RigidOwner::new(&observation.inputs, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
         self.coupled.owner = Some(owner);
         Ok(())
     }
