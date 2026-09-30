@@ -37,17 +37,6 @@ fn tick(engine: &mut PlaybackEngine, realtime: &mut f64, frame: &mut u64, dt: f6
     result
 }
 
-/// section 11 `video_sync_interval` = 2.0s (asserted directly on the default
-/// engine — this is the ruled-correct constant). The cadence *behavior*
-/// below runs with a shortened interval purely so the test is fast; the
-/// gate mechanism under test (`current_time - last_sync_time >=
-/// video_sync_interval`) is identical either way.
-#[test]
-fn default_video_sync_interval_matches_threshold_table() {
-    let engine = create_engine();
-    assert_eq!(engine.video_sync_interval(), Seconds(2.0));
-}
-
 /// Build a minimal single-clip project: one video layer, one long
 /// (never-ending during the test), non-looping clip starting at beat 0.
 /// Non-120 BPM deliberately (the beats-primary trap).

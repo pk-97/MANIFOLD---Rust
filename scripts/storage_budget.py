@@ -138,7 +138,7 @@ def _safe_size(path: Path, seen: Optional[set[tuple[int, int]]] = None,
         return 0
     if _regular_file(path):
         try:
-            stat = path.stat(follow_symlinks=False)
+            stat = path.lstat()
             key = (stat.st_dev, stat.st_ino)
             if key in seen:
                 return 0
@@ -361,9 +361,14 @@ def _cache_path(target: Path, path: Path) -> bool:
 
 _HASHED_DIR = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}$")
 _HASHED_ARTIFACT = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}(?:\.[A-Za-z0-9]+)?$")
+# Covers the hash file (lib-foo), its JSON twin and the dep-info file, for
+# compiled units and build-script runs.
 _FINGERPRINT_METADATA = re.compile(
-    r"^(?:dep-(?:lib|bin|test|example|build-script)-[A-Za-z0-9_.-]+|"
-    r"(?:lib|bin|test|example|build-script)-[A-Za-z0-9_.-]+\.json)$")
+    r"^(?:dep-)?(?:lib|bin|test|example|build-script|run-build-script)-"
+    r"[A-Za-z0-9_.-]+(?:\.json)?$")
+# split-debuginfo = "unpacked" leaves one object per codegen unit beside each
+# artifact: <crate>-<16 hex>.<cgu name>[.<id>].rcgu.o
+_RCGU_OBJECT = re.compile(r"^[A-Za-z0-9_-]+-[0-9a-f]{16}(?:\.[A-Za-z0-9_-]+)+\.rcgu\.o$")
 
 
 def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
@@ -391,12 +396,14 @@ def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
     if subtree in ("deps", "examples"):
         if len(parts) != 1 or "." not in name:
             return False
+        if _RCGU_OBJECT.match(name):
+            return True
         return bool(_HASHED_ARTIFACT.match(name)) and name.endswith(tuple(KNOWN_ARTIFACT_SUFFIXES))
     return False
 
 
 def _identity(path: Path) -> tuple[int, int, int, int, int, int]:
-    stat = path.stat(follow_symlinks=False)
+    stat = path.lstat()
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_mode,
             stat.st_blocks)
 
@@ -443,7 +450,7 @@ def plan_cache_cleanup(target: Path) -> CleanupPlan:
                 if not _cache_path(target, path):
                     continue
                 try:
-                    stat = path.stat(follow_symlinks=False)
+                    stat = path.lstat()
                     key = (stat.st_dev, stat.st_ino)
                     allocated = 0 if key in inode_seen else stat.st_blocks * ALLOCATED_BLOCK
                     inode_seen.add(key)

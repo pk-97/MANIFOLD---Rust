@@ -507,6 +507,7 @@ pub struct FluidRuntime {
     previous_reset: Option<f32>,
     reset_requested: bool,
     target_time: f64,
+    held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
     busy: bool,
@@ -558,6 +559,7 @@ impl Default for FluidRuntime {
             previous_reset: None,
             reset_requested: false,
             target_time: 0.0,
+            held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
             busy: false,
@@ -674,6 +676,7 @@ impl FluidRuntime {
             coupled.clear();
         }
         self.target_time = 0.0;
+        self.held = Default::default();
         self.completed_tick = 0;
         self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
         if self.epoch > 1 {
@@ -1024,6 +1027,7 @@ impl FluidRuntime {
         } else {
             self.target_time
         };
+        self.held.observe(target_time);
         if self.cache_mode == CacheMode::Playback {
             // The worker resolves timed takes from project transport. Retain
             // the absolute speed-scaled address only for untimed legacy caches.
@@ -1294,6 +1298,13 @@ impl FluidRuntime {
                 } else {
                     return Ok(());
                 }
+            }
+            // Pause and Simulation Speed 0 send no new live request, so
+            // retained time debt cannot drain while held. The batch already
+            // in flight covers played time and still publishes. Offline drains
+            // each frame's debt inside that frame.
+            if self.held.is_held() && self.initialized && !blocking {
+                return Ok(());
             }
             let target_tick = simulation_tick(self.target_time);
             let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
@@ -2010,6 +2021,91 @@ mod tests {
             .observe(settings, controls, Seconds(1.0), 1.0, 0.0)
             .unwrap();
         assert_eq!(runtime.target_time, 0.0);
+    }
+
+    /// WATER_SIMULATION_DESIGN.md "Transport pause / water speed zero": a held
+    /// target publishes only the batch already in flight, never drains preview
+    /// time debt, and discards impulses; moving again resumes from the held
+    /// tick without a jump.
+    #[test]
+    fn fluid_held_transport_freezes_live_water_with_time_debt() {
+        let settings = FluidSettings::default();
+        let controls = FluidControls::default();
+        let mut runtime = FluidRuntime::default();
+        runtime.observe(settings, controls, Seconds(0.0), 1.0, 0.0).unwrap();
+        runtime.advance(true).unwrap();
+        assert!(runtime.initialized);
+        // One second of debt; the live request carries one batch of it.
+        runtime.observe(settings, controls, Seconds(1.0), 1.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        assert!(runtime.busy);
+        let start_tick = runtime.completed_tick;
+        let held = |runtime: &FluidRuntime| {
+            (
+                runtime.version,
+                runtime.completed_tick,
+                runtime.busy,
+                bytemuck::cast_slice::<MeshVertex, u8>(&runtime.vertices).to_vec(),
+            )
+        };
+        // Wall-clock waits only bound a poll; they never decide an outcome.
+        let wait_for_tick_change = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
+            let from = runtime.completed_tick;
+            let started = std::time::Instant::now();
+            while runtime.completed_tick == from {
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(120),
+                    "in-flight batch never replied"
+                );
+                runtime
+                    .observe(settings, controls, Seconds(transport), speed, 0.0)
+                    .unwrap();
+                runtime.advance(false).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        // The batch in flight at pause covers played time, so it publishes;
+        // nothing is requested after it.
+        wait_for_tick_change(&mut runtime, 1.0, 1.0);
+        assert_eq!(runtime.completed_tick, start_tick + BATCH as u64);
+        assert!(!runtime.busy, "held water requested more steps");
+        let before = held(&runtime);
+        let hold = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
+            let started = std::time::Instant::now();
+            while started.elapsed() < std::time::Duration::from_millis(1500) {
+                runtime
+                    .observe(settings, controls, Seconds(transport), speed, 0.0)
+                    .unwrap();
+                runtime.advance(false).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        // Held water discards incoming events instead of bursting on resume.
+        let strike = |runtime: &mut FluidRuntime, transport: f64, sequence: u64| {
+            let stamp = runtime.impulse_stamp(Seconds(transport), sequence).unwrap();
+            let field = manifold_physics::FieldValue::uniform([4.0, 0.0, 0.0]).unwrap();
+            runtime.enqueue_impulse(stamp, field).unwrap();
+        };
+        hold(&mut runtime, 1.0, 1.0);
+        assert!(before == held(&runtime), "paused water moved");
+        strike(&mut runtime, 1.0, 0);
+        // Simulation Speed 0 holds while the transport keeps running.
+        hold(&mut runtime, 2.0, 0.0);
+        assert!(before == held(&runtime), "speed-zero water moved");
+        assert!((runtime.target_time - 1.0).abs() < 1e-9, "held time adds no debt");
+        strike(&mut runtime, 2.0, 1);
+        assert_eq!(runtime.impulse_outstanding, 0, "held impulses are discarded");
+
+        // Resume continues from the held tick one batch at a time.
+        wait_for_tick_change(&mut runtime, 2.0 + TICK, 1.0);
+        assert_eq!(
+            runtime.completed_tick,
+            before.1 + BATCH as u64,
+            "resume publishes one batch, not a jump"
+        );
+        runtime.advance(true).unwrap();
+        assert_eq!(runtime.completed_tick, simulation_tick(1.0 + TICK), "debt is retained");
+        assert_eq!(runtime.drain_applied_impulses().count(), 0, "no discarded impulse ran");
     }
 
     #[test]

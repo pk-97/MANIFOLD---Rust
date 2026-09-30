@@ -16,9 +16,15 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 
+from storage_budget import apply_cache_cleanup, plan_cache_cleanup
+
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 LOG_DIR = MAIN_CHECKOUT / ".claude/orchestration/trunk-health"
 BD = shutil.which("bd") or "/opt/homebrew/bin/bd"
+# Cargo never deletes superseded artifacts, so main's target only grows (226G
+# on 2026-09-30). Slots are capped at acquire; main is capped here, right
+# before the gates rebuild it anyway.
+MAIN_TARGET_CAP_GB = 100
 
 # launchd hands a job the bare system PATH, so `cargo` and everything cargo
 # shells out to are invisible to a scheduled run: every gate died with
@@ -38,6 +44,29 @@ def missing_tools():
     """Gate binaries this run cannot see. A loud stop beats four false reds."""
     path = gate_env()["PATH"]
     return [t for t in ("cargo", "git", "python3") if shutil.which(t, path=path) is None]
+
+
+def cap_main_target(dry_run):
+    """Clear main's Cargo caches when they pass the cap. The delete is
+    storage_budget's exact file manifest: regular files only, no directory
+    removal, no links followed, refused while any process holds the target."""
+    # The cap counts only what the manifest may delete. Measured against the
+    # whole folder, files it must keep could hold it over the cap forever and
+    # wipe the caches every night without ever getting under.
+    plan = plan_cache_cleanup(MAIN_CHECKOUT / "target")
+    size = plan.bytes_total
+    if plan.refusals:
+        return f"[target-cap] skipped: " + "; ".join(plan.refusals[:5]) + "\n"
+    if size <= MAIN_TARGET_CAP_GB * 2**30:
+        return f"[target-cap] {size / 2**30:.1f}G deletable, under the {MAIN_TARGET_CAP_GB}G cap\n"
+    if dry_run:
+        return f"[target-cap] {size / 2**30:.1f}G deletable, over the cap; would clear caches\n"
+    removed, files, failures = apply_cache_cleanup(plan, dry_run=False)
+    if failures:
+        return (f"[target-cap] {size / 2**30:.1f}G over the cap; removed {files} files "
+                f"({removed / 2**30:.1f}G); refused: " + "; ".join(failures[:5]) + "\n")
+    return (f"[target-cap] removed {files} cache files ({removed / 2**30:.1f}G) "
+            f"from {size / 2**30:.1f}G\n")
 
 
 def run_cmd(cmd, cwd, timeout):
@@ -79,6 +108,14 @@ def main():
                   cwd=MAIN_CHECKOUT, timeout=300)[1].strip()
     print(f"[trunk-health] origin/main @ {sha}")
     log_lines.append(f"trunk-health for origin/main @ {sha} ({datetime.now().strftime('%Y-%m-%d')})\n")
+
+    # Housekeeping never costs the night's gates.
+    try:
+        cap_line = cap_main_target(args.dry_run)
+    except Exception as e:
+        cap_line = f"[target-cap] failed, skipped: {e}\n"
+    print(cap_line, end="")
+    log_lines.append(cap_line)
 
     gates = [
         # Ignored-test ratchet: any #[ignore] beyond the baseline is a red

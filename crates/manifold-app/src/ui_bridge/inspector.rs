@@ -799,8 +799,8 @@ mod scene_card_convergence_tests {
                 .expect("Scene's fog_density must already be exposed by P1 stamping");
             // The OLD synth-id `DriverToggle` dispatch this fixture used to
             // run did double duty: it exposed AND armed an enabled driver in
-            // one shot (BUG-249's "expose-then-arm"). `driver_toggle_atomic`/
-            // `driver_trim_clean`/`driver_trim_stomp` below assume that
+            // one shot (BUG-249's "expose-then-arm"). `driver_toggle_atomic` and the
+            // driver-trim gesture case below assume that
             // pre-armed driver as their "before" state — reconstruct it
             // directly (no dispatch needed now that exposure is a given).
             if inst.drivers.as_ref().is_none_or(|ds| ds.is_empty()) {
@@ -1046,6 +1046,35 @@ mod scene_card_convergence_tests {
             )
         }
 
+        /// Every inspector slider's drag trio records exactly one undo that
+        /// restores the pre-gesture value and redoes the committed one, both
+        /// clean and when a full snapshot stomps the project mid-drag.
+        #[test]
+        fn every_slider_gesture_undoes_cleanly_even_under_snapshot_stomp() {
+            let cases: [fn(bool); 16] = [
+                master_opacity_case,
+                led_brightness_case,
+                macro_case,
+                layer_opacity_case,
+                audio_gain_case,
+                card_param_case,
+                driver_trim_case,
+                envelope_target_case,
+                envelope_decay_case,
+                audio_mod_shape_case,
+                audio_trigger_shape_case,
+                audio_send_gain_case,
+                audio_crossover_case,
+                relight_param_case,
+                ableton_macro_trim_case,
+                audio_mod_step_amount_case,
+            ];
+            for case in cases {
+                case(false);
+                case(true);
+            }
+        }
+
         // ── Settings sliders ─────────────────────────────────────
 
         fn master_opacity_case(stomp: bool) {
@@ -1090,16 +1119,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn master_opacity_clean() {
-            master_opacity_case(false);
-        }
-
-        #[test]
-        fn master_opacity_stomp() {
-            master_opacity_case(true);
-        }
-
         fn led_brightness_case(stomp: bool) {
             let project = Project::default();
             let mut h = Harness::new(None);
@@ -1142,16 +1161,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn led_brightness_clean() {
-            led_brightness_case(false);
-        }
-
-        #[test]
-        fn led_brightness_stomp() {
-            led_brightness_case(true);
-        }
-
         fn macro_case(stomp: bool) {
             let mut project = Project::default();
             project.settings.macro_bank.slots[0].value = 0.2;
@@ -1191,16 +1200,6 @@ mod scene_card_convergence_tests {
                 0.8,
                 stomp,
             );
-        }
-
-        #[test]
-        fn macro_clean() {
-            macro_case(false);
-        }
-
-        #[test]
-        fn macro_stomp() {
-            macro_case(true);
         }
 
         // ── Layer sliders ────────────────────────────────────────
@@ -1254,16 +1253,6 @@ mod scene_card_convergence_tests {
                 0.55,
                 stomp,
             );
-        }
-
-        #[test]
-        fn layer_opacity_clean() {
-            layer_opacity_case(false);
-        }
-
-        #[test]
-        fn layer_opacity_stomp() {
-            layer_opacity_case(true);
         }
 
         fn audio_gain_case(stomp: bool) {
@@ -1324,16 +1313,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn audio_gain_clean() {
-            audio_gain_case(false);
-        }
-
-        #[test]
-        fn audio_gain_stomp() {
-            audio_gain_case(true);
-        }
-
         // ── Card param drag (exposed manifest slot) ──────────────
 
         fn card_param_case(stomp: bool) {
@@ -1382,16 +1361,6 @@ mod scene_card_convergence_tests {
                 after,
                 stomp,
             );
-        }
-
-        #[test]
-        fn card_param_clean() {
-            card_param_case(false);
-        }
-
-        #[test]
-        fn card_param_stomp() {
-            card_param_case(true);
         }
 
         /// Two Scene generator layers (same structural preset, so a
@@ -1531,16 +1500,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn driver_trim_clean() {
-            driver_trim_case(false);
-        }
-
-        #[test]
-        fn driver_trim_stomp() {
-            driver_trim_case(true);
-        }
-
         /// Arm an envelope on a materialized exposed param.
         fn arm_envelope(
             h: &mut Harness,
@@ -1609,16 +1568,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn envelope_target_clean() {
-            envelope_target_case(false);
-        }
-
-        #[test]
-        fn envelope_target_stomp() {
-            envelope_target_case(true);
-        }
-
         fn envelope_decay_case(stomp: bool) {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
@@ -1658,16 +1607,6 @@ mod scene_card_convergence_tests {
                 3.5,
                 stomp,
             );
-        }
-
-        #[test]
-        fn envelope_decay_clean() {
-            envelope_decay_case(false);
-        }
-
-        #[test]
-        fn envelope_decay_stomp() {
-            envelope_decay_case(true);
         }
 
         // ── Audio modulation drawer sliders ──────────────────────
@@ -1754,16 +1693,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn audio_mod_shape_clean() {
-            audio_mod_shape_case(false);
-        }
-
-        #[test]
-        fn audio_mod_shape_stomp() {
-            audio_mod_shape_case(true);
-        }
-
         fn audio_trigger_shape_case(stomp: bool) {
             let (mut project, layer_id) = scene_layer_project();
             let send_id = with_send(&mut project);
@@ -1838,16 +1767,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn audio_trigger_shape_clean() {
-            audio_trigger_shape_case(false);
-        }
-
-        #[test]
-        fn audio_trigger_shape_stomp() {
-            audio_trigger_shape_case(true);
-        }
-
         // ── Audio Setup panel drags ──────────────────────────────
 
         fn audio_send_gain_case(stomp: bool) {
@@ -1901,16 +1820,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn audio_send_gain_clean() {
-            audio_send_gain_case(false);
-        }
-
-        #[test]
-        fn audio_send_gain_stomp() {
-            audio_send_gain_case(true);
-        }
-
         fn audio_crossover_case(stomp: bool) {
             let project = Project::default();
             let before = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
@@ -1950,16 +1859,6 @@ mod scene_card_convergence_tests {
                 after,
                 stomp,
             );
-        }
-
-        #[test]
-        fn audio_crossover_clean() {
-            audio_crossover_case(false);
-        }
-
-        #[test]
-        fn audio_crossover_stomp() {
-            audio_crossover_case(true);
         }
 
         // ── Relight knobs ────────────────────────────────────────
@@ -2007,16 +1906,6 @@ mod scene_card_convergence_tests {
                 after,
                 stomp,
             );
-        }
-
-        #[test]
-        fn relight_param_clean() {
-            relight_param_case(false);
-        }
-
-        #[test]
-        fn relight_param_stomp() {
-            relight_param_case(true);
         }
 
         // ── Atomic one-shots (buttons / toggles) ─────────────────
@@ -2373,16 +2262,6 @@ mod scene_card_convergence_tests {
             );
         }
 
-        #[test]
-        fn ableton_macro_trim_clean() {
-            ableton_macro_trim_case(false);
-        }
-
-        #[test]
-        fn ableton_macro_trim_stomp() {
-            ableton_macro_trim_case(true);
-        }
-
         fn audio_mod_step_amount_case(stomp: bool) {
             let (mut project, layer_id) = scene_layer_project();
             let mut h = Harness::new(Some(layer_id.clone()));
@@ -2444,16 +2323,6 @@ mod scene_card_convergence_tests {
                 0.65,
                 stomp,
             );
-        }
-
-        #[test]
-        fn audio_mod_step_amount_clean() {
-            audio_mod_step_amount_case(false);
-        }
-
-        #[test]
-        fn audio_mod_step_amount_stomp() {
-            audio_mod_step_amount_case(true);
         }
 
         // ── Clip gestures (timeline host path) ───────────────────
@@ -3113,49 +2982,29 @@ mod scene_card_convergence_tests {
             // ── DriverToggle ──────────────────────────────────────────
 
             #[test]
-            fn driver_toggle_master() {
-                let s = two_scopes("Bloom");
-                let pid = s.pid.clone();
-                let t = s.master_target.clone();
-                scope_atomic(
-                    "driver_toggle_master",
-                    s.project,
-                    &s.master_target,
-                    PanelAction::Modulation(ModulationAction::DriverToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.drivers.as_ref())
-                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled))
-                    },
-                    None,
-                    Some(true),
-                );
-            }
-
-            #[test]
-            fn driver_toggle_layer() {
-                let s = two_scopes("Bloom");
-                let pid = s.pid.clone();
-                let t = s.layer_target.clone();
-                scope_atomic(
-                    "driver_toggle_layer",
-                    s.project,
-                    &s.layer_target,
-                    PanelAction::Modulation(ModulationAction::DriverToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.drivers.as_ref())
-                            .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled))
-                    },
-                    None,
-                    Some(true),
-                );
+            fn driver_toggle_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let s = two_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let pid = s.pid.clone();
+                    let t = target.clone();
+                    scope_atomic(
+                        &format!("driver_toggle_{scope}"),
+                        s.project,
+                        &target,
+                        PanelAction::Modulation(ModulationAction::DriverToggle(
+                            manifold_ui::GraphParamTarget::Effect(0),
+                            pid.clone(),
+                        )),
+                        move |p| {
+                            p.preset_instance(&t)
+                                .and_then(|inst| inst.drivers.as_ref())
+                                .and_then(|ds| ds.iter().find(|d| d.param_id == pid).map(|d| d.enabled))
+                        },
+                        None,
+                        Some(true),
+                    );
+                }
             }
 
             // ── AudioModToggle ────────────────────────────────────────
@@ -3202,51 +3051,30 @@ mod scene_card_convergence_tests {
             }
 
             #[test]
-            fn audio_mod_toggle_master() {
-                let mut s = two_scopes("Bloom");
-                with_send(&mut s.project);
-                let pid = s.pid.clone();
-                let t = s.master_target.clone();
-                scope_atomic(
-                    "audio_mod_toggle_master",
-                    s.project,
-                    &s.master_target,
-                    PanelAction::Modulation(ModulationAction::AudioModToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.find_audio_mod(pid.as_ref()))
-                            .map(|m| m.enabled)
-                    },
-                    None,
-                    Some(true),
-                );
-            }
-
-            #[test]
-            fn audio_mod_toggle_layer() {
-                let mut s = two_scopes("Bloom");
-                with_send(&mut s.project);
-                let pid = s.pid.clone();
-                let t = s.layer_target.clone();
-                scope_atomic(
-                    "audio_mod_toggle_layer",
-                    s.project,
-                    &s.layer_target,
-                    PanelAction::Modulation(ModulationAction::AudioModToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.find_audio_mod(pid.as_ref()))
-                            .map(|m| m.enabled)
-                    },
-                    None,
-                    Some(true),
-                );
+            fn audio_mod_toggle_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let mut s = two_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    with_send(&mut s.project);
+                    let pid = s.pid.clone();
+                    let t = target.clone();
+                    scope_atomic(
+                        &format!("audio_mod_toggle_{scope}"),
+                        s.project,
+                        &target,
+                        PanelAction::Modulation(ModulationAction::AudioModToggle(
+                            manifold_ui::GraphParamTarget::Effect(0),
+                            pid.clone(),
+                        )),
+                        move |p| {
+                            p.preset_instance(&t)
+                                .and_then(|inst| inst.find_audio_mod(pid.as_ref()))
+                                .map(|m| m.enabled)
+                        },
+                        None,
+                        Some(true),
+                    );
+                }
             }
 
             // ── EnvelopeToggle — layer arms; master is a documented
@@ -3302,101 +3130,58 @@ mod scene_card_convergence_tests {
             // ── ParamToggle / ParamFire ───────────────────────────────
 
             #[test]
-            fn param_toggle_master() {
-                let s = two_scopes("Bloom");
-                let pid = s.pid.clone();
-                let t = s.master_target.clone();
-                let before = s
-                    .project
-                    .preset_instance(&s.master_target)
-                    .unwrap()
-                    .get_base_param(pid.as_ref());
-                let after = if before > 0.5 { 0.0 } else { 1.0 };
-                scope_atomic(
-                    "param_toggle_master",
-                    s.project,
-                    &s.master_target,
-                    PanelAction::Params(ParamsAction::ParamToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
-                    before,
-                    after,
-                );
+            fn param_toggle_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let s = two_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let pid = s.pid.clone();
+                    let t = target.clone();
+                    let before = s
+                        .project
+                        .preset_instance(&target)
+                        .unwrap()
+                        .get_base_param(pid.as_ref());
+                    let after = if before > 0.5 { 0.0 } else { 1.0 };
+                    scope_atomic(
+                        &format!("param_toggle_{scope}"),
+                        s.project,
+                        &target,
+                        PanelAction::Params(ParamsAction::ParamToggle(
+                            manifold_ui::GraphParamTarget::Effect(0),
+                            pid.clone(),
+                        )),
+                        move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
+                        before,
+                        after,
+                    );
+                }
             }
 
             #[test]
-            fn param_toggle_layer() {
-                let s = two_scopes("Bloom");
-                let pid = s.pid.clone();
-                let t = s.layer_target.clone();
-                let before = s
-                    .project
-                    .preset_instance(&s.layer_target)
-                    .unwrap()
-                    .get_base_param(pid.as_ref());
-                let after = if before > 0.5 { 0.0 } else { 1.0 };
-                scope_atomic(
-                    "param_toggle_layer",
-                    s.project,
-                    &s.layer_target,
-                    PanelAction::Params(ParamsAction::ParamToggle(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
-                    before,
-                    after,
-                );
-            }
-
-            #[test]
-            fn param_fire_master() {
-                let s = trigger_scopes("Bloom");
-                let pid = s.pid.clone();
-                let t = s.master_target.clone();
-                let before = s
-                    .project
-                    .preset_instance(&s.master_target)
-                    .unwrap()
-                    .get_base_param(pid.as_ref());
-                scope_atomic(
-                    "param_fire_master",
-                    s.project,
-                    &s.master_target,
-                    PanelAction::Params(ParamsAction::ParamFire(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
-                    before,
-                    before + 1.0,
-                );
-            }
-
-            #[test]
-            fn param_fire_layer() {
-                let s = trigger_scopes("Bloom");
-                let pid = s.pid.clone();
-                let t = s.layer_target.clone();
-                let before = s
-                    .project
-                    .preset_instance(&s.layer_target)
-                    .unwrap()
-                    .get_base_param(pid.as_ref());
-                scope_atomic(
-                    "param_fire_layer",
-                    s.project,
-                    &s.layer_target,
-                    PanelAction::Params(ParamsAction::ParamFire(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                    )),
-                    move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
-                    before,
-                    before + 1.0,
-                );
+            fn param_fire_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let s = trigger_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    let pid = s.pid.clone();
+                    let t = target.clone();
+                    let before = s
+                        .project
+                        .preset_instance(&target)
+                        .unwrap()
+                        .get_base_param(pid.as_ref());
+                    scope_atomic(
+                        &format!("param_fire_{scope}"),
+                        s.project,
+                        &target,
+                        PanelAction::Params(ParamsAction::ParamFire(
+                            manifold_ui::GraphParamTarget::Effect(0),
+                            pid.clone(),
+                        )),
+                        move |p| p.preset_instance(&t).unwrap().get_base_param(pid.as_ref()),
+                        before,
+                        before + 1.0,
+                    );
+                }
             }
 
             #[test]
@@ -3442,119 +3227,67 @@ mod scene_card_convergence_tests {
             // ── DriverConfig (one representative: a BeatDiv click) ────
 
             #[test]
-            fn driver_config_beat_div_master() {
-                let mut s = two_scopes("Bloom");
-                arm_driver(&mut s.project, &s.master_target, &s.pid);
-                let pid = s.pid.clone();
-                let t = s.master_target.clone();
-                scope_atomic(
-                    "driver_config_beat_div_master",
-                    s.project,
-                    &s.master_target,
-                    PanelAction::Modulation(ModulationAction::DriverConfig(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                        DriverConfigAction::BeatDiv(4), // -> Half
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.drivers.as_ref())
-                            .and_then(|ds| {
-                                ds.iter()
-                                    .find(|d| d.param_id == pid)
-                                    .map(|d| d.beat_division)
-                            })
-                    },
-                    Some(BeatDivision::Quarter),
-                    Some(BeatDivision::Half),
-                );
+            fn driver_config_beat_div_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let mut s = two_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    arm_driver(&mut s.project, &target, &s.pid);
+                    let pid = s.pid.clone();
+                    let t = target.clone();
+                    scope_atomic(
+                        &format!("driver_config_beat_div_{scope}"),
+                        s.project,
+                        &target,
+                        PanelAction::Modulation(ModulationAction::DriverConfig(
+                            manifold_ui::GraphParamTarget::Effect(0),
+                            pid.clone(),
+                            DriverConfigAction::BeatDiv(4), // -> Half
+                        )),
+                        move |p| {
+                            p.preset_instance(&t)
+                                .and_then(|inst| inst.drivers.as_ref())
+                                .and_then(|ds| {
+                                    ds.iter()
+                                        .find(|d| d.param_id == pid)
+                                        .map(|d| d.beat_division)
+                                })
+                        },
+                        Some(BeatDivision::Quarter),
+                        Some(BeatDivision::Half),
+                    );
+                }
             }
 
             #[test]
-            fn driver_config_beat_div_layer() {
-                let mut s = two_scopes("Bloom");
-                arm_driver(&mut s.project, &s.layer_target, &s.pid);
-                let pid = s.pid.clone();
-                let t = s.layer_target.clone();
-                scope_atomic(
-                    "driver_config_beat_div_layer",
-                    s.project,
-                    &s.layer_target,
-                    PanelAction::Modulation(ModulationAction::DriverConfig(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                        DriverConfigAction::BeatDiv(4), // -> Half
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.drivers.as_ref())
-                            .and_then(|ds| {
-                                ds.iter()
-                                    .find(|d| d.param_id == pid)
-                                    .map(|d| d.beat_division)
-                            })
-                    },
-                    Some(BeatDivision::Quarter),
-                    Some(BeatDivision::Half),
-                );
-            }
-
-            #[test]
-            fn driver_config_frame_align_master() {
-                let mut s = two_scopes("Bloom");
-                arm_driver(&mut s.project, &s.master_target, &s.pid);
-                let pid = s.pid.clone();
-                let t = s.master_target.clone();
-                scope_atomic(
-                    "driver_config_frame_align_master",
-                    s.project,
-                    &s.master_target,
-                    PanelAction::Modulation(ModulationAction::DriverConfig(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                        DriverConfigAction::ToggleFrameAligned,
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.drivers.as_ref())
-                            .and_then(|ds| {
-                                ds.iter()
-                                    .find(|d| d.param_id == pid)
-                                    .map(|d| d.frame_aligned)
-                            })
-                    },
-                    Some(false),
-                    Some(true),
-                );
-            }
-
-            #[test]
-            fn driver_config_frame_align_layer() {
-                let mut s = two_scopes("Bloom");
-                arm_driver(&mut s.project, &s.layer_target, &s.pid);
-                let pid = s.pid.clone();
-                let t = s.layer_target.clone();
-                scope_atomic(
-                    "driver_config_frame_align_layer",
-                    s.project,
-                    &s.layer_target,
-                    PanelAction::Modulation(ModulationAction::DriverConfig(
-                        manifold_ui::GraphParamTarget::Effect(0),
-                        pid.clone(),
-                        DriverConfigAction::ToggleFrameAligned,
-                    )),
-                    move |p| {
-                        p.preset_instance(&t)
-                            .and_then(|inst| inst.drivers.as_ref())
-                            .and_then(|ds| {
-                                ds.iter()
-                                    .find(|d| d.param_id == pid)
-                                    .map(|d| d.frame_aligned)
-                            })
-                    },
-                    Some(false),
-                    Some(true),
-                );
+            fn driver_config_frame_align_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let mut s = two_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    arm_driver(&mut s.project, &target, &s.pid);
+                    let pid = s.pid.clone();
+                    let t = target.clone();
+                    scope_atomic(
+                        &format!("driver_config_frame_align_{scope}"),
+                        s.project,
+                        &target,
+                        PanelAction::Modulation(ModulationAction::DriverConfig(
+                            manifold_ui::GraphParamTarget::Effect(0),
+                            pid.clone(),
+                            DriverConfigAction::ToggleFrameAligned,
+                        )),
+                        move |p| {
+                            p.preset_instance(&t)
+                                .and_then(|inst| inst.drivers.as_ref())
+                                .and_then(|ds| {
+                                    ds.iter()
+                                        .find(|d| d.param_id == pid)
+                                        .map(|d| d.frame_aligned)
+                                })
+                        },
+                        Some(false),
+                        Some(true),
+                    );
+                }
             }
 
             // ── AbletonInvertToggle — NOT undo-tracked (mirrors
@@ -3609,19 +3342,14 @@ mod scene_card_convergence_tests {
             }
 
             #[test]
-            fn ableton_invert_toggle_master() {
-                let mut s = two_scopes("Bloom");
-                arm_ableton_mapping(&mut s.project, &s.master_target, &s.pid);
-                let pid = s.pid.clone();
-                ableton_invert_case("ableton_invert_master", s.project, &s.master_target, pid);
-            }
-
-            #[test]
-            fn ableton_invert_toggle_layer() {
-                let mut s = two_scopes("Bloom");
-                arm_ableton_mapping(&mut s.project, &s.layer_target, &s.pid);
-                let pid = s.pid.clone();
-                ableton_invert_case("ableton_invert_layer", s.project, &s.layer_target, pid);
+            fn ableton_invert_toggle_on_both_scopes() {
+                for (scope, layer) in [("master", false), ("layer", true)] {
+                    let mut s = two_scopes("Bloom");
+                    let target = if layer { s.layer_target.clone() } else { s.master_target.clone() };
+                    arm_ableton_mapping(&mut s.project, &target, &s.pid);
+                    let pid = s.pid.clone();
+                    ableton_invert_case(&format!("ableton_invert_{scope}"), s.project, &target, pid);
+                }
             }
         }
     }
@@ -3686,67 +3414,50 @@ mod scene_card_convergence_tests {
             (b.min, b.max, b.scale, b.offset)
         }
 
+        /// A full snapshot landing mid-drag carries the stale pre-drag
+        /// project; restoring the guarded drag onto it must bring back the
+        /// in-flight value, so the commit sees new != old and records undo.
         #[test]
-        fn mapping_range_drag_survives_snapshot_stomp() {
+        fn mapping_drags_survive_snapshot_stomp() {
+            use crate::ui_bridge::scrub::{ResolvedScrub, ScrubState};
             let (project, target, binding_id) = project_with_binding();
-            let (min0, max0, _, _) = reshape(&project, &binding_id);
             assert_eq!(
-                (min0, max0),
-                (0.0, 1.0),
-                "fixture starts at the default range"
+                reshape(&project, &binding_id),
+                (0.0, 1.0, 1.0, 0.0),
+                "fixture starts at the default range and identity affine"
             );
 
-            // The guard a live range drag installs (in-flight range 0.2..0.8),
-            // now a `ResolvedScrub::MappingRange` in `ScrubState.active`.
-            let scrub = crate::ui_bridge::scrub::ScrubState {
-                active: Some(crate::ui_bridge::scrub::ResolvedScrub::MappingRange {
-                    target,
-                    param_id: binding_id.clone(),
-                    baseline: (0.2, 0.8),
-                    live: (0.2, 0.8),
-                }),
-            };
-            // A full snapshot lands mid-drag carrying the stale pre-drag
-            // project; app_render restores the guarded drag onto it via the real
-            // restore path.
-            let mut stomped = project.clone();
-            scrub.restore_dragged(&mut stomped);
-
-            let (min, max, _, _) = reshape(&stomped, &binding_id);
-            assert_eq!(
-                (min, max),
-                (0.2, 0.8),
-                "range stomp must be undone so the commit sees new != old and records undo"
-            );
-        }
-
-        #[test]
-        fn mapping_affine_drag_survives_snapshot_stomp() {
-            let (project, target, binding_id) = project_with_binding();
-            let (_, _, scale0, offset0) = reshape(&project, &binding_id);
-            assert_eq!(
-                (scale0, offset0),
-                (1.0, 0.0),
-                "fixture starts at identity affine"
-            );
-
-            let scrub = crate::ui_bridge::scrub::ScrubState {
-                active: Some(crate::ui_bridge::scrub::ResolvedScrub::MappingAffine {
-                    target,
-                    param_id: binding_id.clone(),
-                    baseline: (2.5, -0.5),
-                    live: (2.5, -0.5),
-                }),
-            };
-            let mut stomped = project.clone();
-            scrub.restore_dragged(&mut stomped);
-
-            let (_, _, scale, offset) = reshape(&stomped, &binding_id);
-            assert_eq!(
-                (scale, offset),
-                (2.5, -0.5),
-                "affine stomp must be undone so the commit sees new != old and records undo"
-            );
+            type Read = fn((f32, f32, f32, f32)) -> (f32, f32);
+            let cases: [(&str, ResolvedScrub, Read, (f32, f32)); 2] = [
+                (
+                    "range",
+                    ResolvedScrub::MappingRange {
+                        target: target.clone(),
+                        param_id: binding_id.clone(),
+                        baseline: (0.2, 0.8),
+                        live: (0.2, 0.8),
+                    },
+                    |r| (r.0, r.1),
+                    (0.2, 0.8),
+                ),
+                (
+                    "affine",
+                    ResolvedScrub::MappingAffine {
+                        target: target.clone(),
+                        param_id: binding_id.clone(),
+                        baseline: (2.5, -0.5),
+                        live: (2.5, -0.5),
+                    },
+                    |r| (r.2, r.3),
+                    (2.5, -0.5),
+                ),
+            ];
+            for (name, active, read, want) in cases {
+                let scrub = ScrubState { active: Some(active) };
+                let mut stomped = project.clone();
+                scrub.restore_dragged(&mut stomped);
+                assert_eq!(read(reshape(&stomped, &binding_id)), want, "{name} drag restored after stomp");
+            }
         }
     }
 

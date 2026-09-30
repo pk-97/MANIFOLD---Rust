@@ -250,7 +250,7 @@ focused tests each step; full workspace on the token change + shared-render chan
   replacing `lighten(30)`. Render-confirmed; the ring reads clearly on any header hue.
 - **section C shipped** (commit bb6be36): dropped `Info` (clip count) + `NewClip` + `AddGenClip` from
   `compute_layer_row` **and** its `oracle_row` equivalence gate (kept rect-equal), widened the folder
-  path label, removed the dead width consts. `layout_matches_frozen_oracle` + 426 lib tests pass.
+  path label, removed the dead width consts. The `oracle_row` gate was retired 2026-09-29.
 - **Render harness**: `cargo test -p manifold-renderer --test timeline_header_preview` →
   `scratchpad/native_header_baseline.png`. Uses `ScreenLayout` with `timeline_split_ratio = 0.96`
   and a 256×1100 texture to crop to the bottom-anchored layer-controls panel. `Read` the PNG to
@@ -409,7 +409,7 @@ Root fix: a Copy-safe `UIStyle::dropdown_caret` bool; when set, `draw_node` pain
 of the value text. `value_chip_style()` sets it; `with_caret()` (string concat) is deleted, and the
 live-refresh setters set the bare value. Verified headless (left-column crop @3×): caret reads as a dim
 right-pinned glyph on every identity hue; the `Note` toggle correctly has none. Zero new nodes (no
-hit-test risk), `layout_matches_frozen_oracle` unaffected (style-only), token guard unmoved at 131
+hit-test risk), layout unaffected (style-only), token guard unmoved at 131
 (new consts in the exempt `color.rs`).
 
 **Shipped — `BLEND` micro-label hierarchy (M5, root fix).** The mockup `.blend` chip is a dim

@@ -355,15 +355,16 @@ mod tests {
     }
 
     #[test]
-    fn toggle_round_trips() {
-        let mut project = project_with_effect();
-        AddAudioModCommand::new(effect_target(), make_mod("intensity")).execute(&mut project);
-        let mut cmd =
-            ToggleAudioModEnabledCommand::new(effect_target(), "intensity".into(), true, false);
-        cmd.execute(&mut project);
-        assert!(!project.settings.master_effects[0].find_audio_mod("intensity").unwrap().enabled);
-        cmd.undo(&mut project);
-        assert!(project.settings.master_effects[0].find_audio_mod("intensity").unwrap().enabled);
+    fn toggle_undo_and_redo_restore_the_whole_project() {
+        use crate::commands::setter_roundtrip::{SetterCase, assert_setter_cases};
+        assert_setter_cases(project_with_effect, &[SetterCase {
+            name: "enabled toggle",
+            build: |p| {
+                AddAudioModCommand::new(effect_target(), make_mod("intensity")).execute(p);
+                Box::new(ToggleAudioModEnabledCommand::new(effect_target(), "intensity".into(), true, false))
+            },
+            applied: |p| !p.settings.master_effects[0].find_audio_mod("intensity").unwrap().enabled,
+        }]);
     }
 
     #[test]

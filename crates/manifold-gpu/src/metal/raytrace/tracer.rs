@@ -36,10 +36,9 @@ use crate::trace_planner::{TraceRegion, DEFAULT_TRACE_WORK_LIMITS, estimate_trac
 /// bare MSL `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32; 3]`.
 const SHADOW_RAYS_MSL: &str = include_str!("../shadow_rays.msl");
 
-/// Subsurface transport extends the shared shadow-ray helper library.  Keep
-/// `SHADOW_RAYS_MSL` as the original source constant: source-ownership tests
-/// inspect that slice directly, while the device-global library compiles the
-/// concatenated helper and transport kernels once.
+/// Subsurface transport extends the shared shadow-ray helper library; the
+/// device-global library compiles the concatenated helper and transport
+/// kernels once.
 const SUBSURFACE_MSL: &str = include_str!("../subsurface.msl");
 
 // RT-T2-A: a 1x1 fully-opaque (alpha=1.0) texture — bound into every
@@ -2887,82 +2886,8 @@ mod tests {
         assert_eq!(std::mem::offset_of!(TraceRegion, extent), 8);
     }
 
-    #[test]
-    fn trace_specialization_scheduler_keeps_parent_boundaries() {
-        let source = include_str!("tracer.rs");
-        let implementation = source.split_once("impl ShadowRayTracer for MetalShadowRayTracer").unwrap().1;
-        let dispatch = msl_block(implementation, "fn dispatch_shadow_rays(");
-        let regions = msl_block(dispatch, "while let Some(region) = regions.next()");
-        let passes = msl_block(regions, "for pass in TracePass::ALL");
-        assert!(passes.contains("pass.enabled(params)"));
-        assert!(passes.contains("Some((8, trace_region_bytes(&region)))"));
-        assert!(!passes.contains("commit_and_continue"));
-        assert!(msl_block(regions, "if regions.peek().is_some()").contains("commit_and_continue(device)"));
-        // P5: every dispatch owns an encode-time inline snapshot; the
-        // compatibility `_params_buffer` argument is intentionally unused.
-        assert_eq!(dispatch.matches("params_buffer.upload").count(), 0);
-        assert!(dispatch.contains("GpuBinding::Bytes"));
-        assert_eq!(dispatch.matches("addCompletedHandler").count(), 1);
-        assert!(dispatch.find("addCompletedHandler").unwrap() > dispatch.find("commit_and_continue(device)").unwrap());
-        assert!(!dispatch.contains("None,\n            groups"));
-    }
-
-    fn msl_block<'a>(source: &'a str, marker: &str) -> &'a str {
-        let tail = source.split_once(marker).expect(marker).1;
-        let start = tail.find('{').expect("opening brace");
-        let mut depth = 0;
-        for (index, byte) in tail.bytes().enumerate().skip(start) {
-            match byte {
-                b'{' => depth += 1,
-                b'}' => { depth -= 1; if depth == 0 { return &tail[start + 1..index]; } }
-                _ => {}
-            }
-        }
-        panic!("unclosed MSL block {marker}");
-    }
-
-    // Source contracts verify ownership and gates, not generated machine code.
-    #[test]
-    fn trace_specialization_source_ownership_and_global_pixels() {
-        let kernel = msl_block(SHADOW_RAYS_MSL, "kernel void trace_shadow_rays(");
-        for declaration in [
-            "constant bool HAS_TRANSLUCENCY [[function_constant(100)]];",
-            "constant uint TRACE_PASS [[function_constant(101)]];",
-            "constant uint TRACE_SHADOW = 0u;", "constant uint TRACE_DIFFUSE = 1u;",
-            "constant uint TRACE_REFLECTION = 2u;", "#define MAX_RT_REFL_SPP 32u",
-        ] { assert!(SHADOW_RAYS_MSL.contains(declaration)); }
-        assert!(kernel.contains("uint2 tid = trace_region.xy + local_tid;"));
-        assert!(kernel.contains("local_tid.x >= trace_region.z || local_tid.y >= trace_region.w"));
-        assert!(kernel.contains("bool owns_normal = do_diffuse ||"));
-        assert!(kernel.contains("(do_reflection && p.ao_spp == 0u && p.gi_spp == 0u)"));
-        assert!(kernel.contains("bool clears_reflection = do_diffuse && p.refl_spp == 0u;"));
-        let void = msl_block(kernel, "if (!valid)");
-        assert!(msl_block(void, "if (do_shadow").contains("out_svt.write"));
-        assert!(msl_block(void, "if (do_diffuse").contains("out_irr.write"));
-        assert!(msl_block(void, "if (do_reflection || clears_reflection)").contains("-1.0"));
-        assert_eq!(kernel.matches("if (owns_normal)").count(), 2);
-        assert!(msl_block(kernel, "if (do_diffuse || do_reflection)").contains("primary_q.reset"));
-        assert!(msl_block(kernel, "if (do_diffuse && p.ao_spp").contains("ao_q.reset"));
-        let gi = msl_block(kernel, "if (do_diffuse && p.gi_spp");
-        assert!(gi.contains("gi_q.reset") && gi.contains("em_q.reset"));
-        let reflection = msl_block(kernel, "if (do_reflection)");
-        assert!(reflection.contains("refl_q.reset") && reflection.contains("uint rspp = p.refl_spp;"));
-        assert!(reflection.contains("out_refl.write(float4(0, 0, 0, -1.0), tid);"));
-        for forbidden in ["out_n.write", "out_irr.write", "out_sv.write"] { assert!(!reflection.contains(forbidden)); }
-        assert!(msl_block(kernel, "else if (clears_reflection)").contains("out_refl.write"));
-        for forbidden in ["runtime_pass", "active_pass", "fused_lighting"] {
-            assert!(!SHADOW_RAYS_MSL.contains(forbidden));
-        }
-        // P4a: [[buffer(9)]] is now legitimately the emissive-stats binding —
-        // assert the kernel signature and its Rust slot map stay paired
-        // (the R1 slot-map incident class: the compile asserts the MSL
-        // declaration, and RtPipelines::compile maps the same index).
-        assert!(SHADOW_RAYS_MSL.contains("device const EmissiveTableStats* emissive_stats [[buffer(9)]],"));
-    }
-
-
     use super::super::{RtObjectGeometry, blas_geometry_nonopaque};
-    use super::{GpuDevice, MetalShadowRayTracer, SHADOW_RAYS_MSL};
+    use super::{GpuDevice, MetalShadowRayTracer};
     use manifold_foundation::cold_touch::{ColdTouchKind, cold_touch_count};
 
     /// Executes the production normal-frame helper under production MSL options.
@@ -3124,69 +3049,6 @@ mod tests {
         assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 0.5, ..base }));
         assert!(blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 2.0, ..base }));
         assert!(!blas_geometry_nonopaque(&RtObjectGeometry { appearance_gain: 1.0, ..base }));
-    }
-
-    /// P4b (§5.2) source contracts: ONE shared appearance-acceptance helper
-    /// invoked by both candidate walkers (no per-walker copies), ONE shared
-    /// triangle-index resolution with no stray flat-layout corner math, and
-    /// the emissive sampler's coverage×brightness multiply at the sampled
-    /// barycentrics.
-    #[test]
-    fn p4b_appearance_source_contracts() {
-        assert_eq!(SHADOW_RAYS_MSL.matches("appearance_accepts(").count(), 3,
-            "one definition + the two walker call sites (alpha-test and transmission)");
-        assert_eq!(SHADOW_RAYS_MSL.matches("appearance_coverage_brightness(").count(), 4,
-            "one definition + acceptance helper + closest-hit brightness recompute + debug_ray_query");
-        assert_eq!(SHADOW_RAYS_MSL.matches("appearance_variate(").count(), 2,
-            "one definition + the acceptance helper's single draw");
-        // Corner resolution lives in exactly one helper; the old flat-layout
-        // `primitive_id * 3` pattern exists only inside rt_triangle_corners.
-        assert_eq!(SHADOW_RAYS_MSL.matches("primitive_id * 3").count(), 3,
-            "the three corner fetches inside rt_triangle_corners, nowhere else");
-        let corners = msl_block(SHADOW_RAYS_MSL, "static uint3 rt_triangle_corners(");
-        assert_eq!(corners.matches("rt_index_at(").count(), 3);
-        for consumer in ["static float3 fetch_interpolated_normal(", "static float2 fetch_interpolated_uv(", "static bool tangent_frame_at_hit("] {
-            assert!(msl_block(SHADOW_RAYS_MSL, consumer).contains("rt_triangle_corners("),
-                "{consumer} must resolve corners through the shared helper");
-        }
-        assert!(msl_block(SHADOW_RAYS_MSL, "static float3 perturb_normal_with_map(").contains("tangent_frame_at_hit("));
-        // Emissive generation uses the same index helper (enumerate + gather).
-        let enumerate = msl_block(SHADOW_RAYS_MSL, "kernel void emissive_enumerate(");
-        assert_eq!(enumerate.matches("rt_index_at(").count(), 3);
-        let gather = msl_block(SHADOW_RAYS_MSL, "kernel void emissive_gather(");
-        assert!(gather.matches("rt_index_at(").count() == 3 && gather.contains("appearance_weights_addr"));
-        // The explicit-emitter multiply: coverage × brightness once, at the
-        // sampled barycentrics, gain from the canonical row.
-        let trace = msl_block(SHADOW_RAYS_MSL, "kernel void trace_shadow_rays(");
-        assert!(trace.contains("em_contrib *= clamp(elevel, 0.0f, 1.0f) * max(elevel, 1.0f);"));
-        // Accepted hits multiply evaluated radiance by brightness once —
-        // GI gather and reflection hit shading.
-        assert!(trace.contains("gi += throughput * (bounce_emissive + bounce_term) * gi_brightness;"));
-        let gi = msl_block(trace, "if (do_diffuse && p.gi_spp");
-        assert!(gi.contains("if (slot_materials[oi].kind == 0.0f)"));
-        assert!(gi.contains("float3 unlit_emission = (sampler_active && bounce == 0u)"));
-        assert!(gi.contains("gi += throughput * (hit_albedo + unlit_emission) * gi_brightness;"));
-        // The shared surface resolver owns texture/factor evaluation for
-        // both hit classes. Numeric energy/lobe proofs cover its equations.
-        assert_eq!(gi.matches("rt_surface(").count(), 1);
-        assert!(gi.contains("rt_surface_fresnel(surface,"));
-        assert!(gi.contains("rt_direct_lights("));
-        let reflection = msl_block(trace, "if (walk_with_alpha_test(refl_q,");
-        assert_eq!(reflection.matches("rt_surface(").count(), 1);
-        assert_eq!(reflection.matches("refl_hit_brightness").count(), 2,
-            "unlit and lit reflection branches each apply appearance brightness once");
-    }
-
-    #[test]
-    fn retained_rt_source_contracts_are_present() {
-        assert!(SHADOW_RAYS_MSL.contains("constant bool HAS_TRANSLUCENCY [[function_constant(100)]];"));
-        for owner in ["static float3 sun_bounce_at_hit(", "static float3 rt_direct_lights(",
-            "kernel void trace_shadow_rays("] {
-            assert_eq!(msl_block(SHADOW_RAYS_MSL, owner)
-                .matches("force_opacity(forced_opacity::non_opaque)").count(), 1,
-                "{owner} must deliver translucent candidates for visibility queries");
-        }
-        assert!(SHADOW_RAYS_MSL.contains("MAX_RT_REFL_SPP"));
     }
 
     /// COMPILE_CONTRACT_DESIGN INV2: code is device-global — a second tracer

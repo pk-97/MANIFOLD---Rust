@@ -18,3 +18,8 @@ pub mod selection;
 pub mod session_commands;
 pub mod settings;
 pub mod stage;
+
+#[cfg(test)]
+use crate::command::Command;
+#[cfg(test)]
+pub(crate) mod setter_roundtrip;

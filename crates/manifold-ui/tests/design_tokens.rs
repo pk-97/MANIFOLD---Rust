@@ -38,7 +38,9 @@ use std::path::{Path, PathBuf};
 // at landing); the four raw literals it replaced came out of the count.
 // 209→205, 2026-09-26 (three-band waveforms): removed the old computed
 // spectral palette and its two interpolation fixture colours.
-const COLOR_BASELINE: usize = 205;
+// 205→201, 2026-09-29 (test prune): the deleted chrome style-pin tests held
+// four raw fixture colours.
+const COLOR_BASELINE: usize = 201;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]

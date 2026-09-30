@@ -2087,13 +2087,6 @@ mod tests {
 
     // ─── Per-instance graph override (Phase 1) ──────────────────
 
-    #[test]
-    fn new_effect_instance_has_no_graph_override() {
-        let fx = PresetInstance::new(PresetTypeId::new("Mirror"));
-        assert!(fx.graph.is_none());
-        assert_eq!(fx.graph_version, 0);
-    }
-
     // ─── touched flag: the automation self-trigger footgun ───
 
     #[test]

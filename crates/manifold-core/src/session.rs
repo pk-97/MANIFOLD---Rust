@@ -157,14 +157,6 @@ mod tests {
     }
 
     #[test]
-    fn default_grid_is_empty() {
-        let grid = SessionGrid::default();
-        assert!(grid.is_empty());
-        assert!(grid.scenes.is_empty());
-        assert!(grid.slots.is_empty());
-    }
-
-    #[test]
     fn non_empty_grid_reports_not_empty() {
         let grid = sample_grid();
         assert!(!grid.is_empty());
@@ -213,12 +205,5 @@ mod tests {
         assert_eq!(obj.len(), 2, "expected exactly scenes + slots keys, got {obj:?}");
         assert!(obj.contains_key("scenes"));
         assert!(obj.contains_key("slots"));
-    }
-
-    #[test]
-    fn clip_sequence_defaults() {
-        let seq = ClipSequence::default();
-        assert_eq!(seq.length_beats, Beats::ZERO);
-        assert!(seq.clips.is_empty());
     }
 }

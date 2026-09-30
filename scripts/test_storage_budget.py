@@ -219,9 +219,26 @@ def test_ancestor_symlink_refused_by_fd_traversal():
         check("ancestor symlink target remains", generated.exists(), "file removed through symlink")
 
 
+def test_real_cargo_names():
+    # Names copied from a live slot target, 2026-09-30.
+    rec = sb._recognized_cargo_file
+    check("codegen-unit object recognized", rec("deps", (
+        "manifold_playback-45cffb150ab52a7e.3ffzzz259qhxqz222i6agvff6.13qn3pm.rcgu.o",)))
+    check("named codegen-unit object recognized", rec("deps", (
+        "graph_tool-2642b0d0949f57f3.graph_tool.ad5d32f312c1c1c1-cgu.15.rcgu.o",)))
+    check("fingerprint hash file recognized", rec(".fingerprint", ("deflate64-07af2637e01f5bd0", "lib-deflate64")))
+    check("build-script run fingerprint recognized", rec(".fingerprint", (
+        "coremidi-sys-bd69ec384c8c8575", "run-build-script-build-script-build.json")))
+    check("hashed executable still kept", not rec("deps", ("structured_modifier_echo-0f1c97c31eb2a77a",)))
+    check("build-script output still kept", not rec("build", (
+        "libmimalloc-sys-38e0194b3fec4450", "out", "077ae3504b1c7768-static.o")))
+    check("object without a hash kept", not rec("deps", ("notes.3ffzzz.rcgu.o",)))
+
+
 for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_manifest_dry_run_apply_and_identity, test_live_and_uninspectable_refused,
-             test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal):
+             test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
+             test_real_cargo_names):
     try:
         test()
     except Exception as error:

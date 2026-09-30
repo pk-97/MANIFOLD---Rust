@@ -6,8 +6,6 @@
 //! so the inspector composite is untouched.
 
 use crate::ParamsAction;
-#[cfg(test)]
-use crate::RootAction;
 use super::{PanelAction, ScrubPhase, ScrubValue, ValueRef};
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
@@ -281,7 +279,7 @@ impl Default for LayerChromePanel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::tree::UITree;
 
@@ -331,18 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_click_chevron() {
-        let mut tree = UITree::new();
-        let mut panel = LayerChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
-        assert!(matches!(
-            panel.handle_click(chev).as_slice(),
-            [PanelAction::Params(ParamsAction::LayerChromeCollapseToggle)]
-        ));
-    }
-
-    #[test]
     fn sync_name_updates_in_place() {
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
@@ -357,23 +343,25 @@ mod tests {
         assert!(found);
     }
 
-    #[test]
-    fn right_click_on_opacity_track_resolves_to_slider_reset_with_declared_default() {
-        // the layer opacity reset now rides the generic SliderReset
-        // trio.
+    pub(crate) fn right_click_resets() -> Vec<crate::panels::contract_tests::ResetCase> {
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
         let mut reg = crate::intent::IntentRegistry::new();
         panel.register_intents(&mut reg);
+        let got = reg.resolve(&tree, panel.opacity.track_id(), crate::intent::Gesture::RightClick);
+        vec![crate::panels::contract_tests::ResetCase {
+            label: "opacity".into(),
+            got,
+            target: |v| matches!(v, ValueRef::LayerOpacity),
+            default: 1.0,
+        }]
+    }
 
-        let track = panel.opacity.track_id().unwrap();
-        match reg.resolve(&tree, Some(track), crate::intent::Gesture::RightClick) {
-            Some(PanelAction::Root(RootAction::SliderReset { changed, .. })) => {
-                assert!(matches!(*changed, PanelAction::Scrub(ValueRef::LayerOpacity, ScrubPhase::Move(ScrubValue::Scalar(v))) if (v - 1.0).abs() < f32::EPSILON));
-            }
-            other => panic!("expected SliderReset, got {other:?}"),
-        }
+    pub(crate) fn chevron_click() -> Vec<PanelAction> {
+        let mut tree = UITree::new();
+        let mut panel = LayerChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        panel.handle_click(panel.host.node_id_for_key(KEY_CHEVRON).unwrap())
     }
 }

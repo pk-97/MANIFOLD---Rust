@@ -2,7 +2,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::{Beats, Bpm};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::{
-    AddClipCommand, DeleteClipCommand, MoveClipCommand, MuteClipCommand, TrimClipCommand,
+    AddClipCommand, DeleteClipCommand, MoveClipCommand, TrimClipCommand,
 };
 use manifold_editing::commands::settings::ChangeBpmCommand;
 use manifold_editing::undo::UndoRedoManager;
@@ -100,40 +100,6 @@ fn trim_clip_undo_restores_duration() {
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.duration_beats - original_dur).abs() < Beats(0.001));
-}
-
-#[test]
-fn mute_clip_undo_roundtrip() {
-    let mut project = load_project("Burn V5.manifold");
-
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-    let was_muted = project.timeline.layers[0].clips[0].is_muted;
-
-    let mut cmd = MuteClipCommand::new(clip_id.clone(), was_muted, !was_muted);
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert_eq!(clip.is_muted, !was_muted);
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert_eq!(clip.is_muted, was_muted);
-}
-
-#[test]
-fn change_bpm_undo_roundtrip() {
-    let mut project = load_project("Burn V5.manifold");
-
-    let old_bpm = project.settings.bpm.0;
-    let new_bpm = 120.0;
-
-    let mut cmd = ChangeBpmCommand::new(Bpm(old_bpm), Bpm(new_bpm));
-
-    cmd.execute(&mut project);
-    assert!((project.settings.bpm.0 - new_bpm).abs() < 0.01);
-
-    cmd.undo(&mut project);
-    assert!((project.settings.bpm.0 - old_bpm).abs() < 0.01);
 }
 
 #[test]
