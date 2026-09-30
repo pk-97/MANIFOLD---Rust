@@ -655,7 +655,9 @@ struct RenderSceneUniforms {
     /// it, so Rendered/Solid/Wireframe renders are byte-identical whatever
     /// value rides here. `y/z/w` reserved.
     render_mode: [f32; 4],
-    /// Closed volume flag, homogeneous scattering density, embedded particle density, reserved.
+    /// Closed volume flag, homogeneous scattering density, embedded particle
+    /// density, and 1 where Pass B's depth prepass selects the nearest surface
+    /// (`ObjectDraw::depth_prepass_selects_nearest`).
     volume_optics: [f32; 4],
     volume_scattering_color: [f32; 4],
 }
@@ -1745,6 +1747,14 @@ impl ObjectDraw<'_> {
         self.alpha_mode == AlphaMode::Blend || self.is_transmissive
     }
 
+    /// Pass B depth-tests this draw against a prepass of its own triangles
+    /// over the opaque depth, so only its nearest surface shades: the volume
+    /// optics' nearest-surface pass and the shader's discard against it add
+    /// nothing (`volume_optics.w` = 1).
+    fn depth_prepass_selects_nearest(&self) -> bool {
+        self.is_transmissive && !self.points && self.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
+    }
+
     /// `draw`, switched to this object's GPU-written arguments when its mesh
     /// has a live extent.
     fn live<'a>(&'a self, draw: manifold_gpu::DepthMsaaDraw<'a>) -> manifold_gpu::DepthMsaaDraw<'a> {
@@ -2342,7 +2352,7 @@ impl RenderScene {
                 + (world_pos[1] - cam.pos[1]) * cam.fwd[1]
                 + (world_pos[2] - cam.pos[2]) * cam.fwd[2];
 
-            draws.push(ObjectDraw {
+            let mut draw = ObjectDraw {
                 vertices,
                 weights,
                 uniforms,
@@ -2397,7 +2407,11 @@ impl RenderScene {
                 kind: material.kind,
                 fill_mode: color_pass_fill_mode(&render_mode),
                 points,
-            });
+            };
+            if draw.depth_prepass_selects_nearest() {
+                draw.uniforms.volume_optics[3] = 1.0;
+            }
+            draws.push(draw);
         }
 
         let live = draws.iter().filter(|d| d.live_extent.is_some()).count();
@@ -4920,8 +4934,7 @@ impl RenderScene {
             // of all panes replacing one another with the original opaque image.
             for (_, draw_index, draw_call) in &blend_entries {
                 let draw = &draws[*draw_index];
-                let nearest_surface = draw.is_transmissive && !draw.points
-                    && draw.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill;
+                let nearest_surface = draw.depth_prepass_selects_nearest();
                 let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
                 let shadow_bindings = [
                     GpuBinding::Bytes {

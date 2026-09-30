@@ -1674,7 +1674,8 @@ fn eval_iridescence(outside_ior: f32, eta2: f32, cos_theta1: f32, thickness: f32
 // and the only well-defined choice when light_count can be 0.
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    if u.volume_optics.x > 0.5 {
+    // w = 1: Pass B's depth prepass already keeps only the nearest surface.
+    if u.volume_optics.x > 0.5 && u.volume_optics.w < 0.5 {
         let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);
         if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }
     }

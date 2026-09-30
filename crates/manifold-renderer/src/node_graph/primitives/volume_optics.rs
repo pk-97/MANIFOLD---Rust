@@ -151,18 +151,22 @@ impl VolumeOptics {
                     GpuLoadAction::Clear,
                     "volume signed path",
                 );
-                let call = draw.live(GpuEncoder::depth_msaa_draw(
-                    self.nearest_pipeline.as_ref().expect("ensured"),
-                    &b,
-                    draw.vertex_count,
-                    draw.instance_count,
-                ));
-                encoder.draw_instanced_depth_only_batch(
-                    &targets.nearest,
-                    self.depth_state.as_ref().expect("ensured"),
-                    &[call],
-                    "volume nearest surface",
-                );
+                // Pass B's own depth prepass already keeps only the nearest
+                // surface of a filled triangle mesh.
+                if !draw.depth_prepass_selects_nearest() {
+                    let call = draw.live(GpuEncoder::depth_msaa_draw(
+                        self.nearest_pipeline.as_ref().expect("ensured"),
+                        &b,
+                        draw.vertex_count,
+                        draw.instance_count,
+                    ));
+                    encoder.draw_instanced_depth_only_batch(
+                        &targets.nearest,
+                        self.depth_state.as_ref().expect("ensured"),
+                        &[call],
+                        "volume nearest surface",
+                    );
+                }
             }
             if density > 0.0 {
                 u.parameters[0] = density;
