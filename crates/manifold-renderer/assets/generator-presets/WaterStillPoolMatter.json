@@ -1894,10 +1894,6 @@
               "resolution_scale": {
                 "type": "Int",
                 "value": 3
-              },
-              "threshold": {
-                "type": "Float",
-                "value": 0.5
               }
             }
           },

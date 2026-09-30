@@ -684,7 +684,7 @@ fn reference_blob(
         }
     }
     let shift = (0..3).map(|a| (centre[a] - x[a]).powi(2)).sum::<f64>().sqrt();
-    let cap = (cell - shift).max(1e-6 * cell);
+    let cap = ((1.0 - LEVEL_SET_BAND) * cell - shift).max(1e-6 * cell);
     let axes = axes.map(|a| a.min(cap));
     // G = V diag(1/a) Vᵀ with eigenvectors as columns of V (basis[row][col]).
     let g = std::array::from_fn(|r| {
@@ -805,8 +805,15 @@ fn fluid_shape_particle_blobs_match_reference_shapes() {
     assert!(paired < scale * r && paired > iso * scale * r, "{paired}");
 }
 
+/// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
+/// `node.particle_volume` and `node.shape_particle_blobs` both hold it (P6e).
+const LEVEL_SET_BAND: f64 = 0.1;
+
+/// The volume against a brute force over every blob, not just the node's
+/// bins: it matches only if no blob the ±1-bin search misses comes within the
+/// cap, which is the blob atom's reach contract.
 #[test]
-fn fluid_particle_volume_matches_brute_force_sum_and_solid_clamp() {
+fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.0, 2.0], cell: 0.25 };
     let solid_nodes = [9u32, 9, 9];
@@ -838,13 +845,11 @@ fn fluid_particle_volume_matches_brute_force_sum_and_solid_clamp() {
     let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
     let total = nodes.iter().product::<u32>() as usize;
     let (levelset_slot, levelset_buf) = harness.array::<f32>(&[], total);
-    let threshold = 0.5_f32;
     let mut node_params = lattice.params(&[
         ("nodes_x", solid_nodes[0] as f32),
         ("nodes_y", solid_nodes[1] as f32),
         ("nodes_z", solid_nodes[2] as f32),
         ("resolution_scale", scale as f32),
-        ("threshold", threshold),
     ]);
     node_params.insert(Cow::Borrowed("resolution_scale"), ParamValue::Float(scale as f32));
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
@@ -866,45 +871,102 @@ fn fluid_particle_volume_matches_brute_force_sum_and_solid_clamp() {
     }
     let levelset: Vec<f32> = read(&levelset_buf, total);
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
-    let (mut inside, mut clamped) = (0, 0);
+    let band = LEVEL_SET_BAND * f64::from(lattice.cell);
+    let (mut inside, mut clamped, mut in_band) = (0, 0, 0);
     for (idx, &value) in levelset.iter().enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
         let border = (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1);
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
-        let mut sum = 0.0;
+        let mut expected = band;
         for blob in &blobs[..particles.len()] {
-            let d: [f64; 3] = std::array::from_fn(|a| p[a] - f64::from(blob.center_radius[a]));
             let reach = f64::from(blob.center_radius[3]);
-            if d.iter().map(|v| v * v).sum::<f64>() >= reach * reach {
+            if reach <= 0.0 {
                 continue;
             }
+            let d: [f64; 3] = std::array::from_fn(|a| p[a] - f64::from(blob.center_radius[a]));
             let g = blob_matrix(blob);
             let v: [f64; 3] = std::array::from_fn(|r| (0..3).map(|c| g[r][c] * d[c]).sum());
-            let q2: f64 = v.iter().map(|x| x * x).sum();
-            if q2 < 1.0 {
-                sum += (1.0 - q2).powi(3);
-            }
+            let q = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+            expected = expected.min(reach * (q - 1.0));
         }
-        let mut expected = f64::from(threshold) - sum;
         // Solid distance is linear in y, so trilinear interpolation is exact.
         if !border && p[1] - 0.7 < 0.0 {
             expected = expected.max(0.0);
             clamped += 1;
         }
         if border {
-            expected = f64::from(threshold);
+            expected = band;
         }
         if expected < 0.0 {
             inside += 1;
+        } else if expected > 0.0 && expected < band {
+            in_band += 1;
         }
-        let tolerance = 1e-4 * sum.abs().max(1.0);
         assert!(
-            (f64::from(value) - expected).abs() <= tolerance,
+            (f64::from(value) - expected).abs() <= 2e-6,
             "node {ijk:?}: {value} vs {expected}"
         );
     }
     assert!(inside > 100, "the fixture has liquid ({inside} inside nodes)");
+    assert!(in_band > 100, "the fixture has nodes inside the cap band ({in_band})");
     assert!(clamped > 100, "the solid covers part of the lattice ({clamped} nodes)");
+}
+
+/// A lone sphere: the level set is the exact signed distance to it inside
+/// the cap band.
+#[test]
+fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0], cell: 0.25 };
+    let solid_nodes = [5u32, 5, 5];
+    let centre = [0.03_f32, -0.02, 0.01];
+    let (r, scale) = (0.05_f32, 3.0_f32);
+    let particles = [particle(centre, r, 1)];
+    let shape = [("particle_scale", scale), ("stretch", 4.0), ("smoothing", 0.0), ("isolated_scale", 1.0), ("min_neighbours", 6.0)];
+    let (_, _, _, (_, ranges_slot, blobs_slot)) = sort_and_shape(&mut harness, &lattice, &particles, 1, &shape);
+    // Everything outside the solid.
+    let solid = vec![1.0_f32; solid_nodes.iter().product::<u32>() as usize];
+    let (solid_slot, _) = harness.array(&solid, solid.len());
+    let res = 4u32;
+    let nodes = solid_nodes.map(|n| (n - 1) * res + 1);
+    let total = nodes.iter().product::<u32>() as usize;
+    let (levelset_slot, levelset_buf) = harness.array::<f32>(&[], total);
+    let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let (_, errors) = harness.run(
+        &mut ParticleVolume::new(),
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[
+            ("levelset", levelset_slot),
+            ("volume_nodes_x", volume_nodes[0]),
+            ("volume_nodes_y", volume_nodes[1]),
+            ("volume_nodes_z", volume_nodes[2]),
+        ],
+        &lattice.params(&[
+            ("nodes_x", solid_nodes[0] as f32),
+            ("nodes_y", solid_nodes[1] as f32),
+            ("nodes_z", solid_nodes[2] as f32),
+            ("resolution_scale", res as f32),
+        ]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let levelset: Vec<f32> = read(&levelset_buf, total);
+    let min = lattice.min();
+    let h = f64::from(lattice.size[0]) / f64::from(nodes[0] - 1);
+    let radius = f64::from(scale * r);
+    let band = LEVEL_SET_BAND * f64::from(lattice.cell);
+    let mut inside = 0;
+    for (idx, &value) in levelset.iter().enumerate() {
+        let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
+        let border = (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1);
+        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h);
+        let distance = (0..3).map(|a| (p[a] - f64::from(centre[a])).powi(2)).sum::<f64>().sqrt() - radius;
+        let expected = if border { band } else { distance.min(band) };
+        if expected < 0.0 {
+            inside += 1;
+        }
+        assert!((f64::from(value) - expected).abs() <= 2e-6, "node {ijk:?}: {value} vs {expected}");
+    }
+    assert!(inside > 20, "the sphere covers lattice nodes ({inside})");
 }
 
 // --- P6: marching cubes ---------------------------------------------------

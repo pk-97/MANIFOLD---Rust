@@ -76,7 +76,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Feed it node.sort_particles_into_cells' outputs with the same box and cell_size. The kernel never reaches past one bin, so cell_size bounds both the look and the cost: particle_scale above cell_size / radius has no further effect. Live params: changing any of them reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
+    composition_notes: "Feed it node.sort_particles_into_cells' outputs with the same box and cell_size. The kernel never reaches past 0.9 bin from its particle (the band node.particle_volume's distance cap relies on), so cell_size bounds both the look and the cost: particle_scale above 0.9 × cell_size / radius has no further effect. Live params: changing any of them reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
     examples: [],
     picker: { label: "Shape Particle Blobs", category: Atom },
     summary: "Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads.",

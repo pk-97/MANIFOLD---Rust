@@ -1,10 +1,12 @@
 // node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
-// node: threshold − Σ (1 − |G·(x − c)|²)³ over the blobs in the node's 27 bins
-// (negative inside; GPU_FLUID_SURFACE_DESIGN.md D18, never an atomic splat).
-// The lattice is the solid lattice refined by resolution_scale over the same
-// box. A node inside a solid is capped at 0 — never inside the liquid, as
-// upstream's scalar field caps solid vertices at the threshold — and the
-// lattice border is empty, so the surface closes (D15).
+// node: the distance to the nearest blob ellipsoid in the node's 27 bins,
+// a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),
+// negative inside, capped at band = 0.1 bin outside (GPU_FLUID_SURFACE_DESIGN.md
+// D18, P6e; never an atomic splat). node.shape_particle_blobs keeps every blob
+// within 0.9 bin of its particle, so a blob the search misses is at least band
+// away and the cap is exact. A node inside a solid is capped at 0 — never
+// inside the liquid, as upstream's scalar field caps solid vertices — and the
+// lattice border is outside, so the surface closes (D15).
 //
 // ABI: `blobs` (FluidBlob → Element), `cell_ranges` (CellRange → Element2) and
 // `solid` (f32) are gathered; the output is one f32 per node.
@@ -39,23 +41,23 @@ fn body(
     nodes_z: f32,
     cell_size: f32,
     resolution_scale: i32,
-    threshold: f32,
 ) -> f32 {
+    let band = 0.1 * cell_size;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
     if idx >= nodes.x * nodes.y * nodes.z {
-        return threshold;
+        return band;
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
     if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return threshold;
+        return band;
     }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
 
-    var sum = 0.0;
+    var phi = band;
     let bins = max(vec3<i32>(1), vec3<i32>(ceil(size / cell_size)));
     let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
     for (var dz = -1; dz <= 1; dz = dz + 1) {
@@ -68,9 +70,11 @@ fn body(
                 let range = buf_cell_ranges[u32(b.x + bins.x * (b.y + bins.y * b.z))];
                 for (var k = range.start; k < range.start + range.count; k = k + 1u) {
                     let blob = buf_blobs[k];
-                    let d = p - blob.center_radius.xyz;
                     let reach = blob.center_radius.w;
-                    if !(reach > 0.0) || dot(d, d) >= reach * reach {
+                    let d = p - blob.center_radius.xyz;
+                    // Past reach + band the blob cannot go below the cap.
+                    let limit = reach + band;
+                    if !(reach > 0.0) || dot(d, d) >= limit * limit {
                         continue;
                     }
                     let diag = blob.shape_diag;
@@ -80,16 +84,11 @@ fn body(
                         off.x * d.x + diag.y * d.y + off.z * d.z,
                         off.y * d.x + off.z * d.y + diag.z * d.z,
                     );
-                    let q2 = dot(v, v);
-                    if q2 < 1.0 {
-                        let falloff = 1.0 - q2;
-                        sum = sum + falloff * falloff * falloff;
-                    }
+                    phi = min(phi, reach * (length(v) - 1.0));
                 }
             }
         }
     }
-    var phi = threshold - sum;
     let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
     if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
         phi = max(phi, 0.0);
