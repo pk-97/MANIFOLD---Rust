@@ -7,6 +7,11 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use serde_json::{Value, json};
 
+#[cfg(feature = "gpu-proofs")]
+use super::matter_frame::wall_distance_lattice;
+use crate::node_graph::fluid::domain_layout;
+use crate::node_graph::matter::MatterLattice;
+
 /// The box is 4 m on its longest side; the lowest wave it holds is 2π / 4 m.
 pub(super) const BOX_METRES: f64 = 4.0;
 
@@ -67,6 +72,11 @@ pub(super) struct WaterScene {
     pub column: [[f64; 2]; 3],
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
+    /// Give the surface the seam's lattice (`surface_lattice`), so its mesh
+    /// closes as rendering needs. Without it the lattice is the bare tank and
+    /// the mesh stays open at the walls and floor, which the meshed-volume
+    /// oracle (`swash_volume.rs`) measures.
+    pub closed_surface: bool,
     /// How fast crowded cells spread (1/s): node.density_source's rate. 0
     /// leaves the density solve out.
     pub spread_rate: f64,
@@ -105,6 +115,7 @@ impl WaterScene {
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
+            closed_surface: false,
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
             density_passes: DENSITY_PASSES,
             surface_scale: 3,
@@ -125,9 +136,39 @@ impl WaterScene {
         Self { pressure: PressureShape { passes, ..self.pressure }, ..self }
     }
 
-    /// Nodes per axis of the surface's solid lattice: the cell corners.
+    /// The surface as the renderer draws it: closed (`closed_surface`).
+    pub fn with_closed_surface(self) -> Self {
+        Self { surface: true, closed_surface: true, ..self }
+    }
+
+    /// The surface's solid lattice. Closed, it is the particle-frame seam's
+    /// (GPU_FLUID_SURFACE_DESIGN.md section 3.2 (Atoms and ports)): the tank's
+    /// cells grown by the matter padding on every side, so the liquid never
+    /// reaches the border and the level set's smoothing cannot pull the border
+    /// inside. Open, it is the tank's cell corners.
+    pub fn surface_lattice(&self) -> MatterLattice {
+        let layout = domain_layout(None, BOX_METRES as f32, self.pressure.n as u32).expect("tank layout");
+        assert!(layout.min.iter().zip(DAM_MIN).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-6), "the layout is the tank");
+        if self.closed_surface {
+            MatterLattice::from_layout(&layout)
+        } else {
+            MatterLattice { min: layout.min, nodes: layout.cells.map(|n| n + 1), cell_size: layout.cell_size as f32, cells: layout.cells }
+        }
+    }
+
+    /// Nodes per axis of the surface's solid lattice.
     pub fn surface_nodes(&self) -> usize {
-        self.pressure.n + 1
+        self.surface_lattice().nodes[0] as usize
+    }
+
+    /// The surface's solid lattice values. Closed: the seam's lattice for a
+    /// tank closed on all six faces, each node's signed distance to the
+    /// nearest wall, negative past it. Open: no solid, zero everywhere. Only
+    /// the GPU harnesses fill the lattice.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn surface_solid(&self) -> Vec<f32> {
+        let lattice = self.surface_lattice();
+        if self.closed_surface { wall_distance_lattice(&lattice, 63) } else { vec![0.0; lattice.node_count() as usize] }
     }
 
     /// A pool 1 m deep and nothing else (I5).
@@ -407,8 +448,9 @@ fn surface_group() -> Value {
 /// `WaterDamBreakGpu.json` nodes the render leaves out: the FLIP engine and
 /// its Liquid Surface copy (the scene brings its own), the engine's column,
 /// and the obstacle and whitewater objects the engine feeds. SWASH has no
-/// solids or whitewater yet.
-const RENDER_LEFT_OUT: [&str; 16] = [
+/// solids or whitewater yet. The studio floor goes too: Peter's exports drop
+/// it for a black backdrop, and it changes what the water refracts.
+const RENDER_LEFT_OUT: [&str; 20] = [
     "fluid_surface",
     "liquid_surface",
     "initial_column",
@@ -425,15 +467,20 @@ const RENDER_LEFT_OUT: [&str; 16] = [
     "spray_mesh",
     "spray_material",
     "spray_object",
+    "studio_floor_mesh",
+    "studio_floor_material",
+    "studio_floor_transform",
+    "studio_floor",
 ];
 
 /// A meshed scene through the render graph the app shows for the GPU liquid
 /// surface: `WaterDamBreakGpu.json`'s camera, lights, environment, tank, the
 /// water material with its volume optics, and the tone map, drawing SWASH's
-/// mesh in place of the engine's. The generator's trigger count restarts the
-/// liquid, as a clip relaunch would.
+/// mesh in place of the engine's. The mesh is closed (`with_closed_surface`):
+/// the volume optics measure the water's path length between its faces. The
+/// generator's trigger count restarts the liquid, as a clip relaunch would.
 pub(super) fn render_def(scene: WaterScene) -> EffectGraphDef {
-    let mut def = serde_json::to_value(water_def(scene.with_surface())).expect("water def serialises");
+    let mut def = serde_json::to_value(water_def(scene.with_closed_surface())).expect("water def serialises");
     let preset = gpu_surface_preset();
     let id_of = |graph: &Value, name: &str| -> u64 {
         let nodes = graph["nodes"].as_array().expect("nodes");
@@ -491,25 +538,26 @@ fn set_surface_scale(value: &mut Value, scale: usize) {
     }
 }
 
-/// The liquid surface over the tank: its solid lattice is the cell corners,
-/// with no solid in it (`solid` is a test source the harness zeroes).
+/// The liquid surface over the tank, fed the seam's lattice wires: bounds and
+/// nodes of `WaterScene::surface_lattice`, and `solid`, a test source the
+/// harness fills with `WaterScene::surface_solid`.
 fn surface(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
     let nodes = scene.surface_nodes();
     let solid = b.node("solid", "test.value_source", json!({"max_capacity": capacity(nodes.pow(3))}));
-    let half = 0.5 * BOX_METRES;
+    let lattice = scene.surface_lattice().bounds();
     let bounds = b.node(
-        "tank",
+        "surface_lattice",
         "node.transform_3d",
         json!({
-            "pos_x": float(DAM_MIN[0] + half),
-            "pos_y": float(DAM_MIN[1] + half),
-            "pos_z": float(DAM_MIN[2] + half),
-            "scale_x": float(BOX_METRES),
-            "scale_y": float(BOX_METRES),
-            "scale_z": float(BOX_METRES),
+            "pos_x": float(f64::from(lattice.pos[0])),
+            "pos_y": float(f64::from(lattice.pos[1])),
+            "pos_z": float(f64::from(lattice.pos[2])),
+            "scale_x": float(f64::from(lattice.scale[0])),
+            "scale_y": float(f64::from(lattice.scale[1])),
+            "scale_z": float(f64::from(lattice.scale[2])),
         }),
     );
-    let corners = b.node("corners", "node.value", json!({"value": float(nodes as f64)}));
+    let corners = b.node("surface_nodes", "node.value", json!({"value": float(nodes as f64)}));
     let mut group = surface_group();
     set_surface_scale(&mut group, scene.surface_scale);
     let id = b.nodes.len();
