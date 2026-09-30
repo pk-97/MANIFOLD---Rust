@@ -235,13 +235,19 @@ impl LiquidBodies {
     /// the centre of mass, unscaled). Collider roles are simulated; fills,
     /// inflows and drains are refused rather than ignored. A new geometry or
     /// scale rebuilds the shapes, and the atlas when the set of geometries
-    /// changed.
+    /// changed. Live, a distance lattice still building leaves the bodies
+    /// Pending; `wait` (offline) waits for it, so no simulated time goes by
+    /// while it builds.
     pub fn prepare(
         &mut self,
         roles: &[Option<FluidRole>],
         coupled: &[Arc<PreparedFluidGeometry>],
         cell_size: f32,
+        wait: bool,
     ) -> Result<BodiesStatus, String> {
+        let lattice = |geometry: &Arc<PreparedFluidGeometry>| {
+            if wait { geometry.wait_distance_lattice() } else { geometry.distance_lattice() }
+        };
         let occupied = roles.iter().flatten().count();
         if occupied + coupled.len() > MAX_FLUID_ROLES {
             return Err(format!(
@@ -250,7 +256,7 @@ impl LiquidBodies {
             ));
         }
         for (index, geometry) in coupled.iter().enumerate() {
-            match geometry.distance_lattice() {
+            match lattice(geometry) {
                 DistanceState::Pending => return Ok(BodiesStatus::Pending),
                 DistanceState::Failed(error) => return Err(format!("Liquid: coupled body {index}: {error}")),
                 DistanceState::Ready(_) => {}
@@ -270,7 +276,7 @@ impl LiquidBodies {
             if role.transform.scale.iter().any(|s| !(s.is_finite() && *s > 0.0)) {
                 return Err(format!("Liquid: role {slot} scale must be finite and positive"));
             }
-            match role.geometry.distance_lattice() {
+            match lattice(&role.geometry) {
                 DistanceState::Pending => return Ok(BodiesStatus::Pending),
                 DistanceState::Failed(error) => return Err(format!("Liquid: role {slot}: {error}")),
                 DistanceState::Ready(_) => {}
@@ -509,7 +515,7 @@ mod tests {
 
     fn ready_coupled(bodies: &mut LiquidBodies, roles: &[Option<FluidRole>], coupled: &[Arc<PreparedFluidGeometry>]) {
         let start = std::time::Instant::now();
-        while bodies.prepare(roles, coupled, 0.0625).expect("colliders") == BodiesStatus::Pending {
+        while bodies.prepare(roles, coupled, 0.0625, false).expect("colliders") == BodiesStatus::Pending {
             assert!(start.elapsed().as_secs() < 30, "the lattice never arrived");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -622,7 +628,20 @@ mod tests {
         assert_eq!(rows[2].accel_shape[3], -1.0);
         assert_eq!(rows[1].position_inv_mass, [0.0, 1.0, 0.0, 0.5]);
         let many: Vec<_> = (0..MAX_FLUID_ROLES).map(|_| Arc::clone(&hull)).collect();
-        assert!(bodies.prepare(&roles, &many, 0.0625).unwrap_err().contains("exceed"));
+        assert!(bodies.prepare(&roles, &many, 0.0625, false).unwrap_err().contains("exceed"));
+    }
+
+    /// Offline, the first prepare of fresh geometry waits for its distance
+    /// lattices and is Ready; live, the same call is Pending.
+    #[test]
+    fn liquid_bodies_offline_prepare_waits_for_the_lattice() {
+        let roles = vec![collider(&cube(), [0.0; 3], 0.0)];
+        let mut live = LiquidBodies::default();
+        assert_eq!(live.prepare(&roles, &[], 0.0625, false), Ok(BodiesStatus::Pending));
+        let roles = vec![collider(&cube(), [0.0; 3], 0.0)];
+        let mut offline = LiquidBodies::default();
+        assert_eq!(offline.prepare(&roles, &[cube()], 0.0625, true), Ok(BodiesStatus::Ready));
+        assert_eq!(offline.count(), 2);
     }
 
     /// Two roles sharing one geometry share its atlas block; a scale change
@@ -643,6 +662,6 @@ mod tests {
         assert_eq!((bodies.atlas().len(), bodies.version), (words, version + 1));
         assert_eq!(bodies.shapes()[1].scale_min, [1.0; 4]);
         roles[1] = Some(FluidRole { kind: FluidRoleKind::Inflow, ..roles[0].clone().unwrap() });
-        assert!(bodies.prepare(&roles, &[], 0.0625).unwrap_err().contains("Collider roles only"));
+        assert!(bodies.prepare(&roles, &[], 0.0625, false).unwrap_err().contains("Collider roles only"));
     }
 }

@@ -502,7 +502,14 @@ impl Primitive for FluidRoleSource {
         }
 
         if let Some(rx) = &self.pending_geometry {
-            match rx.try_recv() {
+            // Offline waits for the preparation, so the liquid's first tick
+            // never depends on how fast the worker ran.
+            let received = if crate::node_graph::physics::offline_simulation() {
+                rx.recv().map_err(|_| mpsc::TryRecvError::Disconnected)
+            } else {
+                rx.try_recv()
+            };
+            match received {
                 Ok(Ok(geometry)) => {
                     self.geometry = Some(geometry);
                     self.pending_geometry = None;

@@ -454,54 +454,19 @@ impl Primitive for FluidSurface {
             );
             return;
         }
-        let settings = FluidSettings {
-            seed: seed as u64,
-            resolution: ctx.scalar_or_param("resolution", 24.0).round() as u32,
-            domain_size: ctx.scalar_or_param("domain_size", 4.0),
-            domain: ctx.inputs.transform("domain"),
+        let settings = fluid_settings(
+            |name, default| ctx.scalar_or_param(name, default),
+            ctx.params,
+            ctx.inputs.transform("domain"),
+            ctx.inputs.transform("initial_volume"),
             boundary_collisions,
-            fill_height: ctx.scalar_or_param("fill_height", 0.4),
-            initial_volume: ctx.inputs.transform("initial_volume"),
-            surface_subdivisions: ctx.scalar_or_param("surface_subdivisions", 0.0).round() as u32,
-            liquid: LiquidOptions {
-                viscosity: f64::from(ctx.scalar_or_param("viscosity", 0.0)),
-                surface_tension: f64::from(ctx.scalar_or_param("surface_tension", 0.0)),
-            },
-            time_steps: Default::default(),
-            surface: SurfaceOptions {
-                particle_scale: f64::from(ctx.scalar_or_param("surface_particle_scale", 3.0)),
-                smoothing: f64::from(ctx.scalar_or_param("surface_smoothing", 0.5)),
-                smoothing_iterations: ctx
-                    .scalar_or_param("surface_smoothing_iterations", 2.0)
-                    .round() as u32,
-            },
-            whitewater: WhitewaterOptions {
-                enabled: ctx.scalar_or_param("whitewater", 0.0) > 0.5,
-                max_particles: ctx.param_f32("whitewater_capacity", 100000.0).round() as u32,
-                wavecrest_rate: f64::from(ctx.scalar_or_param("whitewater_wavecrest_rate", 175.0)),
-                turbulence_rate: f64::from(
-                    ctx.scalar_or_param("whitewater_turbulence_rate", 175.0),
-                ),
-                min_energy: f64::from(ctx.scalar_or_param("whitewater_min_energy", 0.1)),
-                max_energy: f64::from(ctx.scalar_or_param("whitewater_max_energy", 60.0)),
-            },
-            apic: matches!(ctx.params.get("transfer"), Some(ParamValue::Enum(1))),
-            max_vertices: (ctx
-                .param_f32("max_capacity", 786432.0)
-                .clamp(3.0, 3145728.0) as usize
-                / 3)
-                * 3,
-        };
-        let budget = ctx.param_f32("grid_budget_mcells", 8.0);
-        if let Ok(layout) = settings.domain_layout() {
-            let cells = layout.cells.into_iter().map(|n| u64::from(n) + 3).product::<u64>();
-            if !budget.is_finite() || budget <= 0.0 || cells as f64 > f64::from(budget) * 1e6 {
-                Self::report_failure(&mut self.domain_failure, ctx, format!(
-                    "Fluid grid needs {:.3} million cells including boundary padding; Grid Budget is {budget:.3} million. Increase Grid Budget or lower Resolution. CPU time and memory grow with cell count.",
-                    cells as f64 / 1e6,
-                ));
-                return;
-            }
+            seed as u64,
+        );
+        if let Ok(layout) = settings.domain_layout()
+            && let Err(error) = layout.admit_flip_grid(ctx.param_f32("grid_budget_mcells", 8.0))
+        {
+            Self::report_failure(&mut self.domain_failure, ctx, error);
+            return;
         }
         let cache_mode = match ctx.params.get("cache_mode") {
             Some(ParamValue::Enum(value)) => CacheMode::from_enum(*value),
@@ -795,7 +760,54 @@ impl FluidSurface {
     }
 }
 
-fn boundary_collisions(params: &ParamValues) -> Result<[bool; 6], String> {
+/// The FLIP domain's settings from its params and wires (`read` is
+/// `scalar_or_param`): the node and the extent checker build them with the
+/// same function.
+pub(crate) fn fluid_settings(
+    read: impl Fn(&str, f32) -> f32,
+    params: &ParamValues,
+    domain: Option<crate::node_graph::transform::Transform>,
+    initial_volume: Option<crate::node_graph::transform::Transform>,
+    boundary_collisions: [bool; 6],
+    seed: u64,
+) -> FluidSettings {
+    let param = |name: &str, default: f32| match params.get(name) {
+        Some(ParamValue::Float(value)) => *value,
+        _ => default,
+    };
+    FluidSettings {
+        seed,
+        resolution: read("resolution", 24.0).round() as u32,
+        domain_size: read("domain_size", 4.0),
+        domain,
+        boundary_collisions,
+        fill_height: read("fill_height", 0.4),
+        initial_volume,
+        surface_subdivisions: read("surface_subdivisions", 0.0).round() as u32,
+        liquid: LiquidOptions {
+            viscosity: f64::from(read("viscosity", 0.0)),
+            surface_tension: f64::from(read("surface_tension", 0.0)),
+        },
+        time_steps: Default::default(),
+        surface: SurfaceOptions {
+            particle_scale: f64::from(read("surface_particle_scale", 3.0)),
+            smoothing: f64::from(read("surface_smoothing", 0.5)),
+            smoothing_iterations: read("surface_smoothing_iterations", 2.0).round() as u32,
+        },
+        whitewater: WhitewaterOptions {
+            enabled: read("whitewater", 0.0) > 0.5,
+            max_particles: param("whitewater_capacity", 100000.0).round() as u32,
+            wavecrest_rate: f64::from(read("whitewater_wavecrest_rate", 175.0)),
+            turbulence_rate: f64::from(read("whitewater_turbulence_rate", 175.0)),
+            min_energy: f64::from(read("whitewater_min_energy", 0.1)),
+            max_energy: f64::from(read("whitewater_max_energy", 60.0)),
+        },
+        apic: matches!(params.get("transfer"), Some(ParamValue::Enum(1))),
+        max_vertices: (param("max_capacity", 786432.0).clamp(3.0, 3145728.0) as usize / 3) * 3,
+    }
+}
+
+pub(crate) fn boundary_collisions(params: &ParamValues) -> Result<[bool; 6], String> {
     let mut faces = [true; 6];
     for (index, name) in [
         "closed_neg_x",

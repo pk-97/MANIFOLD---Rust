@@ -1748,7 +1748,18 @@ fn pre_allocate_array_buffers(
         log::warn!("[graph-loader] {warning}");
     }
     // Sizing, capacity propagation and alias decisions have one authority.
-    // Admission inspects these same actions before any buffer is allocated.
+    // Admission inspects these same actions before any buffer is allocated:
+    // the whole scene first, then each buffer against what is live by then.
+    let scene_bytes = allocation
+        .actions
+        .iter()
+        .map(|action| match action {
+            ArrayAllocationAction::Allocate(allocation) => allocation.bytes,
+            _ => 0,
+        })
+        .fold(0u64, u64::saturating_add);
+    super::scene_modifier_expand::admit_scene_bytes(device.modifier_memory_snapshot(), scene_bytes)
+        .map_err(PreAllocationError::AllocationFailed)?;
     for action in allocation.actions {
         match action {
             ArrayAllocationAction::Allocate(allocation) => {

@@ -45,24 +45,27 @@ impl FrameRing {
 
     /// Start writing one tick of `bytes` per slot. Slots too small for it are
     /// replaced with fresh shared storage (capture and look metrics read
-    /// frames back), and the previous frame then counts as empty.
-    pub fn begin(&mut self, device: &GpuDevice, bytes: u64, epoch: u32) -> RingWrite {
+    /// frames back), and the previous frame then counts as empty. A ring the
+    /// device cannot give is refused and the old slots stay.
+    pub fn begin(&mut self, device: &GpuDevice, bytes: u64, epoch: u32) -> Result<RingWrite, String> {
         let mut grown = false;
         if self.slots.len() < RING || self.slots.iter().any(|s| s.size < bytes) {
-            self.slots = (0..RING).map(|_| device.create_buffer_shared(bytes)).collect();
+            crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), RING as u64 * bytes)
+                .map_err(|error| error.to_string())?;
+            self.slots = (0..RING).map(|_| device.try_create_buffer_shared(bytes)).collect::<Result<_, _>>()?;
             self.counts = [0; RING];
             grown = true;
         }
         let write = (0..RING).find(|&i| i != self.a && i != self.b).unwrap_or(0);
         let write = if self.a == self.b { (self.b + 1) % RING } else { write };
         let previous = self.b;
-        RingWrite {
+        Ok(RingWrite {
             write,
             previous,
             previous_count: if grown { 0 } else { self.counts[previous] },
             grown,
             restarted: self.epoch != Some(epoch),
-        }
+        })
     }
 
     /// The slot at `index` (a [`RingWrite`] slot, or A or B).

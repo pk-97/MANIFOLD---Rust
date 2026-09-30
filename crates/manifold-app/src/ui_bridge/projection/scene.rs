@@ -6,7 +6,9 @@ use crate::ui_root::UIRoot;
 use manifold_core::project::Project;
 
 /// Resolve a UI snapshot's document id into the stable graph address used by
-/// content commands. Node ids are globally unique, including group bodies.
+/// content commands: the first node with that id, root level first. Document
+/// ids repeat across group levels in hand-authored presets, so only ids the
+/// editing commands minted (unique across the document) resolve reliably.
 pub(crate) fn scene_node_ref_for_doc_id(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     wanted: u32,
@@ -34,25 +36,18 @@ pub(crate) fn scene_node_ref_for_doc_id(
     visit(&def.nodes, wanted, &mut Vec::new())
 }
 
+/// Every liquid domain behind a scene object, named after its water.
 pub(crate) fn fluid_domains(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
     scene: &manifold_renderer::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::panels::scene_setup_panel::FluidDomainOption> {
-    fn is_domain(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], id: u32) -> bool {
-        nodes.iter().any(|node| (node.id == id && manifold_core::liquid_domain::is_liquid_domain(&node.type_id))
-            || node.group.as_ref().is_some_and(|group| is_domain(&group.nodes, id)))
-    }
-    let mut result = Vec::new();
+    let mut result: Vec<manifold_ui::panels::scene_setup_panel::FluidDomainOption> = Vec::new();
     for object in &scene.objects {
         let manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row) = object else { continue; };
-        for &id in &row.fluid_node_ids {
-            if is_domain(&def.nodes, id)
-                && !result.iter().any(|option: &manifold_ui::panels::scene_setup_panel::FluidDomainOption| option.node_doc_id == id)
-            {
-                result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
-                    node_doc_id: id, name: row.name.clone(),
-                });
-            }
+        let Some(domain) = &row.liquid_domain else { continue; };
+        if !result.iter().any(|option| option.node == domain.node) {
+            result.push(manifold_ui::panels::scene_setup_panel::FluidDomainOption {
+                node: domain.node.clone(), name: row.name.clone(),
+            });
         }
     }
     result
@@ -68,8 +63,7 @@ pub(crate) fn fluid_role_rows(
         roles.into_iter().map(|role| {
             let target_label = match role.domains.as_slice() {
                 [] => "Choose Fluid".into(),
-                [target] => domains.iter().find(|domain|
-                    scene_node_ref_for_doc_id(def, domain.node_doc_id).as_ref() == Some(target))
+                [target] => domains.iter().find(|domain| domain.node == target.node)
                     .map(|domain| format!("Target: {}", domain.name))
                     .unwrap_or_else(|| "Fluid outside this scene".into()),
                 targets => format!("Targets: {} fluids", targets.len()),
@@ -81,14 +75,15 @@ pub(crate) fn fluid_role_rows(
     })
 }
 
-pub(crate) fn group_fluid_role_ids(
+/// The fluid role sources anywhere inside an object's group.
+pub(crate) fn group_fluid_role_nodes(
     def: &manifold_core::effect_graph_def::EffectGraphDef,
     group_id: Option<u32>,
-) -> Vec<u32> {
-    fn collect(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], ids: &mut Vec<u32>) {
+) -> Vec<manifold_core::NodeId> {
+    fn collect(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], ids: &mut Vec<manifold_core::NodeId>) {
         for node in nodes {
-            if node.type_id == "node.fluid_role_source" {
-                ids.push(node.id);
+            if node.type_id == "node.fluid_role_source" && !node.node_id.is_empty() {
+                ids.push(node.node_id.clone());
             }
             if let Some(group) = node.group.as_deref() {
                 collect(&group.nodes, ids);
@@ -102,35 +97,29 @@ pub(crate) fn group_fluid_role_ids(
     ids
 }
 
-/// Resolve a modifier's controls through its scoped stable node identity.
-/// The first binding owns a macro; secondary fan-out targets do not acquire
-/// another copy of its UI. Custom exposed names need no numeric prefix.
-pub(crate) fn object_modifier_parameter_ids(
+/// The nodes whose controls an object's panel shows: its scene_object, its
+/// liquid, its enabled body, transform, material and every modifier.
+pub(crate) fn object_controls(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    group_id: Option<u32>,
-    node_doc_id: u32,
-) -> Vec<String> {
-    use manifold_core::effect_graph_def::BindingTarget;
-    let Some(def) = def else { return Vec::new(); };
-    let Some(metadata) = &def.preset_metadata else { return Vec::new(); };
-    let nodes = match group_id {
-        Some(id) => {
-            let Some(group) = def.nodes.iter().find(|node| node.id == id).and_then(|node| node.group.as_deref()) else {
-                return Vec::new();
-            };
-            &group.nodes
-        }
-        None => &def.nodes,
-    };
-    let Some(node) = nodes.iter().find(|node| node.id == node_doc_id) else { return Vec::new(); };
-    let identity = if node.node_id.is_empty() {
-        manifold_core::NodeId::new(node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}")))
-    } else { node.node_id.clone() };
-    metadata.params.iter().filter(|param| {
-        metadata.bindings.iter().find(|binding| binding.id == param.id)
-            .is_some_and(|binding| matches!(&binding.target,
-                BindingTarget::Node { node_id, .. } if node_id == &identity))
-    }).map(|param| param.id.clone()).collect()
+    row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+) -> Vec<manifold_core::NodeId> {
+    let mut owned = vec![row.object.clone()];
+    owned.extend_from_slice(&row.fluid_controls);
+    if row.parent_group_id.is_none() && let Some(def) = def {
+        owned.extend(group_fluid_role_nodes(def, row.group_node_id));
+    }
+    if let Some(physics) = row.physics.as_ref().filter(|physics| physics.enabled) {
+        owned.push(physics.body.clone());
+    }
+    if let Some(transform) = &row.transform {
+        owned.push(transform.node.clone());
+    }
+    if let manifold_renderer::node_graph::scene_vm::MaterialVm::Known(material) = &row.material {
+        owned.push(material.node.clone());
+    }
+    owned.extend(row.modifier_chain.iter().map(|modifier| modifier.node.clone()));
+    owned.extend(row.transform_chain.iter().map(|modifier| modifier.node.clone()));
+    owned
 }
 
 /// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
@@ -171,87 +160,57 @@ pub fn sync_scene_row_values(ui: &mut UIRoot, project: &Project) {
     }
 }
 
-/// P2 slice 2a (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md): the REAL section
-/// string(s) P1 stamped onto every param whose PRIMARY node is one of
-/// `doc_ids` — read directly off `def`'s exposure metadata. Two stamping
-/// code paths (creation-time commands vs the load-time migration) produce
-/// DIFFERENT section strings for the same node kind (e.g. a scene_object's
-/// own section is the bare handle at creation, "{handle} — Object" after
-/// migration) — reading the real string is the only way to filter correctly
-/// regardless of which path produced it. Dedups, preserves first-seen order.
+/// The real section strings (SCENE_PANEL_EXPOSURE_CONVERGENCE_DESIGN.md P2
+/// slice 2a) of every exposed control owned by `nodes`, read off the def's
+/// exposure metadata: creation-time and load-time stamping name the same
+/// node kind's section differently, so only the stored string filters
+/// correctly. Dedups, preserves first-seen order.
 ///
-/// BUG-291 (fixed): the original implementation attributed a param by
-/// walking `meta.bindings` to each binding's TARGET node and checking that
-/// against `doc_ids` — but a fan-out control (the glTF importer's D7 sun
-/// macro: the sun's `pos_x/y/z` ALSO binds `envmap.sun_x/y/z` so one slider
-/// drives both; similarly env intensity also drives `hdri_gain.gain`) adds
-/// an EXTRA `BindingDef` under the SAME `id` targeting the OTHER node. Target-
-/// walking misattributed those extra bindings to whichever item owned the
-/// fanned-out-to node (World's `envmap` doc id matched the sun's `pos_x`
-/// binding's target, so a "Sun" section leaked into World). Attributing by
-/// the doc-id PREFIX of the param's OWN `id` instead is fan-out-proof: P1
-/// stamps every exposed id as `{primary_node_doc_id}_{param}`
-/// (`manifold_core::scene_exposure::stamp_scene_node_exposures_into`,
-/// mirrored by the glTF importer's own hand-authored fan-out ids at
-/// `gltf_import.rs`'s D7 block) — the prefix names the param's ONE true
-/// owner regardless of how many nodes its value also happens to drive, so no
-/// binding-target walk (and no node-doc-id cross-reference) is needed at
-/// all.
-pub(crate) fn sections_for_doc_ids(
+/// Deliberately does NOT filter by `spec.card_visible`: that flag gates the
+/// generator's outer card, never the scene panel.
+pub(crate) fn sections_for_nodes(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    doc_ids: &[u32],
+    nodes: &[manifold_core::NodeId],
 ) -> Vec<String> {
-    let Some(def) = def else { return Vec::new() };
-    let Some(meta) = def.preset_metadata.as_ref() else {
-        return Vec::new();
-    };
-    if doc_ids.is_empty() {
-        return Vec::new();
-    }
-
-    // Deliberately does NOT filter by `spec.card_visible`: the scene panel
-    // keeps every P1-stamped param regardless of the CARD-curation flag (the
-    // Scene Setup dock's own hand-curated `SceneVm` row builders in
-    // `ui_bridge::projection::inspector`, not this section list, decide what
-    // the panel shows) — `card_visible` only gates the generator/effect
-    // outer CARD's row builder (`cards::param_surface`).
     let mut sections: Vec<String> = Vec::new();
-    for spec in &meta.params {
-        let owned = parameter_owned_by_doc_ids(def, meta, &spec.id, doc_ids);
-        if !owned {
-            continue;
-        }
-        let Some(section) = spec.section.clone() else {
-            continue;
-        };
-        if !sections.contains(&section) {
-            sections.push(section);
+    for spec in owned_specs(def, nodes) {
+        if let Some(section) = &spec.section
+            && !sections.contains(section)
+        {
+            sections.push(section.clone());
         }
     }
     sections
 }
 
-/// Project the exact exposed parameter ids owned by the supplied scene nodes.
-/// Keep this predicate shared with [`sections_for_doc_ids`]: ordinary stamped
-/// ids are owned by their numeric prefix, while cloned `_duplicate` ids are
-/// resolved through their exact binding target. Curated names use their first
-/// binding as owner; secondary fan-out targets do not acquire ownership.
-pub(crate) fn parameter_ids_for_doc_ids(
+/// The exact exposed parameter ids owned by `nodes`; shares its predicate
+/// with [`sections_for_nodes`].
+pub(crate) fn parameter_ids_for_nodes(
     def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
-    doc_ids: &[u32],
+    nodes: &[manifold_core::NodeId],
 ) -> Vec<String> {
-    let Some(def) = def else { return Vec::new() };
-    let Some(meta) = def.preset_metadata.as_ref() else {
-        return Vec::new();
-    };
-    if doc_ids.is_empty() {
-        return Vec::new();
-    }
-    meta.params
-        .iter()
-        .filter(|spec| parameter_owned_by_doc_ids(def, meta, &spec.id, doc_ids))
-        .map(|spec| spec.id.clone())
-        .collect()
+    owned_specs(def, nodes).map(|spec| spec.id.clone()).collect()
+}
+
+/// A control belongs to the node its PRIMARY binding (the first under its
+/// id) targets. A fan-out control (the glTF importer's sun position also
+/// driving the environment's sun, BUG-291) keeps one owner however many
+/// nodes it drives. Stable node ids are unique across the document; the
+/// numeric prefix of a stamped id is a group-local doc id and names no
+/// owner.
+fn owned_specs<'a>(
+    def: Option<&'a manifold_core::effect_graph_def::EffectGraphDef>,
+    nodes: &'a [manifold_core::NodeId],
+) -> impl Iterator<Item = &'a manifold_core::effect_graph_def::ParamSpecDef> + 'a {
+    let meta = def.and_then(|def| def.preset_metadata.as_ref()).filter(|_| !nodes.is_empty());
+    meta.into_iter().flat_map(move |meta| {
+        meta.params.iter().filter(move |spec| {
+            meta.bindings.iter().find(|binding| binding.id == spec.id).is_some_and(|binding| {
+                matches!(&binding.target,
+                    manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } if nodes.contains(node_id))
+            })
+        })
+    })
 }
 
 /// Remove only the legacy rigid-body geometry controls that are inactive when
@@ -378,74 +337,12 @@ fn retain_effective_binding_targets(
     });
 }
 
-fn parameter_owned_by_doc_ids(
-    def: &manifold_core::effect_graph_def::EffectGraphDef,
-    meta: &manifold_core::effect_graph_def::PresetMetadata,
-    parameter_id: &str,
-    doc_ids: &[u32],
-) -> bool {
-    // A cloned scene binding retains its source numeric prefix and adds
-    // `_duplicate` (or `_duplicate_N`). Resolve only these IDs through their
-    // exact binding target; ordinary IDs stay prefix-based so the BUG-291
-    // fan-out path cannot leak sections by target walking.
-    if parameter_id.contains("_duplicate") {
-        return meta
-            .bindings
-            .iter()
-            .filter(|binding| binding.id == parameter_id)
-            .any(|binding| match &binding.target {
-                manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
-                    doc_id_for_node_id(&def.nodes, node_id)
-                        .is_some_and(|owner_doc_id| doc_ids.contains(&owner_doc_id))
-                }
-                _ => false,
-            });
-    }
-    if let Some(prefix_doc_id) = parameter_id
-        .split('_')
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-    {
-        return doc_ids.contains(&prefix_doc_id);
-    }
-    // Curated controls have ordinary names such as `resolution`, rather
-    // than stamped numeric prefixes. Use the same primary-binding owner
-    // as object_modifier_parameter_ids; secondary fan-out targets do not
-    // acquire the control or its section.
-    meta.bindings.iter().find(|binding| binding.id == parameter_id)
-        .is_some_and(|binding| match &binding.target {
-            manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } => {
-                doc_id_for_node_id(&def.nodes, node_id)
-                    .is_some_and(|owner| doc_ids.contains(&owner))
-            }
-            _ => false,
-        })
-}
-
-fn doc_id_for_node_id(
-    nodes: &[manifold_core::effect_graph_def::EffectGraphNode],
-    wanted: &manifold_core::NodeId,
-) -> Option<u32> {
-    for node in nodes {
-        if &node.node_id == wanted {
-            return Some(node.id);
-        }
-        if let Some(group) = node.group.as_deref()
-            && let Some(doc_id) = doc_id_for_node_id(&group.nodes, wanted)
-        {
-            return Some(doc_id);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
-mod sections_for_doc_ids_tests {
-    //! BUG-291: reproduces the exact glTF-importer fan-out shape
-    //! (`gltf_import.rs`'s D7 sun-coherence block) that leaked a "Sun"
-    //! section into World's item. `sections_for_doc_ids` is state_sync's
-    //! own private fn — exercised directly (state-level, no pixels), per
-    //! `docs/BUG_BACKLOG.md`'s prescribed fix shape.
+mod ownership_tests {
+    //! BUG-291 (fan-out leak): reproduces the glTF importer's D7
+    //! sun-coherence fan-out that leaked a "Sun" section into World's item,
+    //! plus the grouped-preset doc id collisions that ownership by stable
+    //! node id removes.
     use super::*;
     use manifold_core::NodeId;
     use manifold_core::PresetTypeId;
@@ -555,49 +452,56 @@ mod sections_for_doc_ids_tests {
         }
     }
 
+    fn ids(names: &[&str]) -> Vec<NodeId> {
+        names.iter().map(NodeId::new).collect()
+    }
+
     #[test]
     fn world_sections_exclude_the_fanned_out_sun_section() {
         let def = azalea_like_fixture();
-        // World's doc-id set: just the envmap node (doc id 1).
-        let sections = sections_for_doc_ids(Some(&def), &[1]);
+        let sections = sections_for_nodes(Some(&def), &ids(&["envmap"]));
         assert_eq!(
             sections,
             vec!["Environment".to_string()],
             "World must not pick up \"Sun\" via the sun's fanned-out envmap.sun_x binding"
         );
-        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[1]), vec!["1_intensity"]);
+        assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["envmap"])), vec!["1_intensity"]);
     }
 
     #[test]
     fn the_lights_own_item_still_includes_its_section() {
         let def = azalea_like_fixture();
-        // Sun's doc-id set: just its own light node (doc id 7).
-        let sections = sections_for_doc_ids(Some(&def), &[7]);
+        let sections = sections_for_nodes(Some(&def), &ids(&["sun"]));
         assert_eq!(sections, vec!["Sun".to_string()]);
-        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[7]), vec!["7_pos_x"]);
+        assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["sun"])), vec!["7_pos_x"]);
     }
 
     #[test]
-    fn object_modifier_controls_use_custom_binding_identity_without_fanout_leaks() {
+    fn custom_named_controls_resolve_through_their_primary_binding() {
         let mut def = azalea_like_fixture();
-        def.nodes = vec![
-            serde_json::from_value(serde_json::json!({
-                "id": 7, "nodeId": "sun", "typeId": "node.bend_mesh"
-            })).unwrap(),
-            serde_json::from_value(serde_json::json!({
-                "id": 1, "nodeId": "envmap", "typeId": "node.twist_mesh"
-            })).unwrap(),
-        ];
         let metadata = def.preset_metadata.as_mut().unwrap();
         metadata.params[1].id = "custom_amount".into();
         for binding in &mut metadata.bindings {
             if binding.id == "7_pos_x" { binding.id = "custom_amount".into(); }
         }
-        assert_eq!(object_modifier_parameter_ids(Some(&def), None, 7), vec!["custom_amount"]);
-        assert_eq!(object_modifier_parameter_ids(Some(&def), None, 1), vec!["1_intensity"]);
-        assert!(object_modifier_parameter_ids(Some(&def), Some(404), 7).is_empty());
-        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[7]), vec!["custom_amount"]);
-        assert_eq!(parameter_ids_for_doc_ids(Some(&def), &[1]), vec!["1_intensity"]);
+        assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["sun"])), vec!["custom_amount"]);
+        assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["envmap"])), vec!["1_intensity"]);
+        assert!(parameter_ids_for_nodes(Some(&def), &[]).is_empty());
+    }
+
+    /// A stamped id's numeric prefix is a group-local doc id: a control whose
+    /// prefix matches another node's doc id still belongs to its target.
+    #[test]
+    fn a_colliding_stamp_prefix_names_no_owner() {
+        let mut def = azalea_like_fixture();
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        for binding in &mut metadata.bindings {
+            if binding.id == "1_intensity" {
+                binding.target = BindingTarget::Node { node_id: NodeId::new("grouped_domain"), param: "speed".into() };
+            }
+        }
+        assert!(parameter_ids_for_nodes(Some(&def), &ids(&["envmap"])).is_empty());
+        assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["grouped_domain"])), vec!["1_intensity"]);
     }
 
     #[test]
@@ -607,11 +511,98 @@ mod sections_for_doc_ids_tests {
         )).unwrap();
         manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
         let def: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
-        let ids = parameter_ids_for_doc_ids(Some(&def), &[4]);
+        let domain = def.nodes.iter()
+            .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
+            .expect("the dam break domain").node_id.clone();
+        let ids = parameter_ids_for_nodes(Some(&def), &[domain]);
         for id in ["resolution", "surface_detail", "whitewater", "surface_particle_scale", "4_grid_budget_mcells"] {
             assert!(ids.iter().any(|actual| actual == id), "missing Water control {id}");
         }
         assert!(!ids.iter().any(|id| id == "environment_mode"));
+    }
+
+    /// Every control the scene panel shows belongs to one item: an object, a
+    /// light, the camera or the world. The one sharing allowed is a material
+    /// wired into several objects, which each of them shows. Returns the
+    /// camera's controls. Doc ids collide across group levels (Dam Break
+    /// Matter's domain and its orbit camera are both doc id 1; every grouped
+    /// glTF object numbers its own level), so this fails the moment
+    /// ownership reads them.
+    fn assert_one_owner(name: &str, def: &EffectGraphDef) -> Vec<String> {
+        use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneLightVm, SceneObjectVm, SceneVm};
+        let vm = SceneVm::from_def(def).unwrap_or_else(|| panic!("{name} is a scene"));
+        // (item, its nodes, the material it may share)
+        let mut items: Vec<(String, Vec<NodeId>, Option<NodeId>)> = Vec::new();
+        for object in &vm.objects {
+            if let SceneObjectVm::Known(row) = object {
+                let material = match &row.material { MaterialVm::Known(m) => Some(m.node.clone()), _ => None };
+                items.push((format!("object {}", row.name), object_controls(Some(def), row), material));
+            }
+        }
+        for light in &vm.lights {
+            if let SceneLightVm::Known(row) = light {
+                items.push((format!("light {}", row.name), vec![row.node.clone()], None));
+            }
+        }
+        items.push(("camera".into(), vm.camera_controls.clone(), None));
+        items.push(("world".into(), vm.world_controls.clone(), None));
+        let mut owner: BTreeMap<String, usize> = BTreeMap::new();
+        for (index, (item, nodes, material)) in items.iter().enumerate() {
+            for id in parameter_ids_for_nodes(Some(def), nodes) {
+                let Some(other) = owner.insert(id.clone(), index) else { continue; };
+                let shared_material = material.as_ref().filter(|material| {
+                    items[other].2.as_ref() == Some(*material)
+                        && parameter_ids_for_nodes(Some(def), std::slice::from_ref(*material)).contains(&id)
+                });
+                assert!(shared_material.is_some(),
+                    "{name}: control {id} shows under both {} and {item}", items[other].0);
+            }
+        }
+        parameter_ids_for_nodes(Some(def), &vm.camera_controls)
+    }
+
+    #[test]
+    fn every_bundled_scene_control_has_one_owner() {
+        let mut scenes = Vec::new();
+        for preset in manifold_renderer::node_graph::bundled_preset_type_ids(
+            manifold_core::preset_def::PresetKind::Generator,
+        ) {
+            let def = manifold_renderer::node_graph::bundled_preset_def(&preset).unwrap();
+            if manifold_renderer::node_graph::scene_vm::SceneVm::from_def(def).is_some() {
+                assert_one_owner(preset.as_str(), def);
+                scenes.push(preset.as_str().to_string());
+            }
+        }
+        assert!(scenes.iter().any(|scene| scene == "WaterDamBreakMatter"), "{scenes:?}");
+        assert!(scenes.iter().any(|scene| scene == "WaterDamBreak"), "{scenes:?}");
+    }
+
+    #[test]
+    fn the_matter_water_shows_no_camera_control() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakMatter")).unwrap();
+        let camera = assert_one_owner("WaterDamBreakMatter", def);
+        assert!(camera.iter().any(|id| id.ends_with("_distance")), "the orbit camera owns its dials: {camera:?}");
+        let vm = SceneVm::from_def(def).unwrap();
+        let water = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
+            _ => None,
+        }).expect("the water is a scene object");
+        let sections = sections_for_nodes(Some(def), &object_controls(Some(def), water));
+        assert!(sections.iter().any(|section| section.contains("Simulation")), "{sections:?}");
+        assert!(sections.iter().all(|section| !section.contains("Camera")), "{sections:?}");
+    }
+
+    #[test]
+    fn imported_gltf_scene_controls_have_one_owner() {
+        for fixture in ["cc0__oomurasaki_azalea_r._x_pulchrum.glb", "cc0___mushroom.glb"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/gltf").join(fixture);
+            let (def, _) = manifold_renderer::node_graph::gltf_import::assemble_import_graph(&path)
+                .unwrap_or_else(|e| panic!("{fixture}: {e}"));
+            let camera = assert_one_owner(fixture, &def);
+            assert!(!camera.is_empty(), "{fixture}: the camera owns its dials");
+        }
     }
 
     #[test]
@@ -669,14 +660,14 @@ mod sections_for_doc_ids_tests {
             default_mirrors_node_param: false,
         });
 
-        let sections = sections_for_doc_ids(Some(&def), &[107]);
+        let sections = sections_for_nodes(Some(&def), &ids(&["sun_clone"]));
         assert_eq!(sections, vec!["Ground 2 — Transform".to_string()]);
         assert_eq!(
-            parameter_ids_for_doc_ids(Some(&def), &[107]),
+            parameter_ids_for_nodes(Some(&def), &ids(&["sun_clone"])),
             vec!["7_pos_x_duplicate"]
         );
-        assert!(parameter_ids_for_doc_ids(Some(&def), &[7]).contains(&"7_pos_x".to_string()));
-        assert!(!parameter_ids_for_doc_ids(Some(&def), &[7]).contains(&"7_pos_x_duplicate".to_string()));
+        assert!(parameter_ids_for_nodes(Some(&def), &ids(&["sun"])).contains(&"7_pos_x".to_string()));
+        assert!(!parameter_ids_for_nodes(Some(&def), &ids(&["sun"])).contains(&"7_pos_x_duplicate".to_string()));
     }
 
     fn source_driven_physics_fixture(
@@ -782,6 +773,7 @@ mod sections_for_doc_ids_tests {
         ];
         let physics = PhysicsVm {
             body_node_id: 10,
+            body: NodeId::new("body"),
             body_scope_path: grouped.then_some(vec![40]).unwrap_or_default(),
             enabled: true,
             imported: false,
@@ -815,20 +807,20 @@ mod sections_for_doc_ids_tests {
         ];
         for grouped in [false, true] {
             let (def, physics) = source_driven_physics_fixture(grouped, true);
-            let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[10, 11]);
+            let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["body", "mesh"]));
             filter_inactive_physics_parameter_ids(Some(&def), Some(&physics), &mut parameter_ids);
             assert_eq!(parameter_ids, expected_ids);
 
             let reloaded: EffectGraphDef = serde_json::from_str(
                 &serde_json::to_string(&def).unwrap(),
             ).unwrap();
-            let mut reloaded_ids = parameter_ids_for_doc_ids(Some(&reloaded), &[10, 11]);
+            let mut reloaded_ids = parameter_ids_for_nodes(Some(&reloaded), &ids(&["body", "mesh"]));
             filter_inactive_physics_parameter_ids(Some(&reloaded), Some(&physics), &mut reloaded_ids);
             assert_eq!(reloaded_ids, expected_ids, "reload preserves projection");
         }
 
         let (def, physics) = source_driven_physics_fixture(false, false);
-        let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[10, 11]);
+        let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["body", "mesh"]));
         filter_inactive_physics_parameter_ids(Some(&def), Some(&physics), &mut parameter_ids);
         assert!(parameter_ids.contains(&"10_shape".to_string()));
         assert!(parameter_ids.contains(&"10_collider_parts".to_string()));
@@ -947,13 +939,13 @@ mod sections_for_doc_ids_tests {
         for grouped in [false, true] {
             let def = fluid_role_projection_fixture(grouped, true);
             let group_id = grouped.then_some(40);
-            assert_eq!(group_fluid_role_ids(&def, group_id), if grouped { vec![20] } else { Vec::new() });
-            let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[20, 21]);
+            assert_eq!(group_fluid_role_nodes(&def, group_id), if grouped { ids(&["role"]) } else { Vec::new() });
+            let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["role", "mesh"]));
             filter_inactive_fluid_role_parameter_ids(Some(&def), group_id, &mut parameter_ids);
             assert_eq!(parameter_ids, expected_ids);
 
             let reloaded: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
-            let mut reloaded_ids = parameter_ids_for_doc_ids(Some(&reloaded), &[20, 21]);
+            let mut reloaded_ids = parameter_ids_for_nodes(Some(&reloaded), &ids(&["role", "mesh"]));
             filter_inactive_fluid_role_parameter_ids(Some(&reloaded), group_id, &mut reloaded_ids);
             assert_eq!(reloaded_ids, expected_ids, "reload preserves role projection");
         }
@@ -962,7 +954,7 @@ mod sections_for_doc_ids_tests {
     #[test]
     fn unwired_fluid_role_projection_retains_fallback_controls() {
         let def = fluid_role_projection_fixture(true, false);
-        let mut parameter_ids = parameter_ids_for_doc_ids(Some(&def), &[20, 21]);
+        let mut parameter_ids = parameter_ids_for_nodes(Some(&def), &ids(&["role", "mesh"]));
         let expected = parameter_ids.clone();
         filter_inactive_fluid_role_parameter_ids(Some(&def), Some(40), &mut parameter_ids);
         assert_eq!(parameter_ids, expected);
