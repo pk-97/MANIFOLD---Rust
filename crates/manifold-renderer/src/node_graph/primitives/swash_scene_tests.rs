@@ -65,16 +65,16 @@ impl Run {
         Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 }
     }
 
-    /// The surface's solid lattice holds no solid: zero at every node. The
-    /// planner may recycle a source's storage, so it is written every frame.
-    fn clear_solid(&self) {
+    /// The surface's solid lattice (`WaterScene::surface_solid`). The planner
+    /// may recycle a source's storage, so it is written every frame.
+    fn write_solid(&self) {
         let resource = output_of(&self.plan, node_named(&self.graph, "solid"), "out");
         let backend = self.exec.backend();
         let buffer = backend.array_buffer(backend.slot_for(resource).expect("solid bound")).expect("solid buffer");
-        let nodes = self.scene.surface_nodes().pow(3);
-        assert!(buffer.size as usize >= nodes * 4, "the solid source holds the corner lattice");
-        // SAFETY: shared storage of at least `nodes` floats; no frame is in flight.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&vec![0.0_f32; nodes])) };
+        let solid = self.scene.surface_solid();
+        assert!(buffer.size as usize >= solid.len() * 4, "the solid source holds the surface lattice");
+        // SAFETY: shared storage of at least this many floats; no frame is in flight.
+        unsafe { buffer.write(0, bytemuck::cast_slice(&solid)) };
     }
 
     /// The surface mesh's live triangles.
@@ -99,7 +99,7 @@ impl Run {
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     pub(super) fn frame(&mut self) -> (f64, f64) {
         if self.scene.surface {
-            self.clear_solid();
+            self.write_solid();
         }
         let mut enc = self.device.create_encoder("swash-scene");
         let cpu_ms;

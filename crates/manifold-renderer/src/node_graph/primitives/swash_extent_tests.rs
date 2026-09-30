@@ -65,7 +65,9 @@ fn sort_bins(params: &ParamValues) -> [u32; 3] {
 
 impl Sizes<'_> {
     /// `particles` is the liquid's particle count; 0 for the bare solve.
-    fn check(&self, shape: PressureShape, particles: u64) -> usize {
+    /// `corners` is the surface's solid lattice nodes per axis
+    /// (`WaterScene::surface_nodes`).
+    fn check(&self, shape: PressureShape, particles: u64, corners: u64) -> usize {
         let names: AHashMap<_, _> = self.graph.nodes().map(|n| (n.id, n)).collect();
         let wired = |step: &crate::node_graph::ExecutionStep, port: &str| step.inputs.iter().any(|(name, _)| *name == port);
         // Provided arrays are allocated in run(), sized from params:
@@ -89,14 +91,13 @@ impl Sizes<'_> {
                 provided.insert(*resource, bytes);
             }
         }
-        // The surface lattice: the solid lattice is the cell corners, refined
-        // resolution_scale times per cell by particle_volume.
-        let corners = shape.n as u64 + 1;
+        // The surface lattice: the solid lattice, refined resolution_scale
+        // times per cell by particle_volume.
         let refined = self
             .graph
             .nodes()
             .find(|n| n.node.type_id().as_str() == "node.particle_volume")
-            .map(|n| shape.n as u64 * param(&n.params, "resolution_scale") + 1);
+            .map(|n| (corners - 1) * param(&n.params, "resolution_scale") + 1);
         let mut checked = 0;
         for step in self.plan.steps() {
             let node = names[&step.node];
@@ -377,7 +378,7 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
         assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
         let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
-        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0);
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0, shape.n as u64 + 1);
         assert!(checked > 60, "checked only {checked} nodes at {n}³");
     }
 }
@@ -388,7 +389,10 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
 #[test]
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
-    let all = [64, 96, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
+    let all = [64, 96, 128]
+        .into_iter()
+        .flat_map(|n| scenes.map(|at| at(n)))
+        .flat_map(|scene| [scene, scene.with_surface(), scene.with_closed_surface()]);
     for scene in all {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
@@ -396,7 +400,7 @@ fn fft_water_scenes_cover_every_dispatch() {
         assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
         let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
-        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles(), scene.surface_nodes() as u64);
         assert!(checked > 150, "checked only {checked} nodes at {n}³");
         let meshed = plan.steps().iter().any(|step| {
             graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
@@ -418,7 +422,8 @@ fn fft_water_rendered_scenes_cover_every_dispatch() {
         assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
         let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
-        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
+        let corners = scene.with_closed_surface().surface_nodes() as u64;
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles(), corners);
         assert!(checked > 150, "checked only {checked} nodes at {n}³");
     }
 }

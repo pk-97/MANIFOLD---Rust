@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use manifold_core::NodeId;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
+use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
 use super::swash_preset::{DAM_MIN, WaterScene, render_def};
@@ -165,6 +167,7 @@ struct Smoke {
     /// Graph name of each plan step, for the stage split.
     step_names: Vec<String>,
     solid: NodeInstanceId,
+    solid_values: Vec<f32>,
     frame_count: i64,
     time: f64,
     trigger: u32,
@@ -183,11 +186,15 @@ struct FrameResult {
 
 impl Smoke {
     fn new(scene: WaterScene) -> Self {
+        Self::with_def(scene, render_def(scene))
+    }
+
+    fn with_def(scene: WaterScene, def: EffectGraphDef) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let device = crate::test_device();
         let runtime = PresetRuntime::from_def_with_device(
-            render_def(scene),
+            def,
             &registry,
             device.arc(),
             WIDTH,
@@ -211,6 +218,7 @@ impl Smoke {
             sampler,
             step_names,
             solid,
+            solid_values: scene.with_closed_surface().surface_solid(),
             frame_count: 0,
             time: 0.0,
             trigger: 0,
@@ -229,16 +237,15 @@ impl Smoke {
         smoke
     }
 
-    /// The surface's solid lattice holds no solid; the planner may recycle a
-    /// source's storage, so it is written before every frame.
-    fn clear_solid(&self) {
+    /// The surface's solid lattice, the tank walls' distances; the planner may
+    /// recycle a source's storage, so it is written before every frame.
+    fn write_solid(&self) {
         let resource = output_of(&self.runtime.plan, self.solid, "out");
         let backend = self.runtime.backend_for_test();
         let buffer = backend.array_buffer(backend.slot_for(resource).expect("solid bound")).expect("solid buffer");
-        let nodes = self.scene.surface_nodes().pow(3);
-        assert!(buffer.size as usize >= nodes * 4, "the solid source holds the corner lattice");
-        // SAFETY: shared storage of at least `nodes` floats; no frame is in flight.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&vec![0.0_f32; nodes])) };
+        assert!(buffer.size as usize >= self.solid_values.len() * 4, "the solid source holds the surface lattice");
+        // SAFETY: shared storage of at least this many floats; no frame is in flight.
+        unsafe { buffer.write(0, bytemuck::cast_slice(&self.solid_values)) };
     }
 
     /// One rendered frame. `dt` 0 with an unchanged clock is a paused
@@ -253,7 +260,7 @@ impl Smoke {
     }
 
     fn frame_inner(&mut self, dt: f64, profile: bool) -> FrameResult {
-        self.clear_solid();
+        self.write_solid();
         if dt > 0.0 {
             self.time += dt;
             self.frame_count += 1;
@@ -526,10 +533,13 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         if bad_vertices > 0 {
             smoke.critical.push(format!("frame {frame}: {bad_vertices} non-finite mesh vertices"));
         }
+        // The closed surface caps at the walls' solid, so its wall faces sit
+        // just past them, within a cell (the smoothing's reach).
+        let reach = scene.pressure.cell_size();
         for a in 0..3 {
             box_low[a] = box_low[a].min(low[a]);
             box_high[a] = box_high[a].max(high[a]);
-            if triangles > 0 && (low[a] < DAM_MIN[a] - 1e-3 || high[a] > DAM_MIN[a] + TANK + 1e-3) {
+            if triangles > 0 && (low[a] < DAM_MIN[a] - reach || high[a] > DAM_MIN[a] + TANK + reach) {
                 smoke.critical.push(format!("frame {frame}: mesh axis {a} spans {:.4}..{:.4}, outside the tank", low[a], high[a]));
             }
         }
@@ -681,6 +691,201 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     }
     println!("SMOKE {tag} critical: {:?}", smoke.critical);
     assert!(smoke.critical.is_empty(), "CRITICAL at {tag}: {:?}", smoke.critical);
+}
+
+/// `WaterDamBreakGpu.json` as shipped (FLIP engine and its GPU surface), with
+/// the studio floor left out as in Peter's exports and `overrides` applied.
+/// A node param a card param owns is set through the card's default, since
+/// the card overwrites it at build.
+fn preset_def(overrides: &Value) -> EffectGraphDef {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpu.json");
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses");
+    let left_out = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
+    let id = |n: &Value| n["id"].as_u64().expect("numeric id");
+    let ids: Vec<u64> = v["nodes"].as_array().expect("nodes").iter().filter(|n| left_out.iter().any(|d| n["nodeId"] == *d)).map(id).collect();
+    v["nodes"].as_array_mut().expect("nodes").retain(|n| !ids.contains(&id(n)));
+    v["wires"].as_array_mut().expect("wires").retain(|w| !ids.contains(&w["fromNode"].as_u64().expect("from")) && !ids.contains(&w["toNode"].as_u64().expect("to")));
+    let mut card = serde_json::Map::new();
+    for binding in v["presetMetadata"]["bindings"].as_array().expect("bindings") {
+        let target = &binding["target"];
+        if let Some(value) = target["nodeId"].as_str().and_then(|node| overrides.get(node)).and_then(|n| n.get(target["param"].as_str().unwrap_or_default())) {
+            card.insert(binding["id"].as_str().expect("binding id").to_string(), value.clone());
+        }
+    }
+    for list in ["params", "bindings"] {
+        for p in v["presetMetadata"][list].as_array_mut().expect("card list") {
+            if let Some(value) = p["id"].as_str().and_then(|id| card.get(id)) {
+                p["defaultValue"] = value.clone();
+            }
+        }
+    }
+    with_params(serde_json::from_value(v).expect("preset def"), overrides)
+}
+
+/// Stills of the shipped preset's own water at `stills`, as `preset_<name>_frameNNNN.png`.
+fn render_preset(name: &str, overrides: &Value, stills: &[usize], dir: &Path) {
+    let registry = PrimitiveRegistry::with_builtin();
+    let device = crate::test_device();
+    let mut runtime = PresetRuntime::from_def_with_device(preset_def(overrides), &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
+        .expect("preset builds on the device");
+    let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "preset-look");
+    for frame in 1..=*stills.iter().max().expect("a still") {
+        objc2::rc::autoreleasepool(|_| {
+            let time = frame as f64 / 60.0;
+            let ctx = PresetContext {
+                time,
+                beat: time * 2.0,
+                dt: 1.0 / 60.0,
+                width: WIDTH,
+                height: HEIGHT,
+                output_width: WIDTH,
+                output_height: HEIGHT,
+                aspect: WIDTH as f32 / HEIGHT as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: frame as i64,
+                anim_progress: 0.0,
+                trigger_count: 0,
+            };
+            let mut enc = device.create_encoder("preset-look");
+            {
+                let mut gpu = GpuEncoder::new(&mut enc, &device);
+                runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
+            }
+            enc.commit_and_wait_profiled(&device);
+        });
+        if stills.contains(&frame) {
+            let rgba = objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&device, &target.texture, WIDTH, HEIGHT));
+            std::fs::write(dir.join(format!("preset_{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
+        }
+    }
+}
+
+/// A contact sheet of stills in reading order, `cols` wide: each cropped to
+/// the tank and its splash, then scaled by `scale`.
+fn contact_sheet(stills: &[PathBuf], cols: usize, scale: f64, out: &Path) {
+    let (w, h) = ((1200.0 * scale) as usize / 2 * 2, (1080.0 * scale) as usize / 2 * 2);
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-loglevel", "error"]);
+    for still in stills {
+        cmd.arg("-i").arg(still);
+    }
+    let mut filter: String = (0..stills.len()).map(|i| format!("[{i}:v]crop=1200:1080:360:0,scale={w}:{h}[t{i}];")).collect();
+    filter += &(0..stills.len()).map(|i| format!("[t{i}]")).collect::<String>();
+    let layout: Vec<String> = (0..stills.len()).map(|i| format!("{}_{}", (i % cols) * (w + 8), (i / cols) * (h + 8))).collect();
+    filter += &format!("xstack=inputs={}:layout={}:fill=0x303030[out]", stills.len(), layout.join("|"));
+    let status = cmd.args(["-filter_complex", &filter, "-map", "[out]", "-frames:v", "1"]).arg(out).status();
+    println!("LOOK sheet {}: {}", out.display(), if status.is_ok_and(|s| s.success()) { "written" } else { "ffmpeg failed" });
+}
+
+/// `def` with node params replaced: `{"node": {"param": value}}`. A param
+/// keeps its declared type; one the def leaves unset is a Float.
+fn with_params(def: EffectGraphDef, overrides: &Value) -> EffectGraphDef {
+    let mut v = serde_json::to_value(def).expect("def serialises");
+    for (name, params) in overrides.as_object().expect("overrides by node") {
+        let nodes = v["nodes"].as_array_mut().expect("nodes");
+        let node = nodes.iter_mut().find(|n| n["nodeId"] == *name).unwrap_or_else(|| panic!("no node {name}"));
+        if !node["params"].is_object() {
+            node["params"] = json!({});
+        }
+        for (param, value) in params.as_object().expect("params by name") {
+            let kind = node["params"][param]["type"].as_str().unwrap_or("Float").to_string();
+            node["params"][param] = json!({"type": kind, "value": value});
+        }
+    }
+    serde_json::from_value(v).expect("def with overrides")
+}
+
+/// Look development on the Dam Break at 64: for each variant in the JSON file
+/// `SWASH_LOOK` names (`{"variant": {"node": {"param": value}}}`, `{}` for the
+/// preset as shipped, in name order), stills at `SWASH_LOOK_STILLS` (frames,
+/// default "90,240") and one contact sheet per still frame. With
+/// `SWASH_LOOK_SOURCE=preset` the water is the shipped preset's own (FLIP
+/// engine and its GPU surface); otherwise SWASH through `render_def`, and
+/// `SWASH_LOOK_CLIP` "first-last" also records those frames as a clip with a
+/// phone copy. Output under `SWASH_SMOKE_DIR`. No-op unset.
+#[test]
+fn swash_look_variants_64() {
+    let Some(path) = std::env::var_os("SWASH_LOOK") else {
+        return;
+    };
+    let variants: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("variants read")).expect("variants parse");
+    let stills: Vec<usize> = std::env::var("SWASH_LOOK_STILLS")
+        .unwrap_or_else(|_| "90,240".into())
+        .split(',')
+        .map(|f| f.trim().parse().expect("still frame"))
+        .collect();
+    let clip = std::env::var("SWASH_LOOK_CLIP").ok().map(|c| {
+        let (a, b) = c.split_once('-').expect("clip is first-last");
+        (a.parse::<usize>().expect("clip start"), b.parse::<usize>().expect("clip end"))
+    });
+    let last = stills.iter().copied().chain(clip.map(|c| c.1)).max().expect("a frame to render");
+    let dir = out_dir();
+    let scene = WaterScene::dam_break(64);
+    let dt = 1.0 / 60.0;
+    let preset = std::env::var("SWASH_LOOK_SOURCE").is_ok_and(|s| s == "preset");
+    let prefix = if preset { "preset" } else { "look" };
+    let variants = variants.as_object().expect("variants by name");
+    for (name, overrides) in variants {
+        let wall = Instant::now();
+        if preset {
+            render_preset(name, overrides, &stills, &dir);
+            println!("LOOK preset {name}: {:.1} s", wall.elapsed().as_secs_f64());
+            continue;
+        }
+        let mut smoke = Smoke::with_def(scene, with_params(render_def(scene), overrides));
+        // As `run`: the first frame, warm-up, then a trigger restart.
+        smoke.frame(dt, false);
+        let mut warmups = 0;
+        while smoke.runtime.warmup_pending() && warmups < 600 {
+            smoke.frame(dt, false);
+            warmups += 1;
+        }
+        smoke.trigger += 1;
+        smoke.frame(dt, false);
+        let mut ffmpeg = None;
+        let clip_path = dir.join(format!("look_{name}_clip.mp4"));
+        for frame in 1..=last {
+            smoke.frame(dt, false);
+            if stills.contains(&frame) {
+                smoke.still(&dir.join(format!("look_{name}_frame{frame:04}.png")));
+            }
+            let Some((first, end)) = clip else { continue };
+            if frame == first {
+                ffmpeg = std::process::Command::new("ffmpeg")
+                    .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{WIDTH}x{HEIGHT}"), "-r", "60", "-i", "-"])
+                    .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18"])
+                    .arg(&clip_path)
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .ok();
+            }
+            if (first..=end).contains(&frame)
+                && let Some(child) = ffmpeg.as_mut()
+            {
+                let rgba = smoke.readback();
+                child.stdin.as_mut().expect("ffmpeg input").write_all(&rgba).expect("clip frame written");
+            }
+        }
+        if let Some(mut child) = ffmpeg.take() {
+            drop(child.stdin.take());
+            let _ = child.wait();
+            phone_copy(&clip_path, &dir.join(format!("look_{name}_phone.mp4")));
+        }
+        println!("LOOK {name}: {last} frames in {:.1} s", wall.elapsed().as_secs_f64());
+    }
+    let still = |name: &String, frame: &usize| dir.join(format!("{prefix}_{name}_frame{frame:04}.png"));
+    if variants.len() > 1 {
+        for frame in &stills {
+            let paths: Vec<PathBuf> = variants.keys().map(|name| still(name, frame)).collect();
+            contact_sheet(&paths, 3, 0.5, &dir.join(format!("{prefix}_sheet_frame{frame:04}.png")));
+        }
+    }
+    // Side by side: a row per still frame, a column per variant.
+    if (2..=4).contains(&variants.len()) {
+        let paths: Vec<PathBuf> = stills.iter().flat_map(|frame| variants.keys().map(move |name| (name, frame))).map(|(name, frame)| still(name, frame)).collect();
+        contact_sheet(&paths, variants.len(), 0.75, &dir.join(format!("{prefix}_grid.png")));
+    }
 }
 
 #[test]
