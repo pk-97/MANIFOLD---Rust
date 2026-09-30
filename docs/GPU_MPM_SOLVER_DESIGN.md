@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1 work on `feat/gpu-mpm-build-b` · P1 partial: D5 amended for BUG-m9g8 (MPM D5 fixed point loses momentum); J bounded for BUG-8akp (MPM water J grows without bound); A2, A4, A6 and the still pool fail as look findings for Peter · P1b in progress (L1 built) · kill check fired (53 ms against 12 ms), budget at P4 in BUG-u3ov (MPM solver budget) · P2a–P2b built on the branch · P3–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to FFT_WATER_SOLVER_DESIGN.md, MPM water presets are test scenes, P4's water targets are withdrawn · owed before landing: BUG-osqh (coupled MPM export below 60 fps drops ticks) · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -820,6 +820,12 @@ Peter's visual call contradicts a pass or fail, the threshold is re-baselined fr
 call and recorded in the phase's decision bead. P1 and P4 capture at Liveliness 0 and
 0.9; the gate is evaluated at the default, and both sets of numbers go to Peter.
 
+**Withdrawn 2026-09-30.** MPM water look is out of scope: liquid water moves to
+[FFT_WATER_SOLVER_DESIGN.md](FFT_WATER_SOLVER_DESIGN.md), and the MPM water presets are
+test scenes. A2, A4, A6, the still-pool settle and the P4 targets A7–A11 are not gated.
+A1, A3 and A5 stay as solver-health gates. The metric functions stay in `matter::look`
+for `fluid_capture --look-metrics`.
+
 ## 8. Speed — roofline, profile and levers
 
 Per substep: 4 dispatches (clear, P2G, grid update, G2P), plus 2 with bodies; per tick,
@@ -994,15 +1000,13 @@ FLIP-only.
 | GPU transfers match the f64 reference at small N | `matter_transfer_matches_reference` (one substep, 512 points, 16³: positions within 1e-5 m and velocities within 2e-5 m/s of the f64 reference with Q = 2^20 fixed-point rounding; velocities within 2e-4 m/s of the continuous f64 reference, because one mass LSB at a low-mass stencil-edge node moves its velocity by about 1e-4 m/s); `matter_hundred_substeps_match_reference` (affine field fixture) |
 | Mass is exact; grid mass matches particle mass | `matter_grid_mass_matches_particle_mass` (relative 1e-5 per substep) |
 | Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks; the fixed-point bound derived for this setup is about 5e-5; measured 4.9e-6 with D5's momentum unit) |
-| A still pool settles | `matter_still_pool_settles` (after 5 s: mean speed < 0.01 m/s; bottom-quarter J matches 1 − ρgd/λ within 20%) |
 | Dam-break energy never grows | `matter_dam_break_energy_bounded` (kinetic + potential + elastic ≤ 1.01 × initial at every tick) |
-| Look artefacts A1–A6 | `matter_look_lattice_alignment`, `matter_look_settles_without_ringing`, `matter_look_volume_drift`, `matter_dam_break_front_matches_martin_moyce`, `matter_look_splash_retention`, `matter_look_sheet_retention` (section 7). ⚠ VERIFY-AT-IMPL: transcribe the Martin & Moyce aspect-2 series and its T definition, with the citation, into the test |
-| Look artefacts A7–A11 | `matter_surface_look_against_flip` (P4) |
+| Look artefacts A1, A3, A5 | `matter_look_lattice_alignment`, `matter_look_volume_drift`, `matter_look_splash_retention` (section 7 (Look — artefacts, metrics and dials); the other look gates are withdrawn) |
 | Determinism | `matter_deterministic_under_seed` (two runs, 120 ticks, bit-identical points); `matter_seed_changes_jitter`; `matter_block_p2g_bit_identical` (P1b) |
 | Fixed-point headroom | `matter_fixed_point_headroom` (Dam Break, max accumulator magnitude < 2^30) |
 | A non-finite tick is never published | `matter_nonfinite_tick_not_published` |
 | Substep rule | `matter_substep_rule_matches_worked_example` (n = 34); `matter_substeps_follow_stiffness` (0.5 → 21, 2 → 61); `matter_dials_limited_to_substep_cap` (a request needing n > 128 runs at the largest fitting value and reports it) |
-| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick` |
+| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`. Coupled export still drops below 60 fps: BUG-osqh (coupled MPM export below 60 fps drops ticks) |
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
 | Coupling | `matter_coupling_hydrostatic_force` (within 5%), `matter_coupling_floating_equilibrium` (density 0.5 settles at the waterline ± 0.5·dx), `matter_coupling_energy_light_body` (ratios 0.1/1/10: body energy never above 1.01 × initial total over 8 ticks), `matter_coupling_free_flight_matches_box3d`, `matter_coupling_presentation_shares_display_time` |
@@ -1446,6 +1450,10 @@ at the end of the phase.
 
 ### P4 — Look and speed gate, and the side-by-side (the go/no-go)
 
+Water targets withdrawn 2026-09-30 (section 7 (Look — artefacts, metrics and dials)): MPM
+water look and speed are out of scope. The brief below stands only as the record of what
+the gate was; it does not run for water.
+
 - **Entry state:** P3d merged; surface P5 and P6 merged: `rg -n 'node.volume_surface_mesh' crates/manifold-renderer/src/node_graph/primitives`.
 - **Read-back:** D19, D20; sections 7 and 8.
 - **Deliverables:** the mesh look-metrics mode of `fluid_capture` (A7–A11); the
@@ -1459,7 +1467,7 @@ at the end of the phase.
   solvers in view.
 - **Forbidden:** changing dials, particle counts, resolution or thresholds to pass;
   comparing through different surfaces; any FLIP change.
-- **Inputs carried from P1** (BUG-k85i (MPM P1 look gates), thresholds unchanged):
+- **Last P1 numbers** (BUG-k85i (MPM P1 look gates), closed as superseded):
 
   | Gate | Matter | Reference |
   |---|---|---|
@@ -1485,7 +1493,7 @@ at the end of the phase.
 
 ### P5a–P5d — Materials, one phase each, goo first
 
-Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
+Paused until the water solver settles (FFT_WATER_SOLVER_DESIGN.md). Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
 Shared deliverables: the Material Enum value, its branch, its params on the domain's
 param surface, a preset, and the D4 hardening bound on c. Shared gate: the phase tests,
 the GPU filter, check-presets and graph-tool, P1's A1–A3 on the new material, an L2

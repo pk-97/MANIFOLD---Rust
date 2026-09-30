@@ -1,11 +1,12 @@
-//! Look gates A1–A6 and free-flight momentum (`docs/GPU_MPM_SOLVER_DESIGN.md`
-//! section 7 (look gates) and section 12 (invariants)). Every metric comes from
-//! `matter::look` over seam particle frames. The Dam Break scene matches
-//! `WaterDamBreakMatter.json`: 4 m domain, 64 cells, 0.16 m pool, the preset's
-//! column, closed walls. FLIP runs the same scene through the real
-//! `node.fluid_surface` at its defaults, without the preset's moving box
-//! (colliders are P2a). Gates are evaluated at Liveliness 0; Liveliness 0.9
-//! numbers are printed.
+//! Look gates A1, A3 and A5, and free-flight momentum
+//! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 7 (look gates) and section 12
+//! (invariants)). A2, A4 and A6 were water look targets, withdrawn with the
+//! MPM water look goal. Every metric comes from `matter::look` over seam
+//! particle frames. The Dam Break scene matches `WaterDamBreakMatter.json`:
+//! 4 m domain, 64 cells, 0.16 m pool, the preset's column, closed walls. FLIP
+//! runs the same scene through the real `node.fluid_surface` at its defaults,
+//! without the preset's moving box. Gates are evaluated at Liveliness 0;
+//! Liveliness 0.9 numbers are printed.
 
 use std::sync::OnceLock;
 
@@ -14,7 +15,7 @@ use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::matter::look::{self, ALIGNMENT_TICKS, Cells, LookRecorder, RETENTION_TICKS};
+use manifold_renderer::node_graph::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder, RETENTION_TICKS};
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
     PrimitiveRegistry, ResourceId, StateStore, Transform, compile, pre_allocate_resources,
@@ -244,26 +245,6 @@ fn matter_look_lattice_alignment() {
     }
 }
 
-/// A2: the Dam Break settles within 10 s and then holds within 5 mm.
-#[test]
-fn matter_look_settles_without_ringing() {
-    let gate = matter(0.0).settling();
-    let lively = matter(0.9).settling();
-    eprintln!("matter_look_settles_without_ringing: L0 {gate:?}; L0.9 {lively:?}");
-    for (name, s) in [("L0", matter(0.0)), ("L0.9", matter(0.9))] {
-        let per_second: Vec<String> = s
-            .samples
-            .iter()
-            .filter(|x| ((x.0 * 60.0).round() as u32).is_multiple_of(60))
-            .map(|x| format!("{:.0}s {:.3} m/s {:.3} m", x.0, x.1, x.2))
-            .collect();
-        eprintln!("  {name}: {}", per_second.join(", "));
-    }
-    let settle = gate.settle_time.expect("the Dam Break never settled within 12 s");
-    assert!(settle <= 10.0, "settled at {settle} s");
-    assert!(gate.ringing <= 0.005, "ringing {} m", gate.ringing);
-}
-
 /// A3: Σ V0·J stays within 3% of the rest volume at every Dam Break tick and
 /// within 1% after settling, and within 1% over 60 s of still pool.
 #[test]
@@ -295,53 +276,6 @@ fn matter_look_volume_drift() {
     assert!(pool_error <= 0.01, "still pool volume error {pool_error}");
 }
 
-/// A4: an aspect-2 column on a dry bed, spanning the domain's depth, collapses
-/// as Martin & Moyce's: front within 10% for T = t·√(2g/a) in [1, 3].
-#[test]
-fn matter_dam_break_front_matches_martin_moyce() {
-    const WIDTH: f32 = 0.75;
-    let layout = domain_layout(None, DOMAIN_SIZE, RESOLUTION).expect("domain");
-    let wall = layout.min[0];
-    let run = |liveliness: f32| {
-        let mut scene = MatterScene::new(&SceneSettings {
-            domain_size: DOMAIN_SIZE,
-            resolution: RESOLUTION,
-            fill_height: 0.0,
-            column: Some(Transform {
-                pos: [wall + WIDTH * 0.5, WIDTH, 0.0],
-                scale: [WIDTH, 2.0 * WIDTH, DOMAIN_SIZE],
-                ..Transform::default()
-            }),
-            liveliness,
-            ..SceneSettings::default()
-        });
-        let to_t_star = (2.0 * 9.81 / WIDTH).sqrt();
-        let mut worst = 0.0f32;
-        let mut rows = Vec::new();
-        for tick in 1..=60 {
-            scene.tick();
-            let t_star = tick as f32 / 60.0 * to_t_star;
-            if !(1.0..=3.0).contains(&t_star) {
-                continue;
-            }
-            let z = (look::front_position(&scene.frame(), 20) - wall) / WIDTH;
-            let reference = look::martin_moyce_front(t_star).expect("T inside the series");
-            let error = (z - reference).abs() / reference;
-            worst = worst.max(error);
-            rows.push((t_star, z, reference));
-        }
-        (worst, rows)
-    };
-    let (worst, rows) = run(0.0);
-    let (lively, _) = run(0.9);
-    eprintln!("matter_dam_break_front_matches_martin_moyce: worst {worst:.4} (L0.9 {lively:.4})");
-    for (t, z, reference) in &rows {
-        eprintln!("  T {t:.3}  Z {z:.3}  Martin & Moyce {reference:.3}");
-    }
-    assert!(!rows.is_empty());
-    assert!(worst <= 0.10, "front off by {worst}");
-}
-
 /// A5: the Dam Break keeps at least 0.6 × FLIP's detached-point fraction.
 #[test]
 fn matter_look_splash_retention() {
@@ -353,19 +287,6 @@ fn matter_look_splash_retention() {
     );
     assert!(f > 0.0, "FLIP produced no splash to compare against");
     assert!(m >= 0.6 * f, "splash {m} against FLIP {f}");
-}
-
-/// A6: the Dam Break keeps at least 0.6 × FLIP's sheet-point fraction.
-#[test]
-fn matter_look_sheet_retention() {
-    let (m, f) = (matter(0.0).max_sheets(), flip().max_sheets());
-    eprintln!(
-        "matter_look_sheet_retention: matter L0 {m:.4}, L0.9 {:.4}, FLIP {f:.4} (gate 0.6 × FLIP = {:.4})",
-        matter(0.9).max_sheets(),
-        0.6 * f
-    );
-    assert!(f > 0.0, "FLIP produced no sheets to compare against");
-    assert!(m >= 0.6 * f, "sheets {m} against FLIP {f}");
 }
 
 /// Zero gravity, a blob in the middle of the domain moving at constant

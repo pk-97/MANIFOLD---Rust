@@ -137,18 +137,6 @@ pub fn mean_surface_height(frame: &[FluidParticle], cells: &Cells) -> f32 {
     (heights.iter().map(|&h| f64::from(h)).sum::<f64>() / heights.len() as f64) as f32
 }
 
-/// The surge front along +X: the `rank`-th largest X of the live records, so
-/// a few stray droplets ahead of the front do not move it.
-pub fn front_position(frame: &[FluidParticle], rank: usize) -> f32 {
-    let mut xs: Vec<f32> = live(frame).iter().map(|p| p.position_radius[0]).collect();
-    if xs.is_empty() {
-        return f32::NAN;
-    }
-    let k = rank.min(xs.len() - 1);
-    xs.select_nth_unstable_by(k, |a, b| b.total_cmp(a));
-    xs[k]
-}
-
 /// A uniform bucket grid over the live points' bounding box.
 struct Buckets {
     origin: [f32; 3],
@@ -408,40 +396,6 @@ impl LookRecorder {
     }
 }
 
-/// Martin & Moyce 1952 (J. C. Martin and W. J. Moyce, "An experimental study
-/// of the collapse of liquid columns on a rigid horizontal plane", Phil.
-/// Trans. R. Soc. Lond. A 244, 312–324), Figure 3, n² = 2 (column twice as
-/// tall as wide), a = 2.25 in: surge front Z = z/a against T = t·√(2g/a),
-/// where a is the column width and z the front's distance from the back
-/// wall. Digitised by PySPH (`pysph/examples/db_exp_data.py`,
-/// `get_martin_moyce_2`); its a = 1.125 in series agrees within 3% for T in
-/// [1, 3].
-pub const MARTIN_MOYCE_N2_2: [(f32, f32); 15] = [
-    (0.832, 1.217),
-    (1.219, 1.474),
-    (1.997, 2.292),
-    (2.547, 2.995),
-    (3.345, 4.134),
-    (4.034, 4.944),
-    (4.418, 5.881),
-    (5.091, 6.980),
-    (5.685, 7.945),
-    (6.306, 8.966),
-    (6.822, 9.986),
-    (7.439, 10.963),
-    (8.031, 11.977),
-    (8.633, 13.005),
-    (9.237, 13.970),
-];
-
-/// Martin & Moyce's Z at `t_star`, linear between the digitised points.
-pub fn martin_moyce_front(t_star: f32) -> Option<f32> {
-    MARTIN_MOYCE_N2_2.windows(2).find(|w| w[0].0 <= t_star && t_star <= w[1].0).map(|w| {
-        let s = (t_star - w[0].0) / (w[1].0 - w[0].0);
-        w[0].1 + s * (w[1].1 - w[0].1)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,20 +487,9 @@ mod tests {
     }
 
     #[test]
-    fn look_surface_and_front() {
+    fn look_surface_height() {
         let mut seed = 3;
         let frame = block(10, 0.05, 0.0, &mut seed);
         assert!((mean_surface_height(&frame, &cells()) - 0.475).abs() < 1e-5);
-        let mut front = frame.clone();
-        front.push(particle([4.0, 0.0, 0.0]));
-        assert!((front_position(&front, 1) - 0.475).abs() < 1e-5);
-    }
-
-    #[test]
-    fn look_martin_moyce_interpolates_inside_the_series() {
-        assert_eq!(martin_moyce_front(1.219), Some(1.474));
-        let mid = martin_moyce_front(1.608).unwrap();
-        assert!((mid - 1.883).abs() < 1e-3, "{mid}");
-        assert_eq!(martin_moyce_front(0.5), None);
     }
 }

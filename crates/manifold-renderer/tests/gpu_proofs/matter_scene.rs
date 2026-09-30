@@ -523,66 +523,6 @@ impl MatterScene {
     }
 }
 
-fn mean_speed(points: &[MatterPoint]) -> f32 {
-    let live: Vec<&MatterPoint> = points.iter().filter(|p| p.id != 0).collect();
-    live.iter()
-        .map(|p| (p.velocity[0].powi(2) + p.velocity[1].powi(2) + p.velocity[2].powi(2)).sqrt())
-        .sum::<f32>()
-        / live.len().max(1) as f32
-}
-
-/// A 1 m box, resolution 32, a 0.5 m pool: after 5 s the pool is still and
-/// its bottom quarter compressed by the hydrostatic ρgd/λ (section 12).
-#[test]
-fn matter_still_pool_settles() {
-    let settings = SceneSettings { fill_height: 0.5, ..SceneSettings::default() };
-    let mut scene = MatterScene::new(&settings);
-    for t in 0..300 {
-        scene.tick();
-        if t % 30 == 29 && std::env::var_os("MATTER_DIAG").is_some() {
-            let pts = scene.points();
-            let s = scene.stats();
-            let speed = |p: &MatterPoint| (p.velocity[0].powi(2) + p.velocity[1].powi(2) + p.velocity[2].powi(2)).sqrt();
-            let top: Vec<&MatterPoint> = pts.iter().filter(|p| p.position[1] > settings.fill_height - 0.0625).collect();
-            let deep: Vec<&MatterPoint> = pts.iter().filter(|p| p.position[1] < settings.fill_height * 0.5).collect();
-            let mean = |v: &[&MatterPoint]| v.iter().map(|p| speed(p)).sum::<f32>() / v.len().max(1) as f32;
-            let expanded = pts.iter().filter(|p| p.volume_ratio > 1.05).count();
-            let above = pts.iter().filter(|p| p.position[1] > settings.fill_height + 0.03).count();
-            let max_y = pts.iter().map(|p| p.position[1]).fold(f32::MIN, f32::max);
-            eprintln!(
-                "t={:.2}s mean {:.4} top {:.4} deep {:.4} max {:.3} | J>1.05: {expanded} above surface: {above} max_y {max_y:.3} | E k {:.3} p {:.3} e {:.3} J [{:.4},{:.3}]",
-                (t + 1) as f32 / 60.0, mean_speed(&pts), mean(&top), mean(&deep), s.max_speed,
-                s.kinetic, s.potential, s.elastic, s.min_j, s.max_j
-            );
-        }
-    }
-    let points = scene.points();
-    let stats = scene.stats();
-    assert_eq!(stats.nonfinite, 0, "{stats:?}");
-    let speed = mean_speed(&points);
-    eprintln!("matter_still_pool_settles: {} points, mean speed {speed:.4} m/s, J [{:.4}, {:.4}], clamped {}", points.len(), stats.min_j, stats.max_j, stats.clamped);
-    assert!(speed < 0.01, "mean speed after 5 s is {speed} m/s");
-
-    // Hydrostatic compression at the bottom quarter's mean depth.
-    let floor = 0.0f32;
-    let surface = settings.fill_height;
-    let bottom: Vec<&MatterPoint> = points
-        .iter()
-        .filter(|p| p.id != 0 && p.position[1] < floor + 0.25 * (surface - floor))
-        .collect();
-    let mean_j = bottom.iter().map(|p| f64::from(p.volume_ratio)).sum::<f64>() / bottom.len() as f64;
-    let mean_depth = f64::from(surface) - bottom.iter().map(|p| f64::from(p.position[1])).sum::<f64>() / bottom.len() as f64;
-    let lambda = manifold_renderer::node_graph::matter::water_lambda(1.0, 1.0);
-    let expected = 1.0 - 1000.0 * 9.81 * mean_depth / lambda;
-    eprintln!("  bottom quarter: mean J {mean_j:.5}, hydrostatic {expected:.5} at depth {mean_depth:.3} m");
-    assert!(
-        ((1.0 - mean_j) - (1.0 - expected)).abs() <= 0.2 * (1.0 - expected),
-        "bottom-quarter compression {} vs hydrostatic {}",
-        1.0 - mean_j,
-        1.0 - expected
-    );
-}
-
 /// A 1 m domain at resolution 32 with a quarter-width, 0.6 m column on a
 /// 3 cm pool: a small dam break.
 pub(crate) fn small_dam_break() -> SceneSettings {
