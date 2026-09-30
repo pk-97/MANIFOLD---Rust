@@ -136,7 +136,7 @@
         "name": "Water Absorption Distance",
         "min": 0.1,
         "max": 20,
-        "defaultValue": 3,
+        "defaultValue": 2.5,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -149,7 +149,7 @@
         "name": "Water Scattering",
         "min": 0,
         "max": 2,
-        "defaultValue": 0.055,
+        "defaultValue": 0.1,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -292,7 +292,7 @@
       {
         "id": "water_attenuation",
         "label": "Water Absorption Distance",
-        "defaultValue": 3,
+        "defaultValue": 2.5,
         "target": {
           "kind": "node",
           "nodeId": "water_material",
@@ -305,7 +305,7 @@
       {
         "id": "water_scattering",
         "label": "Water Scattering",
-        "defaultValue": 0.055,
+        "defaultValue": 0.1,
         "target": {
           "kind": "node",
           "nodeId": "water_material",
@@ -738,7 +738,7 @@
         },
         "volume_attenuation_distance": {
           "type": "Float",
-          "value": 3.0
+          "value": 2.5
         },
         "volume_attenuation_color_r": {
           "type": "Float",
@@ -746,11 +746,11 @@
         },
         "volume_attenuation_color_g": {
           "type": "Float",
-          "value": 0.72
+          "value": 0.76
         },
         "volume_attenuation_color_b": {
           "type": "Float",
-          "value": 0.8
+          "value": 0.76
         },
         "volume_geometry": {
           "type": "Float",
@@ -758,19 +758,19 @@
         },
         "volume_scattering_density": {
           "type": "Float",
-          "value": 0.055
+          "value": 0.1
         },
         "volume_scattering_color_r": {
           "type": "Float",
-          "value": 0.68
+          "value": 0.7
         },
         "volume_scattering_color_g": {
           "type": "Float",
-          "value": 0.86
+          "value": 0.88
         },
         "volume_scattering_color_b": {
           "type": "Float",
-          "value": 0.92
+          "value": 0.88
         }
       }
     },
