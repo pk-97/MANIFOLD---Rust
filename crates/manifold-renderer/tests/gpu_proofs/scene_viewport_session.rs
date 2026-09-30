@@ -59,14 +59,14 @@ fn viewport_session_fluid_domain_draft_redraws_without_rebuilding() {
     session.dolly(-2.5, 0.3);
     let cfg = ViewportOverlayConfig::default();
     let clean = session.render_if_dirty(&frame_ctx, &cfg, None, &[], &[]);
-    let mut fluid: EffectGraphDef = serde_json::from_str(r#"{
+    let mut fluid: EffectGraphDef = serde_json::from_value(serde_json::json!({
         "version":2,"nodes":[
             {"id":1,"nodeId":"domain","typeId":"node.transform_3d","params":{
                 "pos_y":{"type":"Float","value":2.0},
                 "scale_x":{"type":"Float","value":4.0},
                 "scale_y":{"type":"Float","value":4.0},
                 "scale_z":{"type":"Float","value":4.0}}},
-            {"id":2,"nodeId":"water","typeId":"node.fluid_surface"},
+            {"id":2,"nodeId":"water","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID},
             {"id":3,"nodeId":"surface","typeId":"node.scene_object"},
             {"id":4,"nodeId":"scene","typeId":"node.render_scene","params":{
                 "objects":{"type":"Int","value":1}}},
@@ -76,7 +76,7 @@ fn viewport_session_fluid_domain_draft_redraws_without_rebuilding() {
             {"fromNode":2,"fromPort":"vertices","toNode":3,"toPort":"vertices"},
             {"fromNode":3,"fromPort":"object","toNode":4,"toPort":"object_0"},
             {"fromNode":4,"fromPort":"color","toNode":5,"toPort":"in"}
-        ]}"#).unwrap();
+        ]})).unwrap();
     let mut frames = Vec::new();
     for (label, mode, edit) in [
         ("original", GizmoMode::Move, None),
@@ -170,7 +170,7 @@ fn shared_scene_viewport_navigates_without_advancing_fluid_or_changing_show() {
     let registry = PrimitiveRegistry::with_builtin();
     // Keep the diagnostic scalar ports live through ordinary graph wires;
     // the executor intentionally does not allocate unconsumed outputs.
-    let mut def: serde_json::Value = serde_json::from_str(fluid_session_json()).unwrap();
+    let mut def = fluid_session_json();
     def["wires"].as_array_mut().unwrap().extend([
         serde_json::json!({"fromNode":3,"fromPort":"simulation_time","toNode":5,"toPort":"color_b"}),
         serde_json::json!({"fromNode":3,"fromPort":"vertex_count","toNode":4,"toPort":"visible"}),
@@ -287,7 +287,7 @@ fn shared_scene_viewport_does_not_activate_a_hidden_fluid_branch() {
 
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
-    let mut def: serde_json::Value = serde_json::from_str(fluid_session_json()).unwrap();
+    let mut def = fluid_session_json();
     def["nodes"].as_array_mut().unwrap().push(serde_json::json!({
         "id":10, "nodeId":"active_scene", "typeId":"node.render_scene",
         "params":{"objects":{"type":"Int","value":0}, "lights":{"type":"Int","value":0}}
@@ -427,7 +427,7 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
 
     let h = harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
-    let def: EffectGraphDef = serde_json::from_str(fluid_session_json()).unwrap();
+    let def: EffectGraphDef = serde_json::from_value(fluid_session_json()).unwrap();
     let mut frame_ctx = ctx(h);
     frame_ctx.width = 320;
     frame_ctx.height = 200;
@@ -584,10 +584,10 @@ fn viewport_session_refreshes_effective_controls_and_fluid_bounds() {
     );
 }
 
-fn fluid_session_json() -> &'static str {
+fn fluid_session_json() -> serde_json::Value {
     // Keep several filled cell layers at resolution 8 so boundary clipping
     // leaves a visible surface for the navigation and material assertions.
-    r#"{
+    serde_json::json!({
         "version": 2,
         "name": "ViewportFluidProof",
         "presetMetadata": {
@@ -613,7 +613,7 @@ fn fluid_session_json() -> &'static str {
             {"id":0,"typeId":"system.generator_input","nodeId":"input"},
             {"id":1,"typeId":"node.value","nodeId":"domain_value","params":{"value":{"type":"Float","value":0.0}}},
             {"id":2,"typeId":"node.transform_3d","nodeId":"domain","params":{"pos_y":{"type":"Float","value":2.0},"scale_x":{"type":"Float","value":4.0},"scale_y":{"type":"Float","value":4.0},"scale_z":{"type":"Float","value":4.0}}},
-            {"id":3,"typeId":"node.fluid_surface","nodeId":"water","params":{"resolution":{"type":"Float","value":8.0},"fill_height":{"type":"Float","value":1.5},"max_capacity":{"type":"Float","value":100000.0}}},
+            {"id":3,"typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,"nodeId":"water","params":{"resolution":{"type":"Float","value":8.0},"fill_height":{"type":"Float","value":1.5},"max_capacity":{"type":"Float","value":100000.0}}},
             {"id":4,"typeId":"node.scene_object","nodeId":"water_object"},
             {"id":5,"typeId":"node.phong_material","nodeId":"mat","params":{"color_r":{"type":"Float","value":0.8},"color_g":{"type":"Float","value":0.35},"color_b":{"type":"Float","value":0.12},"ambient":{"type":"Float","value":0.2}}},
             {"id":6,"typeId":"node.orbit_camera","nodeId":"cam","params":{"orbit":{"type":"Float","value":0.6},"tilt":{"type":"Float","value":0.7},"distance":{"type":"Float","value":9.0},"fov_y":{"type":"Float","value":0.8}}},
@@ -631,7 +631,7 @@ fn fluid_session_json() -> &'static str {
             {"fromNode":7,"fromPort":"out","toNode":8,"toPort":"light_0"},
             {"fromNode":8,"fromPort":"color","toNode":9,"toPort":"in"}
         ]
-    }"#
+    })
 }
 
 /// Ground plane lit by one sun, wired to an `orbit_camera` (the SHOW

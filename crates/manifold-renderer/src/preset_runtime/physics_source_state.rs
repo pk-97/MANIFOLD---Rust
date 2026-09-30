@@ -11,6 +11,7 @@ use crate::node_graph::source_asset::SourceAssetIdentity;
 use crate::node_graph::{Graph, NodeInstanceId, ParamValue};
 use manifold_core::NodeId;
 use manifold_core::effects::PresetInstance;
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use sha2::{Digest, Sha256};
 
 pub(super) struct PhysicsSourceState {
@@ -300,7 +301,7 @@ impl PhysicsSourceState {
                 for (id, node) in node_map {
                     if id.as_str().starts_with(prefix)
                         && let Some(node) = graph.get_node_mut(*node)
-                        && node.node.type_id().as_str() == "node.fluid_surface"
+                        && node.node.type_id().as_str() == FLIP_DOMAIN_TYPE_ID
                     {
                         node.node.set_physics_source_identity(Err(error.clone()));
                     }
@@ -355,7 +356,7 @@ impl PhysicsSourceState {
                 })?;
             if graph
                 .get_node(node)
-                .is_none_or(|node| node.node.type_id().as_str() != "node.fluid_surface")
+                .is_none_or(|node| node.node.type_id().as_str() != FLIP_DOMAIN_TYPE_ID)
             {
                 return Err(format!(
                     "Physics take: authored fluid {} resolves to a different node type",
@@ -432,7 +433,7 @@ fn scoped_fluid_nodes<'a>(
         if prefix.is_empty() {
             return graph
                 .get_node(*instance)
-                .filter(|node| node.node.type_id().as_str() == "node.fluid_surface")
+                .filter(|node| node.node.type_id().as_str() == FLIP_DOMAIN_TYPE_ID)
                 .map(|_| (node_id, *instance));
         }
         node_id
@@ -442,7 +443,7 @@ fn scoped_fluid_nodes<'a>(
             .and_then(|_| {
                 graph
                     .get_node(*instance)
-                    .filter(|node| node.node.type_id().as_str() == "node.fluid_surface")
+                    .filter(|node| node.node.type_id().as_str() == FLIP_DOMAIN_TYPE_ID)
                     .map(|_| (node_id, *instance))
             })
     })

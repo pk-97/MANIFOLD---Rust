@@ -62,7 +62,7 @@ fn authored_vortex(viscosity: f32) -> (EffectGraphDef, NodeId, String) {
                 group
                     .nodes
                     .iter()
-                    .any(|node| node.type_id == "node.fluid_surface")
+                    .any(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
             })
         })
         .unwrap();
@@ -70,7 +70,7 @@ fn authored_vortex(viscosity: f32) -> (EffectGraphDef, NodeId, String) {
     let fluid = group
         .nodes
         .iter()
-        .find(|node| node.type_id == "node.fluid_surface")
+        .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
         .unwrap()
         .id;
     let role = group

@@ -66,7 +66,7 @@ impl FlipScene {
     fn new() -> Self {
         let registry = PrimitiveRegistry::with_builtin();
         let mut graph = Graph::new();
-        let fluid = graph.add_node(registry.construct("node.fluid_surface").expect("fluid"));
+        let fluid = graph.add_node(registry.construct(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).expect("fluid"));
         let volume = graph.add_node(registry.construct("node.transform_3d").expect("transform"));
         let counter = graph.add_node(registry.construct("node.particles_to_copies").expect("copies"));
         let c = column();

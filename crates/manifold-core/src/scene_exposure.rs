@@ -66,7 +66,11 @@ pub trait SceneExposureMetadataProvider: Send + Sync {
 pub fn card_visible_for(type_id: &str, param: &str) -> bool {
     let visible: &[&str] = match type_id {
         "node.physics_world" => &["copy_count", "reset"],
-        "node.fluid_surface" => &["emission", "inflow_speed", "speed", "reset"],
+        // The performance subset under FLIP's names (D17); a domain without
+        // one of these params simply has no such row.
+        domain if crate::liquid_domain::is_liquid_domain(domain) => {
+            &["emission", "inflow_speed", "speed", "reset"]
+        }
         "node.fluid_role_source" => &["enabled", "velocity_x", "velocity_y", "velocity_z"],
         // `fov_y` lives on `node.orbit_camera` (not `node.camera_lens` —
         // that primitive's real params are focus_distance/f_stop/

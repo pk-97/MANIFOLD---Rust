@@ -31,7 +31,7 @@ fn authored_shared_world_fixture() -> EffectGraphDef {
     let mut add = AddSceneFluidCommand::new(
         target.clone(),
         render_id,
-        crate::node_graph::scene_exposure::metadata_for_node_type("node.fluid_surface"),
+        crate::node_graph::scene_exposure::metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
@@ -60,7 +60,7 @@ fn generated_fluid_id(def: &EffectGraphDef) -> NodeId {
         .iter()
         .find_map(|node| {
             node.group.as_deref()?.nodes.iter().find_map(|child| {
-                (child.type_id == "node.fluid_surface").then(|| child.node_id.clone())
+                (child.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).then(|| child.node_id.clone())
             })
         })
         .expect("generated fluid node")
@@ -182,7 +182,7 @@ fn coupled_fixture() -> EffectGraphDef {
     // object using the same authoring path as an ordinary scene.
     def.nodes.extend([
         serde_json::from_value(serde_json::json!({
-            "id":14,"nodeId":"fluid","typeId":"node.fluid_surface",
+            "id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
             "params":{
                 "resolution":{"type":"Float","value":12.0},
                 "gravity":{"type":"Float","value":0.0},
