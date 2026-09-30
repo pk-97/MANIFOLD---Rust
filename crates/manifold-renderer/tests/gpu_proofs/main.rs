@@ -115,3 +115,4 @@ mod matter_bodies;
 mod matter_coupling;
 mod smoke;
 mod substeps;
+mod encode_replay;

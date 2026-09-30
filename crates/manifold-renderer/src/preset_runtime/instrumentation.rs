@@ -381,6 +381,16 @@ impl PresetRuntime {
         self.executor.set_profiling(on);
     }
 
+    /// See [`crate::node_graph::Executor::set_encode_replay`].
+    pub fn set_encode_replay(&mut self, on: bool) {
+        self.executor.set_encode_replay(on);
+    }
+
+    /// See [`crate::node_graph::Executor::replay_stats`].
+    pub fn replay_stats(&self) -> manifold_gpu::GpuReplayStats {
+        self.executor.replay_stats()
+    }
+
     /// Set this chain's instance identity for profiled tags (D6 correction):
     /// `fx:{layer_id}`, `gen:{layer_id}`, `master`, `led:{...}`. Called by the
     /// owning compositor/generator-renderer at chain-insertion time.
