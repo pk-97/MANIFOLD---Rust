@@ -2682,6 +2682,17 @@ impl GpuEncoder {
         self.scopes.clear();
     }
 
+    /// [`Self::commit_and_continue`], then block until the GPU has completed
+    /// everything committed so far. Afterwards the CPU may read and write
+    /// shared storage the committed work touched before encoding more.
+    /// Offline paths only: a live frame must never wait on the GPU.
+    pub fn commit_wait_and_continue(&mut self, device: &GpuDevice) {
+        let committed = self.cmd_buf.clone();
+        self.commit_and_continue(device);
+        unsafe { committed.waitUntilCompleted() };
+        Self::verify_buffer_completed(&committed, "commit_wait_and_continue");
+    }
+
     /// Commit and block until the GPU has scheduled (not completed) the work.
     pub fn commit_and_wait_scheduled(mut self) {
         self.end_current();
@@ -2733,13 +2744,17 @@ impl GpuEncoder {
     /// failure instead of silent garbage in a readback; release builds (the
     /// live show) log and carry on rather than crash mid-set.
     fn verify_completed(&self, ctx: &str) {
+        Self::verify_buffer_completed(&self.cmd_buf, ctx);
+    }
+
+    fn verify_buffer_completed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>, ctx: &str) {
         use objc2_metal::MTLCommandBufferStatus;
 
-        let status = unsafe { self.cmd_buf.status() };
+        let status = unsafe { cmd_buf.status() };
         if status == MTLCommandBufferStatus::Completed {
             return;
         }
-        let (code, desc) = match unsafe { self.cmd_buf.error() } {
+        let (code, desc) = match unsafe { cmd_buf.error() } {
             None => (-1i64, String::from("(no error object)")),
             Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
         };

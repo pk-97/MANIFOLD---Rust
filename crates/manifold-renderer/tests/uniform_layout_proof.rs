@@ -321,6 +321,8 @@ fn primitive_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+const CFG_TEST_FIXTURES: &[&str] = &["test_multi_output_atomic_fixture.rs"];
+
 #[test]
 fn hand_uniform_structs_match_codegen_layout() {
     let registry = PrimitiveRegistry::with_builtin();
@@ -333,6 +335,12 @@ fn hand_uniform_structs_match_codegen_layout() {
     files.sort();
 
     for path in &files {
+        // cfg(test) fixtures never reach this registry, so they can't be
+        // constructed here. Each one proves its own Params layout in its unit tests.
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        if CFG_TEST_FIXTURES.contains(&file_name.as_ref()) {
+            continue;
+        }
         let text = std::fs::read_to_string(path).expect("readable source");
         let (type_ids, structs) = parse_source(&text);
         if structs.is_empty() {
@@ -510,6 +518,14 @@ const NON_STANDALONE: &[&str] = &[
     "node.torus_wrap_field",
     // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
     "system.mesh_input",
+    // GPU MPM state, frame ring and barriered stats reduction: cross-frame
+    // state and a multipass reduction, their custom ABIs reflected by the
+    // extended custom cases.
+    "node.matter_frame",
+    "node.matter_state",
+    "node.matter_stats",
+    // Block-local P2G (D6): workgroup tiles and barriers, exclusion 1.
+    "node.matter_to_grid",
     // Region detection and tracking are CPU/FFI stateful boundaries. Their
     // Channels records are proven by the extended ABI test; neither node has
     // a generated standalone uniform mirror for its run() path.

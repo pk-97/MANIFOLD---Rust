@@ -11,7 +11,7 @@ use crate::node_graph::physics::RigidImpulseTargets;
 use crate::node_graph::physics_events::ImpulseTarget;
 
 use super::SceneModifierExpandError;
-use super::acceleration::impulse_recipients_with_index;
+use super::acceleration::{impulse_recipients_with_index, liquid_domain_of};
 use super::index::FlatSceneIndex;
 
 /// One physical fluid domain and the rigid recipients coupled to it.
@@ -49,13 +49,18 @@ pub fn prepare_coupled_scenes(
             &SceneTargetSelection::AllObjects,
             registry,
         )?;
+        // Water pairs by its particle producer, whether or not that domain
+        // takes scene forces yet.
         let mut fluids = BTreeSet::new();
+        for object in index.scene_objects(&scene)? {
+            if let Some(domain) = liquid_domain_of(&index, &object)? {
+                fluids.insert(domain.node.as_str().to_owned());
+            }
+        }
         let mut rigids = BTreeMap::<String, RigidImpulseTargets>::new();
         for (node, target) in recipients {
             match target {
-                ImpulseTarget::Fluid => {
-                    fluids.insert(node.as_str().to_owned());
-                }
+                ImpulseTarget::Fluid => {}
                 ImpulseTarget::Rigid(targets) => {
                     rigids
                         .entry(node.as_str().to_owned())
@@ -344,6 +349,36 @@ mod tests {
                     bodies: 1,
                     copies: true,
                 },
+            }]
+        );
+    }
+
+    /// A matter domain pairs through its surface chain even though it takes no
+    /// scene forces yet.
+    #[test]
+    fn matter_domain_pairs_through_its_surface_chain() {
+        let mut builder = GraphBuilder::new();
+        let scene = builder.node("scene", "node.render_scene");
+        let world = builder.node("world", "node.physics_world");
+        let body = builder.node("body", "node.rigid_body");
+        builder.wire(body, "body", world, "body_0");
+        let box_object = builder.node("box", "node.scene_object");
+        builder.wire(world, "pose_0", box_object, "transform");
+        builder.wire(box_object, "object", scene, "object_0");
+        let domain = builder.node("matter", "node.matter_domain");
+        let state = builder.node("state", "node.matter_state");
+        let mesh = builder.node("mesh", "node.volume_surface_mesh");
+        let water = builder.node("water", "node.scene_object");
+        builder.wire(domain, "ticks", state, "ticks");
+        builder.wire(state, "out", mesh, "count");
+        builder.wire(mesh, "vertices", water, "vertices");
+        builder.wire(water, "object", scene, "object_1");
+        assert_eq!(
+            prepare(builder).unwrap(),
+            vec![CoupledSceneBinding {
+                fluid: NodeId::new("matter"),
+                rigid: NodeId::new("world"),
+                colliders: RigidImpulseTargets { bodies: 1, copies: false },
             }]
         );
     }

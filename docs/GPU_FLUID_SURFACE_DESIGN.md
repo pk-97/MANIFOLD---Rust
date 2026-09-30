@@ -399,7 +399,7 @@ pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3
 | Interpolation | **New** — `node.interpolate_particle_frames` | Pointwise buffer atom, one output per `particles_b` slot (`FromInput { input: "particles_b" }`); slots at or past `count_b` write radius 0. `particles_a` is `BufferGather` (binary search over `count_a`). Inputs: `particles_a` (optional; unwired means move-from-B only, used by whitewater), `particles_b`, the counts, identities, `blend`, `span`, and `acceleration_x/y/z` (port-shadowed). No existing atom interpolates keyed records. |
 | SDF clamp | **New** — `node.push_out_of_solid` | Pointwise buffer atom over its particle input; `solid` is `BufferGather` (manual trilinear and central-difference gradient) with `bounds` and `nodes_x/y/z` inputs; moves `x` out along the gradient where `φ < 0`. `node.keep_in_box_3d` keeps `Particle` inside analytic containers in `[0,1]³`; extending it would change its record, its space and its meaning. Reusable by any particle system near a sampled solid. |
 | Display-time solid | **New** — `node.mix_arrays` | `a + (b − a)·amount` over two `Array(f32)` of equal capacity; `MultiInputCoincident`. `node.array_math` has Mix, but it is CPU-only on the content thread by design, and a per-frame CPU write of a GPU-read array races in-flight frames. This is its fusable GPU sibling. |
-| Spatial binning | **New** — `node.sort_particles_into_cells` | D17. Outputs `sorted: Array(FluidParticle)` and `cell_ranges: Array(CellRange)`; `cell_size` param (metres, port-shadowed); bins cover `grid_bounds`. `node.draw_particles_3d` is nearest-voxel energy in wrapped unit space — not a sort. |
+| Spatial binning | **New** — `node.sort_particles_into_cells` | D17. Outputs `sorted: Array(FluidParticle)`, `cell_ranges: Array(CellRange)` sized to its bin grid, and that grid as `bins_x/y/z`, which every searcher takes; `cell_size` param (metres, port-shadowed); bins cover `grid_bounds`. `node.draw_particles_3d` is nearest-voxel energy in wrapped unit space — not a sort. |
 | Anisotropic kernels | **New** — `node.shape_particle_blobs` | Pointwise over sorted particles; `sorted` and `cell_ranges` are `BufferGather`. Yu & Turk weighted mean, covariance, eigen-decomposition with stretch clamp, isotropic fallback below N_ε, centre smoothing, D14's isolated radius. Support is clamped to the bin `cell_size` input — one home for the search radius. Params: `particle_scale`, `stretch`, `smoothing`, `isolated_scale`, `min_neighbours`. |
 | Kernel sum → level set | **New** — `node.particle_volume` | One thread per lattice node; `blobs`, `cell_ranges` and `solid` are `BufferGather`. Writes `threshold − ΣW` (negative inside) and applies D15. Params `resolution_scale` ∈ {2, 3, 4} and `threshold`; outputs `nodes_x/y/z` for the rest of the chain. Capacity is the solid's capacity × `resolution_scale`³, an upper bound on `((n − 1)·m + 1)³`, so it grows with the provided solid array. Shape precedent `node.make_triangles`. |
 | Level-set smoothing | **Exists, not usable** | `node.blur_3d` is `Texture3D`-only (D8). Yu & Turk kernels are already smooth; `smoothing` and `particle_scale` carry the look. The resolve atom is deferred. |
@@ -408,7 +408,7 @@ pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3
 | Lattice box as scalars | **New, two users** — `node.transform_components` | CPU atom, the inverse of `node.transform_3d`. Buffer codegen binds params and arrays only, and a `Transform` wire into a GPU atom is a fusion cut, so the seam keeps `grid_bounds: Transform` and the surface and MLS-MPM atoms read its centre and size as scalars. |
 | MC emit | **New** — `node.volume_surface_mesh` | D16. `capacity` param (vertices, multiple of 3); `scan` and level set are `BufferGather`; `total` input drives the error. Writes the attributes `R/fluid/native.rs:190-201` writes. |
 | Mesh consumer | **Exists** | `node.scene_object.vertices` → `node.render_scene`, unchanged. |
-| Whitewater to instances | **New** — `node.particles_to_copies` (P8) | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius). `node.copy_positions` goes the other way. |
+| Whitewater to instances | **Built under GPU_MPM_SOLVER_DESIGN.md P1 (Water kernel, look gates and the cost probe)** — `node.particles_to_copies` | Pointwise `FluidParticle` → `InstanceTransform` (`pos_scale` = position, radius), with a `live_count` input that turns slots past the producer's count into holes. `node.copy_positions` goes the other way. |
 | One `gpu_fluid_mesher` node | **Forbidden** | DECOMPOSING_GENERATORS.md section 1.1 (No fused single-effect or single-generator monoliths). |
 
 Every atom that reads the lattice takes its box as centre and size scalars and its
@@ -610,12 +610,12 @@ is the orchestrating session's.
 **DEFERRED (2026-09-29).** Trigger: a sub-60 Hz particle producer exists. At 60 Hz the
 newest frame is at most one tick from display time, so the surface reads `particles_b`.
 The `FluidParticle` records moved to P2 (they are the contract).
-GPU_MPM_SOLVER_DESIGN.md P1's entry check also names `node.particles_to_copies`, which
-stays with this deferred phase.
+`node.particles_to_copies` left this phase: it is built under GPU_MPM_SOLVER_DESIGN.md P1
+(Water kernel, look gates and the cost probe).
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
-- **Deliverables:** `fluid_particles.rs` records; atoms `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, each with value `gpu_tests`. Preset `WaterDamBreakParticles.json` ("Water — Dam Break (Particle View)"): the Dam Break scene with liquid particles drawn as copies of a small sphere. Tests `fluid_push_out_penetration_bounded` and `fluid_interpolated_motion_is_even`: over 60 display frames with frames arriving every other display frame, the coefficient of variation of mean per-frame particle displacement is below 0.25 (near 1 without interpolation).
+- **Deliverables:** `fluid_particles.rs` records; atoms `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, each with value `gpu_tests`. Preset `WaterDamBreakParticles.json` ("Water — Dam Break (Particle View)"): the Dam Break scene with liquid particles drawn as copies of a small sphere. Tests `fluid_push_out_penetration_bounded` and `fluid_interpolated_motion_is_even`: over 60 display frames with frames arriving every other display frame, the coefficient of variation of mean per-frame particle displacement is below 0.25 (near 1 without interpolation).
 - **Gate:** the tests above; `cargo run -p manifold-renderer --bin check-presets`; `cargo run -p manifold-renderer --bin graph-tool -- validate crates/manifold-renderer/assets/generator-presets/WaterDamBreakParticles.json --kind generator` and the same with `fusion`, output recorded in the phase report. Interpolate and push-out are expected in one region, with their fused-vs-unfused proof; if they are not, record the builder's reason and file a `bd` bug when it is a codegen gap.
 - **Demo:** `cargo build --profile test --features gpu-proofs --example fluid_capture`, then run it with `--preset WaterDamBreakParticles --frames 120 --stills-every 10` into `/tmp/manifold_particle_view`. L2: Peter looks at the stills.
 - **Gesture:** pause and resume transport mid-splash; the particles hold exactly and resume without a jump.
@@ -641,7 +641,8 @@ tick as the bake engine. The brief below is kept only as the record of what was 
 scan is one module, `R/primitives/prefix_scan.rs`), `node.shape_particle_blobs`,
 `node.particle_volume`; records `FluidBlob` and `CellRange` (channel names registered in
 `well_known`). Value tests against f64 references in `R/primitives/liquid_surface_tests.rs`:
-the binned permutation and contiguous ranges, the Max Cells error, scans at 1, 255, 256,
+the binned permutation and contiguous ranges, ranges sized to the published bins, searchers
+refusing bins past their ranges, scans at 1, 255, 256,
 257 and 2²⁰+3 with the one-frame total, blob shapes (line, cloud, isolated, pair at
 2.5 r), and the level set against a brute-force sum over every blob with a half-space
 solid. Decisions made while building:
@@ -654,6 +655,12 @@ solid. Decisions made while building:
   `node.transform_components` (the inverse of `node.transform_3d`; the MLS-MPM lattice
   wires need it too). Bin size is the simulation cell times a factor, one math chain
   feeding sort, blobs and volume.
+- **The bin grid is the sort's.** The sort works out `bins_x/y/z` once on the CPU,
+  sizes `cell_ranges` to exactly that grid every frame, and publishes it; blobs and
+  volume take those wires and check them against the ranges before dispatching. Why:
+  a GPU `ceil(size / cell)` under fast math can land one bin higher than the CPU's, and
+  a fixed range cap let the searchers read past the ranges from resolution 96 up
+  (BUG-bnp9 (GPU MPM water locks the Mac above resolution 64)).
 - **Kernel shape.** Axis lengths follow the square roots of the covariance's
   eigenvalues, their ratio capped at `stretch`, rescaled to keep the isotropic kernel's
   volume; the kernel is `(1 − |G·r|²)³`. Reach is capped at one bin from the particle
@@ -893,7 +900,7 @@ or in section 11.
 | `Array(f32)` → `Texture3D` resolve atom (debug slice, `blur_3d` reuse) | Authoring needs to see or blur the level set |
 | Migrating legacy presets to the GPU surface | Particle-frame caching lands |
 | Live versus baked look parity | Peter judges the difference unacceptable before particle caching lands |
-| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, `particles_to_copies`, the Particle View preset, and presenting `obstacle_pose` and the coupled rigid frame at `s` | A sub-60 Hz particle producer exists |
+| P3: `interpolate_particle_frames`, `push_out_of_solid`, `mix_arrays`, the Particle View preset, and presenting `obstacle_pose` and the coupled rigid frame at `s` | A sub-60 Hz particle producer exists |
 | FLIP particle identity (`manifold_id`, renumbering, worker-side sort) | FLIP frames must feed P3's interpolation |
 | Fade-out of particles removed during a tick (D11) | Popping shows away from drains; needs a summed capacity expression in the fusion compiler first |
 

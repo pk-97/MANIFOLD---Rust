@@ -1,5 +1,4 @@
-use manifold_physics::{BodyPose, TriangleMesh};
-use std::collections::HashMap;
+use manifold_physics::{BodyPose, PhysicsError, TriangleMesh};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{FluidError, FluidWorld};
@@ -409,129 +408,16 @@ fn validate_transformed_mesh(mesh: &TriangleMesh, pose: [f32; 7]) -> Result<(), 
     Ok(())
 }
 
+/// The shared closed-volume check (`manifold_physics::validate_closed_mesh`)
+/// plus the native solver's size limit.
 pub fn validate_mesh(mesh: &TriangleMesh) -> Result<(), FluidError> {
-    if mesh.vertices.len() < 4 || mesh.triangles.len() < 4 {
-        return Err(FluidError::input("mesh must contain a closed volume"));
-    }
     if mesh.vertices.len() > i32::MAX as usize || mesh.triangles.len() > i32::MAX as usize {
         return Err(FluidError::input("mesh is too large for the native solver"));
     }
-    if mesh
-        .vertices
-        .iter()
-        .any(|vertex| vertex.iter().any(|value| !value.is_finite()))
-    {
-        return Err(FluidError::input("mesh vertices must be finite"));
-    }
-    let mut edges: HashMap<(u32, u32), Vec<(usize, bool)>> = HashMap::new();
-    let mut neighbours = vec![Vec::new(); mesh.triangles.len()];
-    let mut minimum = [f64::INFINITY; 3];
-    let mut maximum = [f64::NEG_INFINITY; 3];
-    for vertex in &mesh.vertices {
-        for axis in 0..3 {
-            let value = f64::from(vertex[axis]);
-            minimum[axis] = minimum[axis].min(value);
-            maximum[axis] = maximum[axis].max(value);
-        }
-    }
-    let scale = (0..3)
-        .map(|axis| maximum[axis] - minimum[axis])
-        .fold(1.0_f64, f64::max);
-    for (triangle_index, triangle) in mesh.triangles.iter().enumerate() {
-        let [a, b, c] = *triangle;
-        if [a, b, c]
-            .iter()
-            .any(|&index| index as usize >= mesh.vertices.len())
-        {
-            return Err(FluidError::input("mesh triangle index is out of range"));
-        }
-        if a == b || b == c || c == a {
-            return Err(FluidError::input("mesh contains a degenerate triangle"));
-        }
-        let va = mesh.vertices[a as usize];
-        let vb = mesh.vertices[b as usize];
-        let vc = mesh.vertices[c as usize];
-        let ab = [
-            f64::from(vb[0]) - f64::from(va[0]),
-            f64::from(vb[1]) - f64::from(va[1]),
-            f64::from(vb[2]) - f64::from(va[2]),
-        ];
-        let ac = [
-            f64::from(vc[0]) - f64::from(va[0]),
-            f64::from(vc[1]) - f64::from(va[1]),
-            f64::from(vc[2]) - f64::from(va[2]),
-        ];
-        let cross = [
-            ab[1] * ac[2] - ab[2] * ac[1],
-            ab[2] * ac[0] - ab[0] * ac[2],
-            ab[0] * ac[1] - ab[1] * ac[0],
-        ];
-        let area2 = cross.iter().map(|value| value * value).sum::<f64>();
-        if !area2.is_finite() || area2 <= 1.0e-24 * scale.max(1.0).powi(4) {
-            return Err(FluidError::input("mesh contains a zero-area triangle"));
-        }
-        for (from, to) in [(a, b), (b, c), (c, a)] {
-            let key = (from.min(to), from.max(to));
-            let forward = from < to;
-            let edge = edges.entry(key).or_default();
-            if edge
-                .iter()
-                .any(|&(_, other_forward)| other_forward == forward)
-            {
-                return Err(FluidError::input(
-                    "mesh edge winding is inconsistent or non-manifold",
-                ));
-            }
-            if edge.len() >= 2 {
-                return Err(FluidError::input("mesh edge is non-manifold"));
-            }
-            edge.push((triangle_index, forward));
-            if edge.len() == 2 {
-                let other = edge[0].0;
-                neighbours[triangle_index].push(other);
-                neighbours[other].push(triangle_index);
-            }
-        }
-    }
-    if edges.values().any(|edge| edge.len() != 2) {
-        return Err(FluidError::input("mesh is open or has non-manifold edges"));
-    }
-    let volume_epsilon = 1.0e-12 * scale.max(1.0).powi(3);
-    let mut visited = vec![false; mesh.triangles.len()];
-    for start in 0..mesh.triangles.len() {
-        if visited[start] {
-            continue;
-        }
-        let mut stack = vec![start];
-        visited[start] = true;
-        let mut volume = 0.0_f64;
-        let [origin_a, _, _] = mesh.triangles[start];
-        let origin = mesh.vertices[origin_a as usize].map(f64::from);
-        while let Some(index) = stack.pop() {
-            let [a, b, c] = mesh.triangles[index];
-            let va = mesh.vertices[a as usize].map(f64::from);
-            let vb = mesh.vertices[b as usize].map(f64::from);
-            let vc = mesh.vertices[c as usize].map(f64::from);
-            let a = [va[0] - origin[0], va[1] - origin[1], va[2] - origin[2]];
-            let b = [vb[0] - origin[0], vb[1] - origin[1], vb[2] - origin[2]];
-            let c = [vc[0] - origin[0], vc[1] - origin[1], vc[2] - origin[2]];
-            volume += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
-                + a[2] * (b[0] * c[1] - b[1] * c[0]))
-                / 6.0;
-            for &neighbour in &neighbours[index] {
-                if !visited[neighbour] {
-                    visited[neighbour] = true;
-                    stack.push(neighbour);
-                }
-            }
-        }
-        if !volume.is_finite() || volume <= volume_epsilon {
-            return Err(FluidError::input(
-                "mesh volume must be finite, nonzero, and outward oriented",
-            ));
-        }
-    }
-    Ok(())
+    manifold_physics::validate_closed_mesh(mesh).map_err(|error| match error {
+        PhysicsError::InvalidInput(message) => FluidError::input(message),
+        other => FluidError::input(other.to_string()),
+    })
 }
 
 #[cfg(test)]

@@ -243,17 +243,15 @@ mod tests {
 
     fn role(kind: FluidRoleKind) -> FluidRole {
         FluidRole {
-            geometry: Arc::new(PreparedFluidGeometry {
-                meshes: vec![
-                    manifold_physics::cook_hull_mesh(&[
-                        [-0.2, -0.2, -0.2],
-                        [0.2, -0.2, -0.2],
-                        [-0.2, 0.2, -0.2],
-                        [-0.2, -0.2, 0.2],
-                    ])
-                    .unwrap(),
-                ],
-            }),
+            geometry: Arc::new(PreparedFluidGeometry::new(vec![
+                manifold_physics::cook_hull_mesh(&[
+                    [-0.2, -0.2, -0.2],
+                    [0.2, -0.2, -0.2],
+                    [-0.2, 0.2, -0.2],
+                    [-0.2, -0.2, 0.2],
+                ])
+                .unwrap(),
+            ])),
             kind,
             transform: Transform {
                 pos: [0.0, 1.0, 0.0],
@@ -348,7 +346,7 @@ mod tests {
         let mut changed = serde_json::from_slice::<Setup>(&encoded).unwrap();
         let mut meshes = changed.roles[0].geometry.meshes.clone();
         meshes[0].vertices[0][0] += 1.0;
-        changed.roles[0].geometry = Arc::new(PreparedFluidGeometry { meshes });
+        changed.roles[0].geometry = Arc::new(PreparedFluidGeometry::new(meshes));
         assert!(!setup.same_geometry(&changed));
     }
 
@@ -541,7 +539,7 @@ mod tests {
         let solid_hull = manifold_physics::cook_hull_mesh(&channel.vertices).unwrap();
         let run = |mesh| {
             let mut collider = role(FluidRoleKind::Collider);
-            collider.geometry = Arc::new(PreparedFluidGeometry { meshes: vec![mesh] });
+            collider.geometry = Arc::new(PreparedFluidGeometry::new(vec![mesh]));
             collider.transform.pos = [0.0, 1.25, 0.0];
             collider.transform.rot_euler[1] = 0.3;
             let mut fill = role(FluidRoleKind::InitialFill);
@@ -553,9 +551,7 @@ mod tests {
                         .flat_map(move |y| [-0.3, 0.3].map(|z| [x, y, z]))
                 })
                 .collect();
-            fill.geometry = Arc::new(PreparedFluidGeometry {
-                meshes: vec![manifold_physics::cook_hull_mesh(&points).unwrap()],
-            });
+            fill.geometry = Arc::new(PreparedFluidGeometry::new(vec![manifold_physics::cook_hull_mesh(&points).unwrap()]));
             fill.transform.pos = [0.0, 1.5, 0.0];
             let settings = FluidSettings {
                 resolution: 16,

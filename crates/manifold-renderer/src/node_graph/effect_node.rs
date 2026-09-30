@@ -943,6 +943,29 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Clock owner of a substep region only (the node wired into the
+    /// boundary's [`SubstepBoundaryPorts::clock`](crate::node_graph::substeps::SubstepBoundaryPorts::clock)
+    /// port). Asked offline only, before body iteration `iteration ≥ 1`:
+    /// `true` makes the executor commit the frame's encoder, wait for the GPU
+    /// to finish it, call [`substep_host_step`](Self::substep_host_step) and
+    /// continue encoding. Live frames never ask. Default: `false`.
+    fn substep_host_sync(&self, _iteration: u32) -> bool {
+        false
+    }
+
+    /// Clock owner only: the host work between iterations after a sync. The
+    /// GPU has completed everything encoded so far, so shared storage the
+    /// region wrote is readable and writable from the CPU; anything encoded
+    /// through `gpu` runs before iteration `iteration`. An error is reported
+    /// and the region carries on.
+    fn substep_host_step(
+        &mut self,
+        _iteration: u32,
+        _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     /// If `Some(port_name)`, this node is a branch-selector: only the
     /// upstream subgraph feeding the named input port needs to run
     /// this frame. The executor uses this to prune unselected branches

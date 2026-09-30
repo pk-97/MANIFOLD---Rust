@@ -231,10 +231,13 @@ pub trait PrimitiveSpec: Send {
     /// NOT through the wrapper's single-element `buf_out[idx] = body(...)`
     /// assignment. A scatter atom's output index is data-dependent (the splat
     /// target), so it can't be a coincident write; the body computes the cell
-    /// and accumulates. The wrapper then calls `body(...)` as a statement (no
-    /// return value). Empty (the default) for every coincident/gather buffer
-    /// atom. Set via the macro's `atomic_outputs:` field. The element must be a
-    /// single-channel u32 / i32 (WGSL atomics are integer-only).
+    /// and accumulates. The body returns only the NON-atomic outputs: with none
+    /// the wrapper calls `body(...)` as a statement; with one plain output next
+    /// to an atomic side output it writes `buf_<plain>[idx] = body(...)`.
+    /// Any atomic output makes the atom a region Boundary. Empty (the default)
+    /// for every coincident/gather buffer atom. Set via the macro's
+    /// `atomic_outputs:` field. The element must be a single-channel u32 / i32
+    /// (WGSL atomics are integer-only).
     const ATOMIC_OUTPUTS: &'static [&'static str] = &[];
 
     /// How this primitive propagates the depth companion channel the "3D
@@ -585,6 +588,23 @@ pub trait Primitive: PrimitiveSpec {
     /// Default: `false`.
     fn substep_iteration(&mut self, _iteration: u32, _scalars: &mut [f32]) -> bool {
         false
+    }
+
+    /// Mirror of
+    /// [`EffectNode::substep_host_sync`](crate::node_graph::effect_node::EffectNode::substep_host_sync).
+    /// Default: `false`.
+    fn substep_host_sync(&self, _iteration: u32) -> bool {
+        false
+    }
+
+    /// Mirror of
+    /// [`EffectNode::substep_host_step`](crate::node_graph::effect_node::EffectNode::substep_host_step).
+    fn substep_host_step(
+        &mut self,
+        _iteration: u32,
+        _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     /// Mirror of
@@ -989,6 +1009,16 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
         Primitive::substep_iteration(self, iteration, scalars)
+    }
+    fn substep_host_sync(&self, iteration: u32) -> bool {
+        Primitive::substep_host_sync(self, iteration)
+    }
+    fn substep_host_step(
+        &mut self,
+        iteration: u32,
+        gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
+    ) -> Result<(), String> {
+        Primitive::substep_host_step(self, iteration, gpu)
     }
     fn selected_input_branch(
         &self,

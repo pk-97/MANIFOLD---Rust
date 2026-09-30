@@ -26,6 +26,8 @@ pub const KRYLOV_BASIS_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
     state: "out",
     iteration_scalars: &["pass", "rows"],
     results: RESULTS,
+    // The passes are one solve, not simulated time: no host syncs.
+    clock: None,
 };
 
 crate::primitive! {

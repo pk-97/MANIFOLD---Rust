@@ -305,13 +305,17 @@ mod custom {
             )
             .collect();
         // These two are vertex payloads, not uniforms. Their vertex descriptor owns
-        // the layout. The fixture file is compiled only under cfg(test).
+        // the layout. The fixture files are compiled only under cfg(test).
         let exclusions: BTreeSet<(String, String)> = [
             ("render_lines.rs".into(), "EdgeInstance".into()),
             ("render_value_overlay.rs".into(), "GlyphQuad".into()),
             (
                 "test_camera_pointwise_fixture.rs".into(),
                 "TestCameraPointwiseUniforms".into(),
+            ),
+            (
+                "test_multi_output_atomic_fixture.rs".into(),
+                "Uniforms".into(),
             ),
         ]
         .into();
@@ -339,8 +343,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 94,
-            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, count_surface_triangles and volume_surface_mesh; the FFT water solver adds cosine_reorder, cosine_spectrum, cosine_half_spectrum, cosine_poisson_divide, cosine_surface_scale, combine_rows, divide_by_value, krylov_givens, krylov_solve, collar_cells, select_flagged, chart_entries, chart_sums, chart_spread, collar_source, collar_gather and collar_pressure; all covered by uniform_layout_proof)"
+            scalar_count, 102,
+            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, count_surface_triangles and volume_surface_mesh; GPU MPM adds zero_array, matter_grid_update, grid_to_matter, matter_fill and particles_to_copies, then matter_move_bodies and matter_solid_distance, then matter_body_reaction; the FFT water solver adds cosine_reorder, cosine_spectrum, cosine_half_spectrum, cosine_poisson_divide, cosine_surface_scale, combine_rows, divide_by_value, krylov_givens, krylov_solve, collar_cells, select_flagged, chart_entries, chart_sums, chart_spread, collar_source, collar_gather and collar_pressure; all covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(

@@ -30,6 +30,12 @@ use crate::node_graph::validation::GraphError;
 /// [`EffectNode::substep_iteration`](crate::node_graph::effect_node::EffectNode::substep_iteration).
 /// `results` are further capture→output back-edge pairs whose final values
 /// escape the region alongside `state` (per-tick statistics, coupling sums).
+/// `clock` opts the region into host syncs: it names the boundary input
+/// wired from the region's clock owner, which offline may ask for a GPU sync
+/// and a host step between iterations
+/// ([`EffectNode::substep_host_sync`](crate::node_graph::effect_node::EffectNode::substep_host_sync)).
+/// `None`, the default for every other region, means the executor never
+/// commits or waits inside the region, live or offline.
 #[derive(Clone, Copy, Debug)]
 pub struct SubstepBoundaryPorts {
     pub seed: &'static str,
@@ -37,6 +43,7 @@ pub struct SubstepBoundaryPorts {
     pub state: &'static str,
     pub iteration_scalars: &'static [&'static str],
     pub results: &'static [SubstepResultPorts],
+    pub clock: Option<&'static str>,
 }
 
 impl SubstepBoundaryPorts {
@@ -62,11 +69,13 @@ pub struct SubstepResultPorts {
 /// in any step's `free_after` — a free attached to a body step would fire per
 /// iteration or, for the boundary, before the body reads it — so the executor
 /// holds them for the whole repeat and releases them when the region ends.
+/// `clock` is the clock owner of a boundary that opted into host syncs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubstepRegion {
     pub boundary: NodeInstanceId,
     pub steps: Vec<usize>,
     pub held_resources: Vec<ResourceId>,
+    pub clock: Option<NodeInstanceId>,
 }
 
 /// Node-level result of region derivation: the boundary first, then its body
@@ -75,6 +84,7 @@ pub struct SubstepRegion {
 pub(crate) struct RegionNodes {
     pub boundary: NodeInstanceId,
     pub nodes: Vec<NodeInstanceId>,
+    pub clock: Option<NodeInstanceId>,
 }
 
 /// Derive and validate the substep regions of the live graph.
@@ -129,7 +139,7 @@ pub(crate) fn derive_regions(
         let inst = graph.get_node(boundary).expect("boundary exists");
         let has_input = |name: &str| inst.node.inputs().iter().any(|p| p.name == name);
         let has_output = |name: &str| inst.node.outputs().iter().any(|p| p.name == name);
-        let declared_inputs = std::iter::once(ports.seed).chain(ports.capture_ports());
+        let declared_inputs = std::iter::once(ports.seed).chain(ports.capture_ports()).chain(ports.clock);
         let declared_outputs = std::iter::once(ports.state)
             .chain(ports.iteration_scalars.iter().copied())
             .chain(ports.results.iter().map(|r| r.output));
@@ -248,10 +258,27 @@ pub(crate) fn derive_regions(
                 "boundary belongs to two substep regions (overlap)".to_string(),
             ));
         }
+        let clock = match ports.clock {
+            None => None,
+            Some(port) => {
+                let Some(wire) = graph.wires_into(boundary).find(|w| w.to.1 == port) else {
+                    return Err(malformed(boundary, boundary, format!("clock port `{port}` has no wire")));
+                };
+                let owner = wire.from.0;
+                if members.contains(&owner) {
+                    return Err(malformed(
+                        boundary,
+                        owner,
+                        "the region's clock owner sits inside the region".to_string(),
+                    ));
+                }
+                Some(owner)
+            }
+        };
         let mut nodes = Vec::with_capacity(body.len() + 1);
         nodes.push(boundary);
         nodes.extend(body);
-        regions.push(RegionNodes { boundary, nodes });
+        regions.push(RegionNodes { boundary, nodes, clock });
     }
 
     // One region feeding another (chaining) is not supported: a member whose
@@ -360,6 +387,7 @@ pub mod test_nodes {
         state: "out",
         iteration_scalars: &["step_dt", "step_index"],
         results: &[],
+        clock: None,
     };
 
     /// The `step_dt` the particle boundary serves at iteration `i`: distinct
@@ -619,6 +647,7 @@ mod tests {
         state: "out",
         iteration_scalars: &["step_dt", "step_index"],
         results: &[],
+        clock: None,
     };
 
     const PORTS_WITH_STATS: SubstepBoundaryPorts = SubstepBoundaryPorts {
@@ -1265,7 +1294,11 @@ mod tests {
         state: "out",
         iteration_scalars: &["step_dt", "step_index"],
         results: &[],
+        clock: None,
     };
+
+    /// The same region, opted into host syncs through its clock owner.
+    const SIM_CLOCK_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts { clock: Some("clock"), ..SIM_PORTS };
 
     fn scalar_in(ctx: &EffectNodeContext<'_, '_>, port: &str) -> Option<f32> {
         match ctx.inputs.scalar(port) {
@@ -1284,6 +1317,7 @@ mod tests {
         pending: u32,
         accepted: f32,
         seeded: bool,
+        ports: SubstepBoundaryPorts,
     }
 
     impl SimBoundary {
@@ -1291,7 +1325,11 @@ mod tests {
             let f32_ty = PortType::Scalar(ScalarType::F32);
             Self {
                 type_id: EffectNodeType::new("test.sim_boundary"),
-                inputs: vec![input("seed", f32_ty, true), input("in", f32_ty, true)],
+                inputs: vec![
+                    input("seed", f32_ty, true),
+                    input("in", f32_ty, true),
+                    input("clock", f32_ty, false),
+                ],
                 outputs: vec![
                     output("out", f32_ty),
                     output("step_dt", f32_ty),
@@ -1302,6 +1340,7 @@ mod tests {
                 pending: 0,
                 accepted: 0.0,
                 seeded: false,
+                ports: SIM_PORTS,
             }
         }
     }
@@ -1338,7 +1377,7 @@ mod tests {
             &["out"]
         }
         fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
-            Some(SIM_PORTS)
+            Some(self.ports)
         }
         fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
             if iteration >= self.pending {
@@ -1438,12 +1477,87 @@ mod tests {
         }
     }
 
+    /// A clock owner that asks for a host sync before every iteration it is
+    /// asked about and logs each host step.
+    struct EagerClock {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+        log: Log,
+    }
+
+    impl EffectNode for EagerClock {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            ctx.outputs.set_scalar("out", ParamValue::Float(0.0));
+        }
+        fn substep_host_sync(&self, _iteration: u32) -> bool {
+            true
+        }
+        fn substep_host_step(
+            &mut self,
+            iteration: u32,
+            _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
+        ) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!("host {iteration}"));
+            Ok(())
+        }
+    }
+
     struct SimFixture {
         graph: Graph,
         plan: crate::node_graph::ExecutionPlan,
         log: Log,
         count: Arc<Mutex<u32>>,
         aux: NodeInstanceId,
+    }
+
+    /// `sim_fixture` with an eager clock owner wired into the boundary's
+    /// `clock` input; `opted` says whether the boundary names it.
+    fn clock_fixture(opted: bool) -> SimFixture {
+        let log: Log = Arc::default();
+        let count = Arc::new(Mutex::new(3));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
+        let aux = graph.add_node(Box::new(Adder::constant("aux", log.clone(), 0.0)));
+        let clock = graph.add_node(Box::new(EagerClock {
+            type_id: EffectNodeType::new("test.eager_clock"),
+            outputs: vec![output("out", PortType::Scalar(ScalarType::F32))],
+            log: log.clone(),
+        }));
+        let mut sim = SimBoundary::new(log.clone(), count.clone());
+        if opted {
+            sim.ports = SIM_CLOCK_PORTS;
+        }
+        let boundary = graph.add_node(Box::new(sim));
+        let add_dt = graph.add_node(Box::new(Adder::new("add_dt", log.clone())));
+        let add_index = graph.add_node(Box::new(Adder::new("add_index", log.clone())));
+        let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((clock, "out"), (boundary, "clock")).unwrap();
+        graph.connect((boundary, "out"), (add_dt, "a")).unwrap();
+        graph.connect((boundary, "step_dt"), (add_dt, "b")).unwrap();
+        graph.connect((add_dt, "out"), (add_index, "a")).unwrap();
+        graph.connect((boundary, "step_index"), (add_index, "b")).unwrap();
+        graph.connect((aux, "out"), (add_index, "c")).unwrap();
+        graph.connect((add_index, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "a")).unwrap();
+        let plan = compile(&graph).unwrap();
+        assert_eq!(plan.substep_regions()[0].clock, opted.then_some(clock));
+        SimFixture { graph, plan, log, count, aux }
     }
 
     fn sim_fixture() -> SimFixture {
@@ -1615,6 +1729,84 @@ mod tests {
         // The live state is untouched by the sample.
         let next = run_frame(&mut fx, &mut exec, 0);
         assert_eq!(next.last().unwrap(), "consumer a=5.5 b=0 c=none");
+    }
+
+    // ─── Host syncs: opt-in per boundary, offline only ───
+
+    fn region_events(log: &[String]) -> Vec<&str> {
+        log.iter()
+            .map(String::as_str)
+            .filter(|e| e.starts_with("capture") || e.starts_with("host") || e.starts_with("add_index"))
+            .collect()
+    }
+
+    #[test]
+    fn substeps_host_sync_runs_offline_between_iterations() {
+        let _export = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        let mut fx = clock_fixture(true);
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        assert_eq!(
+            region_events(&log),
+            vec![
+                "add_index a=1.5 b=0 c=0",
+                "capture 1.5",
+                "host 1",
+                "add_index a=2 b=1 c=0",
+                "capture 3",
+                "host 2",
+                "add_index a=3.5 b=2 c=0",
+                "capture 5.5",
+            ]
+        );
+        assert_eq!(exec.substep_host_syncs(), 2);
+    }
+
+    /// Live never waits: an opted-in region with an eager clock owner
+    /// encodes the whole frame without a mid-region commit.
+    #[test]
+    fn substeps_host_sync_never_runs_live() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let mut fx = clock_fixture(true);
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        assert!(log.iter().all(|e| !e.starts_with("host")), "{log:?}");
+        assert_eq!(log.last().unwrap(), "consumer a=5.5 b=0 c=none");
+        assert_eq!(exec.substep_host_syncs(), 0);
+    }
+
+    /// A boundary that has not opted in never commits or waits mid-region,
+    /// even during export and with an eager clock node wired to it.
+    #[test]
+    fn substeps_host_sync_off_by_default_in_export() {
+        let _export = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        let mut fx = clock_fixture(false);
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        assert!(log.iter().all(|e| !e.starts_with("host")), "{log:?}");
+        assert_eq!(log.last().unwrap(), "consumer a=5.5 b=0 c=none");
+        assert_eq!(exec.substep_host_syncs(), 0);
+    }
+
+    #[test]
+    fn substeps_region_unwired_clock_port_rejected() {
+        let log: Log = Arc::default();
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
+        let mut sim = SimBoundary::new(log.clone(), Arc::new(Mutex::new(1)));
+        sim.ports = SIM_CLOCK_PORTS;
+        let boundary = graph.add_node(Box::new(sim));
+        let body = graph.add_node(Box::new(Adder::new("body", log.clone())));
+        let consumer = graph.add_node(Box::new(Adder::root("consumer", log)));
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "a")).unwrap();
+        let err = compile(&graph).unwrap_err();
+        assert!(
+            matches!(&err, GraphError::MalformedSubstepRegion { reason, .. } if reason.contains("clock port")),
+            "{err:?}"
+        );
     }
 
     // ─── Freeze never fuses across the border ───

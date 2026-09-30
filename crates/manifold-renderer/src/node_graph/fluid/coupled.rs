@@ -12,6 +12,7 @@ use crate::node_graph::transform::Transform;
 use super::HISTORY_CAPACITY;
 
 mod native;
+pub(crate) use native::Layout;
 pub(super) use native::Native;
 
 #[cfg(test)]
@@ -28,7 +29,7 @@ pub struct CoupledRigidInputs<'a> {
 }
 
 impl CoupledRigidInputs<'_> {
-    pub(super) fn validate(self) -> Result<(), String> {
+    pub(crate) fn validate(self) -> Result<(), String> {
         if !self.density.is_finite() || self.density <= 0.0 {
             return Err("Fluid coupling: density must be finite and positive".into());
         }

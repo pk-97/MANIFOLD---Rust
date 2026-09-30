@@ -537,6 +537,46 @@ mod tests {
         );
     }
 
+    /// Every atom with an atomic output — sole output (scatter) or a side
+    /// output next to a coincident one — declares `FusionKind::Boundary`. The
+    /// accumulator only holds its value once the whole dispatch has run, so
+    /// it is always a region cut; a fusable declaration would be a promise
+    /// `classify_buffer_node` silently breaks (docs/FREEZE_COMPILER_MAP.md
+    /// section 4, "The cut rules").
+    #[test]
+    fn atomic_output_atoms_are_boundaries() {
+        use crate::node_graph::PrimitiveRegistry;
+
+        let registry = PrimitiveRegistry::with_builtin();
+        let mut atomic_atoms = 0usize;
+        let mut violations: Vec<String> = Vec::new();
+        for type_id in registry.known_type_ids() {
+            if type_id.starts_with("node.__") {
+                continue;
+            }
+            let node = registry
+                .construct(type_id)
+                .unwrap_or_else(|| panic!("registry missing {type_id}"));
+            if node.atomic_outputs().is_empty() {
+                continue;
+            }
+            atomic_atoms += 1;
+            if node.fusion_kind() != FusionKind::Boundary {
+                violations.push(format!(
+                    "{type_id}: atomic outputs {:?} but fusion_kind {:?}",
+                    node.atomic_outputs(),
+                    node.fusion_kind()
+                ));
+            }
+        }
+        assert!(atomic_atoms > 0, "no registered atom declares atomic outputs — the sweep is vacuous");
+        assert!(
+            violations.is_empty(),
+            "atoms with atomic outputs must declare fusion_kind: Boundary:\n  {}",
+            violations.join("\n  ")
+        );
+    }
+
     /// `docs/DEPTH_RELIGHT_DESIGN.md` D6(a): a `precision_critical` input
     /// declares that its producer benefits from an `Rgba32Float` intermediate
     /// — but that promotion is only safe if THIS atom itself reads the input

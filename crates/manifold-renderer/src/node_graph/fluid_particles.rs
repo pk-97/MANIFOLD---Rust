@@ -116,10 +116,42 @@ impl KnownItem for ChartEntry {
 }
 
 /// Spatial bins covering an axis-aligned box: `max(1, ceil(size / cell))`
-/// bins per axis, bin (i, j, k) spanning `min + (i, j, k)·cell`. One rule for
-/// the sort and every atom that searches its bins.
+/// bins per axis, bin (i, j, k) spanning `min + (i, j, k)·cell`. Only the
+/// sort evaluates it; every atom that searches its bins takes the sort's
+/// `bins_x/y/z` outputs instead, because a GPU fast-math division of the same
+/// floats can land one bin higher (the ratio is usually an exact integer).
 pub fn bin_counts(size: [f32; 3], cell_size: f32) -> [u32; 3] {
     size.map(|extent| (extent / cell_size).ceil().max(1.0) as u32)
+}
+
+/// Bins in a grid of `bins` per axis.
+pub fn bin_total(bins: [u32; 3]) -> u64 {
+    bins.iter().map(|&n| u64::from(n)).product()
+}
+
+/// Most bins a grid may hold: the searching kernels form the linear bin index
+/// in i32.
+pub const MAX_BINS: u64 = i32::MAX as u64;
+
+/// The bin grid a searching atom reads from its `bins_x/y/z` wires, checked
+/// against the `cell_ranges` storage it indexes: every axis whole and at least
+/// 1, and one range per bin. Nothing may read the ranges past this.
+pub fn searched_bins(bins: [f32; 3], range_bytes: u64, atom: &str) -> Result<[u32; 3], String> {
+    if bins.iter().any(|b| !(b.is_finite() && *b >= 1.0 && b.fract() == 0.0 && *b <= MAX_BINS as f32)) {
+        return Err(format!(
+            "{atom}: bins_x/y/z must be whole and at least 1; wire them from the node.sort_particles_into_cells that wrote cell_ranges"
+        ));
+    }
+    let bins = bins.map(|b| b as u32);
+    let ranges = range_bytes / std::mem::size_of::<CellRange>() as u64;
+    let total = bin_total(bins);
+    if total > ranges.min(MAX_BINS) {
+        return Err(format!(
+            "{atom}: a {}×{}×{} bin grid needs {total} cell ranges; cell_ranges holds {ranges}. Wire bins_x/y/z and cell_ranges from the same node.sort_particles_into_cells.",
+            bins[0], bins[1], bins[2]
+        ));
+    }
+    Ok(bins)
 }
 
 /// View of a `FluidParticle` buffer as the solver's record type, for workers
