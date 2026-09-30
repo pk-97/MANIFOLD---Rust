@@ -12,7 +12,7 @@ use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use crate::node_graph::whitewater::{SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes, refinement};
+use crate::node_graph::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes, refinement};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -38,7 +38,7 @@ fn param_nodes(params: &ParamValues, names: [&str; 3], default: f32) -> [u32; 3]
 crate::primitive! {
     name: SurfaceCrossings,
     type_id: "node.surface_crossings",
-    purpose: "For each cell of the whitewater grid (the solid lattice read as nodes − 1 cells a side), the zero crossing of the refined level set nearest the cell centre: of the edges between refined nodes inside the cell (144 at 3 nodes per cell), those whose ends straddle zero with neither end in a solid cross at the linear root. Out holds the crossing in grid cells from the lattice's first node (1e6 when none) and the level set at the cell centre in metres.",
+    purpose: "For each cell of the whitewater grid (the solid lattice read as nodes − 1 cells a side), the zero crossing of the refined level set nearest the cell centre: of the edges between refined nodes inside the cell (144 at 3 nodes per cell), those whose ends straddle zero with neither end in a solid cross at the linear root. Out holds the crossing in grid cells from the lattice's first node (1e6 when none), the unit surface normal there (the level set's gradient at the edge's liquid end, differenced against liquid neighbours where it has them, since a node outside may sit at the level set's cap; zero when none), and the level set at the cell centre in metres.",
     inputs: {
         level_set: Array(f32) required,
         solid: Array(f32) required,
@@ -97,7 +97,7 @@ impl Primitive for SurfaceCrossings {
         let cells = nodes.map(|n| n - 1);
         let count = cell_total(cells);
         let level_count = cell_total(levels);
-        if count * 16 > out.size || cell_total(nodes) * 4 > solid.size || level_count * 4 > level_set.size {
+        if count * SURFACE_CROSSING_BYTES > out.size || cell_total(nodes) * 4 > solid.size || level_count * 4 > level_set.size {
             ctx.error(format!("Surface Crossings: a {nodes:?}-node grid at refinement {s} is larger than its arrays"));
             return;
         }

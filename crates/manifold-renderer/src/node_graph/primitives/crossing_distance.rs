@@ -13,7 +13,7 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use crate::node_graph::whitewater::{SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use crate::node_graph::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -32,7 +32,7 @@ struct DistanceUniforms {
 crate::primitive! {
     name: CrossingDistance,
     type_id: "node.crossing_distance",
-    purpose: "The whitewater grid's signed distance to the liquid surface, one f32 per cell in metres: the distance from the cell centre to its nearest crossing, negative where the level at the centre is, held to 4 cells. FLIP's post-process follows: a cell whose centre is inside a solid and whose distance is under half a cell reads minus half a cell, so the liquid meets the walls, and a distance within 0.005 cell of 0 moves out to it on its own side.",
+    purpose: "The whitewater grid's signed distance to the liquid surface, one f32 per cell in metres: the distance from the cell centre to the tangent plane at its nearest crossing (to the crossing itself when it carries no normal), negative where the level at the centre is, held to 4 cells. FLIP's post-process follows: a cell whose centre is inside a solid and whose distance is under half a cell reads minus half a cell, so the liquid meets the walls, and a distance within 0.005 cell of 0 moves out to it on its own side.",
     inputs: {
         crossings: Array(SurfaceCrossing) required,
         solid: Array(f32) required,
@@ -85,7 +85,7 @@ impl Primitive for CrossingDistance {
             return;
         };
         let count = cell_total(cells);
-        if count * 16 > crossings.size || count * 4 > out.size || cell_total(nodes) * 4 > solid.size {
+        if count * SURFACE_CROSSING_BYTES > crossings.size || count * 4 > out.size || cell_total(nodes) * 4 > solid.size {
             ctx.error(format!("Crossing Distance: a {nodes:?}-node grid is larger than its arrays"));
             return;
         }

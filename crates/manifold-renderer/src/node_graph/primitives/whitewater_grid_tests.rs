@@ -66,7 +66,18 @@ pub(super) fn run<P: Primitive, T: bytemuck::Pod + crate::node_graph::ports::Kno
 }
 
 fn crossing_close(a: SurfaceCrossing, b: SurfaceCrossing) -> bool {
-    (0..3).all(|i| (a.crossing[i] - b.crossing[i]).abs() <= 1e-4 * b.crossing[i].abs().max(1.0)) && (a.level - b.level).abs() <= 1e-6
+    (0..3).all(|i| (a.crossing[i] - b.crossing[i]).abs() <= 1e-4 * b.crossing[i].abs().max(1.0) && (a.normal[i] - b.normal[i]).abs() <= 1e-5)
+        && (a.level - b.level).abs() <= 1e-6
+}
+
+/// A unit normal half the time, else none.
+fn random_normal(rng: &mut Rng) -> [f32; 3] {
+    if rng.unit() < 0.5 {
+        return [0.0; 3];
+    }
+    let v: [f32; 3] = std::array::from_fn(|_| rng.unit() - 0.5);
+    let size = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-3);
+    v.map(|x| x / size)
 }
 
 /// Each cell's crossing and centre level match the CPU statement; a
@@ -105,7 +116,8 @@ fn surface_crossings_match_cpu() {
     }
 }
 
-/// One pass takes the nearest of 27 cells' crossings, the own on a tie.
+/// One pass takes the nearest of 27 cells' crossings, the own on a tie, at
+/// step 1 and 2.
 #[test]
 fn nearest_crossing_matches_cpu() {
     let grid = Grid::new(NODES);
@@ -114,20 +126,23 @@ fn nearest_crossing_matches_cpu() {
         .map(|i| {
             let c = grid.coords(i);
             let crossing = if rng.unit() < 0.2 { std::array::from_fn(|a| c[a] as f32 + rng.unit()) } else { [NO_CROSSING; 3] };
-            SurfaceCrossing { crossing, level: rng.unit() - 0.5 }
+            SurfaceCrossing { crossing, level: rng.unit() - 0.5, normal: random_normal(&mut rng), pad0: 0.0 }
         })
         .collect();
     let mut harness = Harness::new();
     let input = harness.array(&crossings, crossings.len());
-    let got: Vec<SurfaceCrossing> = run(&mut harness, &mut NearestCrossing::new(), &[("crossings", input.0)], grid.total(), &grid_params(&[]));
-    let mut moved = 0;
-    for (i, g) in got.iter().enumerate() {
-        let c = grid.coords(i);
-        let want = cpu::nearest_crossing(&grid, &crossings, c);
-        moved += usize::from(want.crossing != crossings[i].crossing);
-        assert!(crossing_close(*g, want), "cell {c:?}: GPU {g:?} CPU {want:?}");
+    for step in [1.0f32, 2.0] {
+        let got: Vec<SurfaceCrossing> =
+            run(&mut harness, &mut NearestCrossing::new(), &[("crossings", input.0)], grid.total(), &grid_params(&[("step", step)]));
+        let mut moved = 0;
+        for (i, g) in got.iter().enumerate() {
+            let c = grid.coords(i);
+            let want = cpu::nearest_crossing(&grid, &crossings, c, step);
+            moved += usize::from(want.crossing != crossings[i].crossing);
+            assert!(crossing_close(*g, want), "step {step} cell {c:?}: GPU {g:?} CPU {want:?}");
+        }
+        assert!(moved > 100, "step {step}: the pass moves {moved} crossings");
     }
-    assert!(moved > 100, "the pass moves {moved} crossings");
 }
 
 fn random_crossings(grid: &Grid, rng: &mut Rng) -> Vec<SurfaceCrossing> {
@@ -138,7 +153,7 @@ fn random_crossings(grid: &Grid, rng: &mut Rng) -> Vec<SurfaceCrossing> {
             // Some levels at 0 and some centres on their crossing, for the eps rule.
             let level = if rng.unit() < 0.1 { 0.0 } else { rng.unit() - 0.5 };
             let crossing = if rng.unit() < 0.05 { Grid::centre(c) } else { crossing };
-            SurfaceCrossing { crossing, level }
+            SurfaceCrossing { crossing, level, normal: random_normal(rng), pad0: 0.0 }
         })
         .collect()
 }
@@ -309,6 +324,7 @@ fn nearest_crossing_fused_with_crossing_distance_matches_unfused() {
                 "nodes_x" => NODES[0] as f32,
                 "nodes_y" => NODES[1] as f32,
                 "nodes_z" => NODES[2] as f32,
+                "step" if node.0 == 0 => 1.0,
                 "cell_size" if node.0 == 1 => H,
                 other => panic!("unexpected fused param {other} on node {node:?}"),
             };
@@ -336,7 +352,7 @@ fn nearest_crossing_fused_with_crossing_distance_matches_unfused() {
     let fused_out: Vec<f32> = read(&dst.1, grid.total());
     for (i, (f, u)) in fused_out.iter().zip(&unfused).enumerate() {
         let c = grid.coords(i);
-        let want = cpu::crossing_distance(&grid, cpu::nearest_crossing(&grid, &crossings, c), &solid, H, c);
+        let want = cpu::crossing_distance(&grid, cpu::nearest_crossing(&grid, &crossings, c, 1.0), &solid, H, c);
         assert!((u - want).abs() <= 1e-6, "cell {c:?}: standalone {u} CPU {want}");
         assert_eq!(f.to_bits(), u.to_bits(), "cell {c:?}: fused {f} standalone {u}");
     }

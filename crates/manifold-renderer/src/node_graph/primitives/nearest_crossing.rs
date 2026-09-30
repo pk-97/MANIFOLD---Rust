@@ -11,7 +11,7 @@ use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use crate::node_graph::whitewater::{SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
+use crate::node_graph::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -20,13 +20,17 @@ struct NearestUniforms {
     nodes_x: f32,
     nodes_y: f32,
     nodes_z: f32,
+    step: f32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
     name: NearestCrossing,
     type_id: "node.nearest_crossing",
-    purpose: "One pass of spreading surface crossings over the whitewater grid: each cell takes whichever of its own and its 26 neighbours' crossings lies nearest its centre, keeping its own level. Three passes give every cell the nearest crossing within three cells.",
+    purpose: "One pass of spreading surface crossings over the whitewater grid: each cell takes whichever of its own crossing and the crossings of the 26 cells Step cells away lies nearest its centre, with its normal, keeping its own level. Passes at steps 2, 1, 1 give every cell the nearest crossing within four cells; a first pass at step 2 finds the nearest crossing where three unit passes settle on a neighbour's.",
     inputs: {
         crossings: Array(SurfaceCrossing) required,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -38,9 +42,10 @@ crate::primitive! {
         float_param!("nodes_x", "Solid Nodes X", 71.0, 3.0, 4096.0),
         float_param!("nodes_y", "Solid Nodes Y", 71.0, 3.0, 4096.0),
         float_param!("nodes_z", "Solid Nodes Z", 71.0, 3.0, 4096.0),
+        float_param!("step", "Step (cells)", 1.0, 1.0, 8.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Chain three after node.surface_crossings, each reading the one before, then node.crossing_distance. nodes_x/y/z are the solid lattice's, as node.surface_crossings takes them.",
+    composition_notes: "Chain three after node.surface_crossings, each reading the one before, at Step 2, 1, 1, then node.crossing_distance. nodes_x/y/z are the solid lattice's, as node.surface_crossings takes them.",
     examples: [],
     picker: { label: "Nearest Crossing", category: Atom },
     summary: "Passes each grid cell the closest known point on the liquid's surface from its neighbours.",
@@ -70,11 +75,20 @@ impl Primitive for NearestCrossing {
             return;
         };
         let count = cell_total(cells);
-        if count * 16 > crossings.size.min(out.size) {
+        if count * SURFACE_CROSSING_BYTES > crossings.size.min(out.size) {
             ctx.error(format!("Nearest Crossing: a {nodes:?}-node grid is larger than its arrays"));
             return;
         }
-        let uniforms = NearestUniforms { nodes_x: nodes[0] as f32, nodes_y: nodes[1] as f32, nodes_z: nodes[2] as f32, dispatch_count: count as u32 };
+        let uniforms = NearestUniforms {
+            nodes_x: nodes[0] as f32,
+            nodes_y: nodes[1] as f32,
+            nodes_z: nodes[2] as f32,
+            step: ctx.param_f32("step", 1.0),
+            dispatch_count: count as u32,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,

@@ -5787,7 +5787,7 @@
           "type": "float"
         }
       ],
-      "purpose": "The whitewater grid's signed distance to the liquid surface, one f32 per cell in metres: the distance from the cell centre to its nearest crossing, negative where the level at the centre is, held to 4 cells. FLIP's post-process follows: a cell whose centre is inside a solid and whose distance is under half a cell reads minus half a cell, so the liquid meets the walls, and a distance within 0.005 cell of 0 moves out to it on its own side.",
+      "purpose": "The whitewater grid's signed distance to the liquid surface, one f32 per cell in metres: the distance from the cell centre to the tangent plane at its nearest crossing (to the crossing itself when it carries no normal), negative where the level at the centre is, held to 4 cells. FLIP's post-process follows: a cell whose centre is inside a solid and whose distance is under half a cell reads minus half a cell, so the liquid meets the walls, and a distance within 0.005 cell of 0 moves out to it on its own side.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Measures how far each grid cell is from the liquid's surface, negative inside the liquid.",
@@ -23121,9 +23121,19 @@
             "4096"
           ],
           "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Step (cells)",
+          "name": "step",
+          "range": [
+            "1",
+            "8"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "One pass of spreading surface crossings over the whitewater grid: each cell takes whichever of its own and its 26 neighbours' crossings lies nearest its centre, keeping its own level. Three passes give every cell the nearest crossing within three cells.",
+      "purpose": "One pass of spreading surface crossings over the whitewater grid: each cell takes whichever of its own crossing and the crossings of the 26 cells Step cells away lies nearest its centre, with its normal, keeping its own level. Passes at steps 2, 1, 1 give every cell the nearest crossing within four cells; a first pass at step 2 finds the nearest crossing where three unit passes settle on a neighbour's.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Passes each grid cell the closest known point on the liquid's surface from its neighbours.",
@@ -38695,7 +38705,7 @@
           "type": "float"
         }
       ],
-      "purpose": "For each cell of the whitewater grid (the solid lattice read as nodes − 1 cells a side), the zero crossing of the refined level set nearest the cell centre: of the edges between refined nodes inside the cell (144 at 3 nodes per cell), those whose ends straddle zero with neither end in a solid cross at the linear root. Out holds the crossing in grid cells from the lattice's first node (1e6 when none) and the level set at the cell centre in metres.",
+      "purpose": "For each cell of the whitewater grid (the solid lattice read as nodes − 1 cells a side), the zero crossing of the refined level set nearest the cell centre: of the edges between refined nodes inside the cell (144 at 3 nodes per cell), those whose ends straddle zero with neither end in a solid cross at the linear root. Out holds the crossing in grid cells from the lattice's first node (1e6 when none), the unit surface normal there (the level set's gradient at the edge's liquid end, differenced against liquid neighbours where it has them, since a node outside may sit at the level set's cap; zero when none), and the level set at the cell centre in metres.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface.",

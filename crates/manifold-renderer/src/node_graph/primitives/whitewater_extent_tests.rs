@@ -92,7 +92,7 @@ fn whitewater_extents_at_64() {
         assert_eq!(u64::from(capacity), total, "{name} holds exactly the cells");
     }
 
-    assert_eq!(total * std::mem::size_of::<SurfaceCrossing>() as u64, 5_488_000);
+    assert_eq!(total * std::mem::size_of::<SurfaceCrossing>() as u64, 10_976_000);
     assert_eq!(total * std::mem::size_of::<KnownValue>() as u64, 2_744_000);
     assert_eq!(total * 4, 1_372_000);
     assert_eq!(total.div_ceil(256), 1340, "workgroups per grid dispatch");

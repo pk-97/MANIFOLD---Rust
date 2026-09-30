@@ -89,8 +89,10 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
         }
     }
     let centre = [0.5 * s as f32; 3];
-    let mut out = SurfaceCrossing { crossing: [NO_CROSSING; 3], level: NO_CROSSING };
+    let mut out = SurfaceCrossing { crossing: [NO_CROSSING; 3], level: NO_CROSSING, normal: [0.0; 3], pad0: 0.0 };
     let (mut best, mut runner_up) = (3.0e38f32, 3.0e38f32);
+    let mut liquid_end = [0usize; 3];
+    let mut best_root = [0.0f32; 3];
     for a in 0..3 {
         let mut top = [s as usize; 3];
         top[a] = s as usize - 1;
@@ -105,7 +107,8 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
                     if !clear[i0] || !clear[i1] || (v0 < 0.0) == (v1 < 0.0) {
                         continue;
                     }
-                    let t = v0 / (v0 - v1);
+                    let q0: [i64; 3] = std::array::from_fn(|i| i64::from(base[i]) + p0[i] as i64);
+                    let t = crossing_fraction(level, levels, v0, v1, q0, a);
                     let mut root = p0.map(|v| v as f32);
                     root[a] += t;
                     let dd = dist2(root, centre);
@@ -113,12 +116,22 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
                         runner_up = best;
                         best = dd;
                         out.crossing = std::array::from_fn(|i| (base[i] as f32 + root[i]) / s as f32);
+                        liquid_end = if v0 < 0.0 { p0 } else { p1 };
+                        best_root = root;
                     } else if dd < runner_up {
                         runner_up = dd;
                     }
                 }
             }
         }
+    }
+    if best < 3.0e38 {
+        let q: [i64; 3] = std::array::from_fn(|i| i64::from(base[i]) + liquid_end[i] as i64);
+        let g = level_gradient(level, levels, q);
+        let size = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
+        out.normal = if size > 0.0 { g.map(|v| v / size) } else { [0.0; 3] };
+        out.level = (0..3).map(|i| g[i] * (centre[i] - best_root[i])).sum();
+        return (out, best, runner_up);
     }
     let low = centre.map(|v| (v.floor() as u32).min(s - 1) as usize);
     let f: [f32; 3] = std::array::from_fn(|i| centre[i] - low[i] as f32);
@@ -131,20 +144,65 @@ pub(super) fn surface_crossing(grid: &Grid, level: &[f32], solid: &[f32], s: u32
     (out, best, runner_up)
 }
 
-/// `node.nearest_crossing` for one cell.
-pub(super) fn nearest_crossing(grid: &Grid, crossings: &[SurfaceCrossing], c: [u32; 3]) -> SurfaceCrossing {
+/// The refined level set at `p`, clamped into the lattice.
+fn level_at(level: &[f32], levels: [usize; 3], p: [i64; 3]) -> f32 {
+    let c: [usize; 3] = std::array::from_fn(|i| p[i].clamp(0, levels[i] as i64 - 1) as usize);
+    level[c[0] + levels[0] * (c[1] + levels[1] * c[2])]
+}
+
+/// Where the edge from refined node `q0` along axis `a` crosses zero, as a
+/// fraction from `q0`: the inner of the chord's root and the root of the
+/// secant through the next liquid node beyond the edge (the body's
+/// `sc_root`).
+fn crossing_fraction(level: &[f32], levels: [usize; 3], v0: f32, v1: f32, q0: [i64; 3], a: usize) -> f32 {
+    let from_q0 = v0 < 0.0;
+    let (liquid, air) = if from_q0 { (v0, v1) } else { (v1, v0) };
+    let mut beyond = q0;
+    beyond[a] += if from_q0 { -1 } else { 2 };
+    let slope = liquid - level_at(level, levels, beyond);
+    let mut u = liquid / (liquid - air);
+    if slope > 0.0 {
+        u = u.min(-liquid / slope);
+    }
+    if from_q0 { u } else { 1.0 - u }
+}
+
+/// The refined level set's gradient at node `q` (clamped into the lattice),
+/// metres per refined node: per axis central where both neighbours agree on
+/// liquid, else one-sided against the neighbour in the liquid.
+fn level_gradient(level: &[f32], levels: [usize; 3], q: [i64; 3]) -> [f32; 3] {
+    let at = |p: [i64; 3]| level_at(level, levels, p);
+    let here = at(q);
+    std::array::from_fn(|a| {
+        let (mut lo, mut hi) = (q, q);
+        lo[a] -= 1;
+        hi[a] += 1;
+        let (low, high) = (at(lo), at(hi));
+        if (low < 0.0) == (high < 0.0) {
+            0.5 * (high - low)
+        } else if high < 0.0 {
+            high - here
+        } else {
+            here - low
+        }
+    })
+}
+
+/// `node.nearest_crossing` for one cell, at `step` cells.
+pub(super) fn nearest_crossing(grid: &Grid, crossings: &[SurfaceCrossing], c: [u32; 3], step: f32) -> SurfaceCrossing {
+    let reach = step.round().max(1.0) as i64;
     let own = crossings[grid.index(c)];
     let centre = Grid::centre(c);
-    let (mut best, mut nearest) = (own.crossing, dist2(own.crossing, centre));
+    let (mut best, mut nearest) = (own, dist2(own.crossing, centre));
     for dz in -1i64..=1 {
         for dy in -1i64..=1 {
             for dx in -1i64..=1 {
-                let n = [i64::from(c[0]) + dx, i64::from(c[1]) + dy, i64::from(c[2]) + dz];
+                let n = [i64::from(c[0]) + reach * dx, i64::from(c[1]) + reach * dy, i64::from(c[2]) + reach * dz];
                 if (dx, dy, dz) == (0, 0, 0) || (0..3).any(|a| n[a] < 0 || n[a] >= i64::from(grid.cells[a])) {
                     continue;
                 }
-                let other = crossings[grid.index(n.map(|v| v as u32))].crossing;
-                let ee = dist2(other, centre);
+                let other = crossings[grid.index(n.map(|v| v as u32))];
+                let ee = dist2(other.crossing, centre);
                 if ee < nearest {
                     nearest = ee;
                     best = other;
@@ -152,12 +210,19 @@ pub(super) fn nearest_crossing(grid: &Grid, crossings: &[SurfaceCrossing], c: [u
             }
         }
     }
-    SurfaceCrossing { crossing: best, level: own.level }
+    SurfaceCrossing { crossing: best.crossing, level: own.level, normal: best.normal, pad0: 0.0 }
 }
 
 /// `node.crossing_distance` for one cell.
 pub(super) fn crossing_distance(grid: &Grid, crossing: SurfaceCrossing, solid: &[f32], h: f32, c: [u32; 3]) -> f32 {
-    let reach = dist2(crossing.crossing, Grid::centre(c)).sqrt() * h;
+    let centre = Grid::centre(c);
+    let offset: [f32; 3] = std::array::from_fn(|i| centre[i] - crossing.crossing[i]);
+    let n = crossing.normal;
+    let reach = if n[0] * n[0] + n[1] * n[1] + n[2] * n[2] > 0.5 {
+        (offset[0] * n[0] + offset[1] * n[1] + offset[2] * n[2]).abs()
+    } else {
+        dist2(crossing.crossing, centre).sqrt()
+    } * h;
     let mut d = if crossing.level < 0.0 { -1.0 } else { 1.0 } * reach.min(4.0 * h);
     let solid: f32 = grid.corners(solid, c).iter().sum();
     if d < 0.5 * h && 0.125 * solid < 0.0 {

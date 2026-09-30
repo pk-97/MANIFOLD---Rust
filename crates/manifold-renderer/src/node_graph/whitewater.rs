@@ -18,7 +18,10 @@ pub(crate) fn grid_nodes(ctx: &EffectNodeContext<'_, '_>) -> [u32; 3] {
     ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 71.0).round().max(0.0) as u32)
 }
 
-/// A cell's nearest surface crossing and the liquid level at its centre.
+/// A cell's nearest surface crossing, the surface normal there, and the
+/// liquid level at the cell centre. The distance to the crossing's tangent
+/// plane is second-order in how far the crossing sits to the side of the
+/// true nearest point; the distance to the point itself is first-order.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SurfaceCrossing {
@@ -27,14 +30,21 @@ pub struct SurfaceCrossing {
     pub crossing: [f32; 3],
     /// The level set at the cell centre, metres, negative in the liquid.
     pub level: f32,
+    /// Unit gradient of the level set at the crossing, pointing out of the
+    /// liquid; zero when there is no crossing.
+    pub normal: [f32; 3],
+    pub pad0: f32,
 }
 
-const _: () = assert!(std::mem::size_of::<SurfaceCrossing>() == 16);
+pub const SURFACE_CROSSING_BYTES: u64 = std::mem::size_of::<SurfaceCrossing>() as u64;
+const _: () = assert!(SURFACE_CROSSING_BYTES == 32);
 
-/// Std430: vec3 + f32 share one 16-byte slot.
+/// Std430: each vec3 + f32 pair shares one 16-byte slot.
 pub const SURFACE_CROSSING_SPECS: &[ChannelSpec] = &[
     ChannelSpec { name: well_known::CROSSING, ty: ChannelElementType::Vec3F },
     ChannelSpec { name: well_known::LEVEL, ty: ChannelElementType::F32 },
+    ChannelSpec { name: well_known::NORMAL, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::PAD0, ty: ChannelElementType::F32 },
 ];
 
 impl KnownItem for SurfaceCrossing {
@@ -60,6 +70,11 @@ pub const KNOWN_VALUE_SPECS: &[ChannelSpec] = &[
 impl KnownItem for KnownValue {
     const SPECS: &'static [ChannelSpec] = KNOWN_VALUE_SPECS;
 }
+
+/// The `step` of each node.nearest_crossing pass, in order. A first pass at
+/// 2 then two at 1 find the nearest stored crossing wherever three passes at
+/// 1 settle on a neighbour's (GPU_WHITEWATER_DESIGN.md D4).
+pub const SPREAD_STEPS: [f32; 3] = [2.0, 1.0, 1.0];
 
 /// Grid cells past every real crossing: the coordinate of "none".
 pub const NO_CROSSING: f32 = 1e6;

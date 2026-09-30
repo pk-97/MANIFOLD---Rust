@@ -1,7 +1,9 @@
 // node.crossing_distance — fusable BUFFER body, COINCIDENT crossings, GATHER
 // solid. One thread per whitewater cell: the distance from the cell centre
-// to its nearest crossing, in metres, signed by the level at the centre and
-// held to 4 cells. Then FLIP's post-process (particlelevelset.cpp:170): a
+// to the tangent plane at its nearest crossing (to the crossing itself when
+// it has no normal), in metres, signed by the level at the centre and held
+// to 4 cells. The plane leaves an error second-order in how far the crossing
+// sits to the side of the true nearest point. Then FLIP's post-process (particlelevelset.cpp:170): a
 // cell whose centre is in a solid (the mean of its eight solid corners
 // below 0) and whose distance is under half a cell reads −½ cell, so liquid
 // runs into walls; a distance within 0.005 cell of 0 moves out to it, keeping
@@ -27,7 +29,9 @@ fn body(
     }
     let c = ww_cell(idx, cells);
     let centre = vec3<f32>(c) + vec3<f32>(0.5);
-    let reach = length(e_crossings.crossing - centre) * h;
+    let offset = centre - e_crossings.crossing;
+    let n = e_crossings.normal;
+    let reach = select(length(offset), abs(dot(offset, n)), dot(n, n) > 0.5) * h;
     var d = select(1.0, -1.0, e_crossings.level < 0.0) * min(reach, 4.0 * h);
     var solid = 0.0;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
