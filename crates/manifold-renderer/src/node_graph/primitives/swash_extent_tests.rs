@@ -11,7 +11,7 @@ use crate::node_graph::effect_node::ParamValues;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, FluidParticle, bin_counts};
 use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::resource_allocation::plan_array_allocations;
+use crate::node_graph::resource_allocation::{ArrayAllocationAction, ArrayAllocationPlan, plan_array_allocations};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
 use crate::node_graph::validation::GraphError;
 use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, ResourceId, compile};
@@ -434,8 +434,25 @@ pub(super) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
     let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
     let plan = compile(&graph).expect("render def compiles");
     let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
-    let planned: u64 = allocation.storage.values().map(|s| s.bytes).sum();
-    planned + krylov_bytes(scene)
+    fresh(&allocation).values().sum::<u64>() + krylov_bytes(scene)
+}
+
+fn fresh_bytes_of(allocation: &ArrayAllocationPlan) -> u64 {
+    fresh(allocation).values().sum()
+}
+
+/// Bytes of each fresh allocation, by the resource that owns it. A reuse or
+/// alias shares an earlier allocation's memory, so summing `storage` would
+/// count it twice.
+fn fresh(allocation: &ArrayAllocationPlan) -> AHashMap<ResourceId, u64> {
+    allocation
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ArrayAllocationAction::Allocate(a) => Some((a.resource, a.bytes)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn krylov_bytes(scene: WaterScene) -> u64 {
@@ -449,25 +466,54 @@ fn krylov_bytes(scene: WaterScene) -> u64 {
 #[test]
 fn fft_water_memory_at_every_lattice() {
     for n in LATTICES {
-        let scene = WaterScene::dam_break(n);
-        let bytes = rendered_scene_bytes(scene);
-        println!("SWASH rendered Dam Break {n}³: {} particles, arrays {:.2} GB", scene.particles(), bytes as f64 / 1e9);
-        assert!(bytes > 0);
+        for scale in [1, 2, 3] {
+            let scene = WaterScene::dam_break(n).with_surface_scale(scale);
+            let bytes = rendered_scene_bytes(scene);
+            println!(
+                "SWASH rendered Dam Break {n}³, surface scale {scale}: {} particles, arrays {:.2} GB",
+                scene.particles(),
+                bytes as f64 / 1e9
+            );
+            assert!(bytes > 0);
+        }
     }
     let n = LATTICES[LATTICES.len() - 1];
-    let graph = render_def(WaterScene::dam_break(n)).into_graph(&registry(), &Default::default()).expect("render def builds");
+    let scene = WaterScene::dam_break(n).with_surface_scale(1);
+    let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
     let plan = compile(&graph).expect("render def compiles");
     let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
     let names: AHashMap<_, _> = graph.nodes().map(|node| (node.id, node.node_id.as_str().to_string())).collect();
-    let mut ports: Vec<(String, u64)> = plan
+    let zeroed = allocation.actions.iter().filter(|a| matches!(a, ArrayAllocationAction::Allocate(a) if a.zero_init)).count();
+    let aliased = allocation.actions.iter().filter(|a| matches!(a, ArrayAllocationAction::Alias { .. })).count();
+    let freed: usize = plan.steps().iter().map(|step| step.free_after.len()).sum();
+    let fresh = fresh(&allocation);
+    println!("SWASH {n}³ surface scale 1: {} fresh arrays ({zeroed} zero-filled), {aliased} reused, {freed} frees in the plan", fresh.len());
+    let bare = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
+    let bare_plan = compile(&bare).expect("water def compiles");
+    let bare_allocation = plan_array_allocations(&bare, &bare_plan, (64, 64), &AHashMap::default()).expect("plan allocates");
+    let bare_aliased = bare_allocation.actions.iter().filter(|a| matches!(a, ArrayAllocationAction::Alias { .. })).count();
+    println!(
+        "SWASH {n}³ surface scale 1 without the render: {:.2} GB fresh, {bare_aliased} reused",
+        fresh_bytes_of(&bare_allocation) as f64 / 1e9
+    );
+    let ports: Vec<(String, u64)> = plan
         .steps()
         .iter()
         .flat_map(|step| step.outputs.iter().map(move |(port, resource)| (step.node, *port, *resource)))
-        .filter_map(|(node, port, resource)| allocation.storage.get(&resource).map(|s| (format!("{}.{port}", names[&node]), s.bytes)))
+        .filter_map(|(node, port, resource)| fresh.get(&resource).map(|&bytes| (format!("{}.{port}", names[&node]), bytes)))
         .collect();
-    ports.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
-    for (port, bytes) in ports.iter().take(12) {
-        println!("SWASH {n}³ array {port}: {:.2} GB", *bytes as f64 / 1e9);
+    // Grouped by what the port is, across both steps' copies.
+    let mut kinds: AHashMap<String, (u64, usize)> = AHashMap::default();
+    for (port, bytes) in &ports {
+        let kind = port.split_once('.').filter(|(p, _)| p.starts_with('s') && p[1..].parse::<u32>().is_ok()).map_or(port.as_str(), |(_, rest)| rest);
+        let entry = kinds.entry(kind.to_string()).or_default();
+        entry.0 += bytes;
+        entry.1 += 1;
+    }
+    let mut kinds: Vec<_> = kinds.into_iter().collect();
+    kinds.sort_by_key(|(_, (bytes, _))| std::cmp::Reverse(*bytes));
+    for (kind, (bytes, copies)) in kinds.iter().take(16) {
+        println!("SWASH {n}³ surface scale 1, {kind} ×{copies}: {:.2} GB", *bytes as f64 / 1e9);
     }
 }
 
@@ -487,15 +533,16 @@ fn fft_water_collar_capacity_memory() {
             let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
             let plan = compile(&graph).expect("water def compiles");
             let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
-            let planned: u64 = allocation.storage.values().map(|s| s.bytes).sum();
+            let fresh = fresh(&allocation);
+            let planned: u64 = fresh.values().sum();
             let provided = krylov_bytes(scene);
             println!("{n}³ capacity {capacity}: planned {:.0} MB, Krylov bases {:.0} MB, total {:.0} MB", mb(planned), mb(provided), mb(planned + provided));
             let names: AHashMap<_, _> = graph.nodes().map(|node| (node.id, node.node.type_id().as_str().to_string())).collect();
             let mut ports = AHashMap::default();
             for step in plan.steps() {
                 for (port, resource) in &step.outputs {
-                    if let Some(storage) = allocation.storage.get(resource) {
-                        *ports.entry(format!("{}.{port}", names[&step.node])).or_default() += storage.bytes;
+                    if let Some(bytes) = fresh.get(resource) {
+                        *ports.entry(format!("{}.{port}", names[&step.node])).or_default() += bytes;
                     }
                 }
             }
@@ -532,7 +579,8 @@ fn fft_water_refuses_an_illegal_lattice_at_build() {
 #[test]
 fn fft_water_rendered_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool];
-    for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))) {
+    let coarser = LATTICES.into_iter().flat_map(|n| [1, 2].map(|scale| WaterScene::dam_break(n).with_surface_scale(scale)));
+    for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).chain(coarser) {
         let n = scene.pressure.n;
         let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
         let plan = compile(&graph).expect("render def compiles");

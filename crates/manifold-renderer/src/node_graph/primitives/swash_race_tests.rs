@@ -128,6 +128,23 @@ fn report_packing(particles: &[FluidParticle], n: usize, h: f64) {
     println!("SWASH packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
+/// The share of particles past the fill's 8 per cell, summed over cells: how
+/// compressed the water is, without the mesher. Thin sheets lose mesh
+/// volume but not this.
+fn crowded_share(particles: &[FluidParticle], n: usize, h: f64) -> f64 {
+    let mut per_cell = vec![0u32; n * n * n];
+    let mut live = 0usize;
+    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+        let c: [usize; 3] = std::array::from_fn(|a| {
+            (((f64::from(p.position_radius[a]) - super::swash_preset::DAM_MIN[a]) / h).max(0.0) as usize).min(n - 1)
+        });
+        per_cell[c[0] + n * (c[1] + n * c[2])] += 1;
+        live += 1;
+    }
+    let rest = super::swash_preset::REST_PER_CELL as u32;
+    per_cell.iter().map(|&c| c.saturating_sub(rest) as usize).sum::<usize>() as f64 / live.max(1) as f64
+}
+
 /// What one Dam Break run measured.
 struct Record {
     gpu: Vec<f64>,
@@ -187,7 +204,12 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             println!("{label} frame {frame:3}: {g:.1} ms GPU, {c:.1} ms CPU, left rms {:.1e} max {:.1e} /s", rms.last().unwrap(), max.last().unwrap());
             println!("{label} frame {frame:3}: speed mean {:.2} p99 {:.2} top {:.2} m/s, highest {:.2} m", m.mean, m.p99, m.fastest, m.highest);
             if let Some(v) = record.volume.last() {
-                println!("{label} frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%", 100.0 * v, 100.0 * (raw[frame] / raw[0] - 1.0));
+                println!(
+                    "{label} frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%, particles past rest {:.2}%",
+                    100.0 * v,
+                    100.0 * (raw[frame] / raw[0] - 1.0),
+                    100.0 * crowded_share(&particles, n, h)
+                );
             }
         }
     }
@@ -255,14 +277,17 @@ fn fft_water_dam_break_settles() {
     dam_break(WaterScene::dam_break(64).with_surface(), "SETTLE 64³", 900);
 }
 
-/// The density source's rate against volume drift, particle motion and what
-/// the projection leaves undone, on the meshed 64³ Dam Break, with the drift
-/// curve every 30 frames per rate. Past one step's worth of crowding (rate ×
-/// step dt > 1, 120/s here) the correction overshoots and the water fizzes.
+/// The density solve's share of crowding removed per step (rate × step dt)
+/// and its pass count against volume drift and particle motion, on the
+/// meshed 64³ Dam Break, with the drift curve every 30 frames. The
+/// correction moves particles only, so a share up to 2 relaxes instead of
+/// oscillating.
 #[test]
 fn fft_water_density_sweep() {
-    for rate in [0.0, 3.0, 10.0, 30.0, 60.0, 100.0, 120.0, 150.0, 200.0] {
-        let scene = WaterScene { spread_rate: rate, ..WaterScene::dam_break(64).with_surface() };
-        dam_break(scene, &format!("SWEEP rate {rate:>4}"), 300);
+    let base = WaterScene::dam_break(64).with_surface();
+    let per_second = 1.0 / base.step_dt();
+    for (share, passes) in [(5.0 / 6.0, 8), (1.0, 8), (1.5, 8), (5.0 / 6.0, 24), (1.0, 24)] {
+        let scene = WaterScene { spread_rate: share * per_second, density_passes: passes, ..base };
+        dam_break(scene, &format!("SWEEP share {share:.2} passes {passes}"), 300);
     }
 }

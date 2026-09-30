@@ -72,16 +72,20 @@ pub(super) struct WaterScene {
     pub spread_rate: f64,
     /// Krylov passes of the density solve.
     pub density_passes: usize,
+    /// Surface lattice nodes per cell (`resolution_scale` of the surface's
+    /// volume and mesh): the shipped Surface Detail 1 is 3.
+    pub surface_scale: usize,
 }
 
 /// Particles per cell the fill seeds: one per half-cell site.
 pub(super) const REST_PER_CELL: f64 = 8.0;
 
-/// The share of a cell's crowding the density source removes per step:
-/// spread_rate × step dt. Crowding e decays as (1 − share) per step, so a
-/// share over 1 overshoots and the water fizzes; the 64³ Dam Break sweep
-/// (`fft_water_density_sweep`) shows it from 1.25 on. 5/6 is 100/s at two
-/// steps per frame, the best measured rate under that bound.
+/// The share of a cell's crowding the density solve removes per step:
+/// spread_rate × step dt. Linear theory says crowding goes as (1 − share)
+/// per step, but particles are discrete: an overshoot crowds the next cell.
+/// On the Dam Break (`fft_water_density_sweep`, `fft_water_refined_splash`)
+/// share 1.5 leaves more particles past rest than 5/6 at 64³ (10% against
+/// 8% mid-splash) and far more at 128³ (32% against 15% at frame 29).
 pub(super) const SPREAD_PER_STEP: f64 = 5.0 / 6.0;
 
 /// The density solve's passes. It moves particles and is never kept as
@@ -102,11 +106,17 @@ impl WaterScene {
             surface: false,
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
             density_passes: DENSITY_PASSES,
+            surface_scale: 3,
         }
     }
 
     pub fn with_surface(self) -> Self {
         Self { surface: true, ..self }
+    }
+
+    /// Meshed at `scale` surface nodes per cell.
+    pub fn with_surface_scale(self, scale: usize) -> Self {
+        Self { surface: true, surface_scale: scale, ..self }
     }
 
     /// The same scene with `passes` Krylov passes per solve.
@@ -464,6 +474,22 @@ pub(super) fn render_def(scene: WaterScene) -> EffectGraphDef {
     serde_json::from_value(def).expect("render def")
 }
 
+/// Sets `resolution_scale` on every surface volume and mesh node in `value`,
+/// however deep the group nests them.
+fn set_surface_scale(value: &mut Value, scale: usize) {
+    match value {
+        Value::Object(map) => {
+            let surface = map.get("nodeId").is_some_and(|id| id == "liquid_volume" || id == "liquid_mesh");
+            if surface && let Some(params) = map.get_mut("params") {
+                params["resolution_scale"] = int(scale);
+            }
+            map.values_mut().for_each(|v| set_surface_scale(v, scale));
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| set_surface_scale(v, scale)),
+        _ => {}
+    }
+}
+
 /// The liquid surface over the tank: its solid lattice is the cell corners,
 /// with no solid in it (`solid` is a test source the harness zeroes).
 fn surface(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
@@ -484,6 +510,7 @@ fn surface(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> 
     );
     let corners = b.node("corners", "node.value", json!({"value": float(nodes as f64)}));
     let mut group = surface_group();
+    set_surface_scale(&mut group, scene.surface_scale);
     let id = b.nodes.len();
     group["id"] = json!(id);
     group["nodeId"] = json!("surface");

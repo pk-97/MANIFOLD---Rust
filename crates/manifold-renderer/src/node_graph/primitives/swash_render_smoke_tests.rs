@@ -716,8 +716,12 @@ fn swash_render_smoke_128() {
     run(WaterScene::dam_break(128), "dam_break", true);
 }
 
+/// 256³ as a player would run it, with a coarser surface (the shipped
+/// surface lattice would be 769³), beside 128³ at the same surface scale.
 /// Refused by name when the census says the device can't hold it.
 #[test]
 fn swash_render_smoke_256() {
-    run(WaterScene::dam_break(256), "dam_break", true);
+    run(WaterScene::dam_break(128).with_surface_scale(1), "dam_break_surface1", false);
+    run(WaterScene::dam_break(256).with_surface_scale(1), "dam_break_surface1", true);
+    run(WaterScene::dam_break(256).with_surface_scale(2), "dam_break_surface2", false);
 }
