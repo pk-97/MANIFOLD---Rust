@@ -411,7 +411,8 @@ fn fft_water_scenes_cover_every_dispatch() {
     // The splash probes' scenes: the Krylov basis grows with passes, and
     // four steps a frame is four copies of the step.
     let refined = WaterScene::dam_break(128).with_surface();
-    let probes = [refined.with_passes(16), refined.with_passes(32), WaterScene { steps: 4, ..refined }];
+    let bare = |n| WaterScene { spread_rate: 0.0, ..WaterScene::dam_break(n) };
+    let probes = [refined.with_passes(16), refined.with_passes(32), WaterScene { steps: 4, ..refined }, bare(64), bare(128).with_surface()];
     for scene in all.chain(probes) {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
