@@ -335,6 +335,24 @@ fn fft_water_still_pool() {
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
 }
 
+/// The volume oracle on water that must not change: a resting pool's meshed
+/// volume holds within 0.5% for 2 s. A drift here is the measure, not the
+/// solver.
+#[test]
+fn fft_water_still_pool_keeps_its_meshed_volume() {
+    let scene = WaterScene::still_pool(64).with_surface();
+    let mut run = Run::new(scene);
+    let mut volumes = Vec::new();
+    for _ in 0..120 {
+        run.frame();
+        volumes.push(run.surface_volume());
+    }
+    let v0 = volumes[0];
+    let drift = volumes.iter().map(|v| (v / v0 - 1.0).abs()).fold(0.0, f64::max);
+    println!("SWASH still pool meshed: frame 0 {v0:.4} m³, last {:.4} m³, drift max {:.3}%", volumes[119], 100.0 * drift);
+    assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
+}
+
 fn median(v: &[f64]) -> f64 {
     let mut v = v.to_vec();
     v.sort_by(f64::total_cmp);
