@@ -12686,7 +12686,7 @@
         "WaterFloatingBoxMatter",
         "WaterStillPoolMatter"
       ],
-      "fusion": "pointwise",
+      "fusion": "boundary:blocked",
       "inputs": [
         {
           "name": "points",
@@ -12710,6 +12710,11 @@
         },
         {
           "name": "atlas",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "reaction",
           "required": false,
           "type": "Array"
         },
@@ -12772,6 +12777,36 @@
           "name": "body_count",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "density",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "momentum_unit",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "tick_index",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "substep_in_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "substeps_per_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "dynamic_count",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Grid to Matter",
@@ -12779,6 +12814,11 @@
         {
           "capacity": "follows:points",
           "name": "points_out",
+          "type": "Array"
+        },
+        {
+          "capacity": "follows:reaction",
+          "name": "reaction_out",
           "type": "Array"
         }
       ],
@@ -12902,9 +12942,69 @@
             "64"
           ],
           "type": "int"
+        },
+        {
+          "default": "1000",
+          "label": "Density (kg/m³)",
+          "name": "density",
+          "range": [
+            "1",
+            "100000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "128",
+          "label": "Momentum Unit (m/s)",
+          "name": "momentum_unit",
+          "range": [
+            "0.001",
+            "1000000000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Tick",
+          "name": "tick_index",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Substep in Tick",
+          "name": "substep_in_tick",
+          "range": [
+            "0",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Substeps per Tick",
+          "name": "substeps_per_tick",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Dynamic Bodies",
+          "name": "dynamic_count",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it. A point leaving the lattice is removed.",
+      "purpose": "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it; a dynamic body gains the momentum the point lost, added to its reaction words. A point leaving the lattice is removed.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves each liquid particle with the grid's velocities and updates how compressed it is.",
@@ -17918,7 +18018,7 @@
       "label": "Matter Solid Distance",
       "outputs": [
         {
-          "capacity": "param:max_capacity=1048576",
+          "capacity": "fixed:1",
           "name": "solid",
           "type": "Array"
         }
@@ -18033,16 +18133,6 @@
             "1"
           ],
           "type": "float"
-        },
-        {
-          "default": "1048576",
-          "label": "Max Nodes",
-          "name": "max_capacity",
-          "range": [
-            "1",
-            "16777216"
-          ],
-          "type": "int"
         }
       ],
       "purpose": "Write a matter domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
@@ -21487,6 +21577,21 @@
           "name": "cell_size",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "bins_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_z",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Particle Volume",
@@ -21617,6 +21722,36 @@
           "range": [
             "1",
             "4"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins X",
+          "name": "bins_x",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Y",
+          "name": "bins_y",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Z",
+          "name": "bins_z",
+          "range": [
+            "0",
+            "16777216"
           ],
           "type": "int"
         }
@@ -32836,6 +32971,21 @@
           "name": "min_neighbours",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "bins_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_z",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Shape Particle Blobs",
@@ -32964,6 +33114,36 @@
           "range": [
             "1",
             "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins X",
+          "name": "bins_x",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Y",
+          "name": "bins_y",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Z",
+          "name": "bins_z",
+          "range": [
+            "0",
+            "16777216"
           ],
           "type": "int"
         }
@@ -34414,7 +34594,7 @@
           "type": "Array"
         },
         {
-          "capacity": "param:max_cells=1048576",
+          "capacity": "fixed:1",
           "name": "cell_ranges",
           "type": "Array"
         },
@@ -34422,6 +34602,18 @@
           "capacity": "follows:particles",
           "name": "order",
           "type": "Array"
+        },
+        {
+          "name": "bins_x",
+          "type": "f32"
+        },
+        {
+          "name": "bins_y",
+          "type": "f32"
+        },
+        {
+          "name": "bins_z",
+          "type": "f32"
         }
       ],
       "params": [
@@ -34504,19 +34696,9 @@
             "100"
           ],
           "type": "float"
-        },
-        {
-          "default": "1048576",
-          "label": "Max Cells",
-          "name": "max_cells",
-          "range": [
-            "1",
-            "16777216"
-          ],
-          "type": "int"
         }
       ],
-      "purpose": "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
+      "purpose": "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total), each bin's start and count, and the bin grid's size per axis. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. cell_ranges holds exactly one range per bin, sized every frame from the same bin count. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly.",

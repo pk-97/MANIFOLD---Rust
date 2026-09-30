@@ -510,13 +510,26 @@ point at local distance φ < 0 steps along the lattice normal onto the surface
 (`−φ·∇φ/|∇φ|²` with the world-space gradient of the local distance, capped at the
 largest possible gap), and the inward normal part of its velocity relative to the
 body is removed. Tangential motion is untouched and relative speed never grows. The
-push-out is a position correction with no momentum exchange; P2b measures the coupled
-momentum balance with it on. The four collider atoms share one sampler: the
+removed velocity is momentum the body takes (D30). The four collider atoms share one sampler: the
 `matter_pose.wgsl` and `matter_collider.wgsl` includes; each body defines only the
 atlas read over its own gathered binding. Gate: no point ends a tick more than 0.5·dx
 inside a collider. **MatterClock epochs start at 1**, 0 meaning not started: with the
 first epoch at 0, a domain holding zeros while a lattice built looked like a started
 epoch, and the state never seeded.
+
+**D30 — The push-out pays the body (amends D29 and section 4.1 step 6).** The velocity
+D29 removes from a point, m·v_n·n with m = V0·density, is momentum the liquid loses.
+`node.grid_to_matter` adds it, and its turning moment about the body's centre of mass,
+to a dynamic body's reaction words: the same four terms, the same encoding and the
+same 16 words `node.matter_body_reaction` writes per node. The words run
+domain → `matter_body_reaction` → `grid_to_matter` → `matter_state.reaction_in`.
+It stays in G2P, not a separate atom: the correction needs the point's post-advect
+position and final velocity, which G2P already holds, and a separate atom would read
+and write every point again each substep (at the 64³ Dam Break, about 1.8 GB a frame)
+to buy no reuse, since it acts only on matter points against matter bodies. The atomic
+side output makes G2P a fusion boundary per
+FREEZE_COMPILER_MAP.md section 4 (The cut rules — when fusion says no);
+it fused with nothing in any matter preset.
 
 ## 3. Data model and atoms
 
@@ -606,12 +619,12 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | `node.zero_array` | `in: Array(i32)` → `out` (aliased) | P1 |
 | `node.matter_to_grid` | `points`, `material`, lattice wires, `step_dt`, optional `deformation`, optional `order: Array(u32)` (P1b), `accum: Array(i32)` → `accum_out` (aliased, the one atomic output) | P1, P1b |
 | `node.matter_grid_update` | `accum`, `grid` (aliased target), lattice wires, `step_dt`, `gravity_x/y/z`, closed-face mask, optional `bodies`, `shapes`, `atlas`, `forces`, `impulses`, `tick_start` → `grid_out` | P1 walls, P2a colliders, P3c forces |
-| `node.grid_to_matter` | `points`, `grid` (BufferGather), `material`, lattice wires, `step_dt` → `points_out` | P1 |
+| `node.grid_to_matter` | `points`, `grid` (BufferGather), `material`, lattice wires, `step_dt`; P2a adds `bodies`, `shapes`, `atlas`, `body_count`; P2b adds `reaction: Array(i32)`, `density`, `momentum_unit`, `tick_index`, `substep_in_tick`, `substeps_per_tick`, `dynamic_count` → `points_out`, `reaction_out` (aliased atomic, D30, captured by `matter_state.reaction_in`) | P1, P2a, P2b |
 | `node.matter_stats` | `points`, `grid`, `accum`, `material`, `tick_end` → `stats: Array(u32)` | P1 |
 | `node.matter_frame` | `points`, `stats`, `material`, lattice wires, optional `solid`, `simulation_time` → the surface seam outputs: `particles_a`, `particles_b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span` | P1 |
 | `node.matter_move_bodies` | `bodies` (the domain's tick rows), `tick_index`, `first_tick`, `substep_in_tick`, `step_dt`, `body_count`, `rows`; P2b adds `reaction: Array(i32)`, `substeps_per_tick`, `momentum_unit`, `cell_size`, `dynamic_count` → `bodies_out` | P2a, P2b |
 | `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask, `body_count`, `rows`, `tick_seconds` → `solid: Array(f32)`; once per frame after the region, poses at the last tick's end | P2a |
-| `node.matter_body_reaction` | `grid`, `bodies` (from `matter_move_bodies`), `shapes`, `atlas`, lattice wires, `step_dt`, `gravity_x/y/z`, closed-face mask, `momentum_unit`, `body_count`, `dynamic_count`, `substeps_per_tick`, `tick_index`, `substep_in_tick`, `reaction: Array(i32)` → `reaction_out` (aliased atomic, captured by `matter_state.reaction_in`) | P2b |
+| `node.matter_body_reaction` | `grid`, `bodies` (from `matter_move_bodies`), `shapes`, `atlas`, lattice wires, `step_dt`, `gravity_x/y/z`, closed-face mask, `momentum_unit`, `body_count`, `dynamic_count`, `substeps_per_tick`, `tick_index`, `substep_in_tick`, `reaction: Array(i32)` → `reaction_out` (aliased atomic, into `grid_to_matter.reaction`) | P2b |
 | `node.matter_emit` | `points`, `bodies`, `shapes`, `atlas`, lattice wires, `tick_start`, `material`, `points_per_cell` → `points_out` | P3b |
 | `node.matter_drain` | `points`, `bodies`, `shapes`, `atlas`, lattice wires → `points_out` | P3b |
 | `node.matter_compact` | `points`, `tick_end` → `points_out` | P3b |
@@ -671,7 +684,8 @@ over the 27 nodes `i = base + {0,1,2}³`, `d_i = (i·dx + lattice_min) − x_p`.
    `v_p ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic`,
    `C_p = (4/dx²)·Σ w·v_i ⊗ d_i`, `x_p += dt·v_pic`, `J_p ← J_p·(1 + dt·tr C_p)`; then
    a point inside a collider steps out onto its surface and loses the inward normal
-   part of its velocity relative to the body (D29).
+   part of its velocity relative to the body (D29); a dynamic body gains `m_p·v_n·n`
+   and its moment in the same reaction words as step 5 (D30).
 7. **Deformation** (P5 models): `F ← (I + dt·C_p)·F`, then Melt relaxation (D10), then the
    model's return mapping.
 
@@ -942,8 +956,8 @@ module; the honest count.
 
 | Atom | Class | Proof |
 |---|---|---|
-| `zero_array`, `matter_grid_update`, `grid_to_matter`, `matter_move_bodies`, `matter_solid_distance`, `matter_drain`, `matter_update_deformation` | Barrier-free per element: `wgsl_body` + `fusion_kind` + `input_access` (`BufferGather` for lattice, atlas and body reads), pipeline from `standalone_for_spec::<Self>()` | Value `gpu_tests` against CPU-computed expected output; fused-vs-unfused proof for every pair `graph-tool fusion` places in one region. |
-| `matter_to_grid`, `matter_body_reaction` | Atomic scatter, one atomic output each, declared exactly as `scatter_particles_3d.rs:95-98` (Boundary, `atomic_outputs`, standalone codegen); after L1, `matter_to_grid` uses workgroup memory and barriers (exclusion 1). ⚠ VERIFY-AT-IMPL the `boundary_reason` the precedent carries | Values against the f64 reference with the fixed-point tolerance; bit-identity between baseline and L1. |
+| `zero_array`, `matter_grid_update`, `matter_move_bodies`, `matter_solid_distance`, `matter_drain`, `matter_update_deformation` | Barrier-free per element: `wgsl_body` + `fusion_kind` + `input_access` (`BufferGather` for lattice, atlas and body reads), pipeline from `standalone_for_spec::<Self>()` | Value `gpu_tests` against CPU-computed expected output; fused-vs-unfused proof for every pair `graph-tool fusion` places in one region. |
+| `matter_to_grid`, `matter_body_reaction`, `grid_to_matter` | Atomic scatter, one atomic output each, declared exactly as `scatter_particles_3d.rs:95-98` (Boundary, `atomic_outputs`, standalone codegen); `grid_to_matter`'s is a side output next to its aliased points (D30); after L1, `matter_to_grid` uses workgroup memory and barriers (exclusion 1). ⚠ VERIFY-AT-IMPL the `boundary_reason` the precedent carries | Values against the f64 reference with the fixed-point tolerance; bit-identity between baseline and L1. |
 | `matter_emit`, `matter_compact`, `matter_stats` | Exempt, exclusion 1 of the ADDING_PRIMITIVES.md "The codegen path is mandatory" scope test (multi-pass scan, barriered reduction), `standalone_for_boundary_spec` | Values against CPU scans and sums, including sizes 1, 255, 256, 257 and 2²⁰+3. |
 | `matter_state`, `matter_frame` | Exempt, exclusion 2 (cross-frame state) | Clock and ring unit tests; frame value tests. |
 | `matter_domain` | Exempt, exclusion 3 (CPU bridge) | CPU unit tests; upload round-trip GPU test. |
@@ -1039,7 +1053,7 @@ FLIP-only.
 | Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`; coupled: `matter_coupling_export_frame_rate_independent` (30 fps export equals 60 fps word for word) |
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
-| Coupling | `matter_coupling_hydrostatic_force` (within 5%), `matter_coupling_floating_equilibrium` (density 0.5 settles at the waterline ± 0.5·dx), `matter_coupling_energy_light_body` (ratios 0.1/1/10: body energy never above 1.01 × initial total over 8 ticks), `matter_coupling_free_flight_matches_box3d`, `matter_coupling_presentation_shares_display_time` |
+| Coupling | `matter_coupling_hydrostatic_force` (within 5%), `matter_coupling_floating_equilibrium` (density 0.5 settles at the waterline ± 0.5·dx), `matter_coupling_energy_light_body` (ratios 0.1/1/10 over 8 ticks: body energy, and body plus liquid energy, never above 1.01 × initial total; body plus liquid momentum less gravity within 1% of the momentum exchanged), `matter_push_out_reaction_matches_removed_momentum` (D30), `matter_coupling_free_flight_matches_box3d`, `matter_coupling_presentation_shares_display_time` |
 | Coupled pair never blocks live | `matter_coupled_holds_when_reaction_pending`; negative gate: `rg -n 'wait_until_completed\|commit_and_wait' crates/manifold-renderer/src/node_graph/primitives/matter_*.rs` returns nothing |
 | Forces and impulses | `matter_impulse_once_per_tick_across_substeps`; `matter_force_lattice_matches_field`; `matter_input_stream_24_30_60` |
 | One liquid-domain predicate | negative gate: `rg -n '"node\.fluid_surface"' crates -g '*.rs'` returns hits only in `manifold-core/src/liquid_domain.rs`, `R/primitives/fluid_surface.rs` and test code |
@@ -1368,21 +1382,28 @@ at the end of the phase.
   energy tests; FLIP-style after-the-fact exchange.
 - **Phase notes (2026-09-30, Opus 5.5 worker):** built on `feat/gpu-mpm-build-b`.
   `substeps.rs` is untouched: one region, nothing new escapes it.
-  - `matter_coupling_hydrostatic_force`: 625.1 N from the reaction, 625.4 N from the
-    body rows, against ρ0·g·V = 627.8 N (−0.44%).
-    `matter_coupling_floating_equilibrium` (32³, density 0.5): centre 0.5445 m against a
-    measured free surface of 0.5240 m, 0.328·dx, bob 0.0061 m. The gate reads the
-    waterline from the particles. The volume level Σ V0·J reads 0.5131 m because
-    Cohesion 0 caps J at 1 (D3), which drops expansion, so it is printed, not gated.
-    `matter_coupling_energy_light_body`: body energy peaks 0.0155× / 0.264× / 0.883× of
-    the initial total at ratios 0.1 / 1 / 10. Free flight matches Box3D exactly (worst
-    pose difference 0). The presented frame A equals the previous frame B.
-  - Momentum residual, D29 push-out on: −0.24 / −12.1 / −26.8 kg·m/s against
-    1.3 / 6.4 / 9.8 kg·m/s exchanged, and body plus liquid energy peaks at 1.12× at
-    ratio 10. About two thirds is the push-out's removed normal velocity, which the
-    reaction does not count. The fix is in
-    BUG-n97i (coupled MPM loses momentum at the collider push-out), blocked on
-    BUG-agfh (codegen: buffer atom with several outputs, one atomic).
+  - `matter_coupling_hydrostatic_force`: 600.5 N from the reaction, 602.5 N from the
+    body rows, against ρ0·g·V = 627.8 N (−4.35%); the neutral box sinks from 0.386 m
+    to 0.050 m over two seconds. It read −0.44% before D30: the push-out's uncounted
+    momentum held up part of the liquid above the box.
+    `matter_coupling_floating_equilibrium` (32³, density 0.5): centre 0.5384 m against a
+    measured free surface of 0.5249 m, 0.216·dx, bob 0.0034 m (0.328·dx before D30).
+    The gate reads the waterline from the particles. The volume level Σ V0·J reads
+    0.5131 m because Cohesion 0 caps J at 1 (D3), which drops expansion, so it is
+    printed, not gated.
+    `matter_coupling_energy_light_body`: body energy peaks 0.0155× / 0.252× / 0.874×
+    and body plus liquid 0.162× / 0.599× / 0.934× of the initial total at ratios
+    0.1 / 1 / 10. Free flight matches Box3D exactly (worst pose difference 0). The
+    presented frame A equals the previous frame B.
+  - Momentum balance, BUG-n97i (coupled MPM loses momentum at the collider push-out):
+    body plus liquid less gravity drifts |R| = 1.4e-4 / 1.1e-3 / 2.3e-2 kg·m/s against
+    1.29 / 9.91 / 30.3 kg·m/s exchanged (0.011% / 0.011% / 0.075%), gated at 1%.
+    Before, −0.24 / −12.1 / −26.8 in y: two causes. The D29 push-out removed momentum
+    no reaction counted (D30 fixes it). The test also paired the first body row with
+    the liquid two frames back, not one, which added −0.18 / −4.0 / −5.6.
+    `matter_push_out_reaction_matches_removed_momentum` proves the words against the
+    momentum the points lost: 80 points, worst word 6.1 counts against an 81-count
+    rounding bound.
   - Physics history sampling seeded the paired world without its matter domain and
     panicked on any coupled matter preset. A world paired with a liquid that does not
     replay history now records once per display frame with it (D28).
@@ -1630,7 +1651,6 @@ or in section 15.
 | Real surface tension | Peter judges Cohesion wrong for a named look |
 | Mixed materials in one domain | A scene needs two materials that touch in one domain |
 | More than one coupled tick per live frame (30 fps projects; export already runs every tick) | A coupled scene must play live at a project rate below 60 fps |
-| Particle-level collider push-out | `matter_collider_penetration_bounded` fails at grid resolution |
 | Sparse or adaptive grids, 128³ live | P4's stretch report and a named scene need it |
 | Sparse volume tiles (Wu et al. 2018; NVIDIA GVDB) | Domains beyond 128³ are wanted |
 | Multiple matter domains exchanging material | A scene needs two interacting domains |

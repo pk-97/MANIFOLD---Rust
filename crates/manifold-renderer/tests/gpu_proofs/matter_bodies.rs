@@ -8,7 +8,8 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
 use manifold_renderer::node_graph::matter::{
-    MatterBody, MatterGridNode, MatterLattice, MatterShape, body_pose_at, momentum_unit, pack_distance_atlas,
+    MatterBody, MatterGridNode, MatterLattice, MatterPoint, MatterShape, REACTION_WORDS, body_pose_at, momentum_unit,
+    pack_distance_atlas,
 };
 use manifold_renderer::node_graph::{
     ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId,
@@ -327,6 +328,141 @@ fn matter_grid_update_projects_colliders() {
     eprintln!("matter_grid_update_projects_colliders: {projected} nodes projected, worst {worst:e} m/s");
     assert!(projected > 50, "the box projected few nodes: {projected}");
     assert!(worst < 1e-4, "GPU and CPU projections differ by {worst} m/s");
+}
+
+/// BUG-n97i (coupled MPM loses momentum at the collider push-out), D30: the
+/// momentum node.grid_to_matter's push-out takes from each point lands in the
+/// dynamic body's reaction words. A still grid at Liveliness 1 leaves each
+/// point's own velocity, so the push-out is the only velocity change; the
+/// words must equal Σ inv_mass·m·(v_in − v_out) and its turning moment about
+/// the centre of mass, and the (s/n)-weighted copies, within the hashed
+/// rounding (under one count per add). A prescribed body (inv_mass 0) and
+/// dynamic_count 0 each write nothing.
+#[test]
+fn matter_push_out_reaction_matches_removed_momentum() {
+    let lat = MatterLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let dx = lat.cell_size;
+    let dt = 1.0e-3f32;
+    let unit = momentum_unit(dx, f64::from(dt));
+    let density = 1000.0f32;
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
+    let mut atlas = Vec::new();
+    pack_distance_atlas(&lattice.values, &mut atlas);
+    let shape = MatterShape {
+        origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
+        dims_x: lattice.dims[0],
+        dims_y: lattice.dims[1],
+        dims_z: lattice.dims[2],
+        atlas_offset: 0,
+        scale_min: [1.2, 1.0, 1.5, 1.0],
+    };
+    let angle = std::f32::consts::FRAC_PI_6;
+    let dynamic = MatterBody {
+        position_inv_mass: [0.0, 0.5, 0.0, 2.0],
+        rotation: [0.0, (0.5 * angle).sin(), 0.0, (0.5 * angle).cos()],
+        linear_velocity: [0.5, 0.0, 0.0, 0.3],
+        angular_velocity: [0.0, 1.0, 0.0, 0.0],
+        ..MatterBody::default()
+    };
+    // A 12³ block of points through the box, each moving at v0. The unit
+    // domain spans x and z in [−0.5, 0.5] and y in [0, 1].
+    let v0 = [-1.0f32, 0.3, 0.2];
+    let v_rest = dx * dx * dx / 8.0;
+    let centre = [0.0f64, 0.5, 0.0];
+    let points: Vec<MatterPoint> = (0..12u32 * 12 * 12)
+        .map(|i| {
+            let c = [i % 12, (i / 12) % 12, i / 144];
+            let position: [f32; 3] = std::array::from_fn(|a| centre[a] as f32 - 0.33 + 0.06 * c[a] as f32);
+            MatterPoint {
+                position,
+                id: i + 1,
+                velocity: v0,
+                volume_ratio: 1.0,
+                affine_x: [0.0, 0.0, 0.0, 1.0],
+                affine_y: [0.0, 0.0, 0.0, v_rest],
+                affine_z: [0.0; 4],
+            }
+        })
+        .collect();
+    let nodes = lat.node_count();
+    let (substep, substeps) = (3.0f32, 8.0f32);
+    let mut bench = Bench::new(
+        "node.grid_to_matter",
+        vec![
+            ("points", HostArray::new::<MatterPoint>(points.len() as u32)),
+            ("grid", HostArray::new::<MatterGridNode>(nodes)),
+            ("bodies", HostArray::new::<MatterBody>(1)),
+            ("shapes", HostArray::new::<MatterShape>(1)),
+            ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
+            ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
+        ],
+        &["points_out", "reaction_out"],
+        |_, _| {},
+    );
+    bench.fill(1, &vec![MatterGridNode::default(); nodes as usize]);
+    bench.fill(3, &[shape]);
+    bench.fill(4, &atlas);
+    for (name, value) in [
+        ("nodes_x", lat.nodes[0] as f32), ("nodes_y", lat.nodes[1] as f32), ("nodes_z", lat.nodes[2] as f32),
+        ("cell_size", dx), ("step_dt", dt), ("lattice_min_x", lat.min[0]), ("lattice_min_y", lat.min[1]),
+        ("lattice_min_z", lat.min[2]), ("liveliness", 1.0), ("active_count", points.len() as f32),
+        ("body_count", 1.0), ("density", density), ("momentum_unit", unit), ("tick_index", 7.0),
+        ("substep_in_tick", substep), ("substeps_per_tick", substeps), ("dynamic_count", 1.0),
+    ] {
+        bench.set(name, value);
+    }
+    let run = |bench: &mut Bench, body: MatterBody| -> (Vec<MatterPoint>, Vec<i32>) {
+        bench.fill(0, &points);
+        bench.fill(2, &[body]);
+        bench.fill(5, &[0i32; REACTION_WORDS as usize]);
+        bench.run();
+        (bench.read("points_out"), bench.read("reaction_out"))
+    };
+
+    let (moved, words) = run(&mut bench, dynamic);
+    let counts = 16_777_216.0 / f64::from(unit);
+    let inv_mass = f64::from(dynamic.position_inv_mass[3]);
+    let (mut dv, mut dl, mut pushed) = ([0.0f64; 3], [0.0f64; 3], 0u32);
+    for (before, after) in points.iter().zip(&moved) {
+        assert_eq!(after.id, before.id, "no point leaves the lattice");
+        let lost: [f64; 3] = std::array::from_fn(|a| f64::from(before.velocity[a]) - f64::from(after.velocity[a]));
+        if lost == [0.0; 3] {
+            continue;
+        }
+        pushed += 1;
+        let impulse = lost.map(|l| f64::from(v_rest) * f64::from(density) * l);
+        let arm: [f64; 3] = std::array::from_fn(|a| f64::from(after.position[a]) - centre[a]);
+        let moment = [
+            arm[1] * impulse[2] - arm[2] * impulse[1],
+            arm[2] * impulse[0] - arm[0] * impulse[2],
+            arm[0] * impulse[1] - arm[1] * impulse[0],
+        ];
+        for a in 0..3 {
+            dv[a] += inv_mass * impulse[a] * counts;
+            dl[a] += inv_mass * moment[a] / f64::from(dx) * counts;
+        }
+    }
+    let weight = f64::from(substep / substeps);
+    let expected: Vec<f64> = [dv, dv.map(|v| weight * v), dl, dl.map(|v| weight * v)].concat();
+    let worst = expected.iter().zip(&words).map(|(e, &w)| (f64::from(w) - e).abs()).fold(0.0, f64::max);
+    eprintln!(
+        "matter_push_out_reaction_matches_removed_momentum: {pushed} points pushed out, Σ Δv {:?} counts, worst word {worst:.2} counts",
+        dv.map(|v| v.round())
+    );
+    assert!(pushed > 50, "the box pushed out few points: {pushed}");
+    assert!(dv.iter().map(|v| v * v).sum::<f64>().sqrt() > 1.0e5, "the push-out moved little momentum: {dv:?}");
+    // Each add rounds by under one count, stochastically; f32 products add
+    // well under one more per word.
+    assert!(worst < f64::from(pushed) + 1.0, "reaction words {words:?} against {expected:?}");
+    assert!(words[12..16].iter().all(|&w| w == 0), "padding untouched: {words:?}");
+
+    let prescribed = MatterBody { position_inv_mass: [0.0, 0.5, 0.0, 0.0], ..dynamic };
+    let (unchanged, words) = run(&mut bench, prescribed);
+    assert!(words.iter().all(|&w| w == 0), "a prescribed body takes no reaction: {words:?}");
+    assert_eq!(bytemuck::cast_slice::<MatterPoint, u32>(&unchanged), bytemuck::cast_slice::<MatterPoint, u32>(&moved), "the push-out itself does not depend on the body's mass");
+    bench.set("dynamic_count", 0.0);
+    let (_, words) = run(&mut bench, dynamic);
+    assert!(words.iter().all(|&w| w == 0), "dynamic_count 0 writes nothing: {words:?}");
 }
 
 /// Signed distance to a box of `size` centred at `centre`, turned `yaw`

@@ -9,7 +9,9 @@
 // lattice border is outside, so the surface closes (D15).
 //
 // ABI: `blobs` (FluidBlob → Element), `cell_ranges` (CellRange → Element2) and
-// `solid` (f32) are gathered; the output is one f32 per node.
+// `solid` (f32) are gathered; the output is one f32 per node. The bin grid is
+// the sort's (`bins_x/y/z`), never ceil(size / cell_size) again: fast-math
+// division can land one bin past the ranges the sort wrote.
 
 fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
@@ -41,12 +43,16 @@ fn body(
     nodes_z: f32,
     cell_size: f32,
     resolution_scale: i32,
+    bins_x: i32,
+    bins_y: i32,
+    bins_z: i32,
 ) -> f32 {
     let band = 0.1 * cell_size;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
-    if idx >= nodes.x * nodes.y * nodes.z {
+    let bins = vec3<i32>(bins_x, bins_y, bins_z);
+    if idx >= nodes.x * nodes.y * nodes.z || any(bins < vec3<i32>(1)) {
         return band;
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
@@ -58,7 +64,6 @@ fn body(
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
 
     var phi = band;
-    let bins = max(vec3<i32>(1), vec3<i32>(ceil(size / cell_size)));
     let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
     for (var dz = -1; dz <= 1; dz = dz + 1) {
         for (var dy = -1; dy <= 1; dy = dy + 1) {

@@ -143,7 +143,8 @@ unfused, which is always correct. Order matters; from `classify_node`:
 **Buffer-atom gates (`classify_buffer_node`):** ≥1 Array in, exactly 1 Array
 out; no texture output; texture *inputs* must be wired sampled 2D/3D (unwired
 optional = boundary — the fused node's port would be required and silently kill
-the dispatch); no atomic outputs (scatter); same wire/control-producer rules. A
+the dispatch); no atomic outputs (see the atomic-output rule below); same
+wire/control-producer rules. A
 `BufferGather` array input (neighbor_smooth, reflect_array) ADMITS: the
 gathered wire stays external — the finder never unions a gather-consumed wire,
 `build_region` keeps the producer out (bailing defensively otherwise), and the
@@ -181,6 +182,27 @@ its `primitive!` (see the precedent primitives in
 camera-consuming `flatten_to_camera_plane.rs`). A member whose type_id has no
 registered recompute still fails the region closed, same fail-safe contract
 the old whitelist had.
+
+**Atomic outputs are always a cut** —
+BUG-agfh (Codegen: buffer atom with several outputs, one atomic).
+An atom with ANY `atomic_outputs` entry is a Boundary:
+a scatter's sole accumulator, and equally an atomic *side* output next to an
+aliased pointwise output (the `grid_to_matter` + rigid-body-reaction shape).
+`classify_buffer_node` checks it first; `atomic_output_atoms_are_boundaries`
+(classify.rs) holds every registered atom's `fusion_kind` to it. Why: the body
+`atomicAdd`s at data-dependent cells, so the accumulator only holds its value
+once the whole dispatch has run — no consumer of it can share the kernel; the
+second output also breaks the one-Array-output member shape (buffer regions are
+single-output). Cost is nil today: such an atom's pointwise neighbours still
+fuse into their own regions on either side of it
+(`atomic_side_output_atom_cuts_fusion_and_matches_unfused`). The atom is
+excused from fusion, not from codegen: its standalone kernel comes from
+`wgsl_body` via `standalone_for_spec`, where the body returns only the plain
+outputs (one element, a `BufferOutputs` struct for ≥2, nothing for a pure
+scatter) and `atomicAdd`s into the `array<atomic<i32|u32>>` globals itself
+(`generated_atomic_side_output_matches_cpu_reference`). Revisit when fan-out
+(multi-output) buffer regions land: integer `atomicAdd` is order-independent,
+so fusing the pointwise half would be exact, but the atomic edge stays a cut.
 
 **Frame-time fallback inputs (`frame_time_inputs`, BUG-z3l6 (glitch-fused-time-freeze)):**
 an atom whose `run()` resolves an unwired scalar input from the frame clock

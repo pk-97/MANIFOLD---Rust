@@ -1707,7 +1707,8 @@
           },
           { "fromNode": 6, "fromPort": "grid_out", "toNode": 15, "toPort": "grid" },
           { "fromNode": 1, "fromPort": "reaction", "toNode": 15, "toPort": "reaction" },
-          { "fromNode": 15, "fromPort": "reaction_out", "toNode": 3, "toPort": "reaction_in" },
+          { "fromNode": 15, "fromPort": "reaction_out", "toNode": 7, "toPort": "reaction" },
+          { "fromNode": 7, "fromPort": "reaction_out", "toNode": 3, "toPort": "reaction_in" },
           { "fromNode": 1, "fromPort": "nodes_x", "toNode": 15, "toPort": "nodes_x" },
           { "fromNode": 1, "fromPort": "nodes_y", "toNode": 15, "toPort": "nodes_y" },
           { "fromNode": 1, "fromPort": "nodes_z", "toNode": 15, "toPort": "nodes_z" },
@@ -1849,13 +1850,7 @@
             "id": 5,
             "typeId": "node.sort_particles_into_cells",
             "handle": "Sort Into Cells",
-            "nodeId": "liquid_sort",
-            "params": {
-              "max_cells": {
-                "type": "Int",
-                "value": 1048576
-              }
-            }
+            "nodeId": "liquid_sort"
           },
           {
             "id": 6,
@@ -2062,6 +2057,42 @@
             "fromPort": "cell_ranges",
             "toNode": 7,
             "toPort": "cell_ranges"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_x",
+            "toNode": 6,
+            "toPort": "bins_x"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_y",
+            "toNode": 6,
+            "toPort": "bins_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_z",
+            "toNode": 6,
+            "toPort": "bins_z"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_x",
+            "toNode": 7,
+            "toPort": "bins_x"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_y",
+            "toNode": 7,
+            "toPort": "bins_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_z",
+            "toNode": 7,
+            "toPort": "bins_z"
           },
           {
             "fromNode": 6,

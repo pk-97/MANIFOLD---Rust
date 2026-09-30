@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::sort_particles_into_cells::float_param;
+use super::sort_particles_into_cells::{bin_param, float_param, read_searched_bins};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, FluidParticle};
@@ -29,10 +29,10 @@ struct BlobUniforms {
     smoothing: f32,
     isolated_scale: f32,
     min_neighbours: i32,
+    bins_x: i32,
+    bins_y: i32,
+    bins_z: i32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -50,6 +50,7 @@ crate::primitive! {
         smoothing: ScalarF32 optional,
         isolated_scale: ScalarF32 optional,
         min_neighbours: ScalarF32 optional,
+        bins_x: ScalarF32 optional, bins_y: ScalarF32 optional, bins_z: ScalarF32 optional,
     },
     outputs: {
         blobs: Array(FluidBlob),
@@ -74,9 +75,12 @@ crate::primitive! {
             range: Some((1.0, 64.0)),
             enum_values: &[],
         },
+        bin_param!("bins_x", "Bins X"),
+        bin_param!("bins_y", "Bins Y"),
+        bin_param!("bins_z", "Bins Z"),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feed it node.sort_particles_into_cells' outputs with the same box and cell_size. The kernel never reaches past 0.9 bin from its particle (the band node.particle_volume's distance cap relies on), so cell_size bounds both the look and the cost: particle_scale above 0.9 × cell_size / radius has no further effect. Live params: changing any of them reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
+    composition_notes: "Feed it node.sort_particles_into_cells' outputs with the same box and cell_size, and wire the sort's bins_x/y/z: the bins are the sort's, never worked out again on the GPU, and cell_ranges must hold one range per bin or nothing runs (a named error). All three unwired (a graph from before these wires) takes the sort's CPU rule on the shared box, checked the same way. The kernel never reaches past 0.9 bin from its particle (the band node.particle_volume's distance cap relies on), so cell_size bounds both the look and the cost: particle_scale above 0.9 × cell_size / radius has no further effect. Live params: changing any of them reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
     examples: [],
     picker: { label: "Shape Particle Blobs", category: Atom },
     summary: "Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads.",
@@ -117,10 +121,10 @@ impl Primitive for ShapeParticleBlobs {
             smoothing: ctx.scalar_or_param("smoothing", 0.9).clamp(0.0, 1.0),
             isolated_scale: ctx.scalar_or_param("isolated_scale", 1.0).clamp(0.25, 1.0),
             min_neighbours: ctx.scalar_or_param("min_neighbours", 8.0).round() as i32,
+            bins_x: 0,
+            bins_y: 0,
+            bins_z: 0,
             dispatch_count: 0,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -131,12 +135,21 @@ impl Primitive for ShapeParticleBlobs {
         ) else {
             return;
         };
+        let bins = match read_searched_bins(ctx, ranges.size, "Shape Particle Blobs") {
+            Ok(Some(bins)) => bins,
+            Ok(None) => return,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
         let count = (blobs.size / std::mem::size_of::<FluidBlob>() as u64)
             .min(sorted.size / std::mem::size_of::<FluidParticle>() as u64) as u32;
         if count == 0 {
             return;
         }
-        let uniforms = BlobUniforms { dispatch_count: count, ..uniforms };
+        let [bins_x, bins_y, bins_z] = bins.map(|n| n as i32);
+        let uniforms = BlobUniforms { bins_x, bins_y, bins_z, dispatch_count: count, ..uniforms };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,

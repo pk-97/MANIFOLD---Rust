@@ -191,7 +191,8 @@ pub fn body_pose_at(body: &MatterBody, t: f32) -> ([f32; 3], [f32; 4]) {
 pub const ACCUM_WORDS_PER_NODE: u32 = 4;
 
 /// Reaction words per coupled body, written by `node.matter_body_reaction`
-/// and read by `node.matter_move_bodies` and the domain (section 5). Each is
+/// (grid projection) and `node.grid_to_matter` (point push-out, D30), and
+/// read by `node.matter_move_bodies` and the domain (section 5). Each is
 /// value·2^24/U with U the tick's momentum unit:
 /// [0..3) Σ Δv, the body's velocity change (m/s);
 /// [3..6) Σ (s/n)·Δv, s the substep, n the substeps per tick;
@@ -452,6 +453,28 @@ impl MatterLattice {
             ..Transform::default()
         }
     }
+}
+
+/// Nodes of a lattice with `nodes` per axis, in u64 so no byte size wraps.
+pub fn lattice_nodes(nodes: [u32; 3]) -> u64 {
+    nodes.iter().map(|&n| u64::from(n)).product()
+}
+
+/// Bytes of the per-node arrays. The atom that allocates each one and every
+/// atom that dispatches over it take the size from here, from the same
+/// `nodes` wires, so storage always covers the dispatch.
+pub fn grid_accum_bytes(nodes: [u32; 3]) -> u64 {
+    lattice_nodes(nodes) * u64::from(ACCUM_WORDS_PER_NODE) * 4
+}
+
+/// See [`grid_accum_bytes`].
+pub fn grid_bytes(nodes: [u32; 3]) -> u64 {
+    lattice_nodes(nodes) * std::mem::size_of::<MatterGridNode>() as u64
+}
+
+/// See [`grid_accum_bytes`]: one f32 distance per node.
+pub fn solid_bytes(nodes: [u32; 3]) -> u64 {
+    lattice_nodes(nodes) * 4
 }
 
 /// One frame of the D8 clock: how many fixed ticks to run and where the

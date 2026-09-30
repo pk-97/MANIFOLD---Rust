@@ -305,13 +305,17 @@ mod custom {
             )
             .collect();
         // These two are vertex payloads, not uniforms. Their vertex descriptor owns
-        // the layout. The fixture file is compiled only under cfg(test).
+        // the layout. The fixture files are compiled only under cfg(test).
         let exclusions: BTreeSet<(String, String)> = [
             ("render_lines.rs".into(), "EdgeInstance".into()),
             ("render_value_overlay.rs".into(), "GlyphQuad".into()),
             (
                 "test_camera_pointwise_fixture.rs".into(),
                 "TestCameraPointwiseUniforms".into(),
+            ),
+            (
+                "test_multi_output_atomic_fixture.rs".into(),
+                "Uniforms".into(),
             ),
         ]
         .into();

@@ -1574,13 +1574,7 @@
             "id": 5,
             "typeId": "node.sort_particles_into_cells",
             "handle": "Sort Into Cells",
-            "nodeId": "liquid_sort",
-            "params": {
-              "max_cells": {
-                "type": "Int",
-                "value": 1048576
-              }
-            }
+            "nodeId": "liquid_sort"
           },
           {
             "id": 6,
@@ -1787,6 +1781,42 @@
             "fromPort": "cell_ranges",
             "toNode": 7,
             "toPort": "cell_ranges"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_x",
+            "toNode": 6,
+            "toPort": "bins_x"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_y",
+            "toNode": 6,
+            "toPort": "bins_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_z",
+            "toNode": 6,
+            "toPort": "bins_z"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_x",
+            "toNode": 7,
+            "toPort": "bins_x"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_y",
+            "toNode": 7,
+            "toPort": "bins_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_z",
+            "toNode": 7,
+            "toPort": "bins_z"
           },
           {
             "fromNode": 6,

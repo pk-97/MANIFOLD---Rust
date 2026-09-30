@@ -23,7 +23,8 @@ use crate::node_graph::matter::bodies::{BodiesStatus, MatterBodies};
 use crate::node_graph::matter::coupling::{ReactionSlot, RigidOwner};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, MatterBody, MatterClock, MatterLattice, MatterShape, REACTION_WORDS, WATER_DENSITY,
-    free_fall_speed, momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
+    free_fall_speed, lattice_nodes, momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda,
+    wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -206,7 +207,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction, and dynamic_count into both. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -272,6 +273,19 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
     // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
     // retired (the caller checked the frame clock or waited on the GPU).
     Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })
+}
+
+/// The Grid Budget gate: a lattice over `budget_mcells` million nodes is
+/// refused by name before anything downstream sizes or dispatches over it.
+pub(crate) fn admit_lattice(lattice: &MatterLattice, budget_mcells: f32) -> Result<(), String> {
+    let nodes = lattice_nodes(lattice.nodes) as f64;
+    if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6 {
+        return Err(format!(
+            "Matter lattice needs {:.3} million nodes; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
+            nodes / 1e6
+        ));
+    }
+    Ok(())
 }
 
 impl Coupling {
@@ -584,14 +598,7 @@ impl MatterDomain {
         let lattice = MatterLattice::from_layout(&layout);
         let blocks = lattice.blocks();
         let (block_centre, block_size, block_bin) = lattice.block_sort_box();
-        let budget = ctx.param_f32("grid_budget_mcells", 8.0);
-        let nodes = f64::from(lattice.node_count());
-        if !budget.is_finite() || budget <= 0.0 || nodes > f64::from(budget) * 1e6 {
-            return Err(format!(
-                "Matter lattice needs {:.3} million nodes; Grid Budget is {budget:.3} million. Increase Grid Budget or lower Resolution. GPU time grows with node count.",
-                nodes / 1e6
-            ));
-        }
+        admit_lattice(&lattice, ctx.param_f32("grid_budget_mcells", 8.0))?;
         let dx = f64::from(lattice.cell_size);
         let fill_height = ctx.scalar_or_param("fill_height", 0.4);
         if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
