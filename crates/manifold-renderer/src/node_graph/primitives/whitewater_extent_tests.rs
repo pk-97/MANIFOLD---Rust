@@ -160,6 +160,186 @@ fn whitewater_snapshot_holds_one_frame_at_64() {
     assert_eq!(capacity, 100_000, "copies downstream hold FLIP's whole budget");
 }
 
+/// Particle slots of the extent proofs: more than any res-64 solver holds
+/// (8 per cell over the whole 64³ tank).
+const PARTICLE_SLOTS: u32 = 8 * 64 * 64 * 64;
+
+/// The particle half at 64: every emitter atom's output holds exactly the
+/// particle slots, one dispatch covers them, and every face a stencil can
+/// reach from a position inside the whitewater grid lands inside its face
+/// array or reads FLIP's padding 0, never past the array.
+#[test]
+fn whitewater_particle_extents_at_64() {
+    use super::emission_count::EmissionCount;
+    use super::energy_potential::EnergyPotential;
+    use super::jitter_particles::JitterParticles;
+    use super::sample_faces_at_particles::SampleFacesAtParticles;
+    use super::wavecrest_potential::WavecrestPotential;
+    use super::whitewater_particle_cpu::face_index;
+    use crate::node_graph::liquid::grid::face_len;
+
+    let nodes = lattice_at_64().nodes;
+    let cells = grid_cells(nodes).expect("cells");
+    let face_cells = [64; 3];
+    let pad = face_offset(nodes, face_cells).expect("offset")[0] as i32;
+    assert_eq!(pad, 3);
+    let params = grid_params(nodes);
+    let particles = [("particles", PARTICLE_SLOTS)];
+    let one = |capacity: Option<u32>, name: &str| {
+        assert_eq!(capacity, Some(PARTICLE_SLOTS), "{name} holds exactly the particle slots");
+    };
+    one(JitterParticles::new().array_output_capacity("out", &params, &particles), "jitter");
+    let gathers = [("particles", PARTICLE_SLOTS), ("face_u", 266_240), ("face_v", 266_240), ("face_w", 266_240)];
+    one(SampleFacesAtParticles::new().array_output_capacity("out", &params, &gathers), "sampled");
+    one(EnergyPotential::new().array_output_capacity("out", &params, &particles), "energy");
+    let fields = [("particles", PARTICLE_SLOTS), ("distance", 343_000), ("curvature", 343_000), ("cells", 343_000)];
+    one(WavecrestPotential::new().array_output_capacity("out", &params, &fields), "wavecrest");
+    let coincident = [("particles", PARTICLE_SLOTS), ("energy", PARTICLE_SLOTS), ("wavecrest", PARTICLE_SLOTS)];
+    one(EmissionCount::new().array_output_capacity("out", &params, &coincident), "counts");
+    assert_eq!(PARTICLE_SLOTS.div_ceil(256), 8192, "workgroups per particle dispatch");
+
+    // A stencil's lower corner runs from −1 (half a cell below the grid's
+    // first centre) to cells − 1 on the axes across the component, 0 to
+    // cells − 1 along it; its upper corner one more.
+    for axis in 0..3 {
+        let len = face_len(face_cells, axis) as usize;
+        let mut reached = 0;
+        let mut last = 0;
+        for z in -1..=cells[2] as i32 {
+            for y in -1..=cells[1] as i32 {
+                for x in -1..=cells[0] as i32 {
+                    if let Some(i) = face_index([x, y, z], axis, pad, face_cells) {
+                        assert!(i < len, "axis {axis}: face {i} past {len}");
+                        reached += 1;
+                        last = last.max(i);
+                    }
+                }
+            }
+        }
+        assert_eq!(reached, len, "axis {axis}: every seam face is reachable exactly once");
+        assert_eq!(last, len - 1);
+    }
+}
+
+/// The emitter chain after the grid chain, as a graph: particles and faces
+/// from test sources, the grid chain for distance, cells and curvature, and
+/// the counts to a sink.
+fn emitter_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<&'static str>) {
+    let nodes = lattice_at_64().nodes;
+    let level = refined_nodes(nodes.map(|n| n as f32), 3);
+    let grid = |extra: &[(&str, Value)]| {
+        let mut params = json!({"nodes_x": float(71.0), "nodes_y": float(71.0), "nodes_z": float(71.0)});
+        for (name, value) in extra {
+            params[*name] = value.clone();
+        }
+        params
+    };
+    let h = float(4.0 / 64.0);
+    let names_and_types: Vec<(&'static str, &str, Value)> = vec![
+        ("level", "test.value_source", json!({"max_capacity": int(cell_total(level))})),
+        ("solid", "test.value_source", json!({"max_capacity": int(lattice_nodes(nodes))})),
+        ("face_u", "test.value_source", json!({"max_capacity": int(266_240)})),
+        ("face_v", "test.value_source", json!({"max_capacity": int(266_240)})),
+        ("face_w", "test.value_source", json!({"max_capacity": int(266_240)})),
+        ("particles", "test.liquid_source", json!({"max_capacity": int(u64::from(PARTICLE_SLOTS))})),
+        (
+            "crossings",
+            "node.surface_crossings",
+            grid(&[("level_nodes_x", float(211.0)), ("level_nodes_y", float(211.0)), ("level_nodes_z", float(211.0))]),
+        ),
+        ("nearest1", "node.nearest_crossing", grid(&[])),
+        ("nearest2", "node.nearest_crossing", grid(&[])),
+        ("nearest3", "node.nearest_crossing", grid(&[])),
+        ("distance", "node.crossing_distance", grid(&[("cell_size", h.clone())])),
+        ("kinds", "node.liquid_cells", grid(&[])),
+        ("curvature", "node.lattice_curvature", grid(&[("cell_size", h.clone())])),
+        ("extend1", "node.extend_lattice", grid(&[])),
+        ("extend2", "node.extend_lattice", grid(&[])),
+        ("extend3", "node.extend_lattice", grid(&[])),
+        ("jitter", "node.jitter_particles", json!({"cell_size": h})),
+        ("sample", "node.sample_faces_at_particles", grid(&[])),
+        ("energy", "node.energy_potential", json!({})),
+        ("wavecrest", "node.wavecrest_potential", grid(&[])),
+        ("counts", "node.emission_count", json!({})),
+        ("sink", "test.count_sink", json!({})),
+        ("output", "system.final_output", json!({})),
+    ];
+    let id = |name: &str| names_and_types.iter().position(|(n, _, _)| *n == name).expect("node");
+    let nodes_json: Vec<Value> = names_and_types
+        .iter()
+        .enumerate()
+        .map(|(i, (name, type_id, params))| json!({"id": i, "nodeId": name, "typeId": type_id, "params": params}))
+        .collect();
+    let wires: Vec<Value> = [
+        ("level", "out", "crossings", "level_set"),
+        ("solid", "out", "crossings", "solid"),
+        ("crossings", "out", "nearest1", "crossings"),
+        ("nearest1", "out", "nearest2", "crossings"),
+        ("nearest2", "out", "nearest3", "crossings"),
+        ("nearest3", "out", "distance", "crossings"),
+        ("solid", "out", "distance", "solid"),
+        ("distance", "out", "kinds", "distance"),
+        ("solid", "out", "kinds", "solid"),
+        ("distance", "out", "curvature", "distance"),
+        ("curvature", "out", "extend1", "values"),
+        ("extend1", "out", "extend2", "values"),
+        ("extend2", "out", "extend3", "values"),
+        ("particles", "out", "jitter", "particles"),
+        ("jitter", "out", "sample", "particles"),
+        ("face_u", "out", "sample", "face_u"),
+        ("face_v", "out", "sample", "face_v"),
+        ("face_w", "out", "sample", "face_w"),
+        ("sample", "out", "energy", "particles"),
+        ("sample", "out", "wavecrest", "particles"),
+        ("distance", "out", "wavecrest", "distance"),
+        ("extend3", "out", "wavecrest", "curvature"),
+        ("kinds", "out", "wavecrest", "cells"),
+        ("sample", "out", "counts", "particles"),
+        ("energy", "out", "counts", "energy"),
+        ("wavecrest", "out", "counts", "wavecrest"),
+        ("counts", "out", "sink", "values"),
+        ("sink", "out", "output", "in"),
+    ]
+    .into_iter()
+    .map(|(from, from_port, to, to_port)| json!({"fromNode": id(from), "fromPort": from_port, "toNode": id(to), "toPort": to_port}))
+    .collect();
+    let def = serde_json::from_value(json!({"version": 3, "nodes": nodes_json, "wires": wires})).expect("emitter chain def");
+    (def, names_and_types.iter().map(|(name, _, _)| *name).collect())
+}
+
+/// Where the emitter chain fuses (section 3.3: jitter to count in at most
+/// two dispatches). With the counts its only way out, all five atoms fold
+/// into one kernel, faces and grid fields gathered; the GPU proof of that
+/// kernel is `whitewater_emitter_chain_fused_matches_unfused`.
+#[test]
+fn whitewater_emitter_chain_fuses() {
+    let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    let (def, names) = emitter_chain_def();
+    let report = crate::node_graph::fusion_report(&def, &registry);
+    assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);
+    let name = |id: u32| names[id as usize];
+    let emitter = ["jitter", "sample", "energy", "wavecrest", "counts"];
+    let rows: Vec<_> = report
+        .nodes
+        .iter()
+        .filter(|n| emitter.contains(&name(n.node_id)))
+        .map(|n| (name(n.node_id), n.kind.as_str(), n.fused, n.region_index, n.cut_reason.as_deref()))
+        .collect();
+    let regions: Vec<Vec<&str>> = report
+        .regions
+        .iter()
+        .map(|r| r.member_node_ids.iter().map(|&id| name(id)).collect())
+        .collect();
+    let dispatches = rows.iter().filter(|r| !r.2).count()
+        + regions.iter().filter(|members| members.iter().any(|m| emitter.contains(m))).count();
+    assert!(dispatches <= 2, "the emitter chain takes {dispatches} dispatches: {rows:#?}\n{regions:?}");
+    let mut chain: Vec<&str> =
+        regions.iter().find(|members| members.contains(&"counts")).expect("the counts fuse").clone();
+    chain.sort_unstable();
+    assert_eq!(chain, ["counts", "energy", "jitter", "sample", "wavecrest"], "{rows:#?}");
+}
+
 fn float(v: f64) -> Value {
     json!({"type": "Float", "value": v})
 }

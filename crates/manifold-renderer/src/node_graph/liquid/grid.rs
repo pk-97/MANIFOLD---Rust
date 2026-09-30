@@ -9,6 +9,10 @@
 pub const FACE_GRID_PORTS: [&str; 7] =
     ["face_u", "face_v", "face_w", "face_cells_x", "face_cells_y", "face_cells_z", "face_valid_layers"];
 
+/// FLIP's MAC trilinear on the face arrays, for bodies that sample velocity
+/// at a point.
+pub(crate) const LIQUID_FACES: &str = include_str!("../primitives/shaders/liquid_faces.wgsl");
+
 /// Faces per axis of `axis`'s array: one more than the cells along `axis`,
 /// the cells on the other two.
 pub fn face_dims(cells: [u32; 3], axis: usize) -> [u32; 3] {

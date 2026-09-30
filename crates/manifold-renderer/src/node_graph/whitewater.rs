@@ -162,6 +162,26 @@ pub fn grid_box(bounds: crate::node_graph::transform::Transform, nodes: [u32; 3]
     Ok((std::array::from_fn(|a| bounds.pos[a] - 0.5 * bounds.scale[a]), size))
 }
 
+/// The whitewater grid a particle atom reads: the box `center` ± `size`/2
+/// over the solid lattice's `nodes`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ParticleGrid {
+    pub nodes: [u32; 3],
+    pub center: [f32; 3],
+    pub size: [f32; 3],
+}
+
+/// A particle atom's `center_x/y/z`, `size_x/y/z` and `nodes_x/y/z` inputs,
+/// else its params. Cells that aren't cubes are a named refusal.
+pub(crate) fn particle_grid(ctx: &EffectNodeContext<'_, '_>) -> Result<ParticleGrid, String> {
+    let nodes = grid_nodes(ctx);
+    let center = ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
+    let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.375));
+    let bounds = crate::node_graph::transform::Transform { pos: center, scale: size, ..Default::default() };
+    grid_box(bounds, nodes)?;
+    Ok(ParticleGrid { nodes, center, size })
+}
+
 /// The grid index of cell `c`, x fastest.
 pub fn cell_index(cells: [u32; 3], c: [u32; 3]) -> usize {
     let [nx, ny, _] = cells.map(|n| n as usize);

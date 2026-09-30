@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P3 built on `feat/gpu-whitewater`, O1 green as restated with the radius-4 miss recorded (section 3.7); P4 next · owed: approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P4 built on `feat/gpu-whitewater`, O1 green as restated with the radius-4 miss recorded (section 3.7); P5 next · owed: approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step (FFT_WATER_SOLVER_DESIGN.md P3) on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -142,11 +142,13 @@ Every atom is `fusion_kind: Pointwise` on the codegen path with `BufferGather` i
 | `node.liquid_cells` | grid | distance, solid → `Array(u32)` | solid if the solid at the centre (8-node mean) < 0, else liquid if distance < 0, else air; then FLIP's shrink: liquid with an air 6-neighbour becomes air (`F/diffuseparticlesimulation.cpp:1609`) |
 | `node.lattice_curvature` | grid | distance → `Array(KnownValue)` | value: FLIP's formula (`F/particlelevelset.cpp:728`), clamped ±1/h, on cells where it and its 6 neighbours have \|d\| < 2h, off the border; known: 1 there, else 0 |
 | `node.extend_lattice` | grid | `KnownValue` → `KnownValue` | one layer of FLIP's extrapolation: an unknown cell with known 6-neighbours takes their mean; border cells are read, never filled. Run 3 times |
-| `node.jitter_particles` | particles | `FluidParticle` → same | position ± 0.25·(1 − 1e-3)·h per axis, uniform (`:1557`) |
-| `node.sample_faces_at_particles` | particles | particles, faces → particles | velocity = FLIP's MAC trilinear (`F/macvelocityfield.h` `evaluateVelocityAtPositionLinear`): out-of-range corners read 0 |
+| `node.jitter_particles` | particles | `FluidParticle` → same | position ± 0.25·(1 − 1e-3)·h per axis, uniform (`:1557`), from a hash of (slot, seed, epoch); seed the domain's simulation time |
+| `node.sample_faces_at_particles` | particles | particles, faces → particles | velocity = FLIP's MAC trilinear (`F/macvelocityfield.h` `evaluateVelocityAtPositionLinear`) on the faces placed as the lifecycle places them: out-of-range corners read 0, and 0 outside the whitewater grid |
 | `node.energy_potential` | particles | particles → `Array(f32)` | Ie = (clamp(½\|v\|², min, max) − min)/(max − min); 0.1 and 60 by default (`:1768`) |
-| `node.wavecrest_potential` | particles | particles, distance, curvature, cells → `Array(f32)` | 0 unless \|d\| < 1.5h and the cell borders air (26 neighbours); else FLIP's `:1718`: k·h ≥ 0.4, clamped at 1, v̂·n ≥ 0.4 |
-| `node.emission_count` | particles | energy, wavecrest, particles → `Array(u32)` | D5; 0 when \|v\| < 1e-3 |
+| `node.wavecrest_potential` | particles | particles, distance, curvature, cells → `Array(f32)` | 0 unless \|d\| < 1.5h and the cell borders air (26 neighbours, outside the grid counting as solid); else FLIP's `:1718`: k·h ≥ 0.4, clamped at 1, v̂·n ≥ 0.4, n from FLIP's trilinear gradient of the distance |
+| `node.emission_count` | particles | particles, energy, wavecrest → `Array(u32)` | D5; 0 when \|v\| < 1e-3, and at or past the frame's live count |
+
+The particle atoms read the whitewater grid as `center_x/y/z` and `size_x/y/z` (`node.transform_components` on `grid_bounds`) with `nodes_x/y/z`; positions are scene metres.
 | `node.running_total` | particles | counts → offsets | exists; boundary `BarrieredReduction` |
 | `node.spawn_whitewater` | spawn slots | offsets, particles, energy, faces, solid → `Array(WhitewaterSpawn)` | slot j < min(total, C): emitter by binary search (D8 stride past C); cylinder of radius 8 · 0.31h · √Xr about v̂, height Xh · \|v\| · TICK; rejected outside the grid or where the solid < 0.25h; lifetime = min + Ie · (max − min) ± variance (0, 7, 3), rejected ≤ 0; velocity from the faces. Rejected and unused slots write lifetime 0 |
 | `node.whitewater_type` | spawn slots | spawns, distance, cells → spawns | FLIP's `:2056` for a fresh particle |
@@ -159,7 +161,7 @@ P1's atoms (the seam's P10):
 | `node.face_sample_component` | one axis of SWASH's `FaceSample` lattice into the seam array, padding skipped; param `axis` |
 | `node.matter_face_component` | one axis from the MPM grid: the mean of the four nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`); param `axis` |
 
-Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces.wgsl` (FLIP's MAC trilinear on the seam arrays) and `whitewater_common.wgsl` (hash, grid trilinear, 26-neighbour air test). The particle chain from `jitter_particles` to `emission_count` must fuse into at most two dispatches and `spawn_whitewater` + `whitewater_type` into one (⚠ VERIFY-AT-IMPL: `cargo run -p manifold-renderer --bin graph-tool -- fusion` on the SWASH Dam Break preset; before P5, the fusion plan of the builder graph).
+Shared WGSL, via `wgsl_includes` (`R/liquid/bodies.rs` precedent): `liquid_faces.wgsl` (FLIP's MAC trilinear on the seam arrays) and `whitewater_common.wgsl` (hash, grid trilinear, 26-neighbour air test). The particle chain from `jitter_particles` to `emission_count` must fuse into at most two dispatches and `spawn_whitewater` + `whitewater_type` into one. With the counts its only outlet, all five particle atoms fold into one kernel (`whitewater_emitter_chain_fuses`, proven on the GPU by `whitewater_emitter_chain_fused_matches_unfused`). A fused buffer region writes one output, so P5's spawn, which reads the sampled particles and the energy, splits it; P5 measures that on the SWASH Dam Break preset with `graph-tool fusion`.
 
 ### 3.4 Committed types and ports
 

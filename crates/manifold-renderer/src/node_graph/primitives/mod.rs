@@ -367,11 +367,20 @@ mod crossing_distance;
 mod liquid_cells;
 mod lattice_curvature;
 mod extend_lattice;
+mod jitter_particles;
+mod sample_faces_at_particles;
+mod energy_potential;
+mod wavecrest_potential;
+mod emission_count;
 mod whitewater_lifecycle;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_handoff_tests;
 #[cfg(test)]
 mod whitewater_cpu;
+#[cfg(test)]
+mod whitewater_particle_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_particle_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

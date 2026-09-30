@@ -180,8 +180,10 @@ fn dispatch_tail_census_is_stable() {
     // density_source. The liquid face grid adds face_sample_component and
     // matter_face_component, buffer atoms. The whitewater grid adds
     // surface_crossings, nearest_crossing, crossing_distance, liquid_cells,
-    // lattice_curvature and extend_lattice, buffer atoms.
-    assert_eq!(total, 234, "standalone atom census drifted");
+    // lattice_curvature and extend_lattice, buffer atoms; its emitter adds
+    // jitter_particles, sample_faces_at_particles, energy_potential,
+    // wavecrest_potential and emission_count, buffer atoms.
+    assert_eq!(total, 239, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"
