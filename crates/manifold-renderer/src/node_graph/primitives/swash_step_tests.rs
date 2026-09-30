@@ -2,6 +2,7 @@
 //! (docs/FFT_WATER_SOLVER_DESIGN.md P3) against CPU f64 references.
 
 use super::cells_with_particles::CellsWithParticles;
+use super::density_source::DensitySource;
 use super::extend_faces::ExtendFaces;
 use super::face_divergence::FaceDivergence;
 use super::face_gravity::FaceGravity;
@@ -179,6 +180,53 @@ fn swash_cells_with_particles_marks_occupied_bins() {
     for (c, (g, r)) in got.iter().zip(&ranges).enumerate() {
         assert_eq!(*g, f32::from(u8::from(r.count > 0)), "cell {c}");
     }
+}
+
+#[test]
+fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
+    let mut harness = Harness::new();
+    let mut rng = Stream::new(0xde45);
+    let divergence: Vec<f32> = (0..cell_len()).map(|_| rng.signed(3.0)).collect();
+    // One cell in eight empty, so the draw holds both inside and surface cells.
+    let ranges: Vec<CellRange> = (0..cell_len())
+        .map(|c| {
+            let u = rng.unit();
+            CellRange { start: c as u32 * 20, count: if u < 0.125 { 0 } else { 1 + (u * 16.0) as u32 } }
+        })
+        .collect();
+    let inputs = [
+        ("divergence", harness.array(&divergence, cell_len()).0),
+        ("cell_ranges", harness.array(&ranges, cell_len()).0),
+    ];
+    let (rest, rate) = (8.0_f32, 2.5_f32);
+    let got: Vec<f32> =
+        run_into(&mut harness, &mut DensitySource::new(), &inputs, cell_len(), &lattice(&[("rest", rest), ("rate", rate)]));
+    // Walls count as full: a neighbour past the lattice never makes a surface.
+    let full = |p: [usize; 3], a: usize, side: i64| {
+        let q = p[a] as i64 + side;
+        if q < 0 || q >= N[a] as i64 {
+            return true;
+        }
+        let mut r = p;
+        r[a] = q as usize;
+        ranges[cell_index(r)].count > 0
+    };
+    // Cells seen per (inside, crowded) kind.
+    let mut kinds = [[0usize; 2]; 2];
+    for (c, g) in got.iter().enumerate() {
+        let d = f64::from(divergence[c]);
+        if ranges[c].count == 0 {
+            close(*g, d, 3.0, &format!("empty cell {c}"));
+            continue;
+        }
+        let p = cell_coords(c);
+        let inside = (0..3).all(|a| full(p, a, -1) && full(p, a, 1));
+        let crowding = f64::from(ranges[c].count) / f64::from(rest) - 1.0;
+        kinds[usize::from(inside)][usize::from(crowding > 0.0)] += 1;
+        let source = if inside { crowding } else { crowding.max(0.0) };
+        close(*g, d - f64::from(rate) * source, 3.0, &format!("cell {c}"));
+    }
+    assert!(kinds.iter().flatten().all(|&k| k > 3), "the draw covers every inside/surface, crowded/sparse kind: {kinds:?}");
 }
 
 #[test]

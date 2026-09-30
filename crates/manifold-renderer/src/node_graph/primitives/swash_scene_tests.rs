@@ -1,13 +1,14 @@
 //! The FFT water step run on whole scenes (docs/FFT_WATER_SOLVER_DESIGN.md
-//! P3): the momentum and still-pool proofs, and the Dam Break probe that
-//! reports cost, divergence after projection, collar size and occupancy.
+//! P3): the momentum, still-pool and meshed-volume proofs, and the scene
+//! runner the race probes (`swash_race_tests`) share.
 //! `fft_water_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
 
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::swash_preset::{WaterScene, water_def};
+use super::swash_preset::{REST_PER_CELL, WaterScene, water_def};
+use super::swash_volume::{VolumeDrift, volume_and_area};
 use super::swash_solve_tests::{node_named, output_of};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
@@ -29,7 +30,7 @@ fn node_ending(graph: &Graph, name: &str) -> crate::node_graph::NodeInstanceId {
 }
 
 /// A scene's graph compiled and bound once, run frame by frame.
-struct Run {
+pub(super) struct Run {
     device: crate::TestDevice,
     graph: Graph,
     plan: ExecutionPlan,
@@ -40,7 +41,7 @@ struct Run {
 }
 
 impl Run {
-    fn new(scene: WaterScene) -> Self {
+    pub(super) fn new(scene: WaterScene) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
@@ -53,7 +54,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "project", "collar_total", "divergence"] {
+            for name in ["water", "project", "collar_total", "divergence", "density"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -76,33 +77,27 @@ impl Run {
         unsafe { buffer.write(0, bytemuck::cast_slice(&vec![0.0_f32; nodes])) };
     }
 
-    /// The surface mesh's signed volume in m³: Σ v0 · (v1 × v2) / 6 over its
-    /// live triangles.
-    /// The volume the surface mesh encloses with the tank, in m³. The mesh
-    /// stays open where the water meets a wall or the floor, so the volume is
-    /// the flux of (0, y, 0) through it, Σ ȳ · (n·A)_y per triangle: the
-    /// missing wall pieces carry no y-flux and the floor sits at y = 0, so
-    /// they add nothing. Only water on the lid (y = 4 m) would be missed.
-    fn surface_volume(&self) -> f64 {
+    /// The surface mesh's live triangles.
+    pub(super) fn surface(&self) -> Vec<[[f32; 3]; 3]> {
         // The running total's `extent` starts with the grand total: triangles.
         let extent: Vec<u32> = self.read_at(node_ending(&self.graph, "liquid_offsets"), "extent", 1);
         let vertices: Vec<crate::generators::mesh_common::MeshVertex> =
             self.read_at(node_ending(&self.graph, "liquid_mesh"), "vertices", 3 * extent[0] as usize);
-        let floor = super::swash_preset::DAM_MIN[1];
-        vertices
-            .chunks_exact(3)
-            .map(|t| {
-                let [a, b, c] = [0, 1, 2].map(|i| t[i].position.map(f64::from));
-                let (u, v) = ([b[0] - a[0], b[2] - a[2]], [c[0] - a[0], c[2] - a[2]]);
-                // y component of ½ (b − a) × (c − a).
-                let area_y = 0.5 * (u[1] * v[0] - u[0] * v[1]);
-                ((a[1] + b[1] + c[1]) / 3.0 - floor) * area_y
-            })
-            .sum()
+        vertices.chunks_exact(3).map(|t| [0, 1, 2].map(|i| t[i].position)).collect()
+    }
+
+    /// The volume the surface mesh encloses with the tank and its area.
+    pub(super) fn surface_measure(&self) -> (f64, f64) {
+        volume_and_area(self.surface().into_iter(), super::swash_preset::DAM_MIN[1])
+    }
+
+    /// The particles' own volume: `REST_PER_CELL` fill a cell.
+    pub(super) fn particle_volume(&self) -> f64 {
+        self.scene.particles() as f64 * self.scene.pressure.cell_size().powi(3) / REST_PER_CELL
     }
 
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
-    fn frame(&mut self) -> (f64, f64) {
+    pub(super) fn frame(&mut self) -> (f64, f64) {
         if self.scene.surface {
             self.clear_solid();
         }
@@ -140,24 +135,33 @@ impl Run {
         unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
     }
 
-    fn n(&self) -> usize {
+    pub(super) fn n(&self) -> usize {
         self.scene.pressure.n
     }
 
-    fn particles(&self) -> Vec<FluidParticle> {
+    pub(super) fn particles(&self) -> Vec<FluidParticle> {
         let last = self.scene.steps - 1;
         self.read(&format!("s{last}.move"), "out", self.scene.particles() as usize)
     }
 
-    fn water(&self, step: usize) -> Vec<f32> {
+    pub(super) fn water(&self, step: usize) -> Vec<f32> {
         self.read(&format!("s{step}.water"), "out", self.n().pow(3))
     }
 
-    fn faces(&self, step: usize) -> Vec<FaceSample> {
+    pub(super) fn faces(&self, step: usize) -> Vec<FaceSample> {
         self.read(&format!("s{step}.project"), "out", (self.n() + 1).pow(3))
     }
 
-    fn collar(&self, step: usize) -> u32 {
+    /// The divergence the density source asked the solve for: the face
+    /// divergence less what the solve was given.
+    pub(super) fn target(&self, step: usize) -> Vec<f32> {
+        let cells = self.n().pow(3);
+        let before: Vec<f32> = self.read(&format!("s{step}.divergence"), "out", cells);
+        let after: Vec<f32> = self.read(&format!("s{step}.density"), "out", cells);
+        before.iter().zip(&after).map(|(f, g)| f - g).collect()
+    }
+
+    pub(super) fn collar(&self, step: usize) -> u32 {
         let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
         *total.last().expect("a lattice")
     }
@@ -165,15 +169,15 @@ impl Run {
 
 /// Live particles, how many are not finite, the fastest speed, the mean
 /// velocity and the mean height.
-struct ParticleStats {
-    live: usize,
-    bad: usize,
-    fastest: f64,
-    mean_velocity: [f64; 3],
-    mean_height: f64,
+pub(super) struct ParticleStats {
+    pub live: usize,
+    pub bad: usize,
+    pub fastest: f64,
+    pub mean_velocity: [f64; 3],
+    pub mean_height: f64,
 }
 
-fn particle_stats(particles: &[FluidParticle]) -> ParticleStats {
+pub(super) fn particle_stats(particles: &[FluidParticle]) -> ParticleStats {
     let mut stats = ParticleStats { live: 0, bad: 0, fastest: 0.0, mean_velocity: [0.0; 3], mean_height: 0.0 };
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
         stats.live += 1;
@@ -194,22 +198,26 @@ fn particle_stats(particles: &[FluidParticle]) -> ParticleStats {
     stats
 }
 
-/// RMS and max |divergence| (1/s) over the water cells of a face grid.
-fn divergence(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> (f64, f64) {
+/// RMS and max |divergence − target| (1/s) over the water cells of a face
+/// grid: what the projection left undone. `target` is the divergence the
+/// density source asked for (zero without one).
+pub(super) fn divergence(faces: &[FaceSample], water: &[f32], target: &[f32], n: usize, h: f64) -> (f64, f64) {
     let m = n + 1;
     let pad = |i: usize, j: usize, k: usize| i + m * (j + m * k);
     let (mut sum, mut max, mut count) = (0.0, 0.0_f64, 0usize);
     for k in 0..n {
         for j in 0..n {
             for i in 0..n {
-                if water[i + n * (j + n * k)] <= 0.5 {
+                let c = i + n * (j + n * k);
+                if water[c] <= 0.5 {
                     continue;
                 }
                 let at = |p: usize, a: usize| f64::from(faces[p].velocity[a]);
                 let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1) - at(pad(i, j, k), 1)
                     + at(pad(i, j, k + 1), 2)
                     - at(pad(i, j, k), 2))
-                    / h;
+                    / h
+                    - f64::from(target[c]);
                 sum += d * d;
                 max = max.max(d.abs());
                 count += 1;
@@ -217,67 +225,6 @@ fn divergence(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> (f64, f6
         }
     }
     ((sum / count.max(1) as f64).sqrt(), max)
-}
-
-/// The fraction of cells that are water, the fraction of 8³ blocks holding
-/// any, and the height of the water's bounding box in cells.
-fn occupancy(water: &[f32], n: usize) -> (f64, f64, usize) {
-    let blocks = n.div_ceil(8);
-    let mut touched = vec![false; blocks.pow(3)];
-    let (mut wet, mut low, mut high) = (0usize, usize::MAX, 0usize);
-    for (c, &w) in water.iter().enumerate() {
-        if w <= 0.5 {
-            continue;
-        }
-        let (i, j, k) = (c % n, (c / n) % n, c / (n * n));
-        wet += 1;
-        low = low.min(j);
-        high = high.max(j);
-        touched[i / 8 + blocks * (j / 8 + blocks * (k / 8))] = true;
-    }
-    let height = if wet == 0 { 0 } else { high - low + 1 };
-    (wet as f64 / water.len() as f64, touched.iter().filter(|&&t| t).count() as f64 / touched.len() as f64, height)
-}
-
-/// How the particles pack: per occupied cell, how many particles (8 is the
-/// fill's density); how many sit on a wall (within a hundredth of a cell)
-/// or near the lid; the mean height.
-fn report_packing(particles: &[FluidParticle], n: usize, h: f64) {
-    let mut per_cell = vec![0u32; n * n * n];
-    let (mut on_wall, mut high, mut height) = (0usize, 0usize, 0.0_f64);
-    let side = n as f64 * h;
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let local: [f64; 3] = std::array::from_fn(|a| f64::from(p.position_radius[a]) - super::swash_preset::DAM_MIN[a]);
-        if local.iter().any(|&x| x < 0.01 * h || x > side - 0.01 * h) {
-            on_wall += 1;
-        }
-        if local[1] > side - 0.5 {
-            high += 1;
-        }
-        height += local[1];
-        let c: [usize; 3] = std::array::from_fn(|a| ((local[a] / h) as usize).min(n - 1));
-        per_cell[c[0] + n * (c[1] + n * c[2])] += 1;
-    }
-    let occupied: Vec<u32> = per_cell.into_iter().filter(|&c| c > 0).collect();
-    let mut histogram = [0usize; 6];
-    for &c in &occupied {
-        histogram[match c {
-            1..=4 => 0,
-            5..=7 => 1,
-            8 => 2,
-            9..=12 => 3,
-            13..=24 => 4,
-            _ => 5,
-        }] += 1;
-    }
-    let live = particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
-    println!(
-        "SWASH packing: {live} particles in {} cells, {:.2} per cell (the fill is 8), mean height {:.3} m",
-        occupied.len(),
-        live as f64 / occupied.len() as f64,
-        height / live as f64
-    );
-    println!("SWASH packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
 /// Momentum: a block of water in free fall, clear of the walls for the
@@ -319,7 +266,7 @@ fn fft_water_still_pool() {
         if frame % 10 == 9 {
             let stats = particle_stats(&run.particles());
             let last = scene.steps - 1;
-            let (rms, max) = divergence(&run.faces(last), &run.water(last), run.n(), scene.pressure.cell_size());
+            let (rms, max) = divergence(&run.faces(last), &run.water(last), &run.target(last), run.n(), scene.pressure.cell_size());
             println!(
                 "SWASH still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, collar {}",
                 run.n(),
@@ -337,133 +284,21 @@ fn fft_water_still_pool() {
 
 /// The volume oracle on water that must not change: a resting pool's meshed
 /// volume holds within 0.5% for 2 s. A drift here is the measure, not the
-/// solver.
+/// solver. It also prints the surface's skin, the depth the mesh sits
+/// outside the water, for the Dam Break's frame-0 skin to agree with.
 #[test]
 fn fft_water_still_pool_keeps_its_meshed_volume() {
     let scene = WaterScene::still_pool(64).with_surface();
     let mut run = Run::new(scene);
-    let mut volumes = Vec::new();
+    let mut measures = Vec::new();
     for _ in 0..120 {
         run.frame();
-        volumes.push(run.surface_volume());
+        measures.push(run.surface_measure());
     }
-    let v0 = volumes[0];
-    let drift = volumes.iter().map(|v| (v / v0 - 1.0).abs()).fold(0.0, f64::max);
-    println!("SWASH still pool meshed: frame 0 {v0:.4} m³, last {:.4} m³, drift max {:.3}%", volumes[119], 100.0 * drift);
+    let (v0, a0) = measures[0];
+    let drift = measures.iter().map(|(v, _)| (v / v0 - 1.0).abs()).fold(0.0, f64::max);
+    let skin = VolumeDrift::new(measures[0], run.particle_volume()).skin();
+    println!("SWASH still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
+    println!("SWASH still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
-}
-
-fn median(v: &[f64]) -> f64 {
-    let mut v = v.to_vec();
-    v.sort_by(f64::total_cmp);
-    v[v.len() / 2]
-}
-
-fn worst(v: &[f64]) -> f64 {
-    v.iter().copied().fold(0.0_f64, f64::max)
-}
-
-/// The Dam Break for 300 frames, meshed by the shipped GPU liquid surface:
-/// per-frame GPU and CPU encode ms, and the surface's volume against frame
-/// 0's. The step alone is timed by `dam_break_step`; the difference is the
-/// surface.
-fn dam_break_meshed(n: usize) {
-    let scene = WaterScene::dam_break(n).with_surface();
-    let mut run = Run::new(scene);
-    let (mut gpu, mut cpu, mut drift) = (Vec::new(), Vec::new(), Vec::new());
-    let mut first = None;
-    for frame in 0..300 {
-        let (g, c) = run.frame();
-        gpu.push(g);
-        cpu.push(c);
-        let volume = run.surface_volume();
-        let v0 = *first.get_or_insert(volume);
-        drift.push((volume / v0 - 1.0).abs());
-        if frame % 30 == 29 {
-            println!("SWASH meshed dam break {n}³ frame {frame:3}: {g:.2} ms GPU, {c:.2} ms CPU, volume {volume:.4} m³ ({:+.2}% of frame 0)", 100.0 * (volume / v0 - 1.0));
-        }
-    }
-    // Short lines: the tool output around these probes cuts long ones.
-    println!("SWASH meshed {n}³ over 300 frames: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&gpu), median(&cpu));
-    println!(
-        "SWASH meshed {n}³ volume: frame 0 {:.4} m³, drift max {:.2}%, at frame 300 {:.2}%",
-        first.unwrap_or(0.0),
-        100.0 * worst(&drift),
-        100.0 * drift.last().copied().unwrap_or(0.0)
-    );
-}
-
-#[test]
-fn fft_water_cost_probe() {
-    dam_break_step(64);
-    dam_break_meshed(64);
-}
-
-#[test]
-fn fft_water_cost_probe_refined() {
-    dam_break_step(128);
-    dam_break_meshed(128);
-}
-
-/// The Dam Break step alone for 300 frames: per-frame cost, divergence after
-/// projection, collar size and occupancy. It asserts only what must hold
-/// for the numbers to mean anything: no GPU fault, every particle alive and
-/// finite, the collar within capacity.
-fn dam_break_step(n: usize) {
-    let scene = WaterScene::dam_break(n);
-    let mut run = Run::new(scene);
-    let (n, h) = (run.n(), scene.pressure.cell_size());
-    let (mut gpu, mut cpu, mut rms, mut max) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    let (mut collar_max, mut blocks_max, mut height_max, mut water_max) = (0u32, 0.0_f64, 0usize, 0.0_f64);
-    for frame in 0..300 {
-        let (g, c) = run.frame();
-        gpu.push(g);
-        cpu.push(c);
-        for step in 0..scene.steps {
-            let collar = run.collar(step);
-            collar_max = collar_max.max(collar);
-            assert!(collar as usize <= scene.pressure.capacity, "frame {frame} step {step}: collar {collar} past capacity");
-            let water = run.water(step);
-            let (r, m) = divergence(&run.faces(step), &water, n, h);
-            rms.push(r);
-            max.push(m);
-            let (fraction, blocks, height) = occupancy(&water, n);
-            water_max = water_max.max(fraction);
-            blocks_max = blocks_max.max(blocks);
-            height_max = height_max.max(height);
-        }
-        if frame == 0 || frame == 149 {
-            report_packing(&run.particles(), n, h);
-        }
-        if frame % 30 == 29 {
-            let stats = particle_stats(&run.particles());
-            assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
-            let (fraction, blocks, height) = occupancy(&run.water(scene.steps - 1), n);
-            println!(
-                "SWASH dam break {n}³ frame {frame:3}: {g:.2} ms GPU, {c:.2} ms CPU, divergence rms {:.2e} max {:.2e} /s, collar {}, water {:.1}% of cells, {:.1}% of 8³ blocks, {height} cells tall, fastest {:.2} m/s",
-                rms.last().unwrap(),
-                max.last().unwrap(),
-                run.collar(scene.steps - 1),
-                100.0 * fraction,
-                100.0 * blocks,
-                stats.fastest
-            );
-        }
-    }
-    report_packing(&run.particles(), n, h);
-    // Short lines: the tool output around these probes cuts long ones.
-    println!("SWASH step {n}³ over 300 frames: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&gpu), median(&cpu));
-    println!(
-        "SWASH step {n}³ divergence /s: rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e}",
-        median(&rms),
-        worst(&rms),
-        median(&max),
-        worst(&max)
-    );
-    println!(
-        "SWASH step {n}³ occupancy: collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks, {height_max} cells tall",
-        scene.pressure.capacity,
-        100.0 * water_max,
-        100.0 * blocks_max
-    );
 }

@@ -355,6 +355,7 @@ mod cells_with_particles;
 mod particles_to_faces;
 mod face_gravity;
 mod face_divergence;
+mod density_source;
 mod subtract_pressure;
 mod extend_faces;
 mod faces_to_particles;
@@ -372,6 +373,12 @@ mod swash_step_tests;
 mod swash_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_render_smoke_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) mod swash_volume;
+#[cfg(all(test, feature = "water-race-probes"))]
+pub(crate) mod swash_race_tests;
+#[cfg(all(test, feature = "water-race-probes"))]
+pub(crate) mod swash_still;
 mod count_surface_triangles;
 mod volume_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

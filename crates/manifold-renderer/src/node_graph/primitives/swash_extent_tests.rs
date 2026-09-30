@@ -195,6 +195,12 @@ impl Sizes<'_> {
                     covers("faces", faces);
                     covers("out", faces);
                 }
+                "node.density_source" => {
+                    on_lattice();
+                    covers("divergence", cells);
+                    covers("cell_ranges", ranges);
+                    covers("out", cells);
+                }
                 "node.face_divergence" => {
                     on_lattice();
                     covers("faces", faces);
@@ -472,9 +478,10 @@ fn fft_water_pressure_has_no_fused_region() {
 /// input (particles_to_faces, extend_faces, face_divergence's faces,
 /// subtract_pressure's pressure, faces_to_particles' faces), which is a
 /// fusion cut by design; gravity → subtract_pressure is cut because the
-/// pressure between them depends on gravity. The one pair codegen could
-/// fuse, cells_with_particles → face_divergence's coincident water, is
-/// refused because both are sized by lattice params: BUG-u8io
+/// pressure between them depends on gravity. The pairs codegen could fuse,
+/// cells_with_particles → face_divergence's coincident water and
+/// face_divergence → density_source, are refused because every one of them
+/// is sized by lattice params: BUG-u8io
 /// (fft-water-fusion-param-capacity). When this fails, fusion has learned
 /// it: prove the frozen step matches the unfrozen one.
 #[test]
