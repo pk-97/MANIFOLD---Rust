@@ -169,8 +169,9 @@ fn dispatch_tail_census_is_stable() {
     // (matter_to_grid is a hand kernel since D6's block tiles; the cell sort
     // reads matter points directly). Matter colliders add matter_move_bodies
     // and liquid_solid_distance, buffer atoms. Matter coupling adds
-    // matter_body_reaction, a buffer atom.
-    assert_eq!(total, 200, "standalone atom census drifted");
+    // matter_body_reaction, a buffer atom. The liquid surface's last step
+    // before meshing adds clamp_liquid_to_solids, a buffer atom.
+    assert_eq!(total, 201, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"
