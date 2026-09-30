@@ -9,12 +9,13 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::node_graph::matter::{
-    MatterBody, MatterGridNode, MatterPoint, MatterShape, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits,
+    MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
+use super::matter_common::read_lattice;
 use super::standalone_pipeline::{active_elements, standalone_pipeline};
 
 #[repr(C)]
@@ -49,8 +50,8 @@ crate::primitive! {
     inputs: {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
-        bodies: Array(MatterBody) optional,
-        shapes: Array(MatterShape) optional,
+        bodies: Array(LiquidBody) optional,
+        shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         reaction: Array(i32) optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
@@ -108,7 +109,7 @@ crate::primitive! {
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MATTER_POSE, MATTER_COLLIDER],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     atomic_outputs: ["reaction_out"],
 }
 
@@ -180,7 +181,7 @@ impl Primitive for GridToMatter {
         // the grid buffer bound in their slots.
         let (bodies, shapes, atlas, body_count) = match colliders {
             (Some(bodies), Some(shapes), Some(atlas)) => {
-                let rows = (bodies.size / std::mem::size_of::<MatterBody>() as u64) as i32;
+                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
                 (bodies, shapes, atlas, body_count.min(rows))
             }
             _ => (grid, grid, grid, 0),

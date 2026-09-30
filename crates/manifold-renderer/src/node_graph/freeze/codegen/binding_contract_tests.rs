@@ -168,7 +168,7 @@ fn dispatch_tail_census_is_stable() {
     // matter_fill, matter_grid_update, grid_to_matter, particles_to_copies
     // (matter_to_grid is a hand kernel since D6's block tiles; the cell sort
     // reads matter points directly). Matter colliders add matter_move_bodies
-    // and matter_solid_distance, buffer atoms. Matter coupling adds
+    // and liquid_solid_distance, buffer atoms. Matter coupling adds
     // matter_body_reaction, a buffer atom.
     assert_eq!(total, 200, "standalone atom census drifted");
     assert_eq!(

@@ -2,18 +2,18 @@
 // section 4.1 step 4). One thread per lattice node, x fastest:
 //   v_before = momentum / mass                       (Liveliness reads it)
 //   v = v_before + dt · g
-// then the closed walls and each collider in body order (matter_wall_stop and
-// matter_collider_project in matter_collider.wgsl, which
+// then the closed walls and each collider in body order (matter_wall_stop in
+// matter_walls.wgsl and liquid_collider_project in liquid_collider.wgsl, which
 // node.matter_body_reaction repeats to attribute each body's share).
 // Each component is then clamped to ±0.9·dx/dt; a clamped node sets
 // velocity_before.w.
 // `accum` is gathered (4 words per node: momentum xyz in m_unit·U at 2^27, U
 // the domain's power-of-two momentum unit that P2G also reads, mass in
 // m_unit = 1000·dx³/8 kg at 2^16; D5). Element = MatterGridNode; `bodies`
-// (MatterBody), `shapes` (MatterShape) and `atlas` (distances two halves
-// per word) are gathered; the sampling is matter_collider.wgsl's.
+// (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances two halves
+// per word) are gathered; the sampling is liquid_collider.wgsl's.
 
-fn matter_atlas_half(index: u32) -> f32 {
+fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
@@ -67,7 +67,7 @@ fn body(
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
-        v = matter_collider_project(
+        v = liquid_collider_project(
             v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
             bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
             vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,

@@ -1,4 +1,4 @@
-// node.matter_solid_distance — fusable BUFFER body, GATHER (GPU_MPM_SOLVER_DESIGN.md
+// node.liquid_solid_distance — fusable BUFFER body, GATHER (GPU_MPM_SOLVER_DESIGN.md
 // D11, section 3.2). One thread per lattice node, x fastest: the seam's solid
 // lattice, positive in free space and negative inside a solid. It is the
 // smaller of the distance to the nearest closed wall (as node.matter_frame's
@@ -7,11 +7,11 @@
 // last tick (the row rows − body_count moved for tick_seconds, as
 // node.matter_move_bodies moves it) and scaled by the shape's smallest scale.
 //
-// ABI: `bodies` (MatterBody), `shapes` (MatterShape) and `atlas` (distances
+// ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances
 // two halves per word) are gathered; the output is one f32 per node. Poses
-// and sampling are matter_pose.wgsl's and matter_collider.wgsl's.
+// and sampling are liquid_pose.wgsl's and liquid_collider.wgsl's.
 
-fn matter_atlas_half(index: u32) -> f32 {
+fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
@@ -61,14 +61,14 @@ fn body(
         }
         // The pose after tick_seconds, as node.matter_move_bodies moves it.
         let position = bd.position_inv_mass.xyz + bd.linear_velocity.xyz * tick_seconds;
-        let q = matter_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
+        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let g = matter_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        if !matter_lattice_holds(g, dims) {
+        let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
+        if !liquid_lattice_holds(g, dims) {
             continue;
         }
-        distance = min(distance, matter_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w);
+        distance = min(distance, liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w);
     }
     return distance;
 }

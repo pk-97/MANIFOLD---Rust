@@ -14981,6 +14981,216 @@
     },
     {
       "aliases": [
+        "solid lattice",
+        "collider distance",
+        "solid field"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "WaterDamBreakMatter",
+        "WaterFloatingBoxMatter"
+      ],
+      "fusion": "pointwise",
+      "inputs": [
+        {
+          "name": "bodies",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "shapes",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "atlas",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "lattice_min_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "lattice_min_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "lattice_min_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "cell_size",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nodes_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nodes_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "nodes_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "closed_faces",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "body_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rows",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "tick_seconds",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Liquid Solid Distance",
+      "outputs": [
+        {
+          "capacity": "fixed:1",
+          "name": "solid",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "-2.1875",
+          "label": "Lattice Min X",
+          "name": "lattice_min_x",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "-0.1875",
+          "label": "Lattice Min Y",
+          "name": "lattice_min_y",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "-2.1875",
+          "label": "Lattice Min Z",
+          "name": "lattice_min_z",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0.0625",
+          "label": "Cell Size",
+          "name": "cell_size",
+          "range": [
+            "0.0001",
+            "100"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "71",
+          "label": "Nodes X",
+          "name": "nodes_x",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "71",
+          "label": "Nodes Y",
+          "name": "nodes_y",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "71",
+          "label": "Nodes Z",
+          "name": "nodes_z",
+          "range": [
+            "1",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "63",
+          "label": "Closed Faces (bits −X +X −Y +Y −Z +Z)",
+          "name": "closed_faces",
+          "range": [
+            "0",
+            "63"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bodies",
+          "name": "body_count",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Rows",
+          "name": "rows",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0.016666668",
+          "label": "Tick (s)",
+          "name": "tick_seconds",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        }
+      ],
+      "purpose": "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
+      "type_id": "node.liquid_solid_distance"
+    },
+    {
+      "aliases": [
         "look at camera",
         "target camera",
         "aim camera"
@@ -17469,7 +17679,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.matter_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick with non-finite values is never published.",
+      "purpose": "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick with non-finite values is never published.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands the simulated liquid particles to the liquid surface, one frame per simulation tick.",
@@ -17930,216 +18140,6 @@
       "stratum": "atom",
       "summary": "Moves the solid objects in a liquid to where they are at this instant of the simulation.",
       "type_id": "node.matter_move_bodies"
-    },
-    {
-      "aliases": [
-        "solid lattice",
-        "collider distance",
-        "solid field"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "WaterDamBreakMatter",
-        "WaterFloatingBoxMatter"
-      ],
-      "fusion": "pointwise",
-      "inputs": [
-        {
-          "name": "bodies",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "shapes",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "atlas",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "lattice_min_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "lattice_min_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "lattice_min_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "cell_size",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "nodes_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "nodes_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "nodes_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "closed_faces",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "body_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "rows",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "tick_seconds",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Matter Solid Distance",
-      "outputs": [
-        {
-          "capacity": "fixed:1",
-          "name": "solid",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "-2.1875",
-          "label": "Lattice Min X",
-          "name": "lattice_min_x",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "-0.1875",
-          "label": "Lattice Min Y",
-          "name": "lattice_min_y",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "-2.1875",
-          "label": "Lattice Min Z",
-          "name": "lattice_min_z",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "0.0625",
-          "label": "Cell Size",
-          "name": "cell_size",
-          "range": [
-            "0.0001",
-            "100"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "71",
-          "label": "Nodes X",
-          "name": "nodes_x",
-          "range": [
-            "1",
-            "4096"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "71",
-          "label": "Nodes Y",
-          "name": "nodes_y",
-          "range": [
-            "1",
-            "4096"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "71",
-          "label": "Nodes Z",
-          "name": "nodes_z",
-          "range": [
-            "1",
-            "4096"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "63",
-          "label": "Closed Faces (bits −X +X −Y +Y −Z +Z)",
-          "name": "closed_faces",
-          "range": [
-            "0",
-            "63"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Bodies",
-          "name": "body_count",
-          "range": [
-            "0",
-            "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Rows",
-          "name": "rows",
-          "range": [
-            "0",
-            "16777216"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0.016666668",
-          "label": "Tick (s)",
-          "name": "tick_seconds",
-          "range": [
-            "0",
-            "1"
-          ],
-          "type": "float"
-        }
-      ],
-      "purpose": "Write a matter domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
-      "type_id": "node.matter_solid_distance"
     },
     {
       "aliases": [

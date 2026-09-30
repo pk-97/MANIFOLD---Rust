@@ -19,12 +19,13 @@ use manifold_physics::Seconds;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
-use crate::node_graph::matter::bodies::{BodiesStatus, MatterBodies};
-use crate::node_graph::matter::coupling::{ReactionSlot, RigidOwner};
+use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::clock::LiquidClock;
+use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
+use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
 use crate::node_graph::matter::{
-    MAX_SUBSTEPS, MatterBody, MatterClock, MatterLattice, MatterShape, REACTION_WORDS, WATER_DENSITY,
-    free_fall_speed, lattice_nodes, momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda,
-    wave_speed,
+    MAX_SUBSTEPS, MatterLattice, REACTION_WORDS, WATER_DENSITY, free_fall_speed, lattice_nodes, momentum_unit,
+    stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -181,7 +182,7 @@ crate::primitive! {
         momentum_unit: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
-        bodies: Array(MatterBody), shapes: Array(MatterShape), atlas: Array(u32),
+        bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(i32),
     },
     params: [
@@ -207,7 +208,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -216,11 +217,11 @@ crate::primitive! {
     aliases: ["matter", "mpm", "live water", "gpu liquid", "liquid domain"],
     boundary_reason: NonGpu,
     extra_fields: {
-        clock: MatterClock = MatterClock::default(),
+        clock: LiquidClock = LiquidClock::default(),
         setup: Option<MatterSetup> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
-        bodies: MatterBodies = MatterBodies::default(),
+        bodies: LiquidBodies = LiquidBodies::default(),
         role_pending: bool = false,
         body_buffers: Option<BodyBuffers> = None,
         upload: Option<GpuComputePipeline> = None,
@@ -240,7 +241,9 @@ pub struct Coupling {
     colliders: RigidImpulseTargets,
     error: Option<String>,
     previous_reset: Option<f32>,
-    owner: Option<RigidOwner>,
+    owner: Option<LiquidRigidOwner>,
+    /// How the owner's pending tick's reaction words decode.
+    scale: Option<ReactionScale>,
     /// The owner was built since the clock last restarted: the next frame
     /// restarts the liquid with it.
     owner_fresh: bool,
@@ -262,8 +265,9 @@ pub struct Coupling {
 struct Exchange {
     substeps: u32,
     ticks: u32,
-    /// The frame's first tick's slot; later ticks differ only in `tick`.
-    slot: ReactionSlot,
+    /// The frame's first tick; later ticks differ only in `tick`.
+    pending: PendingTick,
+    scale: ReactionScale,
 }
 
 /// The reaction words, once their last GPU writer has retired.
@@ -463,7 +467,7 @@ impl Primitive for MatterDomain {
         if !coupled.mode || self.role_pending || coupled.failed || coupled.observation.is_none() || coupled.error.is_some() {
             return None;
         }
-        coupled.owner.as_ref().map(RigidOwner::frame)
+        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
     }
 
     fn physics_impulse_epoch(&self) -> Option<u64> {
@@ -550,11 +554,11 @@ impl MatterDomain {
             };
             let bodies = match self.body_buffers.take() {
                 Some(buffers) if !needs_bodies => buffers.bodies,
-                _ => gpu.device.create_buffer_shared(row_bytes.max(std::mem::size_of::<MatterBody>()) as u64),
+                _ => gpu.device.create_buffer_shared(row_bytes.max(std::mem::size_of::<LiquidBody>()) as u64),
             };
             self.body_buffers = Some(BodyBuffers {
                 bodies,
-                shapes: fresh(bytemuck::cast_slice(self.bodies.shapes()), std::mem::size_of::<MatterShape>()),
+                shapes: fresh(bytemuck::cast_slice(self.bodies.shapes()), std::mem::size_of::<LiquidShape>()),
                 atlas: fresh(bytemuck::cast_slice(self.bodies.atlas()), 4),
                 version,
             });
@@ -656,7 +660,7 @@ impl MatterDomain {
         if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
             return Ok(None);
         }
-        let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], RigidOwner::geometries);
+        let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
         if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size)? == BodiesStatus::Pending {
             return Ok(None);
         }
@@ -669,11 +673,15 @@ impl MatterDomain {
         let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
             (Some(owner), Some(observation)) if !restart => {
                 let reaction = self.reaction.as_ref();
+                let scale = self.coupled.scale;
                 // This frame's clear is encoded after this read.
                 let ticks = owner.settle(
                     &observation.inputs,
                     |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
-                    || reaction_words(reaction),
+                    |_, rows, impulses| {
+                        let scale = scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
+                        decode(scale, rows, reaction_words(reaction), impulses)
+                    },
                 )?;
                 if offline && ticks > 0 { None } else { Some(ticks) }
             }
@@ -702,7 +710,7 @@ impl MatterDomain {
         // without ticks keeps the last rows as the bodies' poses.
         let row_ticks = if frame.restarted { frame.ticks.max(1) } else { frame.ticks };
         self.rows_fresh = row_ticks > 0;
-        let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], RigidOwner::rows);
+        let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
         let rows = if row_ticks > 0 {
             let rows = self.bodies.rows(first_tick, row_ticks, coupled_rows).len() as f32;
             self.body_rows = rows;
@@ -710,10 +718,7 @@ impl MatterDomain {
         } else {
             self.body_rows
         };
-        let dynamic_count = coupled_rows
-            .iter()
-            .filter(|row| row.position_inv_mass[3] > 0.0 && row.accel_shape[3] >= 0.0)
-            .count();
+        let dynamic_count = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
 
         // D4: substeps from the stiffness/CFL rule, from parameters only.
         let longest = f64::from(layout.size.iter().copied().fold(0.0f32, f32::max));
@@ -732,7 +737,7 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) => owner.body_limit(lattice.cell_size, wave, v_est as f32)?,
+            Some(owner) => body_limit(owner, lattice.cell_size, wave, v_est as f32)?,
             None => None,
         };
         let substeps = substeps_per_tick(lattice.cell_size, wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
@@ -748,16 +753,16 @@ impl MatterDomain {
                         owner.completed()
                     ));
                 }
-                let slot = ReactionSlot {
-                    tick: first_tick,
-                    stamp: clock.as_ref().map_or(0, FrameClock::stamp),
+                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
+                let scale = ReactionScale {
                     unit,
                     cell_size: lattice.cell_size,
                     offset: self.bodies.count() - owner.rows().len(),
                 };
-                owner.set_pending(slot);
+                owner.set_pending(pending);
+                self.coupled.scale = Some(scale);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, slot });
+                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, pending, scale });
                 }
             }
             // The liquid is shown at the tick Box3D has settled, with the
@@ -842,7 +847,7 @@ impl MatterDomain {
         *previous_reset = Some(observation.reset);
         if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *colliders)) {
             *epochs += 1;
-            *owner = Some(RigidOwner::new(&observation.inputs, *colliders, *epochs, owner.as_ref())?);
+            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *colliders, *epochs, owner.as_ref())?);
             *owner_fresh = true;
         }
         Ok(true)
@@ -855,7 +860,9 @@ impl MatterDomain {
         let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
         let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
-        owner.settle(&observation.inputs, |_| true, || reaction_words(Some(reaction)))?;
+        owner.settle(&observation.inputs, |_| true, |_, rows, impulses| {
+            decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
+        })?;
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
         let bodies = &self.body_buffers.as_ref().ok_or("Matter coupling: the body rows are missing")?.bodies;
         let bytes: &[u8] = bytemuck::cast_slice(rows);
@@ -867,7 +874,7 @@ impl MatterDomain {
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
-        owner.set_pending(ReactionSlot { tick: exchange.slot.tick + u64::from(tick), ..exchange.slot });
+        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), ..exchange.pending });
         Ok(())
     }
 
@@ -876,7 +883,7 @@ impl MatterDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let owner = RigidOwner::new(&observation.inputs, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
         self.coupled.owner = Some(owner);
         Ok(())
     }

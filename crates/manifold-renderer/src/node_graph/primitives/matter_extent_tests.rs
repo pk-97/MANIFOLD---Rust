@@ -69,7 +69,7 @@ fn matter_buffers_cover_their_dispatch_at_every_resolution() {
         assert!(nodes * u64::from(ACCUM_WORDS_PER_NODE) <= u64::from(u32::MAX), "res {res}: accumulator word index");
         assert_eq!(grid_accum_bytes(lattice.nodes), nodes * u64::from(ACCUM_WORDS_PER_NODE) * 4, "res {res}");
         assert_eq!(grid_bytes(lattice.nodes), nodes * size_of::<MatterGridNode>() as u64, "res {res}");
-        // The solid lattice: node.matter_solid_distance writes one f32 per
+        // The solid lattice: node.liquid_solid_distance writes one f32 per
         // node and node.matter_frame's ring copies the same bytes.
         assert_eq!(solid_bytes(lattice.nodes), nodes * 4, "res {res}");
 

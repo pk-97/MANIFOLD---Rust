@@ -7,8 +7,8 @@
 // the authored box, which starts PADDING = 3 nodes inside the lattice. A
 // seed inside an enabled collider at its pose when the epoch starts (rows
 // 0..body_count of `bodies`, sampled from its shape's lattice in the atlas)
-// is left an unused slot, id 0, so ids stay sorted. `bodies` (MatterBody →
-// Element), `shapes` (MatterShape → Element2) and `atlas` are gathered; the
+// is left an unused slot, id 0, so ids stay sorted. `bodies` (LiquidBody →
+// Element), `shapes` (LiquidShape → Element2) and `atlas` are gathered; the
 // output is MatterPoint (Element3).
 fn matter_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
@@ -20,7 +20,7 @@ fn matter_fill_unit(x: u32) -> f32 {
     return f32(matter_fill_hash(x) >> 8u) / 16777216.0;
 }
 
-fn matter_atlas_half(index: u32) -> f32 {
+fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
@@ -35,8 +35,8 @@ fn mf_inside_collider(x: vec3<f32>, body_count: i32) -> bool {
         }
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let g = matter_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
-        if matter_lattice_holds(g, dims) && matter_lattice_distance(sh.atlas_offset, dims, g) < 0.0 {
+        let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+        if liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) < 0.0 {
             return true;
         }
     }
