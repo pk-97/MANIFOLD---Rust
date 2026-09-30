@@ -11,7 +11,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::{
-    ACCUM_WORDS_PER_NODE, MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS,
+    MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes,
 };
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
@@ -197,20 +197,35 @@ impl Primitive for MatterState {
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
-        let node_count = u64::from(nodes[0]) * u64::from(nodes[1]) * u64::from(nodes[2]);
         let seed = ctx.inputs.array("seed");
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
 
-        let accum_bytes = node_count * u64::from(ACCUM_WORDS_PER_NODE) * 4;
-        let grid_bytes = node_count * std::mem::size_of::<MatterGridNode>() as u64;
-        if self.grid_accum.as_ref().is_none_or(|b| b.size < accum_bytes) {
-            self.grid_accum = Some(gpu.device.create_buffer(accum_bytes.max(16)));
-        }
-        if self.grid.as_ref().is_none_or(|b| b.size < grid_bytes) {
-            self.grid = Some(gpu.device.create_buffer(grid_bytes.max(32)));
+        // The grid arrays follow the lattice the region's atoms dispatch over;
+        // a lattice the device cannot hold stops the solver before any tick.
+        let device = gpu.device;
+        let mut refused = None;
+        for (buffer, bytes) in [(&mut self.grid_accum, grid_accum_bytes(nodes)), (&mut self.grid, grid_bytes(nodes))] {
+            if buffer.as_ref().is_some_and(|b| b.size >= bytes) {
+                continue;
+            }
+            let bytes = bytes.max(32);
+            match crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
+                .map_err(|error| error.to_string())
+                .and_then(|()| device.try_create_buffer(bytes))
+            {
+                Ok(created) => *buffer = Some(created),
+                Err(error) => {
+                    *buffer = None;
+                    refused = Some(format!(
+                        "Matter: a {}×{}×{} lattice needs {bytes} bytes of grid the device cannot give: {error}. Lower Resolution.",
+                        nodes[0], nodes[1], nodes[2]
+                    ));
+                    break;
+                }
+            }
         }
         let zero_stats = self
             .zero_stats
@@ -238,12 +253,14 @@ impl Primitive for MatterState {
 
         self.substeps = substeps;
         self.step_dt = (TICK / f64::from(substeps)) as f32;
-        self.pending = if self.faulted { 0 } else { ticks.saturating_mul(substeps) };
+        self.pending = if self.faulted || refused.is_some() { 0 } else { ticks.saturating_mul(substeps) };
         self.captures = 0;
         let live = self.last_stats.map_or(count, |s| s.live);
         ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
         ctx.outputs.set_scalar("fault", ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }));
-        if self.faulted {
+        if let Some(error) = refused {
+            ctx.error(error);
+        } else if self.faulted {
             ctx.error("Matter: a tick produced non-finite values; the liquid is halted until Reset");
         }
     }

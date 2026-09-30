@@ -9,7 +9,9 @@ use manifold_gpu::GpuBinding;
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
-use crate::node_graph::matter::{MatterBody, MatterGridNode, MatterPoint, MatterShape, REACTION_WORDS, momentum_unit_fits};
+use crate::node_graph::matter::{
+    MatterBody, MatterGridNode, MatterPoint, MatterShape, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits,
+};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::matter_common::{MATTER_COLLIDER, MATTER_POSE, read_lattice};
@@ -165,6 +167,13 @@ impl Primitive for GridToMatter {
         };
         let active = active_elements::<MatterPoint>(points.size, requested);
         if active == 0 || step_dt <= 0.0 {
+            return;
+        }
+        if grid.size < grid_bytes(lattice.nodes) {
+            ctx.error(format!(
+                "Grid to Matter: the grid holds fewer than this lattice's {} nodes; wire grid from the node.matter_state fed by the same node.matter_domain",
+                lattice_nodes(lattice.nodes)
+            ));
             return;
         }
         // Without all three collider arrays the body loop runs zero times over

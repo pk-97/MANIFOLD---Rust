@@ -30,7 +30,6 @@ fn body(
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
-    max_capacity: i32,
 ) -> f32 {
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));

@@ -18018,7 +18018,7 @@
       "label": "Matter Solid Distance",
       "outputs": [
         {
-          "capacity": "param:max_capacity=1048576",
+          "capacity": "fixed:1",
           "name": "solid",
           "type": "Array"
         }
@@ -18133,16 +18133,6 @@
             "1"
           ],
           "type": "float"
-        },
-        {
-          "default": "1048576",
-          "label": "Max Nodes",
-          "name": "max_capacity",
-          "range": [
-            "1",
-            "16777216"
-          ],
-          "type": "int"
         }
       ],
       "purpose": "Write a matter domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
@@ -21592,6 +21582,21 @@
           "name": "threshold",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "bins_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_z",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Particle Volume",
@@ -21734,6 +21739,36 @@
             "8"
           ],
           "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Bins X",
+          "name": "bins_x",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Y",
+          "name": "bins_y",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Z",
+          "name": "bins_z",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
         }
       ],
       "purpose": "The liquid's level set on a lattice: at each node, threshold minus the sum of every nearby kernel's (1 − |G·(x − c)|²)³, so negative is inside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is empty, so the surface closes.",
@@ -32951,6 +32986,21 @@
           "name": "min_neighbours",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "bins_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "bins_z",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Shape Particle Blobs",
@@ -33079,6 +33129,36 @@
           "range": [
             "1",
             "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins X",
+          "name": "bins_x",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Y",
+          "name": "bins_y",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bins Z",
+          "name": "bins_z",
+          "range": [
+            "0",
+            "16777216"
           ],
           "type": "int"
         }
@@ -34529,7 +34609,7 @@
           "type": "Array"
         },
         {
-          "capacity": "param:max_cells=1048576",
+          "capacity": "fixed:1",
           "name": "cell_ranges",
           "type": "Array"
         },
@@ -34537,6 +34617,18 @@
           "capacity": "follows:particles",
           "name": "order",
           "type": "Array"
+        },
+        {
+          "name": "bins_x",
+          "type": "f32"
+        },
+        {
+          "name": "bins_y",
+          "type": "f32"
+        },
+        {
+          "name": "bins_z",
+          "type": "f32"
         }
       ],
       "params": [
@@ -34619,19 +34711,9 @@
             "100"
           ],
           "type": "float"
-        },
-        {
-          "default": "1048576",
-          "label": "Max Cells",
-          "name": "max_cells",
-          "range": [
-            "1",
-            "16777216"
-          ],
-          "type": "int"
         }
       ],
-      "purpose": "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total) and each bin's start and count. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
+      "purpose": "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total), each bin's start and count, and the bin grid's size per axis. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. cell_ranges holds exactly one range per bin, sized every frame from the same bin count. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly.",
