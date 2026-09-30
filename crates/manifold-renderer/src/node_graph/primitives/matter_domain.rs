@@ -747,7 +747,7 @@ impl MatterDomain {
             return Ok(None);
         }
         let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
-        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size())? == BodiesStatus::Pending {
+        if self.bodies.prepare(roles, coupled_geometries, lattice.cell_size(), offline)? == BodiesStatus::Pending {
             return Ok(None);
         }
         let setup_changed = self.setup != Some(setup);
