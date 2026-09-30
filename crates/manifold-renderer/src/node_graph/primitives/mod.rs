@@ -314,6 +314,7 @@ mod cosine_reorder;
 mod cosine_spectrum;
 mod cosine_half_spectrum;
 mod cosine_poisson_divide;
+mod cosine_surface_scale;
 mod fft_3d;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_tests;

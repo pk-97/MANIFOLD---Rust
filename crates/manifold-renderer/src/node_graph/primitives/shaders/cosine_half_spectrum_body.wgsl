@@ -1,8 +1,9 @@
 // node.cosine_half_spectrum — fusable BUFFER body, GATHER. The inverse of
 // node.cosine_spectrum: from DCT-II coefficients X, rebuild the half spectrum
 // V of the reordered lattice, ready for node.inverse_fft_3d. Per axis the
-// inverse map is V[k] = conj W(k) · (X[k] − i X[N − k]) with X[N] = 0; in 3D
-// the three maps multiply out to eight gathers:
+// inverse map is V[k] = conj W(k) · (X[k] − i X[N − k]) with X[N] = 0; over
+// the transformed axes the maps multiply out to eight gathers (axes 3) or
+// four (axes 2, z slices untouched):
 //   V[k] = Π_a conj W(k_a) · Σ_{mirror set S} (−i)^|S| X[k mirrored on S].
 // One thread per half-spectrum entry (nx/2 + 1 along x). `values` is gathered
 // through `buf_values`; the output element is struct Element { x, y }.
@@ -23,7 +24,7 @@ fn cosine_half_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
-fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Element {
+fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, axes: i32) -> Element {
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
     let hx = n.x / 2 + 1;
     let k = vec3<i32>(
@@ -36,7 +37,8 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Eleme
         vec2<f32>(1.0, 0.0), vec2<f32>(0.0, -1.0), vec2<f32>(-1.0, 0.0), vec2<f32>(0.0, 1.0),
     );
     var sum = vec2<f32>(0.0, 0.0);
-    for (var s = 0; s < 8; s = s + 1) {
+    let terms = select(8, 4, axes == 2);
+    for (var s = 0; s < terms; s = s + 1) {
         let mx = s & 1;
         let my = (s >> 1u) & 1;
         let mz = (s >> 2u) & 1;
@@ -47,10 +49,10 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Eleme
         );
         sum = sum + rot[mx + my + mz] * cosine_half_value(q, n);
     }
-    let w = cosine_half_cmul(
-        cosine_half_cmul(cosine_half_twiddle(k.x, n.x), cosine_half_twiddle(k.y, n.y)),
-        cosine_half_twiddle(k.z, n.z),
-    );
+    var w = cosine_half_cmul(cosine_half_twiddle(k.x, n.x), cosine_half_twiddle(k.y, n.y));
+    if axes != 2 {
+        w = cosine_half_cmul(w, cosine_half_twiddle(k.z, n.z));
+    }
     let v = cosine_half_cmul(w, sum);
     return Element(v.x, v.y);
 }

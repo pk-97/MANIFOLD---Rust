@@ -11,6 +11,7 @@ use super::cosine_poisson_divide::CosinePoissonDivide;
 use super::cosine_reorder::CosineReorder;
 use super::cosine_half_spectrum::CosineHalfSpectrum;
 use super::cosine_spectrum::CosineSpectrum;
+use super::cosine_surface_scale::CosineSurfaceScale;
 use super::fft_3d::{Fft3d, InverseFft3d};
 use super::liquid_surface_tests::{Harness, params, read};
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -37,11 +38,11 @@ fn lattice_params(nodes: [usize; 3], extra: &[(&'static str, f32)]) -> ParamValu
     params(&all)
 }
 
-/// f64 unnormalised DCT-II along every axis: Σ_n x[n] Π cos(π k (2n + 1) / 2N).
-fn reference_dct(values: &[f32], nodes: [usize; 3]) -> Vec<f64> {
+/// f64 unnormalised DCT-II along the first `axes` axes: Σ_n x[n] Π cos(π k (2n + 1) / 2N).
+fn reference_dct(values: &[f32], nodes: [usize; 3], axes: usize) -> Vec<f64> {
     let mut data: Vec<f64> = values.iter().map(|&v| f64::from(v)).collect();
     let stride = [1, nodes[0], nodes[0] * nodes[1]];
-    for axis in 0..3 {
+    for axis in 0..axes {
         let n = nodes[axis];
         let mut next = vec![0.0; data.len()];
         for (idx, slot) in next.iter_mut().enumerate() {
@@ -59,12 +60,53 @@ fn reference_dct(values: &[f32], nodes: [usize; 3]) -> Vec<f64> {
     data
 }
 
+/// f64 inverse of [`reference_dct`] along the first `axes` axes:
+/// x[n] = (X[0] + 2 Σ_{k ≥ 1} X[k] cos(π k (2n + 1) / 2N)) / N.
+fn reference_idct(coeffs: &[f64], nodes: [usize; 3], axes: usize) -> Vec<f64> {
+    let mut data = coeffs.to_vec();
+    let stride = [1, nodes[0], nodes[0] * nodes[1]];
+    for axis in 0..axes {
+        let n = nodes[axis];
+        let mut next = vec![0.0; data.len()];
+        for (idx, slot) in next.iter_mut().enumerate() {
+            let m = (idx / stride[axis]) % n;
+            let base = idx - m * stride[axis];
+            *slot = (0..n)
+                .map(|k| {
+                    let weight = if k == 0 { 1.0 } else { 2.0 };
+                    weight
+                        * data[base + k * stride[axis]]
+                        * (std::f64::consts::PI * k as f64 * (2 * m + 1) as f64 / (2 * n) as f64).cos()
+                })
+                .sum::<f64>()
+                / n as f64;
+        }
+        data = next;
+    }
+    data
+}
+
+/// The helper symbol cosine_surface_scale multiplies coefficient (kx, ky) by.
+fn surface_symbol(k: [usize; 2], n: [usize; 2], h: f64, lowest_wave: f64) -> f64 {
+    let s = |k: usize, n: usize| (std::f64::consts::FRAC_PI_2 * k as f64 / n as f64).sin();
+    (4.0 * (s(k[0], n[0]).powi(2) + s(k[1], n[1]).powi(2)) / (h * h) + lowest_wave * lowest_wave).sqrt()
+}
+
+/// What sits between the forward and inverse transforms.
+#[derive(Clone, Copy)]
+enum Middle {
+    Nothing,
+    Poisson,
+    Surface { lowest_wave: f32 },
+}
+
 /// Every atom of the forward and inverse transforms, run in ONE encoder.
 struct Chain {
     reorder: CosineReorder,
     fft: Fft3d,
     spectrum: CosineSpectrum,
     divide: CosinePoissonDivide,
+    surface: CosineSurfaceScale,
     half: CosineHalfSpectrum,
     ifft: InverseFft3d,
     unorder: CosineReorder,
@@ -105,28 +147,41 @@ impl Chain {
             fft: Fft3d::new(),
             spectrum: CosineSpectrum::new(),
             divide: CosinePoissonDivide::new(),
+            surface: CosineSurfaceScale::new(),
             half: CosineHalfSpectrum::new(),
             ifft: InverseFft3d::new(),
             unorder: CosineReorder::new(),
         }
     }
 
-    /// Encode the chain `repeats` times into one command buffer; `solve`
-    /// inserts the Poisson divide. Returns the wall time and node errors.
+    /// Encode the chain `repeats` times into one command buffer, transforming
+    /// the first `axes` axes, with `middle` between the two transforms.
+    /// Returns the wall time and node errors.
+    #[allow(clippy::too_many_arguments)]
     fn run(
         &mut self,
         harness: &mut Harness,
         slots: &ChainSlots,
         nodes: [usize; 3],
         cell_size: f32,
-        solve: bool,
+        middle: Middle,
+        axes: usize,
         repeats: usize,
     ) -> (f64, Vec<String>) {
-        let lattice = lattice_params(nodes, &[]);
-        let forward = lattice_params(nodes, &[("direction", 0.0)]);
-        let inverse = lattice_params(nodes, &[("direction", 1.0)]);
+        let axes = axes as f32;
+        let lattice = lattice_params(nodes, &[("axes", axes)]);
+        let forward = lattice_params(nodes, &[("direction", 0.0), ("axes", axes)]);
+        let inverse = lattice_params(nodes, &[("direction", 1.0), ("axes", axes)]);
         let divide = lattice_params(nodes, &[("cell_size", cell_size)]);
-        let middle = if solve { slots.divided.0 } else { slots.coeffs.0 };
+        let lowest_wave = match middle {
+            Middle::Surface { lowest_wave } => lowest_wave,
+            _ => 0.0,
+        };
+        let surface = lattice_params(nodes, &[("cell_size", cell_size), ("lowest_wave", lowest_wave)]);
+        let middle_slot = match middle {
+            Middle::Nothing => slots.coeffs.0,
+            Middle::Poisson | Middle::Surface { .. } => slots.divided.0,
+        };
         let mut errors = Vec::new();
         let mut native = harness.device.create_encoder("swash chain");
         let start = Instant::now();
@@ -138,10 +193,16 @@ impl Chain {
                 step(&mut self.reorder, &mut gpu, backend, e, ("values", slots.input.0), ("out", slots.reordered.0), &forward);
                 step(&mut self.fft, &mut gpu, backend, e, ("values", slots.reordered.0), ("spectrum", slots.spectrum.0), &lattice);
                 step(&mut self.spectrum, &mut gpu, backend, e, ("spectrum", slots.spectrum.0), ("out", slots.coeffs.0), &lattice);
-                if solve {
-                    step(&mut self.divide, &mut gpu, backend, e, ("values", slots.coeffs.0), ("out", slots.divided.0), &divide);
+                match middle {
+                    Middle::Nothing => {}
+                    Middle::Poisson => {
+                        step(&mut self.divide, &mut gpu, backend, e, ("values", slots.coeffs.0), ("out", slots.divided.0), &divide)
+                    }
+                    Middle::Surface { .. } => {
+                        step(&mut self.surface, &mut gpu, backend, e, ("values", slots.coeffs.0), ("out", slots.divided.0), &surface)
+                    }
                 }
-                step(&mut self.half, &mut gpu, backend, e, ("values", middle), ("spectrum", slots.half.0), &lattice);
+                step(&mut self.half, &mut gpu, backend, e, ("values", middle_slot), ("spectrum", slots.half.0), &lattice);
                 step(&mut self.ifft, &mut gpu, backend, e, ("spectrum", slots.half.0), ("values", slots.back.0), &lattice);
                 step(&mut self.unorder, &mut gpu, backend, e, ("values", slots.back.0), ("out", slots.output.0), &inverse);
             }
@@ -192,10 +253,10 @@ fn swash_cosine_transform_matches_reference_and_round_trips() {
     let total: usize = nodes.iter().product();
     let values = random_values(total, 0x5eed_c05e);
     let slots = ChainSlots::new(&mut harness, &values, nodes);
-    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, false, 1);
+    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, Middle::Nothing, 3, 1);
     assert!(errors.is_empty(), "{errors:?}");
 
-    let expected = reference_dct(&values, nodes);
+    let expected = reference_dct(&values, nodes, 3);
     let actual: Vec<f32> = read(&slots.coeffs.1, total);
     let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
     let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
@@ -204,6 +265,82 @@ fn swash_cosine_transform_matches_reference_and_round_trips() {
     let back: Vec<f32> = read(&slots.output.1, total);
     let err = back.iter().zip(&values).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
     assert!(err < 1e-5, "forward then inverse does not return the input: {err}");
+}
+
+/// Plane mode: every z slice transformed on its own along x and y. The batch
+/// count (6) is not a power of two; only transformed lengths need to be.
+#[test]
+fn swash_plane_transform_matches_reference_and_round_trips() {
+    let mut harness = Harness::new();
+    let nodes = [16usize, 8, 6];
+    let total: usize = nodes.iter().product();
+    let values = random_values(total, 0x0091_a4e5);
+    let slots = ChainSlots::new(&mut harness, &values, nodes);
+    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, 1.0, Middle::Nothing, 2, 1);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let expected = reference_dct(&values, nodes, 2);
+    let actual: Vec<f32> = read(&slots.coeffs.1, total);
+    let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+    assert!(worst < 1e-5 * scale.max(1.0), "plane transform off by {worst} (scale {scale})");
+
+    let back: Vec<f32> = read(&slots.output.1, total);
+    let err = back.iter().zip(&values).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+    assert!(err < 1e-5, "plane forward then inverse does not return the input: {err}");
+}
+
+/// cosine_surface_scale alone, against the symbol computed on the CPU.
+#[test]
+fn swash_surface_scale_matches_symbol() {
+    let mut harness = Harness::new();
+    let nodes = [16usize, 8, 3];
+    let total: usize = nodes.iter().product();
+    let (h, lowest_wave) = (0.0625_f32, 1.5707964_f32);
+    let values = random_values(total, 0x5ca1e);
+    let input = harness.array(&values, total);
+    let output = harness.array::<f32>(&[], total);
+    let surface = lattice_params(nodes, &[("cell_size", h), ("lowest_wave", lowest_wave)]);
+    let mut errors = Vec::new();
+    let mut native = harness.device.create_encoder("swash surface scale");
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
+        let backend: &dyn Backend = &harness.backend;
+        step(&mut CosineSurfaceScale::new(), &mut gpu, backend, &mut errors, ("values", input.0), ("out", output.0), &surface);
+    }
+    native.commit_and_wait_completed();
+    assert!(errors.is_empty(), "{errors:?}");
+    let actual: Vec<f32> = read(&output.1, total);
+    for (idx, (&a, &v)) in actual.iter().zip(&values).enumerate() {
+        let k = [idx % nodes[0], (idx / nodes[0]) % nodes[1]];
+        let e = f64::from(v) * surface_symbol(k, [nodes[0], nodes[1]], f64::from(h), f64::from(lowest_wave));
+        assert!((f64::from(a) - e).abs() < 1e-5 * e.abs().max(1.0), "entry {idx}: {a} vs {e}");
+    }
+}
+
+/// The helper's surface operator on a stack of planes: forward plane
+/// transform, cosine_surface_scale, inverse, against the same in f64.
+#[test]
+fn swash_surface_helper_matches_reference() {
+    let mut harness = Harness::new();
+    let nodes = [16usize, 16, 3];
+    let total: usize = nodes.iter().product();
+    let (h, lowest_wave) = (0.25_f32, 1.5707964_f32);
+    let values = random_values(total, 0x4e1f);
+    let slots = ChainSlots::new(&mut harness, &values, nodes);
+    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, Middle::Surface { lowest_wave }, 2, 1);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let mut coeffs = reference_dct(&values, nodes, 2);
+    for (idx, c) in coeffs.iter_mut().enumerate() {
+        let k = [idx % nodes[0], (idx / nodes[0]) % nodes[1]];
+        *c *= surface_symbol(k, [nodes[0], nodes[1]], f64::from(h), f64::from(lowest_wave));
+    }
+    let expected = reference_idct(&coeffs, nodes, 2);
+    let actual: Vec<f32> = read(&slots.output.1, total);
+    let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let worst = actual.iter().zip(&expected).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
+    assert!(worst < 1e-5 * scale.max(1.0), "surface helper off by {worst} (scale {scale})");
 }
 
 /// Apply the walled 7-point Laplacian (missing neighbours contribute nothing).
@@ -246,7 +383,7 @@ fn swash_box_solve_inverts_the_walled_laplacian() {
         *v -= mean as f32;
     }
     let slots = ChainSlots::new(&mut harness, &values, nodes);
-    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, true, 1);
+    let (_, errors) = Chain::new().run(&mut harness, &slots, nodes, h, Middle::Poisson, 3, 1);
     assert!(errors.is_empty(), "{errors:?}");
     let p: Vec<f32> = read(&slots.output.1, total);
     let lap = walled_laplacian(&p, nodes, f64::from(h));
@@ -318,10 +455,10 @@ fn swash_box_solve_timing() {
         let values = random_values(n * n * n, 0x7117);
         let slots = ChainSlots::new(&mut harness, &values, nodes);
         let mut chain = Chain::new();
-        let (_, errors) = chain.run(&mut harness, &slots, nodes, 1.0, true, 2);
+        let (_, errors) = chain.run(&mut harness, &slots, nodes, 1.0, Middle::Poisson, 3, 2);
         assert!(errors.is_empty(), "{errors:?}");
         let repeats = 50;
-        let (ms, errors) = chain.run(&mut harness, &slots, nodes, 1.0, true, repeats);
+        let (ms, errors) = chain.run(&mut harness, &slots, nodes, 1.0, Middle::Poisson, 3, repeats);
         assert!(errors.is_empty(), "{errors:?}");
         println!("SWASH box solve {n}³: {:.3} ms per solve ({repeats} solves in one command buffer)", ms / repeats as f64);
     }

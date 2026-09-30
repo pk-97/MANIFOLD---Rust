@@ -166,8 +166,9 @@ fn dispatch_tail_census_is_stable() {
     // smooth_lattice, count_surface_triangles and volume_surface_mesh, buffer
     // atoms (not texture-path).
     // FFT water solver P0 adds cosine_reorder, cosine_spectrum,
-    // cosine_half_spectrum and cosine_poisson_divide, buffer atoms.
-    assert_eq!(total, 196, "standalone atom census drifted");
+    // cosine_half_spectrum and cosine_poisson_divide, buffer atoms; P1 adds
+    // cosine_surface_scale.
+    assert_eq!(total, 197, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"
