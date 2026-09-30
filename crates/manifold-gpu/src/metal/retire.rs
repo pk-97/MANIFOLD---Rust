@@ -187,11 +187,25 @@ impl FrameClock {
     /// come from an earlier, committed frame; a stamp past the last commit
     /// never signals, so it is clamped to that commit.
     pub fn wait(&self, stamp: u64) -> bool {
+        #[cfg(feature = "gpu-proofs")]
+        WAITS.set(WAITS.get() + 1);
         stamp == 0
             || self
                 .event
                 .wait_until_done_timeout(stamp.min(self.event.current_value()), 5000)
     }
+
+    /// GPU proofs: how many times this thread has called [`Self::wait`].
+    /// Live frames must leave it unchanged.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn waits_on_this_thread() -> u64 {
+        WAITS.get()
+    }
+}
+
+#[cfg(feature = "gpu-proofs")]
+thread_local! {
+    static WAITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Receiver half. Lives on the content thread (inside `ContentPipeline`);

@@ -9,10 +9,11 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{MatterGridNode, REACTION_WORDS, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::{MATTER_WALLS, read_lattice};
+use super::matter_common::MATTER_WALLS;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -118,7 +119,7 @@ impl Primitive for MatterBodyReaction {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as i32;
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let gravity = [
@@ -152,7 +153,7 @@ impl Primitive for MatterBodyReaction {
         if nodes == 0 || body_count == 0 {
             return;
         }
-        if !momentum_unit_fits(momentum_unit, lattice.cell_size, step_dt) {
+        if !momentum_unit_fits(momentum_unit, lattice.cell_size(), step_dt) {
             ctx.error(format!(
                 "Matter Body Reaction: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
             ));
@@ -160,19 +161,19 @@ impl Primitive for MatterBodyReaction {
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = BodyReactionUniforms {
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
-            cell_size: lattice.cell_size,
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
+            cell_size: lattice.cell_size(),
             step_dt,
             gravity_x: gravity[0],
             gravity: gravity[1],
             gravity_z: gravity[2],
             closed_faces,
             momentum_unit,
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
             body_count,
             tick_index,
             substep_in_tick,

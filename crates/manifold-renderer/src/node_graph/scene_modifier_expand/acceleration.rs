@@ -3,12 +3,13 @@
 use std::collections::BTreeSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::liquid_domain::is_liquid_domain;
+use manifold_core::liquid_domain::{is_liquid_domain, liquid_domain_of};
+use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 
 use crate::node_graph::persistence::PrimitiveRegistry;
 
-use super::{SceneModifierExpandError, index::FlatSceneIndex};
+use super::SceneModifierExpandError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Recipient {
@@ -77,55 +78,6 @@ pub(super) fn resolve(
 /// The liquid domain input that receives scene forces. A domain that does not
 /// declare it yet is still water (pairing finds it) but takes no forces.
 const LIQUID_ACCELERATION_PORT: &str = "acceleration_field";
-
-/// The liquid domain an object's surface is built from. Water is recognised
-/// by its particle producer, not by the port that feeds the object: the walk
-/// starts at the object's `vertices` producer, follows every wired input
-/// upstream and stops at each liquid domain it meets. A CPU surface
-/// (`fluid_surface.vertices`) and a GPU surface (particles → sort → blobs →
-/// volume → marching cubes) both reach their domain.
-pub(super) fn liquid_domain_of(
-    index: &FlatSceneIndex,
-    object: &SceneNodeRef,
-) -> Result<Option<SceneNodeRef>, SceneModifierExpandError> {
-    let Some(wire) = index.input(object, "vertices")? else {
-        return Ok(None);
-    };
-    let mut pending = vec![wire.from_node];
-    let mut seen = BTreeSet::from([wire.from_node]);
-    let mut domains = BTreeSet::new();
-    while let Some(id) = pending.pop() {
-        let Some(node) = index.flat.nodes.iter().find(|node| node.id == id) else {
-            return Err(unsupported(
-                format!("{object:?}.vertices"),
-                "surface chain names a missing producer",
-            ));
-        };
-        if is_liquid_domain(&node.type_id) {
-            let reference = index.by_id.get(&id).ok_or_else(|| {
-                unsupported(
-                    format!("{object:?}.vertices"),
-                    "liquid domain has no stable scene reference",
-                )
-            })?;
-            domains.insert(reference.clone());
-            continue;
-        }
-        for wire in index.flat.wires.iter().filter(|wire| wire.to_node == id) {
-            if seen.insert(wire.from_node) {
-                pending.push(wire.from_node);
-            }
-        }
-    }
-    let domain = domains.pop_first();
-    if !domains.is_empty() {
-        return Err(unsupported(
-            format!("{object:?}"),
-            "scene object's surface is built from more than one liquid domain",
-        ));
-    }
-    Ok(domain)
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Candidate {

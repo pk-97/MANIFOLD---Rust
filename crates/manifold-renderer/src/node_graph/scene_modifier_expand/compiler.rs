@@ -15,9 +15,10 @@ use sha2::{Digest, Sha256};
 use crate::node_graph::PortType;
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
 
+use manifold_core::scene_index::FlatSceneIndex;
+
 use super::{
     SceneModifierExpandError, bindings, frames,
-    index::FlatSceneIndex,
     math_view::{LegacyMathViewScope, MathViewRequest},
     namespace,
     routes::{self, PreparedSceneModifierGraph},

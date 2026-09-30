@@ -574,7 +574,7 @@ mod tests {
             matches!(object, SceneObjectVm::Known(row)
                 if row.name == "Moving Box"
                     && row.transform.is_some()
-                    && row.fluid_node_ids.contains(&role.id))
+                    && row.fluid_controls.contains(&role.node_id))
         }));
         flatten_groups(&def).unwrap_or_else(|error| panic!("migrated {label} graph must flatten: {error:?}"));
 

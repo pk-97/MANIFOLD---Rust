@@ -45,6 +45,45 @@ impl PartialOrd for SceneNodeRef {
     }
 }
 
+impl SceneNodeRef {
+    /// The node this reference names in `def`, walking the scope group by
+    /// group.
+    pub fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode> {
+        let mut nodes = def.nodes.as_slice();
+        for group in &self.scope {
+            nodes = &nodes.iter().find(|node| &node.node_id == group)?.group.as_deref()?.nodes;
+        }
+        nodes.iter().find(|node| node.node_id == self.node)
+    }
+
+    /// The scoped reference to the node whose stable id is `node`, anywhere
+    /// in `def`. Stable ids are unique across the whole document.
+    pub fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef> {
+        fn visit(nodes: &[EffectGraphNode], wanted: &NodeId, scope: &mut Vec<NodeId>) -> Option<SceneNodeRef> {
+            for candidate in nodes {
+                if &candidate.node_id == wanted {
+                    return Some(SceneNodeRef { scope: scope.clone(), node: wanted.clone() });
+                }
+                if let Some(group) = candidate.group.as_deref()
+                    && !candidate.node_id.is_empty()
+                {
+                    scope.push(candidate.node_id.clone());
+                    let found = visit(&group.nodes, wanted, scope);
+                    scope.pop();
+                    if found.is_some() {
+                        return found;
+                    }
+                }
+            }
+            None
+        }
+        if node.is_empty() {
+            return None;
+        }
+        visit(&def.nodes, node, &mut Vec::new())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SceneTargetSelection {

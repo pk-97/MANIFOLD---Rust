@@ -11,10 +11,10 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::liquid::frame_ring::{FrameRing, RING};
-use crate::node_graph::matter::{MatterLattice, MatterPoint, PADDING_NODES, solid_bytes};
+use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::matter::{MatterPoint, solid_bytes};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
 
 const SHADER: &str = include_str!("shaders/matter_frame.wgsl");
 
@@ -25,39 +25,6 @@ struct FrameParams {
     previous_count: u32,
     radius_scale: f32,
     _pad0: u32,
-}
-
-/// Signed distance from each lattice node to the nearest closed wall of the
-/// authored box (positive inside, negative past a closed face), the seam's
-/// solid lattice for a domain whose only solids are its walls. Open faces
-/// contribute nothing; with none closed, every node reads the lattice
-/// diagonal.
-pub(crate) fn wall_distance_lattice(lattice: &MatterLattice, closed_faces: u32) -> Vec<f32> {
-    let dx = lattice.cell_size;
-    let low: [f32; 3] = std::array::from_fn(|d| lattice.min[d] + PADDING_NODES as f32 * dx);
-    let high: [f32; 3] = std::array::from_fn(|d| low[d] + lattice.cells[d] as f32 * dx);
-    let far = lattice.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
-    let [nx, ny, nz] = lattice.nodes;
-    let mut out = Vec::with_capacity(lattice.node_count() as usize);
-    for k in 0..nz {
-        for j in 0..ny {
-            for i in 0..nx {
-                let p = [i, j, k].map(|c| c as f32 * dx);
-                let mut distance = far;
-                for d in 0..3 {
-                    let x = lattice.min[d] + p[d];
-                    if closed_faces & (1 << (2 * d)) != 0 {
-                        distance = distance.min(x - low[d]);
-                    }
-                    if closed_faces & (1 << (2 * d + 1)) != 0 {
-                        distance = distance.min(high[d] - x);
-                    }
-                }
-                out.push(distance);
-            }
-        }
-    }
-    out
 }
 
 crate::primitive! {
@@ -133,7 +100,7 @@ impl Primitive for MatterFrame {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as u32;
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
@@ -146,15 +113,15 @@ impl Primitive for MatterFrame {
 
         let solid_key = (
             [
-                lattice.min[0].to_bits(), lattice.min[1].to_bits(), lattice.min[2].to_bits(),
-                lattice.cell_size.to_bits(), lattice.nodes[0], lattice.nodes[1], lattice.nodes[2],
+                lattice.min()[0].to_bits(), lattice.min()[1].to_bits(), lattice.min()[2].to_bits(),
+                lattice.cell_size().to_bits(), lattice.nodes()[0], lattice.nodes()[1], lattice.nodes()[2],
             ],
             closed_faces,
         );
-        let mut solid_refused = None;
+        let mut refused = None;
         let gpu = ctx.gpu_encoder();
         if self.solid_key != Some(solid_key) {
-            let distances = wall_distance_lattice(&lattice, closed_faces);
+            let distances = lattice.wall_distance(closed_faces);
             // A fresh buffer per setup: the previous one may still be read by
             // an in-flight frame; its drop is fence-retired.
             let buffer = gpu.device.create_buffer_shared((distances.len() * 4).max(4) as u64);
@@ -164,9 +131,18 @@ impl Primitive for MatterFrame {
             self.solid_key = Some(solid_key);
         }
 
-        if self.ring.wants_tick(epoch, simulation_time) && let (Some(points), Some(stats)) = (points, stats) {
-            let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
-            let slot = self.ring.begin(gpu.device, bytes, epoch);
+        let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
+        let ring = if self.ring.wants_tick(epoch, simulation_time) && points.is_some() && stats.is_some() {
+            self.ring.begin(gpu.device, bytes, epoch).map(Some).unwrap_or_else(|error| {
+                refused = Some(format!(
+                    "Matter Frame: the particle frames need 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                ));
+                None
+            })
+        } else {
+            None
+        };
+        if let (Some(slot), Some(points), Some(stats)) = (ring, points, stats) {
             let write = slot.write;
             let pipeline = self.convert.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame")
@@ -194,16 +170,20 @@ impl Primitive for MatterFrame {
             if let Some(solid_in) = solid_in {
                 // Each tick's solid lattice sits beside its frame, so A and B
                 // each carry the bodies where their particles were.
-                let bytes = solid_bytes(lattice.nodes);
+                let bytes = solid_bytes(lattice.nodes());
                 let fresh = self.solid_slots.len() < RING || self.solid_slots.iter().any(|s| s.size < bytes);
                 if fresh {
                     // A ring the device cannot give leaves none: this node
                     // names it, and the surface atoms draw nothing without it.
-                    self.solid_slots = (0..RING)
-                        .map(|_| gpu.device.try_create_buffer_shared(bytes.max(4)))
-                        .collect::<Result<_, _>>()
+                    let device = gpu.device;
+                    self.solid_slots = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                        device.modifier_memory_snapshot(),
+                        RING as u64 * bytes.max(4),
+                    )
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| (0..RING).map(|_| device.try_create_buffer_shared(bytes.max(4))).collect::<Result<_, _>>())
                         .unwrap_or_else(|error| {
-                            solid_refused = Some(format!(
+                            refused = Some(format!(
                                 "Matter Frame: the solid lattice needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
                             ));
                             Vec::new()
@@ -224,16 +204,16 @@ impl Primitive for MatterFrame {
             ("count_b", self.ring.count_b() as f32),
             ("identity_a", epoch as f32),
             ("identity_b", epoch as f32),
-            ("grid_nodes_x", lattice.nodes[0] as f32),
-            ("grid_nodes_y", lattice.nodes[1] as f32),
-            ("grid_nodes_z", lattice.nodes[2] as f32),
+            ("grid_nodes_x", lattice.nodes()[0] as f32),
+            ("grid_nodes_y", lattice.nodes()[1] as f32),
+            ("grid_nodes_z", lattice.nodes()[2] as f32),
             ("blend", blend),
             ("span", span),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", lattice.bounds());
-        if let Some(error) = solid_refused {
+        if let Some(error) = refused {
             ctx.error(error);
         }
     }
@@ -244,21 +224,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matter_frame_wall_lattice_is_signed_distance_to_closed_faces() {
-        let layout = crate::node_graph::fluid::domain_layout(None, 1.0, 8).unwrap();
-        let lattice = MatterLattice::from_layout(&layout);
-        let dx = lattice.cell_size;
-        let all = wall_distance_lattice(&lattice, 63);
-        let n = lattice.nodes;
-        let at = |i: u32, j: u32, k: u32| all[((k * n[1] + j) * n[0] + i) as usize];
-        // The authored floor sits on node 3; one node below reads −dx.
-        assert!((at(7, 3, 7)).abs() < 1e-6);
-        assert!((at(7, 2, 7) + dx).abs() < 1e-6);
-        assert!((at(7, 5, 7) - 2.0 * dx).abs() < 1e-5);
-        // An open top: the node above the ceiling is not inside a solid.
-        let open_top = wall_distance_lattice(&lattice, 63 & !(1 << 3));
-        let top = n[1] - 1;
-        assert!(open_top[((7 * n[1] + top) * n[0] + 7) as usize] > 0.0);
+    fn matter_frame_params_match_the_shader() {
         assert_eq!(std::mem::size_of::<FrameParams>(), 16);
     }
 }

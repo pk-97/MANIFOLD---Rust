@@ -12,10 +12,10 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{MatterGridNode, MatterPoint, STATS_WORDS};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
 
 const SHADER: &str = include_str!("shaders/matter_stats.wgsl");
 /// Elements one workgroup folds: 256 threads × 8.
@@ -121,7 +121,7 @@ impl Primitive for MatterStats {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let run_now = ctx.scalar_or_param("tick_end", 1.0) > 0.5;
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as u32;
@@ -173,9 +173,9 @@ impl Primitive for MatterStats {
             node_count,
             point_groups,
             node_groups,
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
             lambda,
             gravity_x: gravity[0],
             gravity_y: gravity[1],

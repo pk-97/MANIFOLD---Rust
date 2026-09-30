@@ -11,10 +11,10 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::solid_bytes;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::matter_common::read_lattice;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
@@ -103,7 +103,7 @@ impl Primitive for LiquidSolidDistance {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
@@ -112,7 +112,7 @@ impl Primitive for LiquidSolidDistance {
         let nodes = lattice.node_count();
         // The storage follows the node count the dispatch covers, before it
         // is encoded.
-        let bytes = solid_bytes(lattice.nodes);
+        let bytes = solid_bytes(lattice.nodes());
         if self.solid.as_ref().is_none_or(|solid| solid.size < bytes) {
             let device = ctx.gpu_encoder().device;
             let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
@@ -141,13 +141,13 @@ impl Primitive for LiquidSolidDistance {
         let rows = rows.min((bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32);
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let uniforms = SolidDistanceUniforms {
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
-            cell_size: lattice.cell_size,
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
+            cell_size: lattice.cell_size(),
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
             closed_faces,
             body_count,
             rows,

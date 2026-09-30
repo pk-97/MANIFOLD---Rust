@@ -46,7 +46,7 @@ impl PreparedGraphValueWrites {
         graph: &Graph,
         fused_retarget: &AHashMap<(String, String), (NodeId, String)>,
     ) -> Result<Self, SceneModifierExpandError> {
-        let host_index = super::index::FlatSceneIndex::build(owner)?;
+        let host_index = manifold_core::scene_index::FlatSceneIndex::build(owner)?;
         let mut owners = Vec::with_capacity(1 + owner.scene_modifiers.len());
         for (modifier, local) in std::iter::once((None, owner)).chain(
             owner
