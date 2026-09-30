@@ -89,8 +89,9 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
     let domain = settings.domain_layout().expect("dam break domain");
     let mut world = seeded_world(settings, domain, true).expect("dam break world");
     world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
-    // The floor in native coordinates: the scene floor moved by the padding.
-    let floor = f64::from(domain.to_native(domain.min)[1]);
+    // The tank in native coordinates: the scene box moved by the padding.
+    let tank_min = domain.to_native(domain.min).map(f64::from);
+    let tank_size = f64::from(domain.cells[0]) * domain.cell_size;
     let mut surface = Vec::new();
     let (mut wall, mut reported, mut substeps, mut drift, mut raw) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut oracle = None;
@@ -106,7 +107,7 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
         motions.push(m);
         packed.push(pack);
         world.surface(&mut surface).expect("engine surface");
-        let measure = volume_and_area(triangles(&surface), floor);
+        let measure = volume_and_area(triangles(&surface), tank_min, tank_size);
         raw.push(measure.0);
         if frame == 0 {
             particles = stats.particles;

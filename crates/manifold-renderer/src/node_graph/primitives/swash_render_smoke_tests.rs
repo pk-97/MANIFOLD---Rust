@@ -230,7 +230,7 @@ impl Smoke {
             sampler,
             step_names,
             solid,
-            solid_values: scene.with_closed_surface().surface_solid(),
+            solid_values: scene.surface_solid(),
             frame_count: 0,
             time: 0.0,
             trigger: 0,
