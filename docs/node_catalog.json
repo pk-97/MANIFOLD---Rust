@@ -21500,7 +21500,7 @@
     {
       "aliases": [
         "level set",
-        "particle density",
+        "signed distance",
         "liquid field",
         "scalar field"
       ],
@@ -21575,11 +21575,6 @@
         },
         {
           "name": "cell_size",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "threshold",
           "required": false,
           "type": "f32"
         },
@@ -21731,16 +21726,6 @@
           "type": "int"
         },
         {
-          "default": "0.5",
-          "label": "Threshold",
-          "name": "threshold",
-          "range": [
-            "0.01",
-            "8"
-          ],
-          "type": "float"
-        },
-        {
           "default": "0",
           "label": "Bins X",
           "name": "bins_x",
@@ -21771,10 +21756,10 @@
           "type": "int"
         }
       ],
-      "purpose": "The liquid's level set on a lattice: at each node, threshold minus the sum of every nearby kernel's (1 − |G·(x − c)|²)³, so negative is inside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is empty, so the surface closes.",
+      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a tenth of a bin outside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Turns liquid particles into a smooth density field on a grid, the step before the surface mesh is drawn.",
+      "summary": "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
       "type_id": "node.particle_volume"
     },
     {
