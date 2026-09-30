@@ -8,7 +8,8 @@ use ahash::AHashMap;
 use super::sort_particles_into_cells::range_storage_bytes;
 use super::swash_preset::{PressureShape, WaterScene, pressure_def, water_def};
 use crate::node_graph::effect_node::ParamValues;
-use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle, bin_counts};
+use crate::generators::mesh_common::MeshVertex;
+use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, FluidParticle, bin_counts};
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
@@ -17,6 +18,8 @@ use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegist
 const PARTICLE: u64 = std::mem::size_of::<FluidParticle>() as u64;
 const FACE: u64 = std::mem::size_of::<FaceSample>() as u64;
 const RANGE: u64 = std::mem::size_of::<CellRange>() as u64;
+const BLOB: u64 = std::mem::size_of::<FluidBlob>() as u64;
+const VERTEX: u64 = std::mem::size_of::<MeshVertex>() as u64;
 
 fn registry() -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
@@ -64,8 +67,11 @@ impl Sizes<'_> {
     /// `particles` is the liquid's particle count; 0 for the bare solve.
     fn check(&self, shape: PressureShape, particles: u64) -> usize {
         let names: AHashMap<_, _> = self.graph.nodes().map(|n| (n.id, n)).collect();
+        let wired = |step: &crate::node_graph::ExecutionStep, port: &str| step.inputs.iter().any(|(name, _)| *name == port);
         // Provided arrays are allocated in run(), sized from params:
-        // krylov_basis's vectors, the fill's particles, the sort's ranges.
+        // krylov_basis's vectors, the fill's particles, the step sorts'
+        // ranges. The surface's sort takes its bin size from a wire and
+        // sizes its own ranges; its readers check them (searched_bins).
         let mut provided = AHashMap::default();
         for step in self.plan.steps() {
             let node = names[&step.node];
@@ -75,12 +81,22 @@ impl Sizes<'_> {
                     ("node.krylov_basis", "basis") => param(p, "row_length") * 4 * (param(p, "passes") + 1),
                     ("node.krylov_basis", "current") => param(p, "row_length") * 4,
                     ("node.liquid_fill", "particles") => param(p, "max_capacity") * PARTICLE,
-                    ("node.sort_particles_into_cells", "cell_ranges") => range_storage_bytes(sort_bins(p)),
+                    ("node.sort_particles_into_cells", "cell_ranges") if !wired(step, "cell_size") => {
+                        range_storage_bytes(sort_bins(p))
+                    }
                     _ => continue,
                 };
                 provided.insert(*resource, bytes);
             }
         }
+        // The surface lattice: the solid lattice is the cell corners, refined
+        // resolution_scale times per cell by particle_volume.
+        let corners = shape.n as u64 + 1;
+        let refined = self
+            .graph
+            .nodes()
+            .find(|n| n.node.type_id().as_str() == "node.particle_volume")
+            .map(|n| shape.n as u64 * param(&n.params, "resolution_scale") + 1);
         let mut checked = 0;
         for step in self.plan.steps() {
             let node = names[&step.node];
@@ -108,8 +124,37 @@ impl Sizes<'_> {
             let ranges = side.pow(3) * RANGE;
             let particle_bytes = particles * PARTICLE;
             let on_lattice = || assert_eq!(lattice(p), [side; 3], "{} is off the lattice", node.node_id.as_str());
+            let surface = || refined.expect("a surface node without particle_volume");
             match ty {
-                "test.value_source" | "test.value_sink" | "test.liquid_sink" | "system.final_output" => continue,
+                "test.value_source" | "test.value_sink" | "test.liquid_sink" | "test.mesh_sink" | "system.final_output"
+                | "node.transform_3d" | "node.transform_components" | "node.value" | "node.math" => continue,
+                "node.sort_particles_into_cells" if wired(step, "cell_size") => {
+                    covers("particles", particle_bytes);
+                    covers("sorted", particle_bytes);
+                    covers_if_bound("order", particles * 4);
+                }
+                "node.shape_particle_blobs" => {
+                    covers("sorted", particle_bytes);
+                    covers("blobs", particles * BLOB);
+                }
+                "node.particle_volume" => {
+                    covers("solid", corners.pow(3) * 4);
+                    covers("blobs", particles * BLOB);
+                    covers("levelset", surface().pow(3) * 4);
+                }
+                "node.smooth_lattice" if wired(step, "nodes_x") => {
+                    covers("levelset", surface().pow(3) * 4);
+                    covers("smoothed", surface().pow(3) * 4);
+                }
+                "node.count_surface_triangles" => {
+                    covers("levelset", surface().pow(3) * 4);
+                    covers("counts", (surface() - 1).pow(3) * 4);
+                }
+                "node.volume_surface_mesh" => {
+                    covers("levelset", surface().pow(3) * 4);
+                    covers("scan", (surface() - 1).pow(3) * 4);
+                    covers("vertices", param(p, "max_capacity") * VERTEX);
+                }
                 "node.liquid_fill" => {
                     on_lattice();
                     assert_eq!(param(p, "max_capacity"), particles, "the fill holds every particle it places");
@@ -170,7 +215,7 @@ impl Sizes<'_> {
                 }
                 "node.running_total" => {
                     covers("in", cells);
-                    covers("out", cells);
+                    covers("out", size("in").unwrap_or(0));
                 }
                 "node.select_flagged" => {
                     assert_eq!(param(p, "capacity"), entries);
@@ -331,7 +376,9 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
 #[test]
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
-    for (n, scene) in [64, 128].into_iter().flat_map(|n| scenes.map(|at| (n, at(n)))) {
+    let all = [64, 128].into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
+    for scene in all {
+        let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
         assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
@@ -339,6 +386,10 @@ fn fft_water_scenes_cover_every_dispatch() {
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
         let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
         assert!(checked > 150, "checked only {checked} nodes at {n}³");
+        let meshed = plan.steps().iter().any(|step| {
+            graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
+        });
+        assert_eq!(meshed, scene.surface, "the surface is in the plan exactly when asked for");
     }
 }
 
@@ -391,6 +442,22 @@ fn fft_water_pressure_has_no_fused_region() {
     let report = crate::node_graph::fusion_report(&pressure_def(PressureShape::at(64)), &registry());
     let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
     assert!(fused.is_empty(), "the pressure solve now fuses {fused:?}; prove the frozen solve matches the unfrozen one");
+}
+
+/// Nothing in the water step fuses yet. Most of its edges end at a gather
+/// input (particles_to_faces, extend_faces, face_divergence's faces,
+/// subtract_pressure's pressure, faces_to_particles' faces), which is a
+/// fusion cut by design; gravity → subtract_pressure is cut because the
+/// pressure between them depends on gravity. The one pair codegen could
+/// fuse, cells_with_particles → face_divergence's coincident water, is
+/// refused because both are sized by lattice params: BUG-u8io
+/// (fft-water-fusion-param-capacity). When this fails, fusion has learned
+/// it: prove the frozen step matches the unfrozen one.
+#[test]
+fn fft_water_step_has_no_fused_region() {
+    let report = crate::node_graph::fusion_report(&water_def(WaterScene::dam_break(64)), &registry());
+    let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
+    assert!(fused.is_empty(), "the water step now fuses {fused:?}; prove the frozen step matches the unfrozen one");
 }
 
 /// `tests/fixtures/presets/fft_water_pressure.json` is the 64³ graph.

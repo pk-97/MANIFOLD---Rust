@@ -65,12 +65,30 @@ pub(super) struct WaterScene {
     pub flip: f64,
     pub fill_height: f64,
     pub column: [[f64; 2]; 3],
+    /// Mesh the liquid with the shipped GPU liquid surface.
+    pub surface: bool,
 }
 
 impl WaterScene {
     /// The engine's Dam Break, obstacle unwired.
     pub fn dam_break(n: usize) -> Self {
-        Self { pressure: PressureShape::at(n), steps: 2, flip: 0.95, fill_height: DAM_FILL_HEIGHT, column: DAM_COLUMN }
+        Self {
+            pressure: PressureShape::at(n),
+            steps: 2,
+            flip: 0.95,
+            fill_height: DAM_FILL_HEIGHT,
+            column: DAM_COLUMN,
+            surface: false,
+        }
+    }
+
+    pub fn with_surface(self) -> Self {
+        Self { surface: true, ..self }
+    }
+
+    /// Nodes per axis of the surface's solid lattice: the cell corners.
+    pub fn surface_nodes(&self) -> usize {
+        self.pressure.n + 1
     }
 
     /// A pool 1 m deep and nothing else (I5).
@@ -308,11 +326,62 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
     }
     b.prefix.clear();
     b.wire(particles, state, "in");
-    let sink = b.node("sink", "test.liquid_sink", json!({}));
-    b.wire(particles, sink, "particles");
     let output = b.node("output", "system.final_output", json!({}));
+    let sink = if scene.surface {
+        let mesh = surface(&mut b, scene, particles, (fill, "count"));
+        let sink = b.node("mesh_sink", "test.mesh_sink", json!({}));
+        b.wire(mesh, sink, "vertices");
+        sink
+    } else {
+        let sink = b.node("sink", "test.liquid_sink", json!({}));
+        b.wire(particles, sink, "particles");
+        sink
+    };
     b.wire((sink, "out"), output, "in");
-    serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("dam break def")
+    serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("water def")
+}
+
+/// The `liquid_surface` group of `WaterDamBreakGpu.json`, so SWASH is meshed
+/// exactly as the shipped GPU surface meshes the engine's particles.
+fn surface_group() -> Value {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpu.json");
+    let preset: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses");
+    let nodes = preset["nodes"].as_array().expect("preset nodes");
+    nodes.iter().find(|node| node["nodeId"] == "liquid_surface").expect("liquid surface group").clone()
+}
+
+/// The liquid surface over the tank: its solid lattice is the cell corners,
+/// with no solid in it (`solid` is a test source the harness zeroes).
+fn surface(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
+    let nodes = scene.surface_nodes();
+    let solid = b.node("solid", "test.value_source", json!({"max_capacity": int(nodes.pow(3))}));
+    let half = 0.5 * BOX_METRES;
+    let bounds = b.node(
+        "tank",
+        "node.transform_3d",
+        json!({
+            "pos_x": float(DAM_MIN[0] + half),
+            "pos_y": float(DAM_MIN[1] + half),
+            "pos_z": float(DAM_MIN[2] + half),
+            "scale_x": float(BOX_METRES),
+            "scale_y": float(BOX_METRES),
+            "scale_z": float(BOX_METRES),
+        }),
+    );
+    let corners = b.node("corners", "node.value", json!({"value": float(nodes as f64)}));
+    let mut group = surface_group();
+    let id = b.nodes.len();
+    group["id"] = json!(id);
+    group["nodeId"] = json!("surface");
+    b.nodes.push(group);
+    b.wire(particles, id, "particles");
+    b.wire(count, id, "count");
+    b.wire((solid, "out"), id, "solid");
+    b.wire((bounds, "transform"), id, "bounds");
+    for axis in ["nodes_x", "nodes_y", "nodes_z"] {
+        b.wire((corners, "out"), id, axis);
+    }
+    (id, "vertices")
 }
 
 /// Lattice params plus the lattice's box: cell size and lowest corner.

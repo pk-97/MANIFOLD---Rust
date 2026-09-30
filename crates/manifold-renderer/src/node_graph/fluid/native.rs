@@ -36,6 +36,37 @@ impl PreparedTick<'_> {
     }
 }
 
+/// A native world with a scene's settings and its initial liquid: the fill
+/// and the initial volume, before roles or coupling.
+pub(super) fn seeded_world(
+    settings: super::FluidSettings,
+    domain: super::FluidDomainLayout,
+    surface_meshing: bool,
+) -> Result<FluidWorld, String> {
+    let mut new = FluidWorld::new_seeded(domain.config(settings), settings.seed).map_err(|e| e.to_string())?;
+    new.set_liquid_options(settings.liquid).map_err(|e| e.to_string())?;
+    new.set_time_step_options(settings.time_steps).map_err(|e| e.to_string())?;
+    new.set_surface_options(settings.surface).map_err(|e| e.to_string())?;
+    new.set_surface_reconstruction_enabled(surface_meshing).map_err(|e| e.to_string())?;
+    new.set_whitewater_options(settings.whitewater).map_err(|e| e.to_string())?;
+    new.set_boundary_collisions(settings.boundary_collisions).map_err(|e| e.to_string())?;
+    if settings.fill_height > 0.0 {
+        let min = domain.to_native(domain.min);
+        new.add_fluid_box(
+            Bounds {
+                min,
+                max: [min[0] + domain.size[0], min[1] + settings.fill_height, min[2] + domain.size[2]],
+            },
+            [0.0; 3],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    if let Some(volume) = settings.initial_volume {
+        new.add_fluid_box(domain.bounds(volume), [0.0; 3]).map_err(|e| e.to_string())?;
+    }
+    Ok(new)
+}
+
 /// Native FLIP and cache ownership stays together on the worker thread.
 #[derive(Default)]
 pub(super) struct NativeSimulation {
@@ -69,36 +100,7 @@ impl NativeSimulation {
         // content thread along with all native work.
         self.world = None;
         self.coupled = None;
-        let mut new =
-            FluidWorld::new_seeded(domain.config(request.settings), request.settings.seed)
-                .map_err(|e| e.to_string())?;
-        new.set_liquid_options(request.settings.liquid)
-            .map_err(|e| e.to_string())?;
-        new.set_time_step_options(request.settings.time_steps)
-            .map_err(|e| e.to_string())?;
-        new.set_surface_options(request.settings.surface)
-            .map_err(|e| e.to_string())?;
-        new.set_surface_reconstruction_enabled(request.outputs.surface_meshing)
-            .map_err(|e| e.to_string())?;
-        new.set_whitewater_options(request.settings.whitewater)
-            .map_err(|e| e.to_string())?;
-        new.set_boundary_collisions(request.settings.boundary_collisions)
-            .map_err(|e| e.to_string())?;
-        if request.settings.fill_height > 0.0 {
-            let min = domain.to_native(domain.min);
-            new.add_fluid_box(
-                Bounds {
-                    min,
-                    max: [min[0] + domain.size[0], min[1] + request.settings.fill_height, min[2] + domain.size[2]],
-                },
-                [0.0; 3],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if let Some(volume) = request.settings.initial_volume {
-            new.add_fluid_box(domain.bounds(volume), [0.0; 3])
-                .map_err(|e| e.to_string())?;
-        }
+        let mut new = seeded_world(request.settings, domain, request.outputs.surface_meshing)?;
         self.native_roles = roles::NativeRoles::prepare(&mut new, &request.role_setup, domain)?;
         if let Some(coupled) = coupled {
             self.coupled = Some(coupled::Native::prepare(

@@ -19,6 +19,15 @@ use crate::node_graph::{
 
 const G: f64 = 9.81;
 
+/// The node whose id ends with `name`: the flattened surface group's nodes
+/// carry the group's path before their own id.
+fn node_ending(graph: &Graph, name: &str) -> crate::node_graph::NodeInstanceId {
+    let mut found = graph.nodes().filter(|n| n.node_id.as_str().ends_with(name));
+    let node = found.next().unwrap_or_else(|| panic!("no node ending {name}"));
+    assert!(found.next().is_none(), "two nodes end {name}");
+    node.id
+}
+
 /// A scene's graph compiled and bound once, run frame by frame.
 struct Run {
     device: crate::TestDevice,
@@ -42,18 +51,61 @@ impl Run {
         let mut exec = Executor::new(Box::new(backend));
         // Everything read after a frame is held past it.
         let last = scene.steps - 1;
-        let mut watched = vec![format!("s{last}.move")];
+        let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
             for name in ["water", "project", "collar_total", "divergence"] {
-                watched.push(format!("s{k}.{name}"));
+                watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
-        exec.set_dump_set(Some(watched.iter().map(|name| node_named(&graph, name)).collect()));
+        if scene.surface {
+            watched.extend(["liquid_offsets", "liquid_mesh"].map(|name| node_ending(&graph, name)));
+        }
+        exec.set_dump_set(Some(watched.into_iter().collect()));
         Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 }
+    }
+
+    /// The surface's solid lattice holds no solid: zero at every node. The
+    /// planner may recycle a source's storage, so it is written every frame.
+    fn clear_solid(&self) {
+        let resource = output_of(&self.plan, node_named(&self.graph, "solid"), "out");
+        let backend = self.exec.backend();
+        let buffer = backend.array_buffer(backend.slot_for(resource).expect("solid bound")).expect("solid buffer");
+        let nodes = self.scene.surface_nodes().pow(3);
+        assert!(buffer.size as usize >= nodes * 4, "the solid source holds the corner lattice");
+        // SAFETY: shared storage of at least `nodes` floats; no frame is in flight.
+        unsafe { buffer.write(0, bytemuck::cast_slice(&vec![0.0_f32; nodes])) };
+    }
+
+    /// The surface mesh's signed volume in m³: Σ v0 · (v1 × v2) / 6 over its
+    /// live triangles.
+    /// The volume the surface mesh encloses with the tank, in m³. The mesh
+    /// stays open where the water meets a wall or the floor, so the volume is
+    /// the flux of (0, y, 0) through it, Σ ȳ · (n·A)_y per triangle: the
+    /// missing wall pieces carry no y-flux and the floor sits at y = 0, so
+    /// they add nothing. Only water on the lid (y = 4 m) would be missed.
+    fn surface_volume(&self) -> f64 {
+        // The running total's `extent` starts with the grand total: triangles.
+        let extent: Vec<u32> = self.read_at(node_ending(&self.graph, "liquid_offsets"), "extent", 1);
+        let vertices: Vec<crate::generators::mesh_common::MeshVertex> =
+            self.read_at(node_ending(&self.graph, "liquid_mesh"), "vertices", 3 * extent[0] as usize);
+        let floor = super::swash_preset::DAM_MIN[1];
+        vertices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|i| t[i].position.map(f64::from));
+                let (u, v) = ([b[0] - a[0], b[2] - a[2]], [c[0] - a[0], c[2] - a[2]]);
+                // y component of ½ (b − a) × (c − a).
+                let area_y = 0.5 * (u[1] * v[0] - u[0] * v[1]);
+                ((a[1] + b[1] + c[1]) / 3.0 - floor) * area_y
+            })
+            .sum()
     }
 
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     fn frame(&mut self) -> (f64, f64) {
+        if self.scene.surface {
+            self.clear_solid();
+        }
         let mut enc = self.device.create_encoder("swash-scene");
         let cpu_ms;
         {
@@ -75,10 +127,14 @@ impl Run {
     }
 
     fn read<T: bytemuck::Pod>(&self, node: &str, port: &str, len: usize) -> Vec<T> {
-        let resource = output_of(&self.plan, node_named(&self.graph, node), port);
+        self.read_at(node_named(&self.graph, node), port, len)
+    }
+
+    fn read_at<T: bytemuck::Pod>(&self, node: crate::node_graph::NodeInstanceId, port: &str, len: usize) -> Vec<T> {
+        let resource = output_of(&self.plan, node, port);
         let backend = self.exec.backend();
         let buffer = backend.array_buffer(backend.slot_for(resource).expect("output bound")).expect("array output");
-        assert!(buffer.size as usize >= len * std::mem::size_of::<T>(), "{node}.{port} is shorter than {len} records");
+        assert!(buffer.size as usize >= len * std::mem::size_of::<T>(), "{node:?}.{port} is shorter than {len} records");
         let ptr = buffer.mapped_ptr().expect("shared storage");
         // SAFETY: the frame completed and the buffer holds `len` records.
         unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
@@ -216,11 +272,12 @@ fn report_packing(particles: &[FluidParticle], n: usize, h: f64) {
     }
     let live = particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
     println!(
-        "SWASH packing: {live} particles in {} cells ({:.2} per cell; the fill is 8); cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} within 0.5 m of the lid, mean height {:.3} m",
+        "SWASH packing: {live} particles in {} cells, {:.2} per cell (the fill is 8), mean height {:.3} m",
         occupied.len(),
         live as f64 / occupied.len() as f64,
         height / live as f64
     );
+    println!("SWASH packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
 /// Momentum: a block of water in free fall, clear of the walls for the
@@ -278,13 +335,64 @@ fn fft_water_still_pool() {
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
 }
 
-/// The Dam Break at 64³ for 300 frames: per-frame cost, divergence after
+fn median(v: &[f64]) -> f64 {
+    let mut v = v.to_vec();
+    v.sort_by(f64::total_cmp);
+    v[v.len() / 2]
+}
+
+fn worst(v: &[f64]) -> f64 {
+    v.iter().copied().fold(0.0_f64, f64::max)
+}
+
+/// The Dam Break for 300 frames, meshed by the shipped GPU liquid surface:
+/// per-frame GPU and CPU encode ms, and the surface's volume against frame
+/// 0's. The step alone is timed by `dam_break_step`; the difference is the
+/// surface.
+fn dam_break_meshed(n: usize) {
+    let scene = WaterScene::dam_break(n).with_surface();
+    let mut run = Run::new(scene);
+    let (mut gpu, mut cpu, mut drift) = (Vec::new(), Vec::new(), Vec::new());
+    let mut first = None;
+    for frame in 0..300 {
+        let (g, c) = run.frame();
+        gpu.push(g);
+        cpu.push(c);
+        let volume = run.surface_volume();
+        let v0 = *first.get_or_insert(volume);
+        drift.push((volume / v0 - 1.0).abs());
+        if frame % 30 == 29 {
+            println!("SWASH meshed dam break {n}³ frame {frame:3}: {g:.2} ms GPU, {c:.2} ms CPU, volume {volume:.4} m³ ({:+.2}% of frame 0)", 100.0 * (volume / v0 - 1.0));
+        }
+    }
+    // Short lines: the tool output around these probes cuts long ones.
+    println!("SWASH meshed {n}³ over 300 frames: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&gpu), median(&cpu));
+    println!(
+        "SWASH meshed {n}³ volume: frame 0 {:.4} m³, drift max {:.2}%, at frame 300 {:.2}%",
+        first.unwrap_or(0.0),
+        100.0 * worst(&drift),
+        100.0 * drift.last().copied().unwrap_or(0.0)
+    );
+}
+
+#[test]
+fn fft_water_cost_probe() {
+    dam_break_step(64);
+    dam_break_meshed(64);
+}
+
+#[test]
+fn fft_water_cost_probe_refined() {
+    dam_break_step(128);
+    dam_break_meshed(128);
+}
+
+/// The Dam Break step alone for 300 frames: per-frame cost, divergence after
 /// projection, collar size and occupancy. It asserts only what must hold
 /// for the numbers to mean anything: no GPU fault, every particle alive and
 /// finite, the collar within capacity.
-#[test]
-fn fft_water_cost_probe() {
-    let scene = WaterScene::dam_break(64);
+fn dam_break_step(n: usize) {
+    let scene = WaterScene::dam_break(n);
     let mut run = Run::new(scene);
     let (n, h) = (run.n(), scene.pressure.cell_size());
     let (mut gpu, mut cpu, mut rms, mut max) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -325,19 +433,17 @@ fn fft_water_cost_probe() {
         }
     }
     report_packing(&run.particles(), n, h);
-    let median = |v: &mut Vec<f64>| {
-        v.sort_by(f64::total_cmp);
-        v[v.len() / 2]
-    };
-    let worst = |v: &[f64]| v.iter().copied().fold(0.0_f64, f64::max);
+    // Short lines: the tool output around these probes cuts long ones.
+    println!("SWASH step {n}³ over 300 frames: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&gpu), median(&cpu));
     println!(
-        "SWASH dam break {n}³ over 300 frames: GPU {:.2} ms median, CPU encode {:.2} ms median; divergence rms median {:.2e} worst {:.2e}, max median {:.2e} worst {:.2e} /s; collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks, {height_max} cells tall",
-        median(&mut gpu.clone()),
-        median(&mut cpu.clone()),
-        median(&mut rms.clone()),
+        "SWASH step {n}³ divergence /s: rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e}",
+        median(&rms),
         worst(&rms),
-        median(&mut max.clone()),
-        worst(&max),
+        median(&max),
+        worst(&max)
+    );
+    println!(
+        "SWASH step {n}³ occupancy: collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks, {height_max} cells tall",
         scene.pressure.capacity,
         100.0 * water_max,
         100.0 * blocks_max
