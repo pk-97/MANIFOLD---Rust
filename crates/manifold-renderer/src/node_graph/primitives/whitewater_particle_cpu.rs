@@ -225,6 +225,171 @@ pub(super) fn wavecrest(
     ((k - crest.min_curvature) / (crest.max_curvature - crest.min_curvature), margin)
 }
 
+/// FLIP's emitter radius over the cell size, 8 · (3 / 32π)^(1/3): the spawn
+/// body's `SW_EMITTER_RADIUS`, the same literal.
+const EMITTER_RADIUS: f32 = 2.481_402;
+
+/// FLIP's own truncated 2π (`twopi` in `_emitDiffuseParticles`), the spawn
+/// body's `SW_TWO_PI`.
+#[expect(clippy::approx_constant, reason = "FLIP's literal, not TAU: the port matches it digit for digit")]
+const FLIP_TWO_PI: f32 = 6.28318;
+
+/// `node.spawn_whitewater` inputs besides the arrays.
+#[derive(Clone, Copy)]
+pub(super) struct Spawn {
+    pub capacity: u32,
+    pub emitters: u32,
+    pub seed: f32,
+    pub epoch: f32,
+    pub min_lifetime: f32,
+    pub max_lifetime: f32,
+    pub variance: f32,
+}
+
+/// The arrays `node.spawn_whitewater` gathers.
+pub(super) struct SpawnFields<'a> {
+    pub offsets: &'a [u32],
+    pub particles: &'a [FluidParticle],
+    pub energy: &'a [f32],
+    pub faces: [&'a [f32]; 3],
+    pub face_cells: [u32; 3],
+    pub solid: &'a [f32],
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    v.map(|c| c / l)
+}
+
+/// The solid lattice's distance at grid position q, trilinear over its
+/// nodes, a node past the lattice reading 0.
+fn solid_at(solid: &[f32], grid: &Box3, q: [f32; 3]) -> f32 {
+    let nodes = grid.cells.map(|c| c as i32 + 1);
+    let lower = q.map(f32::floor);
+    let f: [f32; 3] = std::array::from_fn(|a| q[a] - lower[a]);
+    let mut d = 0.0;
+    for c in 0..8 {
+        let o = corner(c);
+        let n: [i32; 3] = std::array::from_fn(|a| lower[a] as i32 + o[a]);
+        if (0..3).all(|a| n[a] >= 0 && n[a] < nodes[a]) {
+            let i = n[0] as usize + nodes[0] as usize * (n[1] as usize + nodes[1] as usize * n[2] as usize);
+            d += corner_weight(f, c) * solid[i];
+        }
+    }
+    d
+}
+
+/// `node.spawn_whitewater` for slot `j`, and the smallest gap between a
+/// dropping test and its threshold, in cells or seconds.
+pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> (manifold_fluids::WhitewaterSpawn, f32) {
+    let empty = manifold_fluids::WhitewaterSpawn::default();
+    let n = (s.emitters as usize).min(fields.offsets.len());
+    if n == 0 || s.capacity == 0 {
+        return (empty, f32::INFINITY);
+    }
+    let total = fields.offsets[n - 1];
+    if j >= total.min(s.capacity) {
+        return (empty, f32::INFINITY);
+    }
+    let m = if total > s.capacity { (u64::from(j) * u64::from(total) / u64::from(s.capacity)) as u32 } else { j };
+    let e = fields.offsets[..n].partition_point(|&o| o <= m);
+    let emitter = fields.particles[e];
+    let v = emitter.velocity;
+    let speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if emitter.position_radius[3] <= 0.0 || speed < 1e-3 {
+        return (empty, f32::INFINITY);
+    }
+    let h = grid.cell_size();
+    let axis = normalize(v);
+    let e1 = if axis[0].abs() - 1.0 < 1e-3 && axis[1].abs() < 1e-3 && axis[2].abs() < 1e-3 {
+        normalize(cross(axis, [0.0, 1.0, 0.0]))
+    } else {
+        normalize(cross(axis, [1.0, 0.0, 0.0]))
+    };
+    let e2 = normalize(cross(axis, e1));
+    let (seed, generation) = (s.seed.to_bits(), s.epoch.round().max(0.0) as u32);
+    let r = EMITTER_RADIUS * h * random(j, seed, generation, 4).sqrt();
+    let theta = random(j, seed, generation, 5) * FLIP_TWO_PI;
+    let along = random(j, seed, generation, 6) * speed / 60.0;
+    let p: [f32; 3] = std::array::from_fn(|a| {
+        emitter.position_radius[a] + r * theta.cos() * e1[a] + r * theta.sin() * e2[a] + along * axis[a]
+    });
+    let q = grid.position(p);
+    let mut margin = q.iter().zip(grid.cells).map(|(&v, c)| v.abs().min((v - c as f32).abs())).fold(f32::INFINITY, f32::min);
+    if !grid.in_grid(q.map(|v| v.floor() as i32)) {
+        return (empty, margin);
+    }
+    let clearance = solid_at(fields.solid, grid, q) - 0.25 * h;
+    margin = margin.min(clearance.abs() / h);
+    if clearance < 0.0 {
+        return (empty, margin);
+    }
+    let lifetime = s.min_lifetime
+        + fields.energy[e] * (s.max_lifetime - s.min_lifetime)
+        + s.variance * (2.0 * random(j, seed, generation, 7) - 1.0);
+    margin = margin.min(lifetime.abs());
+    if lifetime <= 0.0 {
+        return (empty, margin);
+    }
+    let probe = FluidParticle { position_radius: [p[0], p[1], p[2], 1.0], velocity: [0.0; 3], id: 0 };
+    let velocity = sample_faces(probe, fields.faces, fields.face_cells, grid).velocity;
+    (manifold_fluids::WhitewaterSpawn { position_lifetime: [p[0], p[1], p[2], lifetime], velocity, kind: 0 }, margin)
+}
+
+/// `node.whitewater_type` for one record, and the smallest gap between a
+/// deciding value and its threshold, in cells.
+pub(super) fn kind(spawn: manifold_fluids::WhitewaterSpawn, distance: &[f32], cells: &[u32], grid: &Box3) -> (u32, f32) {
+    if spawn.position_lifetime[3] <= 0.0 {
+        return (spawn.kind, f32::INFINITY);
+    }
+    let h = grid.cell_size();
+    let q = grid.position([spawn.position_lifetime[0], spawn.position_lifetime[1], spawn.position_lifetime[2]]);
+    let lo = 1.625 + 0.5e-6 / h;
+    let mut margin = (0..3).map(|a| (q[a] - lo).abs().min((q[a] - (grid.cells[a] as f32 - lo)).abs())).fold(f32::INFINITY, f32::min);
+    if (0..3).any(|a| q[a] < lo || q[a] >= grid.cells[a] as f32 - lo) {
+        return (2, margin);
+    }
+    let s = q.map(|v| v - 0.5);
+    let lower = s.map(f32::floor);
+    let f: [f32; 3] = std::array::from_fn(|a| s[a] - lower[a]);
+    let mut d = 0.0;
+    for c in 0..8 {
+        let o = corner(c);
+        let at: [i32; 3] = std::array::from_fn(|a| lower[a] as i32 + o[a]);
+        if grid.in_grid(at) {
+            d += corner_weight(f, c) * distance[grid.index(at)];
+        }
+    }
+    margin = margin.min((d.abs() - h).abs() / h);
+    let mut kind = if d > -h && d < h {
+        1
+    } else if d < -h {
+        0
+    } else {
+        2
+    };
+    if kind != 0 {
+        let g = q.map(|v| v.floor() as i32);
+        margin = margin.min(q.iter().map(|v| (v - v.round()).abs()).fold(f32::INFINITY, f32::min));
+        let air = (-1..=1).any(|dz| {
+            (-1..=1).any(|dy| {
+                (-1..=1).any(|dx| {
+                    let n = [g[0] + dx, g[1] + dy, g[2] + dz];
+                    (dx, dy, dz) != (0, 0, 0) && grid.in_grid(n) && cells[grid.index(n)] == CELL_AIR
+                })
+            })
+        });
+        if !air {
+            kind = 0;
+        }
+    }
+    (kind, margin)
+}
+
 /// `node.emission_count` inputs besides the per-particle arrays.
 #[derive(Clone, Copy)]
 pub(super) struct Emission {

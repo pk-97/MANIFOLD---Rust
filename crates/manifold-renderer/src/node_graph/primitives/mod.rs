@@ -372,6 +372,8 @@ mod sample_faces_at_particles;
 mod energy_potential;
 mod wavecrest_potential;
 mod emission_count;
+mod spawn_whitewater;
+mod whitewater_type;
 mod whitewater_lifecycle;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_handoff_tests;

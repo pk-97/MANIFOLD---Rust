@@ -2204,44 +2204,50 @@ extern "C" int manifold_fluids_whitewater_load(void *lifecycle,
     });
 }
 
+// One update of `dt` on the last fields, as FluidSimulation drives it.
+static DiffuseParticleSimulationParameters whitewater_update(NativeWhitewater &native, double dt) {
+    if (!std::isfinite(dt) || !(dt > 0.0)) {
+        throw std::invalid_argument("whitewater step must be finite and positive");
+    }
+    if (!native.fields_set) {
+        throw std::invalid_argument("whitewater step needs fields first");
+    }
+    DiffuseParticleSimulationParameters params;
+    params.isize = native.isize;
+    params.jsize = native.jsize;
+    params.ksize = native.ksize;
+    params.dx = native.dx;
+    params.deltaTime = dt;
+    params.CFLConditionNumber = WHITEWATER_CFL;
+    // FluidSimulation's marker radius, 1/8 of a cell's volume as a sphere.
+    params.markerParticleRadius =
+        std::cbrt(3.0 * native.dx * native.dx * native.dx / (32.0 * 3.141592653589793));
+    params.bodyForce = native.gravity;
+    params.markerParticles = &native.markers;
+    params.vfield = &native.velocity;
+    params.liquidSDF = &native.liquid;
+    params.solidSDF = &native.solid;
+    params.surfaceSDF = &native.surface;
+    params.meshingVolumeSDF = nullptr;
+    params.isMeshingVolumeSet = false;
+    params.curvatureGrid = &native.curvature;
+    params.influenceGrid = &native.influence;
+    params.nearSolidGrid = &native.near_solid;
+    params.nearSolidGridCellSize = native.near_solid_cell_size;
+    params.forceFieldGrid = nullptr;
+    params.isForceFieldGridSet = false;
+    return params;
+}
+
 extern "C" int manifold_fluids_whitewater_step(void *lifecycle, double dt) {
     return guarded([&] {
         NativeWhitewater &native = whitewater_of(lifecycle);
-        if (!std::isfinite(dt) || !(dt > 0.0)) {
-            throw std::invalid_argument("whitewater step must be finite and positive");
-        }
-        if (!native.fields_set) {
-            throw std::invalid_argument("whitewater step needs fields first");
-        }
+        DiffuseParticleSimulationParameters params = whitewater_update(native, dt);
         // update() rebuilds the material grid before it looks at the
         // population; with nothing to advance there is nothing to rebuild for.
         if (native.simulation->getNumDiffuseParticles() == 0) {
             return;
         }
-        DiffuseParticleSimulationParameters params;
-        params.isize = native.isize;
-        params.jsize = native.jsize;
-        params.ksize = native.ksize;
-        params.dx = native.dx;
-        params.deltaTime = dt;
-        params.CFLConditionNumber = WHITEWATER_CFL;
-        // FluidSimulation's marker radius, 1/8 of a cell's volume as a sphere.
-        params.markerParticleRadius =
-            std::cbrt(3.0 * native.dx * native.dx * native.dx / (32.0 * 3.141592653589793));
-        params.bodyForce = native.gravity;
-        params.markerParticles = &native.markers;
-        params.vfield = &native.velocity;
-        params.liquidSDF = &native.liquid;
-        params.solidSDF = &native.solid;
-        params.surfaceSDF = &native.surface;
-        params.meshingVolumeSDF = nullptr;
-        params.isMeshingVolumeSet = false;
-        params.curvatureGrid = &native.curvature;
-        params.influenceGrid = &native.influence;
-        params.nearSolidGrid = &native.near_solid;
-        params.nearSolidGridCellSize = native.near_solid_cell_size;
-        params.forceFieldGrid = nullptr;
-        params.isForceFieldGridSet = false;
         native.simulation->update(params);
     });
 }
@@ -2342,6 +2348,49 @@ extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize
         levelset.calculateCurvatureGrid(surface_phi, curvature);
         std::memcpy(surface_phi_out, surface_phi.getRawArray(), count * sizeof(float));
         std::memcpy(curvature_out, curvature.getRawArray(), count * sizeof(float));
+    });
+}
+
+// FLIP's own emitter on a lifecycle's last fields (GPU_WHITEWATER_DESIGN.md
+// section 3.7, O2): the liquid particles at `positions` (scene metres, three
+// floats each) become the markers, `curvature` (cell centres) the curvature
+// grid, and one update runs with emission on, turbulence emission 0 and
+// lifetime variance 0, so it emits, advances, retypes and ages as FLIP does.
+// Emission is off again afterwards.
+extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature,
+                                           const float *positions, size_t count, double dt) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (curvature == nullptr || (count != 0 && positions == nullptr)) {
+            throw std::invalid_argument("oracle emit pointers must be non-null");
+        }
+        DiffuseParticleSimulationParameters params = whitewater_update(native, dt);
+        const size_t cells = static_cast<size_t>(native.isize) * native.jsize * native.ksize;
+        std::memcpy(native.curvature.getRawArray(), curvature, cells * sizeof(float));
+        native.markers = ParticleSystem();
+        native.markers.addAttributeVector3("POSITION");
+        std::vector<vmath::vec3> *markers = native.markers.getAttributeValuesVector3("POSITION");
+        markers->reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const float *p = positions + 3 * index;
+            if (!finite3(p)) {
+                throw std::invalid_argument("oracle emit position is not finite");
+            }
+            markers->push_back(vmath::vec3(p[0], p[1], p[2]) - native.origin);
+        }
+        native.markers.update();
+        DiffuseParticleSimulation &simulation = *native.simulation;
+        simulation.enableDiffuseParticleEmission();
+        // As the engine sets it: FLIP's default box is -inf wide by +inf, whose
+        // far corner is NaN, so no point is inside it.
+        simulation.setEmitterGenerationBounds(AABB(0.0, 0.0, 0.0, native.isize * native.dx,
+                                                   native.jsize * native.dx,
+                                                   native.ksize * native.dx));
+        simulation.setDiffuseParticleTurbulenceEmissionRate(0.0);
+        simulation.setDiffuseParticleLifetimeVariance(0.0);
+        simulation.update(params);
+        simulation.disableDiffuseParticleEmission();
+        native.markers = ParticleSystem();
     });
 }
 #endif

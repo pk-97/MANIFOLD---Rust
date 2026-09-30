@@ -172,6 +172,11 @@ int manifold_fluids_whitewater_particles(void *lifecycle,
 int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t jsize,
                                      uint32_t ksize, double dx, float *surface_phi_out,
                                      float *curvature_out);
+// FLIP's own emitter, then one update, on a lifecycle's last fields: markers
+// at `positions` (count × 3 floats, scene metres), `curvature` at the cell
+// centres, turbulence emission 0, lifetime variance 0.
+int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature, const float *positions,
+                                size_t count, double dt);
 #endif
 
 #ifdef __cplusplus

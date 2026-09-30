@@ -198,6 +198,21 @@ fn whitewater_particle_extents_at_64() {
     one(EmissionCount::new().array_output_capacity("out", &params, &coincident), "counts");
     assert_eq!(PARTICLE_SLOTS.div_ceil(256), 8192, "workgroups per particle dispatch");
 
+    // Spawn slots are the lifecycle's capacity, whatever the particles hold.
+    use super::spawn_whitewater::SpawnWhitewater;
+    use super::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
+    use super::whitewater_type::WhitewaterType;
+    let spawn_inputs = [("offsets", PARTICLE_SLOTS), ("particles", PARTICLE_SLOTS), ("energy", PARTICLE_SLOTS), ("solid", 357_911)];
+    let slots = SpawnWhitewater::new().array_output_capacity("out", &params, &spawn_inputs).expect("spawn slots");
+    assert_eq!(slots, DEFAULT_CAPACITY);
+    let mut largest = params.clone();
+    largest.insert("capacity".into(), ParamValue::Float(MAX_CAPACITY as f32));
+    assert_eq!(SpawnWhitewater::new().array_output_capacity("out", &largest, &spawn_inputs), Some(MAX_CAPACITY));
+    let typed = WhitewaterType::new().array_output_capacity("out", &params, &[("spawns", slots), ("distance", 343_000), ("cells", 343_000)]);
+    assert_eq!(typed, Some(slots), "types hold exactly the spawn slots");
+    assert_eq!(u64::from(MAX_CAPACITY) * std::mem::size_of::<manifold_fluids::WhitewaterSpawn>() as u64, 8_000_000);
+    const { assert!(PARTICLE_SLOTS < 16_777_216, "the emitter count is exact in an f32 scalar") };
+
     // A stencil's lower corner runs from −1 (half a cell below the grid's
     // first centre) to cells − 1 on the axes across the component, 0 to
     // cells − 1 along it; its upper corner one more.
@@ -225,6 +240,13 @@ fn whitewater_particle_extents_at_64() {
 /// from test sources, the grid chain for distance, cells and curvature, and
 /// the counts to a sink.
 fn emitter_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<&'static str>) {
+    whitewater_chain_def(false)
+}
+
+/// With `spawn`, the whole chain the Whitewater group runs: the counts'
+/// running total, spawn and type into the lifecycle, its foam to a sink.
+/// Without, the counts go straight to a sink.
+fn whitewater_chain_def(spawn: bool) -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<&'static str>) {
     let nodes = lattice_at_64().nodes;
     let level = refined_nodes(nodes.map(|n| n as f32), 3);
     let grid = |extra: &[(&str, Value)]| {
@@ -235,7 +257,7 @@ fn emitter_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<
         params
     };
     let h = float(4.0 / 64.0);
-    let names_and_types: Vec<(&'static str, &str, Value)> = vec![
+    let mut names_and_types: Vec<(&'static str, &str, Value)> = vec![
         ("level", "test.value_source", json!({"max_capacity": int(cell_total(level))})),
         ("solid", "test.value_source", json!({"max_capacity": int(lattice_nodes(nodes))})),
         ("face_u", "test.value_source", json!({"max_capacity": int(266_240)})),
@@ -261,15 +283,57 @@ fn emitter_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<
         ("energy", "node.energy_potential", json!({})),
         ("wavecrest", "node.wavecrest_potential", grid(&[])),
         ("counts", "node.emission_count", json!({})),
-        ("sink", "test.count_sink", json!({})),
         ("output", "system.final_output", json!({})),
     ];
+    if spawn {
+        names_and_types.extend([
+            ("offsets", "node.running_total", json!({})),
+            ("spawn", "node.spawn_whitewater", grid(&[])),
+            ("type", "node.whitewater_type", grid(&[])),
+            ("bounds", "node.transform_3d", json!({})),
+            (
+                "lifecycle",
+                "node.whitewater_lifecycle",
+                json!({"grid_nodes_x": float(71.0), "grid_nodes_y": float(71.0), "grid_nodes_z": float(71.0)}),
+            ),
+            ("sink", "test.liquid_sink", json!({})),
+        ]);
+    } else {
+        names_and_types.push(("sink", "test.count_sink", json!({})));
+    }
     let id = |name: &str| names_and_types.iter().position(|(n, _, _)| *n == name).expect("node");
     let nodes_json: Vec<Value> = names_and_types
         .iter()
         .enumerate()
         .map(|(i, (name, type_id, params))| json!({"id": i, "nodeId": name, "typeId": type_id, "params": params}))
         .collect();
+    let tail: Vec<(&str, &str, &str, &str)> = if spawn {
+        vec![
+            ("counts", "out", "offsets", "in"),
+            ("offsets", "out", "spawn", "offsets"),
+            ("sample", "out", "spawn", "particles"),
+            ("energy", "out", "spawn", "energy"),
+            ("face_u", "out", "spawn", "face_u"),
+            ("face_v", "out", "spawn", "face_v"),
+            ("face_w", "out", "spawn", "face_w"),
+            ("solid", "out", "spawn", "solid"),
+            ("spawn", "out", "type", "spawns"),
+            ("distance", "out", "type", "distance"),
+            ("kinds", "out", "type", "cells"),
+            ("type", "out", "lifecycle", "spawns"),
+            ("offsets", "out", "lifecycle", "offsets"),
+            ("face_u", "out", "lifecycle", "face_u"),
+            ("face_v", "out", "lifecycle", "face_v"),
+            ("face_w", "out", "lifecycle", "face_w"),
+            ("distance", "out", "lifecycle", "level"),
+            ("solid", "out", "lifecycle", "solid"),
+            ("bounds", "transform", "lifecycle", "grid_bounds"),
+            ("lifecycle", "foam_particles", "sink", "particles"),
+            ("sink", "out", "output", "in"),
+        ]
+    } else {
+        vec![("counts", "out", "sink", "values"), ("sink", "out", "output", "in")]
+    };
     let wires: Vec<Value> = [
         ("level", "out", "crossings", "level_set"),
         ("solid", "out", "crossings", "solid"),
@@ -297,13 +361,12 @@ fn emitter_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<
         ("sample", "out", "counts", "particles"),
         ("energy", "out", "counts", "energy"),
         ("wavecrest", "out", "counts", "wavecrest"),
-        ("counts", "out", "sink", "values"),
-        ("sink", "out", "output", "in"),
     ]
     .into_iter()
+    .chain(tail)
     .map(|(from, from_port, to, to_port)| json!({"fromNode": id(from), "fromPort": from_port, "toNode": id(to), "toPort": to_port}))
     .collect();
-    let def = serde_json::from_value(json!({"version": 3, "nodes": nodes_json, "wires": wires})).expect("emitter chain def");
+    let def = serde_json::from_value(json!({"version": 3, "nodes": nodes_json, "wires": wires})).expect("whitewater chain def");
     (def, names_and_types.iter().map(|(name, _, _)| *name).collect())
 }
 
@@ -338,6 +401,43 @@ fn whitewater_emitter_chain_fuses() {
         regions.iter().find(|members| members.contains(&"counts")).expect("the counts fuse").clone();
     chain.sort_unstable();
     assert_eq!(chain, ["counts", "energy", "jitter", "sample", "wavecrest"], "{rows:#?}");
+}
+
+/// Where the whole chain fuses once spawn reads the sampled particles and
+/// the energy (section 3.3). Spawn and type fold into one kernel. The five
+/// emitter atoms now feed two consumers outside their region (the counts'
+/// running total and spawn's gathers), and a fused buffer region writes one
+/// output, so the partitioner refuses the region whole and they run one by
+/// one: BUG-imy3.5 (fan-out buffer regions split at the escaping output).
+/// When that lands this test fails and takes the new count.
+#[test]
+fn whitewater_spawn_chain_fuses() {
+    let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    let (def, names) = whitewater_chain_def(true);
+    let report = crate::node_graph::fusion_report(&def, &registry);
+    assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);
+    let name = |id: u32| names[id as usize];
+    let particle_side = ["jitter", "sample", "energy", "wavecrest", "counts", "spawn", "type"];
+    let rows: Vec<_> = report
+        .nodes
+        .iter()
+        .filter(|n| particle_side.contains(&name(n.node_id)))
+        .map(|n| (name(n.node_id), n.kind.as_str(), n.fused, n.region_index, n.cut_reason.as_deref()))
+        .collect();
+    let regions: Vec<Vec<&str>> = report
+        .regions
+        .iter()
+        .map(|r| r.member_node_ids.iter().map(|&id| name(id)).collect())
+        .collect();
+    let mut spawn_region: Vec<&str> =
+        regions.iter().find(|members| members.contains(&"spawn")).expect("spawn fuses").clone();
+    spawn_region.sort_unstable();
+    assert_eq!(spawn_region, ["spawn", "type"], "{rows:#?}\n{regions:?}");
+    let emitter = &particle_side[..5];
+    let dispatches = rows.iter().filter(|r| emitter.contains(&r.0) && !r.2).count()
+        + regions.iter().filter(|members| members.iter().any(|m| emitter.contains(m))).count();
+    assert_eq!(dispatches, 5, "the emitter atoms run one by one until fan-out regions split: {rows:#?}\n{regions:?}");
 }
 
 fn float(v: f64) -> Value {

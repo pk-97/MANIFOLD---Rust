@@ -153,6 +153,12 @@ impl WhitewaterLifecycle {
         self.capacity
     }
 
+    /// The native handle, for the FLIP oracle's entries.
+    #[cfg(feature = "whitewater-oracle")]
+    pub(crate) fn native_handle(&mut self) -> *mut c_void {
+        self.native
+    }
+
     /// Drops every particle and reseeds the RNG.
     pub fn clear(&mut self, seed: u64) -> Result<(), FluidError> {
         // SAFETY: `native` is this lifecycle's live handle.
