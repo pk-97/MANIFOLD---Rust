@@ -9,6 +9,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::EXACT_F32_COUNT;
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::MatterPoint;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -112,11 +113,16 @@ pub(crate) fn fill_cells(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3]) -> u
     pool_count + column_count
 }
 
-/// Points a fill seeds at `points_per_cell`, refused by name past the 32-bit
-/// count every point kernel dispatches over.
+/// Points a fill seeds at `points_per_cell`, refused by name past the count
+/// the `count` wire carries exactly.
 pub(crate) fn fill_count(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3], points_per_cell: u32) -> Result<u32, String> {
     let count = fill_cells(cells, pool, column) * u64::from(points_per_cell);
-    u32::try_from(count).map_err(|_| format!("Matter fill: {count} points exceed 32-bit indexing"))
+    match u32::try_from(count) {
+        Ok(count) if count <= EXACT_F32_COUNT => Ok(count),
+        _ => Err(format!(
+            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Lower Resolution, Points per Cell or the fill."
+        )),
+    }
 }
 
 impl Primitive for MatterFill {
@@ -172,7 +178,10 @@ impl Primitive for MatterFill {
         let bytes = u64::from(count) * std::mem::size_of::<MatterPoint>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size < bytes) {
             let grown = bytes.max(self.buffer.as_ref().map_or(0, |b| b.size.saturating_mul(3) / 2));
-            let created = ctx.gpu_encoder().device.try_create_buffer_shared(grown);
+            let device = ctx.gpu_encoder().device;
+            let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), grown)
+                .map_err(|error| error.to_string())
+                .and_then(|()| device.try_create_buffer_shared(grown));
             match created {
                 Ok(buffer) => {
                     self.buffer = Some(buffer);
@@ -256,6 +265,17 @@ mod tests {
         assert_eq!(cells, 64 * 3 * 64 + 19 * 30 * 56);
         // An empty box adds nothing; the pool never exceeds the domain.
         assert_eq!(fill_cells([8; 3], 20, [[0, 0], [0, 0], [0, 0]]), 8 * 8 * 8);
+    }
+
+    /// The count crosses to every point atom as an f32 wire: 2^24 points is
+    /// the last fill it carries exactly, one cell more is refused by name.
+    #[test]
+    fn matter_fill_refuses_counts_past_the_exact_f32_range() {
+        let empty = [[0, 0]; 3];
+        assert_eq!(fill_count([256, 32, 256], 32, empty, 8), Ok(EXACT_F32_COUNT));
+        let error = fill_count([256, 33, 256], 33, empty, 8).unwrap_err();
+        assert!(error.contains("exact f32 range") && error.contains("Resolution"), "{error}");
+        assert!(fill_count([512; 3], 512, empty, 27).unwrap_err().contains("exact f32 range"));
     }
 
     #[test]

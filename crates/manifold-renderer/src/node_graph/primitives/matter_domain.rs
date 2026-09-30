@@ -16,8 +16,8 @@ use std::borrow::Cow;
 use manifold_gpu::{FrameClock, GpuBinding, GpuBuffer, GpuComputePipeline};
 use manifold_physics::Seconds;
 
-use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, TICK, domain_layout};
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::LiquidClock;
@@ -34,16 +34,141 @@ use crate::node_graph::physics::{
 };
 use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse, map_rigid_receipt};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::transform::Transform;
 
 /// Everything whose change restarts the simulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MatterSetup {
-    lattice: LiquidLattice,
-    closed_faces: u32,
-    pool_cells: u32,
-    column: [[u32; 2]; 3],
-    points_per_cell: u32,
-    seed: u32,
+    pub(crate) lattice: LiquidLattice,
+    pub(crate) closed_faces: u32,
+    pub(crate) pool_cells: u32,
+    pub(crate) column: [[u32; 2]; 3],
+    pub(crate) points_per_cell: u32,
+    pub(crate) seed: u32,
+}
+
+/// The domain's setup and the layout it came from, computed from params and
+/// wires alone: the node and the extent checker both call
+/// [`matter_geometry`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MatterGeometry {
+    pub(crate) layout: FluidDomainLayout,
+    pub(crate) setup: MatterSetup,
+}
+
+impl MatterGeometry {
+    /// The scalar outputs fixed by the setup, by name.
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 27] {
+        let MatterSetup { lattice, closed_faces, pool_cells, column, points_per_cell, seed } = self.setup;
+        let blocks = lattice_blocks(&lattice);
+        let (centre, size, bin) = block_sort_box(&lattice);
+        [
+            ("lattice_min_x", lattice.min()[0]),
+            ("lattice_min_y", lattice.min()[1]),
+            ("lattice_min_z", lattice.min()[2]),
+            ("cell_size", lattice.cell_size()),
+            ("nodes_x", lattice.nodes()[0] as f32),
+            ("nodes_y", lattice.nodes()[1] as f32),
+            ("nodes_z", lattice.nodes()[2] as f32),
+            ("closed_faces", closed_faces as f32),
+            ("pool_cells", pool_cells as f32),
+            ("column_x0", column[0][0] as f32),
+            ("column_x1", column[0][1] as f32),
+            ("column_y0", column[1][0] as f32),
+            ("column_y1", column[1][1] as f32),
+            ("column_z0", column[2][0] as f32),
+            ("column_z1", column[2][1] as f32),
+            ("points_per_cell", points_per_cell as f32),
+            ("fill_seed", seed as f32),
+            ("blocks_x", blocks[0] as f32),
+            ("blocks_y", blocks[1] as f32),
+            ("blocks_z", blocks[2] as f32),
+            ("block_center_x", centre[0]),
+            ("block_center_y", centre[1]),
+            ("block_center_z", centre[2]),
+            ("block_size_x", size[0]),
+            ("block_size_y", size[1]),
+            ("block_size_z", size[2]),
+            ("block_cell_size", bin),
+        ]
+    }
+}
+
+/// The fill in the layout's cells: the pool's height in cells and the
+/// initial volume's cell range per axis (empty without one), refused by name
+/// when either does not fit the domain.
+pub(crate) fn fill_region(
+    layout: &FluidDomainLayout,
+    fill_height: f32,
+    initial_volume: Option<Transform>,
+) -> Result<(u32, [[u32; 2]; 3]), String> {
+    // The lattice's f32 cell size, as every matter atom reads it.
+    let dx = f64::from(layout.cell_size as f32);
+    if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
+        return Err("Matter: Initial Fill Height must lie within the domain height".into());
+    }
+    let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
+    let mut column = [[0u32; 2]; 3];
+    if let Some(volume) = initial_volume {
+        if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
+            return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
+        }
+        if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
+            || volume.scale.iter().any(|v| *v <= 0.0)
+            || (0..3).any(|d| {
+                let half = volume.scale[d] * 0.5;
+                volume.pos[d] - half < layout.min[d] - 1e-4
+                    || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
+            })
+        {
+            return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
+        }
+        for (d, range) in column.iter_mut().enumerate() {
+            let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d]);
+            *range = [
+                cell(volume.pos[d] - volume.scale[d] * 0.5),
+                cell(volume.pos[d] + volume.scale[d] * 0.5),
+            ];
+        }
+    }
+    Ok((pool_cells, column))
+}
+
+/// The domain box, lattice, walls and fill from the domain's params and
+/// wires (`read` is `scalar_or_param`), refused by name when the lattice is
+/// over Grid Budget or the fill does not fit the domain.
+pub(crate) fn matter_geometry(
+    read: impl Fn(&str, f32) -> f32,
+    params: &ParamValues,
+    domain: Option<Transform>,
+    initial_volume: Option<Transform>,
+) -> Result<MatterGeometry, String> {
+    let resolution = read("resolution", 64.0).round().max(0.0) as u32;
+    let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
+    let lattice = LiquidLattice::from_layout(&layout);
+    let budget = match params.get("grid_budget_mcells") {
+        Some(ParamValue::Float(budget)) => *budget,
+        _ => 8.0,
+    };
+    admit_lattice(&lattice, budget)?;
+    let (pool_cells, column) = fill_region(&layout, read("fill_height", 0.4), initial_volume)?;
+    let points_per_cell = match params.get("points_per_cell") {
+        Some(ParamValue::Enum(1)) => 27,
+        _ => 8,
+    };
+    let seed = match params.get("seed") {
+        Some(ParamValue::Float(seed)) => *seed,
+        _ => 0.0,
+    };
+    let setup = MatterSetup {
+        lattice,
+        closed_faces: closed_faces(params),
+        pool_cells,
+        column,
+        points_per_cell,
+        seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
+    };
+    Ok(MatterGeometry { layout, setup })
 }
 
 /// The refusal of an impulse on the liquid itself, owed to seam P8 (the
@@ -305,12 +430,12 @@ impl Coupling {
     }
 }
 
-fn closed_faces(ctx: &EffectNodeContext<'_, '_>) -> u32 {
+fn closed_faces(params: &ParamValues) -> u32 {
     ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
         .iter()
         .enumerate()
         .fold(0, |mask, (bit, name)| {
-            let closed = !matches!(ctx.params.get(*name), Some(ParamValue::Bool(false)));
+            let closed = !matches!(params.get(*name), Some(ParamValue::Bool(false)));
             mask | (u32::from(closed) << bit)
         })
 }
@@ -598,56 +723,15 @@ impl MatterDomain {
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let resolution = ctx.scalar_or_param("resolution", 64.0).round().max(0.0) as u32;
-        let domain_size = ctx.scalar_or_param("domain_size", 4.0);
-        let layout = domain_layout(ctx.inputs.transform("domain"), domain_size, resolution)?;
-        let lattice = LiquidLattice::from_layout(&layout);
-        let blocks = lattice_blocks(&lattice);
-        let (block_centre, block_size, block_bin) = block_sort_box(&lattice);
-        admit_lattice(&lattice, ctx.param_f32("grid_budget_mcells", 8.0))?;
+        let geometry = matter_geometry(
+            |name, default| ctx.scalar_or_param(name, default),
+            ctx.params,
+            ctx.inputs.transform("domain"),
+            ctx.inputs.transform("initial_volume"),
+        )?;
+        let MatterGeometry { layout, setup } = geometry;
+        let lattice = setup.lattice;
         let dx = f64::from(lattice.cell_size());
-        let fill_height = ctx.scalar_or_param("fill_height", 0.4);
-        if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
-            return Err("Matter: fill height must lie within the domain height".into());
-        }
-        let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(lattice.cells()[1]);
-        let mut column = [[0u32; 2]; 3];
-        if let Some(volume) = ctx.inputs.transform("initial_volume") {
-            if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
-                return Err("Matter: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
-            }
-            if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
-                || volume.scale.iter().any(|v| *v <= 0.0)
-                || (0..3).any(|d| {
-                    let half = volume.scale[d] * 0.5;
-                    volume.pos[d] - half < layout.min[d] - 1e-4
-                        || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
-                })
-            {
-                return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
-            }
-            for (d, range) in column.iter_mut().enumerate() {
-                let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(lattice.cells()[d]);
-                *range = [
-                    cell(volume.pos[d] - volume.scale[d] * 0.5),
-                    cell(volume.pos[d] + volume.scale[d] * 0.5),
-                ];
-            }
-        }
-        let points_per_cell = match ctx.params.get("points_per_cell") {
-            Some(ParamValue::Enum(1)) => 27,
-            _ => 8,
-        };
-        let seed = ctx.param_f32("seed", 0.0).round().clamp(0.0, 16_777_215.0) as u32;
-        let faces = closed_faces(ctx);
-        let setup = MatterSetup {
-            lattice,
-            closed_faces: faces,
-            pool_cells,
-            column,
-            points_per_cell,
-            seed,
-        };
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = ["gravity_x", "gravity", "gravity_z", "stiffness", "cohesion", "liveliness"]
             .map(|name| ctx.scalar_or_param(name, 0.0));
@@ -774,54 +858,36 @@ impl MatterDomain {
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
 
-        Ok(Some([
-            lattice.min()[0],
-            lattice.min()[1],
-            lattice.min()[2],
-            lattice.cell_size(),
-            lattice.nodes()[0] as f32,
-            lattice.nodes()[1] as f32,
-            lattice.nodes()[2] as f32,
-            faces as f32,
-            ctx.scalar_or_param("gravity_x", 0.0),
-            ctx.scalar_or_param("gravity", -9.81),
-            ctx.scalar_or_param("gravity_z", 0.0),
-            pool_cells as f32,
-            column[0][0] as f32,
-            column[0][1] as f32,
-            column[1][0] as f32,
-            column[1][1] as f32,
-            column[2][0] as f32,
-            column[2][1] as f32,
-            points_per_cell as f32,
-            seed as f32,
-            frame.ticks as f32,
-            substeps as f32,
-            frame.epoch as f32,
-            frame.simulation_time as f32,
-            display_time as f32,
-            frame.dropped_seconds as f32,
-            lambda as f32,
-            ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0),
-            ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0),
-            WATER_DENSITY,
-            if limited { fitted as f32 } else { 0.0 },
-            blocks[0] as f32,
-            blocks[1] as f32,
-            blocks[2] as f32,
-            block_centre[0],
-            block_centre[1],
-            block_centre[2],
-            block_size[0],
-            block_size[1],
-            block_size[2],
-            block_bin,
-            unit,
-            self.bodies.count() as f32,
-            rows,
-            first_tick as f32,
-            dynamic_count as f32,
-        ]))
+        let per_frame = [
+            ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
+            ("gravity", ctx.scalar_or_param("gravity", -9.81)),
+            ("gravity_z", ctx.scalar_or_param("gravity_z", 0.0)),
+            ("ticks", frame.ticks as f32),
+            ("substeps_per_tick", substeps as f32),
+            ("epoch", frame.epoch as f32),
+            ("simulation_time", frame.simulation_time as f32),
+            ("display_time", display_time as f32),
+            ("dropped_seconds", frame.dropped_seconds as f32),
+            ("lambda", lambda as f32),
+            ("cohesion", ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0)),
+            ("liveliness", ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0)),
+            ("density", WATER_DENSITY),
+            ("limited_by_substeps", if limited { fitted as f32 } else { 0.0 }),
+            ("momentum_unit", unit),
+            ("body_count", self.bodies.count() as f32),
+            ("body_rows", rows),
+            ("first_tick", first_tick as f32),
+            ("dynamic_count", dynamic_count as f32),
+        ];
+        let mut values = [0.0; OUTPUTS.len()];
+        let mut written = 0u64;
+        for (name, value) in geometry.outputs().into_iter().chain(per_frame) {
+            let slot = OUTPUTS.iter().position(|output| *output == name).expect("every output has a slot");
+            values[slot] = value;
+            written |= 1 << slot;
+        }
+        debug_assert_eq!(written, (1 << OUTPUTS.len()) - 1, "every output written once");
+        Ok(Some(values))
     }
 
     /// Take the paired world's observation for this frame: check it shares

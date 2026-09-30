@@ -39,16 +39,22 @@ impl LiquidLattice {
     /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
     /// at resolution 64, matching each atom's param defaults.
     pub(crate) fn from_wires(ctx: &EffectNodeContext<'_, '_>) -> Self {
-        let nodes = |name: &str| ctx.scalar_or_param(name, 71.0).round().max(1.0) as u32;
+        Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
+    }
+
+    /// [`Self::from_wires`] over any `scalar_or_param` reader: the extent
+    /// checker reads the same wires without a frame.
+    pub(crate) fn from_scalars(read: impl Fn(&str, f32) -> f32) -> Self {
+        let nodes = |name: &str| read(name, 71.0).round().max(1.0) as u32;
         let nodes = [nodes("nodes_x"), nodes("nodes_y"), nodes("nodes_z")];
         Self {
             min: [
-                ctx.scalar_or_param("lattice_min_x", -2.1875),
-                ctx.scalar_or_param("lattice_min_y", -0.1875),
-                ctx.scalar_or_param("lattice_min_z", -2.1875),
+                read("lattice_min_x", -2.1875),
+                read("lattice_min_y", -0.1875),
+                read("lattice_min_z", -2.1875),
             ],
             nodes,
-            cell_size: ctx.scalar_or_param("cell_size", 0.0625),
+            cell_size: read("cell_size", 0.0625),
             cells: nodes.map(|n| n.saturating_sub(1 + 2 * PADDING_NODES)),
         }
     }
@@ -228,7 +234,7 @@ mod tests {
     /// transform or value that could drop the padding.
     #[test]
     fn liquid_surface_lattice_comes_from_the_frame() {
-        const FRAMES: [&str; 2] = ["node.fluid_surface", "node.matter_frame"];
+        const FRAMES: [&str; 2] = [manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID, "node.matter_frame"];
         let mut checked = Vec::new();
         for (type_id, flat) in flat_bundled_hosts() {
             let source = |id: u32, port: &str| source(&type_id, &flat, id, port);

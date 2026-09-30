@@ -7,8 +7,18 @@
 
 pub mod bodies;
 pub mod clock;
+#[cfg(any(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+pub mod conformance;
 pub mod coupling;
+#[cfg(any(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+pub mod extent;
 pub mod frame_ring;
 pub mod lattice;
 #[cfg(test)]
 mod scene_contract;
+
+/// The largest count a scalar wire carries exactly: wires are f32, and past
+/// 2^24 a count can round up past the storage sized from the true count.
+pub const EXACT_F32_COUNT: u32 = 1 << 24;

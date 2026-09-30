@@ -15,7 +15,7 @@ mod event_state;
 pub use bindings::SceneModifierBindingSource;
 pub use buffer_budget::{
     MODIFIER_MEMORY_OVERRIDE_ENV, ModifierBufferUsage, PreparedModifierBufferBudget,
-    admit_candidate_bytes,
+    admit_candidate_bytes, admit_scene_bytes,
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use impulses::SceneModifierImpulseRoute;

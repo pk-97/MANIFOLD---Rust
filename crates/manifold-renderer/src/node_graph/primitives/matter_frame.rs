@@ -118,7 +118,7 @@ impl Primitive for MatterFrame {
             ],
             closed_faces,
         );
-        let mut solid_refused = None;
+        let mut refused = None;
         let gpu = ctx.gpu_encoder();
         if self.solid_key != Some(solid_key) {
             let distances = lattice.wall_distance(closed_faces);
@@ -131,9 +131,18 @@ impl Primitive for MatterFrame {
             self.solid_key = Some(solid_key);
         }
 
-        if self.ring.wants_tick(epoch, simulation_time) && let (Some(points), Some(stats)) = (points, stats) {
-            let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
-            let slot = self.ring.begin(gpu.device, bytes, epoch);
+        let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
+        let ring = if self.ring.wants_tick(epoch, simulation_time) && points.is_some() && stats.is_some() {
+            self.ring.begin(gpu.device, bytes, epoch).map(Some).unwrap_or_else(|error| {
+                refused = Some(format!(
+                    "Matter Frame: the particle frames need 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                ));
+                None
+            })
+        } else {
+            None
+        };
+        if let (Some(slot), Some(points), Some(stats)) = (ring, points, stats) {
             let write = slot.write;
             let pipeline = self.convert.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame")
@@ -166,11 +175,15 @@ impl Primitive for MatterFrame {
                 if fresh {
                     // A ring the device cannot give leaves none: this node
                     // names it, and the surface atoms draw nothing without it.
-                    self.solid_slots = (0..RING)
-                        .map(|_| gpu.device.try_create_buffer_shared(bytes.max(4)))
-                        .collect::<Result<_, _>>()
+                    let device = gpu.device;
+                    self.solid_slots = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                        device.modifier_memory_snapshot(),
+                        RING as u64 * bytes.max(4),
+                    )
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| (0..RING).map(|_| device.try_create_buffer_shared(bytes.max(4))).collect::<Result<_, _>>())
                         .unwrap_or_else(|error| {
-                            solid_refused = Some(format!(
+                            refused = Some(format!(
                                 "Matter Frame: the solid lattice needs 3 × {bytes} bytes the device cannot give: {error}. Lower Resolution."
                             ));
                             Vec::new()
@@ -200,7 +213,7 @@ impl Primitive for MatterFrame {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", lattice.bounds());
-        if let Some(error) = solid_refused {
+        if let Some(error) = refused {
             ctx.error(error);
         }
     }
