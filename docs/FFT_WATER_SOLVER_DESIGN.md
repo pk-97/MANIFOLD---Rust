@@ -90,10 +90,10 @@ Per step, in order. A number in brackets is the measured MLX cost at 64³ per st
 6. Krylov region, `passes` iterations. Each pass: charts helper (gather-sum per slot, batched 2D FFT, symbol scale, inverse, spread back plus the local term) → box solve (build the source grid from λ, DCT-II 3D, divide by the Laplacian eigenvalues, inverse, gather at the collar) → Arnoldi against the stored basis → Givens update. [P1 on the GPU: 0.37 ms per pass at 64³]
 7. Back-substitute the small triangular system, form λ, then p over the water cells.
 8. Subtract the pressure gradient on faces touching water; extrapolate two layers into air.
-9. Density solve on the same collar (setup reused), 8 passes: the right-hand side is `node.density_source`'s crowding target (below). Its gradient is subtracted from the projected faces into a separate `advect` grid, extended two layers.
+9. Density solve, on the frame's last step only, on that step's collar (setup reused), 8 passes: the right-hand side is `node.density_source`'s crowding target (below). Its gradient is subtracted from the projected faces into a separate `advect` grid, extended two layers.
 10. Gather faces to particles (PIC/FLIP) from the projected faces, advect by RK3 through `advect`, clamp to the box. [6.1 ms]
 
-The density solve exists because particles bunch as FLIP moves them, and a divergence-free velocity field does nothing about it: with no correction the 64³ Dam Break's water sank 22% by frame 300. Each water cell asks for −rate·e, with e = count/8 − 1: two-sided inside the water, spread-only at the surface, where a part-full cell is not sparse. The correction moves particles and never becomes their velocity. Folded into the main solve instead, FLIP kept the push as speed, and the 128³ splash ran p99 6.90 m/s against the engine's 4.73. The share removed per step (rate × step dt) is 1 (`SPREAD_PER_STEP`).
+The density solve exists because particles bunch as FLIP moves them, and a divergence-free velocity field does nothing about it: with no correction the 64³ Dam Break's water sank 22% by frame 300. Each water cell asks for −rate·e, with e = count/8 − 1: two-sided inside the water, spread-only at the surface, where a part-full cell is not sparse. The correction moves particles and never becomes their velocity. Folded into the main solve instead, FLIP kept the push as speed, and the 128³ splash ran p99 6.90 m/s against the engine's 4.73. The share one solve removes (rate × step dt) is 1 (`SPREAD_PER_STEP`). One solve a frame holds the water measures as well as one every step and costs half as much (the cadence table in section 5, P3).
 
 Memory: the collar capacity is 8n² entries (32,768 at 64³, 131,072 at 128³; the largest Dam Break collars are 18,655 and 94,154). The pressure basis is 25 rows × (capacity + 1) floats at 24 passes (3.3 MB at 64³, 13.1 MB at 128³); the density basis is 9 rows. The box fields are a few n³ grids. Nothing scales with the particle count except the particles themselves.
 
@@ -200,7 +200,7 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   - A collar past capacity is a named error every frame it lasts (`node.running_total`'s `capacity`: "needs N, holds M"). The collar is at most 6n³/7 (a collar cell is air beside water, and the 7-cell cross tiles space). Sizing to that bound is child .2 (collar at its proven bound) of BUG-l2h3 (SWASH live-instrument epic).
   - I6 covers the lattices 16, 32, 48, 64, 80, 96, 128 and 256, open and closed surface, surface scales 1–3, and the render graph. 512 is out: 176M particles is past `node.liquid_fill`'s 67M ceiling, and it needs 257 GB. Int params are f32, so capacities past 2²⁴ round up (`capacity` in `swash_preset.rs`); at 256³ the solid lattice was one float short before that.
   - Array census for the rendered Dam Break: 0.76, 1.29, 5.5 and 37.7 GB at 32, 64, 128 and 256³ with the shipped surface; 26.4 GB at 256³ with surface scale 1. The planner reuses none of its temporaries in these graphs, which is child .3 (planner reuses no temporaries) of BUG-l2h3 (SWASH live-instrument epic).
-  - Size ladder, the rendered Dam Break through `swash_render_smoke_tests` (GPU ms per frame, 2 steps, median over timestamped frames scaled to the plain frame; contended by other sessions, not the race):
+  - Size ladder, the rendered Dam Break through `swash_render_smoke_tests` (GPU ms per frame, 2 steps, a density solve every step, median over timestamped frames scaled to the plain frame; contended by other sessions, not the race):
 
     | Stage | 32³ | 64³ | 128³ |
     |---|---|---|---|
@@ -215,17 +215,17 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   - The stage split needs every dispatch timed. One Metal timestamp buffer holds 2,048 spans, and the profiler scales spans to the command buffer's total, so a frame past that mis-scales every stage. The sampler chains buffers (at most 32 per process), and the smoke fails by name on any untimed dispatch.
   - Particles are kept 0.2 cells off the walls (`faces_to_particles::WALL_MARGIN_CELLS`, the FLIP Fluids engine's solid buffer). The walls sit on zero-velocity faces, so a particle held on a wall reads almost no velocity away from it: 0.001 cells off, water that hit the lid hung there (BUG-h8or (lid slabs)).
   - Probes and the render smoke are opt-in: `--features water-race-probes`.
-- **Measured so far.** Accuracy rows below; timing rows wait for a quiet device. Engine: Detail 1, whitewater off, `setMaxThreadCount` 4. SWASH: share 1, 8 density passes, 24 pressure passes, particles 0.2 cells off the walls. 300 frames each, both measured the same way (`fft_water_cost_probe*`, `fft_water_engine_race*`). The particle packing is the water, binned on each solver's own grid; the closed-surface meshed volume is the surface, which loses thin sheets.
+- **Measured so far.** Accuracy rows below; timing rows wait for a quiet device. Engine: Detail 1, whitewater off, `setMaxThreadCount` 4. SWASH: share 1, one 8-pass density solve a frame, 24 pressure passes, particles 0.2 cells off the walls. 300 frames each, both measured the same way (`fft_water_cost_probe*`, `fft_water_engine_race*`). The particle packing is the water, binned on each solver's own grid; the closed-surface meshed volume is the surface, which loses thin sheets.
 
   | Row | SWASH 64³ | Engine 64³ | SWASH 128³ | Engine 128³ |
   |---|---|---|---|---|
-  | particles past rest, worst / last 30 frames | 13.2% / 6.8% | 20.6% / 12.6% | 19.2% / 7.3% | 24.0% / 15.0% |
-  | particles missing inside, worst / last 30 frames | 10.3% / 5.5% | 22.2% / 21.6% | 12.0% / 6.7% | 22.8% / 22.5% |
-  | meshed volume, max / last | 2.13% / −0.74% | 13.9% / +13.9% | 8.05% / −0.89% | 11.1% / +10.4% |
-  | divergence left, rms median / max worst | 1.5e-4 / 0.27 /s | not measured | 1.1e-2 / 59 /s | not measured |
-  | top speed over the run | 12.6 m/s | 12.2 m/s | 14.8 m/s | 17.3 m/s |
-  | settled speed p99, last 30 frames | 1.32 m/s | 1.75 m/s | 1.43 m/s | 1.40 m/s |
-  | ms per tick, contended, not the race | 30 GPU step, 41 meshed | 509 wall | 176 GPU step, 254 meshed | 2978 wall |
+  | particles past rest, worst / last 30 frames | 14.7% / 6.7% | 20.6% / 12.6% | 16.2% / 7.4% | 24.0% / 15.0% |
+  | particles missing inside, worst / last 30 frames | 10.3% / 5.3% | 22.2% / 21.6% | 12.0% / 6.7% | 22.8% / 22.5% |
+  | meshed volume, max / last | 3.10% / −0.99% | 13.9% / +13.9% | 5.14% / −1.00% | 11.1% / +10.4% |
+  | divergence left, rms median / max worst | 1.3e-4 / 0.33 /s | not measured | 2.7e-2 / 39 /s | not measured |
+  | top speed over the run | 11.8 m/s | 12.2 m/s | 14.4 m/s | 17.3 m/s |
+  | settled speed p99, last 30 frames | 1.36 m/s | 1.75 m/s | 1.51 m/s | 1.40 m/s |
+  | ms per tick, contended, not the race | 37 meshed | 509 wall | 158 GPU step, 276 meshed | 2978 wall |
 
   The engine's water spreads out: at rest its interior cells are short of the fill's 8 by about a fifth of its particle count, which its mesh reads as volume gained. The three-column look record is `swash_race_clips_64` (SWASH, the engine with whitewater, MPM; one camera, material and tone map; studio floor and obstacle out).
 
@@ -240,6 +240,21 @@ Peter, 2026-09-30: no GPU multigrid FLIP is built, not even as a benchmark. The 
   | settled frames 260–300, rms median | 1.9e-5 | 6.6e-6 | 1.1e-4 | 9.0e-5 | 3.5e-5 | 2.0e-4 |
 
   The collar is why: at the splash, 19% of a 64³ step's collar cells (42% at 128³) were not collar cells the step before, so the carry has nothing for them.
+
+  Cadence at 64³, the meshed Dam Break (`fft_water_cadence_64`, 300 frames; the engine's `fft_water_engine_splash_64`, 150 frames). One density solve a frame ships: every measure stays within 1.5 points of a solve every step, and at 128³ it is no worse (the race table above). One water step a frame is not shipped; it is Peter's physics call. GPU ms is the rendered smoke's plain frame, contended by other sessions (`swash_render_smoke_64_cadence`):
+
+  | Row | density every step | density once a frame (shipped) | one step a frame | Engine |
+  |---|---|---|---|---|
+  | particles past rest, worst / last 30 frames | 13.2% / 6.8% | 14.7% / 6.7% | 21.5% / 7.2% | 20.6% / 18.3% |
+  | particles missing inside, worst / last 30 frames | 10.3% / 5.5% | 10.3% / 5.3% | 10.9% / 5.8% | 13.7% / 11.8% |
+  | meshed volume, max / last | 2.13% / −0.74% | 3.10% / −0.99% | 9.64% / −0.85% | 7.84% / +2.69% |
+  | divergence left, rms median / max worst (/s) | 1.5e-4 / 0.27 | 1.3e-4 / 0.33 | 4.9e-4 / 0.55 | not measured |
+  | particles within 10 cm of the lid: peak (frame), gone by | 843 (89), 239 | 904 (89), 149 | 39 (194), 254 | 105 (89), 134 |
+  | highest particle at frames 29 / 39 / 49 / 59 (m) | 2.37 / 3.39 / 3.99 / 3.99 | 2.33 / 3.37 / 3.99 / 3.99 | 2.11 / 2.93 / 3.50 / 3.76 | 2.12 / 3.02 / 3.66 / 3.99 |
+  | top speed; cells it crosses a step | 12.6 m/s; 1.68 | 11.8 m/s; 1.58 | 10.4 m/s; 2.78 | 12.2 m/s; 3.25 (one substep a frame, its CFL limit is 5) |
+  | GPU ms per frame, p50, contended | 46.5 | 42.7 | 31.9 | not measured |
+
+  One step a frame moves the top speed 2.8 cells a step against the two layers the face extension reaches, and its splash rises like the engine's up to frame 49, then stops short of the lid; two steps throw the water to the lid 10 frames before the engine does.
 
 ### P3b — Solid objects in the water
 

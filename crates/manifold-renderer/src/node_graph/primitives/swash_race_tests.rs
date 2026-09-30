@@ -457,16 +457,16 @@ fn fft_water_splash_causes_64() {
     dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
 }
 
-/// The step's cadence levers on the meshed 64³ Dam Break, beside the shipped
-/// cadence: the density solve once a frame (drift, packing, missing, the lid),
-/// and one water step a frame (the same plus the splash height over time and
-/// the cells a step the top speed crosses). The engine's side is
+/// The step's cadence levers on the meshed 64³ Dam Break: the density solve
+/// every step against once a frame (drift, packing, missing, the lid), and one
+/// water step a frame (the same plus the splash height over time and the cells
+/// a step the top speed crosses). The engine's side is
 /// `fft_water_engine_splash_64`.
 #[test]
 fn fft_water_cadence_64() {
     let base = WaterScene::dam_break(64).with_surface();
-    dam_break(base, "CADENCE shipped 64³", 300);
-    dam_break(WaterScene { density_once: true, ..base }, "CADENCE density once 64³", 300);
+    dam_break(WaterScene { density_once: false, ..base }, "CADENCE density every step 64³", 300);
+    dam_break(base, "CADENCE density once 64³", 300);
     let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
     dam_break(one_step, "CADENCE one step 64³", 300);
 }

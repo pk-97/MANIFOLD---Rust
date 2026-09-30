@@ -416,7 +416,7 @@ fn fft_water_scenes_cover_every_dispatch() {
         bare(128).with_surface(),
         step.with_passes(32),
         step.with_passes(48),
-        WaterScene { density_once: true, ..WaterScene::dam_break(64) }.with_surface(),
+        WaterScene { density_once: false, ..WaterScene::dam_break(64) }.with_surface(),
         WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) }.with_surface(),
     ];
     for scene in all.chain(probes) {
@@ -608,9 +608,9 @@ fn fft_water_refuses_an_illegal_lattice_at_build() {
 fn fft_water_rendered_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool];
     let coarser = LATTICES.into_iter().flat_map(|n| [1, 2].map(|scale| WaterScene::dam_break(n).with_surface_scale(scale)));
-    // The cadence probes: the density solve once a frame, one step a frame.
+    // The cadence probes: the density solve every step, one step a frame.
     let cadence = [
-        WaterScene { density_once: true, ..WaterScene::dam_break(64) },
+        WaterScene { density_once: false, ..WaterScene::dam_break(64) },
         WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) },
     ];
     for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).chain(coarser).chain(cadence) {

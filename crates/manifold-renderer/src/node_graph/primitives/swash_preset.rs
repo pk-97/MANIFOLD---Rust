@@ -78,7 +78,9 @@ pub(super) struct WaterScene {
     /// Krylov passes of the density solve.
     pub density_passes: usize,
     /// Run the density solve on the frame's last step only. The spread rate
-    /// stays per step, so that one solve removes the same share.
+    /// stays per step, so that one solve removes the same share. On in the
+    /// shipped cadence: at 64³ it holds the water measures within 1.5 points
+    /// of a solve every step (`fft_water_cadence_64`) and saves one solve.
     pub density_once: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
     /// volume and mesh): the shipped Surface Detail 1 is 3.
@@ -88,13 +90,13 @@ pub(super) struct WaterScene {
 /// Particles per cell the fill seeds: one per half-cell site.
 pub(super) const REST_PER_CELL: f64 = 8.0;
 
-/// The share of a cell's crowding the density solve removes per step:
-/// spread_rate × step dt. Linear theory says crowding goes as (1 − share)
-/// per step, so 1 removes it in one step; particles are discrete, so an
-/// overshoot crowds the next cell. Dam Break volume drift, max over the run
-/// (`fft_water_density_sweep`, `fft_water_refined_splash`): share 1 gives
-/// 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5 leaves
-/// twice the particles past rest at 128³ (32% against 16% at frame 29).
+/// The share of a cell's crowding one density solve removes: spread_rate ×
+/// step dt. Linear theory says crowding goes as (1 − share) per solve, so 1
+/// removes it in one solve; particles are discrete, so an overshoot crowds
+/// the next cell. Dam Break volume drift, max over the run, with a solve
+/// every step (`fft_water_density_sweep`, `fft_water_refined_splash`): share
+/// 1 gives 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5
+/// leaves twice the particles past rest at 128³ (32% against 16% at frame 29).
 pub(super) const SPREAD_PER_STEP: f64 = 1.0;
 
 /// The density solve's passes. It moves particles and is never kept as
@@ -115,7 +117,7 @@ impl WaterScene {
             surface: false,
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
             density_passes: DENSITY_PASSES,
-            density_once: false,
+            density_once: true,
             surface_scale: 3,
         }
     }

@@ -1161,13 +1161,13 @@ fn swash_render_smoke_64() {
     run(WaterScene::still_pool(64), "still_pool", true);
 }
 
-/// The step's cadence levers at 64³ beside the shipped cadence, for the stage
-/// table: the density solve once a frame, and one water step a frame.
+/// The step's cadence levers at 64³, for the stage table: the density solve
+/// every step against once a frame (shipped), and one water step a frame.
 #[test]
 fn swash_render_smoke_64_cadence() {
     let base = WaterScene::dam_break(64);
-    run(base, "dam_break", false);
-    run(WaterScene { density_once: true, ..base }, "density_once", false);
+    run(WaterScene { density_once: false, ..base }, "density_every_step", false);
+    run(base, "density_once", false);
     let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
     run(one_step, "one_step", false);
 }
