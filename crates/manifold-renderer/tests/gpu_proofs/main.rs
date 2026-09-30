@@ -85,6 +85,8 @@ mod rt_dynamic_catalog;
 mod rt_dynamic_perf;
 #[cfg(feature = "fluid-perf-proofs")]
 mod fluid_surface_perf;
+#[cfg(feature = "matter-perf-proofs")]
+mod matter_solver_perf;
 mod rt_dynamic_fusion;
 mod rt_dynamic_shading;
 mod rt_normal_tangent_mirror;
@@ -105,5 +107,11 @@ mod rt_w0_gbuffer;
 mod scene_object_migration_round_trip;
 mod scene_viewport_navigate;
 mod scene_viewport_session;
+mod matter_cost_probe;
+mod matter_look;
+mod matter_scene;
+mod matter_transfer;
+mod matter_bodies;
+mod matter_coupling;
 mod smoke;
 mod substeps;

@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b built on `feat/gpu-mpm-build-b` (not on main) · P1–P8 not built · phase notes under each brief in section 13.
+**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to FFT_WATER_SOLVER_DESIGN.md, MPM water presets are test scenes, P4's water targets are withdrawn · BUG-osqh (coupled MPM export below 60 fps drops ticks) fixed on the branch, bead open until it lands · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -174,6 +174,17 @@ The dials, all port-shadowed params on `node.matter_domain`:
   before P1). The default stays 0 until Peter picks it at P4 from the side-by-side.
 Rejected: Tait EOS on density recomputed from grid mass (the prototype and WebGPU-Ocean) —
 a second scatter pass and noisier density.
+**J is bounded after every update:** `J ← min(J·(1 + dt·tr C), J_max)` with J_max = 1 at
+Cohesion 0 (water without tension stores no expansion; the usual no-negative-pressure
+treatment) and J_max = 2 at Cohesion > 0 (the tension κ·λ·J(J − 1) pulls a stretched
+point back; one stretched to twice its rest volume is torn, and the bound keeps
+λ·J(J − 1) finite). A point whose scatter inputs are not finite contributes nothing, and
+`matter_stats` counts it, so D14 halts the publish; it never reaches the integer cast.
+**Amended 2026-09-30 for BUG-8akp (MPM water J grows without bound).** With J unbounded,
+the Dam Break's largest J was 2.2 at tick 20, 100 at tick 65 and 8.7e17 at tick 115,
+where λ·J(J − 1) overflowed f32 and the Cohesion-0 product inf·0 became NaN. The NaN
+momentum was cast to i32::MIN, a finite garbage velocity, so D14 never saw it and the
+water exploded about 1.9 s in.
 **Consequences:** J drifts slowly because particle and grid divergence disagree; the
 volume-drift gate measures it (D19). A hydrostatic pool compresses by ρgH/λ (1.8% at 2 m
 depth), so the surface sits about 2 cm lower than FLIP's at that depth.
@@ -210,11 +221,35 @@ point.** Per the surface design's D8. The lattice is the `domain_layout` box gro
 nodes per side (taichi `padding = 3`), node (i, j, k) at `min + (i, j, k)·dx`. Arrays:
 `grid_accum: Array(i32)` (4 per node: momentum xyz, mass) and `grid: Array(MatterGridNode)`
 (resolved and pre-update velocity, for Liveliness). Accumulation is `atomicAdd` on i32 in
-normalized units — mass in `m_unit = 1000·dx³/8` kg, momentum in `m_unit·dx/dt` — scaled
-by Q = 2^20, round-to-nearest per contribution. Q = 2^20 is the prototype's measured
-choice (0–0.0125% mass error on its fixtures, where Q = 4096 gave 2.4–4.8%). Integer
-addition is order-independent, so the solver is bit-deterministic on one machine and
-build. The arrays are provided outputs of `node.matter_state` that grow on setup changes
+normalized units — mass in `m_unit = 1000·dx³/8` kg scaled by Q_m = 2^16, momentum in
+`m_unit·U` scaled by Q_p = 2^27, where the momentum unit U is dx/dt rounded up to a power
+of two — with unbiased rounding per contribution:
+`encode(x) = floor(x·Q + u)`, where u ∈ [0, 1) is a 24-bit hash of the point id, node
+index, tick, substep and word, and the carry out of the fraction is taken in integers
+(`matter::encode_fixed`), so f32 addition cannot bias it. The expected encoding equals x,
+so small contributions no longer always round to zero. Integer addition is order-independent and u depends only on those
+indices, so the solver is bit-deterministic on one machine and build.
+**Amended 2026-09-30 for BUG-m9g8 (MPM D5 fixed point loses momentum).** The original
+scale, Q = 2^20 for both mass and momentum with round-to-nearest, made one momentum LSB
+worth dx/dt (about 127 m/s at the Dam Break) times one mass LSB. Small-weight
+contributions kept their mass and lost their momentum, so low-mass edge nodes read slow.
+On the f64 reference (`matter_reference_fixed_point_free_flight_momentum`: dx = 1/16 m,
+n = 34, 300 substeps, v = (1, 0.5, −0.25) m/s) a translating blob lost 0.82%, 2.1% and
+5.6% of its x, y, z momentum; on the GPU, 6%, 15% and 39% per second, with J growing.
+Rebalanced scales alone left +6e-4 per component; with unbiased rounding it is −2.2e-5,
+−2.5e-5, −2.8e-5 (f64 without rounding: 2e-16). Q = 2^20 had been the prototype's
+measured mass choice (0–0.0125% mass error, where Q = 4096 gave 2.4–4.8%); that
+measurement never checked momentum.
+**Momentum unit, 2026-09-30.** The rebalanced scales left the GPU free blob at 1.2e-4
+against the 1e-4 gate. Cause: P2G encoded momentum with dt/dx and the grid update
+decoded with dx/dt, each computed separately in f32, and their product was not 1 (about
++5.4e-8 per substep, a steady drift). Now the host computes U = 2^ceil(log2(dx/dt)) once
+per frame (`matter::momentum_unit`, published by `node.matter_domain`) and wires the same
+value into both kernels. P2G's two scales are powers of two times one reciprocal of
+`m_unit`, and the decode multiplies by U·2^-11, so the round trip is exact for every
+resolution and substep count (`matter_momentum_unit_round_trips`). Rounding up keeps the
+headroom bound (section 4.3). Both kernels refuse a U that is not a power of two at or
+above dx/dt. The free blob now drifts 4.9e-6. The arrays are provided outputs of `node.matter_state` that grow on setup changes
 (surface design precedent, `R/primitives/fluid_surface.rs:202-206`), written in place
 through `aliased_array_io`. Rejected: `Texture3D` (surface D8; no float atomics on storage
 textures in WGSL). Rejected: a float compare-exchange loop (slower in the prototype,
@@ -243,6 +278,22 @@ current main in P0a/P0b with the branch as reference. Rejected: one `mpm_solver`
 dispatches everything (the no-monolith rule). Rejected: unrolling N copies of the atoms
 (N changes with Stiffness). Rejected: repeating the whole frame per substep.
 
+Host syncs between iterations are the one exception to "encode the region and move on",
+and they are opt-in per boundary. A boundary opts in by naming a clock input port in
+`SubstepBoundaryPorts::clock`; the compiler resolves the node wired there as the region's
+clock owner and refuses the graph if the port is unwired or the owner sits inside the
+region. Before each iteration after the first, and only offline (`offline_simulation()`,
+export and Record), the executor asks the owner `substep_host_sync(iteration)`; on true it
+commits the frame's command buffer, waits for it to complete, and calls the owner's
+`substep_host_step(iteration, gpu)`, which may read what the GPU wrote and rewrite shared
+buffers before the rest of the region is encoded. Live frames never ask. A boundary with
+no clock never commits or waits mid-region anywhere, which regions such as the FFT water's
+pressure loop rely on. Matter opts in through `node.matter_state`'s `ticks` port, owned by
+`node.matter_domain`, to exchange with Box3D between ticks (section 5); the FFT water's
+Box3D coupling uses the same seam. Proofs: `substeps_host_sync_runs_offline_between_iterations`,
+`substeps_host_sync_never_runs_live`, `substeps_host_sync_off_by_default_in_export`,
+`substeps_region_unwired_clock_port_rejected`.
+
 **D8 — Fixed 60 Hz ticks, owned by the domain node; live never spirals; export never
 drops.** Tick = 1/60 s, equal to Box3D's fixed tick, stamped with the shared `TickStamp`
 and fed by the shared `EventQueue` and `InputHistory` exactly as FLIP's runtime is.
@@ -250,7 +301,8 @@ and fed by the shared `EventQueue` and `InputHistory` exactly as FLIP's runtime 
 frame's tick count; `node.matter_state` repeats `ticks × n`. Live runs at most
 `ceil(project_frame_interval / tick)` ticks per display frame (1 at 60 fps, 2 at 30 fps);
 due time beyond that is dropped, counted and published on `dropped_seconds`. Export and
-Record run every due tick and may wait on GPU fences. Display follows the surface
+Record run every due tick and may wait on GPU fences; a coupled domain also waits between
+its ticks (D7 host syncs, section 5), so it drops nothing at any frame rate. Display follows the surface
 design's D10: s = target − tick for every solver-time output. Transport behaviour
 (pause, stop, seek, loop, clip edges, reset) follows FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle) unchanged.
 Rejected: FLIP's retained unbounded debt for this solver — one tick costs about a frame
@@ -416,6 +468,56 @@ classifies spray, foam and bubbles from grid potentials with FLIP Fluids' own co
 and publishes the surface design's whitewater frames. P7 records particle frames per tick
 through the existing cache writer. P8 ships one demo scene per capability.
 
+**D25 — Distance lattices build lazily on a worker thread; the domain holds until they
+are ready (amends D16).** D16's VERIFY fired: role geometry is prepared on the content
+thread, so a lattice built there would stall the frame. `PreparedFluidGeometry` keeps
+the lattice in a `OnceLock` filled by a short-lived worker thread on first request
+(`fluid_role.rs`, `distance_lattice`); the lattice is derived and not serialized, so
+take and cache identity are unchanged. While any collider's lattice is pending,
+`node.matter_domain` holds its last outputs (`warmup_pending`) and the clock does not
+advance; the simulation starts on the frame every lattice is ready. The worker holds
+only the `Arc` of the prepared geometry; no channel, mutex or long-lived thread.
+
+**D26 — A role's scale applies at use.** A lattice is built once in the geometry's own
+unscaled frame. Samplers map a world point through the pose and divide by the per-axis
+scale (world → local); a local distance becomes metres by the smallest scale, which
+never overstates the gap for a non-uniform scale. `MatterShape` is 48 bytes: origin and
+spacing, dims, atlas offset, and the scale with its minimum in w.
+
+**D27 — One lattice per geometry: the longest extent over 32, two spacings of padding.**
+Roles sharing geometry share one atlas block. World spacing is the local spacing times
+the role scale per axis. At 64³ (dx = 0.0625 m on the 4 m Dam Break domain): the Dam
+Break's moving box (a unit cube scaled 0.6 × 1.16 × 0.85) samples at 0.019–0.036 m,
+0.3–0.58 dx; a 0.25 m prop at 0.008 m, 0.13 dx; a domain-sized 4 m collider at
+0.125 m, 2 dx. Any collider longer than 32 dx is coarser than the grid and rounds its
+corners by up to a spacing; P4 decides whether to raise the count for large colliders.
+
+**D28 — Bodies are per-tick rows; the pose is evaluated per substep.**
+`node.matter_domain` records each collider's transform once per display frame into
+`InputHistory` at the frame's target time and publishes one `MatterBody` row per body
+per tick of the frame: the tick-start pose, and the linear and angular velocity that
+carry it to the tick-end pose. A restart publishes the first tick's rows with no tick
+run, so the fill sees the starting pose. Rows upload through the inline uniform path in
+encoder order. `node.matter_move_bodies` poses each body at the end of its substep,
+`t = (substep_in_tick + 1)·step_dt`, the slerp between the tick's end poses;
+`node.matter_solid_distance` poses the last row at the frame's end.
+
+**D29 — Colliders are projected on the grid and pushed out on the points (amends
+section 4.1 steps 4 and 6).** The grid projection alone leaves points up to about a cell
+inside a moving body, because a point moves with a velocity blended from 27 nodes. G2P
+therefore finishes every point update against each body at its substep-end pose: a
+point at local distance φ < 0 steps along the lattice normal onto the surface
+(`−φ·∇φ/|∇φ|²` with the world-space gradient of the local distance, capped at the
+largest possible gap), and the inward normal part of its velocity relative to the
+body is removed. Tangential motion is untouched and relative speed never grows. The
+push-out is a position correction with no momentum exchange; P2b measures the coupled
+momentum balance with it on. The four collider atoms share one sampler: the
+`matter_pose.wgsl` and `matter_collider.wgsl` includes; each body defines only the
+atlas read over its own gathered binding. Gate: no point ends a tick more than 0.5·dx
+inside a collider. **MatterClock epochs start at 1**, 0 meaning not started: with the
+first epoch at 0, a domain holding zeros while a lattice built looked like a started
+epoch, and the state never seeded.
+
 ## 3. Data model and atoms
 
 ### 3.1 Records
@@ -473,15 +575,20 @@ pub struct MatterBody {
     pub accel_shape: [f32; 4],         // xyz predicted external acceleration; w = shape index
 }
 
-/// Body-local distance lattice descriptor. 32 bytes.
+/// Body-local distance lattice descriptor. 48 bytes (P2a: grew from 32 to carry the
+/// role's scale, which roles apply at use, not at preparation).
 pub struct MatterShape {
-    pub origin_spacing: [f32; 4],      // local lattice min xyz; w = spacing (m)
-    pub dims_offset: [u32; 4],         // nodes x/y/z; w = offset into the packed atlas
+    pub origin_spacing: [f32; 4],      // local lattice min xyz, unscaled; w = spacing (m)
+    pub dims_x: u32, pub dims_y: u32, pub dims_z: u32,
+    pub atlas_offset: u32,             // index of node (0, 0, 0) in the atlas's halves
+    pub scale_min: [f32; 4],           // role scale xyz; w = the smallest
 }
 ```
 
-Per-body reaction accumulator: `Array(i32)`, 8 per body (linear xyz, angular xyz, 2
-padding), fixed point in `m_unit·dx/dt` and `m_unit·dx²/dt`. Per-tick stats: `Array(u32)`,
+Per-body reaction accumulator: `Array(i32)`, 16 per body: the body's velocity change
+Σ Δv (m/s), the same weighted by s/n (substep s of n), the angular impulse per unit mass
+over dx, the same weighted, 4 padding. Each word is value·2^24/U at D5's momentum unit
+with D5's hashed rounding (`REACTION_WORDS` in `matter.rs`). Per-tick stats: `Array(u32)`,
 16 words (non-finite count, clamp count, live count, max speed, min and max J, volume,
 max accumulator magnitude, mass, momentum xyz, kinetic, potential and elastic energy, tick
 index; floats as bits). Sums use a fixed reduction tree.
@@ -494,7 +601,7 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | Atom | Inputs → outputs | Phase |
 |---|---|---|
 | `node.matter_domain` (scene-facing CPU bridge) | the `node.fluid_surface` scene contract of D17, plus params Material (Enum), Points per Cell (Enum 8/27), Stiffness, Cohesion, Viscosity, Liveliness, Melt, and model params → lattice wires, `ticks`, `substeps_per_tick`, `epoch`, `points_per_cell`, `material: Array(MatterMaterial)`, `bodies: Array(MatterBody)`, `shapes: Array(MatterShape)`, `atlas: Array(u32)`, `forces: Array(u32)`, `impulses: Array(u32)`, `simulation_time`, `dropped_seconds`, `lag_seconds` | P1 (domain, walls, clock, water dials, box fill), P2a–P3d (bodies, roles, fields, impulses, coupling), P5 (Melt, models) |
-| `node.matter_state` (substep boundary) | `seed: Array(MatterPoint)`, capture `in: Array(MatterPoint)`, capture `stats_in: Array(u32)`, lattice wires, `ticks`, `substeps_per_tick`, `epoch` → `out: Array(MatterPoint)`; provided `grid_accum: Array(i32)`, `grid: Array(MatterGridNode)`; per-iteration `step_dt`, `step_index`, `substep_in_tick`, `tick_start`, `tick_end`; `live_count`, `fault` | P1 |
+| `node.matter_state` (substep boundary) | `seed: Array(MatterPoint)`, capture `in: Array(MatterPoint)`, capture `stats_in: Array(u32)`, capture `reaction_in: Array(i32)` (P2b), lattice wires, `ticks`, `substeps_per_tick`, `epoch` → `out: Array(MatterPoint)`, `reaction`; provided `grid_accum: Array(i32)`, `grid: Array(MatterGridNode)`; per-iteration `step_dt`, `step_index`, `substep_in_tick`, `tick_start`, `tick_end`; `live_count`, `fault` | P1 |
 | `node.matter_fill` | lattice wires, `bodies`, `shapes`, `atlas`, `material`, `points_per_cell`, `epoch` → `seed: Array(MatterPoint)`. Params `seed`, `max_capacity` | P1 (box and fill height), P3b (mesh fills) |
 | `node.zero_array` | `in: Array(i32)` → `out` (aliased) | P1 |
 | `node.matter_to_grid` | `points`, `material`, lattice wires, `step_dt`, optional `deformation`, optional `order: Array(u32)` (P1b), `accum: Array(i32)` → `accum_out` (aliased, the one atomic output) | P1, P1b |
@@ -502,9 +609,9 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | `node.grid_to_matter` | `points`, `grid` (BufferGather), `material`, lattice wires, `step_dt` → `points_out` | P1 |
 | `node.matter_stats` | `points`, `grid`, `accum`, `material`, `tick_end` → `stats: Array(u32)` | P1 |
 | `node.matter_frame` | `points`, `stats`, `material`, lattice wires, optional `solid`, `simulation_time` → the surface seam outputs: `particles_a`, `particles_b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span` | P1 |
-| `node.matter_move_bodies` | `bodies`, `reaction: Array(i32)`, `step_dt`, `substep_in_tick` → `bodies_out` | P2a |
-| `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask → `solid: Array(f32)` | P2a |
-| `node.matter_body_reaction` | `accum`, `grid`, `bodies`, `shapes`, `atlas`, lattice wires, `reaction: Array(i32)` → `reaction_out` (aliased atomic) | P2b |
+| `node.matter_move_bodies` | `bodies` (the domain's tick rows), `tick_index`, `first_tick`, `substep_in_tick`, `step_dt`, `body_count`, `rows`; P2b adds `reaction: Array(i32)`, `substeps_per_tick`, `momentum_unit`, `cell_size`, `dynamic_count` → `bodies_out` | P2a, P2b |
+| `node.matter_solid_distance` | `bodies`, `shapes`, `atlas`, lattice wires, closed-face mask, `body_count`, `rows`, `tick_seconds` → `solid: Array(f32)`; once per frame after the region, poses at the last tick's end | P2a |
+| `node.matter_body_reaction` | `grid`, `bodies` (from `matter_move_bodies`), `shapes`, `atlas`, lattice wires, `step_dt`, `gravity_x/y/z`, closed-face mask, `momentum_unit`, `body_count`, `dynamic_count`, `substeps_per_tick`, `tick_index`, `substep_in_tick`, `reaction: Array(i32)` → `reaction_out` (aliased atomic, captured by `matter_state.reaction_in`) | P2b |
 | `node.matter_emit` | `points`, `bodies`, `shapes`, `atlas`, lattice wires, `tick_start`, `material`, `points_per_cell` → `points_out` | P3b |
 | `node.matter_drain` | `points`, `bodies`, `shapes`, `atlas`, lattice wires → `points_out` | P3b |
 | `node.matter_compact` | `points`, `tick_end` → `points_out` | P3b |
@@ -521,7 +628,8 @@ surface design's "Liquid Surface" group, which feeds the scene object.
 
 The content thread owns every runtime value. `node.matter_domain` owns the clock, the
 prepared-geometry references, the pose table, the coupled `RigidSimulation` for a coupled
-pair, the event queue and the reaction readback ring. `node.matter_state` owns the
+pair, the event queue and the fenced reaction buffer (one slot: the one-tick cap never
+leaves two coupled ticks in flight). `node.matter_state` owns the
 persistent point buffer, the provided lattice arrays and the stats readback ring.
 `physics_world` in coupled mode republishes the accepted rigid frame as it does for FLIP.
 Serialized state is the graph JSON only; reload restarts the simulation (as FLIP and
@@ -561,7 +669,9 @@ over the 27 nodes `i = base + {0,1,2}³`, `d_i = (i·dx + lattice_min) − x_p`.
    collider projection.
 6. **G2P** (`node.grid_to_matter`): `v_pic = Σ w·v_i`,
    `v_p ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic`,
-   `C_p = (4/dx²)·Σ w·v_i ⊗ d_i`, `x_p += dt·v_pic`, `J_p ← J_p·(1 + dt·tr C_p)`.
+   `C_p = (4/dx²)·Σ w·v_i ⊗ d_i`, `x_p += dt·v_pic`, `J_p ← J_p·(1 + dt·tr C_p)`; then
+   a point inside a collider steps out onto its surface and loses the inward normal
+   part of its velocity relative to the body (D29).
 7. **Deformation** (P5 models): `F ← (I + dt·C_p)·F`, then Melt relaxation (D10), then the
    model's return mapping.
 
@@ -576,10 +686,14 @@ them inside.
 
 ### 4.3 Fixed-point encoding and headroom
 
-`encode(x) = round(x · Q)`, Q = 2^20, after normalizing by `m_unit` and `dx/dt`. Per-node
-sums stay far below 2^31 whenever J ≥ 0.1; `matter_stats` records the largest
-accumulator magnitude every tick, and `matter_fixed_point_headroom` requires it below
-2^30 on the Dam Break.
+`encode(x) = floor(x · Q + u)` after normalizing by `m_unit` (mass, Q_m = 2^16) or
+`m_unit·U` (momentum, Q_p = 2^27; U the D5 momentum unit, dx/dt rounded up to a power
+of two), u the D5 hash. A node velocity is `p_raw / m_raw · U · Q_m / Q_p`. A node holds
+about 8 `m_unit` at rest density, so its momentum at the velocity clamp (0.9·dx/dt ≤
+0.9·U) is at most about 2^30, and it reaches 2^31 only when
+compressed to J ≈ 0.5 at the clamp. Real flows sit far below the clamp. `matter_stats`
+records the largest accumulator magnitude every tick, and `matter_fixed_point_headroom`
+requires it below 2^30 on the Dam Break.
 
 ### 4.4 Constitutive branches
 
@@ -612,7 +726,7 @@ Tuning is inherited, not rediscovered. Sources fetched 2026-09-29: taichi_elemen
 | Acoustic CFL | 1/3 | taichi_elements default dt at L = 1 (`2e-2·dx/size` gives c·dt/dx = 0.33); bracketed by `mpm3d.py` (0.26) and `mls-mpm88` (0.51) |
 | Grid velocity clamp | 0.9·dx/dt per component | taichi_elements `g2p2g_allowed_cfl = 0.9` |
 | Points per cell | 8 default, 27 option | FLIP Fluids upstream seeding (parity); `mpm3d.py` uses 2, noted |
-| Fixed-point scale | Q = 2^20 | prototype S1 measurement (section 1.2) |
+| Fixed-point scales | mass Q_m = 2^16, momentum Q_p = 2^27, unbiased hashed rounding | D5 amendment (BUG-m9g8 (MPM D5 fixed point loses momentum)); the prototype's Q = 2^20 measured mass only |
 | Liveliness blend | FLIP-style blend in G2P | Fei et al. 2021. ⚠ VERIFY-AT-IMPL before P1 |
 | Goo scale | μ, λ × 0.3 | taichi_elements (`h = 0.3` for elastic) |
 | Snow θc, θs, ξ, Jp clamp | 2.5e-2, 7.5e-3, 10, [0.6, 20] | `mls-mpm88` constants (from Stomakhin et al. 2013); taichi_elements uses θs = 4.5e-3, noted and not taken |
@@ -639,8 +753,8 @@ one tick behind (surface D10), the content thread never waits.
 Per display frame N, inside the contracted coupled group (liquid side first, as
 `prepare_coupled_scenes` orders it today):
 
-1. `node.matter_domain` checks the reaction ring slot of fluid tick k (encoded in frame
-   N−1) with `FrameFence::is_completed`. Not complete → publish `ticks = 0`; the pair
+1. `node.matter_domain` checks the reaction buffer of fluid tick k (encoded in frame
+   N−1) with `FrameFence::is_completed` (offline: `FrameClock::wait`). Not complete → publish `ticks = 0`; the pair
    holds and republishes the previous pair. Lag grows and is reported.
 2. Complete → read the per-body accumulators, convert to world impulses, and run
    `RigidSimulation::advance_with_coupling` with `AdvancementPolicy::Worker { max_ticks: 1 }`
@@ -660,8 +774,18 @@ The GPU body integrator's free-flight baseline equals Box3D's integration of the
 gravity and fields, and the read-back impulse contains only the fluid's reaction, so
 nothing is counted twice. Uncoupled scenes skip steps 1–3 and are free-running under D8.
 
-**Consequences, stated honestly:** a coupled scene advances at most one tick per display
-frame, so at a 30 fps project it runs at half speed live (export is unaffected); a missed
+Offline (export and Record) a frame runs every due tick, each with its own exchange. Steps
+1–3 run for the frame's first tick as above; before each later tick the region makes a D7
+host sync: the GPU finishes the previous tick, the domain settles its reaction, steps
+Box3D over it, rewrites that tick's body rows in place and clears the reaction. The tick
+sequence is the one a 60 fps export runs, so a 30 fps export matches it word for word at
+every shared instant (`matter_coupling_export_frame_rate_independent`). The display stays
+at the tick Box3D had settled when the frame began, so at 30 fps the shown pair is one
+tick older than at 60 fps.
+
+**Consequences, stated honestly:** live, a coupled scene advances at most one tick per
+display frame, so at a 30 fps project it runs at half speed live; export runs every tick
+and pays one GPU drain per extra tick (under 1% at 64³, section 8); a missed
 readback leaves a permanent one-tick lag until Reset; Box3D contacts act once per tick
 while the fluid feels the body every substep, so a body pinned against a wall by water
 can jitter by up to one tick of fluid push.
@@ -723,6 +847,12 @@ Peter's visual call contradicts a pass or fail, the threshold is re-baselined fr
 call and recorded in the phase's decision bead. P1 and P4 capture at Liveliness 0 and
 0.9; the gate is evaluated at the default, and both sets of numbers go to Peter.
 
+**Withdrawn 2026-09-30.** MPM water look is out of scope: liquid water moves to
+[FFT_WATER_SOLVER_DESIGN.md](FFT_WATER_SOLVER_DESIGN.md), and the MPM water presets are
+test scenes. A2, A4, A6, the still-pool settle and the P4 targets A7–A11 are not gated.
+A1, A3 and A5 stay as solver-health gates. The metric functions stay in `matter::look`
+for `fluid_capture --look-metrics`.
+
 ## 8. Speed — roofline, profile and levers
 
 Per substep: 4 dispatches (clear, P2G, grid update, G2P), plus 2 with bodies; per tick,
@@ -759,6 +889,7 @@ G2P, stats and the per-tick bookkeeping, plus dispatch count and the out-of-tile
 | Lever | Look | Expected win | Basis |
 |---|---|---|---|
 | L1 Cell-sorted block-local P2G (D6), sort once per tick | none (bit-identical) | global atomics fall from 108 to about 2 per point (864 tile flushes for 512 points per block); P2G 2–4× faster if atomics dominate | arithmetic; Gao et al. 2018 for the scheme |
+| L1b Sort by stencil base cell; sum each cell's words in registers, one tile add per node per cell | none (bit-identical) | expected: tile atomics fall about 8×. Measured: P2G about 2× slower; reverted (P1b notes) | the P1b probe's guess that block P2G is bound by workgroup-atomic contention |
 | L2 Shared-memory grid tiles in G2P | none (bit-identical) | 1.2–1.5× on G2P; the 27-node gather mostly hits cache already | arithmetic |
 | L3 Half-precision C storage (D21) | none if gates hold | −18% point traffic (176 → 144 B) | arithmetic; accepted only if every P1 gate passes unchanged |
 | L4 Substeps from the rule (D4) | — | a calm or soft setting pays for what it needs (Stiffness 0.5 → 21 substeps) | already the rule; P1b verifies it tracks Stiffness live |
@@ -776,7 +907,10 @@ Levers only Peter can pull, priced for P4:
 
 **Instrument consequences:** one tick of display latency (D10); slow motion instead of
 lag under overload (D8); the cost moves with Stiffness, so a Stiffness sweep is also a
-cost sweep; a coupled scene at 30 fps runs at half speed (section 5).
+cost sweep; a coupled scene at 30 fps runs at half speed live (section 5). Export of a
+coupled 64³ scene: 59.8 ms per frame at 60 fps (one tick), 108.4 ms per frame at 30 fps
+(two ticks with one host sync), 107.6 ms at 30 fps with the sync's wait removed, so the
+wait costs about 0.8 ms per frame (2026-09-30, M-series GPU, floating-box scene).
 
 ## 9. Section 2.5 audit and codegen classification
 
@@ -814,10 +948,11 @@ module; the honest count.
 | `matter_state`, `matter_frame` | Exempt, exclusion 2 (cross-frame state) | Clock and ring unit tests; frame value tests. |
 | `matter_domain` | Exempt, exclusion 3 (CPU bridge) | CPU unit tests; upload round-trip GPU test. |
 
-Helper functions shared by several bodies (stencil weights, fixed-point encode) are
-duplicated with an atom-specific prefix and pinned equal by a source test, unless P1
-read-back finds that fused codegen already namespaces member helpers (⚠ VERIFY-AT-IMPL:
-read `R/freeze/codegen/fused.rs`). A body the codegen cannot express is BLOCKED: file a
+Fused codegen does not namespace member helpers (`R/freeze/codegen/fused_buffer.rs`:
+same name and text dedupe, same name and different text is a `HelperCollision`). Small
+helpers shared by several bodies (stencil weights, finite checks) are duplicated with
+an atom-specific prefix and pinned equal by a source test. Larger shared code is a
+`wgsl_includes` library, as the collider sampler is (D29). A body the codegen cannot express is BLOCKED: file a
 `bd` bug naming the missing read path and declare `boundary_reason: Blocked` — never a
 quiet exemption.
 
@@ -892,18 +1027,16 @@ FLIP-only.
 
 | Invariant | Enforcement |
 |---|---|
-| GPU transfers match the f64 reference at small N | `matter_transfer_matches_reference` (one substep, 512 points, 16³: positions within 1e-5 m, velocities within 2e-5 m/s); `matter_hundred_substeps_match_reference` (affine field fixture) |
+| GPU transfers match the f64 reference at small N | `matter_transfer_matches_reference` (one substep, 512 points, 16³: positions within 1e-5 m and velocities within 2e-5 m/s of the f64 reference with Q = 2^20 fixed-point rounding; velocities within 2e-4 m/s of the continuous f64 reference, because one mass LSB at a low-mass stencil-edge node moves its velocity by about 1e-4 m/s); `matter_hundred_substeps_match_reference` (affine field fixture) |
 | Mass is exact; grid mass matches particle mass | `matter_grid_mass_matches_particle_mass` (relative 1e-5 per substep) |
-| Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks) |
-| A still pool settles | `matter_still_pool_settles` (after 5 s: mean speed < 0.01 m/s; bottom-quarter J matches 1 − ρgd/λ within 20%) |
+| Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks; the fixed-point bound derived for this setup is about 5e-5; measured 4.9e-6 with D5's momentum unit) |
 | Dam-break energy never grows | `matter_dam_break_energy_bounded` (kinetic + potential + elastic ≤ 1.01 × initial at every tick) |
-| Look artefacts A1–A6 | `matter_look_lattice_alignment`, `matter_look_settles_without_ringing`, `matter_look_volume_drift`, `matter_dam_break_front_matches_martin_moyce`, `matter_look_splash_retention`, `matter_look_sheet_retention` (section 7). ⚠ VERIFY-AT-IMPL: transcribe the Martin & Moyce aspect-2 series and its T definition, with the citation, into the test |
-| Look artefacts A7–A11 | `matter_surface_look_against_flip` (P4) |
+| Look artefacts A1, A3, A5 | `matter_look_lattice_alignment`, `matter_look_volume_drift`, `matter_look_splash_retention` (section 7 (Look — artefacts, metrics and dials); the other look gates are withdrawn) |
 | Determinism | `matter_deterministic_under_seed` (two runs, 120 ticks, bit-identical points); `matter_seed_changes_jitter`; `matter_block_p2g_bit_identical` (P1b) |
 | Fixed-point headroom | `matter_fixed_point_headroom` (Dam Break, max accumulator magnitude < 2^30) |
 | A non-finite tick is never published | `matter_nonfinite_tick_not_published` |
 | Substep rule | `matter_substep_rule_matches_worked_example` (n = 34); `matter_substeps_follow_stiffness` (0.5 → 21, 2 → 61); `matter_dials_limited_to_substep_cap` (a request needing n > 128 runs at the largest fitting value and reports it) |
-| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick` |
+| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`; coupled: `matter_coupling_export_frame_rate_independent` (30 fps export equals 60 fps word for word) |
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
 | Coupling | `matter_coupling_hydrostatic_force` (within 5%), `matter_coupling_floating_equilibrium` (density 0.5 settles at the waterline ± 0.5·dx), `matter_coupling_energy_light_body` (ratios 0.1/1/10: body energy never above 1.01 × initial total over 8 ticks), `matter_coupling_free_flight_matches_box3d`, `matter_coupling_presentation_shares_display_time` |
@@ -1034,6 +1167,63 @@ at the end of the phase.
   without a jump.
 - **Forbidden:** everything in section 10; a CPU fallback; colliders (P2a); tuning a dial
   or threshold to pass A1–A6.
+- **Phase notes (partial, 2026-09-30, Opus 5.5 worker):** the kill check fired and the
+  lead took the proceed option: P1b runs as designed, and the budget is decided at P4.
+  The budget call is BUG-u3ov (MPM solver budget); what P1 still owes is BUG-g93n (MPM P1 remaining deliverables).
+  - Built and green: the records, substep rule, clock and f64 reference in `R/matter.rs`;
+    the atoms `matter_domain`, `matter_fill`, `matter_state`, `zero_array`,
+    `matter_to_grid`, `matter_grid_update`, `grid_to_matter`, `matter_stats`,
+    `matter_frame`; 15 GPU proofs (`scripts/gpu_proofs_gate.py --filter matter_
+    --filter substep`): reference, mass, hundred substeps, still pool, energy,
+    determinism, seed jitter, headroom, non-finite tick and gravity, frame ids, live
+    Stiffness, the probe.
+  - Kill check, from `tests/gpu_proofs/matter_cost_probe.rs` on an M4 Max with no other
+    GPU work (load average 18.6 from CPU jobs). 64³ cells, 4 m, Stiffness 1, n = 34,
+    medians of 30 frames, ms per frame, kernels profiled one encoder per dispatch:
+
+    | Points | Clear | Sort | P2G | Grid update | G2P | Stats | Production frame | ns per point-substep |
+    |---|---|---|---|---|---|---|---|---|
+    | 131,072 | 1.38 | n/a | 11.44 | 0.88 | 1.99 | 0.35 | 15.76 | 3.01 |
+    | 262,144 | 1.39 | n/a | 21.96 | 0.98 | 3.71 | 0.39 | 28.07 | 2.88 |
+    | 524,288 | 1.39 | n/a | 44.95 | 0.95 | 7.54 | 0.55 | 54.50 | 2.94 |
+
+    Projection: 2.94 ns × 500,000 × 34 + lattice 2.34 + stats 0.55 = **53 ms against
+    12 ms: fires.** P2G is bound by its 108 global atomic adds per point (about 4.3e10
+    adds per second). G2P already runs at about 420 GB/s, near section 8's 546 GB/s
+    roofline. With every P2G atomic removed, the rest still costs about 12.6 ms.
+  - Deviations: the lattice and material reach the atoms as scalar wires from
+    `matter_domain`. The boundary serves six iteration scalars (step_dt, step_index,
+    substep_in_tick, tick_start, tick_end, tick_index). Walls act on the face node plus
+    the three padding nodes; without the face node a still pool sinks a cell and
+    splashes. `matter_stats` is hand WGSL under exclusion 1. Live runs allow three ticks
+    per frame and carry one tick of jitter debt. `matter_domain` declares `NonGpu`. A
+    point whose stencil leaves the lattice is removed (id 0). The fill rounds the fill
+    height to whole cells. The frame ring uses shared storage.
+  - Tolerance: section 12 now names both oracles. Measured gaps are 5.4e-6 m/s against
+    the fixed-point f64 reference and 1.05e-4 m/s against the continuous one.
+  - Verified: the Liveliness blend and position update follow Fei et al. 2021 as Blatny
+    & Gaume 2025 implement it (positions advect with v_pic). The scatter precedent
+    `scatter_particles_3d.rs` carries `boundary_reason: Blocked` with no tracked gap,
+    now BUG-1ois (atomic scatter atoms declare Blocked). Fused codegen does not
+    namespace member helpers, so shared helpers are duplicated with an atom prefix.
+  - Built since: `particles_to_copies` (moved here from the surface design's deferred
+    P3), with value and fused proofs; `WaterDamBreakMatter.json` and `WaterStillPoolMatter.json` on
+    the Live Matter group (the moving box and whitewater wait for P2a and P6; the pool
+    rounds to whole cells); `matter::look` and the gates in
+    `tests/gpu_proofs/matter_look.rs`; helper-copy source tests.
+  - Verified: `landing_gate.py` scopes GPU proofs by rows of path substrings and test
+    filters, and any uncovered GPU path runs the full suite; the matter row filters
+    `matter_` and `substeps_`. Martin & Moyce 1952 Figure 3, n² = 2, a = 2.25 in,
+    transcribed from PySPH's `db_exp_data.py` into `matter::look`.
+  - Gates after the D5 amendment, Dam Break as the preset: A1 1.02–1.03 (pass); A5 1.44%
+    against FLIP's 1.34% (pass); A6 0.85% against FLIP's 27.3% (fail); A4 11.0% at
+    Liveliness 0 and 2.0% at 0.9, ahead of the experiment by 8–10% from T ≈ 1.3 (fail);
+    free-blob momentum 1.2e-4 against 1e-4 (fail; D5's momentum unit fixed it, now
+    4.9e-6). A2, A3, the still
+    pool and headroom fail through BUG-8akp (MPM water J grows without bound): at
+    Cohesion 0, λ·J(J−1)·0 turns NaN near t = 1.9 s.
+  - Owed with BUG-g93n (MPM P1 remaining deliverables): the `fluid_capture` metrics
+    mode, after the surface branch merge; every gate green after the J ruling; the demo.
 
 ### P1b — Profile and optimise
 
@@ -1055,6 +1245,61 @@ at the end of the phase.
 - **Demo:** none — L1, plus the profile table.
 - **Forbidden:** reordering `MatterPoint`; subgroup operations; changing Stiffness,
   Points per Cell, resolution or any threshold for speed.
+- **Phase notes (in progress, 2026-09-30, Opus 5.5 worker):** started on the lead's call
+  after P1's kill check fired (the entry state's "kill check passed" does not hold).
+  - L1: `node.matter_to_grid` is hand WGSL (exclusion 1) with one entry point: per-point
+    global atomics, or, with `order`/`ranges`, one workgroup per 4³ block of stencil base
+    nodes into a 6³-node workgroup tile. One call into the contribution code serves both
+    modes; two entry points differed in 5 of 1370 words under fast math.
+    `node.matter_state`'s points feed the surface's `node.sort_particles_into_cells`
+    directly (its particles port reads position and liveness by channel name from the
+    producer's layout), boxed by `node.matter_domain`'s block bins. `matter_block_p2g_bit_identical` passes with
+    points in and out of their sorted blocks. The sort runs once per tick (its `enabled`
+    input takes `tick_start`), and the Live Matter group and both presets take the block
+    path. `matter_block_path_matches_per_point` runs 120 ticks of the small dam break on
+    both paths: 0 of 47,104 points differ.
+  - L2 built and measured slower, reverted: G2P at 524k points went from 7.6 ms per frame
+    (codegen) to 11.5 ms (hand kernel, per point) and 14.8 ms (tiled), bound by point
+    traffic.
+  - L3 deferred, not built: its acceptance needs every P1 gate green, and A2, A4, A6 and the still
+    pool fail today; it would also change `MatterPoint` across every atom. L4 holds
+    (`matter_substeps_follow_stiffness_live`). L5: `graph-tool fusion` finds no fusable
+    neighbours in the matter graph.
+  - Probe, M4 Max, 64³, ms per frame at 524,288 points (sort ungated; gated it costs
+    about a 34th of the shown sort time):
+
+    | Stiffness | n | P2G path | Clear | Sort | P2G | Grid | G2P | Stats | Production | ns/point-substep |
+    |---|---|---|---|---|---|---|---|---|---|---|
+    | 1 | 34 | per point | 1.40 | 0 | 47.18 | 1.00 | 7.88 | 0.55 | 57.13 | 3.09 |
+    | 1 | 34 | block | 1.64 | 13.22 | 19.57 | 1.21 | 8.40 | 0.55 | 42.72 | 1.57 |
+    | 0.5 | 21 | per point | 0.87 | 0 | 29.53 | 0.58 | 4.79 | 0.60 | 35.50 | 3.12 |
+    | 0.5 | 21 | block | 1.02 | 7.76 | 11.90 | 0.69 | 4.71 | 0.54 | 26.19 | 1.51 |
+
+  - L1b built and measured slower, reverted: sorting by stencil base cell and summing each
+    cell's words in registers (one thread per cell and stencil x slice) made P2G at 524k
+    points, Stiffness 1, 36.5 ms per frame against L1's 19.5 ms in the same harness and
+    load (a register-switch variant of the sums: 46.8 ms). The probe's guess that tile
+    atomics bound block P2G was wrong: per-cell sums serialise each cell's points in one
+    thread and idle lanes on uneven and empty cells. It stayed bit-identical on all three
+    of its paths. The code is in the branch history.
+  - `tests/gpu_proofs/matter_solver_perf.rs` behind `matter-perf-proofs` (in
+    `scripts/feature_matrix.py`): the P4 operating points, L1 with the sort gated to once
+    per tick, 120 measured frames, M4 Max, load average 5.4–6.1. "Left tile" is the mean
+    fraction of points outside their sorted block's tile at tick end (the last substep's
+    out-of-tile fraction; earlier substeps see less). ms are per frame, one 60 Hz tick.
+
+    | Points | Stiffness | n | p95 frame | ns/point-substep | Left tile | As particles | Sort | P2G | G2P |
+    |---|---|---|---|---|---|---|---|---|---|
+    | 241,920 (column, no pool) | 1 | 34 | 21.2 | 2.58 | 0.18 | 1.48 | 1.12 | 11.4 | 4.14 |
+    | 241,920 | 0.5 | 21 | 13.8 | 2.71 | 0.18 | 0.91 | 1.12 | 7.08 | 2.65 |
+    | 513,152 (0.625 m pool) | 1 | 34 | 37.1 | 2.13 | 0.086 | 6.54 | 1.21 | 19.6 | 7.55 |
+    | 513,152 | 0.5 | 21 | 23.9 | 2.21 | 0.088 | 4.05 | 1.24 | 12.1 | 4.65 |
+
+    Per-point P2G at 513,152, Stiffness 1: p95 65.2 ms. 128³ at 30 Hz (4.2M points, 68
+    substeps a frame): p95 1140 ms. D20's 6 ms is missed at every point; the miss carries
+    to P4. The 6.5 ms of the 37.1 at 513k that a per-substep MatterPoint → particle
+    conversion cost is gone: the sort reads matter points directly, and the conversion
+    atom is deleted (BUG-0pmv (matter_to_particles runs every substep)).
 
 ### P2a — Colliders
 
@@ -1078,6 +1323,29 @@ at the end of the phase.
 - **Gesture:** sweep the paddle fast through the pool; water parts and nothing leaks.
 - **Forbidden:** a GPU mesh-to-SDF atom; a matter geometry cache; box-only fallbacks for
   rejected meshes; CPIC sidedness.
+- **Phase notes (2026-09-30, Opus 5.5 worker):** built on `feat/gpu-mpm-build-b`, as
+  D25–D29 record.
+  - `matter_collider_penetration_bounded` (dx 0.03125): deepest point −0.00068 m against
+    the −0.5·dx gate of −0.0156 m, over 120,032 point-ticks within a cell of a body. Grid
+    projection alone left −1.15·dx; D29's push-out closes it.
+    `matter_grid_update_projects_colliders`: worst normal velocity into a body 4.05e-6 m/s
+    over 96 nodes. `matter_fill_skips_colliders`: 4,922 slots left empty for about 5,898
+    expected from the box volume.
+  - GPU filter `matter_`: 24 pass; the 4 failures are BUG-k85i (MPM water look gates red)
+    exactly: A4, A6 sheet retention, settling, the still pool.
+  - Demo: the Dam Break Matter capture at 64³, 340,224 points, with the moving box. Water
+    parts round the box and none shows inside it.
+  - `examples/fluid_capture.rs` treats `PendingGeometry` as unfinished preparation during
+    warm-up and a failure in the measured frames, per `FrameRenderStatus`: role distance
+    lattices build on a worker (D25).
+  - BUG-0pmv (matter_to_particles runs every substep): the one cell sort reads any record
+    with `position_radius`, or `position` and `id`, through the producer's layout
+    (`Channels[permissive]`, allow-listed per
+    CHANNEL_TYPE_SYSTEM.md section 11.4 (Per-port match-mode discipline));
+    `matter_state.out` wires straight in and `node.matter_to_particles` is deleted. The
+    surface still converts once a frame at `node.matter_frame`.
+    `fluid_sort_particles_into_cells_sorts_matter_points_in_place` proves byte-identical
+    ranges and order against the equivalent particle records.
 
 ### P2b — Two-way Box3D coupling
 
@@ -1098,6 +1366,32 @@ at the end of the phase.
   spins and settles.
 - **Forbidden:** blocking readback; Box3D per substep; damping or mass changes to pass
   energy tests; FLIP-style after-the-fact exchange.
+- **Phase notes (2026-09-30, Opus 5.5 worker):** built on `feat/gpu-mpm-build-b`.
+  `substeps.rs` is untouched: one region, nothing new escapes it.
+  - `matter_coupling_hydrostatic_force`: 625.1 N from the reaction, 625.4 N from the
+    body rows, against ρ0·g·V = 627.8 N (−0.44%).
+    `matter_coupling_floating_equilibrium` (32³, density 0.5): centre 0.5445 m against a
+    measured free surface of 0.5240 m, 0.328·dx, bob 0.0061 m. The gate reads the
+    waterline from the particles. The volume level Σ V0·J reads 0.5131 m because
+    Cohesion 0 caps J at 1 (D3), which drops expansion, so it is printed, not gated.
+    `matter_coupling_energy_light_body`: body energy peaks 0.0155× / 0.264× / 0.883× of
+    the initial total at ratios 0.1 / 1 / 10. Free flight matches Box3D exactly (worst
+    pose difference 0). The presented frame A equals the previous frame B.
+  - Momentum residual, D29 push-out on: −0.24 / −12.1 / −26.8 kg·m/s against
+    1.3 / 6.4 / 9.8 kg·m/s exchanged, and body plus liquid energy peaks at 1.12× at
+    ratio 10. About two thirds is the push-out's removed normal velocity, which the
+    reaction does not count. The fix is in
+    BUG-n97i (coupled MPM loses momentum at the collider push-out), blocked on
+    BUG-agfh (codegen: buffer atom with several outputs, one atomic).
+  - Physics history sampling seeded the paired world without its matter domain and
+    panicked on any coupled matter preset. A world paired with a liquid that does not
+    replay history now records once per display frame with it (D28).
+  - `examples/fluid_capture.rs` reads the presented frame's count, `count_b` or
+    `count_a`. Demo: `/tmp/manifold_matter_p2b`, 64³, 262,144 points, 300 frames. The box
+    settles half-submerged and tips onto an edge, the stable pose at density 0.5. GPU
+    time is about 29.5 ms a frame, over the 20 ms trace gate, see
+    BUG-u3ov (MPM solver budget). The computed waterline check is the floating test; the
+    capture has no body readout.
 
 ### P3a — The liquid-domain seam (seam brief)
 
@@ -1186,6 +1480,10 @@ at the end of the phase.
 
 ### P4 — Look and speed gate, and the side-by-side (the go/no-go)
 
+Water targets withdrawn 2026-09-30 (section 7 (Look — artefacts, metrics and dials)): MPM
+water look and speed are out of scope. The brief below stands only as the record of what
+the gate was; it does not run for water.
+
 - **Entry state:** P3d merged; surface P5 and P6 merged: `rg -n 'node.volume_surface_mesh' crates/manifold-renderer/src/node_graph/primitives`.
 - **Read-back:** D19, D20; sections 7 and 8.
 - **Deliverables:** the mesh look-metrics mode of `fluid_capture` (A7–A11); the
@@ -1199,6 +1497,14 @@ at the end of the phase.
   solvers in view.
 - **Forbidden:** changing dials, particle counts, resolution or thresholds to pass;
   comparing through different surfaces; any FLIP change.
+- **Last P1 numbers** (BUG-k85i (MPM P1 look gates), closed as superseded):
+
+  | Gate | Matter | Reference |
+  |---|---|---|
+  | A2 settling | Dam Break still moving at 12 s, mean speed 0.44 m/s | FLIP without the moving box: 0.74 m/s at 10 s |
+  | A4 front | 11.0% ahead of Martin & Moyce at Liveliness 0, 2.0% at 0.9 | the experiment |
+  | A6 sheets | 0.82% of points in thin sheets | FLIP 27.3% |
+  | Still pool | mean speed 0.0141 m/s at 5 s, still decaying | gate < 0.01 m/s |
 
 ### P4b — Add Fluid authors matter (after Peter's go)
 
@@ -1217,7 +1523,7 @@ at the end of the phase.
 
 ### P5a–P5d — Materials, one phase each, goo first
 
-Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
+Paused until the water solver settles (FFT_WATER_SOLVER_DESIGN.md). Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
 Shared deliverables: the Material Enum value, its branch, its params on the domain's
 param surface, a preset, and the D4 hardening bound on c. Shared gate: the phase tests,
 the GPU filter, check-presets and graph-tool, P1's A1–A3 on the new material, an L2
@@ -1299,7 +1605,7 @@ or in section 15.
 2. MLS-MPM over GPU FLIP/APIC because it avoids the global pressure solve; not claimed cheaper for plain water.
 3. J-tracked weakly compressible water with three dials: Stiffness, Cohesion (default 0), Liveliness (default 0 until Peter picks at P4).
 4. Substeps come from the stiffness/CFL rule every tick, from parameters, never from readback.
-5. Flat arrays with the lattice on wires; i32 fixed point at Q = 2^20; deterministic.
+5. Flat arrays with the lattice on wires; i32 fixed point, mass at 2^16 and momentum at 2^27 with hashed unbiased rounding; deterministic.
 6. One P2G atom; cell-sorted block-local accumulation from P1b; storage order never changes.
 7. Executor repeat region re-implemented from the historical seam.
 8. Fixed 60 Hz ticks owned by the domain node; live caps ticks per frame and reports dropped time; export runs every tick; display one tick behind.
@@ -1323,7 +1629,7 @@ or in section 15.
 | CPIC colored-distance-field compatibility (thin shells, cutting) | A collider thinner than 2 cells leaks in a show scene, or Peter wants cutting |
 | Real surface tension | Peter judges Cohesion wrong for a named look |
 | Mixed materials in one domain | A scene needs two materials that touch in one domain |
-| More than one coupled tick per frame (30 fps projects) | A coupled scene is needed at a project rate below 60 fps |
+| More than one coupled tick per live frame (30 fps projects; export already runs every tick) | A coupled scene must play live at a project rate below 60 fps |
 | Particle-level collider push-out | `matter_collider_penetration_bounded` fails at grid resolution |
 | Sparse or adaptive grids, 128³ live | P4's stretch report and a named scene need it |
 | Sparse volume tiles (Wu et al. 2018; NVIDIA GVDB) | Domains beyond 128³ are wanted |
