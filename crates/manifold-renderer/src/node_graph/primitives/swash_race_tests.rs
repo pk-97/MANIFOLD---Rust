@@ -139,8 +139,7 @@ struct Record {
 }
 
 /// The Dam Break for `frames` frames: per-frame GPU and CPU encode ms, what
-/// the projection left undone (divergence against the density source's
-/// target), collar size, occupancy, packing and particle motion; meshed, the
+/// the projection left undone, collar size, occupancy, packing and particle motion; meshed, the
 /// water volume the surface holds, and stills at frames 90 and 240. `label`
 /// names the run in its lines, kept short because the tool output around
 /// these probes cuts long ones. It asserts only what must hold for the
@@ -162,7 +161,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             collar_max = collar_max.max(collar);
             assert!(collar as usize <= scene.pressure.capacity, "frame {frame} step {step}: collar {collar} past capacity");
             let water = run.water(step);
-            let (r, m) = divergence(&run.faces(step), &water, &run.target(step), n, h);
+            let (r, m) = divergence(&run.faces(step), &water, n, h);
             rms.push(r);
             max.push(m);
             let (fraction, blocks) = occupancy(&water, n);

@@ -54,7 +54,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "project", "collar_total", "divergence", "density"] {
+            for name in ["water", "project", "collar_total"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -152,15 +152,6 @@ impl Run {
         self.read(&format!("s{step}.project"), "out", (self.n() + 1).pow(3))
     }
 
-    /// The divergence the density source asked the solve for: the face
-    /// divergence less what the solve was given.
-    pub(super) fn target(&self, step: usize) -> Vec<f32> {
-        let cells = self.n().pow(3);
-        let before: Vec<f32> = self.read(&format!("s{step}.divergence"), "out", cells);
-        let after: Vec<f32> = self.read(&format!("s{step}.density"), "out", cells);
-        before.iter().zip(&after).map(|(f, g)| f - g).collect()
-    }
-
     pub(super) fn collar(&self, step: usize) -> u32 {
         let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
         *total.last().expect("a lattice")
@@ -198,10 +189,10 @@ pub(super) fn particle_stats(particles: &[FluidParticle]) -> ParticleStats {
     stats
 }
 
-/// RMS and max |divergence − target| (1/s) over the water cells of a face
-/// grid: what the projection left undone. `target` is the divergence the
-/// density source asked for (zero without one).
-pub(super) fn divergence(faces: &[FaceSample], water: &[f32], target: &[f32], n: usize, h: f64) -> (f64, f64) {
+/// RMS and max |divergence| (1/s) over the water cells of a face grid: what
+/// the projection left undone. The density solve's spread moves particles
+/// only, so the projected field is asked for zero.
+pub(super) fn divergence(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> (f64, f64) {
     let m = n + 1;
     let pad = |i: usize, j: usize, k: usize| i + m * (j + m * k);
     let (mut sum, mut max, mut count) = (0.0, 0.0_f64, 0usize);
@@ -216,8 +207,7 @@ pub(super) fn divergence(faces: &[FaceSample], water: &[f32], target: &[f32], n:
                 let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1) - at(pad(i, j, k), 1)
                     + at(pad(i, j, k + 1), 2)
                     - at(pad(i, j, k), 2))
-                    / h
-                    - f64::from(target[c]);
+                    / h;
                 sum += d * d;
                 max = max.max(d.abs());
                 count += 1;
@@ -266,7 +256,7 @@ fn fft_water_still_pool() {
         if frame % 10 == 9 {
             let stats = particle_stats(&run.particles());
             let last = scene.steps - 1;
-            let (rms, max) = divergence(&run.faces(last), &run.water(last), &run.target(last), run.n(), scene.pressure.cell_size());
+            let (rms, max) = divergence(&run.faces(last), &run.water(last), run.n(), scene.pressure.cell_size());
             println!(
                 "SWASH still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, collar {}",
                 run.n(),

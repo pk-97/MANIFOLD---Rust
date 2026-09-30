@@ -6292,11 +6292,6 @@
       "fusion": "pointwise",
       "inputs": [
         {
-          "name": "divergence",
-          "required": true,
-          "type": "Array"
-        },
-        {
           "name": "cell_ranges",
           "required": true,
           "type": "Array"
@@ -6362,7 +6357,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Subtract a crowding source from a divergence field so a pressure solve evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = divergence[c] − rate · e inside the water (all six neighbours hold particles or lie past the lattice) and divergence[c] − rate · max(e, 0) at its surface. The solve then makes the projected field expand crowded cells and, inside the water, close sparse ones at that rate (1/s). Empty cells pass through.",
+      "purpose": "The crowding target of a density solve that evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = −rate · e inside the water (all six neighbours hold particles or lie past the lattice) and −rate · max(e, 0) at its surface; empty cells are 0. Solved as a pressure right-hand side, the field it gives expands crowded cells and, inside the water, closes sparse ones at that rate (1/s).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Pushes apart liquid particles that have bunched up, so the water keeps its volume.",
@@ -9428,6 +9423,11 @@
           "type": "Array"
         },
         {
+          "name": "advect",
+          "required": true,
+          "type": "Array"
+        },
+        {
           "name": "lattice_min_x",
           "required": false,
           "type": "f32"
@@ -9558,7 +9558,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Move liquid particles one step through a face grid (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `faces` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
+      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands the grid's corrected motion back to the liquid particles and moves them one step.",

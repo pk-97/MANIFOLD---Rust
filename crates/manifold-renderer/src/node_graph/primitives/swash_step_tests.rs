@@ -186,7 +186,6 @@ fn swash_cells_with_particles_marks_occupied_bins() {
 fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
     let mut harness = Harness::new();
     let mut rng = Stream::new(0xde45);
-    let divergence: Vec<f32> = (0..cell_len()).map(|_| rng.signed(3.0)).collect();
     // One cell in eight empty, so the draw holds both inside and surface cells.
     let ranges: Vec<CellRange> = (0..cell_len())
         .map(|c| {
@@ -194,10 +193,7 @@ fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
             CellRange { start: c as u32 * 20, count: if u < 0.125 { 0 } else { 1 + (u * 16.0) as u32 } }
         })
         .collect();
-    let inputs = [
-        ("divergence", harness.array(&divergence, cell_len()).0),
-        ("cell_ranges", harness.array(&ranges, cell_len()).0),
-    ];
+    let inputs = [("cell_ranges", harness.array(&ranges, cell_len()).0)];
     let (rest, rate) = (8.0_f32, 2.5_f32);
     let got: Vec<f32> =
         run_into(&mut harness, &mut DensitySource::new(), &inputs, cell_len(), &lattice(&[("rest", rest), ("rate", rate)]));
@@ -214,9 +210,8 @@ fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
     // Cells seen per (inside, crowded) kind.
     let mut kinds = [[0usize; 2]; 2];
     for (c, g) in got.iter().enumerate() {
-        let d = f64::from(divergence[c]);
         if ranges[c].count == 0 {
-            close(*g, d, 3.0, &format!("empty cell {c}"));
+            assert_eq!(*g, 0.0, "empty cell {c}");
             continue;
         }
         let p = cell_coords(c);
@@ -224,7 +219,7 @@ fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
         let crowding = f64::from(ranges[c].count) / f64::from(rest) - 1.0;
         kinds[usize::from(inside)][usize::from(crowding > 0.0)] += 1;
         let source = if inside { crowding } else { crowding.max(0.0) };
-        close(*g, d - f64::from(rate) * source, 3.0, &format!("cell {c}"));
+        close(*g, -f64::from(rate) * source, 3.0, &format!("cell {c}"));
     }
     assert!(kinds.iter().flatten().all(|&k| k > 3), "the draw covers every inside/surface, crowded/sparse kind: {kinds:?}");
 }
@@ -445,6 +440,8 @@ fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let mut harness = Harness::new();
     let faces = random_faces(0xf1a5, true);
     let old = random_faces(0x01d5, false);
+    // A third grid: velocity comes from `faces`, the move from `advect`.
+    let advect = random_faces(0xad7e, true);
     let mut particles = random_particles(0x2b3, 300);
     // Two particles against the walls, so the clamp is exercised.
     particles[0].position_radius[0] = MIN[0] + 1e-4;
@@ -454,6 +451,7 @@ fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
         ("particles", harness.array(&particles, particles.len()).0),
         ("faces", harness.array(&faces, face_len()).0),
         ("old", harness.array(&old, face_len()).0),
+        ("advect", harness.array(&advect, face_len()).0),
     ];
     let got: Vec<FluidParticle> =
         run_into(&mut harness, &mut FacesToParticles::new(), &inputs, particles.len(), &lattice(&[("step_dt", dt), ("flip", flip)]));
@@ -464,15 +462,16 @@ fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
             continue;
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
-        let k1 = cpu_sample(q0, &faces);
-        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces);
-        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces);
+        let k1 = cpu_sample(q0, &advect);
+        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &advect);
+        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &advect);
+        let after = cpu_sample(q0, &faces);
         let before = cpu_sample(q0, &old);
         for a in 0..3 {
             let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0).clamp(0.001, N[a] as f64 - 0.001);
             let position = f64::from(MIN[a]) + q1 * f64::from(H);
             let velocity =
-                f64::from(flip) * (f64::from(p.velocity[a]) + k1[a] - before[a]) + (1.0 - f64::from(flip)) * k1[a];
+                f64::from(flip) * (f64::from(p.velocity[a]) + after[a] - before[a]) + (1.0 - f64::from(flip)) * after[a];
             assert!((f64::from(g.position_radius[a]) - position).abs() < 2e-5, "particle {i} position {a}: {} vs {position}", g.position_radius[a]);
             assert!((f64::from(g.velocity[a]) - velocity).abs() < 1e-4, "particle {i} velocity {a}: {} vs {velocity}", g.velocity[a]);
         }

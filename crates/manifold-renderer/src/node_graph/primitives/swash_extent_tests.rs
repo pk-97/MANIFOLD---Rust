@@ -68,6 +68,8 @@ impl Sizes<'_> {
     /// `particles` is the liquid's particle count; 0 for the bare solve.
     fn check(&self, shape: PressureShape, particles: u64) -> usize {
         let names: AHashMap<_, _> = self.graph.nodes().map(|n| (n.id, n)).collect();
+        let producer: AHashMap<ResourceId, _> =
+            self.plan.steps().iter().flat_map(|step| step.outputs.iter().map(|(_, resource)| (*resource, step.node))).collect();
         let wired = |step: &crate::node_graph::ExecutionStep, port: &str| step.inputs.iter().any(|(name, _)| *name == port);
         // Provided arrays are allocated in run(), sized from params:
         // krylov_basis's vectors, the fill's particles, the step sorts'
@@ -192,7 +194,6 @@ impl Sizes<'_> {
                 }
                 "node.density_source" => {
                     on_lattice();
-                    covers("divergence", cells);
                     covers("cell_ranges", ranges);
                     covers("out", cells);
                 }
@@ -215,6 +216,7 @@ impl Sizes<'_> {
                     covers("out", particle_bytes);
                     covers("faces", faces);
                     covers("old", faces);
+                    covers("advect", faces);
                 }
                 "node.collar_cells" => {
                     covers("water", cells);
@@ -304,16 +306,21 @@ impl Sizes<'_> {
                 "node.combine_rows" => {
                     let length = param(p, "row_length");
                     assert_eq!(length * 4, row);
-                    // Scalar-driven rows reach at most the basis height.
-                    let rows = if step.inputs.iter().any(|(name, _)| *name == "rows") {
-                        shape.passes as u64 + 1
-                    } else {
-                        param(p, "rows")
+                    // Scalar-driven rows come from a Krylov region's boundary
+                    // and reach at most its basis height.
+                    let height = match step.inputs.iter().find(|(name, _)| *name == "rows") {
+                        Some((_, resource)) => {
+                            let source = names[&producer[resource]];
+                            assert_eq!(source.node.type_id().as_str(), "node.krylov_basis", "{} rows", node.node_id.as_str());
+                            Some(param(&source.params, "passes") + 1)
+                        }
+                        None => None,
                     };
+                    let rows = height.unwrap_or_else(|| param(p, "rows"));
                     covers("base", row);
                     covers("out", row);
                     covers("matrix", rows * row);
-                    covers("coef", rows.min(shape.passes as u64 + 1) * 4);
+                    covers("coef", rows * 4);
                 }
                 "node.divide_by_value" => {
                     covers("values", row);
@@ -392,7 +399,8 @@ fn fft_water_scenes_cover_every_dispatch() {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
-        assert_eq!(plan.substep_regions().len(), scene.steps, "one Krylov region per step");
+        let solves = 1 + usize::from(scene.spread_rate > 0.0);
+        assert_eq!(plan.substep_regions().len(), scene.steps * solves, "one Krylov region per solve");
         let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
         let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
         let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles());
@@ -422,7 +430,8 @@ fn fft_water_collar_capacity_memory() {
             let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
             let planned: u64 = allocation.storage.values().map(|s| s.bytes).sum();
             let row = (capacity as u64 + 1) * 4;
-            let provided = scene.steps as u64 * row * (scene.pressure.passes as u64 + 2);
+            let density = if scene.spread_rate > 0.0 { scene.density_passes as u64 + 2 } else { 0 };
+            let provided = scene.steps as u64 * row * (scene.pressure.passes as u64 + 2 + density);
             println!("{n}³ capacity {capacity}: planned {:.0} MB, Krylov bases {:.0} MB, total {:.0} MB", mb(planned), mb(provided), mb(planned + provided));
             let names: AHashMap<_, _> = graph.nodes().map(|node| (node.id, node.node.type_id().as_str().to_string())).collect();
             let mut ports = AHashMap::default();
@@ -513,12 +522,12 @@ fn fft_water_pressure_has_no_fused_region() {
 
 /// Nothing in the water step fuses yet. Most of its edges end at a gather
 /// input (particles_to_faces, extend_faces, face_divergence's faces,
-/// subtract_pressure's pressure, faces_to_particles' faces), which is a
-/// fusion cut by design; gravity → subtract_pressure is cut because the
-/// pressure between them depends on gravity. The pairs codegen could fuse,
-/// cells_with_particles → face_divergence's coincident water and
-/// face_divergence → density_source, are refused because every one of them
-/// is sized by lattice params: BUG-u8io
+/// density_source, subtract_pressure's pressure, faces_to_particles' grids),
+/// which is a fusion cut by design; gravity → subtract_pressure is cut
+/// because the pressure between them depends on gravity. The pairs codegen
+/// could fuse, cells_with_particles → face_divergence's coincident water and
+/// the projection → the density projection, are refused because every one
+/// of them is sized by lattice params: BUG-u8io
 /// (fft-water-fusion-param-capacity). When this fails, fusion has learned
 /// it: prove the frozen step matches the unfrozen one.
 #[test]

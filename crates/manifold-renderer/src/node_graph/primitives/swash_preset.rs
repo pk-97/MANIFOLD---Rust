@@ -67,8 +67,11 @@ pub(super) struct WaterScene {
     pub column: [[f64; 2]; 3],
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
-    /// How fast crowded cells spread (1/s): node.density_source's rate.
+    /// How fast crowded cells spread (1/s): node.density_source's rate. 0
+    /// leaves the density solve out.
     pub spread_rate: f64,
+    /// Krylov passes of the density solve.
+    pub density_passes: usize,
 }
 
 /// Particles per cell the fill seeds: one per half-cell site.
@@ -80,6 +83,11 @@ pub(super) const REST_PER_CELL: f64 = 8.0;
 /// (`fft_water_density_sweep`) shows it from 1.25 on. 5/6 is 100/s at two
 /// steps per frame, the best measured rate under that bound.
 pub(super) const SPREAD_PER_STEP: f64 = 5.0 / 6.0;
+
+/// The density solve's passes. It moves particles and is never kept as
+/// velocity, so its leftover error shows as a slightly uneven spread, not
+/// as motion.
+pub(super) const DENSITY_PASSES: usize = 8;
 
 impl WaterScene {
     /// The engine's Dam Break, obstacle unwired.
@@ -93,6 +101,7 @@ impl WaterScene {
             column: DAM_COLUMN,
             surface: false,
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
+            density_passes: DENSITY_PASSES,
         }
     }
 
@@ -414,7 +423,8 @@ fn lattice_box(s: PressureShape, extra: &[(&str, Value)]) -> Value {
 }
 
 /// One water step (section 3): sort, the water lattice, particles to faces,
-/// gravity, the pressure solve, the projection, faces back to particles.
+/// gravity, the pressure solve, the projection, the density solve on the
+/// same collar, faces back to particles.
 fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
     let s = scene.pressure;
     let n = [s.n; 3];
@@ -448,19 +458,29 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
-    let spread = b.node(
-        "density",
-        "node.density_source",
-        Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
-    );
-    b.wire((divergence, "out"), spread, "divergence");
-    b.wire((sort, "cell_ranges"), spread, "cell_ranges");
-    let p = pressure(b, s, water, (spread, "out"));
-    let projected = b.node("project", "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(h))]));
-    b.wire((forced, "out"), projected, "faces");
-    b.wire(p, projected, "pressure");
-    b.wire(water, projected, "water");
-    let new = extend(b, "new", (projected, "out"), n);
+    let setup = collar(b, s, water);
+    let p = solve(b, s, &setup, water, (divergence, "out"));
+    let projected = subtract(b, "project", (forced, "out"), p, water, s);
+    let new = extend(b, "new", projected, n);
+    // The density solve moves particles apart through `advect` and is never
+    // kept as velocity: kept, a fast splash's correction becomes speed.
+    let advect = if scene.spread_rate > 0.0 {
+        let outer = b.prefix.clone();
+        b.prefix.push_str("density.");
+        let crowding = b.node(
+            "source",
+            "node.density_source",
+            Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
+        );
+        b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
+        let q = solve(b, PressureShape { passes: scene.density_passes, ..s }, &setup, water, (crowding, "out"));
+        let spread = subtract(b, "project", projected, q, water, s);
+        let advect = extend(b, "advect", spread, n);
+        b.prefix = outer;
+        advect
+    } else {
+        new
+    };
     let moved = b.node(
         "move",
         "node.faces_to_particles",
@@ -469,7 +489,18 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     b.wire((sort, "sorted"), moved, "particles");
     b.wire(new, moved, "faces");
     b.wire(old, moved, "old");
+    b.wire(advect, moved, "advect");
     (moved, "out")
+}
+
+/// `faces` minus the gradient of `pressure` on the water's faces.
+fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Port, s: PressureShape) -> Port {
+    let n = [s.n; 3];
+    let id = b.node(name, "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(s.cell_size()))]));
+    b.wire(faces, id, "faces");
+    b.wire(pressure, id, "pressure");
+    b.wire(water, id, "water");
+    (id, "out")
 }
 
 /// Two layers of face extension into the air around the water.
@@ -486,10 +517,21 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
 /// The solve's nodes, from the water lattice and its divergence f; returns
 /// the pressure.
 fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
-    let n = [s.n; 3];
-    let cells = s.cells();
+    let setup = collar(b, s, water);
+    solve(b, s, &setup, water, f)
+}
 
-    // Setup: the collar list and each entry's place in the six views.
+/// What every solve on one water lattice shares: the collar's running total,
+/// its entries, and each entry's place in the six views.
+#[derive(Clone, Copy)]
+struct Collar {
+    total: Port,
+    entries: Port,
+    charts: Port,
+}
+
+fn collar(b: &mut Builder, s: PressureShape, water: Port) -> Collar {
+    let n = [s.n; 3];
     let collar = b.node("collar", "node.collar_cells", Builder::lattice(n, &[]));
     b.wire(water, collar, "water");
     // The capacity is the invariant check: a collar past it is named every
@@ -514,13 +556,19 @@ fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
     b.wire(water, charts, "water");
     b.wire(smoothed, charts, "smoothed");
     b.wire((collar, "out"), charts, "collar");
-    let charts = (charts, "out");
+    Collar { total, entries: (entries, "out"), charts: (charts, "out") }
+}
+
+/// One solve on a set-up collar, for right-hand side f; returns the pressure.
+fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port) -> Port {
+    let cells = s.cells();
+    let Collar { total, entries, charts } = *setup;
 
     // Right-hand side b = (G f at the collar, Σf / n³), β = |b|, start = b / β.
     let gf = b.box_solve("rhs_box", f, s);
     let sum_f = b.dots("sum_f", f, None, cells, 1, false);
     let rhs = b.node("rhs", "node.collar_gather", json!({}));
-    b.wire((entries, "out"), rhs, "entries");
+    b.wire(entries, rhs, "entries");
     b.wire(gf, rhs, "grid");
     b.wire(sum_f, rhs, "vector");
     b.wire(sum_f, rhs, "sum");
@@ -546,7 +594,7 @@ fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
     let gz = b.box_solve("pass_box", (source, "out"), s);
     let sum_z = b.dots("sum_z", z, None, s.capacity, 1, false);
     let w = b.node("w", "node.collar_gather", json!({}));
-    b.wire((entries, "out"), w, "entries");
+    b.wire(entries, w, "entries");
     b.wire(gz, w, "grid");
     b.wire(z, w, "vector");
     b.wire(sum_z, w, "sum");

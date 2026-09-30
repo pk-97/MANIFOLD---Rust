@@ -1,7 +1,8 @@
 //! `node.faces_to_particles` — the face grid back to the particles and one
 //! RK3 move (docs/FFT_WATER_SOLVER_DESIGN.md D7, section 3 step 9): PIC/FLIP
-//! blended velocity, advection through the projected field, clamp to the
-//! box. A per-element gather on the codegen path.
+//! blended velocity from the projected field, advection through `advect`
+//! (the projected field, or it with the density solve's correction), clamp
+//! to the box. A per-element gather on the codegen path.
 
 use std::borrow::Cow;
 
@@ -38,11 +39,12 @@ struct AdvectUniforms {
 crate::primitive! {
     name: FacesToParticles,
     type_id: "node.faces_to_particles",
-    purpose: "Move liquid particles one step through a face grid (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `faces` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
+    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
     inputs: {
         particles: Array(FluidParticle) required,
         faces: Array(FaceSample) required,
         old: Array(FaceSample) required,
+        advect: Array(FaceSample) required,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
@@ -63,7 +65,7 @@ crate::primitive! {
         float_param!("flip", "FLIP Blend", 0.95, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The last atom of an FFT water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
+    composition_notes: "The last atom of an FFT water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is what the particles move through: `faces` itself, or `faces` with the density solve's correction subtracted and extended, so the correction moves particles and never becomes their speed. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
     examples: [],
     picker: { label: "Faces To Particles", category: Atom },
     summary: "Hands the grid's corrected motion back to the liquid particles and moves them one step.",
@@ -72,7 +74,7 @@ crate::primitive! {
     aliases: ["grid to particle", "g2p", "advect", "flip"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/faces_to_particles_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather],
 }
 
 impl Primitive for FacesToParticles {
@@ -100,17 +102,18 @@ impl Primitive for FacesToParticles {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(particles), Some(faces), Some(old), Some(out)) = (
+        let (Some(particles), Some(faces), Some(old), Some(advect), Some(out)) = (
             ctx.inputs.array("particles"),
             ctx.inputs.array("faces"),
             ctx.inputs.array("old"),
+            ctx.inputs.array("advect"),
             ctx.outputs.array("out"),
         ) else {
             return;
         };
         let record = std::mem::size_of::<FluidParticle>() as u64;
         let count = (particles.size.min(out.size) / record) as u32;
-        if face_count(nodes) * 32 > faces.size.min(old.size) {
+        if face_count(nodes) * 32 > faces.size.min(old.size).min(advect.size) {
             ctx.error(format!("Faces To Particles: a {nodes:?} lattice is larger than its face grids"));
             return;
         }
@@ -139,7 +142,8 @@ impl Primitive for FacesToParticles {
                 GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: faces, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: old, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: advect, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
             ],
             [count.div_ceil(256), 1, 1],
             "node.faces_to_particles",

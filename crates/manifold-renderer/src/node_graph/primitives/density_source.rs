@@ -1,9 +1,11 @@
 //! `node.density_source` — the FFT water step's answer to particle clumping
 //! (docs/FFT_WATER_SOLVER_DESIGN.md P3): a cell holding more particles than
-//! the fill put there asks the pressure solve to spread it, and inside the
-//! water a cell holding fewer asks it to close. A correction that only
-//! spreads ratchets the water outward, because packing noise runs both ways.
-//! A per-element atom on the codegen path.
+//! the fill put there asks a solve to spread it, and inside the water a cell
+//! holding fewer asks it to close. A correction that only spreads ratchets
+//! the water outward, because packing noise runs both ways. The step solves
+//! it on its own and moves particles by the result without keeping it as
+//! velocity: kept, a fast splash's correction becomes speed. A per-element
+//! atom on the codegen path.
 
 use std::borrow::Cow;
 
@@ -35,9 +37,8 @@ struct DensityUniforms {
 crate::primitive! {
     name: DensitySource,
     type_id: "node.density_source",
-    purpose: "Subtract a crowding source from a divergence field so a pressure solve evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = divergence[c] − rate · e inside the water (all six neighbours hold particles or lie past the lattice) and divergence[c] − rate · max(e, 0) at its surface. The solve then makes the projected field expand crowded cells and, inside the water, close sparse ones at that rate (1/s). Empty cells pass through.",
+    purpose: "The crowding target of a density solve that evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = −rate · e inside the water (all six neighbours hold particles or lie past the lattice) and −rate · max(e, 0) at its surface; empty cells are 0. Solved as a pressure right-hand side, the field it gives expands crowded cells and, inside the water, closes sparse ones at that rate (1/s).",
     inputs: {
-        divergence: Array(f32) required,
         cell_ranges: Array(CellRange) required,
     },
     outputs: {
@@ -51,7 +52,7 @@ crate::primitive! {
         float_param!("rate", "Spread Rate (1/s)", 1.0, 0.0, 1000.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Between node.face_divergence and the FFT water pressure solve, with the cell_ranges of the sort that binned the step's particles by the lattice's cells. rest is the fill's particles per cell (8).",
+    composition_notes: "The right-hand side of the FFT water step's density solve, from the cell_ranges of the sort that binned the step's particles by the lattice's cells. The solve's pressure goes through node.subtract_pressure onto the projected faces, and those faces reach node.faces_to_particles as `advect` only, so particles move apart without gaining speed. rest is the fill's particles per cell (8).",
     examples: [],
     picker: { label: "Density Source", category: Atom },
     summary: "Pushes apart liquid particles that have bunched up, so the water keeps its volume.",
@@ -60,7 +61,7 @@ crate::primitive! {
     aliases: ["density correction", "anti clumping", "volume correction", "particle spacing"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/density_source_body.wgsl"),
-    input_access: [Coincident, BufferGather],
+    input_access: [BufferGather],
 }
 
 impl Primitive for DensitySource {
@@ -81,13 +82,11 @@ impl Primitive for DensitySource {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(divergence), Some(ranges), Some(out)) =
-            (ctx.inputs.array("divergence"), ctx.inputs.array("cell_ranges"), ctx.outputs.array("out"))
-        else {
+        let (Some(ranges), Some(out)) = (ctx.inputs.array("cell_ranges"), ctx.outputs.array("out")) else {
             return;
         };
         let cells = cell_count(nodes);
-        if cells * 4 > divergence.size.min(out.size) || cells * std::mem::size_of::<CellRange>() as u64 > ranges.size {
+        if cells * 4 > out.size || cells * std::mem::size_of::<CellRange>() as u64 > ranges.size {
             ctx.error(format!("Density Source: a {nodes:?} lattice is larger than its arrays; bin the sort by the lattice's cells"));
             return;
         }
@@ -106,9 +105,8 @@ impl Primitive for DensitySource {
             pipeline,
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: divergence, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: ranges, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: ranges, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
             ],
             [(cells as u32).div_ceil(256), 1, 1],
             "node.density_source",
