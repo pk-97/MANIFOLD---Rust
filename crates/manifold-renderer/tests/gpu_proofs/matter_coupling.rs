@@ -48,6 +48,8 @@ struct Probe {
     momentum_unit: f32,
     blend: f32,
     count_a: f32,
+    ticks: f32,
+    body_count: f32,
 }
 
 const EMPTY_PROBE: Probe = Probe {
@@ -57,6 +59,8 @@ const EMPTY_PROBE: Probe = Probe {
     momentum_unit: f32::NAN,
     blend: f32::NAN,
     count_a: f32::NAN,
+    ticks: f32::NAN,
+    body_count: f32::NAN,
 };
 
 thread_local! {
@@ -89,6 +93,8 @@ impl CouplingProbe {
                 optional("momentum_unit", SCALAR),
                 optional("blend", SCALAR),
                 optional("count_a", SCALAR),
+                optional("ticks", SCALAR),
+                optional("body_count", SCALAR),
                 optional("particles_b", PortType::Array(ArrayType::of_known::<FluidParticle>())),
             ],
         }
@@ -132,6 +138,8 @@ impl EffectNode for CouplingProbe {
             ("momentum_unit", &mut probe.momentum_unit),
             ("blend", &mut probe.blend),
             ("count_a", &mut probe.count_a),
+            ("ticks", &mut probe.ticks),
+            ("body_count", &mut probe.body_count),
         ] {
             if let Some(value) = scalar(name) {
                 *field = value;
@@ -192,6 +200,8 @@ fn preset(scene: &Scene, dry: bool) -> String {
             (1, "display_time"),
             (1, "simulation_time"),
             (1, "momentum_unit"),
+            (1, "ticks"),
+            (1, "body_count"),
             (9, "blend"),
             (9, "count_a"),
             (9, "particles_b"),
@@ -244,12 +254,18 @@ struct Run {
     target: RenderTarget,
     device: Arc<GpuDevice>,
     frame: u32,
+    /// Ticks per exported frame: 1 is 60 fps, 2 is 30 fps.
+    stride: u32,
     last_simulation_time: f32,
     _offline: PhysicsStepScope,
 }
 
 impl Run {
     fn new(scene: &Scene, dry: bool) -> Self {
+        Self::at_stride(scene, dry, 1)
+    }
+
+    fn at_stride(scene: &Scene, dry: bool, stride: u32) -> Self {
         let harness = harness::shared();
         let device = Arc::clone(&harness.device);
         let mut registry = PrimitiveRegistry::with_builtin();
@@ -268,7 +284,7 @@ impl Run {
         .unwrap_or_else(|e| panic!("coupled preset builds: {e}"));
         runtime.set_dump_all(true);
         let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "matter-coupling");
-        let mut run = Self { runtime, target, device, frame: 0, last_simulation_time: 0.0, _offline: offline };
+        let mut run = Self { runtime, target, device, frame: 0, stride, last_simulation_time: 0.0, _offline: offline };
         let started = std::time::Instant::now();
         loop {
             run.render(0, true);
@@ -282,11 +298,12 @@ impl Run {
     }
 
     fn render(&mut self, frame: u32, warming: bool) -> FrameRenderStatus {
-        let time = f64::from(frame) * TICK;
+        let frame_time = f64::from(self.stride) * TICK;
+        let time = f64::from(frame) * frame_time;
         let ctx = PresetContext {
             time,
             beat: time * 2.0,
-            dt: if warming { 0.0 } else { TICK as f32 },
+            dt: if warming { 0.0 } else { frame_time as f32 },
             width: SIZE,
             height: SIZE,
             output_width: SIZE,
@@ -533,6 +550,111 @@ fn matter_coupling_floating_equilibrium() {
         "box centre {mean_y:.4} is not within half a cell ({:.4}) of the waterline {waterline:.4}",
         0.5 * dx
     );
+}
+
+/// The first word where two dumps differ, as (index, left, right).
+fn first_difference(a: &[u32], b: &[u32]) -> Option<(usize, u32, u32)> {
+    if a.len() != b.len() {
+        return Some((a.len().min(b.len()), a.len() as u32, b.len() as u32));
+    }
+    a.iter().zip(b).position(|(x, y)| x != y).map(|i| (i, a[i], b[i]))
+}
+
+/// What one exported frame leaves behind, as raw words.
+struct FrameDump {
+    probe: Probe,
+    rows: Vec<u32>,
+    reaction: Vec<u32>,
+    stats: Vec<u32>,
+    particles: Vec<u32>,
+}
+
+impl Run {
+    fn dump(&mut self) -> FrameDump {
+        let (probe, ticked) = self.step();
+        assert!(ticked, "offline coupled frame {} ran no tick", self.frame);
+        let mut stats: Vec<u32> = self.read("node.matter_state", "stats");
+        stats.truncate(STATS_WORDS as usize);
+        let mut reaction: Vec<u32> = self.read("node.matter_domain", "reaction");
+        reaction.truncate(REACTION_WORDS as usize);
+        FrameDump {
+            probe,
+            rows: self.read("node.matter_domain", "bodies"),
+            reaction,
+            stats,
+            particles: self.read("node.matter_frame", "particles_b"),
+        }
+    }
+}
+
+/// D8 (export loses no time): a coupled scene exported at 30 fps runs two
+/// ticks a frame, exchanging with Box3D between them, and matches the same
+/// scene exported at 60 fps word for word at every shared instant: the body
+/// rows of both ticks, the last tick's reaction, the liquid stats, the
+/// particles and the drawn box pose.
+#[test]
+fn matter_coupling_export_frame_rate_independent() {
+    let scene = Scene {
+        domain_size: 2.0,
+        resolution: 32,
+        fill: 0.5,
+        liquid_gravity: -G as f32,
+        open_faces: false,
+        centre: [0.2, 0.78, 0.1],
+        rotation: [0.21, 0.35, 0.13],
+        edge: 0.5,
+        mass: 62.5,
+    };
+    let mut at_60 = Run::at_stride(&scene, false, 1);
+    let mut at_30 = Run::at_stride(&scene, false, 2);
+    let (mut contact_frames, mut exchanged) = (0u32, 0.0f64);
+    for frame in 1..=60u32 {
+        let earlier = at_60.dump();
+        let later = at_60.dump();
+        let both = at_30.dump();
+        assert_eq!(both.probe.ticks, 2.0, "30 fps frame {frame} ran {} ticks", both.probe.ticks);
+        assert_eq!(later.probe.ticks, 1.0);
+        let count = both.probe.body_count as usize;
+        let row_words = count * std::mem::size_of::<MatterBody>() / 4;
+        assert!(count > 0 && both.rows.len() >= 2 * row_words);
+        let checks = [
+            ("first tick's body rows", first_difference(&both.rows[..row_words], &earlier.rows[..row_words])),
+            (
+                "second tick's body rows",
+                first_difference(&both.rows[row_words..2 * row_words], &later.rows[..row_words]),
+            ),
+            ("reaction", first_difference(&both.reaction, &later.reaction)),
+            ("stats", first_difference(&both.stats, &later.stats)),
+            ("particles", first_difference(&both.particles, &later.particles)),
+            (
+                "display and simulation time",
+                first_difference(
+                    &[both.probe.display_time.to_bits(), both.probe.simulation_time.to_bits()],
+                    &[earlier.probe.display_time.to_bits(), later.probe.simulation_time.to_bits()],
+                ),
+            ),
+        ];
+        for (what, difference) in checks {
+            if let Some((i, a, b)) = difference {
+                panic!(
+                    "30 fps frame {frame} differs from 60 fps in {what} at word {i}: {a:#010x} ({}) against {b:#010x} ({})",
+                    f32::from_bits(a),
+                    f32::from_bits(b)
+                );
+            }
+        }
+        assert_eq!(both.probe.pose, earlier.probe.pose, "30 fps frame {frame} draws the box elsewhere");
+        let reaction: Vec<i32> = bytemuck::cast_slice(&both.reaction).to_vec();
+        if reaction.iter().any(|w| *w != 0) {
+            contact_frames += 1;
+            exchanged += reaction[..3].iter().map(|w| f64::from(*w).powi(2)).sum::<f64>().sqrt();
+        }
+    }
+    eprintln!(
+        "matter_coupling_export_frame_rate_independent: 60 frames at 30 fps equal 120 at 60 fps word for word; \
+         {contact_frames} frames in contact, Σ|reaction| {exchanged:.3e} words"
+    );
+    assert!(contact_frames >= 30, "the box touched the water in only {contact_frames} of 60 frames");
 }
 
 /// A box falls onto a still, weightless pool at 0.1, 1 and 10 times the

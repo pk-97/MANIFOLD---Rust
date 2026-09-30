@@ -41,6 +41,8 @@ pub const MATTER_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
         "tick_index",
     ],
     results: RESULTS,
+    // The domain: offline it exchanges with Box3D between ticks.
+    clock: Some("ticks"),
 };
 
 /// Stats readbacks in flight: the GPU writes a slot at the end of a frame's

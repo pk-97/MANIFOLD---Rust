@@ -259,7 +259,9 @@ impl MatterBodies {
     /// One row per body for each of this frame's ticks, `first_tick..`, tick
     /// major: each role's pose at the tick's start and the velocities that
     /// reach the pose at its end, then `coupled`, the coupled bodies'
-    /// tick-start state (coupled mode runs at most one tick per frame). A
+    /// tick-start state. Every tick gets the same coupled rows; an offline
+    /// frame of several coupled ticks rewrites each later tick's with
+    /// [`Self::set_coupled_rows`] once Box3D has stepped the tick before. A
     /// coupled row's shape index counts from the first coupled body, or is −1.
     /// Consumed samples are pruned afterwards.
     pub fn rows(&mut self, first_tick: u64, ticks: u32, coupled: &[MatterBody]) -> &[MatterBody] {
@@ -281,16 +283,36 @@ impl MatterBodies {
                 let end = at(input_span_before(history.iter(), end_time));
                 self.rows.push(body_row(start, end, index as f32));
             }
-            self.rows.extend(coupled.iter().map(|row| {
-                let shape = row.accel_shape[3];
-                MatterBody {
-                    accel_shape: [row.accel_shape[0], row.accel_shape[1], row.accel_shape[2], if shape >= 0.0 { shape + offset } else { -1.0 }],
-                    ..*row
-                }
-            }));
+            self.rows.extend(coupled.iter().map(|row| coupled_row(row, offset)));
         }
         let _ = history.prune_before(Seconds((first_tick + u64::from(ticks)) as f64 * TICK));
         &self.rows
+    }
+
+    /// Replace tick `tick`'s coupled rows (counted from this frame's first
+    /// tick) with `coupled`; returns the rewritten rows and their byte offset
+    /// in [`Self::last_rows`].
+    pub fn set_coupled_rows(&mut self, tick: usize, coupled: &[MatterBody]) -> Result<(u64, &[MatterBody]), String> {
+        let count = self.count();
+        let start = tick * count + self.roles.len();
+        if coupled.len() != self.coupled.len() || start + coupled.len() > self.rows.len() {
+            return Err(format!("Matter coupling: tick {tick} has no coupled rows this frame"));
+        }
+        let offset = self.roles.len() as f32;
+        let rows = &mut self.rows[start..start + coupled.len()];
+        for (row, body) in rows.iter_mut().zip(coupled) {
+            *row = coupled_row(body, offset);
+        }
+        Ok(((start * std::mem::size_of::<MatterBody>()) as u64, rows))
+    }
+}
+
+/// A coupled body's row with its shape index moved past the roles' shapes.
+fn coupled_row(row: &MatterBody, offset: f32) -> MatterBody {
+    let shape = row.accel_shape[3];
+    MatterBody {
+        accel_shape: [row.accel_shape[0], row.accel_shape[1], row.accel_shape[2], if shape >= 0.0 { shape + offset } else { -1.0 }],
+        ..*row
     }
 }
 

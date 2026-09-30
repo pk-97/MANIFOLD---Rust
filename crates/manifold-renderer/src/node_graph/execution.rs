@@ -155,6 +155,8 @@ pub struct Executor {
     /// values the boundary serves for the next iteration (reused scratch).
     substep_scalar_slots: Vec<Option<Slot>>,
     substep_scalar_values: Vec<f32>,
+    /// Host syncs run inside substep regions since this executor was built.
+    substep_host_syncs: u64,
     /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
     /// nodes can queue scalar writes. Drained back into the backend after
     /// each node's `evaluate` returns.
@@ -551,6 +553,7 @@ impl Executor {
             array_capacity_scratch: Vec::with_capacity(8),
             substep_scalar_slots: Vec::new(),
             substep_scalar_values: Vec::new(),
+            substep_host_syncs: 0,
             scalar_write_scratch: Vec::new(),
             camera_write_scratch: Vec::new(),
             light_write_scratch: Vec::new(),
@@ -920,6 +923,13 @@ impl Executor {
 
     pub fn backend(&self) -> &dyn Backend {
         &*self.backend
+    }
+
+    /// Host syncs (commit, GPU wait, clock owner's host step) run inside
+    /// substep regions since this executor was built. Live frames and
+    /// regions without a clock owner never add to it.
+    pub fn substep_host_syncs(&self) -> u64 {
+        self.substep_host_syncs
     }
 
     pub fn backend_mut(&mut self) -> &mut dyn Backend {

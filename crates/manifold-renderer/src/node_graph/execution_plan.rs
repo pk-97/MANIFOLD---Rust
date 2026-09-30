@@ -1108,6 +1108,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             boundary: region.boundary,
             steps: step_indices,
             held_resources,
+            clock: region.clock,
         });
     }
 

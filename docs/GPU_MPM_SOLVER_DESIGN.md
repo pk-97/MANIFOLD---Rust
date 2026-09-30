@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to FFT_WATER_SOLVER_DESIGN.md, MPM water presets are test scenes, P4's water targets are withdrawn · owed before landing: BUG-osqh (coupled MPM export below 60 fps drops ticks) · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
+**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to FFT_WATER_SOLVER_DESIGN.md, MPM water presets are test scenes, P4's water targets are withdrawn · BUG-osqh (coupled MPM export below 60 fps drops ticks) fixed on the branch, bead open until it lands · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -278,6 +278,22 @@ current main in P0a/P0b with the branch as reference. Rejected: one `mpm_solver`
 dispatches everything (the no-monolith rule). Rejected: unrolling N copies of the atoms
 (N changes with Stiffness). Rejected: repeating the whole frame per substep.
 
+Host syncs between iterations are the one exception to "encode the region and move on",
+and they are opt-in per boundary. A boundary opts in by naming a clock input port in
+`SubstepBoundaryPorts::clock`; the compiler resolves the node wired there as the region's
+clock owner and refuses the graph if the port is unwired or the owner sits inside the
+region. Before each iteration after the first, and only offline (`offline_simulation()`,
+export and Record), the executor asks the owner `substep_host_sync(iteration)`; on true it
+commits the frame's command buffer, waits for it to complete, and calls the owner's
+`substep_host_step(iteration, gpu)`, which may read what the GPU wrote and rewrite shared
+buffers before the rest of the region is encoded. Live frames never ask. A boundary with
+no clock never commits or waits mid-region anywhere, which regions such as the FFT water's
+pressure loop rely on. Matter opts in through `node.matter_state`'s `ticks` port, owned by
+`node.matter_domain`, to exchange with Box3D between ticks (section 5); the FFT water's
+Box3D coupling uses the same seam. Proofs: `substeps_host_sync_runs_offline_between_iterations`,
+`substeps_host_sync_never_runs_live`, `substeps_host_sync_off_by_default_in_export`,
+`substeps_region_unwired_clock_port_rejected`.
+
 **D8 — Fixed 60 Hz ticks, owned by the domain node; live never spirals; export never
 drops.** Tick = 1/60 s, equal to Box3D's fixed tick, stamped with the shared `TickStamp`
 and fed by the shared `EventQueue` and `InputHistory` exactly as FLIP's runtime is.
@@ -285,7 +301,8 @@ and fed by the shared `EventQueue` and `InputHistory` exactly as FLIP's runtime 
 frame's tick count; `node.matter_state` repeats `ticks × n`. Live runs at most
 `ceil(project_frame_interval / tick)` ticks per display frame (1 at 60 fps, 2 at 30 fps);
 due time beyond that is dropped, counted and published on `dropped_seconds`. Export and
-Record run every due tick and may wait on GPU fences. Display follows the surface
+Record run every due tick and may wait on GPU fences; a coupled domain also waits between
+its ticks (D7 host syncs, section 5), so it drops nothing at any frame rate. Display follows the surface
 design's D10: s = target − tick for every solver-time output. Transport behaviour
 (pause, stop, seek, loop, clip edges, reset) follows FLUID_ENGINE_INTEGRATION_PLAN.md section 5 (Timing, events and lifecycle) unchanged.
 Rejected: FLIP's retained unbounded debt for this solver — one tick costs about a frame
@@ -757,8 +774,18 @@ The GPU body integrator's free-flight baseline equals Box3D's integration of the
 gravity and fields, and the read-back impulse contains only the fluid's reaction, so
 nothing is counted twice. Uncoupled scenes skip steps 1–3 and are free-running under D8.
 
-**Consequences, stated honestly:** a coupled scene advances at most one tick per display
-frame, so at a 30 fps project it runs at half speed live (export is unaffected); a missed
+Offline (export and Record) a frame runs every due tick, each with its own exchange. Steps
+1–3 run for the frame's first tick as above; before each later tick the region makes a D7
+host sync: the GPU finishes the previous tick, the domain settles its reaction, steps
+Box3D over it, rewrites that tick's body rows in place and clears the reaction. The tick
+sequence is the one a 60 fps export runs, so a 30 fps export matches it word for word at
+every shared instant (`matter_coupling_export_frame_rate_independent`). The display stays
+at the tick Box3D had settled when the frame began, so at 30 fps the shown pair is one
+tick older than at 60 fps.
+
+**Consequences, stated honestly:** live, a coupled scene advances at most one tick per
+display frame, so at a 30 fps project it runs at half speed live; export runs every tick
+and pays one GPU drain per extra tick (under 1% at 64³, section 8); a missed
 readback leaves a permanent one-tick lag until Reset; Box3D contacts act once per tick
 while the fluid feels the body every substep, so a body pinned against a wall by water
 can jitter by up to one tick of fluid push.
@@ -880,7 +907,10 @@ Levers only Peter can pull, priced for P4:
 
 **Instrument consequences:** one tick of display latency (D10); slow motion instead of
 lag under overload (D8); the cost moves with Stiffness, so a Stiffness sweep is also a
-cost sweep; a coupled scene at 30 fps runs at half speed (section 5).
+cost sweep; a coupled scene at 30 fps runs at half speed live (section 5). Export of a
+coupled 64³ scene: 59.8 ms per frame at 60 fps (one tick), 108.4 ms per frame at 30 fps
+(two ticks with one host sync), 107.6 ms at 30 fps with the sync's wait removed, so the
+wait costs about 0.8 ms per frame (2026-09-30, M-series GPU, floating-box scene).
 
 ## 9. Section 2.5 audit and codegen classification
 
@@ -1006,7 +1036,7 @@ FLIP-only.
 | Fixed-point headroom | `matter_fixed_point_headroom` (Dam Break, max accumulator magnitude < 2^30) |
 | A non-finite tick is never published | `matter_nonfinite_tick_not_published` |
 | Substep rule | `matter_substep_rule_matches_worked_example` (n = 34); `matter_substeps_follow_stiffness` (0.5 → 21, 2 → 61); `matter_dials_limited_to_substep_cap` (a request needing n > 128 runs at the largest fitting value and reports it) |
-| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`. Coupled export still drops below 60 fps: BUG-osqh (coupled MPM export below 60 fps drops ticks) |
+| Live never spirals; export never drops | `matter_live_caps_ticks_per_frame`; `matter_export_runs_every_tick`; coupled: `matter_coupling_export_frame_rate_independent` (30 fps export equals 60 fps word for word) |
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
 | Coupling | `matter_coupling_hydrostatic_force` (within 5%), `matter_coupling_floating_equilibrium` (density 0.5 settles at the waterline ± 0.5·dx), `matter_coupling_energy_light_body` (ratios 0.1/1/10: body energy never above 1.01 × initial total over 8 ticks), `matter_coupling_free_flight_matches_box3d`, `matter_coupling_presentation_shares_display_time` |
@@ -1599,7 +1629,7 @@ or in section 15.
 | CPIC colored-distance-field compatibility (thin shells, cutting) | A collider thinner than 2 cells leaks in a show scene, or Peter wants cutting |
 | Real surface tension | Peter judges Cohesion wrong for a named look |
 | Mixed materials in one domain | A scene needs two materials that touch in one domain |
-| More than one coupled tick per frame (30 fps projects) | A coupled scene is needed at a project rate below 60 fps |
+| More than one coupled tick per live frame (30 fps projects; export already runs every tick) | A coupled scene must play live at a project rate below 60 fps |
 | Particle-level collider push-out | `matter_collider_penetration_bounded` fails at grid resolution |
 | Sparse or adaptive grids, 128³ live | P4's stretch report and a named scene need it |
 | Sparse volume tiles (Wu et al. 2018; NVIDIA GVDB) | Domains beyond 128³ are wanted |

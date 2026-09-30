@@ -422,6 +422,10 @@ invariant a fused def must respect:
     the same step evaluator the frame pass uses, capturing after each
     iteration. Fused body kernels run per iteration and read that iteration's
     scalars; they never contain a node from outside the body (section 4).
+    A boundary may opt in to host syncs by naming a clock port; offline only,
+    the executor may then commit, wait and run the clock owner's host step
+    between two iterations. A region that has not opted in never commits or
+    waits mid-region, so a fused body can rely on one uninterrupted encode.
 
 ## 10. Test surface & how to debug
 

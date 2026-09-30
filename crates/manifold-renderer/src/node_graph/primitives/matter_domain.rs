@@ -206,7 +206,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction, and dynamic_count into both. A coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.matter_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction, and dynamic_count into both. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -248,6 +248,30 @@ pub struct Coupling {
     failed: bool,
     /// Transport of the last frame the pair advanced at.
     transport: Option<f64>,
+    /// This offline frame runs several coupled ticks, exchanging with Box3D
+    /// between them.
+    exchange: Option<Exchange>,
+    /// A host step failed; the next frame reports it and restarts the pair.
+    host_error: Option<String>,
+}
+
+/// An offline frame of several coupled ticks: the region syncs at each later
+/// tick's first substep, and the domain settles the tick before it there.
+#[derive(Clone, Copy)]
+struct Exchange {
+    substeps: u32,
+    ticks: u32,
+    /// The frame's first tick's slot; later ticks differ only in `tick`.
+    slot: ReactionSlot,
+}
+
+/// The reaction words, once their last GPU writer has retired.
+fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
+    let buffer = buffer?;
+    let words = buffer.mapped_ptr()?.cast::<i32>().cast_const();
+    // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
+    // retired (the caller checked the frame clock or waited on the GPU).
+    Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })
 }
 
 impl Coupling {
@@ -323,6 +347,32 @@ impl Primitive for MatterDomain {
         self.role_pending
     }
 
+    /// Offline coupled frames sync at each later tick's first substep.
+    fn substep_host_sync(&self, iteration: u32) -> bool {
+        self.coupled
+            .exchange
+            .is_some_and(|x| iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks)
+    }
+
+    /// Section 5 between two ticks of one offline frame: settle the tick the
+    /// GPU just finished, step Box3D over it, and hand the next tick the
+    /// bodies' new state and a cleared reaction.
+    fn substep_host_step(
+        &mut self,
+        iteration: u32,
+        _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
+    ) -> Result<(), String> {
+        let Some(exchange) = self.coupled.exchange else { return Ok(()) };
+        let result = self.exchange_tick(iteration / exchange.substeps, exchange);
+        if let Err(error) = &result {
+            // The pair restarts next frame with a fresh rigid owner.
+            self.coupled.exchange = None;
+            self.coupled.owner = None;
+            self.coupled.host_error = Some(error.clone());
+        }
+        result
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A physics sample reads authored inputs only; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
@@ -340,6 +390,7 @@ impl Primitive for MatterDomain {
         // this node left unwritten. While a role is still being prepared, or
         // on an error, the liquid holds: the last good outputs repeat with
         // zero ticks.
+        self.coupled.exchange = None;
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -591,6 +642,9 @@ impl MatterDomain {
             return Err("Matter: Simulation Speed must be between 0 and 4, and gravity and the dials must be finite".into());
         }
         let offline = offline_simulation();
+        if let Some(error) = self.coupled.host_error.take() {
+            return Err(error);
+        }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
         if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
             return Ok(None);
@@ -601,23 +655,20 @@ impl MatterDomain {
         }
         let setup_changed = self.setup != Some(setup);
         let restart = setup_changed || self.coupled.owner_fresh;
-        // Section 5: the liquid runs at most the one tick whose bodies Box3D
-        // has settled, and none while the last tick's reaction is in flight.
+        // Section 5: live, the liquid runs at most the one tick whose bodies
+        // Box3D has settled, and none while the last tick's reaction is in
+        // flight. Offline waits for it, then runs every due tick, exchanging
+        // with Box3D between them through the region's host syncs.
         let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
             (Some(owner), Some(observation)) if !restart => {
                 let reaction = self.reaction.as_ref();
-                Some(owner.settle(
+                // This frame's clear is encoded after this read.
+                let ticks = owner.settle(
                     &observation.inputs,
                     |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
-                    || {
-                        let buffer = reaction?;
-                        let words = buffer.mapped_ptr()?.cast::<i32>().cast_const();
-                        // SAFETY: shared, 4-byte aligned storage whose last GPU
-                        // writer has retired (checked just before); this
-                        // frame's clear is encoded after this read.
-                        Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })
-                    },
-                )?)
+                    || reaction_words(reaction),
+                )?;
+                if offline && ticks > 0 { None } else { Some(ticks) }
             }
             (Some(_), _) => Some(1),
             (None, _) => None,
@@ -683,23 +734,28 @@ impl MatterDomain {
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
-                if frame.ticks != 1 || first_tick != owner.completed() {
+                if (frame.ticks != 1 && !offline) || first_tick != owner.completed() {
                     return Err(format!(
                         "Matter coupling: fluid ticks {first_tick}+{} do not follow rigid tick {}",
                         frame.ticks,
                         owner.completed()
                     ));
                 }
-                owner.set_pending(ReactionSlot {
+                let slot = ReactionSlot {
                     tick: first_tick,
                     stamp: clock.as_ref().map_or(0, FrameClock::stamp),
                     unit,
                     cell_size: lattice.cell_size,
                     offset: self.bodies.count() - owner.rows().len(),
-                });
+                };
+                owner.set_pending(slot);
+                if frame.ticks > 1 {
+                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, slot });
+                }
             }
             // The liquid is shown at the tick Box3D has settled, with the
-            // bodies' accepted frame.
+            // bodies' accepted frame, which the scene takes before the region
+            // runs this frame's ticks.
             display_time = owner.completed() as f64 * TICK;
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
@@ -783,6 +839,29 @@ impl MatterDomain {
             *owner_fresh = true;
         }
         Ok(true)
+    }
+
+    /// Exchange before tick `tick` of this frame (counted from its first):
+    /// the GPU has finished tick `tick − 1`, so its reaction words are final
+    /// and the body rows are free to rewrite.
+    fn exchange_tick(&mut self, tick: u32, exchange: Exchange) -> Result<(), String> {
+        let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
+        let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
+        let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
+        owner.settle(&observation.inputs, |_| true, || reaction_words(Some(reaction)))?;
+        let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
+        let bodies = &self.body_buffers.as_ref().ok_or("Matter coupling: the body rows are missing")?.bodies;
+        let bytes: &[u8] = bytemuck::cast_slice(rows);
+        if offset + bytes.len() as u64 > bodies.size {
+            return Err("Matter coupling: the body rows outgrew their buffer".into());
+        }
+        // SAFETY: shared storage in bounds (checked above); the GPU has
+        // completed every command that touched it, and the next reader is
+        // encoded after this write.
+        unsafe { bodies.write(offset, bytes) };
+        reaction.zero_fill();
+        owner.set_pending(ReactionSlot { tick: exchange.slot.tick + u64::from(tick), ..exchange.slot });
+        Ok(())
     }
 
     /// A restart the liquid's own clock found (its reset, a backward seek):
