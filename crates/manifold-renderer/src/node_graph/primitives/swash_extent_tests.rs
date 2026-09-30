@@ -300,6 +300,17 @@ impl Sizes<'_> {
                     covers(input.0, input.1);
                     covers(output.0, output.1);
                 }
+                // A frozen graph's fused cosine pair: member 0 is the
+                // twiddle stage, gathering the half spectrum; the pair
+                // counts, and writes, member 0's lattice.
+                "node.wgsl_compute" => {
+                    let n = ["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|name| param(p, name));
+                    let real = n.iter().product::<u64>() * 4;
+                    assert!(real == cells || real == planes, "{} on {n:?}", node.node_id.as_str());
+                    assert!(p.contains_key("n0_axes"), "{} is not a fused cosine pair", node.node_id.as_str());
+                    covers("src_0", half(n) * 8);
+                    covers("dst", real);
+                }
                 "node.dot_products" => {
                     let (length, max_rows) = (param(p, "row_length"), param(p, "max_rows"));
                     assert!(max_rows <= 64, "{}: more rows than the partials hold", node.node_id.as_str());
@@ -664,34 +675,81 @@ fn fft_water_pressure_region_is_one_pass() {
     assert_eq!(body, want);
 }
 
-/// Nothing in the solve fuses yet. The design's two pairs, cosine_spectrum →
-/// cosine_poisson_divide and cosine_spectrum → cosine_surface_scale, are
-/// refused because cosine_spectrum's output is sized by its lattice params,
-/// which the fused count anchor cannot express: BUG-u8io
-/// (fft-water-fusion-param-capacity). When this fails, fusion has learned it:
-/// replace this with a frozen-against-unfrozen run of fft_water_matches_reference.
-#[test]
-fn fft_water_pressure_has_no_fused_region() {
-    let report = crate::node_graph::fusion_report(&pressure_def(PressureShape::at(64)), &registry());
-    let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
-    assert!(fused.is_empty(), "the pressure solve now fuses {fused:?}; prove the frozen solve matches the unfrozen one");
+/// Each fused region of `def` as its members' node ids, `a + b`.
+fn fused_regions(def: &manifold_core::effect_graph_def::EffectGraphDef) -> Vec<String> {
+    let report = crate::node_graph::fusion_report(def, &registry());
+    let name = |id: u32| def.nodes.iter().find(|n| n.id == id).map_or("?".to_string(), |n| n.node_id.as_str().to_string());
+    report.regions.iter().map(|r| r.member_node_ids.iter().map(|&id| name(id)).collect::<Vec<_>>().join(" + ")).collect()
 }
 
-/// Nothing in the water step fuses yet. Most of its edges end at a gather
-/// input (particles_to_faces, extend_faces, face_divergence's faces,
-/// density_source, subtract_pressure's pressure, faces_to_particles' grids),
-/// which is a fusion cut by design; gravity → subtract_pressure is cut
-/// because the pressure between them depends on gravity. The pairs codegen
-/// could fuse, cells_with_particles → face_divergence's coincident water and
-/// the projection → the density projection, are refused because every one
-/// of them is sized by lattice params: BUG-u8io
-/// (fft-water-fusion-param-capacity). When this fails, fusion has learned
-/// it: prove the frozen step matches the unfrozen one.
+/// `def` frozen as the app renders it, built and planned.
+fn frozen(def: &manifold_core::effect_graph_def::EffectGraphDef, size: (u32, u32)) -> (Graph, ExecutionPlan, AHashMap<ResourceId, u64>) {
+    let view = crate::node_graph::freeze::install::fuse_generator_view(def, &registry()).expect("the def fuses and its fused def builds");
+    let graph = (*view.def).clone().into_graph(&registry(), &view.mesh_rules).expect("fused def builds");
+    let plan = compile(&graph).expect("fused def compiles");
+    let allocation = plan_array_allocations(&graph, &plan, size, &AHashMap::default()).expect("plan allocates");
+    let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
+    (graph, plan, bytes)
+}
+
+/// The frozen graphs at every lattice, before any GPU run of them: the solve
+/// alone, the running scene bare and meshed, and the render graph. Each
+/// fused cosine pair's gathered half spectrum and its output cover the
+/// lattice it counts.
 #[test]
-fn fft_water_step_has_no_fused_region() {
-    let report = crate::node_graph::fusion_report(&water_def(WaterScene::dam_break(64)), &registry());
-    let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
-    assert!(fused.is_empty(), "the water step now fuses {fused:?}; prove the frozen step matches the unfrozen one");
+fn fft_water_frozen_graphs_cover_every_dispatch() {
+    for n in LATTICES {
+        let shape = PressureShape::at(n);
+        let (graph, plan, bytes) = frozen(&pressure_def(shape), (64, 64));
+        let fused = graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
+        assert_eq!(fused, 5, "the solve's five cosine pairs at {n}³");
+        assert!(Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0, shape.n as u64 + 1) > 50);
+        let scene = WaterScene::dam_break(n);
+        for scene in [scene, scene.with_surface()] {
+            let (graph, plan, bytes) = frozen(&water_def(scene), (64, 64));
+            let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles(), scene.surface_nodes() as u64);
+            assert!(checked > 70 * scene.steps, "checked only {checked} nodes at {n}³");
+        }
+        let (graph, plan, bytes) = frozen(&render_def(scene), (1920, 1080));
+        assert!(Sizes { graph: &graph, plan: &plan, bytes }.check(scene.pressure, scene.particles(), scene.surface_nodes() as u64) > 140);
+    }
+}
+
+/// The regions one solve fuses: every cosine transform's twiddle stage folds
+/// into what reads its lattice-sized output, the box's eigenvalue divide or
+/// the helper's plane scale. The count is the lattice's node product, a
+/// uniform the fused kernel reads (BUG-u8io, fft-water-fusion-param-capacity).
+fn solve_regions(prefix: &str) -> Vec<String> {
+    ["rhs_box", "helper", "pass_box", "final_helper", "final_box"]
+        .iter()
+        .map(|stage| format!("{prefix}{stage}_cosine + {prefix}{stage}_scale"))
+        .collect()
+}
+
+/// The solve's fused regions; `fft_water_frozen_solve_matches_unfrozen`
+/// proves them on the GPU.
+#[test]
+fn fft_water_pressure_fused_regions() {
+    let mut fused = fused_regions(&pressure_def(PressureShape::at(64)));
+    let mut want = solve_regions("");
+    fused.sort();
+    want.sort();
+    assert_eq!(fused, want);
+}
+
+/// The water step's fused regions: the solves' pairs and nothing else.
+/// cells_with_particles → face_divergence stays apart, because the water
+/// lattice fans out to the collar, the projections and the density source,
+/// and a buffer region has one output. Every other edge ends at a gather or
+/// crosses a solve. `fft_water_frozen_step_matches_unfrozen` proves them.
+#[test]
+fn fft_water_step_fused_regions() {
+    let scene = WaterScene::dam_break(64);
+    let mut fused = fused_regions(&water_def(scene));
+    let mut want: Vec<String> = ["s0.", "s1.", "s1.density."].iter().flat_map(|p| solve_regions(p)).collect();
+    fused.sort();
+    want.sort();
+    assert_eq!(fused, want, "density once a frame, on the last step");
 }
 
 /// `tests/fixtures/presets/fft_water_pressure.json` is the 64³ graph.

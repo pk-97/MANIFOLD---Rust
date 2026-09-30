@@ -207,7 +207,26 @@ struct FrameResult {
 const SMALL_SPAN_MS: f64 = 0.02;
 
 impl Smoke {
+    /// The scene frozen, as the app renders a generator: the solves' cosine
+    /// pairs fused (`fft_water_frozen_step_matches_unfrozen` proves them bit
+    /// for bit). A fused kernel is named in the stage split by one of its
+    /// members; a pair never spans two stages.
     fn new(scene: WaterScene) -> Self {
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        let view = crate::node_graph::freeze::install::fuse_generator_view(&render_def(scene), &registry).expect("the render graph fuses");
+        let mut smoke = Self::with_def(scene, (*view.def).clone());
+        for name in &mut smoke.step_names {
+            let member = view.node_retarget.iter().filter(|(_, fused)| fused.as_str() == name.as_str()).map(|(member, _)| member.as_str()).min();
+            if let Some(member) = member {
+                *name = member.to_string();
+            }
+        }
+        smoke
+    }
+
+    /// The scene unfrozen: every atom its own dispatch.
+    fn unfrozen(scene: WaterScene) -> Self {
         Self::with_def(scene, render_def(scene))
     }
 
@@ -505,8 +524,13 @@ fn id_faults(particles: &[FluidParticle]) -> usize {
 
 /// The long run of one scene at one lattice. Panics at the first GPU fault,
 /// non-finite particle or collar past capacity (a collar past capacity would
-/// solve the wrong problem and read past the collar vectors).
+/// solve the wrong problem and read past the collar vectors). Frozen, as the
+/// app renders it.
 fn run(scene: WaterScene, label: &str, transport: bool) {
+    run_built(scene, label, transport, Smoke::new);
+}
+
+fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterScene) -> Smoke) {
     let n = scene.pressure.n;
     let dir = out_dir();
     let frames = frames();
@@ -523,9 +547,9 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         return;
     }
     let mem_before = snapshot.current_allocated_bytes as f64 / 1048576.0;
-    let build = Instant::now();
-    let mut smoke = Smoke::new(scene);
-    println!("SMOKE {tag}: runtime built in {:.2} s, GPU memory {mem_before:.0} → {:.0} MB", build.elapsed().as_secs_f64(), smoke.memory_mb());
+    let started = Instant::now();
+    let mut smoke = build(scene);
+    println!("SMOKE {tag}: runtime built in {:.2} s, GPU memory {mem_before:.0} → {:.0} MB", started.elapsed().as_secs_f64(), smoke.memory_mb());
     let dt = 1.0 / 60.0;
 
     // The first frame after the build starts from the fill; it is what every
@@ -1159,6 +1183,15 @@ fn swash_render_smoke_32() {
 fn swash_render_smoke_64() {
     run(WaterScene::dam_break(64), "dam_break", true);
     run(WaterScene::still_pool(64), "still_pool", true);
+}
+
+/// The shipped 64³ scene unfrozen, then frozen as the app renders it, for
+/// what fusing the solves' cosine pairs saves (BUG-u8io).
+#[test]
+fn swash_render_smoke_64_frozen() {
+    let scene = WaterScene::dam_break(64);
+    run_built(scene, "unfrozen", false, Smoke::unfrozen);
+    run(scene, "frozen", false);
 }
 
 /// The step's cadence levers at 64³, for the stage table: the density solve

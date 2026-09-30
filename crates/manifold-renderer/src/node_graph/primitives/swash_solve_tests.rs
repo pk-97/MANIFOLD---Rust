@@ -130,7 +130,18 @@ impl Solver {
     fn new(shape: PressureShape) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let graph = pressure_def(shape).into_graph(&registry, &Default::default()).expect("pressure def builds");
+        Self::with_graph(shape, pressure_def(shape).into_graph(&registry, &Default::default()).expect("pressure def builds"))
+    }
+
+    /// The solve frozen as the app renders it: its cosine pairs fused.
+    fn frozen(shape: PressureShape) -> Self {
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        let view = crate::node_graph::freeze::install::fuse_generator_view(&pressure_def(shape), &registry).expect("the solve fuses");
+        Self::with_graph(shape, (*view.def).clone().into_graph(&registry, &view.mesh_rules).expect("fused def builds"))
+    }
+
+    fn with_graph(shape: PressureShape, graph: Graph) -> Self {
         let plan = compile(&graph).expect("pressure def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
@@ -398,6 +409,28 @@ fn fft_water_pass_cost_split_refined() {
 #[test]
 fn fft_water_matches_reference() {
     check_against_reference(1, &PINNED_64);
+}
+
+/// The frozen solve, its five cosine pairs fused (BUG-u8io,
+/// fft-water-fusion-param-capacity), gives the unfrozen solve's pressure bit
+/// for bit on every saved Dam Break problem. `fft_water_frozen_graphs_cover_every_dispatch`
+/// proves its arrays first.
+#[test]
+fn fft_water_frozen_solve_matches_unfrozen() {
+    let (n, problems) = load_problems();
+    let shape = PressureShape::at(n);
+    let (mut unfrozen, mut frozen) = (Solver::new(shape), Solver::frozen(shape));
+    let fused = frozen.graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
+    assert_eq!(fused, 5, "the solve runs its five cosine pairs fused");
+    for problem in &problems {
+        unfrozen.run(problem);
+        frozen.run(problem);
+        let (a, b) = (unfrozen.pressure(shape.cells()), frozen.pressure(shape.cells()));
+        let differ = a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+        let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0_f32, f32::max);
+        println!("SWASH frozen frame {:3}: {differ} of {} cells differ, worst {worst:.3e}", problem.frame, a.len());
+        assert_eq!(differ, 0, "frame {}: the frozen solve differs from the unfrozen one", problem.frame);
+    }
 }
 
 #[test]

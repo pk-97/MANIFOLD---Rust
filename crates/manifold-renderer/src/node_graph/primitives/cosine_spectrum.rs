@@ -9,6 +9,7 @@ use manifold_gpu::GpuBinding;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -94,7 +95,11 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/cosine_spectrum_body.wgsl"),
     input_access: [BufferGather],
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS },
 }
+
+/// The lattice params whose product is a lattice atom's node count.
+pub(super) const LATTICE_PARAMS: [&str; 3] = ["nodes_x", "nodes_y", "nodes_z"];
 
 impl Primitive for CosineSpectrum {
     fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
