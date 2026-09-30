@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept. The surface meets its re-baselined 6 ms gate (5.3 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) building. The surface meets its re-baselined 6 ms gate (5.3 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -209,7 +209,8 @@ atomic scatter → per-bin stabilise (D21), declared `BarrieredReduction` (prece
 is one Rust module shared with `node.running_total`. Rejected: three graph nodes for one
 counting sort — the graph gains nothing from seeing them.
 
-**D18 — The kernel sum is a per-node gather, not an atomic splat.** Rejected: scattering
+**D18 — The level set is a per-node gather, not an atomic splat.** Since P6e it is the
+distance to the nearest blob ellipsoid, not a kernel sum. Rejected: scattering
 each kernel's footprint with fixed-point `atomicAdd` like `node.draw_particles_3d` — it
 quantizes a smooth field, contends on dense interiors, and cannot fuse. The gather reuses
 the bins the anisotropy pass already needs.
@@ -401,7 +402,7 @@ pose wiring), `WaterDamBreak.json` (whitewater instances and counts), `FluidSim3
 | Display-time solid | **New** — `node.mix_arrays` | `a + (b − a)·amount` over two `Array(f32)` of equal capacity; `MultiInputCoincident`. `node.array_math` has Mix, but it is CPU-only on the content thread by design, and a per-frame CPU write of a GPU-read array races in-flight frames. This is its fusable GPU sibling. |
 | Spatial binning | **New** — `node.sort_particles_into_cells` | D17. Outputs `sorted: Array(FluidParticle)` and `cell_ranges: Array(CellRange)`; `cell_size` param (metres, port-shadowed); bins cover `grid_bounds`. `node.draw_particles_3d` is nearest-voxel energy in wrapped unit space — not a sort. |
 | Anisotropic kernels | **New** — `node.shape_particle_blobs` | Pointwise over sorted particles; `sorted` and `cell_ranges` are `BufferGather`. Yu & Turk weighted mean, covariance, eigen-decomposition with stretch clamp, isotropic fallback below N_ε, centre smoothing, D14's isolated radius. Support is clamped to the bin `cell_size` input — one home for the search radius. Params: `particle_scale`, `stretch`, `smoothing`, `isolated_scale`, `min_neighbours`. |
-| Kernel sum → level set | **New** — `node.particle_volume` | One thread per lattice node; `blobs`, `cell_ranges` and `solid` are `BufferGather`. Writes `threshold − ΣW` (negative inside) and applies D15. Params `resolution_scale` ∈ {2, 3, 4} and `threshold`; outputs `nodes_x/y/z` for the rest of the chain. Capacity is the solid's capacity × `resolution_scale`³, an upper bound on `((n − 1)·m + 1)³`, so it grows with the provided solid array. Shape precedent `node.make_triangles`. |
+| Kernels → level set | **New** — `node.particle_volume` (a distance field since P6e) | One thread per lattice node; `blobs`, `cell_ranges` and `solid` are `BufferGather`. Writes the capped distance to the nearest blob ellipsoid (negative inside, P6e) and applies D15. Param `resolution_scale` ∈ {2, 3, 4}; outputs `nodes_x/y/z` for the rest of the chain. Capacity is the solid's capacity × `resolution_scale`³, an upper bound on `((n − 1)·m + 1)³`, so it grows with the provided solid array. Shape precedent `node.make_triangles`. |
 | Level-set smoothing | **Exists, not usable** | `node.blur_3d` is `Texture3D`-only (D8). Yu & Turk kernels are already smooth; `smoothing` and `particle_scale` carry the look. The resolve atom is deferred. |
 | MC classify | **New** — `node.count_surface_triangles` | One thread per cell; level set is `BufferGather`; writes the case table's triangle count. |
 | Prefix scan | **New** — `node.running_total` | Inclusive multi-level scan of `Array(u32)`, `BarrieredReduction`. `total: ScalarF32` is the last element read back one frame late (the `color_sample` readback pattern). Shares its scan module with the sort. |
@@ -844,6 +845,76 @@ proofs; record the rest. **Done: no lever kept.** The surface stays 5.27 ms p95.
 | Anisotropy once per tick | The volume already reads each particle's stored ellipsoid (`FluidBlob`, built once per frame by `node.shape_particle_blobs`); a cell visit costs one 3×3 multiply, nothing to hoist. At the 60 Hz producer tick equals frame. | Already so; nothing to gain at 60 Hz |
 | Bin-local shared memory for the volume gather | Tiled kernel (one workgroup per 4×4×4 node block, the block's bins copied to workgroup memory, same sum order) passed the brute-force proof but took 30.4 ms against 1.95 ms at ×2, 103 ms against 5.5 at ×3: the tile needs 31 KB of the core's 32 KB, leaving one 64-thread workgroup per core. | Dropped |
 | Half-precision neighbour reads | Scalar model at res 64 ×2 scales over 2,000 nodes: f16 blob fields move the level set by up to 9.1e-2 with world-space centres and 1.4e-3 with bin-relative ones, 10⁷–10⁹ f32 ULPs against a 1-LSB bar. | Dropped |
+
+### P6e — Surface look: a distance level set
+
+Lead brief, 2026-09-30: make the live surface read as water and come close to the FLIP
+bake surface, working on the particle-frame seam, inside the 6 ms gate.
+
+**Measured, before.** `fluid_capture --dump-mesh` writes the GPU mesh, the CPU FLIP mesh
+of the same particles (a hidden second water object keeps the CPU mesher running) and
+the particle frame. The oracle is the top surface as a height map at the lattice
+spacing (dx/3), its slope split by wavelength with an FFT, in units of the simulation
+cell dx. The CPU mesh is the reference: same particles, FLIP's own surface. Dam Break
+(GPU Surface), res 64, Detail 1, region x −1.75…−0.3:
+
+| Time | Mesh | Slope rms, wavelength 1–2 dx | 2–4 dx | over 4 dx | Curvature std (1/m) |
+|---|---|---|---|---|---|
+| 10 s | CPU | 7.2° | 4.0° | 11.4° | 12 |
+| 10 s | GPU | 12.3° | 8.6° | 11.8° | 24 |
+| 15 s | CPU | 7.0° | 5.1° | 15.8° | 10 |
+| 15 s | GPU | 12.6° | 10.3° | 16.4° | 21 |
+| 30 s | CPU | 4.9° | 4.2° | 3.2° | 9 |
+| 30 s | GPU | 11.1° | 9.2° | 4.5° | 20 |
+
+A still pool of undisturbed particles is flat in both (0.02° GPU): the roughness comes
+from disordered particles. The long waves match; the GPU surface carries twice FLIP's
+slope at 1–4 cells and twice its curvature. That is the orange peel. A settle scene (a
+small drop into a pool, 8 s) shows the same: GPU 12.8° and 9.8° against CPU 6.1° and 3.4°.
+
+**Root cause.** `node.particle_volume` places the surface where a sum of kernels crosses
+a threshold. Where particles are disordered, how many kernels overlap a point varies from
+place to place, so the surface height follows the local particle count, not the particle
+positions: bumps two to eight particle spacings wide. Level-set smoothing tied to lattice
+nodes (P6c) reaches a third of a cell at Detail 1 and cannot remove them; anisotropy
+neither causes nor cures them. FLIP builds a distance field instead (the distance to the
+nearest particle sphere), whose surface sits a fixed distance from the particles.
+
+**Evidence** (an f64 replica of sort, blobs, volume and smoothing run on the dumped
+particles; it matches the GPU surface at correlation 0.92 above 2 cells). Settle scene at
+8 s, CPU FLIP reference 6.1°, 3.4°, 5.1°, curvature 10:
+
+| Level set | 1–2 dx | 2–4 dx | over 4 dx | Curvature |
+|---|---|---|---|---|
+| Kernel sum, 2 passes (today) | 23.1° | 14.5° | 7.3° | 42 |
+| Kernel sum, 6 passes | 4.8° | 8.9° | 7.5° | 7 |
+| Kernel sum, covariance over a whole cell | 29.6° | 19.6° | 8.7° | 59 |
+| Isotropic kernel sum | 22.0° | 14.6° | 7.3° | 37 |
+| Distance to the blob ellipsoids, 2 passes (this phase) | 8.4° | 5.5° | 5.3° | 10 |
+| Same, centre smoothing 0 | 6.8° | 4.4° | 5.2° | 8 |
+| Same, isotropic blobs (FLIP's sphere union) | 6.1° | 3.8° | 5.1° | 7 |
+
+More smoothing passes flatten only the shortest bumps and thicken the liquid; a wider
+covariance makes the anisotropy noisier, not calmer.
+
+**Shape.** `node.particle_volume` writes `min(band, min over blobs of a·(|G·(x − c)| − 1))`,
+where `a` is the blob's longest axis and `band` is a tenth of a bin: the distance to the
+nearest blob ellipsoid (exact for spheres, scaled by the long axis for stretched blobs),
+negative inside, capped a tenth of a bin outside. `threshold` goes. D15 stands: solid
+nodes are `max(φ, 0)`, border nodes are `band`. The cap is exact because of one contract
+between the two atoms: `node.shape_particle_blobs` caps a blob's reach at `0.9·bin −
+|centre − particle|`, so any blob a node's ±1-bin search misses is at least `band` away.
+The volume value test checks it against a brute force over every blob. D2 stands: the
+kernels are still Yu & Turk's, and FLIP's sphere union is this atom fed isotropic blobs
+(stretch 1, smoothing 0, isolated scale 1) — a look choice for Peter, not a code path.
+
+- **Entry state:** P6c built; `rg -n 'threshold - sum' crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl` finds the kernel sum.
+- **Read-back:** D2, D14, D15, D18; P5's kernel-shape notes; P6c.
+- **Deliverables:** the volume and blob kernels above; value tests `fluid_particle_volume_matches_brute_force_distance_and_solid_clamp` and the blob reference with the new reach cap; `threshold` removed from the four presets that carry the Liquid Surface group; the capture tool's `--dump-mesh`.
+- **Gate:** the tests and `scripts/gpu_proofs_gate.py --filter fluid_ --filter water_` green; renderer clippy clean; check-presets and graph-tool validate/fusion clean on `WaterDamBreakGpu.json`; `fluid_surface_perf` p95 ≤ 6.0 ms at res 64 ×2, the cost reported either way.
+- **Demo:** `fluid_capture --gpu-surface --dump-mesh` on the Dam Break and the settle scene, before and after, stills plus the table above re-measured on the GPU mesh. L2: Peter judges the stills.
+- **Gesture:** drag Surface Particle Scale mid-splash; the water swells and thins smoothly with no restart.
+- **Forbidden:** raising smoothing passes or kernel reach to hide the bumps (measured above: neither removes them); a second level-set atom beside `particle_volume`; any MPM scene above res 64 on the GPU (BUG-bnp9 (MPM matter hard lock)).
 
 ### P7 — Add Fluid authors the GPU surface
 
