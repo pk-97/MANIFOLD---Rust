@@ -59,3 +59,8 @@ pub use metal::*;
 mod vulkan;
 #[cfg(feature = "vulkan")]
 pub use vulkan::*;
+
+// Plain compute kernels, so backend-neutral in principle; gated to Metal only
+// until the Vulkan encoder grows the same dispatch surface.
+#[cfg(not(feature = "vulkan"))]
+pub mod compute_fft;
