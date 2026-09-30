@@ -1,6 +1,6 @@
 # SWASH (Spectral Water via A Surface Helper) — a free-surface pressure solve made of FFTs, raced against MPM water
 
-<!-- index: Benchmark-gated challenger to GPU MLS-MPM water: particles on a face (MAC) grid with pressure solved exactly each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced against the MPM cost probe, a native multigrid baseline, then Peter's call. Touches nothing MPM owns until it wins. -->
+<!-- index: Benchmark-gated challenger to GPU MLS-MPM water: particles on a face (MAC) grid with pressure solved exactly each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, a native multigrid (standard FLIP) race on those problems, the full liquid step raced against the MPM cost probe, then Peter's call. Touches nothing MPM owns until it wins. -->
 
 **Status:** APPROVED · 2026-09-30 · P0 built on `feat/fft-water` · P1–P4 not built · race outcome is Peter's call at P4, tracked in BUG-wsim (FFT pressure split research).
 **Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record; every number below comes from it).
@@ -10,6 +10,7 @@ Peter's decisions, 2026-09-30, not reopened:
 
 - Framing: he chose **"Challenger (Recommended)"** over replacing or merging with MPM. This solver is built as a benchmark-gated challenger to MPM water. MPM continues untouched meanwhile.
 - On MPM's rejection of a GPU FLIP-style solver (GPU_MPM_SOLVER_DESIGN.md D1 and D2): "That was done BEFORE we started any of our research". Those decisions are reopened only if P4 shows this solver winning, and only through a seam brief against that doc.
+- The race against standard FLIP (multigrid pressure) is the like-for-like one: same look, same behaviour, only the pressure solve differs. It runs straight after P1, before the full-step race against MPM.
 
 ## What it is on stage
 
@@ -29,7 +30,7 @@ Water that does not squash. A dam of water collapses, sloshes and settles into a
 | MPM Dam Break cost probe | `crates/manifold-renderer/tests/gpu_proofs/matter_cost_probe.rs` on `feat/gpu-mpm-build-b` | MPM branch | the race opponent, run unchanged |
 | Codegen scope test and exemption classes | `docs/ADDING_PRIMITIVES.md` lines 101–140 | main | every atom below names its class |
 
-Genuinely new: 3D/batched FFT and the cosine transform, collar classification and compaction, the six chart views, the Krylov atoms, gather-form face transfers, a native multigrid baseline (P3 only).
+Genuinely new: 3D/batched FFT and the cosine transform, collar classification and compaction, the six chart views, the Krylov atoms, gather-form face transfers, a native multigrid baseline (P2 only).
 
 ## 2. Decisions
 
@@ -51,6 +52,18 @@ Genuinely new: 3D/batched FFT and the cosine transform, collar classification an
 
 **D9 — Exemption classes, named per atom.** 3D FFT, batched 2D FFT: class 1 (multi-pass cross-element transform), one MPSGraph call each. Dot products and norms for Arnoldi: class 1 (barriered reduction). Compaction place and chart sort: class 1 (scan-then-place, precedent `spawn_from_mesh`). Everything else is a barrier-free per-element atom on the codegen path with a CPU-value `gpu_tests` proof: cosine-transform permutation and twiddle, eigenvalue divide, collar source build, collar gather, chart gather-sum and spread, symbol scale, axpy, Givens update, cell classification, face gather, divergence, pressure-gradient update, particle gather and advect.
 
+**D10 — Krylov passes inside one region, basis owned by the boundary.** The boundary `node.krylov_basis` (`CrossFrameState`: the basis must survive the region's iterations) owns two provided arrays: `basis`, `(passes + 1) × length` f32 row-major, and `current`, the row the next pass starts from. Every Krylov vector has `length` = collar capacity + 1: collar entries first, zeros past the live count, the constant c last. The zero tail keeps every dot and update exact with no count on the GPU.
+- Evaluate: copy `start` (v0 = b/β) into basis row 0 and `current`; clear the small state `out`, then copy β from `seed` into its g0 slot. Offset copies are a `manifold-gpu` blit, not a shader.
+- Iteration scalars: `pass` = j and `rows` = j + 1, for j < `passes`.
+- Captures: `in` ← the new small state, `next_in` ← v(j+1). Late capture copies `in` to `out` and blits `next_in` into basis row j+1 and into `current`.
+- Small state, f32: Hessenberg column-major `(passes + 1) × passes`, then cs, sn (`passes` each), then g (`passes + 1`).
+- One pass (region body): helper on `current` → z (D11); z scattered to the grid, box solve, gathered at the collar minus c, last element Σz/n³ → w; CGS2 as `node.dot_products` against rows 0..j then `node.combine_rows` (w − V h), twice; ‖w‖ by `node.dot_products`; w/‖w‖ by `node.combine_rows` with a divisor → `next_in`; `node.krylov_givens` → `in`. Givens is one thread per state element, each re-deriving column j's rotations (at most 32), so no thread waits on another.
+- Before the region: G f by one box solve; b = G f at the collar with last element Σf/n³; β = ‖b‖; start = b/β.
+- After the region: `node.krylov_solve` (back-substitution, one thread per coefficient, each running the whole solve); u = V y by `node.combine_rows`; λ = helper(u); p = (G f − G Jᵀλ + c) on water cells, reusing G f.
+- Rejected: MINRES (1.5–2× the passes, findings doc); modified Gram–Schmidt (j + 1 reductions per pass, CGS2 is two); unnormalized basis rows scaled by stored norms (every reader pays a divide to save one dispatch); flexible GMRES (stores P V too, doubling the basis to skip one helper call per solve).
+
+**D11 — Chart sums by column walk, no sort.** One thread per plane element (view, sheet, row, column) walks its column along the view axis and sums weight × value over the collar entries with that sheet index. A cell is collar exactly where the collar running total steps up, and its entry is that total minus one, so no per-view sort, place or scatter exists. Weights and sheet indices are per entry, once per step (`node.chart_entries`: a short walk along each view axis counting water-run ends or starts, capped at NL − 1). Planes are M × M with M the longest lattice side; all six views and NL sheets go through one `[6·NL, M, M]` 2D cosine transform each way. A shorter side pads with zeros: the helper is a preconditioner, so padding changes its accuracy near the short walls, never the answer. The 2·NL threads of a column read the same cells, which stay in cache. Rejected: a counting sort per view (six scans and places per step to save reads the measurements have not asked for); scatter-add into planes (atomics); one transform per axis (three times the vendor FFT calls, about 0.25 ms more per pass).
+
 ## 3. The step
 
 Per step, in order. A number in brackets is the measured MLX cost at 64³ per step where one exists.
@@ -71,8 +84,8 @@ Memory at 64³ with 24 passes and a compacted collar of about 40k entries: the b
 
 | # | Invariant | Machine check |
 |---|---|---|
-| I1 | No node-grid velocity anywhere in the liquid path | `rg -n "node_vel\|NodeVelocity\|matter_" crates/manifold-renderer/src/node_graph/primitives/fft_water_*.rs` returns zero |
-| I2 | No CPU readback inside a frame; stats one frame late only | `rg -n "read_back\|readback\|wait_until_completed" crates/manifold-renderer/src/node_graph/primitives/fft_water_*.rs` returns zero outside the stats atom |
+| I1 | No node-grid velocity anywhere in the liquid path | `rg -n "node_vel\|NodeVelocity\|matter_" crates/manifold-renderer/src/node_graph/primitives -g "{cosine_,fft_3d,collar_,chart_,krylov_,dot_products,combine_rows,select_flagged}*"` returns zero |
+| I2 | No CPU readback inside a frame; stats one frame late only | `rg -n "read_back\|readback\|wait_until_completed"` over the I1 files returns zero outside the stats atom |
 | I3 | Every per-element atom on the codegen path (D9) | `every_boundary_atom_declares_its_reason` (`freeze/classify.rs:482`) passes: each exempt atom declares `boundary_reason` naming its class; each codegen atom has its `gpu_tests` value proof |
 | I4 | MPM untouched (D1) | `git diff --stat origin/main...HEAD -- docs/GPU_MPM_SOLVER_DESIGN.md $(git ls-tree -r --name-only feat/gpu-mpm-build-b -- crates/manifold-renderer/src/node_graph/primitives \| rg matter_)` is empty |
 | I5 | Water volume is kept | `fft_water_still_pool` proof: particle count constant, fastest particle under 1 mm/s after 2 s at 64³ |
@@ -94,35 +107,42 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 ### P1 — The collar solve on saved Dam Break problems
 
 - **Entry state:** P0 landed on the branch. `rg -n "never nested" crates/manifold-renderer/src/node_graph/substeps.rs` still matches. Confirm two sibling regions in one graph compile, with a unit test in `substeps.rs`'s test module. If they don't, stop and escalate: D8 depends on it.
-- **Read-back:** findings doc sections "The method" and "Why splashes cost more passes"; `cap3d.py` (`build_charts`, `chart_apply`) and `dambreak_mlx.py` (`charts_setup`, `charts_apply`, `pressure`, the GMRES guards). Restate D3–D6 and D8.
-- **Deliverables:** atoms for step 2's collar flag, step 5, steps 6–7. Preset fragment `fft_water_pressure.json`. Fixture: the seven Dam Break problems from `dambreak_snaps.npz` (frames 0, 15, 30, 45, 60, 90, 120), converted to a binary fixture under `crates/manifold-renderer/tests/fixtures/`. Proof `fft_water_matches_reference`: at 24 passes, the true masked-equation residual per fixture is within 2× of the MLX number. Fused-versus-unfused proof for the one fusable pair on the box-solve path (`cosine_spectrum` → `cosine_poisson_divide`), run through the frozen and unfrozen preset.
-- **Gate:** proof passes. Report per fixture: passes, residual, ms per pass, ms per solve. Target 24 passes in under 10 ms at 64³ (MLX: 20.0 ms with the column helper).
+- **Read-back:** findings doc sections "The method" and "Why splashes cost more passes"; `cap3d.py` (`build_charts`, `chart_apply`) and `dambreak_mlx.py` (`charts_setup`, `charts_apply`, `pressure`, the GMRES guards). Restate D3–D6, D8, D10 and D11.
+- **Deliverables:**
+  - Setup atoms: `node.collar_cells` (air cells with a water neighbour, as u32 flags); `node.select_flagged` (entry → cell by binary search of a running total, sentinel past the total); `node.chart_entries` (weight and sheet index per entry and view). Reused: `node.running_total`, `node.smooth_lattice`.
+  - Box-solve atoms: `node.collar_source` (entry values onto the grid) and `node.collar_gather` (grid values at the entries minus c, last element sum/volume).
+  - Helper atoms: `node.chart_sums` (D11; with no value wired it counts entries, which gives D), `node.cosine_surface_scale` (× sqrt(λ₁ + λ₂ + q0²)) and `node.chart_spread` (planes back to entries, plus the local term). The cosine atoms and `node.fft_3d` gain a plane mode: the last two axes transformed, the first batched.
+  - Krylov (D10): `node.krylov_basis`, `node.dot_products`, `node.combine_rows`, `node.krylov_givens`, `node.krylov_solve`, and an offset buffer copy on `GpuEncoder`.
+  - Preset fragment `fft_water_pressure.json`.
+  - Fixture: the seven Dam Break problems from `dambreak_snaps.npz` (frames 0, 15, 30, 45, 60, 90, 120) as a zstd binary under `crates/manifold-renderer/tests/fixtures/` (water bits, f32 divergence). The 128³ problems are these refined 2× in the test, each cell becoming eight, for the pass-count and timing trend; no 128³ bytes are stored.
+  - Proof `fft_water_matches_reference`: at 24 passes, the true masked-equation residual per fixture is within 2× of the MLX number, recomputed from the same fixture and pinned in the test. Fused-versus-unfused proof for the fusable pairs (`cosine_spectrum` → `cosine_poisson_divide`, `cosine_spectrum` → `cosine_surface_scale`), run through the frozen and unfrozen preset.
+- **Gate:** proofs pass. Report per fixture, at 64³ and 128³: residual, ms per solve, and ms per pass split into helper, box solve and Krylov. Target 24 passes in under 10 ms at 64³ (MLX: 20.0 ms with the column helper). The box solve alone is 0.43 ms, so 24 passes spend 10.3 ms there: meeting the target needs a cheaper per-pass box solve or fewer passes (the charts helper converged in 15–20). Report which.
 - **Demo:** none — L1.
 - **Forbidden:** full-grid Krylov vectors (D6); a tolerance loop; keeping the column helper "for comparison" in shipped code (the comparison lives in the Python record).
 
-### P2 — The full step, raced against MPM
+### P2 — Standard FLIP (multigrid) raced on the same problems
 
-- **Entry state:** P1 landed on the branch; `feat/gpu-mpm-build-b` still has `matter_cost_probe.rs`.
-- **Read-back:** section 3; the `wave/live-water` sources of `mac_gather_advect` and `mac_extrapolate` (`git show wave/live-water:<path>`), `sort_particles_into_cells.rs`. Restate D2, D7, I1–I5.
-- **Deliverables:** atoms for steps 1–4 and 8–9; preset `FftWaterDamBreak.json` (64³, 4 m, walls on all six sides, pool of 3 cells plus the block x 10..29, y 0..33, z 4..60, 8 particles per cell, 353,664 particles, 2 steps per frame, 24 passes); cost probe `fft_water_cost_probe.rs` using the MPM probe's timing method; still-pool proof (I5); a momentum proof (a box of water in free fall keeps g within 1%).
-- **Gate:** both proofs pass. Race table, same machine, same session: frame ms for this preset versus `matter_cost_probe` on MPM's branch, and max residual over 300 frames.
-- **Demo:** L2 — 300 frames of the Dam Break through `particle_volume` and the surface pipeline, headless to PNGs, side by side with MPM's Dam Break; Peter looks. **Performer gesture:** drop the block and watch the pool settle; the gate is the still-pool number after the slosh.
-- **Forbidden:** atomics in particle→face (D7); importing any `matter_*` type (I4).
-
-### P3 — Native multigrid baseline
-
-- **Entry state:** P2 landed on the branch.
+- **Entry state:** P1 landed on the branch.
 - **Read-back:** `dambreak_mlx.py` `pressure_mg`; McAdams, Sifakis, Teran 2010. Restate that this is a benchmark opponent, not shipped code.
-- **Deliverables:** multigrid-preconditioned CG as atoms (damped Jacobi 2+2, trilinear prolongation and its transpose, coarse cell water if any child is, 30 sweeps at 4³) in a test-only preset. Race on the P1 fixtures.
-- **Gate:** race table at equal residual (about 1e-1, 6e-3, 2.5e-4). MLX reference: FFT 11.6/20.0/30.8 ms against multigrid 16.0/31.3/47.2 ms.
+- **Deliverables:** multigrid-preconditioned CG as atoms (damped Jacobi 2+2, trilinear prolongation and its transpose, coarse cell water if any child is, 30 sweeps at 4³) in a test-only preset; CG reuses `node.dot_products` and `node.combine_rows`. Race on the P1 problems at 64³ and 128³.
+- **Gate:** race table at equal residual (about 1e-1, 6e-3, 2.5e-4) at both sizes. MLX reference at 64³: FFT 11.6/20.0/30.8 ms against multigrid 16.0/31.3/47.2 ms.
 - **Demo:** none — L1.
 - **Forbidden:** handicapping the baseline. Tune the smoother and coarse solve until a change stops helping, and report the tuning.
+
+### P3 — The full step, raced against MPM
+
+- **Entry state:** P2 landed on the branch; `feat/gpu-mpm-build-b` still has `matter_cost_probe.rs`.
+- **Read-back:** section 3; the `wave/live-water` sources of `mac_gather_advect` and `mac_extrapolate` (`git show wave/live-water:<path>`), `sort_particles_into_cells.rs`. Restate D2, D7, I1–I5.
+- **Deliverables:** atoms for steps 1–4 and 8–9; preset `FftWaterDamBreak.json` (64³, 4 m, walls on all six sides, pool of 3 cells plus the block x 10..29, y 0..33, z 4..60, 8 particles per cell, 353,664 particles, 2 steps per frame, 24 passes) and its 128³ twin; cost probe `fft_water_cost_probe.rs` using the MPM probe's timing method; still-pool proof (I5); a momentum proof (a box of water in free fall keeps g within 1%).
+- **Gate:** both proofs pass. Race table, same machine, same session: frame ms at 64³ and 128³ for this preset versus `matter_cost_probe` on MPM's branch, and max residual over 300 frames.
+- **Demo:** L2 — 300 frames of the Dam Break through `particle_volume` and the surface pipeline, headless to PNGs, side by side with MPM's Dam Break; Peter looks. **Performer gesture:** drop the block and watch the pool settle; the gate is the still-pool number after the slosh.
+- **Forbidden:** atomics in particle→face (D7); importing any `matter_*` type (I4).
 
 ### P4 — Peter's call
 
 - **Deliverables:** one page in BUG-wsim (FFT pressure split research) with the P2 and P3 tables and the side-by-side PNGs; a `decision` bead for Peter.
 - **If it wins:** a seam brief against `GPU_MPM_SOLVER_DESIGN.md` reopening D1 and D2 for water, written with the MPM lead. **If it loses:** this doc and the branch go to `docs/archive/` with the numbers.
-- **Demo:** the P2 side-by-side.
+- **Demo:** the P3 side-by-side.
 
 ## 6. Decided — do not reopen
 
@@ -138,10 +158,10 @@ All phases on one branch `feat/fft-water` off main, via the slot ring. Test scop
 | Item | Revives when |
 |---|---|
 | Solid objects inside the water (collar on the solid boundary; the helper divides by \|k\| there) | P4 win |
-| APIC on faces (needs an affine record) | P4 win and a visible PIC/FLIP noise complaint in the P2 demo |
+| APIC on faces (needs an affine record) | P4 win and a visible PIC/FLIP noise complaint in the P3 demo |
 | Snow, sand and goo coupling through augmented MPM's volumetric split | P4 win and the MPM seam brief |
-| Nested substep regions (steps per frame above 2) | the P2 demo needs more than 2 steps to stay stable |
+| Nested substep regions (steps per frame above 2) | the P3 demo needs more than 2 steps to stay stable |
 | Subcell (ghost-fluid) surface to cut splash passes | P1 misses its pass target on the violent fixtures |
 | NL = 4 sheet-cap aliasing check | P1 residual misses on the fixtures with stacked sheets |
 | Vulkan and large-GPU scaling (dispatch count per pass is the limit there) | the Vulkan backend exists |
-| Wrap-around (torus) axes: a per-axis wrap switch on the transform atoms (plain FFT, no reorder or twiddle; eigenvalue 4 sin²(πk/N)), wrapping particle transfers and chart views. Endless ocean = wrap x and z over a floor; a full torus needs force fields in place of gravity, or water accelerates forever. Peter asked for it 2026-09-30 | P2 race done, win or lose |
+| Wrap-around (torus) axes: a per-axis wrap switch on the transform atoms (plain FFT, no reorder or twiddle; eigenvalue 4 sin²(πk/N)), wrapping particle transfers and chart views. Endless ocean = wrap x and z over a floor; a full torus needs force fields in place of gravity, or water accelerates forever. Peter asked for it 2026-09-30 | P3 race done, win or lose |
