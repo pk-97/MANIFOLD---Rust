@@ -57,7 +57,7 @@ pub enum Check {
     LiveFramesNeverWait,
     /// Speed 0.5 runs half the water time.
     HalfSpeed,
-    /// Reset starts a new epoch.
+    /// Reset, and the runtime's state reset, start a new epoch.
     Reset,
 }
 

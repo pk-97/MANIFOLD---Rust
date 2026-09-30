@@ -59,7 +59,8 @@ pub(crate) enum ExportTestFault {
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 thread_local! {
     static EXPORT_OBSERVER: RefCell<Option<Sender<ExportFrameObservation>>> = const { RefCell::new(None) };
-    static EXPORT_SDR_READBACK: Cell<bool> = const { Cell::new(false) };
+    /// The export frame whose SDR output is read back.
+    static EXPORT_SDR_READBACK: Cell<Option<u32>> = const { Cell::new(None) };
     static EXPORT_HDR_READBACK: Cell<bool> = const { Cell::new(false) };
     static EXPORT_FAILURE_FRAME: Cell<Option<(u32, ExportTestFault)>> = const { Cell::new(None) };
     static EXPORT_GPU_ABORT_REQUESTED: Cell<bool> = const { Cell::new(false) };
@@ -93,18 +94,25 @@ pub(crate) fn install_export_observer_with_export_readbacks(
         assert!(slot.borrow().is_none(), "export observer already installed");
         *slot.borrow_mut() = Some(sender);
     });
-    EXPORT_SDR_READBACK.with(|capture| capture.set(capture_first_sdr_frame));
+    EXPORT_SDR_READBACK.with(|capture| capture.set(capture_first_sdr_frame.then_some(0)));
     EXPORT_HDR_READBACK.with(|capture| capture.set(capture_first_hdr_frame));
     EXPORT_FAILURE_FRAME.with(|frame| frame.set(fail_before_encode_frame));
     EXPORT_GPU_ABORT_REQUESTED.with(|requested| requested.set(false));
     ExportObservationGuard
 }
 
+/// Read back the SDR output of export frame `frame_idx` instead of the first;
+/// call after installing the observer.
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+pub(crate) fn capture_export_sdr_frame(frame_idx: u32) {
+    EXPORT_SDR_READBACK.with(|capture| capture.set(Some(frame_idx)));
+}
+
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 impl Drop for ExportObservationGuard {
     fn drop(&mut self) {
         EXPORT_OBSERVER.with(|slot| *slot.borrow_mut() = None);
-        EXPORT_SDR_READBACK.with(|capture| capture.set(false));
+        EXPORT_SDR_READBACK.with(|capture| capture.set(None));
         EXPORT_HDR_READBACK.with(|capture| capture.set(false));
         EXPORT_FAILURE_FRAME.with(|frame| frame.set(None));
     }
@@ -131,7 +139,7 @@ pub(crate) fn export_test_gpu_abort_requested() -> bool {
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 fn export_sdr_readback_requested(frame_idx: u32) -> bool {
-    frame_idx == 0 && EXPORT_SDR_READBACK.with(Cell::get)
+    EXPORT_SDR_READBACK.with(Cell::get) == Some(frame_idx)
 }
 
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]

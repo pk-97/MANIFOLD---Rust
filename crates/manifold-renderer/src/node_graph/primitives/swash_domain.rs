@@ -342,6 +342,10 @@ impl Primitive for SwashDomain {
         self.coupled = enabled;
     }
 
+    fn clear_state(&mut self) {
+        self.clock.restart();
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A physics sample reads authored inputs only; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {

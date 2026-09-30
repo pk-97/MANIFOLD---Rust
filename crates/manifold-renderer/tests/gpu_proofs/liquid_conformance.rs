@@ -1198,6 +1198,31 @@ fn liquid_reset_starts_a_new_epoch() {
                 reset.get("simulation_time")
             );
             assert!(resumed.get("simulation_time") > reset.get("simulation_time"), "{}: the new epoch does not run", row.type_id);
+
+            // The runtime's state reset (export start, resize) restarts the
+            // same way while the transport runs on.
+            let device = Arc::clone(&run.device);
+            run.runtime.reset_state(&device);
+            let cleared = run.steps(1);
+            eprintln!(
+                "liquid_reset_starts_a_new_epoch {} {fixture:?}: after reset_state identity {}, epoch {}, water time {:.4} s",
+                row.type_id,
+                cleared.get("identity_b"),
+                cleared.get("epoch"),
+                cleared.get("simulation_time")
+            );
+            if resumed.get("identity_b") != 0.0 {
+                assert_ne!(cleared.get("identity_b"), resumed.get("identity_b"), "{}: reset_state kept the frame identity", row.type_id);
+            }
+            if !resumed.get("epoch").is_nan() {
+                assert_eq!(cleared.get("epoch"), resumed.get("epoch") + 1.0, "{}: reset_state did not count one epoch", row.type_id);
+            }
+            assert!(
+                f64::from(cleared.get("simulation_time")) <= TICK + 1e-6,
+                "{}: reset_state did not restart the water time ({} s)",
+                row.type_id,
+                cleared.get("simulation_time")
+            );
         }
     }
 }

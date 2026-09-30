@@ -817,8 +817,11 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         }
         smoke.runtime.clear_state();
         smoke.frame(dt, false);
-        let cleared = smoke.particles();
-        println!("SMOKE {tag} transport: clear_state mid-run, max |Δx| against the first frame {:.3e} m", max_diff(&first, &cleared));
+        let cleared = max_diff(&first, &smoke.particles());
+        println!("SMOKE {tag} transport: clear_state mid-run, max |Δx| against the first frame {cleared:.3e} m");
+        if cleared > 0.0 {
+            smoke.critical.push(format!("clear_state mid-run left particles {cleared:.3e} m from the fill"));
+        }
     }
     println!("SMOKE {tag} critical: {:?}", smoke.critical);
     assert!(smoke.critical.is_empty(), "CRITICAL at {tag}: {:?}", smoke.critical);
