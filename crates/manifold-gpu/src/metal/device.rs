@@ -147,6 +147,11 @@ pub struct GpuDevice {
     /// Eliminates repeated WGSL→MSL→Metal compilation for the same shader.
     compute_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuComputePipeline>>,
     render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
+    /// FFT plans (compiled MPSGraph executables) by what they transform.
+    /// Code is device-global (COMPILE_CONTRACT_DESIGN D3): every FFT node
+    /// that asks for a shape shares one compile. Locked only on a node's
+    /// shape change, never per frame.
+    fft_cache: std::sync::Mutex<std::collections::HashMap<super::fft::FftPlanKey, Arc<super::fft::GpuFft>>>,
     /// On-disk MSL cache — skips WGSL→naga→SPIR-V→spirv-opt→SPIRV-Cross on hit.
     msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
     /// Pre-compiled compute clear pipelines per texture format.
@@ -216,6 +221,7 @@ impl GpuDevice {
             archive: std::sync::Mutex::new(None),
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            fft_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             msl_cache: std::sync::Mutex::new(None),
             clear_pipelines: std::sync::OnceLock::new(),
             rt_pipelines: std::sync::OnceLock::new(),
@@ -633,6 +639,28 @@ impl GpuDevice {
     /// (e.g. BUG-037's `RenderScene::prewarm_pipelines`).
     pub fn render_pipeline_cache_len(&self) -> usize {
         self.render_cache.lock().unwrap().len()
+    }
+
+    /// The FFT plan for `key`, compiled on the first ask and shared after.
+    /// A miss is an MPSGraph compile on the calling thread, about 1.4 ms on
+    /// an M4 Max at 64³ and 128³, and counts as a pipeline cold touch.
+    pub fn fft_plan(&self, key: super::fft::FftPlanKey) -> Arc<super::fft::GpuFft> {
+        if let Some(plan) = self.fft_cache.lock().unwrap().get(&key) {
+            return Arc::clone(plan);
+        }
+        record_cold_touch(ColdTouchKind::PipelineCompile);
+        if pipeline_compile_log_enabled() {
+            eprintln!("[pipeline-compile] fft plan {key:?}");
+        }
+        // Compiled outside the lock; a racing compile of the same key keeps
+        // the first plan stored.
+        let plan = Arc::new(key.build(self));
+        Arc::clone(self.fft_cache.lock().unwrap().entry(key).or_insert(plan))
+    }
+
+    /// Distinct FFT plans compiled on this device.
+    pub fn fft_plan_cache_len(&self) -> usize {
+        self.fft_cache.lock().unwrap().len()
     }
 
     /// Create a compute pipeline from WGSL source (full f32 precision).

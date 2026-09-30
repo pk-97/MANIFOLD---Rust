@@ -329,23 +329,32 @@ impl CapacityExpr {
     /// [`Self::eval`] with the fused node's params for `Param` leaves.
     /// `None` when a param is missing, not a Float, or not finite.
     pub fn eval_with(&self, input_capacities: &[(&str, u32)], params: &ParamValues) -> Option<u32> {
-        let all = |v: &[CapacityExpr]| -> Option<Vec<u32>> {
-            v.iter().map(|e| e.eval_with(input_capacities, params)).collect()
-        };
-        match self {
-            CapacityExpr::Slot(n) => {
+        self.eval_by(
+            &|n| {
                 let name = format!("src_{n}");
                 input_capacities.iter().find(|(p, _)| *p == name).map(|(_, c)| *c)
-            }
-            CapacityExpr::Mul(f, x) => x.eval_with(input_capacities, params)?.checked_mul(*f),
-            CapacityExpr::Min(v) => all(v)?.into_iter().min(),
-            CapacityExpr::Param(field) => match params.get(field.as_str()) {
-                Some(ParamValue::Float(value)) if value.is_finite() => {
-                    let rounded = value.round_ties_even().max(0.0);
-                    (rounded <= u32::MAX as f32).then_some(rounded as u32)
-                }
+            },
+            &|field| match params.get(field) {
+                Some(ParamValue::Float(value)) => Some(*value),
                 _ => None,
             },
+        )
+    }
+
+    /// Evaluate with a slot's length from `slot` and a param's value from
+    /// `param`: the same arithmetic as the WGSL count anchor. `None` when a
+    /// leaf has no value, a param is not finite, or a product overflows.
+    pub fn eval_by(&self, slot: &dyn Fn(usize) -> Option<u32>, param: &dyn Fn(&str) -> Option<f32>) -> Option<u32> {
+        let all = |v: &[CapacityExpr]| -> Option<Vec<u32>> { v.iter().map(|e| e.eval_by(slot, param)).collect() };
+        match self {
+            CapacityExpr::Slot(n) => slot(*n),
+            CapacityExpr::Mul(f, x) => x.eval_by(slot, param)?.checked_mul(*f),
+            CapacityExpr::Min(v) => all(v)?.into_iter().min(),
+            CapacityExpr::Param(field) => {
+                let value = param(field).filter(|v| v.is_finite())?;
+                let rounded = value.round_ties_even().max(0.0);
+                (rounded <= u32::MAX as f32).then_some(rounded as u32)
+            }
             CapacityExpr::Product(v) => all(v)?.into_iter().try_fold(1u32, u32::checked_mul),
         }
     }

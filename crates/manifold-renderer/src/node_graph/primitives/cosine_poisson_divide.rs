@@ -7,7 +7,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cosine_spectrum::lattice_nodes;
+use super::cosine_spectrum::live_lattice;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -31,9 +31,12 @@ struct DivideUniforms {
 crate::primitive! {
     name: CosinePoissonDivide,
     type_id: "node.cosine_poisson_divide",
-    purpose: "Divide each 3D cosine-transform coefficient (node.cosine_spectrum layout) by the eigenvalue of the cell-centred 7-point Laplacian with walls on every face, −4 Σ sin²(π k / 2N) / h². Between a forward and an inverse cosine transform this solves ∇²p = f exactly; the constant mode is zeroed, so f's mean is dropped and p has zero mean.",
+    purpose: "Divide each 3D cosine-transform coefficient (node.cosine_spectrum layout) by the eigenvalue of the cell-centred 7-point Laplacian with walls on every face, −4 Σ sin²(π k / 2N) / h². Between a forward and an inverse cosine transform this solves ∇²p = f exactly; the constant mode is zeroed, so f's mean is dropped and p has zero mean. Wired lengths run a smaller lattice in arrays sized for the params'.",
     inputs: {
         values: Array(f32) required,
+        nodes_x: ScalarF32 optional,
+        nodes_y: ScalarF32 optional,
+        nodes_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
@@ -62,7 +65,7 @@ impl Primitive for CosinePoissonDivide {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(nodes) = lattice_nodes(ctx.params) else {
+        let Some(nodes) = live_lattice(ctx) else {
             ctx.error("Cosine Poisson Divide: every length must be even, 2 to 1024".to_string());
             return;
         };
