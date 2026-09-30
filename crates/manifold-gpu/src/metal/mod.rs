@@ -34,6 +34,8 @@ mod types;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod pipeline_cache_tests;
+#[cfg(test)]
+mod workgroup_zeroing_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
