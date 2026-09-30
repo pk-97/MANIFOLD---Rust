@@ -81,6 +81,9 @@ pub struct GpuProfiledSpan {
     /// The dispatch/pass debug label.
     pub label: String,
     pub kind: GpuWorkKind,
+    /// The dispatched pipeline's static threadgroup (WGSL `var<workgroup>`)
+    /// memory in bytes; 0 for every non-compute span.
+    pub threadgroup_bytes: u32,
     /// GPU start time relative to the frame's first sample, milliseconds.
     pub start_ms: f64,
     /// GPU time spent in this span, milliseconds.
@@ -114,6 +117,7 @@ pub(crate) struct PendingSpan {
     pub(crate) tag: String,
     pub(crate) label: String,
     pub(crate) kind: GpuWorkKind,
+    pub(crate) threadgroup_bytes: u32,
 }
 
 /// Encoder-side profiling state. Lives on [`GpuEncoder`] while a frame is
@@ -130,7 +134,12 @@ pub(crate) struct ProfileState {
 
 impl ProfileState {
     /// Reserve the next span's sample-index pair, or `None` when full.
-    pub(crate) fn reserve(&mut self, label: &str, kind: GpuWorkKind) -> Option<(usize, usize)> {
+    pub(crate) fn reserve(
+        &mut self,
+        label: &str,
+        kind: GpuWorkKind,
+        threadgroup_bytes: u32,
+    ) -> Option<(usize, usize)> {
         let idx = self.spans.len() * 2;
         if idx + 1 >= self.sampler.capacity {
             self.overflow += 1;
@@ -140,6 +149,7 @@ impl ProfileState {
             tag: self.tag.clone(),
             label: label.to_string(),
             kind,
+            threadgroup_bytes,
         });
         Some((idx, idx + 1))
     }
@@ -308,6 +318,7 @@ pub(crate) fn resolve(
             tag: span.tag.clone(),
             label: span.label.clone(),
             kind: span.kind,
+            threadgroup_bytes: span.threadgroup_bytes,
             start_ms: (start.saturating_sub(origin)) as f64 * ns_per_gpu_tick / 1.0e6,
             millis: (end - start) as f64 * ns_per_gpu_tick / 1.0e6,
         });
