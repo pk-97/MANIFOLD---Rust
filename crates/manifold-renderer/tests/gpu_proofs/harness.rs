@@ -146,11 +146,12 @@ pub fn assert_no_shadowed_def_params(
 pub fn capture_rt_channels(
     render_one_armed_frame: impl FnOnce(),
 ) -> Vec<manifold_renderer::node_graph::primitives::RtCaptureSlot> {
-    use manifold_renderer::node_graph::primitives::{RT_CAPTURE_ARM, RT_CAPTURE_QUEUE};
-    RT_CAPTURE_QUEUE.lock().expect("capture queue").clear();
-    RT_CAPTURE_ARM.store(true, std::sync::atomic::Ordering::Relaxed);
+    use manifold_renderer::node_graph::primitives::{arm_rt_capture, disarm_rt_capture, take_rt_captures};
+    take_rt_captures();
+    arm_rt_capture(false);
     render_one_armed_frame();
-    RT_CAPTURE_QUEUE.lock().expect("capture queue").drain(..).collect()
+    disarm_rt_capture();
+    take_rt_captures()
 }
 
 /// Anti-vacuity guard: fail unless the RT block actually ran.
@@ -456,6 +457,50 @@ pub fn retry_on_gpu_commit_error<T>(mut f: impl FnMut() -> T) -> T {
         std::panic::resume_unwind(first_error.take().unwrap_or(payload));
     }
     unreachable!("the loop returns or resumes on every iteration")
+}
+
+/// How long a test waits on a runtime's background work (file decode, mesh
+/// publish, collider build, RT accel build) before calling it hung. It tells a
+/// hang from a loaded machine and is never a speed claim: under the full
+/// parallel binary a cold DamagedHelmet import took 44 s (BUG-ca67, RT proofs
+/// time out the GPU).
+pub const BACKGROUND_HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Paces a render loop that waits on a runtime's background work. A frame
+/// rendered while work is in flight is not settled: it must not count toward a
+/// frame budget or a stability window. The wait is bounded only by
+/// [`BACKGROUND_HANG_GUARD`], so load makes the test slower, not red.
+pub struct BackgroundWait {
+    label: String,
+    started: std::time::Instant,
+}
+
+impl BackgroundWait {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self { label: label.into(), started: std::time::Instant::now() }
+    }
+
+    /// Call once per rendered frame. True while `runtime` has background work
+    /// in flight, after yielding to its worker threads.
+    pub fn pending(&self, runtime: &manifold_renderer::preset_runtime::PresetRuntime) -> bool {
+        let pending = runtime.io_pending() || runtime.warmup_pending();
+        if pending {
+            self.hold();
+        }
+        pending
+    }
+
+    /// Yield to the worker threads once. For loops whose readiness test is
+    /// more than [`Self::pending`], such as a frame status.
+    pub fn hold(&self) {
+        assert!(
+            self.started.elapsed() < BACKGROUND_HANG_GUARD,
+            "{}: background work still pending after {:?}, treating it as hung",
+            self.label,
+            self.started.elapsed()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
 }
 
 /// Best-effort human-readable message for a panic payload. `panic!` produces

@@ -5,6 +5,12 @@
 //! A boundary that names a clock owner may, offline, have the executor
 //! commit, wait for the GPU and run the owner's host step between two
 //! iterations; nothing else in a region ever commits or waits.
+//!
+//! An inner region (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D10) runs through
+//! this same driver, one level down, each time its outer body reaches it:
+//! its boundary evaluates once per outer iteration, then its body its own
+//! count times with its own scalars. The compiler never gives an inner
+//! region a clock, so host syncs fall only between outer iterations.
 
 use super::{Executor, FrameTally, StepEnv, StepFlow, StepPass, resolve_dims};
 use crate::gpu_encoder::GpuEncoder;
@@ -13,7 +19,7 @@ use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::physics::offline_simulation;
 use crate::node_graph::state_store::StateStore;
-use crate::node_graph::substeps::SubstepRegion;
+use crate::node_graph::substeps::{MAX_REGION_DEPTH, SubstepRegion};
 
 /// Iterations one region may run in one frame. The boundary owns the count
 /// (the MPM rule caps it at 128 substeps per tick); this only stops a
@@ -23,25 +29,28 @@ pub(crate) const MAX_REGION_ITERATIONS: u32 = 4096;
 impl Executor {
     /// Run one contracted region. Region resources are held for the whole
     /// repeat — no body step carries a `free_after` for them — and released
-    /// here when it ends.
+    /// here when it ends. `pass` is the pass the boundary evaluates under:
+    /// the frame pass at the top level, the enclosing iteration inside an
+    /// outer body. `depth` is 0 at the top level.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run_substep_region(
         &mut self,
         graph: &mut Graph,
         plan: &ExecutionPlan,
         region: &SubstepRegion,
+        pass: StepPass,
+        depth: usize,
         env: StepEnv<'_>,
         tally: &mut FrameTally,
         gpu: &mut Option<&mut GpuEncoder<'_>>,
         state: &mut Option<&mut StateStore>,
     ) -> StepFlow {
+        debug_assert!(depth < MAX_REGION_DEPTH, "the compiler nests regions at most {MAX_REGION_DEPTH} deep");
         let boundary_idx = region.steps[0];
         if !self.live_steps[boundary_idx] {
             return StepFlow::Next;
         }
-        if self.run_step(graph, plan, boundary_idx, StepPass::Frame, env, tally, gpu, state)
-            == StepFlow::Abort
-        {
+        if self.run_step(graph, plan, boundary_idx, pass, env, tally, gpu, state) == StepFlow::Abort {
             return StepFlow::Abort;
         }
         let ports = graph
@@ -49,17 +58,17 @@ impl Executor {
             .and_then(|inst| inst.node.substep_boundary())
             .expect("a compiled region's boundary declares its ports");
         let boundary_step = &plan.steps()[boundary_idx];
-        self.substep_scalar_slots.clear();
+        self.substep_scalar_slots[depth].clear();
         for name in ports.iteration_scalars {
             let slot = boundary_step
                 .outputs
                 .iter()
                 .find(|(port, _)| port == name)
                 .and_then(|&(_, resource)| self.backend.slot_for(resource));
-            self.substep_scalar_slots.push(slot);
+            self.substep_scalar_slots[depth].push(slot);
         }
-        self.substep_scalar_values.clear();
-        self.substep_scalar_values.resize(ports.iteration_scalars.len(), 0.0);
+        self.substep_scalar_values[depth].clear();
+        self.substep_scalar_values[depth].resize(ports.iteration_scalars.len(), 0.0);
 
         let mut iteration = 0u32;
         loop {
@@ -67,7 +76,7 @@ impl Executor {
                 .get_node_mut(region.boundary)
                 .expect("boundary exists")
                 .node
-                .substep_iteration(iteration, &mut self.substep_scalar_values);
+                .substep_iteration(iteration, &mut self.substep_scalar_values[depth]);
             if !more {
                 break;
             }
@@ -99,23 +108,28 @@ impl Executor {
                     );
                 }
             }
-            for (slot, &value) in self.substep_scalar_slots.iter().zip(&self.substep_scalar_values) {
+            for (slot, &value) in self.substep_scalar_slots[depth]
+                .iter()
+                .zip(&self.substep_scalar_values[depth])
+            {
                 if let Some(slot) = *slot {
                     self.backend.set_scalar(slot, ParamValue::Float(value));
                 }
             }
-            for &body_idx in &region.steps[1..] {
-                if self.run_step(
-                    graph,
-                    plan,
-                    body_idx,
-                    StepPass::Iteration(iteration),
-                    env,
-                    tally,
-                    gpu,
-                    state,
-                ) == StepFlow::Abort
-                {
+            let body_pass = StepPass::Repeat {
+                first: pass.first_visit() && iteration == 0,
+            };
+            let mut position = 1;
+            while position < region.steps.len() {
+                let step_idx = region.steps[position];
+                let flow = if let Some(inner) = region.inner.iter().find(|inner| inner.steps[0] == step_idx) {
+                    position += inner.steps.len();
+                    self.run_substep_region(graph, plan, inner, body_pass, depth + 1, env, tally, gpu, state)
+                } else {
+                    position += 1;
+                    self.run_step(graph, plan, step_idx, body_pass, env, tally, gpu, state)
+                };
+                if flow == StepFlow::Abort {
                     return StepFlow::Abort;
                 }
             }

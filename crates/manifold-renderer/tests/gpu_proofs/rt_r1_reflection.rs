@@ -399,6 +399,9 @@ fn reflection_of_empty_scene_equals_env_only() {
 /// LEAD: no expectation math needed here — the 20ms/hitch assertion is the
 /// standing budget from P1's gate; the measured `trace_ms` delta (reflections
 /// on vs off) is reported in the phase report.
+///
+/// Wall-clock, so `rt-perf-proofs` only, like the region-probe gate.
+#[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn rt_reflections_dispatch_never_stalls_past_20ms() {
     let h = harness::shared();

@@ -64,8 +64,8 @@ fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
     let _live = PhysicsStepScope::for_render(false);
     // Preparation at zero precedes the first native tick that creates water.
     for frame in 0..=1 {
-        let mut ready = false;
-        for _ in 0..1000 {
+        let wait = crate::harness::BackgroundWait::new(format!("water frame {frame}"));
+        loop {
             let mut encoder = harness.device.create_encoder("dam-break-initial-frame");
             let status = {
                 let mut gpu = RendererGpuEncoder::new(&mut encoder, &harness.device);
@@ -85,12 +85,10 @@ fn migrated_dam_break_publishes_progress_while_live_preview_is_behind() {
                         .iter()
                         .any(|(port, value)| port == "vertex_count" && *value > 0.0))
             {
-                ready = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            wait.hold();
         }
-        assert!(ready, "water frame {frame} did not initialize");
     }
     let (_, outputs) = runtime.preview_scalar_io();
     let initial_time = outputs
