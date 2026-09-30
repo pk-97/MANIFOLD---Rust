@@ -79,6 +79,30 @@
     }
   },
   {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "camera — Camera"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.1_orbit"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
     "ScrollTo": {
       "target": {
         "Query": {
@@ -200,6 +224,67 @@
       "selector": {
         "Query": {
           "name": "scene_setup.properties.physics"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  "Snapshot",
+  {
+    "Pointer": {
+      "target": {
+        "Query": {
+          "text": "📷 Camera"
+        }
+      },
+      "gesture": {
+        "Click": {
+          "modifiers": {}
+        }
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "camera — Camera"
+        }
+      },
+      "check": "Exists"
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Domain — Simulation"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "text": "Fluid"
+        }
+      },
+      "check": {
+        "Count": 0
+      }
+    }
+  },
+  {
+    "Assert": {
+      "selector": {
+        "Query": {
+          "name": "param_row.1_domain_size"
         }
       },
       "check": {

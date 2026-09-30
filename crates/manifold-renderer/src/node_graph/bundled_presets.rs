@@ -244,6 +244,49 @@ mod tests {
         }
     }
 
+    /// Scene panels and liquid domains address nodes by stable node id, so
+    /// every node a scene can hold carries one, unique across the whole
+    /// document. Doc ids repeat across group levels and name nothing outside
+    /// their level. Presets that are not scenes may still lean on the handle
+    /// fallback.
+    #[test]
+    fn every_bundled_scene_node_id_is_unique_across_the_document() {
+        fn collect<'a>(
+            nodes: &'a [manifold_core::effect_graph_def::EffectGraphNode],
+            seen: &mut ahash::AHashSet<&'a str>,
+            preset: &str,
+            faults: &mut Vec<String>,
+        ) {
+            for node in nodes {
+                // A group's port stubs carry no controls.
+                let port_stub = matches!(node.type_id.as_str(), "system.group_input" | "system.group_output");
+                if node.node_id.is_empty() {
+                    if port_stub { continue; }
+                    faults.push(format!("{preset}: node {} ({}) has no stable id", node.id, node.type_id));
+                } else if !seen.insert(node.node_id.as_str()) {
+                    faults.push(format!("{preset}: stable id {} repeats", node.node_id.as_str()));
+                }
+                if let Some(group) = node.group.as_deref() {
+                    collect(&group.nodes, seen, preset, faults);
+                }
+            }
+        }
+        let mut scenes = 0;
+        let mut faults = Vec::new();
+        for kind in [PresetKind::Generator, PresetKind::SceneModifier] {
+            for type_id in bundled_preset_type_ids(kind) {
+                let def = bundled_preset_def(&type_id).expect("registered preset has a parsed def");
+                if kind == PresetKind::Generator && crate::node_graph::scene_vm::SceneVm::from_def(def).is_none() {
+                    continue;
+                }
+                scenes += 1;
+                collect(&def.nodes, &mut ahash::AHashSet::default(), type_id.as_str(), &mut faults);
+            }
+        }
+        assert!(scenes > 20, "only {scenes} scene documents checked");
+        assert!(faults.is_empty(), "{}", faults.join("\n"));
+    }
+
     #[test]
     fn bundled_scene_modifier_catalog_enumerates_playable_stock_recipes() {
         let ids: Vec<String> = bundled_preset_type_ids(PresetKind::SceneModifier)

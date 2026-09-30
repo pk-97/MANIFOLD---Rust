@@ -456,9 +456,10 @@ pub struct ObjectKnownRow {
     pub fluid_roles: Result<Vec<FluidRoleRow>, String>,
 }
 
+/// Which rows of the matched sections a selection shows: all of them, or
+/// exactly the parameter ids the app resolved as owned by the selection.
 enum PropertyOwners<'a> {
     All,
-    Nodes(&'a [u32]),
     Parameters(&'a [String]),
 }
 
@@ -466,8 +467,6 @@ impl PropertyOwners<'_> {
     fn contains(&self, id: &str) -> bool {
         match self {
             Self::All => true,
-            Self::Nodes(ids) => id.split('_').next().and_then(|s| s.parse::<u32>().ok())
-                .is_some_and(|id| ids.contains(&id)),
             Self::Parameters(ids) => ids.iter().any(|owned| owned == id),
         }
     }
@@ -606,7 +605,8 @@ pub enum CameraRowVm {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FluidDomainOption {
-    pub node_doc_id: u32,
+    /// The domain's stable id: document ids repeat across group levels.
+    pub node: FoundationNodeId,
     pub name: String,
 }
 
@@ -654,10 +654,11 @@ pub struct SceneSetupVm {
     /// P2 slice 2a: the REAL P1 section string(s) covering the camera family
     /// (the camera atom + its lens, if wired) — see `ObjectKnownRow::sections`.
     pub camera_sections: Vec<String>,
-    /// Custom/loop cameras expose only their shared lens and cinematic tail.
-    /// Ownership disambiguates rows sharing the importer's "Camera" section.
-    /// None preserves the full section for ordinary camera sources.
-    pub camera_param_doc_ids: Option<Vec<u32>>,
+    /// Custom/loop cameras expose only their shared lens and cinematic tail:
+    /// the exact parameter ids those nodes own, since they share the
+    /// importer's "Camera" section with the camera atom. None shows the full
+    /// sections for ordinary camera sources.
+    pub camera_parameter_ids: Option<Vec<String>>,
     /// P2 slice 2a: the REAL P1 section string(s) covering World (the
     /// environment/bake node + the atmosphere/fog node, whichever are
     /// wired) — see `ObjectKnownRow::sections`.
@@ -2235,18 +2236,7 @@ impl ScenePanel {
         cy: f32,
         sections: &[String],
     ) -> f32 {
-        self.build_filtered_properties_owned(tree, inner_x, inner_w, cy, (sections, None))
-    }
-
-    fn build_filtered_properties_owned(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        owner: (&[String], Option<&[u32]>),
-    ) -> f32 {
-        self.build_filtered_properties_excluding(tree, inner_x, inner_w, cy, (owner.0, owner.1, &[]))
+        self.build_filtered_properties_with_ownership(tree, inner_x, inner_w, cy, (sections, PropertyOwners::All, &[]))
     }
 
     fn build_filtered_properties_parameter_ids(
@@ -2263,23 +2253,6 @@ impl ScenePanel {
             inner_w,
             cy,
             (sections, PropertyOwners::Parameters(parameter_ids), excluded_ids),
-        )
-    }
-
-    fn build_filtered_properties_excluding(
-        &mut self,
-        tree: &mut UITree,
-        inner_x: f32,
-        inner_w: f32,
-        cy: f32,
-        (sections, owner_ids, excluded_ids): (&[String], Option<&[u32]>, &[String]),
-    ) -> f32 {
-        self.build_filtered_properties_with_ownership(
-            tree,
-            inner_x,
-            inner_w,
-            cy,
-            (sections, owner_ids.map_or(PropertyOwners::All, PropertyOwners::Nodes), excluded_ids),
         )
     }
 

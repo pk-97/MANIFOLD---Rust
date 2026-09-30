@@ -1656,10 +1656,8 @@ impl Application {
             let mut scene = viewport_def
                 .as_ref()
                 .and_then(manifold_renderer::node_graph::scene_vm::SceneVm::from_def);
-            if let Some(scene) = scene.as_mut()
-                && let Some(def) = viewport_def.as_ref()
-            {
-                crate::fluid_domain_edit::apply_runtime_domains(scene, def, &ws.viewport_fluid_domains);
+            if let Some(scene) = scene.as_mut() {
+                crate::fluid_domain_edit::apply_runtime_domains(scene, &ws.viewport_fluid_domains);
             }
             let draft = ws.viewport_gizmo_drag.as_ref()
                 .and_then(|drag| drag.fluid_domain.as_ref())

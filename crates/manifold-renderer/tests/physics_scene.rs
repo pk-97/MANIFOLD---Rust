@@ -14,9 +14,7 @@ use manifold_core::effect_graph_def::{
 use manifold_core::effects::ParamConvert;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures;
-use manifold_renderer::node_graph::scene_vm::{
-    MaterialVm, SceneObjectVm, SceneVm, physics_body_doc_id, physics_world_doc_ids,
-};
+use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
 use manifold_renderer::preset_runtime::PresetRuntime;
 
 const PHYSICS_SOLIDS_JSON: &str = include_str!("../assets/generator-presets/PhysicsSolids.json");
@@ -216,23 +214,21 @@ fn physics_solids_compiles_and_scene_objects_resolve_editable_sources() {
         assert!(row.modifier_chain_parseable);
     }
 
-    assert_eq!(
-        physics_world_doc_ids(&def).collect::<Vec<_>>(),
-        vec![40],
-        "all six bodies share world node 40"
+    let world = def.nodes.iter().find(|node| node.id == 40).expect("world node 40");
+    assert_eq!(world.type_id, "node.physics_world");
+    assert!(
+        vm.world_controls.contains(&world.node_id),
+        "all six bodies share world node 40, and World owns its controls"
     );
-    for (object_id, body_id) in [
-        (104, 101),
-        (114, 111),
-        (124, 121),
-        (134, 131),
-        (144, 141),
-        (154, 151),
-    ] {
+    for (object, body_id) in vm.objects.iter().zip([101, 111, 121, 131, 141, 151]) {
+        let SceneObjectVm::Known(row) = object else { unreachable!("checked above") };
+        let physics = row.physics.as_ref().expect("an authored rigid body");
+        let body = def.nodes.iter().find(|node| node.id == body_id).unwrap();
         assert_eq!(
-            physics_body_doc_id(&def, object_id),
-            Some(body_id),
-            "object {object_id} must resolve its authored rigid body"
+            (physics.body_node_id, &physics.body),
+            (body_id, &body.node_id),
+            "object {} must resolve its authored rigid body",
+            row.object_node_id
         );
     }
 }

@@ -41,7 +41,13 @@
     ],
     "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls"],
     "crates/manifold-renderer/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls"],
+    "crates/manifold-renderer/src/node_graph/scene_vm.rs": [
+      "scene-item-ownership",
+      "scene-liquid-recognition"
+    ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
+      "scene-item-ownership",
+      "scene-liquid-recognition",
       "scene-fluid-dam-break-controls",
       "scene-setup",
       "scene-card",
@@ -61,6 +67,8 @@
       "scene-forces-controls"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
+      "scene-item-ownership",
+      "scene-liquid-recognition",
       "frame-align-lfo",
       "inspector",
       "select-and-inspect",
@@ -144,6 +152,7 @@
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",
     "scene-liquid-recognition": "waterdambreakmatter",
+    "scene-item-ownership": "gltfscene",
     "scene-fluid-role-assignment": "fluidauthoring",
     "scene-physics-duplicate-paused": "physicsscene",
     "scene-physics-controls": "physicsscene",

@@ -552,12 +552,12 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
         ProjectAction::SceneSetupAssignFluidRole {
-            layer_id, render_scene_node_id, object_index, domain_node_id, role,
+            layer_id, render_scene_node_id, object_index, domain, role,
         } => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
                 let target = manifold_core::GraphTarget::Generator(layer_id.clone());
                 let domain = project.graph_for_target(&target, Some(&default))
-                    .and_then(|def| super::projection::scene::scene_node_ref_for_doc_id(def, *domain_node_id));
+                    .and_then(|def| manifold_core::SceneNodeRef::locate(def, domain));
                 if let Some(domain) = domain {
                     let command = manifold_editing::commands::graph::AssignSceneFluidRoleCommand::new(
                         target, *render_scene_node_id, *object_index, domain, *role,
@@ -582,10 +582,8 @@ pub(super) fn dispatch_project(
                     super::projection::scene::scene_node_ref_for_doc_id(def, *source_node_id)
                 });
                 let domain = match action {
-                    ProjectAction::SceneSetupRetargetFluidRole { domain_node_id, .. } => {
-                        def.and_then(|def| {
-                            super::projection::scene::scene_node_ref_for_doc_id(def, *domain_node_id)
-                        })
+                    ProjectAction::SceneSetupRetargetFluidRole { domain, .. } => {
+                        def.and_then(|def| manifold_core::SceneNodeRef::locate(def, domain))
                     }
                     _ => None,
                 };
@@ -2108,13 +2106,13 @@ mod tests {
         assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
         let vm = SceneVm::from_def(&added).expect("scene with fluid");
         let row = vm.objects.iter().find_map(|object| match object {
-            SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => Some(row),
+            SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("fluid is a selectable scene object");
-        assert_eq!(row.fluid_node_ids.len(), 4, "surface, domain, role source, and source transform controls");
+        assert_eq!(row.fluid_controls.len(), 4, "surface, domain, role source, and source transform controls");
         assert_eq!(row.fluid_domain.unwrap().size, [4.0; 3]);
-        let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
-            Some(&added), &row.fluid_node_ids,
+        let sections = crate::ui_bridge::projection::scene::sections_for_nodes(
+            Some(&added), &row.fluid_controls,
         );
         assert!(sections.iter().any(|section| section.contains("Simulation")));
         assert!(sections.iter().any(|section| section.contains("Domain")));
@@ -2127,13 +2125,12 @@ mod tests {
         let reloaded_def = effective_def(&reloaded, &layer_id);
         let reloaded_vm = SceneVm::from_def(&reloaded_def).unwrap();
         assert_eq!(reloaded_vm.objects, vm.objects);
-        let reloaded_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
-            Some(&reloaded_def), &row.fluid_node_ids,
+        let reloaded_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
+            Some(&reloaded_def), &row.fluid_controls,
         );
         let metadata = reloaded_def.preset_metadata.as_ref().unwrap();
-        let world_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
-            Some(&reloaded_def),
-            &manifold_renderer::node_graph::scene_vm::physics_world_doc_ids(&reloaded_def).collect::<Vec<_>>(),
+        let world_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
+            Some(&reloaded_def), &reloaded_vm.world_controls,
         );
         let world = reloaded_def.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
         for (param, label, default) in [
@@ -2203,21 +2200,23 @@ mod tests {
 
         fn water(def: &EffectGraphDef) -> SceneObjectKnownRow {
             SceneVm::from_def(def).expect("matter scene").objects.into_iter().find_map(|object| match object {
-                SceneObjectVm::Known(row) if row.liquid_domain_node_id.is_some() => Some(*row),
+                SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(*row),
                 _ => None,
             }).expect("the water is recognised")
         }
         fn assert_water(def: &EffectGraphDef, step: &str) {
             let row = water(def);
-            let matter = def.nodes.iter()
-                .filter_map(|node| node.group.as_deref())
-                .flat_map(|group| &group.nodes)
-                .find(|node| node.type_id == manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID)
-                .expect("the scene keeps its matter domain").id;
-            assert_eq!(row.liquid_domain_node_id, Some(matter), "{step}");
+            let domain = row.liquid_domain.as_ref().unwrap().resolve(def).expect("the domain ref resolves");
+            assert_eq!(domain.type_id, manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "{step}");
             assert!(row.physics.is_none(), "{step}: water carries no rigid body");
-            let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(Some(def), &row.fluid_node_ids);
+            let sections = crate::ui_bridge::projection::scene::sections_for_nodes(Some(def), &row.fluid_controls);
             assert!(sections.iter().any(|section| section.contains("Simulation")), "{step}: the water panel shows its dials");
+            let camera = crate::ui_bridge::projection::scene::sections_for_nodes(
+                Some(def), &SceneVm::from_def(def).unwrap().camera_controls,
+            );
+            assert!(!camera.is_empty(), "{step}: the camera owns its dials");
+            assert!(sections.iter().all(|section| !camera.contains(section)),
+                "{step}: the water panel carries no camera section ({sections:?} vs {camera:?})");
         }
 
         let mut project = Project::default();
@@ -2286,17 +2285,17 @@ mod tests {
         }
         let before = effective_def(&project, &layer_id);
         let vm = SceneVm::from_def(&before).unwrap();
-        let domains = super::super::projection::scene::fluid_domains(&before, &vm);
+        let domains = super::super::projection::scene::fluid_domains(&vm);
         assert_eq!(domains.len(), 1);
         let object = vm.objects.iter().filter_map(|object| match object {
             SceneObjectVm::Known(row) if row.group_node_id.is_some()
-                && row.fluid_node_ids.is_empty() => Some(row),
+                && row.liquid_domain.is_none() => Some(row),
             _ => None,
         }).max_by_key(|row| row.index).unwrap();
         let group_id = object.group_node_id;
         dispatch_project(&ProjectAction::SceneSetupAssignFluidRole {
             layer_id: layer_id.clone(), render_scene_node_id: render_scene_id,
-            object_index: object.index as u32, domain_node_id: domains[0].node_doc_id, role: 1,
+            object_index: object.index as u32, domain: domains[0].node.clone(), role: 1,
         }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
         assert_eq!(effective_def(&project, &layer_id), before, "UI must not edit project state");
         let ContentCommand::ExecuteOnContent(mut command) = rx.try_recv().unwrap()
@@ -2304,12 +2303,12 @@ mod tests {
         command.execute(&mut project);
         assert!(command.was_applied(), "{:?}", command.rejection_reason());
         let after = effective_def(&project, &layer_id);
-        let role_ids = super::super::projection::scene::group_fluid_role_ids(&after, group_id);
-        assert_eq!(role_ids.len(), 1);
+        let role_nodes = super::super::projection::scene::group_fluid_role_nodes(&after, group_id);
+        assert_eq!(role_nodes.len(), 1);
         let group = after.nodes.iter().find(|node| Some(node.id) == group_id)
             .unwrap().group.as_ref().unwrap();
-        let role = group.nodes.iter().find(|node| node.id == role_ids[0]).unwrap();
-        let sections = super::super::projection::scene::sections_for_doc_ids(Some(&after), &role_ids);
+        let role = group.nodes.iter().find(|node| node.node_id == role_nodes[0]).unwrap();
+        let sections = super::super::projection::scene::sections_for_nodes(Some(&after), &role_nodes);
         let metadata = after.preset_metadata.as_ref().unwrap();
         for param in ["enabled", "role", "velocity_y", "friction"] {
             let binding = metadata.bindings.iter().find(|binding| matches!(&binding.target,
@@ -2346,11 +2345,11 @@ mod tests {
         second_fluid.execute(&mut project);
         assert!(second_fluid.was_applied());
         let with_second = effective_def(&project, &layer_id);
-        let domains = super::super::projection::scene::fluid_domains(&with_second, &SceneVm::from_def(&with_second).unwrap());
+        let domains = super::super::projection::scene::fluid_domains(&SceneVm::from_def(&with_second).unwrap());
         assert_eq!(domains.len(), 2);
-        let new_domain = super::super::projection::scene::scene_node_ref_for_doc_id(&with_second, domains[1].node_doc_id).unwrap();
+        let new_domain = manifold_core::SceneNodeRef::locate(&with_second, &domains[1].node).unwrap();
         dispatch_project(&ProjectAction::SceneSetupRetargetFluidRole {
-            layer_id: layer_id.clone(), source_node_id: role.id, domain_node_id: domains[1].node_doc_id,
+            layer_id: layer_id.clone(), source_node_id: role.id, domain: domains[1].node.clone(),
         }, &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
         assert_eq!(effective_def(&project, &layer_id), with_second, "retarget waits for content");
         let ContentCommand::ExecuteOnContent(mut retarget) = rx.try_recv().unwrap()
@@ -2371,7 +2370,7 @@ mod tests {
         remove.execute(&mut project);
         assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
         let removed = effective_def(&project, &layer_id);
-        assert!(super::super::projection::scene::group_fluid_role_ids(&removed, group_id).is_empty());
+        assert!(super::super::projection::scene::group_fluid_role_nodes(&removed, group_id).is_empty());
         remove.undo(&mut project);
         assert_eq!(effective_def(&project, &layer_id), retargeted);
         retarget.undo(&mut project);
@@ -2745,38 +2744,25 @@ mod tests {
         let def = effective_def(&project, &layer_id);
         let vm = manifold_renderer::node_graph::scene_vm::SceneVm::from_def(&def)
             .expect("PhysicsSolids scene VM after duplicate");
-        let transform_id = vm
-            .objects
-            .iter()
-            .find_map(|object| match object {
-                manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
-                    if row.index == duplicate_index =>
-                {
-                    row.transform
-                        .as_ref()
-                        .map(|transform| transform.node_doc_id)
-                }
-                _ => None,
-            })
-            .expect("physics duplicate has a transform row");
-        let sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
+        let transform_of = |index: usize| vm.objects.iter().find_map(|object| match object {
+            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row) if row.index == index => {
+                row.transform.clone()
+            }
+            _ => None,
+        });
+        let transform = transform_of(duplicate_index).expect("physics duplicate has a transform row");
+        let transform_id = transform.node_doc_id;
+        let sections = crate::ui_bridge::projection::scene::sections_for_nodes(
             Some(&def),
-            &[transform_id],
+            std::slice::from_ref(&transform.node),
         );
         assert!(
             sections.iter().any(|section| section.contains("Transform")),
             "duplicate transform sections: {sections:?}"
         );
-        let source_transform_id = vm.objects.iter().find_map(|object| match object {
-            manifold_renderer::node_graph::scene_vm::SceneObjectVm::Known(row)
-                if row.index == source_index as usize =>
-            {
-                row.transform.as_ref().map(|transform| transform.node_doc_id)
-            }
-            _ => None,
-        }).expect("source has a transform row");
-        let source_sections = crate::ui_bridge::projection::scene::sections_for_doc_ids(
-            Some(&def), &[source_transform_id],
+        let source_transform = transform_of(source_index as usize).expect("source has a transform row");
+        let source_sections = crate::ui_bridge::projection::scene::sections_for_nodes(
+            Some(&def), std::slice::from_ref(&source_transform.node),
         );
         assert!(sections.iter().all(|section| !source_sections.contains(section)),
             "duplicate properties must not include source sections");
