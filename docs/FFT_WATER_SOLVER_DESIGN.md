@@ -89,10 +89,13 @@ Per step, in order. A number in brackets is the measured MLX cost at 64³ per st
 5. Setup once per step: compact the collar (D6); smooth the water indicator; per entry and view, the sheet index and the share (D4, D11).
 6. Krylov region, `passes` iterations. Each pass: charts helper (gather-sum per slot, batched 2D FFT, symbol scale, inverse, spread back plus the local term) → box solve (build the source grid from λ, DCT-II 3D, divide by the Laplacian eigenvalues, inverse, gather at the collar) → Arnoldi against the stored basis → Givens update. [P1 on the GPU: 0.37 ms per pass at 64³]
 7. Back-substitute the small triangular system, form λ, then p over the water cells.
-8. Subtract the pressure gradient on faces touching water; extrapolate one layer into air.
-9. Gather faces to particles (PIC/FLIP), advect by RK3 through the face field, clamp to the box. [6.1 ms]
+8. Subtract the pressure gradient on faces touching water; extrapolate two layers into air.
+9. Density solve on the same collar (setup reused), 8 passes: the right-hand side is `node.density_source`'s crowding target (below). Its gradient is subtracted from the projected faces into a separate `advect` grid, extended two layers.
+10. Gather faces to particles (PIC/FLIP) from the projected faces, advect by RK3 through `advect`, clamp to the box. [6.1 ms]
 
-Memory: the collar capacity is 8n² entries (32,768 at 64³, 131,072 at 128³; the largest Dam Break collars are 18,655 and 94,154). The basis is 25 rows × (capacity + 1) floats at 24 passes: 3.3 MB at 64³, 13.1 MB at 128³. The box fields are a few n³ grids. Nothing scales with the particle count except the particles themselves.
+The density solve exists because particles bunch as FLIP moves them, and a divergence-free velocity field does nothing about it: with no correction the 64³ Dam Break's water sank 22% by frame 300. Each water cell asks for −rate·e, with e = count/8 − 1: two-sided inside the water, spread-only at the surface, where a part-full cell is not sparse. The correction moves particles and never becomes their velocity. Folded into the main solve instead, FLIP kept the push as speed, and the 128³ splash ran p99 6.90 m/s against the engine's 4.73. The share removed per step (rate × step dt) is 1 (`SPREAD_PER_STEP`).
+
+Memory: the collar capacity is 8n² entries (32,768 at 64³, 131,072 at 128³; the largest Dam Break collars are 18,655 and 94,154). The pressure basis is 25 rows × (capacity + 1) floats at 24 passes (3.3 MB at 64³, 13.1 MB at 128³); the density basis is 9 rows. The box fields are a few n³ grids. Nothing scales with the particle count except the particles themselves.
 
 ## 4. Invariants & enforcement
 
@@ -103,7 +106,9 @@ Memory: the collar capacity is 8n² entries (32,768 at 64³, 131,072 at 128³; t
 | I3 | Every per-element atom on the codegen path (D9) | `every_boundary_atom_declares_its_reason` (`freeze/classify.rs:482`) passes: each exempt atom declares `boundary_reason` naming its class; each codegen atom has its `gpu_tests` value proof |
 | I4 | MPM untouched (D1) | `git diff --stat origin/main...HEAD -- docs/GPU_MPM_SOLVER_DESIGN.md $(git ls-tree -r --name-only origin/main -- crates/manifold-renderer/src/node_graph \| rg matter)` is empty |
 | I5 | Water volume is kept | `fft_water_still_pool` proof: particle count constant, fastest particle under 1 mm/s after 2 s at 64³ |
-| I6 | Every buffer covers every dispatch before the GPU sees it | a CPU test per preset and size, the pattern of `fft_water_pressure_arrays_cover_every_dispatch` (`primitives/swash_extent_tests.rs`); dynamic dispatch counts are clamped to capacity on the CPU |
+| I6 | Every buffer covers every dispatch before the GPU sees it | a CPU test per preset and size, the pattern of `fft_water_pressure_arrays_cover_every_dispatch` (`primitives/swash_extent_tests.rs`), over every lattice in its `LATTICES` (16–256); dynamic dispatch counts are clamped to capacity on the CPU |
+| I7 | The density correction moves particles and never becomes velocity | `swash_faces_to_particles_blends_flip_and_moves_by_rk3` feeds three different grids and checks velocity against `faces`/`old` only, position against `advect` only |
+| I8 | The water is not compressed | the race probe's share of particles past 8 per cell, reported beside the meshed volume; the meshed volume measures the surface (it loses thin sheets), this measures the water |
 
 ## 5. Phasing
 
