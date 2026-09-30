@@ -44457,6 +44457,10 @@
         {
           "name": "lifecycle_ms",
           "type": "f32"
+        },
+        {
+          "name": "worker_ms",
+          "type": "f32"
         }
       ],
       "params": [
@@ -44471,7 +44475,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Advance whitewater with FLIP's own lifecycle: spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages and dies as FLIP's native whitewater does. Spawns and the liquid's faces, distance and solid are copied on the GPU each frame with ticks and handed to the lifecycle once that frame finished, so the population trails the water by one frame offline and one or two live. Out come foam, bubbles and spray as particle frames, each particle's radius its fade, with their counts. A new epoch clears everything; ticks 0 holds it. Past Capacity, spawns are thinned evenly and counted.",
+      "purpose": "Advance whitewater with FLIP's own lifecycle: spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages and dies as FLIP's native whitewater does. Spawns and the liquid's faces, distance and solid are copied on the GPU each frame with ticks and handed to the lifecycle's own thread once that frame finished, so the population trails the water by one frame offline and two or three live. Out come foam, bubbles and spray as particle frames, each particle's radius its fade, with their counts. A new epoch clears everything; ticks 0 holds it. Past Capacity, spawns are thinned evenly and counted.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves and ages spray, foam and bubbles the way FLIP's own whitewater does.",

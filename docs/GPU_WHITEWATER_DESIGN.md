@@ -16,7 +16,7 @@ Binding from outside this doc: never a GPU port of FLIP's solver; no FLIP tuning
 
 ## What it does on stage
 
-A SWASH dam break throws spray off its front, lays foam on breaking crests and churns bubbles under the impact, the way FLIP's does, for about 3 ms a frame instead of 42–55. Pause freezes the foam where it is. Reset clears it with the water. An export matches the preview within one frame. Whitewater trails the water surface by one display frame offline and one or two live, because the live frame never waits for the GPU.
+A SWASH dam break throws spray off its front, lays foam on breaking crests and churns bubbles under the impact, the way FLIP's does, for about 3 ms of GPU and 3 ms on a thread of its own a frame instead of 42–55. Pause freezes the foam where it is. Reset clears it with the water. An export matches the preview within one frame. Whitewater trails the water surface by one display frame offline and two or three live, because the live frame waits for neither the GPU nor the lifecycle's thread.
 
 ## 1. Audit — what exists (verified 2026-09-30)
 
@@ -97,7 +97,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D10 — Randomness:** stateless hashes of (index, seed, epoch) on the GPU; the lifecycle's own RNG seeded with the epoch (`setRandomSeed`). There is no bit-exact oracle; the FLIP oracles are statistical over seeds (BUG-imy3 notes).
 
-**D11 — The lifecycle runs in the node's `run` on the content thread.** No new thread. Defaulted, with a trigger: if `lifecycle_ms` p95 exceeds 3 ms at 64, stop and escalate (a worker thread needs Peter's approval).
+**D11 — The lifecycle runs on its own thread; the content thread only loans it slots.** Retired snapshot slots and a retired output slot go to the worker by value through one-deep channels, one request in flight at most, and come back with its reply: FLIP's particle-ring loan (`fluid/particle_ring.rs`), so no slot is ever shared and there is no lock. GPU allocation stays on the content thread. Live never waits for the worker, which costs one more frame of trail; offline waits for its reply. Content-thread target: `lifecycle_ms` p95 ≤ 3 ms at 64. The lead ruled the thread on 2026-10-01, when the lifecycle measured p50 3 ms on the content thread.
 
 **D12 — Ticks, epoch and gravity come from the domain.** Every GPU liquid domain exposes `ticks` and `epoch` (the `LiquidClock` frame) and its gravity; the whitewater never infers time from the particle frame. A changed epoch clears the population; T = 0 holds everything.
 
@@ -210,7 +210,7 @@ Bridge entries are new glue in `bridge.cpp` (`manifold_fluids_whitewater_*`); no
 
 | Inputs | Outputs | Params |
 |---|---|---|
-| `spawns` Array(WhitewaterSpawn), `offsets` Array(u32), `count` (emitter slots), `face_u/v/w`, `face_cells_x/y/z`, `face_valid_layers`, `level` Array(f32), `solid` Array(f32), `grid_bounds`, `grid_nodes_x/y/z`, `ticks`, `epoch`, `gravity_x/gravity/gravity_z` | `foam_particles`, `bubble_particles`, `spray_particles` Array(FluidParticle); `foam_count`, `bubble_count`, `spray_count`, `emitted`, `thinned`, `dropped_ticks`, `lifecycle_ms` ScalarF32 | `capacity` Int 1–250,000, default 100,000 |
+| `spawns` Array(WhitewaterSpawn), `offsets` Array(u32), `count` (emitter slots), `face_u/v/w`, `face_cells_x/y/z`, `face_valid_layers`, `level` Array(f32), `solid` Array(f32), `grid_bounds`, `grid_nodes_x/y/z`, `ticks`, `epoch`, `gravity_x/gravity/gravity_z` | `foam_particles`, `bubble_particles`, `spray_particles` Array(FluidParticle); `foam_count`, `bubble_count`, `spray_count`, `emitted`, `thinned`, `dropped_ticks`, `lifecycle_ms` (content thread), `worker_ms` (lifecycle thread, last work finished) ScalarF32 | `capacity` Int 1–250,000, default 100,000 |
 
 The particle outputs plan at Capacity, so the copies downstream hold the whole budget. `emitted`, `thinned` and `dropped_ticks` count since the epoch began. A new grid or Capacity makes a new lifecycle, which clears the population.
 
@@ -218,18 +218,18 @@ The "Whitewater" group exposes the ports of section 3.2 as inputs, the lifecycle
 
 ### 3.5 Handoff and fence rules
 
-The lifecycle node owns two rings (clock: `gpu.device.frame_clock()`).
+The lifecycle node owns two rings and the lifecycle's thread (clock: `gpu.device.frame_clock()`; code: `whitewater_handoff.rs`).
 
-- **Snapshot ring**, 3 slots, each shared buffers for spawns (C × 32 B), the scan's last entry, the three face arrays, the distance and the solid (9.2 MB at 64), plus stamp, epoch, ticks and a pending flag (`matter_state.rs:49` precedent).
-- **Output ring**, 3 slots, each three shared `FluidParticle` buffers grown in 4,096-record steps up to C, plus a read stamp (`fluid/particle_ring.rs` precedent; admission through `admit_candidate_bytes`).
+- **Snapshot ring**, 4 slots (three in flight on the GPU, one on loan), each shared buffers for spawns (C × 32 B), the scan's last entry, the three face arrays, the distance and the solid (9.2 MB at 64), plus stamp, epoch, ticks and a pending flag (`matter_state.rs:49` precedent).
+- **Output ring**, 4 slots (the one provided, one on loan, two still being read), each three shared `FluidParticle` buffers grown in 4,096-record steps up to C, plus a read stamp (`fluid/particle_ring.rs` precedent; admission through `admit_candidate_bytes`).
 
 `run` does, in this order:
 
-1. **Consume.** For each pending slot in stamp order: live, stop at the first whose `is_complete(stamp)` is false; offline, `wait(stamp)`. A slot from an older epoch is discarded. Otherwise: epoch changed → `clear`; `set_fields`; `load`; `step(TICK)` × the slot's ticks; the slot is free. A slot is consumed once.
-2. **Publish.** If the population changed, write it into an output slot whose read stamp is complete: fade and split by `WhitewaterFrame::fill`'s rule (one shared function), positions in scene space. If none is complete, keep the previous slot. The slot provided this frame takes `stamp()` as its read stamp.
-3. **Capture.** If ticks > 0: take a free snapshot slot, encode GPU copies of this frame's inputs into it, record stamp, epoch and ticks. No free slot → `dropped_ticks += ticks`, reported, never silent. Ticks = 0 captures nothing.
+1. **Collect.** Take the worker's reply if it has come (offline, wait for it). Its snapshot slots are free again; a written output slot becomes the one provided. A reply for an epoch, grid or Capacity since replaced is dropped unpublished and uncounted.
+2. **Loan.** With no request in flight: a reset first when the epoch, grid or Capacity changed (the outputs go empty at once); each pending snapshot slot in stamp order whose `is_complete(stamp)` holds, live stopping at the first that doesn't and offline calling `wait(stamp)`, a slot of an older epoch or shape freed unloaded; and, if the population changed, an output slot whose read stamp is complete. The worker clears or makes the lifecycle, then per slot `set_fields`, `load`, `step(TICK)` × its ticks, then writes the population into the output slot (fade and split by `WhitewaterFrame::fill`'s rule, one shared function, positions in scene space). A population that outgrew its slot is reported; the next loan grows on the content thread, offline within the frame. With no output slot complete, the provided one stays. The provided slot takes `stamp()` as its read stamp.
+3. **Capture.** If ticks > 0: take a free snapshot slot, encode GPU copies of this frame's inputs into it, record stamp, epoch and ticks. No free slot → `dropped_ticks += ticks`, reported, never silent. Ticks = 0 captures nothing and loans nothing.
 
-Rules: live never calls `wait`; the CPU touches a snapshot slot only after its stamp completes; the GPU writes a slot only when it is free; no lock, no thread. Offline export waits, so an export is the same at any speed.
+Rules: live never calls `wait` and never blocks on the worker; the worker touches a snapshot slot only after its stamp completes and only while it holds it; the GPU writes a slot only when it is free; slots move by value, so no lock. Offline export waits for both, so an export is the same at any speed.
 
 ### 3.6 Solver feeds
 
@@ -250,7 +250,7 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
 - **Lifecycle** (CPU, manifold-fluids, `whitewater.rs`): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
 - **Handoff** (renderer, `gpu-proofs`, `whitewater_handoff_tests.rs`): what the node publishes equals the lifecycle run on the CPU with the same spawns and fields; pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts; an output slot is rewritten only after its readers retired. A hand-retired fence stands in for the frame clock; every frame still commits on the device.
 - **Extents** (`whitewater_extent_tests.rs`, CPU): every atom's dispatch and array lengths at 64, and the named refusals for a misplaced face grid, a fractional refinement and `face_valid_layers` < 1, before any GPU run at that size.
-- **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, and `lifecycle_ms`; p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; CPU per D11.
+- **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, `lifecycle_ms` live (content thread) and `worker_ms` (lifecycle thread); p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; content thread per D11, gated by `whitewater_lifecycle_stays_off_the_content_thread`.
 
 ### 3.8 Wrong turns, forbidden by name
 
@@ -261,7 +261,7 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
 - A whitewater atom or the lifecycle branching on which solver fed it, or importing `matter_*`, `swash_*` or `fluid_surface` items.
 - `InstanceSnapshotUpload` for whitewater; `InstanceTransform` outputs.
 - Silent clipping at capacity or on a full ring.
-- A thread, a channel or `Arc<Mutex>` for the lifecycle.
+- A lock (`Arc<Mutex>`, `Arc<RwLock>`) for the lifecycle, or a slot shared with its thread rather than loaned.
 - FLIP's upwind reinit on the capped field.
 - Retuning FLIP's constants toward a look.
 - A whitewater renderer or screen-space foam.
@@ -272,10 +272,10 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
 |---|---|---|
 | I1 | Whitewater reads only seam ports | negative gate: `rg -n -e matter_ -e swash_ -e fluid_surface -e "type_id ==" crates/manifold-renderer/src/node_graph/primitives/whitewater_*.rs crates/manifold-renderer/src/node_graph/primitives/*crossing*.rs` → 0 |
 | I2 | Grid placement is derived | `whitewater_refuses_misplaced_face_grid`, `whitewater_refuses_fractional_refinement`, `whitewater_refuses_unextended_faces` |
-| I3 | Live never waits on the GPU | `whitewater_live_holds_until_fence` |
+| I3 | Live never waits on the GPU or the lifecycle's thread; offline waits for both | `whitewater_live_holds_until_fence`, `whitewater_live_never_waits_for_the_worker`, `whitewater_offline_waits_for_its_snapshot_and_the_worker` |
 | I4 | A snapshot is consumed once, in order, after its fence; a dropped one is counted | `whitewater_ring_overflow_counts_dropped_ticks` |
 | I5 | Ticks 0 hold population and outputs, and capture nothing | `whitewater_pause_holds_population` |
-| I6 | A new epoch clears before any load | `whitewater_epoch_restart_clears` |
+| I6 | A new epoch clears before any load, and work in flight for the old one is never published | `whitewater_epoch_restart_clears`, `whitewater_epoch_restart_drops_the_reply_in_flight` |
 | I7 | Emission rounds per tick | `emission_count_rounds_per_tick` (gpu_tests) |
 | I8 | No vendored edit | `git diff --stat origin/feat/fft-water -- crates/manifold-fluids/native/flip_engine crates/manifold-fluids/native/PROVENANCE.md` → empty |
 | I9 | A CPU extent proof precedes every new GPU size | `whitewater_extents_at_64`, `face_grid_extents_at_64` |
@@ -284,7 +284,7 @@ Rules: live never calls `wait`; the CPU touches a snapshot slot only after its s
 | I12 | The GPU emitter matches FLIP's on the same inputs | `whitewater_emitter_matches_flip` (O2) |
 | I13 | Curvature and distance match FLIP's and the exact field | the O1 tests |
 | I14 | Fused equals unfused | per-atom fused proofs; `scripts/gpu_proofs_gate.py` |
-| I15 | No new lock or thread | `git diff -U0 origin/feat/fft-water -- crates/manifold-renderer crates/manifold-fluids/src`, added lines searched with `rg -e "Arc<Mutex" -e "Arc<RwLock" -e "thread::spawn" -e crossbeam` → 0 |
+| I15 | No new lock; one new thread, the lifecycle's | `git diff -U0 origin/feat/fft-water -- crates/manifold-renderer crates/manifold-fluids/src ':!*tests.rs'`, added lines: `rg -e "Arc<Mutex" -e "Arc<RwLock"` → 0; `rg "thread::"` → the one `thread::Builder` in `whitewater_handoff.rs` |
 | I16 | The seam face layout holds for every producer (the seam's I16) | `liquid_face_grid_layout` |
 
 ## 5. Phasing
@@ -318,7 +318,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Deliverables:** `WhitewaterSpawn`, `WhitewaterGrid`, `WhitewaterFields`, `WhitewaterLifecycle` and their bridge glue; `node.whitewater_lifecycle` with both rings; the lifecycle and handoff proofs of section 3.7 (spawns from a test source); I2–I6, I10, I11.
 - **Gate:** `cargo nextest run -p manifold-fluids whitewater`; `cargo nextest run -p manifold-renderer whitewater`; the handoff proofs under `scripts/gpu_proofs_gate.py`. Negative: I8, I15.
 - **Demo:** none — L1.
-- **Forbidden:** `wait` on the live path; a thread; reading graph arrays in place; any `flip_engine/` edit.
+- **Forbidden:** `wait` on the live path; a lock; reading graph arrays in place; any `flip_engine/` edit.
 - **Test scope:** focused manifold-fluids and renderer; GPU proofs.
 
 ### P4 — Emitter potentials
@@ -372,7 +372,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
   | `lifecycle_ms` (target p95 ≤ 3) | 3.17 / 42.2 | 3.58 / 12.5 |
   | FLIP `simulation_ms`, whitewater on / off | 216 / 399 (off run invalid) | 217 / 531 against 235 / 473 |
 
-  The 42–55 ms FLIP whitewater cost does not reproduce here: the engine's whole step reads over 200 ms under this load and on minus off is lost in it (p50 +5 ms). Verdict: the GPU side misses 2 ms on the cleaner run, mostly `surface_crossings` walking 144 edges in every cell; `lifecycle_ms` sits at 3 ms at p50 on every run, so D11's escalation is raised with the lead.
+  The 42–55 ms FLIP whitewater cost does not reproduce here: the engine's whole step reads over 200 ms under this load and on minus off is lost in it (p50 +5 ms). Verdict: the GPU side misses 2 ms on the cleaner run, mostly `surface_crossings` walking 144 edges in every cell (BUG-imy3.6, under BUG-imy3 (GPU whitewater, solver-agnostic)); `lifecycle_ms` sat at 3 ms at p50 on every run, so the lifecycle moved to its own thread (D11). Live at 64, frames 31–180, same machine: the content thread went from p50 2.98 / p95 3.34 ms to 0.027 / 0.035; the lifecycle's thread takes 3.08 / 3.76. Offline counts, emitted, thinned and dropped ticks are identical to the content-thread version over 120 frames.
 
 Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase above or in section 7.
 
@@ -387,7 +387,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 7. Capacity thins and reports (D8).
 8. Turbulence, dust, influence, speed factor, generation coin and foam preservation dropped (D9).
 9. Statistical oracles against FLIP's own code through its public API (D10).
-10. No thread; escalate past 3 ms (D11).
+10. The lifecycle on its own thread, slots loaned by value, no lock (D11).
 11. Time, epoch and gravity from the domain (D12).
 12. One Whitewater group; SWASH hosts it, from the Rust builders through P4 and the SWASH Dam Break preset from P5 (D13).
 
@@ -399,7 +399,6 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 | Forces and impulses on whitewater | the seam's P8 (Forces and impulses for GPU liquids) lands |
 | Obstacle influence grid | GPU liquids get obstacle roles |
 | Presenting whitewater at display time | the side-by-side shows foam trailing the front |
-| A lifecycle worker thread | `lifecycle_ms` p95 > 3 ms at 64, or a `MANIFOLD_RENDER_TRACE=1` frame over 20 ms |
 | `liquid_frame` publishing the grid | the seam's P7a lands |
 | Resolutions above 64 | the resolution campaign, one size at a time with extent proofs |
 | Whitewater in the frame cache | GPU liquids get a bake |

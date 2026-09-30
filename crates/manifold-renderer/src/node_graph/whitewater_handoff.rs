@@ -1,14 +1,20 @@
-//! The whitewater lifecycle's two rings (`docs/GPU_WHITEWATER_DESIGN.md` D6,
-//! D7, section 3.5). A snapshot slot takes one frame's GPU copies of the
-//! lifecycle's inputs; the CPU reads it only after that frame retired. An
-//! output slot takes the population from the CPU; it is rewritten only after
-//! every frame that read it retired. The content thread owns both: no lock,
-//! no thread, and live never waits.
+//! The whitewater lifecycle's handoff (`docs/GPU_WHITEWATER_DESIGN.md` D6,
+//! D7, D11, section 3.5). A snapshot slot takes one frame's GPU copies of the
+//! lifecycle's inputs; once that frame retired, the slot is loaned to the
+//! lifecycle worker, which loads and steps it. An output slot is loaned to
+//! the worker once every frame that read it retired; the worker writes the
+//! population into it and the content thread makes it current. Slots move by
+//! value through two one-deep channels, the way FLIP's particle ring loans
+//! its slots, so no slot is ever shared: no lock, and live never waits.
 
-use manifold_fluids::{WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterParticle, WhitewaterSpawn};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+
+use manifold_fluids::{
+    WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
+};
 use manifold_gpu::{FrameClock, GpuBuffer, GpuDevice};
 
-use crate::node_graph::fluid::whitewater_fade;
+use crate::node_graph::fluid::{TICK, whitewater_fade};
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::liquid::grid::face_len;
 
@@ -54,8 +60,11 @@ impl Fence for Retired {
     }
 }
 
-pub(crate) const SNAPSHOT_SLOTS: usize = 3;
-pub(crate) const OUTPUT_SLOTS: usize = 3;
+/// Three in flight on the GPU and one on loan to the worker, so live drops
+/// ticks only when the GPU is three frames behind.
+pub(crate) const SNAPSHOT_SLOTS: usize = 4;
+/// The current one, one on loan, and two still being read.
+pub(crate) const OUTPUT_SLOTS: usize = 4;
 /// Output buffers grow in steps of this many records.
 const OUTPUT_ROUNDING: usize = 4096;
 
@@ -117,8 +126,8 @@ pub(crate) struct Snapshot {
     pub gravity: [f32; 3],
     /// Spawn records the copy filled; the rest of the slot is stale.
     spawn_records: u32,
-    /// Captured and not yet consumed. The GPU writes a slot only when this is
-    /// false; the CPU reads it only while it is true and its stamp retired.
+    /// Captured and not yet loaned. The GPU writes a slot only when this is
+    /// false; the worker reads it only once its stamp retired.
     pub pending: bool,
 }
 
@@ -254,12 +263,16 @@ impl Snapshot {
 
 #[derive(Default)]
 pub(crate) struct SnapshotRing {
+    /// Free and pending slots; loaned ones are on the worker.
     pub slots: Vec<Snapshot>,
+    /// Slots allocated, wherever they are.
+    allocated: usize,
 }
 
 impl SnapshotRing {
     /// A free slot sized for `shape`, allocating up to [`SNAPSHOT_SLOTS`] and
-    /// replacing a free slot of another shape. None when every slot is pending.
+    /// replacing a free slot of another shape. None when every slot is
+    /// pending or on loan.
     pub fn free_slot(&mut self, device: &GpuDevice, shape: SnapshotShape) -> Result<Option<usize>, String> {
         if let Some(index) = self.slots.iter().position(|s| !s.pending && s.shape == shape) {
             return Ok(Some(index));
@@ -268,20 +281,64 @@ impl SnapshotRing {
             self.slots[index] = Snapshot::allocate(device, shape)?;
             return Ok(Some(index));
         }
-        if self.slots.len() < SNAPSHOT_SLOTS {
+        if self.allocated < SNAPSHOT_SLOTS {
             self.slots.push(Snapshot::allocate(device, shape)?);
+            self.allocated += 1;
             return Ok(Some(self.slots.len() - 1));
         }
         Ok(None)
     }
 
     /// The pending slot captured first.
-    pub fn oldest_pending(&self) -> Option<usize> {
+    fn oldest_pending(&self) -> Option<usize> {
         (0..self.slots.len()).filter(|&i| self.slots[i].pending).min_by_key(|&i| self.slots[i].stamp)
     }
 
     pub fn pending_count(&self) -> usize {
         self.slots.iter().filter(|s| s.pending).count()
+    }
+
+    /// Move each pending slot whose frame retired into `loan`, oldest first
+    /// (I4). Live stops at the first that hasn't retired (I3); offline waits
+    /// for it. A slot of another epoch or shape is freed, never loaned (I6).
+    pub fn take_retired(
+        &mut self,
+        fence: &dyn Fence,
+        offline: bool,
+        epoch: u32,
+        shape: SnapshotShape,
+        loan: &mut Vec<Snapshot>,
+    ) -> Result<(), String> {
+        while let Some(index) = self.oldest_pending() {
+            let stamp = self.slots[index].stamp;
+            if !fence.is_complete(stamp) {
+                if !offline {
+                    break;
+                }
+                if !fence.wait(stamp) {
+                    return Err("a frame's snapshot did not finish on the GPU within 5 seconds".into());
+                }
+            }
+            if self.slots[index].epoch != epoch || self.slots[index].shape != shape {
+                self.slots[index].pending = false;
+                continue;
+            }
+            loan.push(self.slots.swap_remove(index));
+        }
+        Ok(())
+    }
+
+    /// Slots back from the worker, free again.
+    pub fn give_back(&mut self, loan: &mut Vec<Snapshot>) {
+        for mut slot in loan.drain(..) {
+            slot.pending = false;
+            self.slots.push(slot);
+        }
+    }
+
+    /// Slots that went down with a stopped worker.
+    pub fn lose(&mut self, count: usize) {
+        self.allocated -= count;
     }
 }
 
@@ -315,43 +372,25 @@ impl OutputSlot {
         };
         Ok(Self { buffers: [buffer()?, buffer()?, buffer()?], records, counts: [0; 3], read_stamp: 0 })
     }
-}
 
-#[derive(Default)]
-pub(crate) struct OutputRing {
-    pub slots: Vec<OutputSlot>,
-    /// The slot the outputs provide.
-    pub current: Option<usize>,
-}
-
-impl OutputRing {
-    /// Write `particles` into a slot every reader of which retired, faded as
-    /// FLIP's native whitewater is, and make it current. False when no slot
-    /// has retired: the current one stays.
-    pub fn publish(&mut self, device: &GpuDevice, fence: &dyn Fence, particles: &[WhitewaterParticle]) -> Result<bool, String> {
+    /// Worker side: write `particles` into this loaned slot, faded as FLIP's
+    /// native whitewater is. Err with the records per population it needs
+    /// when it holds fewer; the slot is then untouched.
+    fn write(&mut self, particles: &[WhitewaterParticle]) -> Result<(), usize> {
         let mut counts = [0usize; 3];
         for particle in particles {
             counts[population_of(particle.kind)] += 1;
         }
         let records = counts.iter().copied().max().unwrap_or(0).max(1).div_ceil(OUTPUT_ROUNDING) * OUTPUT_ROUNDING;
-        let index = match self.slots.iter().position(|slot| fence.is_complete(slot.read_stamp)) {
-            Some(index) => index,
-            None if self.slots.len() < OUTPUT_SLOTS => {
-                self.slots.push(OutputSlot::allocate(device, records)?);
-                self.slots.len() - 1
-            }
-            None => return Ok(false),
-        };
-        if self.slots[index].records < records {
-            let read_stamp = self.slots[index].read_stamp;
-            self.slots[index] = OutputSlot { read_stamp, ..OutputSlot::allocate(device, records)? };
+        if self.records < records {
+            return Err(records);
         }
-        let slot = &mut self.slots[index];
-        let outs: [&mut [FluidParticle]; 3] = slot.buffers.each_ref().map(|buffer| {
+        let outs: [&mut [FluidParticle]; 3] = self.buffers.each_ref().map(|buffer| {
             let ptr = buffer.mapped_ptr().expect("output slots are shared storage");
-            // SAFETY: shared storage of at least `records` particles; every
-            // frame that read it retired, and the three buffers are distinct.
-            unsafe { std::slice::from_raw_parts_mut(ptr.cast::<FluidParticle>(), records) }
+            // SAFETY: shared storage of `self.records` particles; the slot is
+            // loaned only once every frame that read it retired, and the
+            // three buffers are distinct.
+            unsafe { std::slice::from_raw_parts_mut(ptr.cast::<FluidParticle>(), self.records) }
         });
         let mut next = [0usize; 3];
         for particle in particles {
@@ -364,19 +403,243 @@ impl OutputRing {
             };
             next[population] += 1;
         }
-        slot.counts = counts.map(|n| n as u32);
-        self.current = Some(index);
-        Ok(true)
+        self.counts = counts.map(|n| n as u32);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct OutputRing {
+    /// Neither current nor on loan; frames may still read them.
+    free: Vec<OutputSlot>,
+    /// The slot the outputs provide.
+    current: Option<OutputSlot>,
+    /// Slots allocated, wherever they are.
+    allocated: usize,
+    /// Records per population a loaned slot holds.
+    records: usize,
+}
+
+impl OutputRing {
+    /// A slot for the worker to write the population into, every reader of
+    /// which retired, grown on this thread to the records the population
+    /// last needed. None when none has retired: the current one stays.
+    pub fn loan(&mut self, device: &GpuDevice, fence: &dyn Fence) -> Result<Option<OutputSlot>, String> {
+        let records = self.records.max(OUTPUT_ROUNDING);
+        let retired = |slot: &OutputSlot| fence.is_complete(slot.read_stamp);
+        if let Some(index) = self.free.iter().position(|slot| retired(slot) && slot.records >= records) {
+            return Ok(Some(self.free.swap_remove(index)));
+        }
+        if let Some(index) = self.free.iter().position(retired) {
+            drop(self.free.swap_remove(index));
+            self.allocated -= 1;
+        }
+        if self.allocated == OUTPUT_SLOTS {
+            return Ok(None);
+        }
+        let slot = OutputSlot::allocate(device, records)?;
+        self.allocated += 1;
+        Ok(Some(slot))
+    }
+
+    /// The worker wrote `slot`: provide it. The slot it replaces is freed;
+    /// frames in flight may still read it.
+    pub fn accept(&mut self, slot: OutputSlot) {
+        if let Some(old) = self.current.replace(slot) {
+            self.free.push(old);
+        }
+    }
+
+    /// A loan that came back unwritten.
+    pub fn give_back(&mut self, slot: OutputSlot) {
+        self.free.push(slot);
+    }
+
+    /// The population needs `records` per population; later loans hold them.
+    pub fn grow(&mut self, records: usize) {
+        self.records = self.records.max(records);
+    }
+
+    /// Provide nothing until the next write: the population started over.
+    pub fn clear(&mut self) {
+        if let Some(old) = self.current.take() {
+            self.free.push(old);
+        }
+    }
+
+    /// A loan that went down with a stopped worker.
+    pub fn lose(&mut self) {
+        self.allocated -= 1;
     }
 
     /// Stamp the current slot with the frame now being encoded, which reads it.
     pub fn mark_read(&mut self, fence: &dyn Fence) {
-        if let Some(index) = self.current {
-            self.slots[index].read_stamp = fence.stamp();
+        if let Some(slot) = self.current.as_mut() {
+            slot.read_stamp = fence.stamp();
         }
     }
 
     pub fn current(&self) -> Option<&OutputSlot> {
-        self.current.map(|index| &self.slots[index])
+        self.current.as_ref()
+    }
+
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub fn allocated(&self) -> usize {
+        self.allocated
+    }
+}
+
+/// The lifecycle starts over: a new one on this grid and capacity, or the
+/// same one cleared for a new epoch (D12, I6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Reset {
+    pub grid: WhitewaterGrid,
+    pub capacity: u32,
+    pub epoch: u32,
+}
+
+/// What one frame hands the worker: everything it owns until the reply.
+pub(crate) struct Request {
+    /// Applied before any snapshot loads.
+    pub reset: Option<Reset>,
+    /// Retired snapshots of the current epoch and shape, oldest first.
+    pub snapshots: Vec<Snapshot>,
+    /// A slot every reader of which retired, for the stepped population.
+    pub output: Option<OutputSlot>,
+    /// Tests only: the worker waits for this before it starts.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub hold: Option<Receiver<()>>,
+}
+
+/// The worker's answer: the loans back, and what the work did.
+pub(crate) struct Reply {
+    pub snapshots: Vec<Snapshot>,
+    pub output: Option<OutputSlot>,
+    /// `output` holds the population.
+    pub written: bool,
+    /// `output` was too small: records per population the population needs.
+    pub needs: Option<usize>,
+    /// Spawns the emitters asked for in these snapshots, before capacity.
+    pub emitted: u64,
+    pub thinned: u64,
+    pub worker_ms: f64,
+    pub failure: Option<String>,
+}
+
+/// FLIP's lifecycle, owned by the worker thread alone.
+#[derive(Default)]
+struct Lifecycle {
+    native: Option<NativeLifecycle>,
+    population: Vec<WhitewaterParticle>,
+}
+
+impl Lifecycle {
+    fn process(&mut self, mut request: Request) -> Reply {
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        if let Some(hold) = request.hold.take() {
+            let _ = hold.recv();
+        }
+        let start = std::time::Instant::now();
+        let mut reply = Reply {
+            snapshots: std::mem::take(&mut request.snapshots),
+            output: request.output.take(),
+            written: false,
+            needs: None,
+            emitted: 0,
+            thinned: 0,
+            worker_ms: 0.0,
+            failure: None,
+        };
+        reply.failure = self.step(request.reset, &mut reply).and_then(|()| self.write(&mut reply)).err();
+        reply.worker_ms = start.elapsed().as_secs_f64() * 1000.0;
+        reply
+    }
+
+    /// Load each snapshot, oldest first, and step it its ticks (I4).
+    fn step(&mut self, reset: Option<Reset>, reply: &mut Reply) -> Result<(), String> {
+        if let Some(reset) = reset {
+            let fits = self.native.as_ref().is_some_and(|l| l.grid() == reset.grid && l.capacity() == reset.capacity);
+            if fits {
+                self.native.as_mut().expect("lifecycle").clear(u64::from(reset.epoch)).map_err(|e| e.to_string())?;
+            } else {
+                self.native = None;
+                self.native = Some(NativeLifecycle::new(reset.grid, reset.capacity, u64::from(reset.epoch)).map_err(|e| e.to_string())?);
+            }
+        }
+        let native = self.native.as_mut().ok_or("no lifecycle: the first request resets it")?;
+        for slot in &reply.snapshots {
+            // SAFETY: the slot's frame retired and the slot is on loan to this
+            // thread alone.
+            let (fields, spawns, emitted) = unsafe { (slot.fields(), slot.spawns(), slot.emitted()) };
+            native.set_fields(&fields).map_err(|e| e.to_string())?;
+            let (_, load_thinned) = native.load(spawns).map_err(|e| e.to_string())?;
+            reply.emitted += u64::from(emitted);
+            reply.thinned += u64::from(emitted.saturating_sub(slot.shape.capacity)) + u64::from(load_thinned);
+            for _ in 0..slot.ticks {
+                native.step(TICK).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn write(&mut self, reply: &mut Reply) -> Result<(), String> {
+        let Some(slot) = reply.output.as_mut() else {
+            return Ok(());
+        };
+        let native = self.native.as_mut().ok_or("no lifecycle: the first request resets it")?;
+        native.particles(&mut self.population).map_err(|e| e.to_string())?;
+        match slot.write(&self.population) {
+            Ok(()) => reply.written = true,
+            Err(records) => reply.needs = Some(records),
+        }
+        Ok(())
+    }
+}
+
+/// The lifecycle's own thread (D11). One request is in flight at most, so
+/// neither channel ever blocks a send.
+pub(crate) struct Worker {
+    requests: SyncSender<Request>,
+    replies: Receiver<Reply>,
+}
+
+impl Worker {
+    pub fn spawn() -> Result<Self, String> {
+        let (requests, receiver) = mpsc::sync_channel::<Request>(1);
+        let (sender, replies) = mpsc::sync_channel::<Reply>(1);
+        std::thread::Builder::new()
+            .name("whitewater-lifecycle".into())
+            .spawn(move || {
+                let mut lifecycle = Lifecycle::default();
+                while let Ok(request) = receiver.recv() {
+                    if sender.send(lifecycle.process(request)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("the whitewater worker could not start: {e}"))?;
+        Ok(Self { requests, replies })
+    }
+
+    /// Only while no request is in flight.
+    pub fn send(&self, request: Request) -> Result<(), String> {
+        self.requests.try_send(request).map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => "a whitewater request was sent while one was in flight".to_owned(),
+            mpsc::TrySendError::Disconnected(_) => "the whitewater worker stopped".to_owned(),
+        })
+    }
+
+    /// The reply, if the worker finished. Never blocks.
+    pub fn try_reply(&self) -> Result<Option<Reply>, String> {
+        match self.replies.try_recv() {
+            Ok(reply) => Ok(Some(reply)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err("the whitewater worker stopped".into()),
+        }
+    }
+
+    /// Offline only: block until the worker finishes.
+    pub fn reply(&self) -> Result<Reply, String> {
+        self.replies.recv().map_err(|_| "the whitewater worker stopped".to_owned())
     }
 }

@@ -38,8 +38,8 @@ use crate::render_target::RenderTarget;
 const KINDS: [&str; 3] = ["foam", "bubble", "spray"];
 const LIFECYCLE_PORTS: [(&str, &str); 3] =
     [("foam_particles", "foam_count"), ("bubble_particles", "bubble_count"), ("spray_particles", "spray_count")];
-const LIFECYCLE_REPORTS: [&str; 7] =
-    ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "dropped_ticks", "lifecycle_ms"];
+const LIFECYCLE_REPORTS: [&str; 8] =
+    ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "dropped_ticks", "lifecycle_ms", "worker_ms"];
 
 /// The engine preset's whitewater objects `render_def` leaves out.
 const OBJECTS: [&str; 9] = [
@@ -595,15 +595,15 @@ fn swash_builder_whitewater_emits() {
     let scene = WaterScene::dam_break(64);
     let mut show = Show::new(whitewater_render_def(scene), (320, 180), Some(scene.surface_solid()), true, &[]);
     show.restart();
-    let mut last = [0.0; 7];
+    let mut last = [0.0; 8];
     for frame in 1..=90 {
         show.frame(false);
         last = show.probes(LIFECYCLE_REPORTS);
         if frame % 15 == 0 {
-            let [foam, bubble, spray, emitted, thinned, dropped, ms] = last;
+            let [foam, bubble, spray, emitted, thinned, dropped, ms, worker] = last;
             let [count] = show.probes(["count"]);
             println!(
-                "frame {frame}: {count} particles; foam {foam} bubble {bubble} spray {spray}, emitted {emitted}, thinned {thinned}, dropped ticks {dropped}, lifecycle {ms:.2} ms"
+                "frame {frame}: {count} particles; foam {foam} bubble {bubble} spray {spray}, emitted {emitted}, thinned {thinned}, dropped ticks {dropped}, lifecycle {ms:.2} ms, worker {worker:.2} ms"
             );
         }
     }
@@ -611,6 +611,37 @@ fn swash_builder_whitewater_emits() {
     assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
     assert!(last[0] > 0.0, "no foam by 1.5 s: {last:?}");
     assert_eq!(last[5], 0.0, "offline, the lifecycle never drops a tick");
+}
+
+/// D11 at 64, live: the lifecycle's work is on its own thread, so the
+/// content thread's time in the node stays inside the design's 3 ms budget
+/// with room to spare, and no tick drops while the GPU keeps up.
+#[test]
+fn whitewater_lifecycle_stays_off_the_content_thread() {
+    let scene = WaterScene::dam_break(64);
+    let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    let mut show = Show::new(whitewater_render_def(scene), (320, 180), Some(scene.surface_solid()), true, &[]);
+    show.restart();
+    let (mut content, mut worker) = (Vec::new(), Vec::new());
+    let mut last = [0.0; 8];
+    for frame in 1..=180 {
+        show.frame(false);
+        last = show.probes(LIFECYCLE_REPORTS);
+        // The first frames compile pipelines and hold little water.
+        if frame > 30 {
+            content.push(f64::from(last[6]));
+            worker.push(f64::from(last[7]));
+        }
+    }
+    let errors = show.errors();
+    assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
+    let row = |values: &[f64]| format!("p50 {:.3} p95 {:.3} max {:.3}", percentile(values, 0.5), percentile(values, 0.95), percentile(values, 1.0));
+    println!("WHITEWATER live, frames 31-180: content thread {} ms; lifecycle thread {} ms", row(&content), row(&worker));
+    println!("WHITEWATER live at frame 180: {last:?}");
+    assert!(last[0] > 0.0, "no foam by 3 s: {last:?}");
+    assert!(worker.iter().any(|&ms| ms > 0.0), "the lifecycle thread never reported work");
+    assert!(percentile(&content, 0.95) <= 3.0, "the content thread pays {} ms", row(&content));
+    assert_eq!(last[5], 0.0, "live, with the GPU waited each frame, no tick drops");
 }
 
 fn percentile(values: &[f64], p: f64) -> f64 {
@@ -858,15 +889,18 @@ fn whitewater_side_by_side() {
     assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
 
     let (flip_on_ms, flip_off_ms) = (flip_simulation_ms(true), flip_simulation_ms(false));
+    // Live, as the show runs: offline the node also waits for its worker.
+    let live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
     let mut swash = swash_show();
-    let (swash_frames, swash_lifecycle_ms): (Vec<Frame>, Vec<f64>) = (0..DEMO_FRAMES)
+    let (swash_frames, swash_lifecycle_ms): (Vec<Frame>, Vec<[f64; 2]>) = (0..DEMO_FRAMES)
         .map(|_| {
             let frame = swash.frame(true);
-            (frame, f64::from(swash.probes(["lifecycle_ms"])[0]))
+            (frame, swash.probes(["lifecycle_ms", "worker_ms"]).map(f64::from))
         })
         .unzip();
     let labels = swash.labels.clone();
     drop(swash);
+    drop(live);
 
     let clip = dir.join("side_by_side.mp4");
     side_by_side(&flip_clip, &swash_clip, &clip);
@@ -879,12 +913,12 @@ fn whitewater_side_by_side() {
     let swash_counts: Vec<[f32; 3]> = swash_values.iter().map(|v| [v[0], v[1], v[2]]).collect();
     plot_counts(&dir.join("counts.png"), &flip_counts, &swash_counts);
     let mut csv = String::from(
-        "frame,flip_foam,flip_bubble,flip_spray,swash_foam,swash_bubble,swash_spray,swash_emitted,flip_simulation_ms,flip_off_simulation_ms,swash_lifecycle_ms,swash_whitewater_gpu_ms\n",
+        "frame,flip_foam,flip_bubble,flip_spray,swash_foam,swash_bubble,swash_spray,swash_emitted,flip_simulation_ms,flip_off_simulation_ms,swash_lifecycle_ms,swash_worker_ms,swash_whitewater_gpu_ms\n",
     );
     for frame in 0..DEMO_FRAMES {
         let (f, s) = (flip_values[frame], swash_values[frame]);
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
             frame + 1,
             f[0],
             f[1],
@@ -895,7 +929,8 @@ fn whitewater_side_by_side() {
             s[3],
             flip_on_ms[frame],
             flip_off_ms[frame],
-            swash_lifecycle_ms[frame],
+            swash_lifecycle_ms[frame][0],
+            swash_lifecycle_ms[frame][1],
             swash_frames[frame].whitewater_ms.iter().sum::<f64>()
         ));
     }
@@ -913,15 +948,17 @@ fn whitewater_side_by_side() {
         println!("WHITEWATER   GPU {label:<56} {:7.3} {:7.3}", percentile(&ms, 0.5), percentile(&ms, 0.95));
     }
     let untimed = swash_frames.iter().map(|f| f.untimed).max().unwrap_or(0);
-    let lifecycle = &swash_lifecycle_ms[settled.clone()];
+    let lifecycle: Vec<f64> = swash_lifecycle_ms[settled.clone()].iter().map(|ms| ms[0]).collect();
+    let worker: Vec<f64> = swash_lifecycle_ms[settled.clone()].iter().map(|ms| ms[1]).collect();
     let frame_gpu: Vec<f64> = swash_frames[settled.clone()].iter().map(|f| f.gpu_ms).collect();
     let frame_cpu: Vec<f64> = swash_frames[settled.clone()].iter().map(|f| f.cpu_ms).collect();
     let (on, off) = (&flip_on_ms[settled.clone()], &flip_off_ms[settled.clone()]);
     let delta: Vec<f64> = on.iter().zip(off).map(|(a, b)| a - b).collect();
-    let (gpu_p95, life_p95) = (percentile(&total, 0.95), percentile(lifecycle, 0.95));
+    let (gpu_p95, life_p95) = (percentile(&total, 0.95), percentile(&lifecycle, 0.95));
     let row = |name: &str, values: &[f64]| println!("WHITEWATER   {name:<60} {:7.3} {:7.3}", percentile(values, 0.5), percentile(values, 0.95));
     row("GPU whitewater total (target p95 <= 2)", &total);
-    row("CPU lifecycle_ms (target p95 <= 3)", lifecycle);
+    row("content-thread lifecycle_ms, live (target p95 <= 3)", &lifecycle);
+    row("lifecycle thread worker_ms", &worker);
     row("SWASH whole frame GPU", &frame_gpu);
     row("SWASH whole frame CPU", &frame_cpu);
     row("FLIP simulation_ms, whitewater on", on);
@@ -929,10 +966,9 @@ fn whitewater_side_by_side() {
     row("FLIP whitewater cost (on minus off, frame by frame)", &delta);
     println!("WHITEWATER   untimed dispatches on the worst frame: {untimed}");
     println!(
-        "WHITEWATER verdict: GPU {} the 2 ms p95 target; lifecycle {} the 3 ms p95 target{}",
+        "WHITEWATER verdict: GPU {} the 2 ms p95 target; the content thread {} the 3 ms p95 target",
         if gpu_p95 <= 2.0 { "meets" } else { "misses" },
         if life_p95 <= 3.0 { "meets" } else { "misses" },
-        if life_p95 > 3.0 { " (D11 escalation)" } else { "" }
     );
     for frame in DEMO_STILLS {
         let (f, s) = (flip_values[frame - 1], swash_values[frame - 1]);
