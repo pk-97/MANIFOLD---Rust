@@ -363,8 +363,12 @@ mod face_sample_component;
 mod matter_face_component;
 #[cfg(test)]
 mod face_grid_extent_tests;
+#[cfg(test)]
+mod face_grid_scenes;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod face_grid_scene_tests;
 #[cfg(test)]
 mod swash_preset;
 #[cfg(test)]

@@ -14,14 +14,15 @@ use crate::node_graph::matter::{MatterGridNode, PADDING_NODES, grid_bytes};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Face layers past the liquid whose velocity is the grid's own. A point's
-/// quadratic stencil puts mass on every corner node of its cell, so each
-/// face whose four nodes include a corner of a liquid cell reads grid
-/// velocity: the liquid cells' own faces and, one layer out, the faces of
-/// every neighbouring cell that share an edge with them. The face one cell
-/// out along its own axis also reads velocity once a point sits in the near
-/// half of the liquid cell.
-pub const MATTER_FACE_VALID_LAYERS: u32 = 1;
+/// Face layers past the liquid whose velocity is the grid's own, counted as
+/// FLIP's extrapolation counts them: a layer holds when every face in it
+/// carries velocity. A point's quadratic stencil puts mass on every corner
+/// node of its cell, so a liquid cell's own faces and the faces sharing an
+/// edge with them always read grid velocity. The face one cell out along
+/// its own axis reads it only when a point sits in the half of the cell
+/// next to it: 67.7% of those faces in Dam Break at 64 after 45 ticks
+/// (`face_grid_demo_swash_and_matter_side_by_side`). So no layer holds.
+pub const MATTER_FACE_VALID_LAYERS: u32 = 0;
 
 /// Authored cells per axis of a matter lattice with `nodes` nodes.
 pub fn matter_cells(nodes: [u32; 3]) -> Option<[u32; 3]> {

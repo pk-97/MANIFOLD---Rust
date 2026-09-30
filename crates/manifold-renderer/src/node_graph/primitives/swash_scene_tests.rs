@@ -7,7 +7,8 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::swash_preset::{REST_PER_CELL, WaterScene, water_def};
+use super::swash_preset::{FACE_NODES, REST_PER_CELL, WaterScene, water_def};
+use crate::node_graph::liquid::grid::face_len;
 use super::swash_volume::{VolumeDrift, volume_and_area};
 use super::swash_solve_tests::{node_named, output_of};
 use crate::gpu_encoder::GpuEncoder;
@@ -44,7 +45,12 @@ impl Run {
     pub(super) fn new(scene: WaterScene) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+        if scene.faces {
+            for name in FACE_NODES {
+                graph.add_external_output(node_named(&graph, name), "out").expect("face grid output");
+            }
+        }
         let plan = compile(&graph).expect("water def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
@@ -60,6 +66,9 @@ impl Run {
         }
         if scene.surface {
             watched.extend(["liquid_offsets", "liquid_mesh"].map(|name| node_ending(&graph, name)));
+        }
+        if scene.faces {
+            watched.extend(FACE_NODES.map(|name| node_named(&graph, name)));
         }
         exec.set_dump_set(Some(watched.into_iter().collect()));
         Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 }
@@ -150,6 +159,13 @@ impl Run {
 
     pub(super) fn faces(&self, step: usize) -> Vec<FaceSample> {
         self.read(&format!("s{step}.project"), "out", (self.n() + 1).pow(3))
+    }
+
+    /// The seam face grid of the frame's last step, x, y and z (a scene built
+    /// with `faces`).
+    pub(super) fn face_grid(&self) -> [Vec<f32>; 3] {
+        let cells = [self.n() as u32; 3];
+        std::array::from_fn(|axis| self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize))
     }
 
     pub(super) fn collar(&self, step: usize) -> u32 {

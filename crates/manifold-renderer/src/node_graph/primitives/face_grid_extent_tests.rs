@@ -79,6 +79,54 @@ fn face_grid_extents_at_64() {
     assert_eq!(face_len([64; 3], 0) * 4, 1_064_960);
 }
 
+/// Where the face grid nodes fuse in their host graphs. SWASH's component
+/// sizes its output from params, so the freeze compiler refuses it even
+/// beside a coincident consumer (BUG-u8io, param-sized outputs never fuse).
+/// The matter component sizes its output from its grid input, so it folds
+/// into one region with its consumer and stands alone without one; the
+/// fused-vs-unfused GPU proof covers the folded case.
+#[test]
+fn face_grid_fusion_in_host_graphs() {
+    use super::face_grid_scenes::matter_dam_break_faces;
+    use super::swash_preset::{FACE_NODES, WaterScene, water_def};
+    use crate::node_graph::FusionReport;
+    let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    let report = |def| {
+        let report = crate::node_graph::fusion_report(&def, &registry);
+        assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);
+        report
+    };
+    let of_type = |report: &FusionReport, type_id: &str| -> Vec<_> { report.nodes.iter().filter(|n| n.type_id == type_id).cloned().collect() };
+
+    let mut swash = serde_json::to_value(water_def(WaterScene::dam_break(64).with_faces())).expect("def");
+    let nodes = swash["nodes"].as_array().expect("nodes");
+    let face_u = nodes.iter().find(|n| n["nodeId"] == FACE_NODES[0]).expect("face_u")["id"].clone();
+    let next = nodes.iter().filter_map(|n| n["id"].as_u64()).max().expect("ids") + 1;
+    swash["nodes"].as_array_mut().expect("nodes").push(serde_json::json!({
+        "id": next, "nodeId": "face_u_consumer", "typeId": "node.cosine_poisson_divide", "params": {},
+    }));
+    swash["wires"].as_array_mut().expect("wires").push(serde_json::json!({"fromNode": face_u, "fromPort": "out", "toNode": next, "toPort": "values"}));
+    let swash = report(serde_json::from_value(swash).expect("def"));
+    let sampled = of_type(&swash, "node.face_sample_component");
+    assert_eq!(sampled.len(), 3);
+    assert!(sampled.iter().all(|n| !n.fused), "SWASH face components stay unfused: {sampled:?}");
+
+    let alone = report(matter_dam_break_faces(None, false));
+    let components = of_type(&alone, "node.matter_face_component");
+    assert_eq!(components.len(), 3);
+    assert!(components.iter().all(|n| !n.fused), "a lone matter component is its own dispatch: {components:?}");
+
+    let consumed = report(matter_dam_break_faces(Some(1), false));
+    let components = of_type(&consumed, "node.matter_face_component");
+    let fused: Vec<_> = components.iter().filter(|n| n.fused).collect();
+    assert_eq!(fused.len(), 1, "only the consumed axis fuses: {components:?}");
+    let region = &consumed.regions[fused[0].region_index.expect("region")];
+    let members: Vec<_> = consumed.nodes.iter().filter(|n| region.member_node_ids.contains(&n.node_id)).map(|n| n.type_id.as_str()).collect();
+    assert_eq!(members.len(), 2, "component and consumer only: {members:?}");
+    assert!(members.contains(&"node.cosine_poisson_divide"), "the consumer shares the region: {members:?}");
+}
+
 /// Every Resolution the matter presets allow keeps its reads inside the grid.
 #[test]
 fn face_grid_extents_at_every_matter_resolution() {

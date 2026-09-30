@@ -80,7 +80,16 @@ pub(super) struct WaterScene {
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
     /// volume and mesh): the shipped Surface Detail 1 is 3.
     pub surface_scale: usize,
+    /// Publish the last step's faces as the liquid seam's face grid: three
+    /// node.face_sample_component named [`FACE_NODES`].
+    pub faces: bool,
 }
+
+/// The face grid's nodes in a scene built with `faces`, x, y and z.
+pub(super) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
+
+/// Face layers past the water SWASH extends each step's faces by.
+pub(super) const EXTENDED_LAYERS: usize = 2;
 
 /// Particles per cell the fill seeds: one per half-cell site.
 pub(super) const REST_PER_CELL: f64 = 8.0;
@@ -113,11 +122,16 @@ impl WaterScene {
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
             density_passes: DENSITY_PASSES,
             surface_scale: 3,
+            faces: false,
         }
     }
 
     pub fn with_surface(self) -> Self {
         Self { surface: true, ..self }
+    }
+
+    pub fn with_faces(self) -> Self {
+        Self { faces: true, ..self }
     }
 
     /// Meshed at `scale` surface nodes per cell.
@@ -395,12 +409,20 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let state = b.node("state", "node.liquid_feedback", json!({}));
     b.wire((fill, "particles"), state, "seed");
     let mut particles: Port = (state, "out");
+    let mut faces = particles;
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
-        particles = water_step(&mut b, scene, particles, (fill, "count"));
+        (particles, faces) = water_step(&mut b, scene, particles, (fill, "count"));
     }
     b.prefix.clear();
     b.wire(particles, state, "in");
+    if scene.faces {
+        for (axis, name) in FACE_NODES.into_iter().enumerate() {
+            let params = Builder::lattice([s.n; 3], &[("axis", json!({"type": "Enum", "value": axis}))]);
+            let id = b.node(name, "node.face_sample_component", params);
+            b.wire(faces, id, "faces");
+        }
+    }
     let output = b.node("output", "system.final_output", json!({}));
     let sink = if scene.surface {
         let mesh = surface(&mut b, scene, particles, (fill, "count"));
@@ -569,8 +591,9 @@ fn lattice_box(s: PressureShape, extra: &[(&str, Value)]) -> Value {
 
 /// One water step (section 3): sort, the water lattice, particles to faces,
 /// gravity, the pressure solve, the projection, the density solve on the
-/// same collar, faces back to particles.
-fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
+/// same collar, faces back to particles. Returns the moved particles and the
+/// step's projected, extended faces.
+fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> (Port, Port) {
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -635,7 +658,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     b.wire(new, moved, "faces");
     b.wire(old, moved, "old");
     b.wire(advect, moved, "advect");
-    (moved, "out")
+    ((moved, "out"), new)
 }
 
 /// `faces` minus the gradient of `pressure` on the water's faces.
@@ -651,7 +674,7 @@ fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Por
 /// Two layers of face extension into the air around the water.
 fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
     let mut faces = faces;
-    for layer in 1..=2 {
+    for layer in 1..=EXTENDED_LAYERS {
         let id = b.node(&format!("{name}_extend_{layer}"), "node.extend_faces", Builder::lattice(n, &[]));
         b.wire(faces, id, "faces");
         faces = (id, "out");
