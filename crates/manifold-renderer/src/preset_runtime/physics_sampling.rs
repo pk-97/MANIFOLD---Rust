@@ -4,6 +4,7 @@ use super::*;
 use crate::node_graph::ParamValues;
 use crate::node_graph::physics::{PhysicsHistoryDrainScope, offline_simulation};
 use crate::preset_context::ProjectTempo;
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
@@ -17,7 +18,7 @@ mod drain_tests;
 fn setup_input(kind: &str, port: &str) -> bool {
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
-        "node.fluid_surface" => port == "domain",
+        FLIP_DOMAIN_TYPE_ID => port == "domain",
         "node.fluid_role_source" => !matches!(
             port,
             "transform"
@@ -144,7 +145,7 @@ pub(super) fn physics_sample_steps(
 ) -> Result<Option<Vec<bool>>, String> {
     use std::collections::HashSet;
 
-    let replays_history = |type_id: &str| matches!(type_id, "node.physics_world" | "node.fluid_surface");
+    let replays_history = |type_id: &str| matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID);
     // A coupled pair samples together or not at all. The matter domain records
     // its controls once per display frame (GPU_MPM_SOLVER_DESIGN.md D28, bodies
     // are per-tick rows) and owns its paired world, so neither replays history.
@@ -195,7 +196,7 @@ pub(super) fn physics_sample_steps(
         let stateless_cpu = matches!(
             type_id,
             "node.physics_world"
-                | "node.fluid_surface"
+                | FLIP_DOMAIN_TYPE_ID
                 | "node.fluid_role_source"
                 | "node.rigid_body"
                 | "node.transform_3d"
@@ -538,7 +539,7 @@ mod tests {
                     .to_owned()
             })
             .collect();
-        assert!(sampled.iter().any(|kind| kind == "node.fluid_surface"));
+        assert!(sampled.iter().any(|kind| kind == FLIP_DOMAIN_TYPE_ID));
         assert!(sampled.iter().any(|kind| kind == "node.lfo"));
         assert!(!sampled.iter().any(|kind| kind == "node.scene_object"));
         assert!(!sampled.iter().any(|kind| kind == "node.render_scene"));

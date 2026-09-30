@@ -62,7 +62,7 @@ fn runtime_definition() -> EffectGraphDef {
     let def = serde_json::json!({
         "version": 2, "name": "Fluid offline history",
         "nodes": [
-            {"id":0,"nodeId":"fluid","typeId":"node.fluid_surface","params":{
+            {"id":0,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,"params":{
                 "resolution":{"type":"Int","value":8},
                 "fill_height":{"type":"Float","value":0.0},
                 "emission":{"type":"Float","value":0.0}
@@ -205,7 +205,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
     let mut definition = serde_json::json!({
         "version": 2, "name": "Recorded source graph",
         "nodes": [
-            {"id":0,"nodeId":"fluid","typeId":"node.fluid_surface","params":{
+            {"id":0,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,"params":{
                 "resolution":{"type":"Int","value":8}, "fill_height":{"type":"Float","value":0.0},
                 "emission":{"type":"Float","value":0.0}, "cache_mode":{"type":"Enum","value":1},
                 "cache_path":{"type":"String","value":directory.to_str().unwrap()}

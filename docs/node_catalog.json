@@ -137271,6 +137271,90 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "8",
+          "id": "1_grid_budget_mcells",
+          "max": "512",
+          "min": "0.01",
+          "name": "Grid Budget (M cells)"
+        },
+        {
+          "default": "4",
+          "id": "1_domain_size",
+          "max": "20",
+          "min": "0.5",
+          "name": "Domain Size"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −X"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +X"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Bottom"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Top"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −Z"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +Z"
+        },
+        {
+          "default": "0.16",
+          "id": "1_fill_height",
+          "max": "20",
+          "min": "0",
+          "name": "Initial Fill Height"
+        },
+        {
+          "default": "0",
+          "id": "1_gravity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity X"
+        },
+        {
+          "default": "-9.81",
+          "id": "1_gravity",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity Y"
+        },
+        {
+          "default": "0",
+          "id": "1_gravity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity Z"
+        },
+        {
           "default": "0.98",
           "id": "61_color_r",
           "max": "1",
@@ -146861,6 +146945,90 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "8",
+          "id": "1_grid_budget_mcells",
+          "max": "512",
+          "min": "0.01",
+          "name": "Grid Budget (M cells)"
+        },
+        {
+          "default": "4",
+          "id": "1_domain_size",
+          "max": "20",
+          "min": "0.5",
+          "name": "Domain Size"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −X"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +X"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Bottom"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Top"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −Z"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +Z"
+        },
+        {
+          "default": "0.5",
+          "id": "1_fill_height",
+          "max": "20",
+          "min": "0",
+          "name": "Initial Fill Height"
+        },
+        {
+          "default": "0",
+          "id": "1_gravity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity X"
+        },
+        {
+          "default": "-9.81",
+          "id": "1_gravity",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity Y"
+        },
+        {
+          "default": "0",
+          "id": "1_gravity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity Z"
         },
         {
           "default": "0.98",
@@ -156460,6 +156628,90 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "8",
+          "id": "1_grid_budget_mcells",
+          "max": "512",
+          "min": "0.01",
+          "name": "Grid Budget (M cells)"
+        },
+        {
+          "default": "4",
+          "id": "1_domain_size",
+          "max": "20",
+          "min": "0.5",
+          "name": "Domain Size"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −X"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +X"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Bottom"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Top"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_neg_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −Z"
+        },
+        {
+          "default": "1",
+          "id": "1_closed_pos_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +Z"
+        },
+        {
+          "default": "0.5",
+          "id": "1_fill_height",
+          "max": "20",
+          "min": "0",
+          "name": "Initial Fill Height"
+        },
+        {
+          "default": "0",
+          "id": "1_gravity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity X"
+        },
+        {
+          "default": "-9.81",
+          "id": "1_gravity",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity Y"
+        },
+        {
+          "default": "0",
+          "id": "1_gravity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Gravity Z"
         },
         {
           "default": "0.98",

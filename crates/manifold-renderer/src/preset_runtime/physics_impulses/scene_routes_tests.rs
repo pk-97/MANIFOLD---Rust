@@ -196,7 +196,7 @@ fn scene_impulse_routes_reset_rearms_internal_bindings_and_cancels_pending_hits(
 fn scene_impulse_routes_share_rigid_and_fluid_targets_and_wait_for_domain_edits() {
     let (mut def, manifest) = scene_fixture(&["part_a", "part_b"]);
     def.nodes.extend([
-        serde_json::from_value(serde_json::json!({"id":14,"nodeId":"fluid","typeId":"node.fluid_surface",
+        serde_json::from_value(serde_json::json!({"id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
             "params":{"resolution":{"type":"Int","value":8},"fill_height":{"type":"Float","value":0.0},"emission":{"type":"Float","value":0.0}}})).unwrap(),
         serde_json::from_value(serde_json::json!({"id":15,"nodeId":"domain","typeId":"node.transform_3d"})).unwrap(),
     ]);

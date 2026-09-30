@@ -39,7 +39,7 @@ pub(crate) fn fluid_domains(
     scene: &manifold_renderer::node_graph::scene_vm::SceneVm,
 ) -> Vec<manifold_ui::panels::scene_setup_panel::FluidDomainOption> {
     fn is_domain(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], id: u32) -> bool {
-        nodes.iter().any(|node| (node.id == id && node.type_id == "node.fluid_surface")
+        nodes.iter().any(|node| (node.id == id && manifold_core::liquid_domain::is_liquid_domain(&node.type_id))
             || node.group.as_ref().is_some_and(|group| is_domain(&group.nodes, id)))
     }
     let mut result = Vec::new();

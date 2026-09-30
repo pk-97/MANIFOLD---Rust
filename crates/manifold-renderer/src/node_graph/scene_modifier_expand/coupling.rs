@@ -163,6 +163,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire};
+    use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 
     use super::*;
 
@@ -238,7 +239,7 @@ mod tests {
         ) {
             let world = self.node(world_name, "node.physics_world");
             let body = self.node(format!("{world_name}_body"), "node.rigid_body");
-            let fluid = self.node(fluid_name, "node.fluid_surface");
+            let fluid = self.node(fluid_name, FLIP_DOMAIN_TYPE_ID);
             for &slot in slots {
                 self.wire(body, "body", world, &format!("body_{slot}"));
                 let object = self.node(
@@ -310,7 +311,7 @@ mod tests {
 
         fn fluid_only_scene(&mut self, scene_name: &str, fluid_name: &str) {
             let scene = self.node(scene_name, "node.render_scene");
-            let fluid = self.node(fluid_name, "node.fluid_surface");
+            let fluid = self.node(fluid_name, FLIP_DOMAIN_TYPE_ID);
             let object = self.node(format!("{scene_name}_fluid"), "node.scene_object");
             self.wire(fluid, "vertices", object, "vertices");
             self.wire(object, "object", scene, "object_0");
@@ -365,7 +366,7 @@ mod tests {
         let box_object = builder.node("box", "node.scene_object");
         builder.wire(world, "pose_0", box_object, "transform");
         builder.wire(box_object, "object", scene, "object_0");
-        let domain = builder.node("matter", "node.matter_domain");
+        let domain = builder.node("matter", MATTER_DOMAIN_TYPE_ID);
         let state = builder.node("state", "node.matter_state");
         let mesh = builder.node("mesh", "node.volume_surface_mesh");
         let water = builder.node("water", "node.scene_object");

@@ -174,8 +174,8 @@ fn warmup_mesh_roles(
 ) {
     // Async geometry preparation is pumped at unchanged transport time, as
     // export pre-roll does. Only complete frames advance simulation time.
-    let mut complete = false;
-    for _ in 0..200 {
+    let wait = crate::harness::BackgroundWait::new("mesh role warmup");
+    loop {
         let mut encoder = device.create_encoder("mesh-role-warmup");
         let status = {
             let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
@@ -185,12 +185,10 @@ fn warmup_mesh_roles(
         encoder.commit_and_wait_completed();
         assert!(!matches!(status, FrameRenderStatus::Failed(_)), "role warmup: {status:?}");
         if status == FrameRenderStatus::Complete && !runtime.warmup_pending() {
-            complete = true;
-            break;
+            return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        wait.hold();
     }
-    assert!(complete, "mesh role preparation must finish within bounded pre-roll");
 }
 
 fn assert_finite_and_nonempty(bytes: &[u8], frame: u32) {
@@ -477,7 +475,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
+        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
         baseline.clone()).with_world_metadata(metadata_for_node_type("node.physics_world"));
     add.execute(&mut project);
@@ -681,7 +679,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        metadata_for_node_type("node.fluid_surface"), metadata_for_node_type("node.transform_3d"),
+        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"), baseline.clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
     add_fluid.execute(&mut project);
@@ -699,8 +697,8 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let object_index = object.index as u32;
     let object_group_id = object.group_node_id.unwrap();
     let fluid_group = def.nodes.iter().find(|node| node.group.as_ref().is_some_and(|group|
-        group.nodes.iter().any(|node| node.type_id == "node.fluid_surface"))).unwrap();
-    let fluid = fluid_group.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == "node.fluid_surface").unwrap();
+        group.nodes.iter().any(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID))).unwrap();
+    let fluid = fluid_group.group.as_ref().unwrap().nodes.iter().find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).unwrap();
     let domain = SceneNodeRef { scope: vec![fluid_group.node_id.clone()], node: fluid.node_id.clone() };
     let mut assign = AssignSceneFluidRoleCommand::new(target_graph.clone(), render_id, object_index,
         domain, 0, vec![], baseline.clone());
@@ -713,7 +711,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
         let domain_node = body.wires.iter().find(|wire| wire.to_port == "domain").map(|wire| wire.from_node);
         for node in &mut body.nodes {
             match node.type_id.as_str() {
-                "node.fluid_surface" => {
+                manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID => {
                     for (name, value) in [("resolution", 12.0), ("fill_height", 0.0), ("emission", 0.0), ("gravity", 0.0)] {
                         node.params.insert(name.into(), SerializedParamValue::Float { value });
                     }

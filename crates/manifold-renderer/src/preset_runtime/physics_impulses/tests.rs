@@ -560,7 +560,7 @@ fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
     let mut def = fixture();
     def.nodes.push(
         serde_json::from_value(serde_json::json!({
-            "id":14, "nodeId":"fluid", "typeId":"node.fluid_surface"
+            "id":14, "nodeId":"fluid", "typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
         }))
         .unwrap(),
     );

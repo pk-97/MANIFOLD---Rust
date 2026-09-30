@@ -286,14 +286,13 @@ impl Run {
         runtime.set_dump_all(true);
         let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "matter-coupling");
         let mut run = Self { runtime, target, device, frame: 0, stride, last_simulation_time: 0.0, _offline: offline };
-        let started = std::time::Instant::now();
+        let wait = crate::harness::BackgroundWait::new("matter coupling asset warmup");
         loop {
             run.render(0, true);
             if !run.runtime.warmup_pending() {
                 break;
             }
-            assert!(started.elapsed().as_secs() < 60, "asset warmup did not finish");
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            wait.hold();
         }
         run
     }
@@ -369,13 +368,13 @@ impl Run {
 
     /// The coupled body's Box3D state at this frame's display time.
     fn body(&self) -> LiquidBody {
-        self.read::<LiquidBody>("node.matter_domain", "bodies")[0]
+        self.read::<LiquidBody>(manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "bodies")[0]
     }
 
     /// This frame's tick: the body's velocity change and angular impulse
     /// (per unit mass, over dx) summed over the substeps, m/s.
     fn reaction(&self, momentum_unit: f32) -> ([f64; 3], [f64; 3]) {
-        let words: Vec<i32> = self.read("node.matter_domain", "reaction");
+        let words: Vec<i32> = self.read(manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "reaction");
         assert!(words.len() >= REACTION_WORDS as usize);
         let decode = |w: i32| f64::from(w) * f64::from(momentum_unit) / WORD_SCALE;
         (std::array::from_fn(|i| decode(words[i])), std::array::from_fn(|i| decode(words[6 + i])))
@@ -576,11 +575,11 @@ impl Run {
         assert!(ticked, "offline coupled frame {} ran no tick", self.frame);
         let mut stats: Vec<u32> = self.read("node.matter_state", "stats");
         stats.truncate(STATS_WORDS as usize);
-        let mut reaction: Vec<u32> = self.read("node.matter_domain", "reaction");
+        let mut reaction: Vec<u32> = self.read(manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "reaction");
         reaction.truncate(REACTION_WORDS as usize);
         FrameDump {
             probe,
-            rows: self.read("node.matter_domain", "bodies"),
+            rows: self.read(manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID, "bodies"),
             reaction,
             stats,
             particles: self.read("node.matter_frame", "particles_b"),

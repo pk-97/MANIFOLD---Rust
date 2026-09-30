@@ -11,6 +11,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 mod compound;
 mod fluid_objects;
 mod fluid_quality;
+use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain, liquid_dial_params};
 use manifold_core::scene_exposure::{SceneExposureMetadataProvider, SceneParamMetadata};
 
 use crate::node_graph::parameters::ParamType;
@@ -20,6 +21,10 @@ use crate::node_graph::material_inspector::material_param_role;
 static SCENE_EXPOSURE_REGISTRY: std::sync::LazyLock<PrimitiveRegistry> =
     std::sync::LazyLock::new(PrimitiveRegistry::with_builtin);
 
+static SCENE_VOCABULARY: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+    SCENE_VOCABULARY_TYPE_IDS.iter().chain(LIQUID_DOMAIN_TYPE_IDS).copied().collect()
+});
+
 /// An unbounded angle has no primitive range to copy into an exposure, but a
 /// scene card still needs a useful initial scrub band. Keep the band in the
 /// primitive's storage unit (radians); the `is_angle` flag makes the card
@@ -28,11 +33,11 @@ const UNBOUNDED_ANGLE_EXPOSURE_RANGE: (f32, f32) =
     (-std::f32::consts::TAU, std::f32::consts::TAU);
 
 /// Scene-vocabulary type ids — the nodes whose params the scene panel wants to
-/// address. Kept in sync with `scene_vm.rs`.
+/// address. Kept in sync with `scene_vm.rs`. Every liquid domain joins them
+/// through `LIQUID_DOMAIN_TYPE_IDS` (`scene_vocabulary`).
 const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.rigid_body",
     "node.physics_world",
-    "node.fluid_surface",
     "node.fluid_role_source",
     "node.transform_3d",
     "node.pbr_material",
@@ -94,16 +99,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         })
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
-        .filter(|pd| type_id != "node.fluid_surface" || matches!(pd.name.as_ref(),
-            "seed" | "domain_size" | "fill_height" | "liquid_density" | "viscosity" | "surface_tension"
-                | "gravity_x" | "gravity" | "gravity_z"
-                | "emission" | "inflow_speed" | "speed" | "reset" | "surface_subdivisions"
-                | "surface_particle_scale" | "surface_smoothing" | "surface_smoothing_iterations"
-                | "resolution" | "grid_budget_mcells" | "transfer" | "whitewater" | "whitewater_capacity"
-                | "whitewater_wavecrest_rate" | "whitewater_turbulence_rate"
-                | "whitewater_min_energy" | "whitewater_max_energy"
-                | "closed_neg_x" | "closed_pos_x" | "closed_neg_y" | "closed_pos_y"
-                | "closed_neg_z" | "closed_pos_z"))
+        .filter(|pd| liquid_dial_params(type_id).is_none_or(|dials| dials.contains(&pd.name.as_ref())))
         .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
             "role" | "enabled" | "geometry" | "shape" | "radius"
                 | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
@@ -171,7 +167,7 @@ pub fn migrate_scene_exposures(def: &mut EffectGraphDef) -> bool {
     let provider = PrimitiveRegistrySceneExposureProvider;
     let migrated = manifold_core::scene_exposure::migrate_scene_exposures(
         def,
-        SCENE_VOCABULARY_TYPE_IDS,
+        &SCENE_VOCABULARY,
         section_name_for_node,
         &provider,
     );
@@ -396,7 +392,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         .unwrap_or("Scene");
     let category = match node.type_id.as_str() {
         "node.rigid_body" | "node.physics_world" => "Physics".to_string(),
-        "node.fluid_surface" => "Simulation".to_string(),
+        domain if is_liquid_domain(domain) => "Simulation".to_string(),
         "node.fluid_role_source" => "Source".to_string(),
         "node.transform_3d" => "Transform".to_string(),
         "node.pbr_material" | "node.unlit_material" | "node.cel_material" => {
@@ -673,7 +669,7 @@ mod tests {
 
     #[test]
     fn scene_physics_fluid_metadata_exposes_creative_controls_and_trigger() {
-        let metadata = metadata_for_node_type("node.fluid_surface");
+        let metadata = metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
         for name in ["seed", "domain_size", "fill_height", "liquid_density", "viscosity", "surface_tension",
             "gravity_x", "gravity", "gravity_z", "emission", "inflow_speed", "speed", "surface_subdivisions",
             "surface_particle_scale", "surface_smoothing", "surface_smoothing_iterations",
@@ -716,7 +712,7 @@ mod tests {
         use manifold_core::effect_graph_def::SerializedParamValue;
         use std::collections::BTreeSet;
 
-        let mut fluid = graph_node(9, "fluid", "node.fluid_surface");
+        let mut fluid = graph_node(9, "fluid", manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
         fluid.params.insert(
             "fill_height".to_string(),
             SerializedParamValue::Float { value: 0.75 },

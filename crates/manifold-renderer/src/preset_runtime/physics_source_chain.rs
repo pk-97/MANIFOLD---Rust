@@ -15,7 +15,9 @@ impl EffectSlot {
             id.as_str().starts_with(&self.card_prefix)
                 && graph
                     .get_node(*node)
-                    .is_some_and(|node| node.node.type_id().as_str() == "node.fluid_surface")
+                    .is_some_and(|node| {
+                        node.node.type_id().as_str() == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID
+                    })
         }) {
             return;
         }

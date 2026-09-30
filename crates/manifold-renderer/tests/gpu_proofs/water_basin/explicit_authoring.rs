@@ -144,7 +144,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
     let mut fluid = AddSceneFluidCommand::new(
         target.clone(),
         scene,
-        metadata_for_node_type("node.fluid_surface"),
+        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.scene_object"),
@@ -379,7 +379,7 @@ pub(super) fn instrument(def: &mut EffectGraphDef, body_id: &manifold_core::Node
                 .filter_map(|node| node.group.as_ref())
                 .flat_map(|group| &group.nodes),
         )
-        .find(|node| node.type_id == "node.fluid_surface")
+        .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
         .unwrap()
         .node_id
         .clone();

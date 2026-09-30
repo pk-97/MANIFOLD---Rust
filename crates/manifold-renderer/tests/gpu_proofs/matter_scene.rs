@@ -90,7 +90,7 @@ impl MatterScene {
         let registry = PrimitiveRegistry::with_builtin();
         let mut graph = Graph::new();
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
-        let domain = add(&mut graph, "node.matter_domain");
+        let domain = add(&mut graph, manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
         let fill = add(&mut graph, "node.matter_fill");
         let state = add(&mut graph, "node.matter_state");
         let zero = add(&mut graph, "node.zero_array");
