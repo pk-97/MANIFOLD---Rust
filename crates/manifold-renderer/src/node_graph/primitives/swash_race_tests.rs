@@ -56,6 +56,17 @@ pub(crate) fn report_motion(label: &str, motion: &[Motion]) {
     println!("{label}: last 30 frames speed mean {:.3} p99 {:.3} m/s", settled(|m| m.mean), settled(|m| m.p99));
 }
 
+/// The water measure over a run, one [`Packing`] per frame: at frame 0, the
+/// worst frame, and the median of the last 30.
+pub(crate) fn report_water(label: &str, packed: &[Packing]) {
+    let tail = &packed[packed.len().saturating_sub(30)..];
+    for (name, f) in [("past rest", (|p: &Packing| p.crowded) as fn(&Packing) -> f64), ("missing inside", |p: &Packing| p.hollow)] {
+        let worst = packed.iter().map(f).fold(0.0, f64::max);
+        let settled = median(&tail.iter().map(f).collect::<Vec<_>>());
+        println!("{label}: particles {name} {:.1}% at frame 0, worst {worst_pct:.1}%, last 30 frames {settled_pct:.1}%", 100.0 * f(&packed[0]), worst_pct = 100.0 * worst, settled_pct = 100.0 * settled);
+    }
+}
+
 pub(crate) fn median(v: &[f64]) -> f64 {
     let mut v = v.to_vec();
     v.sort_by(f64::total_cmp);
@@ -128,21 +139,51 @@ fn report_packing(particles: &[FluidParticle], n: usize, h: f64) {
     println!("SWASH packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
-/// The share of particles past the fill's 8 per cell, summed over cells: how
-/// compressed the water is, without the mesher. Thin sheets lose mesh
-/// volume but not this.
-fn crowded_share(particles: &[FluidParticle], n: usize, h: f64) -> f64 {
-    let mut per_cell = vec![0u32; n * n * n];
+fn swash_packing(particles: &[FluidParticle], n: usize, h: f64) -> Packing {
+    let live = particles.iter().filter(|p| p.position_radius[3] > 0.0);
+    packing(live.map(|p| p.position_radius), super::swash_preset::DAM_MIN, [n; 3], h)
+}
+
+/// How far the particles sit from the fill's 8 a cell, over the solver's own
+/// cells. Both solvers seed 8 a cell, so it reads the same for each, and it
+/// needs no mesher: thin sheets lose mesh volume but not this.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Packing {
+    /// Particles past 8 in their cell, as a share of the live count: the
+    /// water compressed (I8, the accuracy guard).
+    pub crowded: f64,
+    /// Particles missing below 8 in interior cells (the cell and its six
+    /// neighbours all hold water), as a share of the live count: the water
+    /// spread out, which the mesher reads as volume gained.
+    pub hollow: f64,
+}
+
+/// [`Packing`] for `positions` binned into `cells` of edge `h` from `origin`.
+pub(crate) fn packing(positions: impl Iterator<Item = [f32; 4]>, origin: [f64; 3], cells: [usize; 3], h: f64) -> Packing {
+    let mut per_cell = vec![0u32; cells.iter().product()];
+    let index = |c: [usize; 3]| c[0] + cells[0] * (c[1] + cells[1] * c[2]);
     let mut live = 0usize;
-    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
-        let c: [usize; 3] = std::array::from_fn(|a| {
-            (((f64::from(p.position_radius[a]) - super::swash_preset::DAM_MIN[a]) / h).max(0.0) as usize).min(n - 1)
-        });
-        per_cell[c[0] + n * (c[1] + n * c[2])] += 1;
+    for p in positions {
+        let c: [usize; 3] = std::array::from_fn(|a| (((f64::from(p[a]) - origin[a]) / h).max(0.0) as usize).min(cells[a] - 1));
+        per_cell[index(c)] += 1;
         live += 1;
     }
     let rest = super::swash_preset::REST_PER_CELL as u32;
-    per_cell.iter().map(|&c| c.saturating_sub(rest) as usize).sum::<usize>() as f64 / live.max(1) as f64
+    let crowded: usize = per_cell.iter().map(|&c| c.saturating_sub(rest) as usize).sum();
+    let mut hollow = 0usize;
+    for z in 1..cells[2].saturating_sub(1) {
+        for y in 1..cells[1].saturating_sub(1) {
+            for x in 1..cells[0].saturating_sub(1) {
+                let count = per_cell[index([x, y, z])];
+                let near = [[x - 1, y, z], [x + 1, y, z], [x, y - 1, z], [x, y + 1, z], [x, y, z - 1], [x, y, z + 1]];
+                if count > 0 && near.iter().all(|&c| per_cell[index(c)] > 0) {
+                    hollow += rest.saturating_sub(count) as usize;
+                }
+            }
+        }
+    }
+    let share = |k: usize| k as f64 / live.max(1) as f64;
+    Packing { crowded: share(crowded), hollow: share(hollow) }
 }
 
 /// What one Dam Break run measured.
@@ -168,7 +209,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new() };
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut collar_max, mut blocks_max, mut water_max) = (0u32, 0.0_f64, 0.0_f64);
-    let (mut raw, mut oracle) = (Vec::new(), None);
+    let (mut raw, mut oracle, mut packed) = (Vec::new(), None, Vec::new());
     for frame in 0..frames {
         let (g, c) = run.frame();
         record.gpu.push(g);
@@ -197,6 +238,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         }
         let particles = run.particles();
         record.motion.push(particle_motion(&particles));
+        let pack = swash_packing(&particles, n, h);
+        packed.push(pack);
         if frame % 30 == 29 {
             let stats = particle_stats(&particles);
             assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
@@ -204,16 +247,13 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             println!("{label} frame {frame:3}: {g:.1} ms GPU, {c:.1} ms CPU, left rms {:.1e} max {:.1e} /s", rms.last().unwrap(), max.last().unwrap());
             println!("{label} frame {frame:3}: speed mean {:.2} p99 {:.2} top {:.2} m/s, highest {:.2} m", m.mean, m.p99, m.fastest, m.highest);
             if let Some(v) = record.volume.last() {
-                println!(
-                    "{label} frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%, particles past rest {:.2}%",
-                    100.0 * v,
-                    100.0 * (raw[frame] / raw[0] - 1.0),
-                    100.0 * crowded_share(&particles, n, h)
-                );
+                println!("{label} frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%", 100.0 * v, 100.0 * (raw[frame] / raw[0] - 1.0));
             }
+            println!("{label} frame {frame:3}: particles past rest {:.1}%, missing inside {:.1}%", 100.0 * pack.crowded, 100.0 * pack.hollow);
         }
     }
     report_packing(&run.particles(), n, h);
+    report_water(label, &packed);
     println!("{label}: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&record.gpu), median(&record.cpu));
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));
     println!("{label}: collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks", scene.pressure.capacity, 100.0 * water_max, 100.0 * blocks_max);

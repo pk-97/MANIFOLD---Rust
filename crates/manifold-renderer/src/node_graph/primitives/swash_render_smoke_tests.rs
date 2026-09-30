@@ -527,6 +527,8 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let (mut fastest, mut bucket_fastest) = (0.0_f64, 0.0_f64);
     let capacity = scene.pressure.capacity as u32;
     let mesh_capacity = smoke.mesh_capacity();
+    let smoothing_passes = smoke.runtime.graph.nodes().filter(|n| n.node_id.as_str().contains("liquid_smooth_")).count();
+    assert!(smoothing_passes > 0, "the surface has smoothing passes");
     let wall = Instant::now();
     for frame in 1..=frames {
         let profile = frame % PROFILE_EVERY == 0;
@@ -563,9 +565,10 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         if bad_vertices > 0 {
             smoke.critical.push(format!("frame {frame}: {bad_vertices} non-finite mesh vertices"));
         }
-        // The closed surface caps at the walls' solid, so its wall faces sit
-        // just past them, within a cell (the smoothing's reach).
-        let reach = scene.pressure.cell_size();
+        // The closed surface caps at the walls' solid. Its wall faces sit past
+        // them by at most the crossing's surface cell, plus one surface cell
+        // per smoothing pass.
+        let reach = scene.pressure.cell_size() / scene.surface_scale as f64 * (1 + smoothing_passes) as f64;
         for a in 0..3 {
             box_low[a] = box_low[a].min(low[a]);
             box_high[a] = box_high[a].max(high[a]);

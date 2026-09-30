@@ -14,7 +14,7 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 
 use super::native::seeded_world;
 use super::{FluidSettings, Transform};
-use crate::node_graph::primitives::swash_race_tests::{Motion, motion, report_motion};
+use crate::node_graph::primitives::swash_race_tests::{Motion, Packing, motion, packing, report_motion, report_water};
 use crate::node_graph::primitives::swash_still::write_still;
 use crate::node_graph::primitives::swash_volume::{VolumeDrift, volume_and_area};
 
@@ -50,13 +50,14 @@ fn triangles(vertices: &[SurfaceVertex]) -> impl Iterator<Item = [[f32; 3]; 3]> 
 }
 
 /// The marker particles' motion after a step, read through the particle-frame
-/// seam in scene coordinates. The buffers grow to what the capture asks for.
+/// seam in scene coordinates, and their packing on the engine's own grid
+/// (SWASH's water measure). The buffers grow to what the capture asks for.
 fn engine_motion(
     world: &mut manifold_fluids::FluidWorld,
     domain: super::FluidDomainLayout,
     records: &mut Vec<ParticleRecord>,
     solid: &mut Vec<f32>,
-) -> Motion {
+) -> (Motion, Packing) {
     let offset = domain.to_scene([0.0; 3]);
     let info = loop {
         match world.capture_particle_frame(offset, records, solid) {
@@ -69,7 +70,10 @@ fn engine_motion(
         }
     };
     let live = &records[..info.count as usize];
-    motion(live.iter().map(|p| (p.position_radius, p.velocity)), f64::from(domain.min[1]))
+    let origin = domain.native_origin().map(f64::from);
+    let cells = domain.config(FluidSettings::default()).cells.map(|n| n as usize);
+    let pack = packing(live.iter().map(|p| p.position_radius), origin, cells, domain.cell_size);
+    (motion(live.iter().map(|p| (p.position_radius, p.velocity)), f64::from(domain.min[1])), pack)
 }
 
 fn median(v: &[f64]) -> f64 {
@@ -91,15 +95,16 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
     let (mut wall, mut reported, mut substeps, mut drift, mut raw) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut oracle = None;
     let mut particles = 0;
-    let (mut records, mut solid, mut motions) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut records, mut solid, mut motions, mut packed) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for frame in 0..frames {
         let start = Instant::now();
         let stats = world.step(Seconds(1.0 / 60.0)).expect("engine step");
         wall.push(start.elapsed().as_secs_f64() * 1000.0);
         reported.push(stats.simulation_ms);
         substeps.push(f64::from(stats.substeps));
-        let m = engine_motion(&mut world, domain, &mut records, &mut solid);
+        let (m, pack) = engine_motion(&mut world, domain, &mut records, &mut solid);
         motions.push(m);
+        packed.push(pack);
         world.surface(&mut surface).expect("engine surface");
         let measure = volume_and_area(triangles(&surface), floor);
         raw.push(measure.0);
@@ -127,10 +132,16 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
             println!(
                 "ENGINE {resolution}³ frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%",
                 100.0 * drift[frame as usize],
-                100.0 * (raw[frame as usize] / raw[0] - 1.0)
+                100.0 * (raw[frame as usize] / raw[0] - 1.0),
+            );
+            println!(
+                "ENGINE {resolution}³ frame {frame:3}: particles past rest {:.1}%, missing inside {:.1}%",
+                100.0 * pack.crowded,
+                100.0 * pack.hollow
             );
         }
     }
+    report_water(&format!("ENGINE {resolution}³"), &packed);
     report_motion(&format!("ENGINE {resolution}³"), &motions);
     // Short lines: the tool output around these probes cuts long ones.
     println!("ENGINE {resolution}³ settings: Detail 1, particle scale 2.2, smoothing 0.35 × 2, substeps 1–6 at CFL 5, whitewater {whitewater}");
