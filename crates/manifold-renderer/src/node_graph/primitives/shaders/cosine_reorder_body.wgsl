@@ -14,6 +14,10 @@ fn cosine_reorder_target(m: u32, n: u32) -> u32 {
 
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, direction: i32, axes: i32) -> f32 {
     let n = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    // Past the lattice, or a lattice longer than `values`: 0, never a stray read.
+    if idx >= n.x * n.y * n.z || n.x * n.y * n.z > arrayLength(&buf_values) {
+        return 0.0;
+    }
     let c = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
     var s = vec3<u32>(
         cosine_reorder_source(c.x, n.x),

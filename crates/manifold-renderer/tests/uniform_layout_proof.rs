@@ -519,6 +519,11 @@ const NON_STANDALONE: &[&str] = &[
     // kernel, so no uniform struct at all.
     "node.fft_3d",
     "node.inverse_fft_3d",
+    // The Krylov reduction's two-pass hand shader (its DotParams are
+    // reflected in uniform_layout_extended) and the Krylov loop boundary,
+    // which only issues blits.
+    "node.dot_products",
+    "node.krylov_basis",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

@@ -187,6 +187,12 @@ pub mod well_known {
         START = "start";
         COUNT = "count";
 
+        // ─── Liquid pressure solve (FFT_WATER_SOLVER_DESIGN.md D11 chart entries)
+        VIEW_PLUS = "view_plus";
+        VIEW_MINUS = "view_minus";
+        SHEETS = "sheets";
+        CELL = "cell";
+
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's
         // Array(JointMatrix) output — one skin matrix per joint, column-

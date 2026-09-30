@@ -107,3 +107,4 @@ mod scene_viewport_navigate;
 mod scene_viewport_session;
 mod smoke;
 mod substeps;
+mod swash_krylov;

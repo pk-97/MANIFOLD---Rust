@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 325 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 339 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,11 +293,18 @@ _Generated from the node registry. Do not hand-edit. 325 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (17)
+### Particles 3D (24)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
+| Chart Entries | `node.chart_entries` | Filter | Works out which way each bit of water surface faces, so the pressure solver can look at it from the right side. |
+| Chart Spread | `node.chart_spread` | Filter | Brings the smoothed surface back from the six viewing planes onto the water's edge. |
+| Chart Sums | `node.chart_sums` | Filter | Flattens the water surface onto six viewing planes so the pressure solver can smooth it with a fast transform. |
+| Collar Cells | `node.collar_cells` | Filter | Marks the layer of air cells touching the water, where the pressure solver works. |
+| Collar Gather | `node.collar_gather` | Filter | Reads the grid back at the water's edge for the pressure solver. |
+| Collar Pressure | `node.collar_pressure` | Filter | Finishes the water's pressure from the solver's answer, zero in the air. |
+| Collar Source | `node.collar_source` | Filter | Places the pressure solver's values back on the grid cells at the water's edge. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
@@ -367,13 +374,14 @@ _Generated from the node registry. Do not hand-edit. 325 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (29)
+### Math & Convert (36)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Absolute Value | `node.absolute_value` | Filter | Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape. |
 | Array Feedback | `node.array_feedback` | Filter | Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle. |
 | Array Math | `node.array_math` | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
+| Combine Rows | `node.combine_rows` | Map | Adds weighted rows of a table onto a list of numbers. |
 | Combine XYZW | `node.combine_xyzw` | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
 | Connect Nearest | `node.connect_nearest` | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
 | Cosine Half Spectrum | `node.cosine_half_spectrum` | Map | Starts turning cosine-wave strengths back into a 3D grid. |
@@ -381,8 +389,13 @@ _Generated from the node registry. Do not hand-edit. 325 nodes registered, group
 | Cosine Reorder | `node.cosine_reorder` | Map | Shuffles a 3D grid of numbers into the order a cosine transform needs, or back again. |
 | Cosine Spectrum | `node.cosine_spectrum` | Map | Finishes a 3D cosine transform, turning a grid into the strengths of its smooth wave patterns. |
 | Cosine Surface Scale | `node.cosine_surface_scale` | Map | Weights each smooth wave on a water surface by how sharply it bends, for the pressure solver's surface helper. |
+| Divide By Value | `node.divide_by_value` | Map | Divides a list of numbers by one number the GPU just worked out. |
+| Dot Products | `node.dot_products` | Map | Measures how much a list of numbers lines up with each row of a table, all on the GPU. |
 | FFT 3D | `node.fft_3d` | Map | Breaks a 3D grid of numbers into the waves it is made of. |
 | Inverse FFT 3D | `node.inverse_fft_3d` | Map | Adds a 3D grid's waves back together into the grid. |
+| Krylov Basis | `node.krylov_basis` | Filter | Runs the pressure solver's rounds and remembers every round's result. |
+| Krylov Givens | `node.krylov_givens` | Map | Updates the pressure solver's small bookkeeping table after each round. |
+| Krylov Solve | `node.krylov_solve` | Map | Works out how much of each round's guess goes into the pressure solver's answer. |
 | Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
@@ -392,6 +405,7 @@ _Generated from the node registry. Do not hand-edit. 325 nodes registered, group
 | Resolve Scatter (3D) | `node.resolve_scatter_3d` | Filter | Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample. |
 | Running Total | `node.running_total` | Filter | Adds up a list of counts as it goes, so each item knows where its results start. |
 | Scale + Offset (image) | `node.scale_offset_image` | Filter | Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step. |
+| Select Flagged | `node.select_flagged` | Filter | Turns a grid of yes/no flags into a short list of the flagged cells. |
 | Sine / Cosine | `node.sine_cosine` | Filter | Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient. |
 | Smoothstep | `node.smoothstep` | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
 | Split XY | `node.split_xy` | Filter | Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them. |

@@ -316,6 +316,24 @@ mod cosine_half_spectrum;
 mod cosine_poisson_divide;
 mod cosine_surface_scale;
 mod fft_3d;
+mod dot_products;
+mod combine_rows;
+mod divide_by_value;
+mod krylov_givens;
+mod krylov_solve;
+mod krylov_basis;
+mod collar_cells;
+mod select_flagged;
+mod chart_entries;
+mod chart_sums;
+mod chart_spread;
+mod collar_source;
+mod collar_gather;
+mod collar_pressure;
+#[cfg(test)]
+mod swash_preset;
+#[cfg(test)]
+mod swash_extent_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_tests;
 mod count_surface_triangles;

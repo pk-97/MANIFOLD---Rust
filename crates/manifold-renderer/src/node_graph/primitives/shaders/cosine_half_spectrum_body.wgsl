@@ -27,6 +27,10 @@ fn cosine_half_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, axes: i32) -> Element {
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
     let hx = n.x / 2 + 1;
+    // Past the half spectrum, or a lattice longer than `values`: 0.
+    if idx >= u32(hx * n.y * n.z) || u32(n.x * n.y * n.z) > arrayLength(&buf_values) {
+        return Element(0.0, 0.0);
+    }
     let k = vec3<i32>(
         i32(idx % u32(hx)),
         i32((idx / u32(hx)) % u32(n.y)),

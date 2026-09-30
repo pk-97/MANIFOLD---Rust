@@ -84,6 +84,37 @@ impl KnownItem for CellRange {
     const SPECS: &'static [ChannelSpec] = CELL_RANGE_SPECS;
 }
 
+/// One air-collar entry of the FFT water pressure solve in the six-view
+/// surface helper (FFT_WATER_SOLVER_DESIGN.md D4), from `node.chart_entries`.
+/// View v = 2·axis + (0 for +, 1 for −).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ChartEntry {
+    /// Share of the +x, +y, +z views: max(outward normal component, 0)
+    /// over the square root of the entry count of its chart slot.
+    pub view_plus: [f32; 3],
+    /// Sheet per view, 4 bits each, view v at bits 4v.
+    pub sheets: u32,
+    /// Share of the −x, −y, −z views, as `view_plus`.
+    pub view_minus: [f32; 3],
+    /// The entry's cell; u32::MAX for an empty entry.
+    pub cell: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<ChartEntry>() == 32);
+
+/// Std430: vec3 + u32 pack into one 16-byte slot twice; stride 32.
+pub const CHART_ENTRY_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::VIEW_PLUS, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::SHEETS, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::VIEW_MINUS, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::CELL, ty: ChannelElementType::U32 },
+];
+
+impl KnownItem for ChartEntry {
+    const SPECS: &'static [ChannelSpec] = CHART_ENTRY_SPECS;
+}
+
 /// Spatial bins covering an axis-aligned box: `max(1, ceil(size / cell))`
 /// bins per axis, bin (i, j, k) spanning `min + (i, j, k)·cell`. One rule for
 /// the sort and every atom that searches its bins.
@@ -117,5 +148,6 @@ mod tests {
         );
         assert_eq!(std430_stride(FLUID_BLOB_SPECS) as usize, std::mem::size_of::<FluidBlob>());
         assert_eq!(std430_stride(CELL_RANGE_SPECS) as usize, std::mem::size_of::<CellRange>());
+        assert_eq!(std430_stride(CHART_ENTRY_SPECS) as usize, std::mem::size_of::<ChartEntry>());
     }
 }

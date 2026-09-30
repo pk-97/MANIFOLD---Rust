@@ -22,15 +22,15 @@ struct SurfaceScaleUniforms {
     nodes_z: f32,
     cell_size: f32,
     lowest_wave: f32,
+    offset: f32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
     name: CosineSurfaceScale,
     type_id: "node.cosine_surface_scale",
-    purpose: "Scale the 2D cosine coefficients of a stack of planes (node.cosine_spectrum with axes 2: nodes_x × nodes_y per plane, nodes_z planes) by sqrt(4 sin²(π kx / 2nx) / h² + 4 sin²(π ky / 2ny) / h² + q0²): the walled surface Laplacian's square root, floored by the lowest wave number q0. Between a forward and an inverse plane transform it applies the surface part of the six-view pressure helper.",
+    purpose: "Scale the 2D cosine coefficients of a stack of planes (node.cosine_spectrum with axes 2: nodes_x × nodes_y per plane, nodes_z planes) by sqrt(4 sin²(π kx / 2nx) / h² + 4 sin²(π ky / 2ny) / h² + q0²) − offset: the walled surface Laplacian's square root, floored by the lowest wave number q0, less a constant. Between a forward and an inverse plane transform it applies the surface part of the six-view pressure helper; offset 2/h takes out the helper's local term, which node.chart_spread adds back per entry.",
     inputs: {
         values: Array(f32) required,
     },
@@ -43,6 +43,7 @@ crate::primitive! {
         float_param!("nodes_z", "Planes", 24.0, 1.0, 4096.0),
         float_param!("cell_size", "Cell Size", 1.0, 1e-6, 1e6),
         float_param!("lowest_wave", "Lowest Wave Number (rad/m)", 1.5707964, 0.0, 1e6),
+        float_param!("offset", "Offset", 0.0, -1e6, 1e6),
     ],
     depth_rule: Terminal,
     composition_notes: "cosine_reorder → fft_3d → cosine_spectrum → cosine_surface_scale → cosine_half_spectrum → inverse_fft_3d → cosine_reorder (direction 1), every atom with axes 2. lowest_wave is 2π over the box length (1.571 for a 4 m box).",
@@ -68,6 +69,7 @@ impl Primitive for CosineSurfaceScale {
         };
         let cell_size = ctx.scalar_or_param("cell_size", 1.0).max(1e-6);
         let lowest_wave = ctx.scalar_or_param("lowest_wave", 1.5707964).max(0.0);
+        let offset = ctx.scalar_or_param("offset", 0.0);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let (Some(values), Some(out)) = (ctx.inputs.array("values"), ctx.outputs.array("out")) else {
@@ -84,9 +86,9 @@ impl Primitive for CosineSurfaceScale {
             nodes_z: nodes[2] as f32,
             cell_size,
             lowest_wave,
+            offset,
             dispatch_count: total,
             _pad0: 0,
-            _pad1: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(

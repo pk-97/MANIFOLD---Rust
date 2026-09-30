@@ -45,6 +45,21 @@ macro_rules! float_param {
 }
 pub(crate) use float_param;
 
+/// An Int param: whole numbers in `[min, max]`, stored as a float.
+macro_rules! int_param {
+    ($name:literal, $label:literal, $default:expr, $min:expr, $max:expr) => {
+        ParamDef {
+            name: Cow::Borrowed($name),
+            label: $label,
+            ty: ParamType::Int,
+            default: ParamValue::Float($default),
+            range: Some(($min, $max)),
+            enum_values: &[],
+        }
+    };
+}
+pub(crate) use int_param;
+
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",

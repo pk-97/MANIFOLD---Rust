@@ -339,8 +339,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 82,
-            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, count_surface_triangles and volume_surface_mesh; the FFT water solver adds cosine_reorder, cosine_spectrum, cosine_half_spectrum, cosine_poisson_divide and cosine_surface_scale; all covered by uniform_layout_proof)"
+            scalar_count, 94,
+            "buffer-family census changed; update its existing proof too (Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, count_surface_triangles and volume_surface_mesh; the FFT water solver adds cosine_reorder, cosine_spectrum, cosine_half_spectrum, cosine_poisson_divide, cosine_surface_scale, combine_rows, divide_by_value, krylov_givens, krylov_solve, collar_cells, select_flagged, chart_entries, chart_sums, chart_spread, collar_source, collar_gather and collar_pressure; all covered by uniform_layout_proof)"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(

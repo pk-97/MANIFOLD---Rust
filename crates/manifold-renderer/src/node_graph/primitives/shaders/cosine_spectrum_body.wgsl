@@ -35,6 +35,10 @@ fn cosine_cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, axes: i32) -> f32 {
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    // Past the lattice, or a half spectrum shorter than the lattice's: 0.
+    if idx >= u32(n.x * n.y * n.z) || u32((n.x / 2 + 1) * n.y * n.z) > arrayLength(&buf_spectrum) {
+        return 0.0;
+    }
     let k = vec3<i32>(
         i32(idx % u32(n.x)),
         i32((idx / u32(n.x)) % u32(n.y)),
