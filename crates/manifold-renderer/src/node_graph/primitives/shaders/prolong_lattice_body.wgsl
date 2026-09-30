@@ -10,7 +10,9 @@ fn body(idx: u32, count: u32, e_value: f32, e_water: f32, nodes_x: f32, nodes_y:
     let n = m / 2;
     let cells = u32(m.x) * u32(m.y) * u32(m.z);
     let coarse = u32(n.x) * u32(n.y) * u32(n.z);
-    if idx >= cells || coarse > arrayLength(&buf_coarse) || any(n < vec3<i32>(1)) || !(e_water > 0.5) {
+    // An odd side would put a parent past the coarse lattice.
+    let odd_side = any((m % vec3<i32>(2)) != vec3<i32>(0));
+    if idx >= cells || odd_side || coarse > arrayLength(&buf_coarse) || any(n < vec3<i32>(1)) || !(e_water > 0.5) {
         return e_value;
     }
     let f = vec3<i32>(

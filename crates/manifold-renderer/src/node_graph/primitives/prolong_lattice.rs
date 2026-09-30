@@ -55,7 +55,11 @@ crate::primitive! {
     category: Particles3D,
     role: Filter,
     aliases: ["prolong", "interpolate", "upsample volume", "coarse correction", "multigrid prolong"],
-    fusion_kind: Pointwise,
+    // Not MinInputs: that is the min over every required input, and the
+    // gathered coarse lattice is an eighth as long. The freeze compiler has
+    // no count for "the shorter of the coincident inputs", so a region that
+    // reads water from outside refuses and runs unfused.
+    fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/prolong_lattice_body.wgsl"),
     input_access: [Coincident, BufferGather, Coincident],
     output_capacity: FusedOutputCapacity::FromInput { input: "value" },

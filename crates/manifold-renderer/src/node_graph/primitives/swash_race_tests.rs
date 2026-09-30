@@ -318,27 +318,23 @@ struct Record {
 }
 
 /// The Dam Break for `frames` frames: per-frame GPU and CPU encode ms, what
-/// the projection left undone, collar size, occupancy, packing and particle motion; meshed, the
+/// the projection left undone, occupancy, packing and particle motion; meshed, the
 /// water volume the surface holds, and stills at frames 90 and 240. `label`
 /// names the run in its lines, kept short because the tool output around
 /// these probes cuts long ones. It asserts only what must hold for the
-/// numbers to mean anything: no GPU fault, every particle alive and finite,
-/// the collar within capacity.
+/// numbers to mean anything: no GPU fault, every particle alive and finite.
 fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let mut run = Run::new(scene);
     let (n, h, min) = (run.n(), scene.pressure.cell_size(), scene.min());
     let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new() };
     let (mut rms, mut max) = (Vec::new(), Vec::new());
-    let (mut collar_max, mut blocks_max, mut water_max) = (0u32, 0.0_f64, 0.0_f64);
+    let (mut blocks_max, mut water_max) = (0.0_f64, 0.0_f64);
     let (mut raw, mut oracle, mut packed) = (Vec::new(), None, Vec::new());
     for frame in 0..frames {
         let (g, c) = run.frame();
         record.gpu.push(g);
         record.cpu.push(c);
         for step in 0..scene.steps {
-            let collar = run.collar(step);
-            collar_max = collar_max.max(collar);
-            assert!(collar as usize <= scene.pressure.capacity, "frame {frame} step {step}: collar {collar} past capacity");
             let water = run.water(step);
             let (r, m) = divergence(&run.faces(step), &water, n, h);
             rms.push(r);
@@ -390,7 +386,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     report_water(label, &packed);
     println!("{label}: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&record.gpu), median(&record.cpu));
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));
-    println!("{label}: collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks", scene.pressure.capacity, 100.0 * water_max, 100.0 * blocks_max);
+    println!("{label}: water at most {:.1}% of cells, {:.1}% of 8³ blocks", 100.0 * water_max, 100.0 * blocks_max);
     report_motion(label, &record.motion);
     let top = record.motion.iter().map(|m| m.fastest).fold(0.0, f64::max);
     println!("{label}: the top speed crosses {:.2} cells a step, {} steps a frame", top * scene.step_dt() / h, scene.steps);
@@ -419,14 +415,15 @@ fn fft_water_cost_probe_refined() {
     cost_probe(128);
 }
 
-/// The 128³ splash against the solve's pass count: if the fastest particle
-/// and the highest splash fall as passes rise, an under-converged solve is
-/// feeding the splash energy; if not, the splash is the scene's.
+/// The 128³ splash against the solve's iteration count: if the fastest
+/// particle and the highest splash fall as iterations rise, an
+/// under-converged solve is feeding the splash energy; if not, the splash is
+/// the scene's.
 #[test]
-fn fft_water_refined_splash_passes() {
-    for passes in [16, 24, 32] {
-        let scene = WaterScene::dam_break(128).with_surface().with_passes(passes);
-        dam_break(scene, &format!("PASSES {passes} 128³"), 150);
+fn fft_water_refined_splash_iterations() {
+    for iterations in [4, 8, 12] {
+        let scene = WaterScene::dam_break(128).with_surface().with_iterations(iterations);
+        dam_break(scene, &format!("ITERATIONS {iterations} 128³"), 150);
     }
 }
 
@@ -478,7 +475,7 @@ fn fft_water_dam_break_settles() {
 }
 
 /// The density solve's share of crowding removed per step (rate × step dt)
-/// and its pass count against volume drift and particle motion, on the
+/// and its iteration count against volume drift and particle motion, on the
 /// meshed 64³ Dam Break, with the drift curve every 30 frames. The
 /// correction moves particles only, so a share up to 2 relaxes instead of
 /// oscillating.
@@ -486,9 +483,9 @@ fn fft_water_dam_break_settles() {
 fn fft_water_density_sweep() {
     let base = WaterScene::dam_break(64).with_surface();
     let per_second = 1.0 / base.step_dt();
-    for (share, passes) in [(5.0 / 6.0, 8), (1.0, 8), (1.5, 8), (5.0 / 6.0, 24), (1.0, 24)] {
-        let scene = WaterScene { spread_rate: share * per_second, density_passes: passes, ..base };
-        dam_break(scene, &format!("SWEEP share {share:.2} passes {passes}"), 300);
+    for (share, iterations) in [(5.0 / 6.0, 3), (1.0, 3), (1.5, 3), (5.0 / 6.0, 8), (1.0, 8)] {
+        let scene = WaterScene { spread_rate: share * per_second, density_iterations: iterations, ..base };
+        dam_break(scene, &format!("SWEEP share {share:.2} iterations {iterations}"), 300);
     }
 }
 
@@ -557,25 +554,25 @@ fn leftover_by_place(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> (
 /// leftover divergence against its right-hand side (the divergence of the
 /// forced faces over the water cells; the density solve is a separate solve
 /// whose result only moves particles), where the leftover sits, and how it
-/// follows the collar.
+/// follows the water's size.
 fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
     let mut run = Run::new(scene);
     let (n, h) = (run.n(), scene.pressure.cell_size());
     let mut totals = [Leftover::default(); 3];
-    let (mut rms, mut relative, mut by_collar) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut rms, mut relative, mut by_size) = (Vec::new(), Vec::new(), Vec::new());
     let mut worst_cell = (0.0, 0, [0; 3], 0usize, 0u32);
     for frame in 0..frames {
         run.frame();
         for step in 0..scene.steps {
             let water = run.water(step);
-            let collar = run.collar(step);
+            let wet = run.water_cells(step);
             let (places, cell) = leftover_by_place(&run.faces(step), &water, n, h);
             let (rhs, _) = divergence(&run.forced(step), &water, n, h);
             let cells: usize = places.iter().map(|p| p.cells).sum();
             let r = (places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt();
             rms.push(r);
             relative.push(r / rhs.max(1e-30));
-            by_collar.push((collar, r));
+            by_size.push((wet, r));
             for (t, p) in totals.iter_mut().zip(places) {
                 t.cells += p.cells;
                 t.squares += p.squares;
@@ -583,7 +580,7 @@ fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
                 t.past_one += p.past_one;
             }
             if cell.0 > worst_cell.0 {
-                worst_cell = (cell.0, cell.1, cell.2, frame, collar);
+                worst_cell = (cell.0, cell.1, cell.2, frame, wet);
             }
             if frame % 30 == 29 && step == 0 {
                 let line: Vec<String> = PLACES
@@ -591,7 +588,7 @@ fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
                     .zip(places)
                     .map(|(name, p)| format!("{name} {:.1e}/{:.1e}", (p.squares / p.cells.max(1) as f64).sqrt(), p.max))
                     .collect();
-                println!("{label} frame {frame:3}: collar {collar}, rms {r:.2e} ({:.1e} of the rhs {rhs:.2e}); rms/max {}", r / rhs.max(1e-30), line.join(", "));
+                println!("{label} frame {frame:3}: water cells {wet}, rms {r:.2e} ({:.1e} of the rhs {rhs:.2e}); rms/max {}", r / rhs.max(1e-30), line.join(", "));
             }
         }
     }
@@ -606,22 +603,21 @@ fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
         );
     }
     println!("{label}: rms median {:.2e} worst {:.2e}; relative to the rhs median {:.2e} worst {:.2e}", median(&rms), worst(&rms), median(&relative), worst(&relative));
-    let (max, place, cell, frame, collar) = worst_cell;
-    println!("{label}: worst cell {max:.2e} /s, {} cell {cell:?}, frame {frame}, collar {collar}", PLACES[place]);
-    by_collar.sort_by_key(|c| c.0);
-    let quarter = by_collar.len() / 4;
-    for (q, chunk) in by_collar.chunks(quarter.max(1)).take(4).enumerate() {
+    let (max, place, cell, frame, wet) = worst_cell;
+    println!("{label}: worst cell {max:.2e} /s, {} cell {cell:?}, frame {frame}, water cells {wet}", PLACES[place]);
+    by_size.sort_by_key(|c| c.0);
+    let quarter = by_size.len() / 4;
+    for (q, chunk) in by_size.chunks(quarter.max(1)).take(4).enumerate() {
         let r: Vec<f64> = chunk.iter().map(|c| c.1).collect();
-        println!("{label}: collar quarter {q} ({}..{} cells): rms median {:.2e}", chunk[0].0, chunk[chunk.len() - 1].0, median(&r));
+        println!("{label}: water quarter {q} ({}..{} cells): rms median {:.2e}", chunk[0].0, chunk[chunk.len() - 1].0, median(&r));
     }
 }
 
-/// The 128³ pressure solve's leftover divergence against its pass count
-/// (BUG-m632, residual bar): 24, 32 and 48 passes over the 300-frame Dam
-/// Break, the step alone.
+/// The 128³ pressure solve's leftover divergence against its iteration
+/// count: 4, 8 and 12 over the 300-frame Dam Break, the step alone.
 #[test]
-fn fft_water_refined_leftover_passes() {
-    for passes in [24, 32, 48] {
-        leftover_run(WaterScene::dam_break(128).with_passes(passes), &format!("LEFTOVER {passes} 128³"), 300);
+fn fft_water_refined_leftover_iterations() {
+    for iterations in [4, 8, 12] {
+        leftover_run(WaterScene::dam_break(128).with_iterations(iterations), &format!("LEFTOVER {iterations} 128³"), 300);
     }
 }

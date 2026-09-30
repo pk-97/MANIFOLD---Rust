@@ -411,9 +411,9 @@ mod face_grid_scene_tests;
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) mod swash_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
-mod swash_tests;
+mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
-mod swash_solve_tests;
+mod gpu_flip_solve_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod swash_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

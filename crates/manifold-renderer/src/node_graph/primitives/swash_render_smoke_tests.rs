@@ -1,7 +1,7 @@
 //! SWASH end to end through the render graph the app shows (`render_def`):
 //! particles → GPU Liquid Surface → water material with volume optics → tone
 //! map → frames, run by `PresetRuntime` as the app runs a generator. A long
-//! run watches for GPU faults, non-finite particles, collar or mesh past
+//! run watches for GPU faults, non-finite particles, a mesh past its
 //! capacity, a mesh leaving the tank, frame-time creep and memory growth; it
 //! splits each frame's GPU and CPU time by stage from timestamped frames, and
 //! checks what the transport does to the liquid's clock: pause, Reset,
@@ -54,11 +54,11 @@ const STAGES: [&str; 23] = [
     "gravity + walls",
     "extrapolation",
     "divergence",
-    "solve setup (collar, charts, rhs box)",
-    "solve helper (passes)",
-    "solve box (passes)",
-    "solve Krylov (passes)",
-    "solve finish (λ, final box, p)",
+    "solve levels (coarse water, zeros)",
+    "solve smoothing",
+    "solve residual + transfers",
+    "solve coarsest level",
+    "solve vectors (CG)",
     "pressure gradient",
     "density solve (source, passes, spread)",
     "face→particle + advect",
@@ -88,12 +88,13 @@ fn stage(name: &str) -> &'static str {
             "project" => "pressure gradient",
             "move" => "face→particle + advect",
             l if l.starts_with("old_extend") || l.starts_with("new_extend") => "extrapolation",
-            l if l.starts_with("helper_") => "solve helper (passes)",
-            l if l.starts_with("pass_box_") || matches!(l, "pass_source" | "sum_z" | "w") => "solve box (passes)",
-            "h1" | "w1" | "h2" | "w2" | "norm" | "next" | "givens" | "krylov" => "solve Krylov (passes)",
-            l if l.starts_with("final_helper_") || l.starts_with("final_box_") => "solve finish (λ, final box, p)",
-            "final_source" | "y" | "u" | "pressure" => "solve finish (λ, final box, p)",
-            _ => "solve setup (collar, charts, rhs box)",
+            l if l.contains("_pre") || l.contains("_post") => "solve smoothing",
+            l if l.starts_with("mg") && (l.ends_with("_residual") || l.ends_with("_restrict") || l.ends_with("_prolong")) => {
+                "solve residual + transfers"
+            }
+            l if l.starts_with("mg") && l.ends_with("_solve") => "solve coarsest level",
+            "cg" | "rz" | "beta" | "direction" | "minus_lp" | "p_dot_s" | "alpha" | "solution" | "residual" => "solve vectors (CG)",
+            _ => "solve levels (coarse water, zeros)",
         };
     }
     match name {
@@ -271,7 +272,7 @@ impl Smoke {
         };
         // Hold what is read after each frame past it.
         let mut watched: Vec<String> = vec!["fill".into(), "state".into()];
-        watched.extend((0..scene.steps).map(|k| format!("s{k}.collar_total")));
+        watched.extend((0..scene.steps).map(|k| format!("s{k}.water")));
         for suffix in ["liquid_offsets", "liquid_mesh"] {
             let found = smoke.runtime.graph.nodes().find(|n| n.node_id.as_str().ends_with(suffix)).expect("surface node");
             watched.push(found.node_id.as_str().to_string());
@@ -420,9 +421,10 @@ impl Smoke {
         self.dumped("state", "out", self.scene.particles() as usize)
     }
 
-    fn collar(&self, step: usize) -> u32 {
+    /// Water cells in the step's lattice: the size of its pressure solve.
+    fn water_cells(&self, step: usize) -> u32 {
         let cells = self.scene.pressure.cells();
-        *self.dumped::<u32>(&format!("s{step}.collar_total"), "out", cells).last().expect("lattice")
+        self.dumped::<f32>(&format!("s{step}.water"), "out", cells).iter().filter(|&&w| w > 0.5).count() as u32
     }
 
     /// Live triangles and, over their vertices, the bounding box and how many
@@ -514,10 +516,8 @@ fn id_faults(particles: &[FluidParticle]) -> usize {
     faults
 }
 
-/// The long run of one scene at one lattice. Panics at the first GPU fault,
-/// non-finite particle or collar past capacity (a collar past capacity would
-/// solve the wrong problem and read past the collar vectors). Frozen, as the
-/// app renders it.
+/// The long run of one scene at one lattice. Panics at the first GPU fault
+/// or non-finite particle. Frozen, as the app renders it.
 fn run(scene: WaterScene, label: &str, transport: bool) {
     run_built(scene, label, transport, Smoke::new);
 }
@@ -528,7 +528,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     let dir = out_dir();
     let frames = frames();
     let tag = format!("{label}_{n}");
-    println!("SMOKE {tag}: {} particles, collar capacity {}, {WIDTH}x{HEIGHT}", scene.particles(), scene.pressure.capacity);
+    println!("SMOKE {tag}: {} particles, {} pressure iterations, {WIDTH}x{HEIGHT}", scene.particles(), scene.pressure.iterations);
     // The CPU census gates the run against the allowance the runtime itself
     // admits graphs by (75% of the working set): a scene past it is refused
     // by name, never tried.
@@ -573,7 +573,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     let mut ffmpeg = ffmpeg.ok();
 
     let mut csv = std::fs::File::create(dir.join(format!("{tag}_frames.csv"))).expect("csv");
-    writeln!(csv, "frame,profiled,gpu_ms,cpu_ms,collar0,collar1,triangles,mem_mb").unwrap();
+    writeln!(csv, "frame,profiled,gpu_ms,cpu_ms,water0,water1,triangles,mem_mb").unwrap();
     let mut gpu: Vec<(usize, f64)> = Vec::new();
     let mut cpu: Vec<(usize, f64)> = Vec::new();
     let mut stage_gpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
@@ -581,12 +581,11 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
     let mut census: [Vec<f64>; 5] = Default::default();
     let mut small_by_type: Vec<(String, f64, f64)> = Vec::new();
-    let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
+    let (mut water_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
     let mut rss: Vec<(usize, f64)> = Vec::new();
     let (mut fastest, mut bucket_fastest) = (0.0_f64, 0.0_f64);
-    let capacity = scene.pressure.capacity as u32;
     let mesh_capacity = smoke.mesh_capacity();
     let smoothing_passes = smoke.runtime.graph.nodes().filter(|n| n.node_id.as_str().contains("liquid_smooth_")).count();
     assert!(smoothing_passes > 0, "the surface has smoothing passes");
@@ -623,11 +622,8 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
             gpu.push((frame, r.gpu_ms));
             cpu.push((frame, r.cpu_ms));
         }
-        let collars: Vec<u32> = (0..scene.steps).map(|k| smoke.collar(k)).collect();
-        for (k, &c) in collars.iter().enumerate() {
-            collar_peak = collar_peak.max(c);
-            assert!(c <= capacity, "CRITICAL: frame {frame} step {k}: collar {c} past capacity {capacity}");
-        }
+        let wet: Vec<u32> = (0..scene.steps).map(|k| smoke.water_cells(k)).collect();
+        water_peak = wet.iter().copied().fold(water_peak, u32::max);
         let (triangles, low, high, bad_vertices) = smoke.mesh();
         tri_peak = tri_peak.max(triangles);
         tri_low = tri_low.min(triangles);
@@ -659,8 +655,8 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
             u8::from(profile),
             r.gpu_ms,
             r.cpu_ms,
-            collars[0],
-            collars.get(1).copied().unwrap_or(0)
+            wet[0],
+            wet.get(1).copied().unwrap_or(0)
         )
         .unwrap();
         if frame % 10 == 0 || frame == 1 {
@@ -683,7 +679,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         if frame % 100 == 0 {
             rss.push((frame, host_rss_mb()));
             println!(
-                "SMOKE {tag} frame {frame}: {:.2} ms GPU, {:.2} ms CPU, collar {collars:?}, {triangles} triangles, GPU mem {mem:.0} MB, fastest {bucket_fastest:.2} m/s over the last 100, {:.0} s wall",
+                "SMOKE {tag} frame {frame}: {:.2} ms GPU, {:.2} ms CPU, water cells {wet:?}, {triangles} triangles, GPU mem {mem:.0} MB, fastest {bucket_fastest:.2} m/s over the last 100, {:.0} s wall",
                 r.gpu_ms,
                 r.cpu_ms,
                 wall.elapsed().as_secs_f64()
@@ -739,8 +735,8 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     let mem_max = memory.iter().map(|m| m.1).fold(f64::MIN, f64::max);
     println!("SMOKE {tag} GPU memory: frame 1 {mem_first:.0} MB, max {mem_max:.0} MB, last {:.0} MB", memory.last().map_or(f64::NAN, |m| m.1));
     println!(
-        "SMOKE {tag} capacity: collar peak {collar_peak} of {capacity} ({:.1}%); triangles {tri_low}..{tri_peak}, vertices peak {} of {mesh_capacity} ({:.2}%)",
-        100.0 * f64::from(collar_peak) / f64::from(capacity),
+        "SMOKE {tag} capacity: water cells peak {water_peak} ({:.1}% of the lattice); triangles {tri_low}..{tri_peak}, vertices peak {} of {mesh_capacity} ({:.2}%)",
+        100.0 * f64::from(water_peak) / scene.pressure.cells() as f64,
         3 * tri_peak,
         100.0 * 3.0 * f64::from(tri_peak) / mesh_capacity as f64
     );

@@ -10,7 +10,7 @@ use manifold_gpu::GpuTextureFormat;
 use super::swash_preset::{EXTENDED_LAYERS, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::swash_volume::{VolumeDrift, volume_and_area};
-use super::swash_solve_tests::{node_named, output_of};
+use super::gpu_flip_solve_tests::{node_named, output_of};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
@@ -48,14 +48,6 @@ impl Run {
         Self::with_graph(scene, water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds"))
     }
 
-    /// The scene frozen as the app renders it: the solves' cosine pairs fused.
-    pub(super) fn frozen(scene: WaterScene) -> Self {
-        let mut registry = PrimitiveRegistry::with_builtin();
-        register_substep_test_nodes(&mut registry);
-        let view = crate::node_graph::freeze::install::fuse_generator_view(&water_def(scene), &registry).expect("the scene fuses");
-        Self::with_graph(scene, (*view.def).clone().into_graph(&registry, &view.mesh_rules).expect("fused def builds"))
-    }
-
     fn with_graph(scene: WaterScene, graph: Graph) -> Self {
         let plan = compile(&graph).expect("water def compiles");
         let device = crate::test_device();
@@ -66,7 +58,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "gravity", "project", "collar_total"] {
+            for name in ["water", "gravity", "project"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -170,9 +162,9 @@ impl Run {
         std::array::from_fn(|axis| self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize))
     }
 
-    pub(super) fn collar(&self, step: usize) -> u32 {
-        let total: Vec<u32> = self.read(&format!("s{step}.collar_total"), "out", self.n().pow(3));
-        *total.last().expect("a lattice")
+    /// Water cells in the step's lattice: the size of its pressure solve.
+    pub(super) fn water_cells(&self, step: usize) -> u32 {
+        self.water(step).iter().filter(|&&w| w > 0.5).count() as u32
     }
 }
 
@@ -250,12 +242,12 @@ fn fft_water_free_fall_keeps_g() {
     let t = f64::from(frames) / 60.0;
     let want = -G * t;
     println!(
-        "SWASH free fall {}³: {} particles, mean velocity {:?} m/s after {t:.3} s (−g·t = {want:.4}), mean height {:.4} m, collar {}",
+        "SWASH free fall {}³: {} particles, mean velocity {:?} m/s after {t:.3} s (−g·t = {want:.4}), mean height {:.4} m, water cells {}",
         run.n(),
         stats.live,
         stats.mean_velocity,
         stats.mean_height,
-        run.collar(scene.steps - 1)
+        run.water_cells(scene.steps - 1)
     );
     assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "every particle lives and stays finite");
     assert!((stats.mean_velocity[1] - want).abs() <= 0.01 * want.abs(), "fall speed {} against {want}", stats.mean_velocity[1]);
@@ -304,11 +296,11 @@ fn fft_water_still_pool() {
             let last = scene.steps - 1;
             let (rms, max) = divergence(&run.faces(last), &run.water(last), run.n(), scene.pressure.cell_size());
             println!(
-                "SWASH still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, collar {}",
+                "SWASH still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, water cells {}",
                 run.n(),
                 stats.fastest,
                 stats.mean_height,
-                run.collar(last)
+                run.water_cells(last)
             );
             assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
             fastest.push(stats.fastest);
@@ -337,23 +329,4 @@ fn fft_water_still_pool_keeps_its_meshed_volume() {
     println!("SWASH still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
     println!("SWASH still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
-}
-
-/// The frozen 64³ Dam Break, every solve's cosine pairs fused (BUG-u8io,
-/// fft-water-fusion-param-capacity), moves every particle exactly as the
-/// unfrozen one through the collapse and into the splash.
-/// `fft_water_frozen_graphs_cover_every_dispatch` proves its arrays first.
-#[test]
-fn fft_water_frozen_step_matches_unfrozen() {
-    let scene = WaterScene::dam_break(64);
-    let (mut unfrozen, mut frozen) = (Run::new(scene), Run::frozen(scene));
-    let fused = frozen.graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
-    assert_eq!(fused, 5 * (scene.steps + scene.density_solves()), "every solve runs its five cosine pairs fused");
-    for frame in 0..90 {
-        unfrozen.frame();
-        frozen.frame();
-        let (a, b) = (unfrozen.particles(), frozen.particles());
-        let same = bytemuck::cast_slice::<FluidParticle, u8>(&a) == bytemuck::cast_slice::<FluidParticle, u8>(&b);
-        assert!(same, "frame {frame}: the frozen step moved particles differently");
-    }
 }

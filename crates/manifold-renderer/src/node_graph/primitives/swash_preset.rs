@@ -32,7 +32,7 @@ pub(crate) const STEPS_PER_TICK: usize = 2;
 
 /// Iteration counts the GPU iteration trend runs; the CPU size proof covers each.
 #[cfg(test)]
-pub(super) const TREND_ITERATIONS: [usize; 4] = [4, 6, 8, 12];
+pub(super) const TREND_ITERATIONS: [usize; 5] = [3, 4, 6, 8, 12];
 
 /// The main solve's iterations at every lattice (Auto). A multigrid
 /// preconditioner's count does not grow with the lattice: on the seven Dam
