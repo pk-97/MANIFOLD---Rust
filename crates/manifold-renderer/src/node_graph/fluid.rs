@@ -33,7 +33,7 @@ mod native;
 pub(crate) mod particle_ring;
 #[cfg(test)]
 mod playback_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(test, feature = "water-race-probes"))]
 mod race_probe;
 mod roles;
 mod take;

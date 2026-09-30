@@ -67,18 +67,32 @@ pub(super) struct WaterScene {
     pub column: [[f64; 2]; 3],
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
+    /// How fast crowded cells spread (1/s): node.density_source's rate.
+    pub spread_rate: f64,
 }
+
+/// Particles per cell the fill seeds: one per half-cell site.
+pub(super) const REST_PER_CELL: f64 = 8.0;
+
+/// The share of a cell's crowding the density source removes per step:
+/// spread_rate × step dt. Crowding e decays as (1 − share) per step, so a
+/// share over 1 overshoots and the water fizzes; the 64³ Dam Break sweep
+/// (`fft_water_density_sweep`) shows it from 1.25 on. 5/6 is 100/s at two
+/// steps per frame, the best measured rate under that bound.
+pub(super) const SPREAD_PER_STEP: f64 = 5.0 / 6.0;
 
 impl WaterScene {
     /// The engine's Dam Break, obstacle unwired.
     pub fn dam_break(n: usize) -> Self {
+        let steps = 2;
         Self {
             pressure: PressureShape::at(n),
-            steps: 2,
+            steps,
             flip: 0.95,
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
+            spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
         }
     }
 
@@ -429,7 +443,14 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
-    let p = pressure(b, s, water, (divergence, "out"));
+    let spread = b.node(
+        "density",
+        "node.density_source",
+        Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
+    );
+    b.wire((divergence, "out"), spread, "divergence");
+    b.wire((sort, "cell_ranges"), spread, "cell_ranges");
+    let p = pressure(b, s, water, (spread, "out"));
     let projected = b.node("project", "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), projected, "faces");
     b.wire(p, projected, "pressure");

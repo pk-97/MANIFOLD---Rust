@@ -163,6 +163,9 @@ rt-perf-proofs = ["gpu-proofs"]
 fluid-perf-proofs = ["gpu-proofs"]
 # GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
 matter-perf-proofs = ["gpu-proofs"]
+# FFT water race probes (FFT_WATER_SOLVER_DESIGN.md P3): minutes-long Dam
+# Break runs of SWASH and the FLIP Fluids engine, opt-in.
+water-race-probes = ["gpu-proofs"]
 
 [lints]
 workspace = true

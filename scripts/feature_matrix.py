@@ -42,6 +42,7 @@ MATRIX = [
     ("manifold-renderer", "rt-perf-proofs"),
     ("manifold-renderer", "fluid-perf-proofs"),
     ("manifold-renderer", "matter-perf-proofs"),
+    ("manifold-renderer", "water-race-probes"),
     ("manifold-spectral", "gpu-proofs"),
 ]
 
