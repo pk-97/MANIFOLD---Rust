@@ -33,6 +33,7 @@
 use std::collections::{HashMap, HashSet};
 
 use manifold_core::LayerId;
+use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, SerializedParamValue,
 };
@@ -1231,7 +1232,7 @@ fn trace_scene_object(
             continue;
         }
         if !MODIFIER_TYPE_IDS.contains(&n.type_id.as_str()) {
-            if n.type_id == "node.fluid_surface" {
+            if n.type_id == FLIP_DOMAIN_TYPE_ID {
                 (fluid_domain, fluid_domain_transform) =
                     trace_fluid_domain(&current_level, &mesh_scope_path, n);
                 fluid_node_ids.push(n.id);
@@ -1682,7 +1683,7 @@ mod tests {
             "scale_y", SerializedParamValue::Float { value: 4.0 });
         let graph = def(vec![scene, node(2, "system.final_output", None),
             node(3, "node.scene_object", Some("Fluid")),
-            node(4, "node.fluid_surface", None), node(5, "node.transform_3d", None), domain],
+            node(4, FLIP_DOMAIN_TYPE_ID, None), node(5, "node.transform_3d", None), domain],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
                 wire(6, "transform", 4, "domain"),
                 wire(4, "vertices", 3, "vertices"), wire(5, "transform", 4, "emitter"),
@@ -1712,7 +1713,7 @@ mod tests {
         }));
         let graph = def(vec![scene, node(2, "system.final_output", None),
             node(3, "node.scene_object", Some("Fluid")),
-            node(4, "node.fluid_surface", None), source_group],
+            node(4, FLIP_DOMAIN_TYPE_ID, None), source_group],
             vec![wire(1, "color", 2, "in"), wire(3, "object", 1, "object_0"),
                 wire(4, "vertices", 3, "vertices"), wire(10, "role", 4, "role_0"),
                 wire(10, "role", 4, "role_1")]);
@@ -1729,7 +1730,7 @@ mod tests {
             SerializedParamValue::Float { value: 1.0 });
         let graph = def(vec![scene, node(2, "system.final_output", None),
             node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
-            node(4, "node.fluid_surface", None), node(6, "node.value", None)],
+            node(4, FLIP_DOMAIN_TYPE_ID, None), node(6, "node.value", None)],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
                 wire(4, "vertices", 3, "vertices"), wire(6, "out", 4, "domain")]);
         let vm = SceneVm::from_def(&graph).unwrap();
@@ -1750,7 +1751,7 @@ mod tests {
             "scale_y", SerializedParamValue::Float { value: 4.0 });
         let graph = def(vec![scene, node(2, "system.final_output", None),
             node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
-            node(4, "node.fluid_surface", None), domain,
+            node(4, FLIP_DOMAIN_TYPE_ID, None), domain,
             node(7, "node.value", None)],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
                 wire(4, "vertices", 3, "vertices"), wire(6, "transform", 4, "domain"),
@@ -1769,7 +1770,7 @@ mod tests {
             SerializedParamValue::Bool { value: true });
         let graph = def(vec![scene, node(2, "system.final_output", None),
             node(3, SCENE_OBJECT_TYPE_ID, Some("Fluid")),
-            node(4, "node.fluid_surface", None), domain],
+            node(4, FLIP_DOMAIN_TYPE_ID, None), domain],
             vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
                 wire(4, "vertices", 3, "vertices"), wire(6, "transform", 4, "domain")]);
         let vm = SceneVm::from_def(&graph).unwrap();

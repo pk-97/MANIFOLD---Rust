@@ -482,7 +482,7 @@ mod tests {
                 {"id": 2, "nodeId": "final", "typeId": "system.final_output"},
                 {"id": 3, "nodeId": "world", "typeId": "node.physics_world"},
                 {"id": 4, "nodeId": "world_body", "typeId": "node.rigid_body"},
-                {"id": 5, "nodeId": "fluid", "typeId": "node.fluid_surface"},
+                {"id": 5, "nodeId": "fluid", "typeId": manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID},
                 {"id": 6, "nodeId": "body_object", "typeId": "node.scene_object"},
                 {"id": 7, "nodeId": "fluid_object", "typeId": "node.scene_object"}
             ],
