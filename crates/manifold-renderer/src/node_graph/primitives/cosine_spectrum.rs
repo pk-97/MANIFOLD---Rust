@@ -46,32 +46,15 @@ pub(super) fn transform_axes(params: &ParamValues) -> u32 {
 }
 
 /// Lattice lengths from the params. Every transformed length is even, 2 to
-/// 1024; a batched z (axes 2) is any count from 1 to 4096. These are the
-/// lengths the arrays are sized for.
+/// 1024; a batched z (axes 2) is any count from 1 to 4096.
 pub(super) fn lattice_nodes(params: &ParamValues) -> Option<[u32; 3]> {
     lattice_nodes_with(params, transform_axes(params))
 }
 
 pub(super) fn lattice_nodes_with(params: &ParamValues, axes: u32) -> Option<[u32; 3]> {
-    legal_lattice(
-        |name| match params.get(name) {
-            Some(ParamValue::Float(n)) => *n,
-            _ => 64.0,
-        },
-        axes,
-    )
-}
-
-/// This frame's lattice: a wire into `nodes_x/y/z` wins over the param, so a
-/// solve can run on a smaller box inside arrays sized for the whole one.
-pub(super) fn live_lattice(ctx: &EffectNodeContext<'_, '_>) -> Option<[u32; 3]> {
-    legal_lattice(|name| ctx.scalar_or_param(name, 64.0), transform_axes(ctx.params))
-}
-
-fn legal_lattice(length: impl Fn(&str) -> f32, axes: u32) -> Option<[u32; 3]> {
-    let nodes = LATTICE_PARAMS.map(|name| {
-        let n = length(name);
-        if n.is_finite() { n.round() as i64 } else { -1 }
+    let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| match params.get(name) {
+        Some(ParamValue::Float(n)) => n.round() as i64,
+        _ => 64,
     });
     let batched = axes == 2;
     let valid = |axis: usize, n: i64| {
@@ -88,12 +71,9 @@ pub(super) fn half_spectrum_len(nodes: [u32; 3]) -> u32 {
 crate::primitive! {
     name: CosineSpectrum,
     type_id: "node.cosine_spectrum",
-    purpose: "Unnormalised cosine transform (DCT-II) of a lattice, finished from the half spectrum node.fft_3d made of its node.cosine_reorder'd values: X[k] = Σ_n x[n] Π cos(π k (2n + 1) / 2N) over the transformed axes. Axes 3 transforms x, y and z (four gathers per coefficient); axes 2 transforms x and y of every z slice on its own (two gathers). Lattice nodes_x/y/z, node (i, j, k) at i + nx·(j + ny·k), every transformed length even; wired lengths run a smaller lattice in arrays sized for the params'.",
+    purpose: "Unnormalised cosine transform (DCT-II) of a lattice, finished from the half spectrum node.fft_3d made of its node.cosine_reorder'd values: X[k] = Σ_n x[n] Π cos(π k (2n + 1) / 2N) over the transformed axes. Axes 3 transforms x, y and z (four gathers per coefficient); axes 2 transforms x and y of every z slice on its own (two gathers). Lattice nodes_x/y/z, node (i, j, k) at i + nx·(j + ny·k), every transformed length even.",
     inputs: {
         spectrum: Array([f32; 2]) required,
-        nodes_x: ScalarF32 optional,
-        nodes_y: ScalarF32 optional,
-        nodes_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
@@ -127,7 +107,7 @@ impl Primitive for CosineSpectrum {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(nodes) = live_lattice(ctx) else {
+        let Some(nodes) = lattice_nodes(ctx.params) else {
             ctx.error("Cosine Spectrum: every transformed length must be even, 2 to 1024".to_string());
             return;
         };

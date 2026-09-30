@@ -7,9 +7,7 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use super::active_region::RegionPolicy;
-use super::swash_preset::{Clip, PressureShape, pressure_def, pressure_def_in};
-use crate::node_graph::parameters::ParamValue;
+use super::swash_preset::{PressureShape, pressure_def};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
 use crate::node_graph::{
@@ -141,30 +139,6 @@ impl Solver {
         register_substep_test_nodes(&mut registry);
         let view = crate::node_graph::freeze::install::fuse_generator_view(&pressure_def(shape), &registry).expect("the solve fuses");
         Self::with_graph(shape, (*view.def).clone().into_graph(&registry, &view.mesh_rules).expect("fused def builds"))
-    }
-
-    /// The solve with every box solve on a window, set per problem by
-    /// [`Self::set_clip`]; frozen as the app renders it when `frozen`.
-    fn clipped(shape: PressureShape, frozen: bool) -> Self {
-        let mut registry = PrimitiveRegistry::with_builtin();
-        register_substep_test_nodes(&mut registry);
-        let def = pressure_def_in(shape, Some(Clip { origin: [0; 3], size: [shape.n; 3] }));
-        let graph = if frozen {
-            let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("the solve fuses");
-            (*view.def).clone().into_graph(&registry, &view.mesh_rules).expect("fused def builds")
-        } else {
-            def.into_graph(&registry, &Default::default()).expect("pressure def builds")
-        };
-        Self::with_graph(shape, graph)
-    }
-
-    fn set_clip(&mut self, clip: Clip) {
-        for (axis, name) in ["x", "y", "z"].into_iter().enumerate() {
-            for (label, value) in [("origin", clip.origin[axis]), ("nodes", clip.size[axis])] {
-                let node = node_named(&self.graph, &format!("clip_{label}_{name}"));
-                self.graph.set_param(node, "value", ParamValue::Float(value as f32)).expect("clip param sets");
-            }
-        }
     }
 
     fn with_graph(shape: PressureShape, graph: Graph) -> Self {
@@ -462,104 +436,4 @@ fn fft_water_frozen_solve_matches_unfrozen() {
 #[test]
 fn fft_water_matches_reference_refined() {
     check_against_reference(2, &PINNED_128);
-}
-
-/// The box a problem's water needs as node.active_region makes it: the
-/// water's bounds grown by `pad` cells, each side snapped up to the ladder.
-fn clip_for(problem: &Problem, shape: PressureShape, pad: usize) -> Clip {
-    let n = shape.n;
-    let (mut low, mut end) = ([u32::MAX; 3], [0u32; 3]);
-    for c in (0..n * n * n).filter(|&c| problem.water[c]) {
-        let at = [c % n, (c / n) % n, c / (n * n)];
-        for a in 0..3 {
-            low[a] = low[a].min(at[a] as u32);
-            end[a] = end[a].max(at[a] as u32 + 1);
-        }
-    }
-    let policy = RegionPolicy { nodes: [n as u32; 3], pad: pad as u32, step: shape.region_step() as u32, hold: 1, max_age: 1 };
-    let (low, end) = policy.grow(low, end, pad as u32);
-    let window = policy.snap(low, end);
-    Clip { origin: window.origin.map(|v| v as usize), size: window.size.map(|v| v as usize) }
-}
-
-/// P3c gate: every saved problem solved on its water's box, grown by the
-/// collar alone (the tightest box the answer allows) and by the Dam Break's
-/// pad, against the whole box at 24 passes. The answer on the water is the
-/// same by construction, so only the preconditioner changes. Kill check: a
-/// clipped residual over 2× the whole box's, or one that needs more than
-/// 25% more passes (30) to reach it.
-fn clipped_against_whole(refine_by: usize) {
-    let (n, problems) = load_problems();
-    let shape = PressureShape::at(n * refine_by);
-    let cells = shape.cells();
-    let h = shape.cell_size();
-    let mut whole = Solver::new(shape);
-    let mut clipped = Solver::clipped(shape, false);
-    let mut longer = Solver::clipped(PressureShape { passes: 30, ..shape }, false);
-    let mut failures = Vec::new();
-    for problem in &problems {
-        let problem = if refine_by > 1 { refine(problem, n, refine_by) } else { Problem { frame: problem.frame, water: problem.water.clone(), f: problem.f.clone() } };
-        let median = |solver: &mut Solver| {
-            let mut times: Vec<f64> = (0..3).map(|_| solver.run(&problem)).collect();
-            times.sort_by(f64::total_cmp);
-            times[1]
-        };
-        let whole_ms = median(&mut whole);
-        let full = residual(&whole.pressure(cells), &problem, shape.n, h);
-        for pad in [1, shape.region_pad()] {
-            let clip = clip_for(&problem, shape, pad);
-            clipped.set_clip(clip);
-            let clipped_ms = median(&mut clipped);
-            let got = residual(&clipped.pressure(cells), &problem, shape.n, h);
-            let at_30 = if got > full {
-                longer.set_clip(clip);
-                longer.run(&problem);
-                Some(residual(&longer.pressure(cells), &problem, shape.n, h))
-            } else {
-                None
-            };
-            println!(
-                "SWASH clipped {}³ frame {:3} pad {pad:2}: box {:?} at {:?}, residual {got:.3e} against whole {full:.3e} ({:.2}×){}, {clipped_ms:.2} ms against {whole_ms:.2} ms GPU per solve",
-                shape.n,
-                problem.frame,
-                clip.size,
-                clip.origin,
-                got / full,
-                at_30.map_or(String::new(), |r| format!(", {r:.3e} at 30 passes")),
-            );
-            if got.is_nan() || got > 2.0 * full || at_30.is_some_and(|r| r > full) {
-                failures.push(format!("frame {} pad {pad}: {got:.3e} against {full:.3e}, at 30 passes {at_30:?}", problem.frame));
-            }
-        }
-    }
-    assert!(failures.is_empty(), "P3c kill check: {failures:?}");
-}
-
-#[test]
-fn fft_water_clipped_matches_whole_box() {
-    clipped_against_whole(1);
-}
-
-#[test]
-fn fft_water_clipped_matches_whole_box_refined() {
-    clipped_against_whole(2);
-}
-
-/// The clipped solve frozen gives the unfrozen clipped solve's pressure bit
-/// for bit: the fused cosine pairs run the window their wired lengths say.
-#[test]
-fn fft_water_frozen_clipped_solve_matches_unfrozen() {
-    let (n, problems) = load_problems();
-    let shape = PressureShape::at(n);
-    let (mut unfrozen, mut frozen) = (Solver::clipped(shape, false), Solver::clipped(shape, true));
-    for problem in &problems {
-        let clip = clip_for(problem, shape, shape.region_pad());
-        unfrozen.set_clip(clip);
-        frozen.set_clip(clip);
-        unfrozen.run(problem);
-        frozen.run(problem);
-        let (a, b) = (unfrozen.pressure(shape.cells()), frozen.pressure(shape.cells()));
-        let differ = a.iter().zip(&b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
-        assert_eq!(differ, 0, "frame {} on {clip:?}: the frozen clipped solve differs from the unfrozen one", problem.frame);
-    }
 }

@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cosine_spectrum::{AXES_PARAM, half_spectrum_len, lattice_nodes, live_lattice, transform_axes};
+use super::cosine_spectrum::{AXES_PARAM, half_spectrum_len, lattice_nodes, transform_axes};
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -30,12 +30,9 @@ struct HalfSpectrumUniforms {
 crate::primitive! {
     name: CosineHalfSpectrum,
     type_id: "node.cosine_half_spectrum",
-    purpose: "Inverse of node.cosine_spectrum: from cosine-transform coefficients, rebuild the half spectrum (nx/2 + 1 entries along x) that node.inverse_fft_3d turns back into the reordered lattice. Eight gathers per entry with axes 3, four with axes 2 (x and y of every z slice). Lattice nodes_x/y/z, every transformed length even; wired lengths run a smaller lattice in arrays sized for the params'.",
+    purpose: "Inverse of node.cosine_spectrum: from cosine-transform coefficients, rebuild the half spectrum (nx/2 + 1 entries along x) that node.inverse_fft_3d turns back into the reordered lattice. Eight gathers per entry with axes 3, four with axes 2 (x and y of every z slice). Lattice nodes_x/y/z, every transformed length even.",
     inputs: {
         values: Array(f32) required,
-        nodes_x: ScalarF32 optional,
-        nodes_y: ScalarF32 optional,
-        nodes_z: ScalarF32 optional,
     },
     outputs: {
         spectrum: Array([f32; 2]),
@@ -65,7 +62,7 @@ impl Primitive for CosineHalfSpectrum {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(nodes) = live_lattice(ctx) else {
+        let Some(nodes) = lattice_nodes(ctx.params) else {
             ctx.error("Cosine Half Spectrum: every transformed length must be even, 2 to 1024".to_string());
             return;
         };

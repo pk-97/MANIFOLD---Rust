@@ -6,7 +6,7 @@
 use ahash::AHashMap;
 
 use super::sort_particles_into_cells::range_storage_bytes;
-use super::swash_preset::{Clip, PressureShape, WaterScene, pressure_def, pressure_def_in, render_def, water_def};
+use super::swash_preset::{PressureShape, WaterScene, pressure_def, render_def, water_def};
 use crate::node_graph::effect_node::ParamValues;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, FluidParticle, bin_counts};
@@ -129,28 +129,6 @@ impl Sizes<'_> {
             let particle_bytes = particles * PARTICLE;
             let on_lattice = || assert_eq!(lattice(p), [side; 3], "{} is off the lattice", node.node_id.as_str());
             let surface = || refined.expect("a surface node without particle_volume");
-            // A wired lattice length (the active region, P3c) must stay within
-            // the static one the arrays are sized for: it comes from a region
-            // on the same lattice, or a constant no longer than it.
-            let wired_lengths_fit = |ports: [&str; 3], lengths: [u64; 3]| {
-                for (axis, port) in ports.into_iter().enumerate() {
-                    let Some((_, resource)) = step.inputs.iter().find(|(name, _)| *name == port) else { continue };
-                    let source = names[&producer[resource]];
-                    match source.node.type_id().as_str() {
-                        "node.active_region" => assert_eq!(
-                            lattice(&source.params),
-                            lengths,
-                            "{} {port}: a region on another lattice",
-                            node.node_id.as_str()
-                        ),
-                        "node.value" => {
-                            let v = param(&source.params, "value");
-                            assert!(v >= 2 && v.is_multiple_of(2) && v <= lengths[axis], "{} {port}: {v} past {lengths:?}", node.node_id.as_str());
-                        }
-                        other => panic!("{} {port} is wired from {other}", node.node_id.as_str()),
-                    }
-                }
-            };
             match ty {
                 "test.value_source" | "test.value_sink" | "test.liquid_sink" | "test.mesh_sink" | "system.final_output"
                 | "node.transform_3d" | "node.transform_components" | "node.value" | "node.math" => continue,
@@ -321,15 +299,6 @@ impl Sizes<'_> {
                     };
                     covers(input.0, input.1);
                     covers(output.0, output.1);
-                    // A window reads (forward) or writes (inverse) the whole
-                    // lattice, which is this lattice.
-                    if ty == "node.cosine_reorder" {
-                        for (axis, name) in ["outer_x", "outer_y", "outer_z"].into_iter().enumerate() {
-                            let outer = p.get(name).map_or(0, |_| param(p, name));
-                            assert!(outer == 0 || outer == n[axis], "{} {name} {outer} is not its lattice {n:?}", node.node_id.as_str());
-                        }
-                    }
-                    wired_lengths_fit(["nodes_x", "nodes_y", "nodes_z"], n);
                 }
                 // A frozen graph's fused cosine pair: member 0 is the
                 // twiddle stage, gathering the half spectrum; the pair
@@ -341,14 +310,7 @@ impl Sizes<'_> {
                     assert!(p.contains_key("n0_axes"), "{} is not a fused cosine pair", node.node_id.as_str());
                     covers("src_0", half(n) * 8);
                     covers("dst", real);
-                    wired_lengths_fit(["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"], n);
-                    wired_lengths_fit(["n1_nodes_x", "n1_nodes_y", "n1_nodes_z"], n);
                 }
-                "node.occupied_bounds" => {
-                    on_lattice();
-                    covers("values", cells);
-                }
-                "node.active_region" => on_lattice(),
                 "node.dot_products" => {
                     let (length, max_rows) = (param(p, "row_length"), param(p, "max_rows"));
                     assert!(max_rows <= 64, "{}: more rows than the partials hold", node.node_id.as_str());
@@ -426,35 +388,22 @@ impl Sizes<'_> {
 const LATTICES: [usize; 8] = [16, 32, 48, 64, 80, 96, 128, 256];
 
 fn plan_for(shape: PressureShape) -> (Graph, ExecutionPlan) {
-    plan_in(shape, None)
-}
-
-fn plan_in(shape: PressureShape, clip: Option<Clip>) -> (Graph, ExecutionPlan) {
-    let graph = pressure_def_in(shape, clip).into_graph(&registry(), &Default::default()).expect("pressure def builds");
+    let graph = pressure_def(shape).into_graph(&registry(), &Default::default()).expect("pressure def builds");
     let plan = compile(&graph).expect("pressure def compiles");
     (graph, plan)
 }
 
-/// A window of half the lattice's side, a quarter in from the low corner.
-fn half_clip(n: usize) -> Clip {
-    let size = (n / 2).next_multiple_of(2);
-    Clip { origin: [n / 4; 3], size: [size; 3] }
-}
-
-/// Every lattice at every pass count of the pass-count trend, on the whole
-/// box and on a window.
+/// Every lattice at every pass count of the pass-count trend.
 #[test]
 fn fft_water_pressure_arrays_cover_every_dispatch() {
     for (n, passes) in LATTICES.into_iter().flat_map(|n| super::swash_preset::TREND_PASSES.map(|p| (n, p))) {
         let shape = PressureShape { passes, ..PressureShape::at(n) };
-        for clip in [None, Some(half_clip(n))] {
-            let (graph, plan) = plan_in(shape, clip);
-            assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
-            let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
-            let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
-            let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0, shape.n as u64 + 1);
-            assert!(checked > 60, "checked only {checked} nodes at {n}³");
-        }
+        let (graph, plan) = plan_for(shape);
+        assert_eq!(plan.substep_regions().len(), 1, "one Krylov region");
+        let allocation = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).expect("plan allocates");
+        let bytes = allocation.storage.iter().map(|(&r, s)| (r, s.bytes)).collect();
+        let checked = Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0, shape.n as u64 + 1);
+        assert!(checked > 60, "checked only {checked} nodes at {n}³");
     }
 }
 
@@ -751,19 +700,10 @@ fn frozen(def: &manifold_core::effect_graph_def::EffectGraphDef, size: (u32, u32
 fn fft_water_frozen_graphs_cover_every_dispatch() {
     for n in LATTICES {
         let shape = PressureShape::at(n);
-        for clip in [None, Some(half_clip(n))] {
-            let (graph, plan, bytes) = frozen(&pressure_def_in(shape, clip), (64, 64));
-            let fused = graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
-            assert_eq!(fused, 5, "the solve's five cosine pairs at {n}³");
-            // A window reaches every box-solve atom, fused ones included.
-            let windowed = plan
-                .steps()
-                .iter()
-                .filter(|step| ["n0_nodes_x", "nodes_x"].iter().any(|port| step.inputs.iter().any(|(name, _)| name == port)))
-                .count();
-            assert_eq!(windowed, if clip.is_some() { 3 * 6 } else { 0 }, "windowed steps at {n}³");
-            assert!(Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0, shape.n as u64 + 1) > 50);
-        }
+        let (graph, plan, bytes) = frozen(&pressure_def(shape), (64, 64));
+        let fused = graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
+        assert_eq!(fused, 5, "the solve's five cosine pairs at {n}³");
+        assert!(Sizes { graph: &graph, plan: &plan, bytes }.check(shape, 0, shape.n as u64 + 1) > 50);
         let scene = WaterScene::dam_break(n);
         for scene in [scene, scene.with_surface()] {
             let (graph, plan, bytes) = frozen(&water_def(scene), (64, 64));

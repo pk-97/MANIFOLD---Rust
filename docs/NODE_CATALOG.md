@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 364 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 362 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -396,12 +396,11 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (39)
+### Math & Convert (37)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Absolute Value | `node.absolute_value` | Filter | Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape. |
-| Active Region | `node.active_region` | Filter | Picks the part of a 3D grid worth solving this frame, from where things were a frame ago. |
 | Array Feedback | `node.array_feedback` | Filter | Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle. |
 | Array Math | `node.array_math` | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
 | Combine Rows | `node.combine_rows` | Map | Adds weighted rows of a table onto a list of numbers. |
@@ -421,7 +420,6 @@ _Generated from the node registry. Do not hand-edit. 364 nodes registered, group
 | Krylov Solve | `node.krylov_solve` | Map | Works out how much of each round's guess goes into the pressure solver's answer. |
 | Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
-| Occupied Bounds | `node.occupied_bounds` | Filter | Finds the box around the filled cells of a 3D grid, a frame late. |
 | Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | Power | `node.power` | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
 | Range | `node.range` | Source | Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps. |
