@@ -10,5 +10,6 @@
 /// `VkCommandBuffer`; `commit_and_wait_completed` submits + waits for
 /// the fence, then the encoder is dropped.
 pub struct GpuEncoder {
-    pub(crate) _reserved: (),
+    /// The open encode-replay span's cache (`replay.rs`).
+    pub(crate) replay: Option<super::replay::GpuReplayCache>,
 }

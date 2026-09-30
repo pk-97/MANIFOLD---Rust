@@ -9,10 +9,10 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use super::matter_common::read_lattice;
 use super::standalone_pipeline::active_elements;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::CellRange;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{MatterPoint, grid_accum_bytes, lattice_nodes, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -120,7 +120,7 @@ impl Primitive for MatterToGrid {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = read_lattice(ctx);
+        let lattice = LiquidLattice::from_wires(ctx);
         let count = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let lambda = ctx.scalar_or_param("lambda", 1.111e6);
@@ -146,27 +146,27 @@ impl Primitive for MatterToGrid {
         if active == 0 || step_dt <= 0.0 {
             return;
         }
-        if !momentum_unit_fits(momentum_unit, lattice.cell_size, step_dt) {
+        if !momentum_unit_fits(momentum_unit, lattice.cell_size(), step_dt) {
             ctx.error(format!(
                 "Matter to Grid: momentum unit {momentum_unit} is not a power of two at or above cell size / step_dt; wire node.matter_domain's momentum_unit"
             ));
             return;
         }
-        if accum.size < grid_accum_bytes(lattice.nodes) {
+        if accum.size < grid_accum_bytes(lattice.nodes()) {
             ctx.error(format!(
                 "Matter to Grid: the accumulator holds fewer than this lattice's {} nodes; wire accum from the node.matter_state fed by the same node.matter_domain",
-                lattice_nodes(lattice.nodes)
+                lattice_nodes(lattice.nodes())
             ));
             return;
         }
         let uniforms = P2gParams {
-            lattice_min_x: lattice.min[0],
-            lattice_min_y: lattice.min[1],
-            lattice_min_z: lattice.min[2],
-            cell_size: lattice.cell_size,
-            nodes_x: lattice.nodes[0] as i32,
-            nodes_y: lattice.nodes[1] as i32,
-            nodes_z: lattice.nodes[2] as i32,
+            lattice_min_x: lattice.min()[0],
+            lattice_min_y: lattice.min()[1],
+            lattice_min_z: lattice.min()[2],
+            cell_size: lattice.cell_size(),
+            nodes_x: lattice.nodes()[0] as i32,
+            nodes_y: lattice.nodes()[1] as i32,
+            nodes_z: lattice.nodes()[2] as i32,
             active_count: active,
             step_dt,
             lambda,

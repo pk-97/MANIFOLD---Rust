@@ -142,6 +142,7 @@ fn compile_pipeline_with_constants(
         label: entry.to_string(),
         workgroup_size: SHADOW_WORKGROUP,
         needs_sizes_buffer: false,
+        supports_replay: false,
     }
 }
 

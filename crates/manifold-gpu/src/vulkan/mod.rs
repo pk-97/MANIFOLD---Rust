@@ -28,11 +28,13 @@
 
 mod device;
 mod encoder;
+mod replay;
 mod shader_compiler;
 mod types;
 
 pub use device::GpuDevice;
 pub use encoder::GpuEncoder;
+pub use replay::GpuReplayCache;
 pub use types::{GpuBuffer, GpuComputePipeline, GpuRenderPipeline, GpuSampler, GpuTexture};
 
 /// Reserved WGSL binding slot for naga's "sizes buffer" (resolves

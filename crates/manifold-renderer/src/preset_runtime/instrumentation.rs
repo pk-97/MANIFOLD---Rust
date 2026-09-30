@@ -326,12 +326,7 @@ impl PresetRuntime {
             let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
                 continue;
             };
-            let Some(buffer) = self
-                .executor
-                .backend()
-                .slot_for(res)
-                .and_then(|s| self.executor.backend().array_buffer(s))
-            else {
+            let Some(buffer) = self.executor.dump_array_buffer(res) else {
                 continue;
             };
             let (offsets, _, _) = std430_layout(at.specs);
@@ -384,6 +379,16 @@ impl PresetRuntime {
     /// step on the live path.
     pub fn set_profiling(&mut self, on: bool) {
         self.executor.set_profiling(on);
+    }
+
+    /// See [`crate::node_graph::Executor::set_encode_replay`].
+    pub fn set_encode_replay(&mut self, on: bool) {
+        self.executor.set_encode_replay(on);
+    }
+
+    /// See [`crate::node_graph::Executor::replay_stats`].
+    pub fn replay_stats(&self) -> manifold_gpu::GpuReplayStats {
+        self.executor.replay_stats()
     }
 
     /// Set this chain's instance identity for profiled tags (D6 correction):
@@ -489,12 +494,7 @@ impl PresetRuntime {
             let Some(PortType::Array(at)) = self.plan.resource_type(res) else {
                 continue;
             };
-            let Some(buffer) = self
-                .executor
-                .backend()
-                .slot_for(res)
-                .and_then(|s| self.executor.backend().array_buffer(s))
-            else {
+            let Some(buffer) = self.executor.dump_array_buffer(res) else {
                 continue;
             };
             let (offsets, _, _) = std430_layout(at.specs);

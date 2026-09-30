@@ -121,6 +121,32 @@ impl FluidDomainLayout {
         self.min.map(|value| value - (1.5 * self.cell_size) as f32)
     }
 
+    /// Scene box and node counts of the FLIP solid lattice: the padded
+    /// native grid, node (i, j, k) at `min + (i, j, k)·size/(nodes − 1)`.
+    pub(crate) fn solid_lattice(self) -> (Transform, [u32; 3]) {
+        let origin = self.native_origin();
+        let size: [f32; 3] = std::array::from_fn(|axis| (f64::from(self.cells[axis] + 3) * self.cell_size) as f32);
+        let bounds = Transform {
+            pos: std::array::from_fn(|axis| origin[axis] + size[axis] * 0.5),
+            scale: size,
+            ..Transform::default()
+        };
+        (bounds, self.cells.map(|cells| cells + 4))
+    }
+
+    /// The FLIP Grid Budget gate: the padded grid over `budget_mcells`
+    /// million cells is refused by name.
+    pub(crate) fn admit_flip_grid(self, budget_mcells: f32) -> Result<(), String> {
+        let cells = self.cells.into_iter().map(|n| u64::from(n) + 3).product::<u64>();
+        if !budget_mcells.is_finite() || budget_mcells <= 0.0 || cells as f64 > f64::from(budget_mcells) * 1e6 {
+            return Err(format!(
+                "Fluid grid needs {:.3} million cells including boundary padding; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or lower Resolution. CPU time and memory grow with cell count.",
+                cells as f64 / 1e6,
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn bounds(self, pose: Transform) -> Bounds {
         let centre = self.to_native(pose.pos);
         Bounds {

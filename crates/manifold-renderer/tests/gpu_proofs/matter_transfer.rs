@@ -10,10 +10,11 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::domain_layout;
+use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
 use manifold_renderer::node_graph::matter::reference::{self, Params, Point};
 use manifold_renderer::node_graph::matter::{
-    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterLattice, MatterPoint, mass_unit, momentum_unit,
-    rounding_hash, water_lambda,
+    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit,
+    momentum_unit, rounding_hash, water_lambda,
 };
 use manifold_renderer::node_graph::{
     ArrayType, Backend, EffectNode, EffectNodeContext, EffectNodeType, ExecutionPlan, Executor,
@@ -100,7 +101,7 @@ pub(crate) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) 
 }
 
 impl Chain {
-    pub(crate) fn new(lat: &MatterLattice, points: &[MatterPoint], p: &Params) -> Self {
+    pub(crate) fn new(lat: &LiquidLattice, points: &[MatterPoint], p: &Params) -> Self {
         Self::build(lat, points, p, None)
     }
 
@@ -109,7 +110,7 @@ impl Chain {
     /// into the lattice's D6 block bins, and P2G reads `order` and `ranges`.
     /// A source other than `points` leaves points outside their sorted block.
     pub(crate) fn build(
-        lat: &MatterLattice,
+        lat: &LiquidLattice,
         points: &[MatterPoint],
         p: &Params,
         sort_source: Option<&[MatterPoint]>,
@@ -131,11 +132,11 @@ impl Chain {
             graph.connect((src, "out"), (sort, "particles")).unwrap();
             graph.connect((sort, "order"), (p2g, "order")).unwrap();
             graph.connect((sort, "cell_ranges"), (p2g, "ranges")).unwrap();
-            let (centre, size, bin) = lat.block_sort_box();
+            let (centre, size, bin) = block_sort_box(lat);
             for (axis, name) in ["x", "y", "z"].iter().enumerate() {
                 set(&mut graph, sort, &format!("center_{name}"), centre[axis]);
                 set(&mut graph, sort, &format!("size_{name}"), size[axis]);
-                set(&mut graph, p2g, &format!("blocks_{name}"), lat.blocks()[axis] as f32);
+                set(&mut graph, p2g, &format!("blocks_{name}"), lattice_blocks(lat)[axis] as f32);
             }
             set(&mut graph, sort, "cell_size", bin);
             (src, sort)
@@ -149,19 +150,19 @@ impl Chain {
         graph.connect((update, "grid_out"), (g2p, "grid")).unwrap();
 
         for node in [p2g, g2p] {
-            set(&mut graph, node, "lattice_min_x", lat.min[0]);
-            set(&mut graph, node, "lattice_min_y", lat.min[1]);
-            set(&mut graph, node, "lattice_min_z", lat.min[2]);
+            set(&mut graph, node, "lattice_min_x", lat.min()[0]);
+            set(&mut graph, node, "lattice_min_y", lat.min()[1]);
+            set(&mut graph, node, "lattice_min_z", lat.min()[2]);
             set(&mut graph, node, "active_count", points.len() as f32);
         }
         for node in [p2g, update, g2p] {
-            set(&mut graph, node, "cell_size", lat.cell_size);
-            set(&mut graph, node, "nodes_x", lat.nodes[0] as f32);
-            set(&mut graph, node, "nodes_y", lat.nodes[1] as f32);
-            set(&mut graph, node, "nodes_z", lat.nodes[2] as f32);
+            set(&mut graph, node, "cell_size", lat.cell_size());
+            set(&mut graph, node, "nodes_x", lat.nodes()[0] as f32);
+            set(&mut graph, node, "nodes_y", lat.nodes()[1] as f32);
+            set(&mut graph, node, "nodes_z", lat.nodes()[2] as f32);
             set(&mut graph, node, "step_dt", p.dt as f32);
         }
-        let unit = momentum_unit(lat.cell_size, p.dt);
+        let unit = momentum_unit(lat.cell_size(), p.dt);
         set(&mut graph, p2g, "momentum_unit", unit);
         set(&mut graph, update, "momentum_unit", unit);
         set(&mut graph, p2g, "lambda", p.lambda as f32);
@@ -233,10 +234,10 @@ impl Chain {
     }
 
     fn read<T: bytemuck::Pod>(&self, res: ResourceId) -> Vec<T> {
-        let backend = self.executor.backend();
-        let buffer = backend
-            .array_buffer(backend.slot_for(res).expect("bound"))
-            .expect("array");
+        let buffer = self
+            .executor
+            .host_array_buffer(&self.graph, &self.plan, res)
+            .expect("array holds its own contents");
         let ptr = buffer.mapped_ptr().expect("shared");
         let n = buffer.size as usize / std::mem::size_of::<T>();
         // SAFETY: the encoder completed; `n` whole elements fit the buffer.
@@ -252,20 +253,20 @@ impl Chain {
     }
 }
 
-fn lattice() -> MatterLattice {
-    MatterLattice::from_layout(&domain_layout(None, 1.0, 16).expect("16-cell unit domain"))
+fn lattice() -> LiquidLattice {
+    LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("16-cell unit domain"))
 }
 
 /// 512 points (8 per cell over a 4×4×4-cell blob) resting on the floor,
 /// with an affine velocity field, a non-zero C and volume ratios either side
 /// of 1, so every term of the transfer (stress, cohesion, walls, Liveliness)
 /// is exercised.
-fn fixture(lat: &MatterLattice) -> Vec<MatterPoint> {
-    let dx = lat.cell_size;
+fn fixture(lat: &LiquidLattice) -> Vec<MatterPoint> {
+    let dx = lat.cell_size();
     let v0 = dx * dx * dx / 8.0;
-    let floor = lat.min[1] + 3.0 * dx;
-    let centre_x = lat.min[0] + 0.5 * (lat.nodes[0] - 1) as f32 * dx;
-    let centre_z = lat.min[2] + 0.5 * (lat.nodes[2] - 1) as f32 * dx;
+    let floor = lat.min()[1] + 3.0 * dx;
+    let centre_x = lat.min()[0] + 0.5 * (lat.nodes()[0] - 1) as f32 * dx;
+    let centre_z = lat.min()[2] + 0.5 * (lat.nodes()[2] - 1) as f32 * dx;
     let mut out = Vec::with_capacity(512);
     for n in 0..512u32 {
         let (i, j, k) = (n % 8, (n / 8) % 8, n / 64);
@@ -353,7 +354,7 @@ fn matter_grid_mass_matches_particle_mass() {
     let mut chain = Chain::new(&lat, &points, &p);
     chain.step();
     let accum = chain.accum();
-    let unit = f64::from(mass_unit(lat.cell_size)) / f64::from(MASS_SCALE);
+    let unit = f64::from(mass_unit(lat.cell_size())) / f64::from(MASS_SCALE);
     let grid: f64 = accum.chunks_exact(4).map(|w| f64::from(w[3]) * unit).sum();
     let particles: f64 = points.iter().map(|pt| f64::from(pt.affine_y[3]) * p.density).sum();
     let rel = (grid - particles).abs() / particles;
@@ -375,9 +376,9 @@ fn matter_accumulator_words_match_fixed_point_oracle() {
     let gpu = chain.accum();
     let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
     let grid = reference::substep(&mut fixed, &lat, &Params { fixed_point: true, ..p });
-    let m_unit = f64::from(mass_unit(lat.cell_size));
+    let m_unit = f64::from(mass_unit(lat.cell_size()));
     let to_mass = f64::from(MASS_SCALE) / m_unit;
-    let to_momentum = f64::from(MOMENTUM_SCALE) / m_unit / f64::from(momentum_unit(lat.cell_size, p.dt));
+    let to_momentum = f64::from(MOMENTUM_SCALE) / m_unit / f64::from(momentum_unit(lat.cell_size(), p.dt));
     // Large words sum f32 contributions of up to 1e8 that partly cancel, so
     // they differ from the f64 oracle by f32 precision: tens of LSB, about
     // 1e-10·dx/dt of velocity at a full node.
@@ -425,9 +426,9 @@ fn matter_block_p2g_bit_identical() {
         (chain.accum(), chain.points(), ranked, covered)
     };
     let (plain, plain_points, _, _) = step(None);
-    let dx = lat.cell_size;
+    let dx = lat.cell_size();
     let base = |position: [f32; 3]| -> [i64; 3] {
-        std::array::from_fn(|axis| ((position[axis] - lat.min[axis]) / dx - 0.5).floor() as i64)
+        std::array::from_fn(|axis| ((position[axis] - lat.min()[axis]) / dx - 0.5).floor() as i64)
     };
     // (in the sorted block's tile, global) for a source.
     let paths = |source: &[MatterPoint]| {
@@ -453,7 +454,7 @@ fn matter_block_p2g_bit_identical() {
         (rounding_hash(id.wrapping_mul(3).wrapping_add(axis as u32)) >> 8) as f32 / 16_777_216.0 * 2.4 - 1.2
     });
     let nonzero = plain.iter().filter(|&&w| w != 0).count();
-    eprintln!("matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks", lat.blocks().iter().product::<u32>());
+    eprintln!("matter_block_p2g_bit_identical: {nonzero} nonzero words over {} blocks", lattice_blocks(&lat).iter().product::<u32>());
     assert!(nonzero > 1000, "the fixture touches few nodes: {nonzero}");
     for (name, source) in [("sorted", &points), ("drifted", &drifted), ("jittered", &jittered)] {
         let tally = paths(source);

@@ -17,6 +17,7 @@ use manifold_renderer::preset_context::PresetContext;
 use manifold_renderer::preset_runtime::PresetRuntime;
 use manifold_gpu::raytrace::{EmissiveAliasEntry,EmissiveTableStats,EmissiveTriangleGpu,GiMaterial,MetalShadowRayTracer,RtGeometryChange,RtObjectGeometry,ShadowRayTracer};
 use manifold_gpu::{GpuBuffer,GpuDevice};
+#[cfg(feature = "rt-perf-proofs")]
 use std::time::Instant;
 use crate::harness;
 
@@ -149,6 +150,9 @@ fn i_rs3_sampler_converges_to_cpu_analytic_gather_misses() {
     assert!(delta > 0.001, "I-RS3: sampler produces no measurable irradiance");
 }
 
+// Wall-clock, so `rt-perf-proofs` only (run with `--test-threads=1`): in the
+// parallel correctness binary a frame time measures the other tests.
+#[cfg(feature = "rt-perf-proofs")]
 fn ms(json:&str,label:&str,n:usize)->(f64,f64){
     let h=harness::shared();let reg=PrimitiveRegistry::with_builtin();
     let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("tms");
@@ -163,6 +167,7 @@ fn ms(json:&str,label:&str,n:usize)->(f64,f64){
     eprintln!("{label}: median={med:.3}ms max={mx:.3}ms over {} frames",tail.len());(med,mx)
 }
 
+#[cfg(feature = "rt-perf-proofs")]
 #[test]fn trace_ms(){let j=scene_json(EMIT_R);let(mon,_)=ms(&j,"on",16);let(moff,_)=ms(&scene_json(0.),"off",16);eprintln!("TRACE_MS on={mon:.3} off={moff:.3} d={:+.3}ms",mon-moff);assert!(mon.max(1.)<20.);}
 
 // Structural

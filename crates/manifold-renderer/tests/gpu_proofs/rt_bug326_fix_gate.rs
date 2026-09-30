@@ -154,11 +154,20 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     let h = harness::shared();
 
     // Baseline: rt=0.
+    // Frames rendered while the import is still loading don't count toward
+    // either arm's budget (the load's length depends on machine load).
+    const SETTLED_FRAME_BUDGET: u32 = 600;
     let (mut rt_baseline, tex_baseline, base_manifest) = build_helmet_harness(h, false, false);
+    let wait = harness::BackgroundWait::new("bug326 baseline");
     let mut baseline_frac = 0.0;
-    for f in 0..600 {
+    let mut settled = 0;
+    for f in 0i64.. {
         frame(&mut rt_baseline, h, &tex_baseline, f, &base_manifest);
-        if !rt_baseline.warmup_pending() && f >= 89 {
+        if wait.pending(&rt_baseline) {
+            continue;
+        }
+        settled += 1;
+        if f >= 89 {
             // Quiescent loaders can become ready on a frame whose composite
             // was suppressed during preparation. Require a visible completed
             // frame, just as the RT arm below does, within the same bound.
@@ -167,11 +176,10 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
                 break;
             }
         }
-        if rt_baseline.warmup_pending() {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        if settled >= SETTLED_FRAME_BUDGET {
+            break;
         }
     }
-    assert!(!rt_baseline.warmup_pending(), "baseline import did not finish loading within 600 frames");
     assert!(baseline_frac > 0.0, "baseline must contain lit pixels, not a vacuous zero threshold");
 
     // RT on: rt=1+refl=1. Poll until lit: the rerun suppression window
@@ -180,15 +188,20 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     // frame persists). Window length is load-dependent (completion-handler
     // delivery), so a fixed frame count is flaky under full-suite load.
     let (mut rt_on, tex_on, on_manifest) = build_helmet_harness(h, true, true);
+    let wait = harness::BackgroundWait::new("bug326 rt-on");
     let threshold = 0.20 * baseline_frac;
     let mut on_frac = 0.0f64;
-    for f in 0..600 {
+    let mut settled = 0;
+    let mut f = 0i64;
+    while settled < SETTLED_FRAME_BUDGET {
         frame(&mut rt_on, h, &tex_on, f, &on_manifest);
-        if rt_on.warmup_pending() {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        f += 1;
+        if wait.pending(&rt_on) {
             continue;
         }
-        if f >= 84 && f % 5 == 4 {
+        settled += 1;
+        let rendered = f - 1;
+        if rendered >= 84 && rendered % 5 == 4 {
             on_frac = on_frac.max(non_black_fraction_rgbf32(&readback_rgba_f32(&h.device, &tex_on)));
             if on_frac >= threshold {
                 break;
@@ -206,13 +219,13 @@ fn imported_glb_rt_on_stays_within_80pct_of_baseline() {
     // branch, so a non-empty capture reads the mechanism directly — without this
     // a pure-raster arm can satisfy the ratio assert below and report nothing.
     harness::assert_rt_dispatched(
-        || frame(&mut rt_on, h, &tex_on, 600, &on_manifest),
+        || frame(&mut rt_on, h, &tex_on, f, &on_manifest),
         "bug326 rt-on arm",
     );
 
     assert!(
         on_frac >= threshold,
-        "BUG-326: imported GLB with rt enabled never lit within 600 frames \
+        "BUG-326: imported GLB with rt enabled never lit within {SETTLED_FRAME_BUDGET} settled frames \
          (baseline {baseline_frac:.4}, rt-on {on_frac:.4}, ratio {:.2}) — the fix has regressed",
         on_frac / baseline_frac
     );

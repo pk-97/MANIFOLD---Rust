@@ -174,8 +174,8 @@ fn warmup_mesh_roles(
 ) {
     // Async geometry preparation is pumped at unchanged transport time, as
     // export pre-roll does. Only complete frames advance simulation time.
-    let mut complete = false;
-    for _ in 0..200 {
+    let wait = crate::harness::BackgroundWait::new("mesh role warmup");
+    loop {
         let mut encoder = device.create_encoder("mesh-role-warmup");
         let status = {
             let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
@@ -185,12 +185,10 @@ fn warmup_mesh_roles(
         encoder.commit_and_wait_completed();
         assert!(!matches!(status, FrameRenderStatus::Failed(_)), "role warmup: {status:?}");
         if status == FrameRenderStatus::Complete && !runtime.warmup_pending() {
-            complete = true;
-            break;
+            return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        wait.hold();
     }
-    assert!(complete, "mesh role preparation must finish within bounded pre-roll");
 }
 
 fn assert_finite_and_nonempty(bytes: &[u8], frame: u32) {
@@ -693,7 +691,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let def = project.graph_for_target(&target_graph, None).unwrap();
     let vm = SceneVm::from_def(def).unwrap();
     let object = vm.objects.iter().filter_map(|object| match object {
-        SceneObjectVm::Known(row) if row.group_node_id.is_some() && row.fluid_node_ids.is_empty() => Some(row),
+        SceneObjectVm::Known(row) if row.group_node_id.is_some() && row.fluid_controls.is_empty() => Some(row),
         _ => None,
     }).max_by_key(|row| row.index).unwrap();
     let object_index = object.index as u32;
@@ -791,7 +789,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     assert!(changed_size > 100, "visible mesh size edit must change assigned liquid geometry: {changed_size} pixels");
     let scene = SceneVm::from_def(&edited).unwrap();
     let domain = scene.objects.iter().find_map(|row| match row {
-        SceneObjectVm::Known(row) if !row.fluid_node_ids.is_empty() => row.fluid_domain,
+        SceneObjectVm::Known(row) if !row.fluid_controls.is_empty() => row.fluid_domain,
         _ => None,
     }).expect("assigned domain bounds survive save/reload and mesh edit");
     assert_eq!(domain.size, [5.0, 3.125, 2.5]);

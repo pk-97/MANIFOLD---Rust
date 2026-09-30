@@ -1022,11 +1022,44 @@ pub(super) struct ScenePhysicsPlan {
 /// The shared structural preflight for the physics projection and command.
 /// Keeping this on the editing side means a stale UI snapshot cannot make the
 /// command accept a graph shape that the content thread would later reject.
+/// Whether render slot `object_index` shows water: its surface walks to a
+/// liquid domain (`manifold_core::liquid_domain::liquid_domain_of`, the walk
+/// forces and the scene panel use). A graph the scene index refuses has no
+/// stable paths, so nothing in it is water.
+fn scene_object_is_water(
+    def: &EffectGraphDef,
+    render_scene_node_id: u32,
+    object_index: u32,
+) -> Result<bool, String> {
+    use manifold_core::liquid_domain::liquid_domain_of;
+    use manifold_core::scene_index::FlatSceneIndex;
+    use manifold_core::SceneNodeRef;
+
+    let Some(scene) = def.nodes.iter().find(|node| node.id == render_scene_node_id) else {
+        return Ok(false);
+    };
+    let Ok(index) = FlatSceneIndex::build(def) else {
+        return Ok(false);
+    };
+    let scene = SceneNodeRef { scope: Vec::new(), node: scene.node_id.clone() };
+    let Ok(Some(object)) = index.scene_object_at(&scene, object_index) else {
+        return Ok(false);
+    };
+    liquid_domain_of(&index, &object)
+        .map(|domain| domain.is_some())
+        .map_err(|error| format!("Enable Physics cannot read this object's surface: {error}"))
+}
+
 pub(super) fn scene_object_physics_plan(
     def: &EffectGraphDef,
     render_scene_node_id: u32,
     object_index: u32,
 ) -> Result<ScenePhysicsPlan, String> {
+    if scene_object_is_water(def, render_scene_node_id, object_index)? {
+        return Err(
+            "Water cannot take Enable Physics: its liquid simulation already moves it".into(),
+        );
+    }
     let parts = scene_object_parts(def, render_scene_node_id, object_index)?;
     if parts.render_indices.is_empty() {
         return Err("Selected scene object has no render outputs".into());

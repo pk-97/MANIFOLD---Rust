@@ -728,16 +728,7 @@ impl FluidRuntime {
     /// Scene box and node counts of the solid lattice: the padded native
     /// grid, node (i, j, k) at `min + (i, j, k)·size/(nodes − 1)`.
     pub(crate) fn particle_lattice(&self) -> Option<(Transform, [u32; 3])> {
-        let layout = self.settings?.domain_layout().ok()?;
-        let origin = layout.native_origin();
-        let size: [f32; 3] =
-            std::array::from_fn(|axis| (f64::from(layout.cells[axis] + 3) * layout.cell_size) as f32);
-        let bounds = Transform {
-            pos: std::array::from_fn(|axis| origin[axis] + size[axis] * 0.5),
-            scale: size,
-            ..Transform::default()
-        };
-        Some((bounds, layout.cells.map(|cells| cells + 4)))
+        Some(self.settings?.domain_layout().ok()?.solid_lattice())
     }
 
     /// The published tick is not the completed tick: a capture is owed.

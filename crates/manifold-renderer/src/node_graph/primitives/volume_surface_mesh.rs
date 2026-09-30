@@ -45,7 +45,9 @@ struct MeshUniforms {
     dispatch_count: u32,
 }
 
-fn capacity(params: &ParamValues) -> u32 {
+/// Mesh Capacity in vertices, whole triangles: the kernel places triangles
+/// up to it.
+pub(crate) fn mesh_capacity(params: &ParamValues) -> u32 {
     let value = match params.get("max_capacity") {
         Some(ParamValue::Float(n)) => *n,
         _ => DEFAULT_CAPACITY,
@@ -129,11 +131,11 @@ fn vertex_bound(late_triangles: f32, slots: u32) -> u32 {
 
 impl Primitive for VolumeSurfaceMesh {
     fn array_output_capacity(&self, port: &str, params: &ParamValues, _: &[(&str, u32)]) -> Option<u32> {
-        (port == "vertices").then(|| capacity(params))
+        (port == "vertices").then(|| mesh_capacity(params))
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let capacity = capacity(ctx.params);
+        let capacity = mesh_capacity(ctx.params);
         // The GPU emptied last frame's mesh if this total overflowed; say so.
         let total = ctx.scalar_or_param("total", 0.0);
         if total.is_finite() && total * 3.0 > capacity as f32 {

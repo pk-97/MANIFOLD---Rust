@@ -32,6 +32,19 @@ pub(crate) fn alloc_log_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_LOG").is_some())
 }
 
+const BUFFER_ALLOCATION: usize = 0;
+const TEXTURE_ALLOCATION: usize = 1;
+const ACCEL_ALLOCATION: usize = 2;
+
+thread_local! {
+    /// Allocations made on this thread, per device: (resource scope id,
+    /// [buffers, textures, acceleration structures]). Per thread so a probe
+    /// that renders on its own thread counts only its own work while other
+    /// threads share the device (the parallel gpu-proofs binary).
+    static THREAD_ALLOCATIONS: std::cell::RefCell<Vec<(u64, [u64; 3])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(crate) fn alloc_log_backtrace() {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_BT").is_some()) {
@@ -136,7 +149,6 @@ pub struct GpuDevice {
     /// Distinguishes resource ownership even when native devices or Rust
     /// addresses are reused by a later renderer.
     resource_scope_id: u64,
-    allocation_counts: [std::sync::atomic::AtomicU64; 3],
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
@@ -162,6 +174,9 @@ pub struct GpuDevice {
     /// `MTLSamplerState` per frame. Mirrors the `clear_pipelines`
     /// lazy-cache pattern.
     linear_sampler: std::sync::OnceLock<GpuSampler>,
+    /// The word-copy kernel a replay span turns buffer copies into
+    /// (docs/ENCODE_REPLAY_DESIGN.md D9). Built on the first replaying span.
+    replay_copy_kernel: std::sync::OnceLock<std::sync::Arc<GpuComputePipeline>>,
     /// Device-level Xcode capture scope. A scope only defines capture
     /// boundaries through begin/end calls, so it must be retained and
     /// driven per frame — see `capture_scope_begin`/`capture_scope_end`.
@@ -210,7 +225,6 @@ impl GpuDevice {
             .expect("Failed to create command queue");
         Self {
             resource_scope_id,
-            allocation_counts: [const { std::sync::atomic::AtomicU64::new(0) }; 3],
             device,
             queue,
             archive: std::sync::Mutex::new(None),
@@ -220,6 +234,7 @@ impl GpuDevice {
             clear_pipelines: std::sync::OnceLock::new(),
             rt_pipelines: std::sync::OnceLock::new(),
             linear_sampler: std::sync::OnceLock::new(),
+            replay_copy_kernel: std::sync::OnceLock::new(),
             capture_scope: std::sync::OnceLock::new(),
             mtl4_bridge: std::sync::OnceLock::new(),
             retirement: std::sync::OnceLock::new(),
@@ -409,14 +424,34 @@ impl GpuDevice {
         retire_on_queue(&self.queue, obj, label);
     }
 
-    /// Successful Metal buffer, texture and RT acceleration-structure allocations.
-    /// Monotonic per-device counters for warmup/steady-state acceptance probes.
+    /// Successful Metal buffer, texture and RT acceleration-structure
+    /// allocations the calling thread made on this device. Monotonic counters
+    /// for warmup/steady-state probes; the probe must render on the thread
+    /// that reads them.
     pub fn allocation_counts(&self) -> [u64; 3] {
-        self.allocation_counts.each_ref().map(|count| count.load(std::sync::atomic::Ordering::Relaxed))
+        THREAD_ALLOCATIONS.with_borrow(|counts| {
+            counts
+                .iter()
+                .find(|(scope, _)| *scope == self.resource_scope_id)
+                .map_or([0; 3], |(_, count)| *count)
+        })
+    }
+
+    fn record_allocation(&self, kind: usize) {
+        THREAD_ALLOCATIONS.with_borrow_mut(|counts| {
+            match counts.iter_mut().find(|(scope, _)| *scope == self.resource_scope_id) {
+                Some((_, count)) => count[kind] += 1,
+                None => {
+                    let mut count = [0; 3];
+                    count[kind] = 1;
+                    counts.push((self.resource_scope_id, count));
+                }
+            }
+        });
     }
 
     pub(crate) fn record_accel_allocation(&self) {
-        self.allocation_counts[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(ACCEL_ALLOCATION);
     }
 
     /// Create a GPU texture via device allocation (kernel call per texture).
@@ -433,7 +468,7 @@ impl GpuDevice {
             .device
             .newTextureWithDescriptor(&mtl_desc)
             .expect("Metal: texture allocation failed — GPU memory exhausted");
-        self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(TEXTURE_ALLOCATION);
         GpuTexture {
             raw: raw.clone(),
             width: desc.width,
@@ -466,7 +501,7 @@ impl GpuDevice {
                     desc.width, desc.height, desc.depth, desc.format
                 )
             })?;
-        self.allocation_counts[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(TEXTURE_ALLOCATION);
         Ok(GpuTexture {
             raw: raw.clone(),
             width: desc.width,
@@ -489,7 +524,7 @@ impl GpuDevice {
             .unwrap_or_else(|| {
                 panic!("Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted")
             });
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         GpuBuffer {
             raw: raw.clone(),
             size,
@@ -508,7 +543,7 @@ impl GpuDevice {
             .device
             .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| format!("Metal: buffer allocation failed ({size} bytes)"))?;
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         Ok(GpuBuffer {
             raw: raw.clone(),
             size,
@@ -534,7 +569,7 @@ impl GpuDevice {
                 )
             });
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         GpuBuffer {
             raw: raw.clone(),
             size,
@@ -557,7 +592,7 @@ impl GpuDevice {
             .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
             .ok_or_else(|| format!("Metal: shared buffer allocation failed ({size} bytes)"))?;
         let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
-        self.allocation_counts[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_allocation(BUFFER_ALLOCATION);
         Ok(GpuBuffer {
             raw: raw.clone(),
             size,
@@ -724,67 +759,55 @@ impl GpuDevice {
         let available: Vec<String> = available_ns_names.iter().map(|s| s.to_string()).collect();
         let function = find_entry_function(&library, &msl_entry_name, &available, label, "compute");
 
-        // Use descriptor-based creation when archive is available — enables
-        // binary archive lookup (near-instant on cache hit) and auto-populates
-        // the archive on miss.
-        let mut archive_guard = self.archive.lock().unwrap();
-        let state = if let Some(ref mut arch) = *archive_guard {
-            let desc = unsafe {
-                use objc2::AnyThread;
-                MTLComputePipelineDescriptor::init(MTLComputePipelineDescriptor::alloc())
-            };
-            unsafe {
-                desc.setComputeFunction(Some(&function));
-                desc.setLabel(Some(&NSString::from_str(label)));
-                let archives =
-                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
-                desc.setBinaryArchives(Some(&archives));
-            }
-
-            let state = unsafe {
-                self.device
-                    .newComputePipelineStateWithDescriptor_options_reflection_error(
-                        &desc,
-                        MTLPipelineOption::None,
-                        None,
-                    )
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{label}: MTL compute PSO error: {}",
-                    e.localizedDescription()
-                )
-            });
-
-            if !arch.was_added(hash) {
-                match unsafe {
-                    arch.raw_archive()
-                        .addComputePipelineFunctionsWithDescriptor_error(&desc)
-                } {
-                    Ok(()) => {
-                        arch.mark_added(hash);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "{label}: failed to add to binary archive: {}",
-                            e.localizedDescription()
-                        );
-                    }
-                }
-            }
-            state
-        } else {
-            unsafe {
-                self.device
-                    .newComputePipelineStateWithFunction_error(&function)
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{label}: MTL compute PSO error: {}",
-                    e.localizedDescription()
-                )
-            })
+        // A buffers-only pipeline can enter an encode-replay recording
+        // (docs/ENCODE_REPLAY_DESIGN.md D6); Metal refuses indirect-command
+        // support for a function that binds a texture or sampler directly.
+        // With an archive loaded, the descriptor also looks the binary up
+        // there and adds it on a miss.
+        let desc = unsafe {
+            use objc2::AnyThread;
+            MTLComputePipelineDescriptor::init(MTLComputePipelineDescriptor::alloc())
         };
+        let mut supports_replay = slot_map.buffers_only();
+        unsafe {
+            desc.setComputeFunction(Some(&function));
+            desc.setLabel(Some(&NSString::from_str(label)));
+            desc.setSupportIndirectCommandBuffers(supports_replay);
+        }
+        let mut archive_guard = self.archive.lock().unwrap();
+        if let Some(ref arch) = *archive_guard {
+            let archives = objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
+            unsafe { desc.setBinaryArchives(Some(&archives)) };
+        }
+        let create = |desc: &MTLComputePipelineDescriptor| unsafe {
+            self.device
+                .newComputePipelineStateWithDescriptor_options_reflection_error(desc, MTLPipelineOption::None, None)
+        };
+        let state = match create(&desc) {
+            Ok(state) => state,
+            // Replay is only a speed-up: a function Metal won't allow in an
+            // indirect command buffer for a reason the slot map can't see
+            // still builds, and its dispatches encode directly.
+            Err(e) if supports_replay => {
+                log::warn!(
+                    "{label}: no indirect-command support ({}); its dispatches won't replay",
+                    e.localizedDescription()
+                );
+                supports_replay = false;
+                unsafe { desc.setSupportIndirectCommandBuffers(false) };
+                create(&desc)
+                    .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {}", e.localizedDescription()))
+            }
+            Err(e) => panic!("{label}: MTL compute PSO error: {}", e.localizedDescription()),
+        };
+        if let Some(ref mut arch) = *archive_guard
+            && !arch.was_added(hash)
+        {
+            match unsafe { arch.raw_archive().addComputePipelineFunctionsWithDescriptor_error(&desc) } {
+                Ok(()) => arch.mark_added(hash),
+                Err(e) => log::warn!("{label}: failed to add to binary archive: {}", e.localizedDescription()),
+            }
+        }
         drop(archive_guard);
 
         let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
@@ -794,6 +817,7 @@ impl GpuDevice {
             label: label.to_string(),
             workgroup_size,
             needs_sizes_buffer,
+            supports_replay,
         };
         self.compute_cache
             .lock()
@@ -1318,6 +1342,13 @@ impl GpuDevice {
             .get_or_init(|| super::raytrace::RtPipelines::compile(self))
     }
 
+    /// The replay word-copy kernel, compiled on first use.
+    pub(super) fn replay_copy_kernel(&self) -> &std::sync::Arc<GpuComputePipeline> {
+        self.replay_copy_kernel.get_or_init(|| {
+            std::sync::Arc::new(self.create_compute_pipeline(super::replay::COPY_KERNEL_WGSL, "cs_main", "replay copy"))
+        })
+    }
+
     /// Get or lazily compile all compute clear pipelines.
     fn clear_pipelines(&self) -> &ClearPipelines {
         self.clear_pipelines.get_or_init(|| {
@@ -1383,6 +1414,7 @@ impl GpuDevice {
             clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
             profile: None,
             scopes: Vec::new(),
+            replay: None,
         }
     }
 

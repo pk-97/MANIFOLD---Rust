@@ -57,7 +57,7 @@ use crate::{GpuEvent, GpuTextureFormat};
 /// The crash is at framework graph-compile time, not our encode time — no
 /// descriptor property or caller-side change can avoid it. Re-test with
 /// MANIFOLD_MTL4FX_DENOISER=1 after each macOS update. The temporal scaler
-/// (non-denoised) remains live and is not gated by this flag.
+/// (non-denoised) has its own flag, below.
 pub fn metalfx_m4_denoiser_available() -> bool {
     if std::env::var_os("MANIFOLD_MTL4FX_DENOISER").is_none() {
         return false;
@@ -69,7 +69,21 @@ pub fn metalfx_m4_denoiser_available() -> bool {
 }
 
 /// Check if MTL4FX Temporal Scaler is available on this system.
+///
+/// Off unless `MANIFOLD_MTL4FX_TEMPORAL=1`, so the temporal upscaler uses
+/// classic MTLFX (BUG-ca67, 2026-10-01, macOS 26.6.1 on M4 Max). An MTL4
+/// temporal scaler that follows an earlier one on the device hangs its MTL4
+/// command buffer until the MTL4 queue's own watchdog kills it after about
+/// 4 s (MTL4CommandQueueErrorTimeout); the classic frame waiting on it stalls
+/// the same 4 s or times out itself, and a classic timeout makes macOS ignore
+/// the process's queue. Clean under the Metal validation layer, and no MTL4
+/// command buffer is ever left waiting on an uncommitted signal. Classic MTLFX
+/// runs the same repro clean. Re-test with the flag after each macOS update:
+/// the repro is in the retest bead.
 pub fn metalfx_m4_temporal_available() -> bool {
+    if std::env::var_os("MANIFOLD_MTL4FX_TEMPORAL").is_none() {
+        return false;
+    }
     mtl4fx_creation_supported(
         c"MTLFXTemporalScalerDescriptor",
         objc2::sel!(newTemporalScalerWithDevice:compiler:),
@@ -1169,7 +1183,8 @@ mod tests {
     /// available, creation must succeed, one encode must complete without
     /// GPU error, and the output must carry content (any nonzero byte).
     /// This is the tripwire for the barrier-stages requirement documented
-    /// on `set_mtl4fx_barrier_stages`.
+    /// on `set_mtl4fx_barrier_stages`. Runs only with
+    /// `MANIFOLD_MTL4FX_TEMPORAL=1`, as part of the re-test.
     #[test]
     fn m4_temporal_scaler_encodes_one_frame() {
         let device = GpuDevice::new();

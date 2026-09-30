@@ -1844,7 +1844,7 @@ impl UIRoot {
                         let action = if domains.len() == 1 {
                             PanelAction::Project(ProjectAction::SceneSetupAssignFluidRole {
                                 layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                                object_index: *object_index, domain_node_id: domains[0].node_doc_id, role,
+                                object_index: *object_index, domain: domains[0].node.clone(), role,
                             })
                         } else {
                             PanelAction::Root(RootAction::SceneSetupFluidDomainClicked {
@@ -1865,7 +1865,7 @@ impl UIRoot {
                 items.extend(domains.iter().map(|domain| DropdownItem::new(&domain.name)
                     .with_action(PanelAction::Project(ProjectAction::SceneSetupRetargetFluidRole {
                         layer_id: layer_id.clone(), source_node_id: *source_node_id,
-                        domain_node_id: domain.node_doc_id,
+                        domain: domain.node.clone(),
                     }))));
                 if domains.is_empty() { items.push(DropdownItem::disabled("Add a Fluid to this scene first")); }
                 self.open_dropdown_typed(items, self.tree.get_bounds(*button_node_id));
@@ -1878,7 +1878,7 @@ impl UIRoot {
                     DropdownItem::new(&domain.name).with_action(PanelAction::Project(
                         ProjectAction::SceneSetupAssignFluidRole {
                             layer_id: layer_id.clone(), render_scene_node_id: *render_scene_node_id,
-                            object_index: *object_index, domain_node_id: domain.node_doc_id, role: *role,
+                            object_index: *object_index, domain: domain.node.clone(), role: *role,
                         },
                     ))
                 }).collect();

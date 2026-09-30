@@ -819,7 +819,7 @@ defaults. **Built (2026-09-30).**
 - **Atom.** `node.smooth_lattice`: one axis of the binomial blur, `passes` rounds of
   [1, 2, 1] / 4 applied as one (2·passes + 1)-tap gather with edge-clamped indices,
   fusable per element (`BufferGather`). The Liquid Surface group chains axes x, y, z
-  between the volume and the count and mesh atoms; one `node.value` ("Smoothing
+  between the volume and `node.clamp_liquid_to_solids`; one `node.value` ("Smoothing
   Passes") feeds all three and is the group param `smoothing_passes` (default 2).
   Because the weights are a product of per-axis rows and the clamp is per axis, the
   chain equals the full 3D binomial blur: `fluid_smooth_lattice_matches_binomial_reference_and_passes_through`
@@ -837,9 +837,15 @@ defaults. **Built (2026-09-30).**
   Smoothing pays for itself: fewer triangles make emit, draw and ray tracing cheaper.
   Two passes turn the crinkled pool into broad smooth waves; a softened band of
   regular ridges remains at the back of the pool, and faint vertical stripes along the
-  near wall's waterline. Peter judges the set. Nodes inside solids can pick up liquid
-  from their neighbours after smoothing, so the surface may sit fractionally inside a
-  wall; the wall hides it.
+  near wall's waterline. Peter judges the set.
+- **Solid clamp after smoothing** (BUG-koy0 (solid clamp before smoothing)). Smoothing
+  pulls liquid into nodes inside walls and bodies, about two-thirds of a cell at the
+  default two passes, and at extreme dials into the lattice border.
+  `node.clamp_liquid_to_solids` re-applies the volume's rule after the last pass:
+  border nodes read the band, nodes inside a solid read at least 0. It fuses into the
+  last smoothing pass. The count and mesh atoms read its output, and
+  `liquid_surface_meshes_the_clamped_level_set` checks that wiring in every bundled
+  preset.
 
 ### P6d — Blob and volume kernel levers
 

@@ -15,6 +15,8 @@ default = []
 vulkan = ["dep:ash"]
 # GPU-backed proofs (requires an Apple Silicon device). Off by default — run with
 # `cargo test -p manifold-gpu --features gpu-proofs -- --test-threads=1`.
+# Also compiles the frame clock's wait counter, which manifold-renderer's
+# GPU proofs read.
 gpu-proofs = []
 
 [dependencies]
@@ -74,6 +76,9 @@ objc2-metal = { version = "0.3", features = [
     "MTLCounters",
     "MTLComputePass",
     "MTLBlitPass",
+    # docs/ENCODE_REPLAY_DESIGN.md: repeat-region recordings.
+    "MTLIndirectCommandBuffer",
+    "MTLIndirectCommandEncoder",
     # RAYTRACING_DESIGN.md P1 — Metal ray-query acceleration structures
     # (`metal/raytrace.rs`). Feature set matches tools/rt_prototype's
     # Cargo.toml exactly (the prototype this module ports from).

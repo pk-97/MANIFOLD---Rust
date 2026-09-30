@@ -27,6 +27,7 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::{ArrayType, PortType};
 use crate::node_graph::physics::PhysicsAuthoredSampleScope;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
+use crate::node_graph::substeps::MAX_REGION_DEPTH;
 
 
 /// Resolve a resource's slot dims for `Backend::acquire` / `release`.
@@ -114,16 +115,21 @@ struct FrameTally {
 /// Which pass is evaluating a step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StepPass {
-    /// The ordinary frame pass, including a substep boundary's own evaluate.
+    /// The ordinary frame pass, including a top-level substep boundary's own
+    /// evaluate.
     Frame,
-    /// Iteration `n` of a substep region body.
-    Iteration(u32),
+    /// Inside a substep region's repeat; `first` on the frame's first visit
+    /// of the step (iteration 0 of every enclosing region).
+    Repeat { first: bool },
 }
 
 impl StepPass {
     /// Per-frame diagnostics record a step once per frame, not per iteration.
     fn first_visit(self) -> bool {
-        matches!(self, Self::Frame | Self::Iteration(0))
+        match self {
+            Self::Frame => true,
+            Self::Repeat { first } => first,
+        }
     }
 }
 
@@ -152,9 +158,11 @@ pub struct Executor {
     growing_arrays: Vec<bool>,
     array_capacity_scratch: Vec<(&'static str, u32)>,
     /// A running substep region's per-iteration scalar output slots and the
-    /// values the boundary serves for the next iteration (reused scratch).
-    substep_scalar_slots: Vec<Option<Slot>>,
-    substep_scalar_values: Vec<f32>,
+    /// values the boundary serves for the next iteration (reused scratch),
+    /// one pair per nesting level: an inner region runs between two writes
+    /// of its outer region's scalars.
+    substep_scalar_slots: [Vec<Option<Slot>>; MAX_REGION_DEPTH],
+    substep_scalar_values: [Vec<f32>; MAX_REGION_DEPTH],
     /// Host syncs run inside substep regions since this executor was built.
     substep_host_syncs: u64,
     /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
@@ -284,9 +292,23 @@ pub struct Executor {
     dump_resources:
         Vec<(NodeInstanceId, &'static str, ResourceId, Option<manifold_gpu::GpuTexture>)>,
     /// Same, for `Array` (storage-buffer) outputs — particle/instance/edge
-    /// buffers. Read via [`dump_array_resources`] and decoded against the
+    /// buffers. Recorded only under [`dump_all`]: the atlas has no array
+    /// reader. Read via [`dump_array_buffer`] and decoded against the
     /// resource's `ArrayType` channel layout.
     dump_array_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
+    /// Per resource on a [`dump_all`] frame: a later step gives this
+    /// array's storage to a different array, so the post-frame read must
+    /// come from [`dump_array_snapshots`] (see
+    /// [`arrays_overwritten_later`](super::resource_allocation::arrays_overwritten_later)).
+    dump_array_overwritten: Vec<bool>,
+    /// Copies of overwritten arrays, taken as their producer finishes.
+    /// Reused across consecutive dump frames and dropped when dumping stops.
+    dump_array_snapshots: ahash::AHashMap<ResourceId, manifold_gpu::GpuBuffer>,
+    /// Encode replay for outermost substep regions (docs/ENCODE_REPLAY_DESIGN.md),
+    /// on unless a caller turns it off. Off under `dump_all` regardless.
+    encode_replay: bool,
+    /// One recording cache per outermost region, keyed by its boundary.
+    replay_caches: ahash::AHashMap<NodeInstanceId, manifold_gpu::GpuReplayCache>,
     /// Dedup key for the node-output-preview diagnostic log:
     /// `(target, matched_a_live_step, texture_2d_output_count,
     /// captured_resource)`. Logged (grep `[preview]`) only when it changes
@@ -551,8 +573,8 @@ impl Executor {
             output_scratch: Vec::new(),
             growing_arrays: Vec::new(),
             array_capacity_scratch: Vec::with_capacity(8),
-            substep_scalar_slots: Vec::new(),
-            substep_scalar_values: Vec::new(),
+            substep_scalar_slots: Default::default(),
+            substep_scalar_values: Default::default(),
             substep_host_syncs: 0,
             scalar_write_scratch: Vec::new(),
             camera_write_scratch: Vec::new(),
@@ -583,6 +605,10 @@ impl Executor {
             dump_pinned_resources: ahash::AHashSet::new(),
             dump_resources: Vec::new(),
             dump_array_resources: Vec::new(),
+            dump_array_overwritten: Vec::new(),
+            dump_array_snapshots: ahash::AHashMap::new(),
+            encode_replay: true,
+            replay_caches: ahash::AHashMap::new(),
             preview_debug_last: None,
             profile_force_all_live: false,
             profiling: false,
@@ -666,6 +692,22 @@ impl Executor {
         self.profiling = on;
     }
 
+    /// Turn encode replay for outermost substep regions on or off (on by
+    /// default). Output is the same either way; off costs CPU encode time
+    /// and brings back per-dispatch GPU signposts.
+    pub fn set_encode_replay(&mut self, on: bool) {
+        self.encode_replay = on;
+    }
+
+    /// What encode replay did, summed over every region this executor runs.
+    pub fn replay_stats(&self) -> manifold_gpu::GpuReplayStats {
+        let mut total = manifold_gpu::GpuReplayStats::default();
+        for cache in self.replay_caches.values() {
+            total += cache.stats();
+        }
+        total
+    }
+
     /// Set this executor's instance identity for profiled tags (D6
     /// correction): `fx:{layer_id}`, `gen:{layer_id}`, `master`, `led:{...}`.
     /// Cheap (a `String` assign) — call at chain-insertion time from the
@@ -699,7 +741,9 @@ impl Executor {
     /// disk dump). When on, every node's Texture2D/Array outputs are recorded in
     /// [`dump_resources`](Self::dump_resources) and each recorded resource is
     /// held past the frame (pinned via [`dump_pinned_resources`], so its slot
-    /// isn't reacquired and overwritten before the host reads it). One-shot: the
+    /// isn't reacquired and overwritten before the host reads it). An array
+    /// whose storage a later step takes is copied as its producer finishes
+    /// (see [`dump_array_buffer`](Self::dump_array_buffer)). One-shot: the
     /// host turns it on, runs a frame, reads the textures, turns it off. For the
     /// continuous editor atlas use [`set_dump_set`](Self::set_dump_set) instead.
     pub fn set_dump_all(&mut self, on: bool) {
@@ -731,7 +775,16 @@ impl Executor {
     /// but whose held output slots still carry valid content, so a static
     /// subgraph keeps its zero-cost skip yet still shows a current thumbnail.
     /// Caller gates on [`should_dump`](Self::should_dump).
-    fn record_dump_outputs(&mut self, plan: &ExecutionPlan, step: &ExecutionStep) {
+    ///
+    /// An array whose storage a later step takes is copied now, while it
+    /// still holds this step's write. One the copy can't be made for is left
+    /// out of the dump, never read as the array that took its storage.
+    fn record_dump_outputs(
+        &mut self,
+        plan: &ExecutionPlan,
+        step: &ExecutionStep,
+        mut gpu: Option<&mut GpuEncoder<'_>>,
+    ) {
         for &(port, res) in &step.outputs {
             match plan.resource_type(res) {
                 Some(t) if t.is_texture_2d() => {
@@ -743,13 +796,47 @@ impl Executor {
                     self.dump_resources.push((step.node, port, res, tex));
                     self.dump_pinned_resources.insert(res);
                 }
-                Some(crate::node_graph::ports::PortType::Array(_)) => {
+                Some(crate::node_graph::ports::PortType::Array(_)) if self.dump_all => {
+                    if !self.dump_array_overwritten.get(res.0 as usize).copied().unwrap_or(false) {
+                        self.dump_array_snapshots.remove(&res);
+                    } else if !self.snapshot_dump_array(res, gpu.as_deref_mut()) {
+                        continue;
+                    }
                     self.dump_array_resources.push((step.node, port, res));
                     self.dump_pinned_resources.insert(res);
                 }
                 _ => {}
             }
         }
+    }
+
+    /// Encode a copy of `res`'s current storage into its dump snapshot.
+    /// False when there is no GPU, no storage, or no memory for the copy.
+    fn snapshot_dump_array(&mut self, res: ResourceId, gpu: Option<&mut GpuEncoder<'_>>) -> bool {
+        let Some(gpu) = gpu else { return false };
+        let Some(source) = self.backend.slot_for(res).and_then(|s| self.backend.array_buffer(s)) else {
+            return false;
+        };
+        let size = source.size;
+        if self.dump_array_snapshots.get(&res).is_none_or(|snapshot| snapshot.size != size) {
+            let admitted = super::scene_modifier_expand::admit_candidate_bytes(
+                gpu.device.modifier_memory_snapshot(), size,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|()| gpu.device.try_create_buffer_shared(size));
+            match admitted {
+                Ok(buffer) => {
+                    self.dump_array_snapshots.insert(res, buffer);
+                }
+                Err(error) => {
+                    log::warn!("[dump] array {res:?} left out: no room to copy it ({error})");
+                    self.dump_array_snapshots.remove(&res);
+                    return false;
+                }
+            }
+        }
+        gpu.native_enc.copy_buffer_to_buffer(source, &self.dump_array_snapshots[&res], size);
+        true
     }
 
     /// `(node, output_port, resource, texture)` for every Texture2D output
@@ -764,10 +851,39 @@ impl Executor {
     }
 
     /// `(node, output_port, resource)` for every `Array` output captured on
-    /// the last frame while dump mode was on. Resolve to a buffer via
-    /// [`Backend::array_buffer`] and decode against the resource's `ArrayType`.
+    /// the last [`set_dump_all`](Self::set_dump_all) frame. Read each through
+    /// [`dump_array_buffer`](Self::dump_array_buffer) and decode against the
+    /// resource's `ArrayType`.
     pub fn dump_array_resources(&self) -> &[(NodeInstanceId, &'static str, ResourceId)] {
         &self.dump_array_resources
+    }
+
+    /// The buffer holding a dumped array's contents: its snapshot when a
+    /// later step took its storage, else its live storage.
+    pub fn dump_array_buffer(&self, res: ResourceId) -> Option<&manifold_gpu::GpuBuffer> {
+        self.dump_array_snapshots
+            .get(&res)
+            .or_else(|| self.backend.slot_for(res).and_then(|s| self.backend.array_buffer(s)))
+    }
+
+    /// The storage holding `res` after the frame, for a host reading arrays
+    /// once the GPU is done. `None` when a later step gave that storage to a
+    /// different array: declare the read with
+    /// [`Graph::add_external_output`] so the planner keeps it dedicated.
+    pub fn host_array_buffer(
+        &self,
+        graph: &Graph,
+        plan: &ExecutionPlan,
+        res: ResourceId,
+    ) -> Option<&manifold_gpu::GpuBuffer> {
+        let backend = &*self.backend;
+        let overwritten = super::resource_allocation::arrays_overwritten_later(graph, plan, |r| {
+            backend.slot_for(r).map(|slot| slot.0)
+        });
+        if overwritten.get(res.0 as usize).copied().unwrap_or(false) {
+            return None;
+        }
+        backend.slot_for(res).and_then(|slot| backend.array_buffer(slot))
     }
 
     /// Set the node whose output texture should be preserved for an
@@ -1518,6 +1634,14 @@ impl Executor {
         self.dump_resources.clear();
         self.dump_array_resources.clear();
         self.dump_pinned_resources.clear();
+        if self.dump_all {
+            let backend = &*self.backend;
+            self.dump_array_overwritten = super::resource_allocation::arrays_overwritten_later(
+                graph, plan, |r| backend.slot_for(r).map(|slot| slot.0),
+            );
+        } else if !self.dump_array_snapshots.is_empty() {
+            self.dump_array_snapshots.clear();
+        }
         if self.profiling {
             self.step_profiles.clear();
         }
@@ -1602,7 +1726,8 @@ impl Executor {
         while idx < plan.steps().len() {
             // A substep region is one contiguous block, boundary first
             // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7); its driver runs the whole
-            // block. A physics sample never advances a simulation region.
+            // block, nested regions included. A physics sample never advances
+            // a simulation region.
             let flow = if let Some(region) =
                 plan.substep_regions().iter().find(|region| region.steps[0] == idx)
             {
@@ -1610,7 +1735,17 @@ impl Executor {
                 if partial_sample {
                     StepFlow::Next
                 } else {
-                    self.run_substep_region(graph, plan, region, env, &mut tally, &mut gpu, &mut state)
+                    self.run_substep_region(
+                        graph,
+                        plan,
+                        region,
+                        StepPass::Frame,
+                        0,
+                        env,
+                        &mut tally,
+                        &mut gpu,
+                        &mut state,
+                    )
                 }
             } else {
                 idx += 1;
@@ -1800,7 +1935,7 @@ impl Executor {
                 // frame's content — a stateful/feedback node, whose held slot can
                 // be the pre-swap buffer, never memo-skips.
                 if self.should_dump(step.node) {
-                    self.record_dump_outputs(plan, step);
+                    self.record_dump_outputs(plan, step, gpu.as_deref_mut());
                 }
                 // Re-publish the held logical metadata to the slots that
                 // consumers will read. The authority remains unchanged, but
@@ -1858,7 +1993,7 @@ impl Executor {
                         // — if one were somehow unbound, record_dump_outputs
                         // reads None (a blank cell), never a panic.
                         if first_visit && self.should_dump(step.node) {
-                            self.record_dump_outputs(plan, step);
+                            self.record_dump_outputs(plan, step, gpu.as_deref_mut());
                         }
                         self.commit_mesh_revisions(plan, step, true, None);
                         return StepFlow::Next;
@@ -2515,7 +2650,7 @@ impl Executor {
             // The identity is pinned NOW, before the end-of-frame feedback swap
             // rebinds slots — see record_dump_outputs / dump_resources.
             if first_visit && self.should_dump(step.node) {
-                self.record_dump_outputs(plan, step);
+                self.record_dump_outputs(plan, step, gpu.as_deref_mut());
             }
 
             // 4. Release dead resources. `dims` must match the

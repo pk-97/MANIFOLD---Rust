@@ -567,10 +567,10 @@ mod gpu {
             };
             let columns = scalar(self.columns_resource);
             let rows = scalar(self.rows_resource);
-            let slot = backend
-                .slot_for(self.cells_resource)
-                .expect("terminal cells slot");
-            let buffer = backend.array_buffer(slot).expect("terminal cells buffer");
+            let buffer = self
+                .executor
+                .host_array_buffer(&self.graph, &self.plan, self.cells_resource)
+                .expect("terminal cells hold their own contents");
             let count = columns.saturating_mul(rows);
             let ptr = buffer.mapped_ptr().expect("terminal cells mapped buffer");
             let values = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), count) };
