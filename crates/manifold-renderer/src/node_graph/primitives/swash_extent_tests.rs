@@ -6,7 +6,7 @@
 use ahash::AHashMap;
 
 use super::sort_particles_into_cells::range_storage_bytes;
-use super::swash_preset::{PressureShape, WaterScene, pressure_def, render_def, water_def};
+use super::swash_preset::{PressureShape, WARM_PROBE_PASSES, WaterScene, pressure_def, render_def, water_def};
 use crate::node_graph::effect_node::ParamValues;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidBlob, FluidParticle, bin_counts};
@@ -269,6 +269,12 @@ impl Sizes<'_> {
                 "node.collar_source" => {
                     covers("total", cells);
                     covers("value", row);
+                    covers_if_bound("base", cells);
+                    covers("out", cells);
+                }
+                "node.field_feedback" => {
+                    assert_eq!(param(p, "max_capacity") * 4, cells, "{} carries a lattice", node.node_id.as_str());
+                    covers("in", cells);
                     covers("out", cells);
                 }
                 "node.collar_gather" => {
@@ -407,7 +413,10 @@ fn fft_water_pressure_arrays_cover_every_dispatch() {
 #[test]
 fn fft_water_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
-    let all = LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
+    let all = LATTICES
+        .into_iter()
+        .flat_map(|n| scenes.map(|at| at(n)))
+        .flat_map(|scene| [scene, scene.with_surface(), scene.with_warm(), scene.with_warm().with_surface()]);
     // The splash probes' scenes: the Krylov basis grows with passes, and
     // four steps a frame is four copies of the step.
     let refined = WaterScene::dam_break(128).with_surface();
@@ -422,7 +431,11 @@ fn fft_water_scenes_cover_every_dispatch() {
         step.with_passes(32),
         step.with_passes(48),
     ];
-    for scene in all.chain(probes) {
+    // The warm-start probe's pass counts at both lattices.
+    let warm = [64, 128]
+        .into_iter()
+        .flat_map(|n| WARM_PROBE_PASSES.map(|passes| WaterScene::dam_break(n).with_warm().with_passes(passes)));
+    for scene in all.chain(probes).chain(warm) {
         let n = scene.pressure.n;
         let graph = water_def(scene).into_graph(&registry(), &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
@@ -610,9 +623,17 @@ fn fft_water_refuses_an_illegal_lattice_at_build() {
 fn fft_water_rendered_scenes_cover_every_dispatch() {
     let scenes = [WaterScene::dam_break, WaterScene::still_pool];
     let coarser = LATTICES.into_iter().flat_map(|n| [1, 2].map(|scale| WaterScene::dam_break(n).with_surface_scale(scale)));
-    for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).chain(coarser) {
+    let warm = LATTICES.into_iter().map(|n| WaterScene::dam_break(n).with_warm());
+    for scene in LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).chain(coarser).chain(warm) {
         let n = scene.pressure.n;
         let graph = render_def(scene).into_graph(&registry(), &Default::default()).expect("render def builds");
+        let resets = graph.nodes().filter(|node| node.node.type_id().as_str() == "node.field_feedback").count();
+        let reset_wires = graph
+            .nodes()
+            .filter(|node| ["node.field_feedback", "node.liquid_feedback"].contains(&node.node.type_id().as_str()))
+            .filter(|node| graph.wires_into(node.id).any(|wire| wire.to.1 == "reset_trigger"))
+            .count();
+        assert_eq!(reset_wires, resets + 1, "the relaunch restarts the liquid and every carry at {n}³");
         let plan = compile(&graph).expect("render def compiles");
         assert_eq!(plan.substep_regions().len(), scene.steps * solves(scene), "one Krylov region per solve");
         let allocation = plan_array_allocations(&graph, &plan, (1920, 1080), &AHashMap::default()).expect("plan allocates");
@@ -686,9 +707,11 @@ fn fft_water_pressure_has_no_fused_region() {
 /// it: prove the frozen step matches the unfrozen one.
 #[test]
 fn fft_water_step_has_no_fused_region() {
-    let report = crate::node_graph::fusion_report(&water_def(WaterScene::dam_break(64)), &registry());
-    let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
-    assert!(fused.is_empty(), "the water step now fuses {fused:?}; prove the frozen step matches the unfrozen one");
+    for scene in [WaterScene::dam_break(64), WaterScene::dam_break(64).with_warm()] {
+        let report = crate::node_graph::fusion_report(&water_def(scene), &registry());
+        let fused: Vec<_> = report.regions.iter().map(|r| &r.member_node_ids).collect();
+        assert!(fused.is_empty(), "the water step now fuses {fused:?}; prove the frozen step matches the unfrozen one");
+    }
 }
 
 /// `tests/fixtures/presets/fft_water_pressure.json` is the 64³ graph.

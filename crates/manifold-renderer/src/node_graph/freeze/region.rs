@@ -1912,13 +1912,25 @@ fn build_region(
         // the same key `eval` looks up). Slot-distinct catches the non-min
         // selector families (max, conditional) the way input-distinct probes
         // did pre-BUG-orm4.
-        let slot_synthetics: Vec<(String, u32)> = externals
-            .iter()
-            .enumerate()
-            .map(|(e, _)| (format!("src_{e}"), 1009u32.saturating_add(1000 * e as u32)))
-            .collect();
+        // The probe runs twice, ascending and descending: a member whose
+        // capacity selects one input (not the min) would pass as MinInputs
+        // whenever that input happened to hold the smallest synthetic.
+        let synthetics = |descending: bool| -> Vec<(String, u32)> {
+            let last = externals.len().saturating_sub(1);
+            externals
+                .iter()
+                .enumerate()
+                .map(|(e, _)| {
+                    let rank = if descending { last - e } else { e };
+                    (format!("src_{e}"), 1009u32.saturating_add(1000 * rank as u32))
+                })
+                .collect()
+        };
+        let (slot_synthetics, reversed_synthetics) = (synthetics(false), synthetics(true));
         let slot_syn_refs: Vec<(&str, u32)> =
             slot_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        let reversed_syn_refs: Vec<(&str, u32)> =
+            reversed_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
         for (pos, &doc_id) in order.iter().enumerate() {
             let member = members
                 .iter()
@@ -2081,38 +2093,40 @@ fn build_region(
             // conditional identity (ordered_recon_mesh: `Some` only when
             // `in` == `reference`) answers None on distinct slots and
             // refuses here.
-            let port_caps: Vec<(&str, u32)> = {
-                let mut caps = Vec::with_capacity(sources.len());
-                for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
-                    let cap = match src {
-                        RegionInput::External(e) => slot_syn_refs
-                            .get(*e)
-                            .map(|(_, c)| *c)
-                            .ok_or("array input names an unknown external slot")?,
-                        RegionInput::Member(producer) => {
-                            let ppos = order
-                                .iter()
-                                .position(|id| id == producer)
-                                .ok_or("register producer not a region member")?;
-                            member_expr[ppos]
-                                .as_ref()
-                                .ok_or("register producer lacks a capacity expression")?
-                                .eval(&slot_syn_refs)
-                                .ok_or("register producer capacity does not evaluate")?
-                        }
-                        // Unwired optional: absent, no synthetic capacity.
-                        RegionInput::Unwired => continue,
-                        _ => return Err("member has a non-register array input"),
-                    };
-                    caps.push((*name, cap));
+            for syn_refs in [&slot_syn_refs, &reversed_syn_refs] {
+                let port_caps: Vec<(&str, u32)> = {
+                    let mut caps = Vec::with_capacity(sources.len());
+                    for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
+                        let cap = match src {
+                            RegionInput::External(e) => syn_refs
+                                .get(*e)
+                                .map(|(_, c)| *c)
+                                .ok_or("array input names an unknown external slot")?,
+                            RegionInput::Member(producer) => {
+                                let ppos = order
+                                    .iter()
+                                    .position(|id| id == producer)
+                                    .ok_or("register producer not a region member")?;
+                                member_expr[ppos]
+                                    .as_ref()
+                                    .ok_or("register producer lacks a capacity expression")?
+                                    .eval(syn_refs)
+                                    .ok_or("register producer capacity does not evaluate")?
+                            }
+                            // Unwired optional: absent, no synthetic capacity.
+                            RegionInput::Unwired => continue,
+                            _ => return Err("member has a non-register array input"),
+                        };
+                        caps.push((*name, cap));
+                    }
+                    caps
+                };
+                let composed = expr.eval(syn_refs);
+                match (composed, constructed.array_output_capacity(out_port, &Default::default(), &port_caps),
+                ) {
+                    (Some(a), Some(b)) if a == b => {}
+                    _ => return Err("array output capacity disagrees with the declared fused shape"),
                 }
-                caps
-            };
-            let composed = expr.eval(&slot_syn_refs);
-            match (composed, constructed.array_output_capacity(out_port, &Default::default(), &port_caps),
-            ) {
-                (Some(a), Some(b)) if a == b => {}
-                _ => return Err("array output capacity disagrees with the declared fused shape"),
             }
             member_expr[pos] = Some(expr);
         }

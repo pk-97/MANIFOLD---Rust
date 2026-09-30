@@ -170,7 +170,7 @@ impl Chain {
 
     /// Encode the chain `repeats` times into one command buffer, transforming
     /// the first `axes` axes, with `middle` between the two transforms.
-    /// Returns the wall time and node errors.
+    /// Returns the command buffer's GPU ms and node errors.
     #[allow(clippy::too_many_arguments)]
     fn run(
         &mut self,
@@ -198,7 +198,6 @@ impl Chain {
         };
         let mut errors = Vec::new();
         let mut native = harness.device.create_encoder("swash chain");
-        let start = Instant::now();
         {
             let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
             let backend: &dyn Backend = &harness.backend;
@@ -221,8 +220,7 @@ impl Chain {
                 step(&mut self.unorder, &mut gpu, backend, e, ("values", slots.back.0), ("out", slots.output.0), &inverse);
             }
         }
-        native.commit_and_wait_completed();
-        (start.elapsed().as_secs_f64() * 1000.0, errors)
+        (native.commit_and_wait_completed_timed() * 1000.0, errors)
     }
 }
 
@@ -482,21 +480,24 @@ fn swash_box_solve_cost_split() {
     }
 }
 
-/// The P0 kill check's number: one full box solve at 64³ and 128³.
+/// The P0 kill check's number, one full box solve at 64³ and 128³, beside
+/// the clipped boxes a settled Dam Break pool needs (P3c: the water's bounds
+/// plus the collar and one 8-cell pad, 24 of 64 and 40 of 128 cells high)
+/// and a 16³ box, where the solve is all fixed cost per dispatch.
 #[test]
 fn swash_box_solve_timing() {
     let mut harness = Harness::new();
-    for n in [64usize, 128] {
-        let nodes = [n; 3];
-        let values = random_values(n * n * n, 0x7117);
+    for nodes in [[16usize, 16, 16], [64, 64, 64], [64, 24, 64], [128, 128, 128], [128, 40, 128]] {
+        let total: usize = nodes.iter().product();
+        let values = random_values(total, 0x7117);
         let slots = ChainSlots::new(&mut harness, &values, nodes);
         let mut chain = Chain::new();
         let (_, errors) = chain.run(&mut harness, &slots, nodes, 1.0, Middle::Poisson, 3, 2);
         assert!(errors.is_empty(), "{errors:?}");
         let repeats = 50;
-        let (ms, errors) = chain.run(&mut harness, &slots, nodes, 1.0, Middle::Poisson, 3, repeats);
-        assert!(errors.is_empty(), "{errors:?}");
-        println!("SWASH box solve {n}³: {:.3} ms per solve ({repeats} solves in one command buffer)", ms / repeats as f64);
+        let mut ms: Vec<f64> = (0..5).map(|_| chain.run(&mut harness, &slots, nodes, 1.0, Middle::Poisson, 3, repeats).0).collect();
+        ms.sort_by(f64::total_cmp);
+        println!("SWASH box solve {nodes:?}: {:.3} ms GPU per solve (median of 5 command buffers of {repeats})", ms[2] / repeats as f64);
     }
 }
 
@@ -944,6 +945,25 @@ fn swash_collar_source_gather_and_pressure_match_cpu() {
             run_into(&mut harness, &mut CollarSource::new(), &[("total", total.0), ("value", value_in.0)], cells, &params(&[]));
         assert_close(&grid, &want, &format!("collar source, {k} entries"));
     }
+
+    // With a base: base + scale · value at the collar cells, base elsewhere.
+    let value = random_values(collar.count + 1, 0xba5e);
+    let base = random_values(cells, 0xba5f);
+    let mut want: Vec<f64> = base.iter().map(|&b| f64::from(b)).collect();
+    for (e, &c) in cpu_entries(&collar.flags, collar.count).iter().enumerate().filter(|(_, c)| **c != u32::MAX) {
+        want[c as usize] -= 0.5 * f64::from(value[e]);
+    }
+    let value_in = harness.array(&value, collar.count + 1);
+    let base_in = harness.array(&base, cells);
+    let inputs = [("total", total.0), ("value", value_in.0), ("base", base_in.0)];
+    let grid: Vec<f32> = run_into(&mut harness, &mut CollarSource::new(), &inputs, cells, &params(&[("scale", -0.5)]));
+    assert_close(&grid, &want, "collar source onto a base");
+    // A base shorter than the lattice is refused, never read past its end.
+    let short = harness.array(&base[..cells / 2], cells / 2);
+    let out = harness.array::<f32>(&[], cells);
+    let inputs = [("total", total.0), ("value", value_in.0), ("base", short.0)];
+    let (_, errors) = harness.run(&mut CollarSource::new(), &inputs, &[("out", out.0)], &params(&[]));
+    assert!(errors.iter().any(|e| e.contains("shorter")), "a short base must be refused: {errors:?}");
 
     // Gather: grid at the entries minus c (vector[K], or 0 for a short vector), then sum / cells.
     let entries = cpu_entries(&collar.flags, collar.count + 4);

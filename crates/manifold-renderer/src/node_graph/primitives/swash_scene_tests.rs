@@ -42,9 +42,14 @@ pub(super) struct Run {
 
 impl Run {
     pub(super) fn new(scene: WaterScene) -> Self {
+        Self::from_def(scene, water_def(scene))
+    }
+
+    /// `def` is `water_def(scene)` with harness edits (extra controls).
+    pub(super) fn from_def(scene: WaterScene, def: manifold_core::effect_graph_def::EffectGraphDef) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+        let graph = def.into_graph(&registry, &Default::default()).expect("water def builds");
         let plan = compile(&graph).expect("water def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
@@ -121,6 +126,18 @@ impl Run {
         (profile.total_ms, cpu_ms)
     }
 
+    /// Clears every node's cross-frame state, as a seek, project load or
+    /// restart does.
+    pub(super) fn restart(&mut self) {
+        self.state.cleanup_all();
+    }
+
+    /// Sets a `node.value`'s value, read on the next frame.
+    pub(super) fn set_value(&mut self, node: &str, value: f32) {
+        let id = node_named(&self.graph, node);
+        self.graph.set_param(id, "value", crate::node_graph::parameters::ParamValue::Float(value)).expect("value param");
+    }
+
     fn read<T: bytemuck::Pod>(&self, node: &str, port: &str, len: usize) -> Vec<T> {
         self.read_at(node_named(&self.graph, node), port, len)
     }
@@ -154,6 +171,7 @@ impl Run {
 
     /// The face grid the pressure solve starts from: gravity added, walls 0.
     /// Its divergence over the water cells is the solve's right-hand side.
+    #[cfg(feature = "water-race-probes")]
     pub(super) fn forced(&self, step: usize) -> Vec<FaceSample> {
         self.read(&format!("s{step}.gravity"), "out", (self.n() + 1).pow(3))
     }

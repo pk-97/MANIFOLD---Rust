@@ -594,6 +594,64 @@ fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
     }
 }
 
+/// The Dam Break's windows the warm start is judged on: the run-up sheet at
+/// the splash peak, and the settled pool.
+const WINDOWS: [(&str, std::ops::Range<usize>); 2] = [("splash 50-90", 50..90), ("settled 260-300", 260..300)];
+
+/// The pressure solve's leftover divergence in each window over a 300-frame
+/// Dam Break, per water step: rms median and worst, worst cell, and the GPU
+/// ms per frame.
+fn leftover_windows(scene: WaterScene, label: &str) {
+    let mut run = Run::new(scene);
+    let (n, h) = (run.n(), scene.pressure.cell_size());
+    let end = WINDOWS.iter().map(|(_, w)| w.end).max().expect("windows");
+    let mut per_frame = Vec::with_capacity(end);
+    for _ in 0..end {
+        let (gpu_ms, _) = run.frame();
+        let steps: Vec<(f64, f64)> = (0..scene.steps)
+            .map(|step| {
+                let (places, cell) = leftover_by_place(&run.faces(step), &run.water(step), n, h);
+                let cells: usize = places.iter().map(|p| p.cells).sum();
+                ((places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt(), cell.0)
+            })
+            .collect();
+        per_frame.push((gpu_ms, steps));
+    }
+    for (name, window) in WINDOWS {
+        let frames = &per_frame[window];
+        let rms: Vec<f64> = frames.iter().flat_map(|(_, s)| s.iter().map(|r| r.0)).collect();
+        let cell = frames.iter().flat_map(|(_, s)| s.iter().map(|r| r.1)).fold(0.0, f64::max);
+        let gpu: Vec<f64> = frames.iter().map(|f| f.0).collect();
+        println!(
+            "{label} {name}: rms median {:.2e} worst {:.2e}, worst cell {cell:.2e} /s, GPU {:.1} ms/frame",
+            median(&rms),
+            worst(&rms),
+            median(&gpu)
+        );
+    }
+}
+
+/// Warm start against cold (BUG-m632, residual bar): the pass count holds
+/// the worst frame, so passes saved are read at the splash peak as well as
+/// the settled pool. 64³ against its 24 cold passes.
+#[test]
+fn fft_water_warm_leftover_64() {
+    leftover_windows(WaterScene::dam_break(64), "WARM cold 24 64³");
+    for passes in [8, 12, 16, 24] {
+        leftover_windows(WaterScene::dam_break(64).with_warm().with_passes(passes), &format!("WARM warm {passes} 64³"));
+    }
+}
+
+/// The same at 128³ against its 48 cold passes (3n/8); run only after the
+/// 64³ probe is green.
+#[test]
+fn fft_water_warm_leftover_128() {
+    leftover_windows(WaterScene::dam_break(128).with_passes(48), "WARM cold 48 128³");
+    for passes in [16, 24, 32, 48] {
+        leftover_windows(WaterScene::dam_break(128).with_warm().with_passes(passes), &format!("WARM warm {passes} 128³"));
+    }
+}
+
 /// The 128³ pressure solve's leftover divergence against its pass count
 /// (BUG-m632, residual bar): 24, 32 and 48 passes over the 300-frame Dam
 /// Break, the step alone.

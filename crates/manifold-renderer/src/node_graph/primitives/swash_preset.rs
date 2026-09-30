@@ -18,6 +18,10 @@ pub(super) const BOX_METRES: f64 = 4.0;
 /// Pass counts the GPU pass-count trend runs; the CPU size proof covers each.
 pub(super) const TREND_PASSES: [usize; 4] = [12, 16, 24, 32];
 
+/// Pass counts the warm-start probe runs at 64³ and 128³; the CPU size proof
+/// covers each.
+pub(super) const WARM_PROBE_PASSES: [usize; 6] = [8, 12, 16, 24, 32, 48];
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PressureShape {
     /// Cells per side of the cubic lattice.
@@ -80,6 +84,9 @@ pub(super) struct WaterScene {
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
     /// volume and mesh): the shipped Surface Detail 1 is 3.
     pub surface_scale: usize,
+    /// Start each solve from the last step's collar sources, carried across
+    /// frames by node.field_feedback.
+    pub warm: bool,
 }
 
 /// Particles per cell the fill seeds: one per half-cell site.
@@ -113,7 +120,13 @@ impl WaterScene {
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
             density_passes: DENSITY_PASSES,
             surface_scale: 3,
+            warm: false,
         }
+    }
+
+    /// The same scene with every solve warm-started.
+    pub fn with_warm(self) -> Self {
+        Self { warm: true, ..self }
     }
 
     pub fn with_surface(self) -> Self {
@@ -395,12 +408,23 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let state = b.node("state", "node.liquid_feedback", json!({}));
     b.wire((fill, "particles"), state, "seed");
     let mut particles: Port = (state, "out");
+    // Warm: each solve's sources carry to the next step's, and the frame's
+    // last into the next frame's first through a delay per solve.
+    let delay = |b: &mut Builder, name: &str| b.node(name, "node.field_feedback", json!({"max_capacity": capacity(s.cells())}));
+    let pressure_delay = scene.warm.then(|| delay(&mut b, "pressure_carry"));
+    let density_delay = (scene.warm && scene.spread_rate > 0.0).then(|| delay(&mut b, "density_carry"));
+    let mut carry = Carry { pressure: pressure_delay.map(|id| (id, "out")), density: density_delay.map(|id| (id, "out")) };
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
-        particles = water_step(&mut b, scene, particles, (fill, "count"));
+        (particles, carry) = water_step(&mut b, scene, particles, (fill, "count"), carry);
     }
     b.prefix.clear();
     b.wire(particles, state, "in");
+    for (id, last) in [(pressure_delay, carry.pressure), (density_delay, carry.density)] {
+        if let (Some(id), Some(last)) = (id, last) {
+            b.wire(last, id, "in");
+        }
+    }
     let output = b.node("output", "system.final_output", json!({}));
     let sink = if scene.surface {
         let mesh = surface(&mut b, scene, particles, (fill, "count"));
@@ -496,10 +520,15 @@ pub(super) fn render_def(scene: WaterScene) -> EffectGraphDef {
             def["wires"].as_array_mut().expect("wires").push(wire);
         }
     }
-    let extra = [
+    let mut extra = vec![
         json!({"fromNode": id_of(&def, "surface"), "fromPort": "vertices", "toNode": offset + id_of(&preset, "water_object"), "toPort": "vertices"}),
-        json!({"fromNode": offset + id_of(&preset, "input"), "fromPort": "trigger_count", "toNode": id_of(&def, "state"), "toPort": "reset_trigger"}),
     ];
+    // The relaunch restarts the liquid and zeroes its solves' carried sources.
+    let restarted = ["state", "pressure_carry", "density_carry"];
+    for node in def["nodes"].as_array().expect("nodes").iter().filter(|n| restarted.iter().any(|name| n["nodeId"] == *name)) {
+        let to = node["id"].as_u64().expect("numeric id");
+        extra.push(json!({"fromNode": offset + id_of(&preset, "input"), "fromPort": "trigger_count", "toNode": to, "toPort": "reset_trigger"}));
+    }
     def["wires"].as_array_mut().expect("wires").extend(extra);
     def["name"] = json!("SWASH (GPU Surface)");
     serde_json::from_value(def).expect("render def")
@@ -567,10 +596,18 @@ fn lattice_box(s: PressureShape, extra: &[(&str, Value)]) -> Value {
     params
 }
 
+/// The collar sources a step's solves start from, warm; the step returns the
+/// ones its own solves ended on.
+#[derive(Clone, Copy, Default)]
+struct Carry {
+    pressure: Option<Port>,
+    density: Option<Port>,
+}
+
 /// One water step (section 3): sort, the water lattice, particles to faces,
 /// gravity, the pressure solve, the projection, the density solve on the
 /// same collar, faces back to particles.
-fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> Port {
+fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port, carry: Carry) -> (Port, Carry) {
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -604,12 +641,12 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
     let setup = collar(b, s, water);
-    let p = solve(b, s, &setup, water, (divergence, "out"));
+    let (p, pressure_carry) = solve(b, s, &setup, water, (divergence, "out"), carry.pressure);
     let projected = subtract(b, "project", (forced, "out"), p, water, s);
     let new = extend(b, "new", projected, n);
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
-    let advect = if scene.spread_rate > 0.0 {
+    let (advect, density_carry) = if scene.spread_rate > 0.0 {
         let outer = b.prefix.clone();
         b.prefix.push_str("density.");
         let crowding = b.node(
@@ -618,13 +655,14 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
             Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
         );
         b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
-        let q = solve(b, PressureShape { passes: scene.density_passes, ..s }, &setup, water, (crowding, "out"));
+        let shape = PressureShape { passes: scene.density_passes, ..s };
+        let (q, density_carry) = solve(b, shape, &setup, water, (crowding, "out"), carry.density);
         let spread = subtract(b, "project", projected, q, water, s);
         let advect = extend(b, "advect", spread, n);
         b.prefix = outer;
-        advect
+        (advect, density_carry)
     } else {
-        new
+        (new, None)
     };
     let moved = b.node(
         "move",
@@ -635,7 +673,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     b.wire(new, moved, "faces");
     b.wire(old, moved, "old");
     b.wire(advect, moved, "advect");
-    (moved, "out")
+    ((moved, "out"), Carry { pressure: pressure_carry, density: density_carry })
 }
 
 /// `faces` minus the gradient of `pressure` on the water's faces.
@@ -663,7 +701,7 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
 /// the pressure.
 fn pressure(b: &mut Builder, s: PressureShape, water: Port, f: Port) -> Port {
     let setup = collar(b, s, water);
-    solve(b, s, &setup, water, f)
+    solve(b, s, &setup, water, f, None).0
 }
 
 /// What every solve on one water lattice shares: the collar's running total,
@@ -704,10 +742,38 @@ fn collar(b: &mut Builder, s: PressureShape, water: Port) -> Collar {
     Collar { total, entries: (entries, "out"), charts: (charts, "out") }
 }
 
-/// One solve on a set-up collar, for right-hand side f; returns the pressure.
-fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port) -> Port {
+/// One solve on a set-up collar, for right-hand side f; returns the pressure
+/// and, given the last solve's collar sources `warm`, this solve's.
+///
+/// Warm, the solve starts from λ0, `warm` read at this collar's cells, and
+/// solves for the rest against f' = f − Jᵀλ0: the same system with b − Aλ0 on
+/// the right, since the start's constant is 0. So p = G f' − G Jᵀλ + c and the
+/// sources carried on are Jᵀλ0 + Jᵀλ. A zero carry is the cold solve.
+fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port, warm: Option<Port>) -> (Port, Option<Port>) {
     let cells = s.cells();
     let Collar { total, entries, charts } = *setup;
+
+    let (f, start_sources) = match warm {
+        None => (f, None),
+        Some(last) => {
+            // collar_gather subtracts nothing when the vector has one element;
+            // λ0's constant (element K) is never placed by collar_source.
+            let one = b.dots("guess_sum", f, None, cells, 1, false);
+            let guess = b.node("guess", "node.collar_gather", json!({}));
+            b.wire(entries, guess, "entries");
+            b.wire(last, guess, "grid");
+            b.wire(one, guess, "vector");
+            b.wire(one, guess, "sum");
+            let placed = b.node("guess_source", "node.collar_source", json!({}));
+            b.wire(total, placed, "total");
+            b.wire((guess, "out"), placed, "value");
+            let rest = b.node("guess_rest", "node.collar_source", json!({"scale": float(-1.0)}));
+            b.wire(total, rest, "total");
+            b.wire((guess, "out"), rest, "value");
+            b.wire(f, rest, "base");
+            ((rest, "out"), Some((placed, "out")))
+        }
+    };
 
     // Right-hand side b = (G f at the collar, Σf / n³), β = |b|, start = b / β.
     let gf = b.box_solve("rhs_box", f, s);
@@ -779,5 +845,12 @@ fn solve(b: &mut Builder, s: PressureShape, setup: &Collar, water: Port, f: Port
     b.wire(gf, pressure, "solved");
     b.wire(correction, pressure, "correction");
     b.wire(lambda, pressure, "vector");
-    (pressure, "out")
+    let carried = start_sources.map(|start| {
+        let carry = b.node("carry", "node.collar_source", json!({}));
+        b.wire(total, carry, "total");
+        b.wire(lambda, carry, "value");
+        b.wire(start, carry, "base");
+        (carry, "out")
+    });
+    ((pressure, "out"), carried)
 }
