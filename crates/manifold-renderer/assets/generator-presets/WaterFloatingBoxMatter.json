@@ -103,7 +103,7 @@
           {"id":10,"typeId":"system.group_output"},
           {"id":12,"typeId":"node.sort_particles_into_cells","handle":"Sort Into Blocks","nodeId":"matter_sort_into_blocks"},
           {"id":13,"typeId":"node.matter_move_bodies","handle":"Move Bodies","nodeId":"matter_move_bodies"},
-          {"id":14,"typeId":"node.matter_solid_distance","handle":"Solid Distance","nodeId":"matter_solid_distance"},
+          {"id":14,"typeId":"node.liquid_solid_distance","handle":"Solid Distance","nodeId":"liquid_solid_distance"},
           {"id":15,"typeId":"node.matter_body_reaction","handle":"Body Reaction","nodeId":"matter_body_reaction"}
         ],
         "wires": [

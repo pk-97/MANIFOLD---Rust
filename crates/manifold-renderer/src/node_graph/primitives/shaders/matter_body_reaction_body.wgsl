@@ -2,7 +2,7 @@
 // (GPU_MPM_SOLVER_DESIGN.md section 4.1 step 5). One thread per lattice node,
 // after node.matter_grid_update. It repeats grid_update's projection from the
 // node's velocity after forces (v_before + dt·g, the walls, then each body in
-// order, the same helpers in matter_collider.wgsl) and adds what each dynamic
+// order, the same helpers in matter_walls.wgsl and liquid_collider.wgsl) and adds what each dynamic
 // body (inv_mass > 0) removed from the node, m·(v_in − v_out), to that body's
 // 16 words of `reaction_out`:
 //   [0..3)  Σ inv_mass·m·Δv                       (velocity change, m/s)
@@ -15,7 +15,7 @@
 // exactly as grid_update gathers them; `reaction` aliases `reaction_out` and is
 // never read here.
 
-fn matter_atlas_half(index: u32) -> f32 {
+fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
@@ -91,7 +91,7 @@ fn body(
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
-        let projected = matter_collider_project(
+        let projected = liquid_collider_project(
             v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
             bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
             vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,

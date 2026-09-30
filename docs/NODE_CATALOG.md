@@ -303,13 +303,13 @@ _Generated from the node registry. Do not hand-edit. 331 nodes registered, group
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
+| Liquid Solid Distance | `node.liquid_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
 | Matter Body Reaction | `node.matter_body_reaction` | Filter | Measures how hard the liquid pushes on each floating object so the physics world can move it. |
 | Matter Domain | `node.matter_domain` | Source | Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves. |
 | Matter Fill | `node.matter_fill` | Source | Places the liquid's starting particles in the domain: a pool on the floor plus one box. |
 | Matter Frame | `node.matter_frame` | Filter | Hands the simulated liquid particles to the liquid surface, one frame per simulation tick. |
 | Matter Grid Update | `node.matter_grid_update` | Filter | Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls. |
 | Matter Move Bodies | `node.matter_move_bodies` | Filter | Moves the solid objects in a liquid to where they are at this instant of the simulation. |
-| Matter Solid Distance | `node.matter_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
 | Matter State | `node.matter_state` | Filter | Keeps the liquid's particles between frames and runs its simulation steps. |
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |

@@ -9,16 +9,14 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid::display_blend;
 use crate::node_graph::fluid_particles::FluidParticle;
+use crate::node_graph::liquid::frame_ring::{FrameRing, RING};
 use crate::node_graph::matter::{MatterLattice, MatterPoint, PADDING_NODES, solid_bytes};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::matter_common::read_lattice;
 
 const SHADER: &str = include_str!("shaders/matter_frame.wgsl");
-/// Frames in the ring: A, B and the one being written.
-const RING: usize = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -65,7 +63,7 @@ pub(crate) fn wall_distance_lattice(lattice: &MatterLattice, closed_faces: u32) 
 crate::primitive! {
     name: MatterFrame,
     type_id: "node.matter_frame",
-    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.matter_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick with non-finite values is never published.",
+    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the frame lattice, blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. A tick with non-finite values is never published.",
     inputs: {
         points: Array(MatterPoint) required,
         stats: Array(u32) required,
@@ -100,13 +98,7 @@ crate::primitive! {
     boundary_reason: CrossFrameState,
     extra_fields: {
         convert: Option<GpuComputePipeline> = None,
-        slots: Vec<GpuBuffer> = Vec::new(),
-        slot_count: [u32; 3] = [0; 3],
-        a: usize = 0,
-        b: usize = 0,
-        t_a: f64 = 0.0,
-        t_b: f64 = 0.0,
-        epoch: Option<u32> = None,
+        ring: FrameRing = FrameRing::default(),
         solid: Option<GpuBuffer> = None,
         solid_key: Option<([u32; 7], u32)> = None,
         solid_slots: Vec<GpuBuffer> = Vec::new(),
@@ -121,10 +113,10 @@ impl Primitive for MatterFrame {
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
-            "particles_a" => self.slots.get(self.a),
-            "particles_b" => self.slots.get(self.b),
-            "solid_a" if self.solid_wired => self.solid_slots.get(self.a),
-            "solid_b" if self.solid_wired => self.solid_slots.get(self.b),
+            "particles_a" => self.ring.buffer_a(),
+            "particles_b" => self.ring.buffer_b(),
+            "solid_a" if self.solid_wired => self.solid_slots.get(self.ring.a()),
+            "solid_b" if self.solid_wired => self.solid_slots.get(self.ring.b()),
             "solid_a" | "solid_b" => self.solid.as_ref(),
             _ => None,
         }
@@ -172,26 +164,16 @@ impl Primitive for MatterFrame {
             self.solid_key = Some(solid_key);
         }
 
-        let restarted = self.epoch != Some(epoch);
-        let new_tick = restarted || simulation_time > self.t_b;
-        if new_tick && let (Some(points), Some(stats)) = (points, stats) {
+        if self.ring.wants_tick(epoch, simulation_time) && let (Some(points), Some(stats)) = (points, stats) {
             let bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
-            let mut grown = false;
-            if self.slots.len() < RING || self.slots.iter().any(|s| s.size < bytes) {
-                // Shared storage: capture and look metrics read frames back.
-                self.slots = (0..RING).map(|_| gpu.device.create_buffer_shared(bytes)).collect();
-                self.slot_count = [0; RING];
-                grown = true;
-            }
-            let write = (0..RING).find(|&i| i != self.a && i != self.b).unwrap_or(0);
-            let write = if self.a == self.b { (self.b + 1) % RING } else { write };
-            let previous = self.b;
+            let slot = self.ring.begin(gpu.device, bytes, epoch);
+            let write = slot.write;
             let pipeline = self.convert.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame")
             });
             let params = FrameParams {
                 count: count.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32),
-                previous_count: if grown { 0 } else { self.slot_count[previous] },
+                previous_count: slot.previous_count,
                 radius_scale: (3.0 / (4.0 * std::f32::consts::PI)).cbrt(),
                 _pad0: 0,
             };
@@ -202,8 +184,8 @@ impl Primitive for MatterFrame {
                         GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
                         GpuBinding::Buffer { binding: 1, buffer: points, offset: 0 },
                         GpuBinding::Buffer { binding: 2, buffer: stats, offset: 0 },
-                        GpuBinding::Buffer { binding: 3, buffer: &self.slots[previous], offset: 0 },
-                        GpuBinding::Buffer { binding: 4, buffer: &self.slots[write], offset: 0 },
+                        GpuBinding::Buffer { binding: 3, buffer: self.ring.slot(slot.previous), offset: 0 },
+                        GpuBinding::Buffer { binding: 4, buffer: self.ring.slot(write), offset: 0 },
                     ],
                     [params.count.div_ceil(256), 1, 1],
                     "node.matter_frame",
@@ -233,23 +215,13 @@ impl Primitive for MatterFrame {
                     gpu.native_enc.copy_buffer_to_buffer(solid_in, &self.solid_slots[slot], bytes);
                 }
             }
-            self.slot_count[write] = params.count;
-            if restarted || grown {
-                self.a = write;
-                self.t_a = simulation_time;
-            } else {
-                self.a = self.b;
-                self.t_a = self.t_b;
-            }
-            self.b = write;
-            self.t_b = simulation_time;
-            self.epoch = Some(epoch);
+            self.ring.finish(slot, params.count, epoch, simulation_time);
         }
 
-        let (blend, span) = display_blend(display_time, self.t_a, self.t_b);
+        let (blend, span) = self.ring.blend(display_time);
         for (name, value) in [
-            ("count_a", self.slot_count[self.a] as f32),
-            ("count_b", self.slot_count[self.b] as f32),
+            ("count_a", self.ring.count_a() as f32),
+            ("count_b", self.ring.count_b() as f32),
             ("identity_a", epoch as f32),
             ("identity_b", epoch as f32),
             ("grid_nodes_x", lattice.nodes[0] as f32),
