@@ -1,15 +1,15 @@
-//! The FFT water step run on whole scenes (docs/FFT_WATER_SOLVER_DESIGN.md
-//! P3): the momentum, still-pool and meshed-volume proofs, and the scene
-//! runner the race probes (`swash_race_tests`) share.
-//! `fft_water_scenes_cover_every_dispatch` proves every array these graphs
+//! The GPU FLIP water step run on whole scenes (docs/GPU_FLIP_PRESSURE_SOLVE.md
+//! section 1 (the step)): the momentum, still-pool and meshed-volume proofs, and the scene
+//! runner the race probes (`gpu_flip_race_tests`) share.
+//! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
 
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::swash_preset::{EXTENDED_LAYERS, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
+use super::gpu_flip_preset::{EXTENDED_LAYERS, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
-use super::swash_volume::{VolumeDrift, volume_and_area};
+use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
 use super::gpu_flip_solve_tests::{node_named, output_of};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
@@ -88,7 +88,7 @@ impl Run {
 
     /// The volume the surface mesh holds in the tank and its free surface's area.
     pub(super) fn surface_measure(&self) -> (f64, f64) {
-        volume_and_area(self.surface().into_iter(), self.scene.min(), super::swash_preset::BOX_METRES)
+        volume_and_area(self.surface().into_iter(), self.scene.min(), super::gpu_flip_preset::BOX_METRES)
     }
 
     /// The particles' own volume: `REST_PER_CELL` fill a cell.
@@ -98,7 +98,7 @@ impl Run {
 
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     pub(super) fn frame(&mut self) -> (f64, f64) {
-        let mut enc = self.device.create_encoder("swash-scene");
+        let mut enc = self.device.create_encoder("gpu-flip-scene");
         let cpu_ms;
         {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
@@ -231,7 +231,7 @@ pub(super) fn divergence(faces: &[FaceSample], water: &[f32], n: usize, h: f64) 
 /// whole run, falls at g. After 0.2 s its mean velocity is −g·t within 1%
 /// and no particle is lost.
 #[test]
-fn fft_water_free_fall_keeps_g() {
+fn gpu_flip_free_fall_keeps_g() {
     let scene = WaterScene::free_fall(64);
     let mut run = Run::new(scene);
     let frames = 12;
@@ -242,7 +242,7 @@ fn fft_water_free_fall_keeps_g() {
     let t = f64::from(frames) / 60.0;
     let want = -G * t;
     println!(
-        "SWASH free fall {}³: {} particles, mean velocity {:?} m/s after {t:.3} s (−g·t = {want:.4}), mean height {:.4} m, water cells {}",
+        "GPU FLIP free fall {}³: {} particles, mean velocity {:?} m/s after {t:.3} s (−g·t = {want:.4}), mean height {:.4} m, water cells {}",
         run.n(),
         stats.live,
         stats.mean_velocity,
@@ -258,7 +258,7 @@ fn fft_water_free_fall_keeps_g() {
 /// the face components gather the seam's arrays from them: at 32 first, then
 /// at 64.
 #[test]
-fn fft_water_face_grid_is_the_last_ticks_faces() {
+fn gpu_flip_face_grid_is_the_last_ticks_faces() {
     for n in [32, 64] {
         let scene = WaterScene::dam_break(n).with_faces();
         let mut run = Run::new(scene);
@@ -271,11 +271,11 @@ fn fft_water_face_grid_is_the_last_ticks_faces() {
         let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
         let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
         let grid = run.face_grid();
-        let expected = crate::node_graph::liquid::conformance::swash_faces(bytemuck::cast_slice(&state), [n as u32; 3]);
+        let expected = crate::node_graph::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), [n as u32; 3]);
         let gathered = (0..3)
             .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
             .sum::<usize>();
-        println!("SWASH face grid {n}³: {moving} of {records} face samples moving; state differs at {differ}, gather at {gathered}");
+        println!("GPU FLIP face grid {n}³: {moving} of {records} face samples moving; state differs at {differ}, gather at {gathered}");
         assert!(moving > records / 100, "{n}³: the faces barely move");
         assert_eq!(differ, 0, "{n}³: the state's faces are not the last step's");
         assert_eq!(gathered, 0, "{n}³: the face components differ from the state's faces");
@@ -285,7 +285,7 @@ fn fft_water_face_grid_is_the_last_ticks_faces() {
 /// I5: a pool at rest stays at rest. After 2 s the particle count is the
 /// fill's and the fastest particle moves under 1 mm/s.
 #[test]
-fn fft_water_still_pool() {
+fn gpu_flip_still_pool() {
     let scene = WaterScene::still_pool(64);
     let mut run = Run::new(scene);
     let mut fastest = Vec::new();
@@ -296,7 +296,7 @@ fn fft_water_still_pool() {
             let last = scene.steps - 1;
             let (rms, max) = divergence(&run.faces(last), &run.water(last), run.n(), scene.pressure.cell_size());
             println!(
-                "SWASH still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, water cells {}",
+                "GPU FLIP still pool {}³ frame {frame:3}: fastest {:.2e} m/s, mean height {:.5} m, divergence rms {rms:.2e} max {max:.2e} /s, water cells {}",
                 run.n(),
                 stats.fastest,
                 stats.mean_height,
@@ -315,7 +315,7 @@ fn fft_water_still_pool() {
 /// solver. It also prints the surface's skin, the depth the mesh sits
 /// outside the water, for the Dam Break's frame-0 skin to agree with.
 #[test]
-fn fft_water_still_pool_keeps_its_meshed_volume() {
+fn gpu_flip_still_pool_keeps_its_meshed_volume() {
     let scene = WaterScene::still_pool(64).with_surface();
     let mut run = Run::new(scene);
     let mut measures = Vec::new();
@@ -326,7 +326,7 @@ fn fft_water_still_pool_keeps_its_meshed_volume() {
     let (v0, a0) = measures[0];
     let drift = measures.iter().map(|(v, _)| (v / v0 - 1.0).abs()).fold(0.0, f64::max);
     let skin = VolumeDrift::new(measures[0], run.particle_volume()).skin();
-    println!("SWASH still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
-    println!("SWASH still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
+    println!("GPU FLIP still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
+    println!("GPU FLIP still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
 }

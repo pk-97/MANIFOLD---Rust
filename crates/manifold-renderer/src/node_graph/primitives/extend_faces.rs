@@ -1,5 +1,5 @@
 //! `node.extend_faces` — one layer of velocity extension into invalid faces
-//! (docs/FFT_WATER_SOLVER_DESIGN.md section 3 step 8), so particles near the
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)), so particles near the
 //! surface sample only meaningful faces. A per-element gather on the codegen
 //! path.
 

@@ -1,6 +1,6 @@
 //! The water volume a surface mesh holds in the 4 m Dam Break tank, measured
-//! the same way for every solver in the FFT water race
-//! (docs/FFT_WATER_SOLVER_DESIGN.md P3).
+//! the same way for every solver in the water race
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 6 (measures)).
 
 /// The water a closed surface mesh holds inside the tank (the cube of side
 /// `size` from `min`) and its free surface's area, in m³ and m². The mesh
@@ -34,7 +34,7 @@ pub(crate) fn volume_and_area(triangles: impl Iterator<Item = [[f32; 3]; 3]>, mi
 /// area, and the Dam Break's free surface halves as the column falls: frame 0's
 /// raw volume is the wrong baseline. δ is calibrated at frame 0, where the
 /// seeded packing makes `truth` exact: δ = (V₀ − truth) / A₀. The resting
-/// pool's skin (`fft_water_still_pool_keeps_its_meshed_volume`) checks the
+/// pool's skin (`gpu_flip_still_pool_keeps_its_meshed_volume`) checks the
 /// model on a second shape.
 pub(crate) struct VolumeDrift {
     truth: f64,

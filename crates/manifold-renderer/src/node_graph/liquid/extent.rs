@@ -20,7 +20,7 @@ use std::mem::size_of;
 
 use ahash::AHashMap;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, SWASH_DOMAIN_TYPE_ID, is_liquid_domain};
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::{Beats, Seconds};
 
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
@@ -54,7 +54,7 @@ use crate::node_graph::primitives::matter_fill::{fill_cells, fill_count};
 use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale};
 use crate::node_graph::primitives::particles_to_faces::face_count;
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
-use crate::node_graph::primitives::swash_domain::swash_geometry;
+use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
@@ -550,7 +550,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.matter_frame", check: matter_frame },
     ExtentRule { type_id: "node.matter_face_component", check: matter_face_component },
     ExtentRule { type_id: "node.face_sample_component", check: face_sample_component },
-    ExtentRule { type_id: SWASH_DOMAIN_TYPE_ID, check: swash_domain },
+    ExtentRule { type_id: GPU_FLIP_DOMAIN_TYPE_ID, check: gpu_flip_domain },
     ExtentRule { type_id: "node.liquid_fill", check: liquid_fill },
     ExtentRule { type_id: "node.liquid_state", check: liquid_state },
     ExtentRule { type_id: "node.liquid_stats", check: liquid_stats },
@@ -859,7 +859,7 @@ fn matter_face_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = swash_cells(x)?;
+    let cells = gpu_flip_cells(x)?;
     let Some(axis) = axis_param(x.params()) else {
         return Err(Verdict::Refused("the axis is not X, Y or Z".into()));
     };
@@ -1020,9 +1020,9 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("vertices", u64::from(mesh_capacity(x.params())) * size_of::<MeshVertex>() as u64)
 }
 
-// ── SWASH ─────────────────────────────────────────────────────────────────
+// ── GPU FLIP ─────────────────────────────────────────────────────────────────
 //
-// SWASH's atoms read their lattice from params (P7b wires it). Several size
+// GPU FLIP's atoms read their lattice from params (P7b wires it). Several size
 // their dispatch to the smallest of their arrays at run time; each rule here
 // asks that no array is the smaller one, so no work is ever cut.
 
@@ -1030,8 +1030,8 @@ const PARTICLE: u64 = size_of::<FluidParticle>() as u64;
 const FACE: u64 = size_of::<FaceSample>() as u64;
 const RANGE: u64 = size_of::<CellRange>() as u64;
 
-fn swash_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let geometry = swash_geometry(
+fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let geometry = gpu_flip_geometry(
         |name, default| x.scalar(name, default),
         x.params(),
         x.transform("domain"),
@@ -1041,7 +1041,7 @@ fn swash_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
-    // SWASH carries no bodies until P3b: one empty record of each.
+    // GPU FLIP carries no bodies until it has solids: one empty record of each.
     x.publish("body_count", 0.0);
     x.publish("body_rows", 0.0);
     for (port, bytes) in [("bodies", size_of::<LiquidBody>() as u64), ("shapes", size_of::<LiquidShape>() as u64), ("atlas", 4)] {
@@ -1053,7 +1053,7 @@ fn swash_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 /// Storage sized to exactly the particles the fill's wires place.
 fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
+    let nodes = gpu_flip_cells(x)?;
     let (pool, sites) = fill_of(|name, default| x.scalar(name, default));
     let placed = filled_sites(nodes, pool, sites);
     if placed > u64::from(EXACT_F32_COUNT) {
@@ -1127,19 +1127,19 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     cover_frame_faces(x, &lattice)
 }
 
-/// A SWASH atom's cell lattice, as its run() reads it.
-fn swash_cells(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
+/// A GPU FLIP atom's cell lattice, as its run() reads it.
+fn gpu_flip_cells(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
     cell_lattice(x.params()).ok_or_else(|| x.uncovered("every lattice length must be 1 to 1024".into()))
 }
 
 fn cells_with_particles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     x.covers("cell_ranges", cells * RANGE)?;
     x.covers("out", cells * 4)
 }
 
 fn particles_to_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
+    let nodes = gpu_flip_cells(x)?;
     x.covers("cell_ranges", cell_count(nodes) * RANGE)?;
     x.covers("out", face_count(nodes) * FACE)?;
     // The ranges index the sorted particles; the kernel bounds them by its length.
@@ -1148,20 +1148,20 @@ fn particles_to_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 /// Face grid in, face grid out.
 fn face_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let faces = face_count(swash_cells(x)?) * FACE;
+    let faces = face_count(gpu_flip_cells(x)?) * FACE;
     x.covers("faces", faces)?;
     x.covers("out", faces)
 }
 
 fn face_divergence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
+    let nodes = gpu_flip_cells(x)?;
     x.covers("faces", face_count(nodes) * FACE)?;
     x.covers("water", cell_count(nodes) * 4)?;
     x.covers("out", cell_count(nodes) * 4)
 }
 
 fn subtract_pressure(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
+    let nodes = gpu_flip_cells(x)?;
     let faces = face_count(nodes) * FACE;
     x.covers("faces", faces)?;
     x.covers("out", faces)?;
@@ -1170,13 +1170,13 @@ fn subtract_pressure(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn density_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     x.covers("cell_ranges", cells * RANGE)?;
     x.covers("out", cells * 4)
 }
 
 fn faces_to_particles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
+    let nodes = gpu_flip_cells(x)?;
     if nodes.iter().any(|&n| n < 2) {
         return Err(x.uncovered(format!("a {nodes:?} lattice has a side under 2 cells")));
     }
@@ -1226,21 +1226,21 @@ fn divide_by_value(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn zero_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     x.covers("out", cells * 4)
 }
 
 /// A coarse-lattice atom reading the lattice twice as long per axis: every
 /// fine cell under a coarse one, and for the restriction one more each side.
 fn coarsen_water(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     x.covers("fine", cells * 32)?;
     x.covers("out", cells * 4)
 }
 
 /// One red-black sweep or one residual: every array on the lattice.
 fn pressure_sweep(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     for port in ["water", "rhs", "value", "out"] {
         x.covers(port, cells * 4)?;
     }
@@ -1248,14 +1248,14 @@ fn pressure_sweep(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn restrict_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     x.covers("fine", cells * 32)?;
     x.covers("water", cells * 4)?;
     x.covers("out", cells * 4)
 }
 
 fn prolong_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = swash_cells(x)?;
+    let nodes = gpu_flip_cells(x)?;
     if nodes.iter().any(|&n| n % 2 != 0) {
         return Err(x.uncovered(format!("a {nodes:?} lattice has an odd side; the coarse level can't cover it")));
     }
@@ -1273,7 +1273,7 @@ fn coarse_pressure_solve(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if let Some(reason) = coarse_refusal(x.params()) {
         return Err(x.uncovered(reason));
     }
-    let cells = cell_count(swash_cells(x)?);
+    let cells = cell_count(gpu_flip_cells(x)?);
     for port in ["water", "rhs", "out"] {
         x.covers(port, cells * 4)?;
     }

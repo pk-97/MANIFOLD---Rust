@@ -1,5 +1,5 @@
 //! Host graphs that publish the liquid seam's face grid, for the face grid's
-//! fusion check and its side-by-side demo: SWASH through
+//! fusion check and its side-by-side demo: GPU FLIP through
 //! `WaterScene::with_faces`, MPM through `WaterDamBreakMatter.json` with the
 //! three components wired into its Live Matter group.
 

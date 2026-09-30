@@ -1,5 +1,5 @@
 //! `node.face_divergence` — the right-hand side of the pressure solve
-//! (docs/FFT_WATER_SOLVER_DESIGN.md section 3 step 4): each water cell's net
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): each water cell's net
 //! outflow through its faces. A per-element gather on the codegen path.
 
 use std::borrow::Cow;
@@ -50,7 +50,7 @@ crate::primitive! {
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "After node.face_gravity; water is node.cells_with_particles. Its output is the f the FFT water pressure solve makes incompressible; node.subtract_pressure then applies the pressure.",
+    composition_notes: "After node.face_gravity; water is node.cells_with_particles. Its output is the f the GPU FLIP pressure solve makes incompressible; node.subtract_pressure then applies the pressure.",
     examples: [],
     picker: { label: "Face Divergence", category: Atom },
     summary: "Measures how much liquid each cell is trying to push out or suck in.",

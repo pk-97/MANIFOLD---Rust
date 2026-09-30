@@ -1341,7 +1341,7 @@ fn face_mismatches(published: &[Vec<f32>; 3], expected: &[Vec<f32>; 3]) -> (usiz
     (count, worst, first)
 }
 
-/// P10 (D5), and SWASH's half of seam P10: the frame publishes the faces the
+/// P10 (D5), and GPU FLIP's half of seam P10: the frame publishes the faces the
 /// solver's own grid gives at the frame's last tick, bit for bit where the
 /// resample is a gather (the row's `ulps` otherwise, with its reason), over
 /// the domain's cells with the solver's valid layers. Paused frames hold

@@ -109,7 +109,7 @@ manifold-io = { path = "../manifold-io" }
 # test-only, exactly like the `manifold-io` dev-dependency above.
 manifold-editing = { path = "../manifold-editing" }
 
-# The SWASH render smoke drains Metal's autoreleased objects per frame, as the
+# The GPU FLIP render smoke drains Metal's autoreleased objects per frame, as the
 # content thread does (`content_thread.rs`), so host memory reads as the app's.
 # Already in the graph through manifold-gpu.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
@@ -170,8 +170,8 @@ rt-perf-proofs = ["gpu-proofs"]
 fluid-perf-proofs = ["gpu-proofs"]
 # GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.
 matter-perf-proofs = ["gpu-proofs"]
-# FFT water race probes (FFT_WATER_SOLVER_DESIGN.md P3): minutes-long Dam
-# Break runs of SWASH and the FLIP Fluids engine, opt-in.
+# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
+# runs of GPU FLIP and the FLIP Fluids engine, opt-in.
 water-race-probes = ["gpu-proofs"]
 # The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
 # opt-in: builds FLIP's oracle entries into manifold-fluids.

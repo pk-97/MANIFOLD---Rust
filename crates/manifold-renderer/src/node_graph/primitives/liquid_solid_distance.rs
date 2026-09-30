@@ -66,7 +66,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Once per frame, after the liquid's tick region. bodies, shapes, atlas, body_count, rows, the lattice and closed faces come from the liquid's domain (node.matter_domain, node.swash_domain); solid feeds its particle frame's (node.matter_frame, node.liquid_frame) solid input, which publishes it as the seam's solid_a/solid_b. solid holds exactly one value per lattice node, sized every frame from the same node count the dispatch covers; a lattice the device cannot hold is a named error.",
+    composition_notes: "Once per frame, after the liquid's tick region. bodies, shapes, atlas, body_count, rows, the lattice and closed faces come from the liquid's domain (node.matter_domain, node.gpu_flip_domain); solid feeds its particle frame's (node.matter_frame, node.liquid_frame) solid input, which publishes it as the seam's solid_a/solid_b. solid holds exactly one value per lattice node, sized every frame from the same node count the dispatch covers; a lattice the device cannot hold is a named error.",
     examples: ["WaterDamBreakMatter"],
     picker: { label: "Liquid Solid Distance", category: Atom },
     summary: "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",

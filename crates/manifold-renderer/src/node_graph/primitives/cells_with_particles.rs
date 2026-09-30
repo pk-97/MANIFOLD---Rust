@@ -1,5 +1,5 @@
 //! `node.cells_with_particles` — the water lattice of a particle liquid
-//! (docs/FFT_WATER_SOLVER_DESIGN.md section 3 step 2): a cell is water when
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): a cell is water when
 //! the sort put a particle in it. A per-element atom on the codegen path.
 
 use std::borrow::Cow;
@@ -63,7 +63,7 @@ crate::primitive! {
         float_param!("nodes_z", "Cells Z", 64.0, 1.0, 1024.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "After node.sort_particles_into_cells whose bins are the liquid's lattice cells (the box is the lattice, cell_size its cell): the 1/0 water lattice the FFT water pressure solve and node.face_divergence read.",
+    composition_notes: "After node.sort_particles_into_cells whose bins are the liquid's lattice cells (the box is the lattice, cell_size its cell): the 1/0 water lattice the GPU FLIP pressure solve and node.face_divergence read.",
     examples: [],
     picker: { label: "Cells With Particles", category: Atom },
     summary: "Marks the grid cells that have liquid in them.",

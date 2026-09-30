@@ -1,5 +1,5 @@
-//! `node.swash_domain` — the scene-facing CPU bridge of a SWASH liquid
-//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a, `docs/FFT_WATER_SOLVER_DESIGN.md`):
+//! `node.gpu_flip_domain` — the scene-facing CPU bridge of a GPU FLIP liquid
+//! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a, `docs/GPU_FLIP_PRESSURE_SOLVE.md`):
 //! it speaks `node.fluid_surface`'s scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity and the
 //! padded lattice the solid distance and the particle frame read. The
@@ -33,25 +33,25 @@ const CLOSED_FACES: u32 = 63;
 
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SwashSetup {
+pub(crate) struct GpuFlipSetup {
     pub(crate) lattice: LiquidLattice,
     pub(crate) pool_sites: u32,
     pub(crate) box_sites: [[u32; 2]; 3],
 }
 
 /// The domain's setup and the layout it came from, computed from params and
-/// wires alone: the node and the extent checker both call [`swash_geometry`].
+/// wires alone: the node and the extent checker both call [`gpu_flip_geometry`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SwashGeometry {
+pub(crate) struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
-    pub(crate) setup: SwashSetup,
+    pub(crate) setup: GpuFlipSetup,
     pub(crate) particles: u64,
 }
 
-impl SwashGeometry {
+impl GpuFlipGeometry {
     /// The scalar outputs fixed by the setup, by name.
     pub(crate) fn outputs(&self) -> [(&'static str, f32); 16] {
-        let SwashSetup { lattice, pool_sites, box_sites } = self.setup;
+        let GpuFlipSetup { lattice, pool_sites, box_sites } = self.setup;
         let h = self.layout.cell_size;
         [
             ("lattice_min_x", lattice.min()[0]),
@@ -83,7 +83,7 @@ fn fill_sites(
     initial_volume: Option<Transform>,
 ) -> Result<(u32, [[u32; 2]; 3]), String> {
     if !fill_height.is_finite() || fill_height < 0.0 || fill_height >= layout.size[1] {
-        return Err("SWASH: Initial Fill Height must lie within the domain height".into());
+        return Err("GPU FLIP: Initial Fill Height must lie within the domain height".into());
     }
     let min = layout.min.map(f64::from);
     let h = layout.cell_size;
@@ -91,7 +91,7 @@ fn fill_sites(
     let mut sites = [[0u32; 2]; 3];
     if let Some(volume) = initial_volume {
         if volume.billboard || volume.rot_euler.iter().any(|v| !v.is_finite() || v.abs() > 1e-6) {
-            return Err("SWASH: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
+            return Err("GPU FLIP: the initial volume must be an axis-aligned box; rotation and billboarding are not supported".into());
         }
         if volume.pos.iter().chain(&volume.scale).any(|v| !v.is_finite())
             || volume.scale.iter().any(|v| *v <= 0.0)
@@ -100,7 +100,7 @@ fn fill_sites(
                 volume.pos[d] - half < layout.min[d] - 1e-4 || volume.pos[d] + half > layout.min[d] + layout.size[d] + 1e-4
             })
         {
-            return Err("SWASH: the initial volume must be a finite box fully inside the domain".into());
+            return Err("GPU FLIP: the initial volume must be a finite box fully inside the domain".into());
         }
         for (d, range) in sites.iter_mut().enumerate() {
             let half = f64::from(volume.scale[d]) * 0.5;
@@ -116,22 +116,22 @@ fn fill_sites(
 /// the pressure solve cannot transform, a fill that does not fit the domain,
 /// a fill past the count a wire carries exactly, and a lattice other than the
 /// one the preset's solver is built for.
-pub(crate) fn swash_geometry(
+pub(crate) fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
     domain: Option<Transform>,
     initial_volume: Option<Transform>,
-) -> Result<SwashGeometry, String> {
+) -> Result<GpuFlipGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
     if let Some(reason) = multigrid_refusal(layout.cells) {
-        return Err(format!("SWASH: {reason}. Change Resolution."));
+        return Err(format!("GPU FLIP: {reason}. Change Resolution."));
     }
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
-            "SWASH: the fill places {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution or Initial Fill Height."
+            "GPU FLIP: the fill places {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution or Initial Fill Height."
         ));
     }
     let float = |name: &str, default: f32| match params.get(name) {
@@ -143,15 +143,15 @@ pub(crate) fn swash_geometry(
     let built = domain_layout(None, built_size, built_resolution)?;
     if layout.cells != built.cells || layout.min != built.min || layout.cell_size != built.cell_size {
         return Err(format!(
-            "SWASH: this solver is built for Resolution {built_resolution} and Domain Size {built_size} m with no domain box, and its lattice cannot change yet. Set Resolution to {built_resolution} and Domain Size to {built_size}."
+            "GPU FLIP: this solver is built for Resolution {built_resolution} and Domain Size {built_size} m with no domain box, and its lattice cannot change yet. Set Resolution to {built_resolution} and Domain Size to {built_size}."
         ));
     }
-    let setup = SwashSetup { lattice: LiquidLattice::from_layout(&layout), pool_sites, box_sites };
-    Ok(SwashGeometry { layout, setup, particles })
+    let setup = GpuFlipSetup { lattice: LiquidLattice::from_layout(&layout), pool_sites, box_sites };
+    Ok(GpuFlipGeometry { layout, setup, particles })
 }
 
 /// The refusal of any wired role until sources, drains and solids reach
-/// SWASH (FFT_WATER_SOLVER_DESIGN.md P3b brings solids).
+/// GPU FLIP (solids are owed: GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)).
 fn refuse_roles(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
     for port in ROLE_PORTS {
         if ctx.inputs.slot(port).is_none() {
@@ -159,15 +159,15 @@ fn refuse_roles(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
         }
         return Err(match ctx.inputs.fluid_role(port).map(|role| role.kind) {
             Some(FluidRoleKind::Collider) => {
-                "SWASH: Collider roles are not supported yet; the water does not meet solids until bodies join its pressure solve".into()
+                "GPU FLIP: Collider roles are not supported yet; the water does not meet solids until bodies join its pressure solve".into()
             }
-            _ => "SWASH: Fill, Inflow and Outflow roles are not supported; unwire them from the domain".into(),
+            _ => "GPU FLIP: Fill, Inflow and Outflow roles are not supported; unwire them from the domain".into(),
         });
     }
     Ok(())
 }
 
-/// Every scalar output, in the order [`SwashDomain::compute`] fills them.
+/// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
 const OUTPUTS: [&str; 26] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
@@ -176,7 +176,7 @@ const OUTPUTS: [&str; 26] = [
 ];
 const TICKS: usize = 19;
 
-/// Empty body, shape and atlas storage: SWASH carries no bodies yet, and
+/// Empty body, shape and atlas storage: GPU FLIP carries no bodies yet, and
 /// node.liquid_solid_distance reads them with a body count of 0.
 pub struct EmptyBodies {
     bodies: GpuBuffer,
@@ -185,9 +185,9 @@ pub struct EmptyBodies {
 }
 
 crate::primitive! {
-    name: SwashDomain,
-    type_id: "node.swash_domain",
-    purpose: "Define a SWASH liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. The solver's lattice is baked into its preset: any other Resolution, Domain Size or domain box is refused by name, as are every role and pairing with a physics world.",
+    name: GpuFlipDomain,
+    type_id: "node.gpu_flip_domain",
+    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. The solver's lattice is baked into its preset: any other Resolution, Domain Size or domain box is refused by name, as are every role and pairing with a physics world.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
@@ -294,24 +294,24 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("built_domain_size"), label: "Built Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The SWASH group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites into node.liquid_fill, gravity into every step's node.face_gravity, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance and node.liquid_frame; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Built Resolution and Built Domain Size name the lattice the preset's atoms are built for.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites into node.liquid_fill, gravity into every step's node.face_gravity, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance and node.liquid_frame; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Built Resolution and Built Domain Size name the lattice the preset's atoms are built for.",
     examples: [],
-    picker: { label: "SWASH Domain", category: Atom },
-    summary: "Sets up a SWASH liquid: its box, resolution, starting fill, gravity and speed.",
+    picker: { label: "GPU FLIP Domain", category: Atom },
+    summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
     category: Particles3D,
     role: Source,
-    aliases: ["swash", "fft water", "liquid domain"],
+    aliases: ["gpu flip", "gpu water", "liquid domain"],
     boundary_reason: NonGpu,
     extra_fields: {
         clock: LiquidClock = LiquidClock::default(),
-        setup: Option<SwashSetup> = None,
+        setup: Option<GpuFlipSetup> = None,
         published: Option<[f32; OUTPUTS.len()]> = None,
         empty: Option<EmptyBodies> = None,
         coupled: bool = false,
     },
 }
 
-impl Primitive for SwashDomain {
+impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "bodies" | "shapes" | "atlas")
     }
@@ -382,13 +382,13 @@ impl Primitive for SwashDomain {
     }
 }
 
-impl SwashDomain {
+impl GpuFlipDomain {
     fn compute(&mut self, ctx: &EffectNodeContext<'_, '_>) -> Result<[f32; OUTPUTS.len()], String> {
         if self.coupled {
-            return Err("SWASH: the water does not couple with a physics world yet; take the physics world out of this scene".into());
+            return Err("GPU FLIP: the water does not couple with a physics world yet; take the physics world out of this scene".into());
         }
         refuse_roles(ctx)?;
-        let geometry = swash_geometry(
+        let geometry = gpu_flip_geometry(
             |name, default| ctx.scalar_or_param(name, default),
             ctx.params,
             ctx.inputs.transform("domain"),
@@ -401,7 +401,7 @@ impl SwashDomain {
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
         if !speed.is_finite() || !(0.0..=4.0).contains(&speed) || gravity.iter().any(|g| !g.is_finite()) {
-            return Err("SWASH: Simulation Speed must be between 0 and 4, and gravity must be finite".into());
+            return Err("GPU FLIP: Simulation Speed must be between 0 and 4, and gravity must be finite".into());
         }
         let restart = self.setup != Some(geometry.setup);
         self.setup = Some(geometry.setup);
@@ -450,19 +450,19 @@ mod tests {
         params
     }
 
-    fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<SwashGeometry, String> {
+    fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<GpuFlipGeometry, String> {
         let read = |name: &str, default: f32| match name {
             "resolution" => resolution,
             "fill_height" => fill,
             _ => default,
         };
-        swash_geometry(read, &params(resolution.round()), None, volume)
+        gpu_flip_geometry(read, &params(resolution.round()), None, volume)
     }
 
     /// The Dam Break's column, as the preset wires it: the engine's boxes on
     /// the engine's half-cell site rule.
     #[test]
-    fn swash_domain_fills_the_dam_break_sites() {
+    fn gpu_flip_domain_fills_the_dam_break_sites() {
         let column = Transform { pos: [-1.25, 1.12, 0.0], scale: [1.18, 1.92, 3.5], ..Transform::default() };
         let at64 = geometry(64.0, 0.16, Some(column)).expect("64 fills");
         assert_eq!((at64.setup.pool_sites, at64.setup.box_sites), (5, [[5, 43], [5, 67], [8, 120]]));
@@ -473,8 +473,8 @@ mod tests {
     }
 
     #[test]
-    fn swash_domain_refuses_by_name() {
-        let refused = |result: Result<SwashGeometry, String>| result.expect_err("refused");
+    fn gpu_flip_domain_refuses_by_name() {
+        let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
         assert!(refused(geometry(63.0, 0.16, None)).contains("Resolution"));
         assert!(refused(geometry(64.0, 4.0, None)).contains("Initial Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
@@ -484,7 +484,7 @@ mod tests {
         assert!(over.contains("Resolution") && over.contains("Initial Fill Height"), "{over}");
         // Any lattice but the built one.
         let read = |name: &str, default: f32| if name == "resolution" { 32.0 } else { default };
-        let other = refused(swash_geometry(read, &params(64.0), None, None));
+        let other = refused(gpu_flip_geometry(read, &params(64.0), None, None));
         assert!(other.contains("Resolution") && other.contains("Domain Size"), "{other}");
     }
 }

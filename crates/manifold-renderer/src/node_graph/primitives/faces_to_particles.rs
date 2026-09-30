@@ -1,5 +1,5 @@
 //! `node.faces_to_particles` — the face grid back to the particles and one
-//! RK3 move (docs/FFT_WATER_SOLVER_DESIGN.md D7, section 3 step 9): PIC/FLIP
+//! RK3 move (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): PIC/FLIP
 //! blended velocity from the projected field, advection through `advect`
 //! (the projected field, or it with the density solve's correction), then
 //! kept `WALL_MARGIN_CELLS` inside the box. A per-element gather on the
@@ -24,7 +24,7 @@ use crate::node_graph::primitive::Primitive;
 /// times the next face's speed: held on the wall, water that hits the lid
 /// hangs there. The FLIP Fluids engine keeps particles the same 0.2 cells off
 /// its solids. The kernel's `FACES_TO_PARTICLES_WALL_MARGIN` is this value;
-/// the CPU reference in `swash_step_tests` reads it here, so the value proof
+/// the CPU reference in `gpu_flip_step_tests` reads it here, so the value proof
 /// fails if the two drift.
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) const WALL_MARGIN_CELLS: f64 = 0.2;
@@ -76,7 +76,7 @@ crate::primitive! {
         float_param!("flip", "FLIP Blend", 0.95, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The last atom of an FFT water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is what the particles move through: `faces` itself, or `faces` with the density solve's correction subtracted and extended, so the correction moves particles and never becomes their speed. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
+    composition_notes: "The last atom of a GPU FLIP water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is what the particles move through: `faces` itself, or `faces` with the density solve's correction subtracted and extended, so the correction moves particles and never becomes their speed. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
     examples: [],
     picker: { label: "Faces To Particles", category: Atom },
     summary: "Hands the grid's corrected motion back to the liquid particles and moves them one step.",

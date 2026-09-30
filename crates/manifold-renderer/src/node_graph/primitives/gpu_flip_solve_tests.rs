@@ -7,7 +7,7 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use super::swash_preset::{PressureShape, TREND_ITERATIONS, pressure_def};
+use super::gpu_flip_preset::{PressureShape, TREND_ITERATIONS, pressure_def};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
 use crate::node_graph::{
@@ -408,7 +408,7 @@ fn gpu_flip_real_frames_against_fft() {
         let f: Vec<f32> = floats(at + 4 * cells, cells).iter().zip(&water).map(|(&f, &w)| if w { f } else { 0.0 }).collect();
         let fft = floats(at + 8 * cells, cells);
         at += 12 * cells;
-        let iterations = if kind == 0 { super::swash_preset::PRESSURE_ITERATIONS } else { super::swash_preset::DENSITY_ITERATIONS };
+        let iterations = if kind == 0 { super::gpu_flip_preset::PRESSURE_ITERATIONS } else { super::gpu_flip_preset::DENSITY_ITERATIONS };
         let shape = PressureShape { iterations, ..PressureShape::at(n) };
         let index = match solvers.iter().position(|s| s.shape.n == n && s.shape.iterations == iterations) {
             Some(index) => index,

@@ -1,5 +1,6 @@
-//! GPU value proofs for the FFT water step's particle and face atoms
-//! (docs/FFT_WATER_SOLVER_DESIGN.md P3) against CPU f64 references.
+//! GPU value proofs for the GPU FLIP water step's particle and face atoms
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)) against CPU f64
+//! references.
 
 use super::cells_with_particles::CellsWithParticles;
 use super::density_source::DensitySource;
@@ -170,7 +171,7 @@ fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>)
 }
 
 #[test]
-fn swash_cells_with_particles_marks_occupied_bins() {
+fn gpu_flip_cells_with_particles_marks_occupied_bins() {
     let mut harness = Harness::new();
     let mut rng = Stream::new(0xce11);
     let ranges: Vec<CellRange> =
@@ -183,7 +184,7 @@ fn swash_cells_with_particles_marks_occupied_bins() {
 }
 
 #[test]
-fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
+fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
     let mut harness = Harness::new();
     let mut rng = Stream::new(0xde45);
     // One cell in eight empty, so the draw holds both inside and surface cells.
@@ -225,7 +226,7 @@ fn swash_density_source_evens_packing_inside_and_spreads_at_the_surface() {
 }
 
 #[test]
-fn swash_particles_to_faces_matches_the_tent_sum() {
+fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
     let mut harness = Harness::new();
     let particles = random_particles(0x9261, 400);
     let (sorted, ranges) = cpu_sort(&particles);
@@ -268,7 +269,7 @@ fn swash_particles_to_faces_matches_the_tent_sum() {
 }
 
 #[test]
-fn swash_face_gravity_adds_gravity_and_holds_the_walls() {
+fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
     let mut harness = Harness::new();
     let faces = random_faces(0x96a7, false);
     let input = harness.array(&faces, face_len());
@@ -292,7 +293,7 @@ fn swash_face_gravity_adds_gravity_and_holds_the_walls() {
 }
 
 #[test]
-fn swash_face_divergence_is_the_outflow_of_water_cells() {
+fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
     let mut harness = Harness::new();
     let faces = random_faces(0xd1f, false);
     let water = random_water(0x3a7e);
@@ -317,7 +318,7 @@ fn swash_face_divergence_is_the_outflow_of_water_cells() {
 }
 
 #[test]
-fn swash_subtract_pressure_projects_faces_touching_water() {
+fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     let mut harness = Harness::new();
     let faces = random_faces(0x5b7, false);
     let water = random_water(0xa7e2);
@@ -395,7 +396,7 @@ fn cpu_extend(faces: &[FaceSample]) -> Vec<FaceSample> {
 }
 
 #[test]
-fn swash_extend_faces_fills_one_layer() {
+fn gpu_flip_extend_faces_fills_one_layer() {
     let mut harness = Harness::new();
     let faces = random_faces(0xe7e, true);
     let input = harness.array(&faces, face_len());
@@ -436,7 +437,7 @@ fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
 }
 
 #[test]
-fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
+fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let mut harness = Harness::new();
     let faces = random_faces(0xf1a5, true);
     let old = random_faces(0x01d5, false);
@@ -499,7 +500,7 @@ fn cpu_fill_hash(x: u32) -> u32 {
 }
 
 #[test]
-fn swash_liquid_fill_places_pool_then_box() {
+fn gpu_flip_liquid_fill_places_pool_then_box() {
     let mut harness = Harness::new();
     // Sites are half cells: a 12 × 10 × 8 site lattice.
     let (pool, sites, seed, jitter) = (1u32, [[2u32, 8], [0, 4], [3, 9]], 7u32, 0.5f32);

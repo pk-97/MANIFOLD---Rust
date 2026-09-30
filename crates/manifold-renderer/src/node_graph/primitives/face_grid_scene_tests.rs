@@ -1,6 +1,6 @@
 //! The face grid on whole scenes: the matter component fused with a consumer
 //! against its standalone kernels, and the seam's P10 demo, a face-speed
-//! slice of SWASH and MPM Dam Break side by side
+//! slice of GPU FLIP and MPM Dam Break side by side
 //! (`docs/GPU_WHITEWATER_DESIGN.md` P1 (Grid outputs)).
 
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -11,8 +11,8 @@ use super::dot_products::DotProducts;
 use super::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
 use super::liquid_surface_tests::{Harness, params, read};
 use super::matter_face_component::MatterFaceComponent;
-use super::swash_preset::WaterScene;
-use super::swash_scene_tests::Run;
+use super::gpu_flip_preset::WaterScene;
+use super::gpu_flip_scene_tests::Run;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::liquid::grid::{face_coords, face_dims, face_index, face_len};
 use crate::node_graph::liquid::lattice::PADDING_NODES;
@@ -259,24 +259,24 @@ fn heat(t: f32) -> [u8; 3] {
     [t, t - 1.0, t - 2.0].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// L2, the seam's P10 demo: SWASH and MPM Dam Break at 64 after the same 45
+/// L2, the seam's P10 demo: GPU FLIP and MPM Dam Break at 64 after the same 45
 /// ticks, each solver's face grid as a cell-centre speed slice through the
-/// middle depth on one colour scale, SWASH left. Set FACE_GRID_DEMO_PNG to a
+/// middle depth on one colour scale, GPU FLIP left. Set FACE_GRID_DEMO_PNG to a
 /// path to write the picture.
 #[test]
-fn face_grid_demo_swash_and_matter_side_by_side() {
+fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
     const FRAMES: usize = 45;
     const SCALE: usize = 4;
     const GAP: usize = 8;
     let scene = WaterScene::dam_break(64).with_faces();
-    let mut swash = Run::new(scene);
+    let mut gpu_flip = Run::new(scene);
     for _ in 0..FRAMES {
-        swash.frame();
+        gpu_flip.frame();
     }
-    assert_eq!(swash.n(), 64);
-    let swash_faces = swash.face_grid();
-    let swash_liquid: Vec<bool> = swash.water(scene.steps - 1).iter().map(|&w| w > 0.5).collect();
-    drop(swash);
+    assert_eq!(gpu_flip.n(), 64);
+    let gpu_flip_faces = gpu_flip.face_grid();
+    let gpu_flip_liquid: Vec<bool> = gpu_flip.water(scene.steps - 1).iter().map(|&w| w > 0.5).collect();
+    drop(gpu_flip);
     let mut matter = MatterRun::new(matter_dam_break_faces(None, false));
     for _ in 0..FRAMES {
         matter.frame();
@@ -284,8 +284,8 @@ fn face_grid_demo_swash_and_matter_side_by_side() {
     let matter_faces = matter.face_grid();
     let matter_liquid = matter.liquid_cells();
 
-    let slices = [speed_slice(&swash_faces, CELLS), speed_slice(&matter_faces, CELLS)];
-    let runs = [("SWASH", &swash_faces, &swash_liquid, &slices[0]), ("MPM", &matter_faces, &matter_liquid, &slices[1])];
+    let slices = [speed_slice(&gpu_flip_faces, CELLS), speed_slice(&matter_faces, CELLS)];
+    let runs = [("GPU FLIP", &gpu_flip_faces, &gpu_flip_liquid, &slices[0]), ("MPM", &matter_faces, &matter_liquid, &slices[1])];
     for (name, faces, liquid, slice) in runs {
         for (axis, face) in faces.iter().enumerate() {
             assert!(face.iter().all(|v| v.is_finite()), "{name} axis {axis} holds a non-finite face");
@@ -306,9 +306,9 @@ fn face_grid_demo_swash_and_matter_side_by_side() {
         );
         assert!((0.1..20.0).contains(&fastest), "{name} slice speed {fastest} m/s is not a falling column's");
         // Both solvers carry velocity on the liquid's own faces and across
-        // one layer; only SWASH's extension also fills the layer along the
+        // one layer; only GPU FLIP's extension also fills the layer along the
         // axis (MATTER_FACE_VALID_LAYERS is 0 for that reason).
-        let full = if name == "SWASH" { 3 } else { 2 };
+        let full = if name == "GPU FLIP" { 3 } else { 2 };
         for (layer, &(carrying, counted)) in shares.iter().enumerate().take(full) {
             assert!(counted > 0 && carrying == counted, "{name} layer {layer}: {carrying} of {counted} faces carry velocity");
         }

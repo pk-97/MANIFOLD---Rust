@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<StatsParams>(), 16);
         assert!(SHADER.contains("struct StatsParams"));
         assert_eq!(std::mem::size_of::<FluidParticle>(), 32);
-        assert!(!SHADER.contains("atomic"), "SWASH D7: the tick statistics use no atomics");
+        assert!(!SHADER.contains("atomic"), "GPU FLIP: the tick statistics use no atomics");
         let module = naga::front::wgsl::parse_str(SHADER).expect("liquid_stats.wgsl parses");
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)

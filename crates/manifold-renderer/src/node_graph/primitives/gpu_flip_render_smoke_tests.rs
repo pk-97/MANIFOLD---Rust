@@ -1,17 +1,17 @@
-//! SWASH end to end through the render graph the app shows (`render_def`):
+//! GPU FLIP end to end through the render graph the app shows (`render_def`):
 //! particles → GPU Liquid Surface → water material with volume optics → tone
 //! map → frames, run by `PresetRuntime` as the app runs a generator. A long
 //! run watches for GPU faults, non-finite particles, a mesh past its
 //! capacity, a mesh leaving the tank, frame-time creep and memory growth; it
 //! splits each frame's GPU and CPU time by stage from timestamped frames, and
 //! checks what the transport does to the liquid's clock: pause, Reset,
-//! `clear_state`. `fft_water_rendered_scenes_cover_every_dispatch`
+//! `clear_state`. `gpu_flip_rendered_scenes_cover_every_dispatch`
 //! proves every array these graphs allocate at each lattice run here, and
 //! each run first checks its arrays fit the device. Hours long at the large
 //! lattices, so opt-in: `--features water-race-probes`.
 //!
-//! `SWASH_SMOKE_DIR` names the output directory (stills, mp4, timing CSV);
-//! `SWASH_SMOKE_FRAMES` the run length (900 when unset).
+//! `GPU_FLIP_SMOKE_DIR` names the output directory (stills, mp4, timing CSV);
+//! `GPU_FLIP_SMOKE_FRAMES` the run length (900 when unset).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
-use super::swash_preset::{WaterScene, render_def, rendered_scene_bytes};
+use super::gpu_flip_preset::{WaterScene, render_def, rendered_scene_bytes};
 use crate::frame_status::FrameRenderStatus;
 use crate::generators::mesh_common::MeshVertex;
 use crate::gpu_encoder::GpuEncoder;
@@ -122,13 +122,13 @@ fn percentile(values: &[f64], p: f64) -> f64 {
 }
 
 fn out_dir() -> PathBuf {
-    let dir = std::env::var_os("SWASH_SMOKE_DIR").map_or_else(|| std::env::temp_dir().join("swash-smoke"), PathBuf::from);
+    let dir = std::env::var_os("GPU_FLIP_SMOKE_DIR").map_or_else(|| std::env::temp_dir().join("gpu-flip-smoke"), PathBuf::from);
     std::fs::create_dir_all(&dir).expect("output directory");
     dir
 }
 
 fn frames() -> usize {
-    std::env::var("SWASH_SMOKE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(900)
+    std::env::var("GPU_FLIP_SMOKE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(900)
 }
 
 fn host_rss_mb() -> f64 {
@@ -193,8 +193,8 @@ struct FrameResult {
     /// the timed spans stretch to the whole frame and the rest read as zero.
     untimed: usize,
     /// On a profiled frame: timed dispatches, those under `SMALL_SPAN_MS`,
-    /// their own ms, every dispatch's own ms, and the gaps between them (the
-    /// untimed MPSGraph FFTs plus idle time).
+    /// their own ms, every dispatch's own ms, and the gaps between them (idle
+    /// time).
     census: Option<[f64; 5]>,
     /// Dispatches under `SMALL_SPAN_MS` by node type: count and own ms.
     small_by_type: Vec<(String, f64, f64)>,
@@ -205,10 +205,9 @@ struct FrameResult {
 const SMALL_SPAN_MS: f64 = 0.02;
 
 impl Smoke {
-    /// The scene frozen, as the app renders a generator: the solves' cosine
-    /// pairs fused (`fft_water_frozen_step_matches_unfrozen` proves them bit
-    /// for bit). A fused kernel is named in the stage split by one of its
-    /// members; a pair never spans two stages.
+    /// The scene frozen, as the app renders a generator. Nothing in the
+    /// solve or the step fuses (`gpu_flip_solve_and_step_do_not_fuse`), so
+    /// every dispatch keeps its own stage.
     fn new(scene: WaterScene) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
@@ -245,7 +244,7 @@ impl Smoke {
             None,
         )
         .expect("render def builds on the device");
-        let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "swash-smoke");
+        let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "gpu-flip-smoke");
         // A frame here runs about 2,700 dispatches; one sample buffer holds
         // 2,048 spans, so this chains four.
         let sampler = device.create_timestamp_sampler(8_192).expect("timestamp sampling");
@@ -321,7 +320,7 @@ impl Smoke {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        let mut enc = self.device.create_encoder("swash-smoke");
+        let mut enc = self.device.create_encoder("gpu-flip-smoke");
         if profile {
             enc.enable_dispatch_profiling(self.sampler.clone(), &self.device);
         }
@@ -356,8 +355,8 @@ impl Smoke {
             let mut end = 0.0_f64;
             let mut counts = [0.0; 5];
             for span in spans {
-                // Untimed vendor work (the MPSGraph FFTs) shows as the gap
-                // before the next timed dispatch; it is that dispatch's stage.
+                // Untimed work shows as the gap before the next timed
+                // dispatch; it is that dispatch's stage.
                 let gap = (span.start_ms - end).max(0.0);
                 let charged = span.millis + gap;
                 end = end.max(span.start_ms + span.millis);
@@ -952,9 +951,9 @@ fn record_preset(def: EffectGraphDef, name: &str, frames: usize, stills: &[usize
     clip
 }
 
-/// SWASH's first `frames` frames through `render_def` as `{name}.mp4`, with
+/// GPU FLIP's first `frames` frames through `render_def` as `{name}.mp4`, with
 /// stills, started as `run` starts it: the first frame, warm-up, then Reset.
-fn record_swash(scene: WaterScene, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
+fn record_gpu_flip(scene: WaterScene, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
     let dt = 1.0 / 60.0;
     let mut smoke = Smoke::with_def(scene, render_def(scene));
     smoke.frame(dt, false);
@@ -1037,25 +1036,25 @@ fn with_params(def: EffectGraphDef, overrides: &Value) -> EffectGraphDef {
 }
 
 /// Look development on the Dam Break at 64: for each variant in the JSON file
-/// `SWASH_LOOK` names (`{"variant": {"node": {"param": value}}}`, `{}` for the
-/// preset as shipped, in name order), stills at `SWASH_LOOK_STILLS` (frames,
+/// `GPU_FLIP_LOOK` names (`{"variant": {"node": {"param": value}}}`, `{}` for the
+/// preset as shipped, in name order), stills at `GPU_FLIP_LOOK_STILLS` (frames,
 /// default "90,240") and one contact sheet per still frame. With
-/// `SWASH_LOOK_SOURCE=preset` the water is the shipped preset's own (FLIP
-/// engine and its GPU surface); otherwise SWASH through `render_def`, and
-/// `SWASH_LOOK_CLIP` "first-last" also records those frames as a clip with a
-/// phone copy. Output under `SWASH_SMOKE_DIR`. No-op unset.
+/// `GPU_FLIP_LOOK_SOURCE=preset` the water is the shipped preset's own (FLIP
+/// engine and its GPU surface); otherwise GPU FLIP through `render_def`, and
+/// `GPU_FLIP_LOOK_CLIP` "first-last" also records those frames as a clip with a
+/// phone copy. Output under `GPU_FLIP_SMOKE_DIR`. No-op unset.
 #[test]
-fn swash_look_variants_64() {
-    let Some(path) = std::env::var_os("SWASH_LOOK") else {
+fn gpu_flip_look_variants_64() {
+    let Some(path) = std::env::var_os("GPU_FLIP_LOOK") else {
         return;
     };
     let variants: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("variants read")).expect("variants parse");
-    let stills: Vec<usize> = std::env::var("SWASH_LOOK_STILLS")
+    let stills: Vec<usize> = std::env::var("GPU_FLIP_LOOK_STILLS")
         .unwrap_or_else(|_| "90,240".into())
         .split(',')
         .map(|f| f.trim().parse().expect("still frame"))
         .collect();
-    let clip = std::env::var("SWASH_LOOK_CLIP").ok().map(|c| {
+    let clip = std::env::var("GPU_FLIP_LOOK_CLIP").ok().map(|c| {
         let (a, b) = c.split_once('-').expect("clip is first-last");
         (a.parse::<usize>().expect("clip start"), b.parse::<usize>().expect("clip end"))
     });
@@ -1063,7 +1062,7 @@ fn swash_look_variants_64() {
     let dir = out_dir();
     let scene = WaterScene::dam_break(64);
     let dt = 1.0 / 60.0;
-    let preset = std::env::var("SWASH_LOOK_SOURCE").is_ok_and(|s| s == "preset");
+    let preset = std::env::var("GPU_FLIP_LOOK_SOURCE").is_ok_and(|s| s == "preset");
     let prefix = if preset { "preset" } else { "look" };
     let variants = variants.as_object().expect("variants by name");
     for (name, overrides) in variants {
@@ -1128,15 +1127,15 @@ fn swash_look_variants_64() {
     }
 }
 
-/// The P3 demo (docs/FFT_WATER_SOLVER_DESIGN.md): the Dam Break at 64³ for
-/// 300 frames, left to right SWASH, the FLIP Fluids engine (whitewater as
-/// shipped) and MPM, through one camera, tank, light rig, water material and
-/// tone map. The studio floor is left out as in Peter's exports, and the
-/// obstacle too, since SWASH has no solids until P3b. Writes each column, the
+/// The race clips (docs/GPU_FLIP_PRESSURE_SOLVE.md section 6 (measures)):
+/// the Dam Break at 64³ for 300 frames, left to right GPU FLIP, the FLIP
+/// Fluids engine (whitewater as shipped) and MPM, through one camera, tank,
+/// light rig, water material and tone map. The studio floor is left out as in
+/// Peter's exports, and the obstacle too, since GPU FLIP has no solids yet. Writes each column, the
 /// side-by-side clip with a phone copy, and a still row at frames 90 and 240
-/// under `SWASH_SMOKE_DIR`.
+/// under `GPU_FLIP_SMOKE_DIR`.
 #[test]
-fn swash_race_clips_64() {
+fn gpu_flip_race_clips_64() {
     const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
     let dir = out_dir();
     let (frames, stills) = (300, [90, 240]);
@@ -1156,7 +1155,7 @@ fn swash_race_clips_64() {
     }
     println!("RACE CLIP MPM water material from the engine preset: {material:?}");
     let columns = [
-        record_swash(WaterScene::dam_break(64), "race_swash_64", frames, &stills, &dir),
+        record_gpu_flip(WaterScene::dam_break(64), "race_gpu_flip_64", frames, &stills, &dir),
         record_preset(preset_def_from("WaterDamBreakGpu.json", &left_out, &json!({})), "race_engine_64", frames, &stills, &dir),
         record_preset(
             preset_def_from("WaterDamBreakMatter.json", &left_out, &json!({ "water_material": material })),
@@ -1166,22 +1165,22 @@ fn swash_race_clips_64() {
             &dir,
         ),
     ];
-    let clip = dir.join("race_64_swash_engine_mpm.mp4");
+    let clip = dir.join("race_64_gpu_flip_engine_mpm.mp4");
     side_by_side(&columns, &clip);
-    phone_copy(&clip, &dir.join("race_64_swash_engine_mpm_phone.mp4"));
+    phone_copy(&clip, &dir.join("race_64_gpu_flip_engine_mpm_phone.mp4"));
     for frame in stills {
-        let row: Vec<PathBuf> = ["swash", "engine", "mpm"].iter().map(|c| dir.join(format!("race_{c}_64_frame{frame:04}.png"))).collect();
+        let row: Vec<PathBuf> = ["gpu_flip", "engine", "mpm"].iter().map(|c| dir.join(format!("race_{c}_64_frame{frame:04}.png"))).collect();
         contact_sheet(&row, 3, 0.5, &dir.join(format!("race_64_frame{frame:04}.png")));
     }
 }
 
 #[test]
-fn swash_render_smoke_32() {
+fn gpu_flip_render_smoke_32() {
     run(WaterScene::dam_break(32), "dam_break", true);
 }
 
 #[test]
-fn swash_render_smoke_64() {
+fn gpu_flip_render_smoke_64() {
     run(WaterScene::dam_break(64), "dam_break", true);
     run(WaterScene::still_pool(64), "still_pool", true);
 }
@@ -1189,7 +1188,7 @@ fn swash_render_smoke_64() {
 /// The shipped 64³ scene unfrozen, then frozen as the app renders it, for
 /// what fusing the solves' cosine pairs saves (BUG-u8io).
 #[test]
-fn swash_render_smoke_64_frozen() {
+fn gpu_flip_render_smoke_64_frozen() {
     let scene = WaterScene::dam_break(64);
     run_built(scene, "unfrozen", false, Smoke::unfrozen);
     run(scene, "frozen", false);
@@ -1198,22 +1197,22 @@ fn swash_render_smoke_64_frozen() {
 /// The step's cadence levers at 64³, for the stage table: the density solve
 /// every step against once a frame (shipped), and one water step a frame.
 #[test]
-fn swash_render_smoke_64_cadence() {
+fn gpu_flip_render_smoke_64_cadence() {
     let base = WaterScene::dam_break(64);
     run(WaterScene { density_once: false, ..base }, "density_every_step", false);
     run(base, "density_once", false);
-    let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
+    let one_step = WaterScene { steps: 1, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0, ..base };
     run(one_step, "one_step", false);
 }
 
 /// A mixed-radix lattice (96 = 2⁵·3), between the powers of two.
 #[test]
-fn swash_render_smoke_96() {
+fn gpu_flip_render_smoke_96() {
     run(WaterScene::dam_break(96), "dam_break", true);
 }
 
 #[test]
-fn swash_render_smoke_128() {
+fn gpu_flip_render_smoke_128() {
     run(WaterScene::dam_break(128), "dam_break", true);
 }
 
@@ -1221,7 +1220,7 @@ fn swash_render_smoke_128() {
 /// surface lattice would be 769³), beside 128³ at the same surface scale.
 /// Refused by name when the census says the device can't hold it.
 #[test]
-fn swash_render_smoke_256() {
+fn gpu_flip_render_smoke_256() {
     run(WaterScene::dam_break(128).with_surface_scale(1), "dam_break_surface1", false);
     run(WaterScene::dam_break(256).with_surface_scale(1), "dam_break_surface1", true);
     run(WaterScene::dam_break(256).with_surface_scale(2), "dam_break_surface2", false);

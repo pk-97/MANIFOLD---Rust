@@ -1,8 +1,8 @@
 //! A CPU still of a water surface mesh in the 4 m Dam Break tank, the same
-//! for every solver in the FFT water race (docs/FFT_WATER_SOLVER_DESIGN.md
-//! P3): one fixed camera, one light, flat two-sided shading and a depth
+//! for every solver in the water race (docs/GPU_FLIP_PRESSURE_SOLVE.md
+//! section 6 (measures)): one fixed camera, one light, flat two-sided shading and a depth
 //! buffer, so stills compare surface shape, not shading. Written only when
-//! `SWASH_STILLS` names a directory.
+//! `GPU_FLIP_STILLS` names a directory.
 
 use std::path::PathBuf;
 
@@ -112,11 +112,11 @@ impl Canvas {
     }
 }
 
-/// Writes `name`.png into `SWASH_STILLS`: the tank floor in grey and the
+/// Writes `name`.png into `GPU_FLIP_STILLS`: the tank floor in grey and the
 /// surface's triangles in water blue, lit from the camera's upper left.
-/// Does nothing when `SWASH_STILLS` is unset.
+/// Does nothing when `GPU_FLIP_STILLS` is unset.
 pub(crate) fn write_still(name: &str, triangles: impl Iterator<Item = [[f32; 3]; 3]>) {
-    let Some(dir) = std::env::var_os("SWASH_STILLS").map(PathBuf::from) else {
+    let Some(dir) = std::env::var_os("GPU_FLIP_STILLS").map(PathBuf::from) else {
         return;
     };
     let mut canvas = Canvas::new();

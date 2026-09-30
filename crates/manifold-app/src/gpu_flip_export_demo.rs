@@ -1,9 +1,9 @@
-//! Liquid seam P7a demo (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a (SWASH on
-//! the contract)): the shipped SWASH Dam Break through the production export
+//! Liquid seam P7a demo (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a (GPU FLIP on
+//! the contract)): the shipped GPU FLIP Dam Break through the production export
 //! at 60 and 30 fps. The frame at 5 s is the same pixels at both rates, and a
 //! paused live transport keeps showing the same frame. Writes both videos,
 //! the two 5 s frames, their difference and a paused frame to
-//! `SWASH_DEMO_DIR` (`/tmp/swash_dam_break_l2` when unset).
+//! `GPU_FLIP_DEMO_DIR` (`/tmp/gpu_flip_dam_break_l2` when unset).
 #![cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8, re
 use crate::content_command::ContentCommand;
 use crate::headless_harness::headless_content_thread;
 
-const PRESET: &str = "WaterDamBreakSwash";
+const PRESET: &str = "WaterDamBreakGpuFlip";
 const BPM: f64 = 120.0;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
@@ -29,7 +29,7 @@ const HEIGHT: u32 = 1080;
 const AT: u32 = 5;
 
 fn out_dir() -> PathBuf {
-    let dir = std::env::var_os("SWASH_DEMO_DIR").map_or_else(|| PathBuf::from("/tmp/swash_dam_break_l2"), PathBuf::from);
+    let dir = std::env::var_os("GPU_FLIP_DEMO_DIR").map_or_else(|| PathBuf::from("/tmp/gpu_flip_dam_break_l2"), PathBuf::from);
     std::fs::create_dir_all(&dir).expect("demo directory");
     dir
 }
@@ -39,7 +39,7 @@ fn project() -> Project {
     project.settings.bpm = Bpm(BPM as f32);
     project.settings.output_width = WIDTH as i32;
     project.settings.output_height = HEIGHT as i32;
-    let mut layer = Layer::new_generator("SWASH Dam Break".into(), PresetTypeId::new(PRESET), 0);
+    let mut layer = Layer::new_generator("GPU FLIP Dam Break".into(), PresetTypeId::new(PRESET), 0);
     // A minute long, so the live run never reaches its end.
     layer.clips.push(TimelineClip::new_generator(Beats::ZERO, Beats(128.0)));
     project.timeline.layers.push(layer);
@@ -100,7 +100,7 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
     let last = observed.last().expect("frames");
     assert!((last.time_seconds - f64::from(AT)).abs() < 1e-9, "{fps} fps last frame at {} s", last.time_seconds);
     println!(
-        "SWASH demo: {fps} fps export, {frames} frames in {:.1} s → {}",
+        "GPU FLIP demo: {fps} fps export, {frames} frames in {:.1} s → {}",
         took.as_secs_f64(),
         path.display()
     );
@@ -108,7 +108,7 @@ fn export(fps: u32, dir: &Path) -> Vec<u8> {
 }
 
 #[test]
-fn swash_dam_break_export_matches_across_frame_rates() {
+fn gpu_flip_dam_break_export_matches_across_frame_rates() {
     let dir = out_dir();
     let at_60 = export(60, &dir);
     let at_30 = export(30, &dir);
@@ -130,14 +130,14 @@ fn swash_dam_break_export_matches_across_frame_rates() {
     }
     std::fs::write(dir.join("dam_break_diff.png"), encode_rgba8_png(&diff, WIDTH, HEIGHT)).expect("diff written");
     println!(
-        "SWASH demo: frame 300 at 60 fps against frame 150 at 30 fps: {differing} of {} pixels differ, largest {largest:.3e}",
+        "GPU FLIP demo: frame 300 at 60 fps against frame 150 at 30 fps: {differing} of {} pixels differ, largest {largest:.3e}",
         WIDTH * HEIGHT
     );
     assert_eq!(differing, 0, "the frame at {AT} s differs between 60 and 30 fps");
 }
 
 #[test]
-fn swash_dam_break_paused_live_frames_hold() {
+fn gpu_flip_dam_break_paused_live_frames_hold() {
     let dir = out_dir();
     let mut content = headless_content_thread(project(), WIDTH, HEIGHT);
     let (state_tx, _state_rx) = unbounded();
@@ -154,16 +154,16 @@ fn swash_dam_break_paused_live_frames_hold() {
         content.tick_frame(&state_tx);
         if frame == 59 {
             playing = grab(&content);
-            println!("SWASH demo: playing frame 60 at {:.2} s", content.engine.current_time().0);
+            println!("GPU FLIP demo: playing frame 60 at {:.2} s", content.engine.current_time().0);
         }
         std::thread::sleep(Duration::from_millis(16));
     }
     let later = grab(&content);
-    println!("SWASH demo: playing frame 90 at {:.2} s", content.engine.current_time().0);
+    println!("GPU FLIP demo: playing frame 90 at {:.2} s", content.engine.current_time().0);
     write_png(&dir.join("dam_break_playing_60.png"), &playing);
     write_png(&dir.join("dam_break_playing_90.png"), &later);
     let moved = differing(&playing, &later);
-    println!("SWASH demo: 30 playing frames changed {moved} of {} pixels", WIDTH * HEIGHT);
+    println!("GPU FLIP demo: 30 playing frames changed {moved} of {} pixels", WIDTH * HEIGHT);
     assert!(moved > 0, "the liquid did not move while playing");
     content.handle_command(ContentCommand::Pause);
     content.tick_frame(&state_tx);
@@ -173,7 +173,7 @@ fn swash_dam_break_paused_live_frames_hold() {
         std::thread::sleep(Duration::from_millis(16));
         content.tick_frame(&state_tx);
         let changed = differing(&held, &grab(&content));
-        println!("SWASH demo: paused frame {} changed {changed} of {} pixels", frame + 1, WIDTH * HEIGHT);
+        println!("GPU FLIP demo: paused frame {} changed {changed} of {} pixels", frame + 1, WIDTH * HEIGHT);
         assert_eq!(changed, 0, "paused frame {} changed the picture", frame + 1);
     }
 }

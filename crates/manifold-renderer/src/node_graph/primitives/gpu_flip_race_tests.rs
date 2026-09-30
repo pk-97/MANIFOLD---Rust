@@ -1,15 +1,15 @@
-//! SWASH's side of the FFT water race (docs/FFT_WATER_SOLVER_DESIGN.md P3):
-//! the Dam Break probes that report cost, what the projection leaves
-//! undone, collar size, occupancy, packing, particle motion and the water
+//! GPU FLIP's side of the water race (docs/GPU_FLIP_PRESSURE_SOLVE.md
+//! section 6 (measures)): the Dam Break probes that report cost, what the
+//! projection leaves undone, occupancy, packing, particle motion and the water
 //! volume the surface holds, plus the density-source sweep and the settle
 //! check. Minutes long, so opt-in: `--features water-race-probes`.
-//! `fft_water_scenes_cover_every_dispatch` proves every array these graphs
+//! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
 
-use super::swash_preset::WaterScene;
-use super::swash_scene_tests::{Run, divergence, particle_stats};
-use super::swash_still::write_still;
-use super::swash_volume::VolumeDrift;
+use super::gpu_flip_preset::WaterScene;
+use super::gpu_flip_scene_tests::{Run, divergence, particle_stats};
+use super::gpu_flip_still::write_still;
+use super::gpu_flip_volume::VolumeDrift;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 
 /// How the live particles move: mean, 99th-percentile and top speed (m/s),
@@ -252,15 +252,15 @@ fn report_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) 
     }
     let live = particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
     println!(
-        "SWASH packing: {live} particles in {} cells, {:.2} per cell (the fill is 8), mean height {:.3} m",
+        "GPU FLIPpacking: {live} particles in {} cells, {:.2} per cell (the fill is 8), mean height {:.3} m",
         occupied.len(),
         live as f64 / occupied.len() as f64,
         height / live as f64
     );
-    println!("SWASH packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
+    println!("GPU FLIPpacking: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
-fn swash_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) -> Packing {
+fn gpu_flip_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) -> Packing {
     let live = particles.iter().filter(|p| p.position_radius[3] > 0.0);
     packing(live.map(|p| p.position_radius), min, [n; 3], h)
 }
@@ -289,7 +289,7 @@ pub(crate) fn packing(positions: impl Iterator<Item = [f32; 4]>, origin: [f64; 3
         per_cell[index(c)] += 1;
         live += 1;
     }
-    let rest = super::swash_preset::REST_PER_CELL as u32;
+    let rest = super::gpu_flip_preset::REST_PER_CELL as u32;
     let crowded: usize = per_cell.iter().map(|&c| c.saturating_sub(rest) as usize).sum();
     let mut hollow = 0usize;
     for z in 1..cells[2].saturating_sub(1) {
@@ -355,7 +355,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         }
         let particles = run.particles();
         record.motion.push(particle_motion(&particles, min));
-        let pack = swash_packing(&particles, min, n, h);
+        let pack = gpu_flip_packing(&particles, min, n, h);
         packed.push(pack);
         let sheet = frame % 5 == 4 && frame < 90;
         if frame % 15 == 14 || sheet {
@@ -401,17 +401,17 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
 /// The race rows at a lattice: the step alone, then meshed; the difference
 /// is the surface. The spread rate is the scene's default.
 fn cost_probe(n: usize) {
-    dam_break(WaterScene::dam_break(n), &format!("SWASH step {n}³"), 300);
-    dam_break(WaterScene::dam_break(n).with_surface(), &format!("SWASH meshed {n}³"), 300);
+    dam_break(WaterScene::dam_break(n), &format!("GPU FLIPstep {n}³"), 300);
+    dam_break(WaterScene::dam_break(n).with_surface(), &format!("GPU FLIPmeshed {n}³"), 300);
 }
 
 #[test]
-fn fft_water_cost_probe() {
+fn gpu_flip_cost_probe() {
     cost_probe(64);
 }
 
 #[test]
-fn fft_water_cost_probe_refined() {
+fn gpu_flip_cost_probe_refined() {
     cost_probe(128);
 }
 
@@ -420,7 +420,7 @@ fn fft_water_cost_probe_refined() {
 /// under-converged solve is feeding the splash energy; if not, the splash is
 /// the scene's.
 #[test]
-fn fft_water_refined_splash_iterations() {
+fn gpu_flip_refined_splash_iterations() {
     for iterations in [4, 8, 12] {
         let scene = WaterScene::dam_break(128).with_surface().with_iterations(iterations);
         dam_break(scene, &format!("ITERATIONS {iterations} 128³"), 150);
@@ -428,9 +428,9 @@ fn fft_water_refined_splash_iterations() {
 }
 
 /// The 128³ splash as shipped, against the engine's at the same frames
-/// (`fft_water_engine_race_refined`): p99 and top speed, peak height.
+/// (`gpu_flip_engine_race_refined`): p99 and top speed, peak height.
 #[test]
-fn fft_water_refined_splash() {
+fn gpu_flip_refined_splash() {
     dam_break(WaterScene::dam_break(128).with_surface(), "SPLASH 128³", 150);
 }
 
@@ -438,7 +438,7 @@ fn fft_water_refined_splash() {
 /// 0) and the step length (four steps a frame, so a fast particle crosses
 /// half as many cells per step as the two-layer face extension covers).
 #[test]
-fn fft_water_refined_splash_causes() {
+fn gpu_flip_refined_splash_causes() {
     let refined = WaterScene::dam_break(128).with_surface();
     dam_break(WaterScene { spread_rate: 0.0, ..refined }, "SPLASH rate 0 128³", 120);
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
@@ -446,9 +446,9 @@ fn fft_water_refined_splash_causes() {
 
 /// How high the 64³ splash throws and whether it stays at the lid (BUG-h8or,
 /// splash slabs along the lid), as shipped and with the density solve left
-/// out, against `fft_water_engine_race`'s splash lines.
+/// out, against `gpu_flip_engine_race`'s splash lines.
 #[test]
-fn fft_water_splash_causes_64() {
+fn gpu_flip_splash_causes_64() {
     let base = WaterScene::dam_break(64);
     dam_break(base, "LID share 1 64³", 150);
     dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
@@ -458,19 +458,19 @@ fn fft_water_splash_causes_64() {
 /// every step against once a frame (drift, packing, missing, the lid), and one
 /// water step a frame (the same plus the splash height over time and the cells
 /// a step the top speed crosses). The engine's side is
-/// `fft_water_engine_splash_64`.
+/// `gpu_flip_engine_splash_64`.
 #[test]
-fn fft_water_cadence_64() {
+fn gpu_flip_cadence_64() {
     let base = WaterScene::dam_break(64).with_surface();
     dam_break(WaterScene { density_once: false, ..base }, "CADENCE density every step 64³", 300);
     dam_break(base, "CADENCE density once 64³", 300);
-    let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
+    let one_step = WaterScene { steps: 1, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0, ..base };
     dam_break(one_step, "CADENCE one step 64³", 300);
 }
 
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
 #[test]
-fn fft_water_dam_break_settles() {
+fn gpu_flip_dam_break_settles() {
     dam_break(WaterScene::dam_break(64).with_surface(), "SETTLE 64³", 900);
 }
 
@@ -480,7 +480,7 @@ fn fft_water_dam_break_settles() {
 /// correction moves particles only, so a share up to 2 relaxes instead of
 /// oscillating.
 #[test]
-fn fft_water_density_sweep() {
+fn gpu_flip_density_sweep() {
     let base = WaterScene::dam_break(64).with_surface();
     let per_second = 1.0 / base.step_dt();
     for (share, iterations) in [(5.0 / 6.0, 3), (1.0, 3), (1.5, 3), (5.0 / 6.0, 8), (1.0, 8)] {
@@ -489,8 +489,8 @@ fn fft_water_density_sweep() {
     }
 }
 
-/// Where a water cell sits: beside air inside the box (it borders the
-/// collar), touching a box wall, or neither.
+/// Where a water cell sits: beside air inside the box, touching a box wall,
+/// or neither.
 const PLACES: [&str; 3] = ["surface", "wall", "interior"];
 
 /// The projection's leftover divergence over one place's water cells.
@@ -616,7 +616,7 @@ fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
 /// The 128³ pressure solve's leftover divergence against its iteration
 /// count: 4, 8 and 12 over the 300-frame Dam Break, the step alone.
 #[test]
-fn fft_water_refined_leftover_iterations() {
+fn gpu_flip_refined_leftover_iterations() {
     for iterations in [4, 8, 12] {
         leftover_run(WaterScene::dam_break(128).with_iterations(iterations), &format!("LEFTOVER {iterations} 128³"), 300);
     }

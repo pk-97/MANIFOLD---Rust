@@ -86,9 +86,9 @@ fn seam_position(axis: usize, f: [u32; 3]) -> [f64; 3] {
     face_position(MIN, H, axis, f).map(f64::from)
 }
 
-/// SWASH's lattice: (n+1)³ padded cells, face a of cell p at
+/// GPU FLIP's lattice: (n+1)³ padded cells, face a of cell p at
 /// m + p·h with ½ on the other two axes; weight 1 where the face exists.
-fn swash_lattice(field: &Field) -> Vec<FaceSample> {
+fn gpu_flip_lattice(field: &Field) -> Vec<FaceSample> {
     let m = N.map(|n| n + 1);
     (0..m.iter().product::<u32>())
         .map(|i| {
@@ -126,13 +126,13 @@ fn matter_grid(field: &Field) -> Vec<MatterGridNode> {
         .collect()
 }
 
-/// I16 for SWASH: a uniform and a sheared field come out at the seam's face
+/// I16 for GPU FLIP: a uniform and a sheared field come out at the seam's face
 /// positions.
 #[test]
-fn liquid_face_grid_layout_swash() {
+fn liquid_face_grid_layout_gpu_flip() {
     let mut harness = Harness::new();
     for (name, field) in [("uniform", Field::uniform()), ("shear", Field::shear())] {
-        let lattice = swash_lattice(&field);
+        let lattice = gpu_flip_lattice(&field);
         let input = harness.array(&lattice, lattice.len());
         for axis in 0..3 {
             let got = run_component(
@@ -142,7 +142,7 @@ fn liquid_face_grid_layout_swash() {
                 face_len(N, axis) as usize,
                 &component_params(N, axis as u32),
             );
-            assert_faces(axis, &got, |f| field.at(seam_position(axis, f))[axis], &format!("SWASH {name}"));
+            assert_faces(axis, &got, |f| field.at(seam_position(axis, f))[axis], &format!("GPU FLIP {name}"));
         }
     }
 }
@@ -169,12 +169,12 @@ fn liquid_face_grid_layout_matter() {
     }
 }
 
-/// A SWASH face with weight 0 reads 0, whatever velocity it holds.
+/// A GPU FLIP face with weight 0 reads 0, whatever velocity it holds.
 #[test]
 fn face_sample_component_zeroes_unweighted_faces() {
     let mut harness = Harness::new();
     let mut rng = Rng(0x5eed_face);
-    let mut lattice = swash_lattice(&Field::shear());
+    let mut lattice = gpu_flip_lattice(&Field::shear());
     for s in &mut lattice {
         for a in 0..3 {
             if rng.unit() < 0.4 {
@@ -201,7 +201,7 @@ fn face_sample_component_zeroes_unweighted_faces() {
                 let s = lattice[(f[0] + m[0] * (f[1] + m[1] * f[2])) as usize];
                 if s.weight[axis] > 0.0 { f64::from(s.velocity[axis]) } else { 0.0 }
             },
-            "SWASH weights",
+            "GPU FLIP weights",
         );
         zeroed += got.iter().filter(|&&v| v == 0.0).count();
     }

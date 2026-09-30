@@ -1,5 +1,5 @@
 //! `node.face_gravity` — the body force and the box walls on the face grid
-//! (docs/FFT_WATER_SOLVER_DESIGN.md section 3 step 3), before the pressure
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)), before the pressure
 //! solve. A per-element atom on the codegen path.
 
 use std::borrow::Cow;
@@ -15,7 +15,7 @@ use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// The step length every SWASH step atom defaults to: two steps per 60 fps
+/// The step length every GPU FLIP step atom defaults to: two steps per 60 fps
 /// frame.
 pub(super) const DEFAULT_STEP_DT: f32 = 1.0 / 120.0;
 

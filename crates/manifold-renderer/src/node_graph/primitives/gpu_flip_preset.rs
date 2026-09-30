@@ -1,21 +1,21 @@
-//! SWASH, the FFT water solver (docs/FFT_WATER_SOLVER_DESIGN.md), as graphs
-//! built for any lattice. `water_def` is a running liquid on the liquid seam
-//! (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.swash_domain's clock runs
+//! GPU FLIP, the GPU water solver (docs/GPU_FLIP_PRESSURE_SOLVE.md), as
+//! graphs built for any lattice. `water_def` is a running liquid on the
+//! liquid seam (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.gpu_flip_domain's clock runs
 //! node.liquid_state's tick region, whose body is one 60 Hz tick of
 //! [`STEPS_PER_TICK`] water steps, the density solve on the last, then
 //! node.liquid_stats; node.liquid_frame publishes each tick to the liquid
 //! surface. `render_def` puts it in the render of the shipped
-//! `WaterDamBreakSwash.json`, which is its own Dam Break at 64. The solver's
+//! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64. The solver's
 //! lattice is baked into its atoms' params, and the domain refuses any other
 //! (lifted in P7b).
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::liquid_domain::SWASH_DOMAIN_TYPE_ID;
+use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
 use super::coarse_pressure_solve::multigrid_levels;
-use super::swash_domain::{SwashGeometry, swash_geometry};
+use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -28,7 +28,7 @@ pub(crate) const BOX_METRES: f64 = 4.0;
 
 /// Water steps per 60 Hz liquid tick (D8): copies of the step inside the tick
 /// region, the density solve on the last. A builder constant: whether a
-/// coupled body moves per step or per tick is SWASH P3b's to settle.
+/// coupled body moves per step or per tick is the solids work's to settle (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)).
 pub(crate) const STEPS_PER_TICK: usize = 2;
 
 /// Iteration counts the GPU iteration trend runs; the CPU size proof covers each.
@@ -38,13 +38,13 @@ pub(super) const TREND_ITERATIONS: [usize; 5] = [3, 4, 6, 8, 12];
 /// The main solve's iterations at every lattice (Auto). A multigrid
 /// preconditioner's count does not grow with the lattice: on the seven Dam
 /// Break problems and the dumped splash solves, the f64 reference needed at
-/// most 7 iterations at 64³ and 5 at 128³ to reach the FFT solve's residual
+/// most 7 iterations at 64³ and 5 at 128³ to reach the retired FFT solve's residual
 /// (`scripts/mgpcg_reference.py`, docs/GPU_FLIP_PRESSURE_SOLVE.md). One more
 /// is the margin.
 pub(crate) const PRESSURE_ITERATIONS: usize = 8;
 
-/// The density solve's iterations (Auto): the reference matched the FFT
-/// density solve's residual in 2 at 64³ and 1 at 128³, plus one.
+/// The density solve's iterations (Auto): the reference matched the retired
+/// FFT density solve's residual in 2 at 64³ and 1 at 128³, plus one.
 pub(crate) const DENSITY_ITERATIONS: usize = 3;
 
 /// Red-black sweeps before and after each coarse correction.
@@ -110,11 +110,11 @@ pub(crate) struct WaterScene {
     /// Run the density solve on the tick's last step only. The spread rate
     /// stays per step, so that one solve removes the same share. On in the
     /// shipped cadence: at 64³ it holds the water measures within 1.5 points
-    /// of a solve every step (`fft_water_cadence_64`) and saves one solve.
+    /// of a solve every step (`gpu_flip_cadence_64`) and saves one solve.
     pub density_once: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
     /// volume and mesh): the shipped Surface Detail 0 is 2, which fits the
-    /// frame budget at 64 (BUG-mjhx, surface scale at SWASH 64).
+    /// frame budget at 64 (BUG-mjhx, surface scale at GPU FLIP 64).
     pub surface_scale: usize,
     /// Publish the face grid: three node.face_sample_component named
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
@@ -125,7 +125,7 @@ pub(crate) struct WaterScene {
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
 pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
 
-/// Face layers past the water SWASH extends each step's faces by: the face
+/// Face layers past the water GPU FLIP extends each step's faces by: the face
 /// grid's `face_valid_layers`.
 pub(crate) const EXTENDED_LAYERS: usize = 2;
 
@@ -136,7 +136,7 @@ pub(crate) const REST_PER_CELL: f64 = 8.0;
 /// step dt. Linear theory says crowding goes as (1 − share) per solve, so 1
 /// removes it in one solve; particles are discrete, so an overshoot crowds
 /// the next cell. Dam Break volume drift, max over the run, with a solve
-/// every step (`fft_water_density_sweep`, `fft_water_refined_splash`): share
+/// every step (`gpu_flip_density_sweep`, `gpu_flip_refined_splash`): share
 /// 1 gives 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5
 /// leaves twice the particles past rest at 128³ (32% against 16% at frame 29).
 pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
@@ -226,8 +226,8 @@ impl WaterScene {
     }
 
     /// The domain's own reading of the scene: the fill's sites, the padded
-    /// lattice and the particle count, from node.swash_domain's function.
-    pub fn geometry(&self) -> SwashGeometry {
+    /// lattice and the particle count, from node.gpu_flip_domain's function.
+    pub fn geometry(&self) -> GpuFlipGeometry {
         let n = self.pressure.n as f32;
         let mut params = ParamValues::default();
         params.insert("built_resolution".into(), ParamValue::Float(n));
@@ -238,7 +238,7 @@ impl WaterScene {
             "fill_height" => self.fill_height as f32,
             _ => default,
         };
-        swash_geometry(read, &params, None, self.initial_volume()).expect("the scene fits its domain")
+        gpu_flip_geometry(read, &params, None, self.initial_volume()).expect("the scene fits its domain")
     }
 
     #[cfg(test)]
@@ -386,7 +386,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let geometry = scene.geometry();
     let domain = b.node(
         "domain",
-        SWASH_DOMAIN_TYPE_ID,
+        GPU_FLIP_DOMAIN_TYPE_ID,
         json!({
             "resolution": int(s.n),
             "domain_size": float(BOX_METRES),
@@ -490,15 +490,15 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("water def")
 }
 
-/// The shipped SWASH Dam Break. Its render (camera, lights, environment,
+/// The shipped GPU FLIP Dam Break. Its render (camera, lights, environment,
 /// tank, water material, tone map) and its Liquid Surface group are the one
 /// source every builder scene takes them from; its water is the builder's
-/// Dam Break at 64 (`fft_water_shipped_preset_is_the_builders_dam_break`).
-pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakSwash";
+/// Dam Break at 64 (`gpu_flip_shipped_preset_is_the_builders_dam_break`).
+pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
 
 fn shipped_preset() -> Value {
-    let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the SWASH preset is bundled");
-    serde_json::from_str(&json).expect("the SWASH preset parses")
+    let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the GPU FLIP preset is bundled");
+    serde_json::from_str(&json).expect("the GPU FLIP preset parses")
 }
 
 /// The shipped preset's Liquid Surface group.
@@ -652,9 +652,10 @@ fn lattice_box(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
     params
 }
 
-/// One water step (section 3): sort, the water lattice, particles to faces,
-/// the domain's gravity, the pressure solve, the projection, the density
-/// solve on the same collar when `density`, faces back to particles.
+/// One water step (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)):
+/// sort, the water lattice, particles to faces, the domain's gravity, the
+/// pressure solve, the projection, the density solve when `density`, faces
+/// back to particles.
 /// Returns the moved particles and the step's projected, extended faces.
 fn water_step(
     b: &mut Builder,
@@ -872,7 +873,7 @@ pub(super) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
     tests::walk(&render_def(scene), false).expect("the rendered scene covers every dispatch").scene_bytes
 }
 
-/// CPU size proofs for every SWASH graph, run before any GPU run of it: the
+/// CPU size proofs for every GPU FLIP graph, run before any GPU run of it: the
 /// shared liquid extent rules (`liquid::extent`) at every lattice, bare,
 /// meshed, rendered and frozen.
 #[cfg(test)]
@@ -937,12 +938,12 @@ pub(super) mod tests {
     /// of two included. Each is proven here before any GPU run at it. 256
     /// holds the pool and column only with a lower fill: the Dam Break there
     /// places more particles than a count carries, and the domain refuses it
-    /// by name (`fft_water_dam_break_past_the_count_rail_is_refused`).
+    /// by name (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
     const LATTICES: [usize; 7] = [16, 32, 48, 64, 80, 96, 128];
 
     /// Every lattice at every iteration count of the iteration trend.
     #[test]
-    fn fft_water_pressure_arrays_cover_every_dispatch() {
+    fn gpu_flip_pressure_arrays_cover_every_dispatch() {
         for (n, iterations) in LATTICES.into_iter().chain([256]).flat_map(|n| TREND_ITERATIONS.map(|i| (n, i))) {
             let shape = PressureShape { iterations, ..PressureShape::at(n) };
             let def = pressure_def(shape);
@@ -957,7 +958,7 @@ pub(super) mod tests {
     /// The V-cycle's levels: halved while a side is even and over 8, so the
     /// coarsest fits the one-workgroup solve at every lattice a scene uses.
     #[test]
-    fn fft_water_levels_halve_to_one_workgroup() {
+    fn gpu_flip_levels_halve_to_one_workgroup() {
         let sides = |n| PressureShape::at(n).levels();
         assert_eq!(sides(64), vec![64, 32, 16, 8]);
         assert_eq!(sides(80), vec![80, 40, 20, 10, 5]);
@@ -972,7 +973,7 @@ pub(super) mod tests {
     /// any GPU run of it: the tick region's steps, their solves, the stats,
     /// the frame and the surface.
     #[test]
-    fn fft_water_scenes_cover_every_dispatch() {
+    fn gpu_flip_scenes_cover_every_dispatch() {
         let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
         let all = LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
         // The splash probes' scenes: four steps a tick is four copies of the
@@ -1008,7 +1009,7 @@ pub(super) mod tests {
     /// The tick region's body is the tick: every step copy and the stats, and
     /// nothing the frame or the domain runs once a frame.
     #[test]
-    fn fft_water_tick_region_is_the_tick() {
+    fn gpu_flip_tick_region_is_the_tick() {
         let scene = WaterScene::dam_break(64).with_surface();
         let (graph, plan) = built(&water_def(scene));
         let region = &plan.substep_regions()[0];
@@ -1030,13 +1031,13 @@ pub(super) mod tests {
     /// The rendered Dam Break's device bytes at every lattice, for the size
     /// ladder.
     #[test]
-    fn fft_water_memory_at_every_lattice() {
+    fn gpu_flip_memory_at_every_lattice() {
         for n in LATTICES {
             for scale in [1, 2, 3] {
                 let scene = WaterScene::dam_break(n).with_surface_scale(scale);
                 let bytes = rendered_scene_bytes(scene);
                 println!(
-                    "SWASH rendered Dam Break {n}³, surface scale {scale}: {} particles, {:.2} GB",
+                    "GPU FLIP rendered Dam Break {n}³, surface scale {scale}: {} particles, {:.2} GB",
                     scene.particles(),
                     bytes as f64 / 1e9
                 );
@@ -1050,7 +1051,7 @@ pub(super) mod tests {
     /// can't halve. The domain refuses the same Resolution by name first (the
     /// GPU FLIP conformance row).
     #[test]
-    fn fft_water_refuses_an_illegal_lattice_at_build() {
+    fn gpu_flip_refuses_an_illegal_lattice_at_build() {
         for n in [63, 81, 97] {
             let graph = pressure_def(PressureShape::at(n)).into_graph(&registry(), &Default::default()).expect("pressure def builds");
             match compile(&graph) {
@@ -1066,7 +1067,7 @@ pub(super) mod tests {
     /// Past the count a wire carries exactly, the domain refuses the Dam
     /// Break by name before any GPU work.
     #[test]
-    fn fft_water_dam_break_past_the_count_rail_is_refused() {
+    fn gpu_flip_dam_break_past_the_count_rail_is_refused() {
         let scene = WaterScene::dam_break(128);
         let mut def = water_def(scene);
         let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
@@ -1086,7 +1087,7 @@ pub(super) mod tests {
     /// every Surface Detail. No card overwrites a def param at build, so the
     /// runtime runs the graph this walk checks.
     #[test]
-    fn fft_water_rendered_scenes_cover_every_dispatch() {
+    fn gpu_flip_rendered_scenes_cover_every_dispatch() {
         let scenes = [WaterScene::dam_break, WaterScene::still_pool];
         let coarser = LATTICES.into_iter().flat_map(|n| [1, 2].map(|scale| WaterScene::dam_break(n).with_surface_scale(scale)));
         let detail = (SURFACE_DETAIL_OFFSET..=SURFACE_DETAIL_OFFSET + 2).map(|scale| WaterScene::dam_break(64).with_surface_scale(scale));
@@ -1114,7 +1115,7 @@ pub(super) mod tests {
     /// The fill is the engine's: its site rule on the engine's boxes, read
     /// by the domain.
     #[test]
-    fn fft_water_dam_break_fill_matches_the_engine_boxes() {
+    fn gpu_flip_dam_break_fill_matches_the_engine_boxes() {
         let at64 = WaterScene::dam_break(64);
         assert_eq!((at64.pool_sites(), at64.box_sites()), (5, [[5, 43], [5, 67], [8, 120]]));
         assert_eq!(at64.particles(), 128 * 5 * 128 + 38 * 62 * 112);
@@ -1132,7 +1133,7 @@ pub(super) mod tests {
     /// solve, the prolongation, two sweep pairs up) and the vector updates.
     /// The coarse water and the zero lattices are outside it.
     #[test]
-    fn fft_water_pressure_region_is_one_iteration() {
+    fn gpu_flip_pressure_region_is_one_iteration() {
         let (graph, plan) = built(&pressure_def(PressureShape::at(64)));
         let region = &plan.substep_regions()[0];
         let names: AHashMap<_, _> = graph.nodes().map(|n| (n.id, n.node_id.as_str().to_string())).collect();
@@ -1166,7 +1167,7 @@ pub(super) mod tests {
     /// The frozen graphs at every lattice, before any GPU run of them: the
     /// running scene bare and meshed, and the render graph.
     #[test]
-    fn fft_water_frozen_graphs_cover_every_dispatch() {
+    fn gpu_flip_frozen_graphs_cover_every_dispatch() {
         for n in LATTICES {
             let scene = WaterScene::dam_break(n);
             for scene in [scene.with_surface(), scene.with_faces()] {
@@ -1182,7 +1183,7 @@ pub(super) mod tests {
     /// runs unfrozen, so no fused-vs-unfrozen solve proof exists to run;
     /// each atom's own fused kernel is proven in `gpu_flip_atom_tests`.
     #[test]
-    fn fft_water_solve_and_step_do_not_fuse() {
+    fn gpu_flip_solve_and_step_do_not_fuse() {
         assert_eq!(fused_regions(&pressure_def(PressureShape::at(64))), Vec::<String>::new());
         assert_eq!(fused_regions(&water_def(WaterScene::dam_break(64))), Vec::<String>::new());
     }
@@ -1202,7 +1203,7 @@ pub(super) mod tests {
     /// The tick hands the state its last step's projected faces, extended by
     /// the face grid's valid layers, whatever the step count.
     #[test]
-    fn fft_water_state_takes_the_last_steps_extended_faces() {
+    fn gpu_flip_state_takes_the_last_steps_extended_faces() {
         for scene in [WaterScene::dam_break(64), WaterScene { steps: 1, ..WaterScene::dam_break(64) }] {
             let def = serde_json::to_value(water_def(scene)).expect("def");
             let name = |id: &Value| -> String {
@@ -1217,26 +1218,26 @@ pub(super) mod tests {
         }
     }
 
-    /// The shipped `WaterDamBreakSwash.json` is the builder's Dam Break at 64,
-    /// so the tests that build it run what ships. `UPDATE_SWASH_PRESET=1`
+    /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,
+    /// so the tests that build it run what ships. `UPDATE_GPU_FLIP_PRESET=1`
     /// rewrites it from the builder.
     #[test]
-    fn fft_water_shipped_preset_is_the_builders_dam_break() {
+    fn gpu_flip_shipped_preset_is_the_builders_dam_break() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{SHIPPED_PRESET}.json"));
         let built = serde_json::to_value(render_def(WaterScene::dam_break(64).with_faces())).expect("serialise");
-        if std::env::var("UPDATE_SWASH_PRESET").is_ok() {
+        if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
             let mut json = serde_json::to_string_pretty(&built).expect("serialise");
             json.push('\n');
             std::fs::write(&path, json).expect("write the shipped preset");
         }
         let shipped: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("the shipped preset reads")).expect("parses");
-        assert!(canonical(&shipped) == canonical(&built), "{SHIPPED_PRESET}.json differs from the builder's Dam Break; rerun with UPDATE_SWASH_PRESET=1");
+        assert!(canonical(&shipped) == canonical(&built), "{SHIPPED_PRESET}.json differs from the builder's Dam Break; rerun with UPDATE_GPU_FLIP_PRESET=1");
     }
 
     /// The shipped preset loads, saves and reloads unchanged, the Whitewater
     /// group's params and its cards with it.
     #[test]
-    fn swash_preset_round_trips_with_its_whitewater() {
+    fn gpu_flip_preset_round_trips_with_its_whitewater() {
         let shipped = shipped_preset();
         let def: EffectGraphDef = serde_json::from_value(shipped.clone()).expect("the preset loads");
         let loaded = serde_json::to_value(&def).expect("serialise");

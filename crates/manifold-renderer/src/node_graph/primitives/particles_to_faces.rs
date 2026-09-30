@@ -1,5 +1,5 @@
 //! `node.particles_to_faces` — particles to the face grid by gather
-//! (docs/FFT_WATER_SOLVER_DESIGN.md D2, D7): each face reads the particles
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): each face reads the particles
 //! around it through the sort's cell ranges and sums tent weights and
 //! momentum itself, so no atomics exist. A per-element gather on the codegen
 //! path.
@@ -70,7 +70,7 @@ crate::primitive! {
         float_param!("lattice_min_z", "Lattice Min Z", -2.0, -1.0e4, 1.0e4),
     ],
     depth_rule: Terminal,
-    composition_notes: "The first step of the FFT water step, after node.sort_particles_into_cells binned by the same lattice (box = the lattice, cell_size its cell): wire its sorted and cell_ranges. Feeds node.face_gravity; keep this output as the FLIP reference for node.faces_to_particles' old input.",
+    composition_notes: "The first atom of a GPU FLIP water step, after node.sort_particles_into_cells binned by the same lattice (box = the lattice, cell_size its cell): wire its sorted and cell_ranges. Feeds node.face_gravity; keep this output as the FLIP reference for node.faces_to_particles' old input.",
     examples: [],
     picker: { label: "Particles To Faces", category: Atom },
     summary: "Spreads the liquid particles' motion onto a grid so the solver can make it incompressible.",

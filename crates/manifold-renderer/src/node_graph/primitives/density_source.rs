@@ -1,5 +1,5 @@
-//! `node.density_source` — the FFT water step's answer to particle clumping
-//! (docs/FFT_WATER_SOLVER_DESIGN.md P3): a cell holding more particles than
+//! `node.density_source` — the GPU FLIP water step's answer to particle
+//! clumping (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): a cell holding more particles than
 //! the fill put there asks a solve to spread it, and inside the water a cell
 //! holding fewer asks it to close. A correction that only spreads ratchets
 //! the water outward, because packing noise runs both ways. The step solves
@@ -52,7 +52,7 @@ crate::primitive! {
         float_param!("rate", "Spread Rate (1/s)", 1.0, 0.0, 1000.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The right-hand side of the FFT water step's density solve, from the cell_ranges of the sort that binned the step's particles by the lattice's cells. The solve's pressure goes through node.subtract_pressure onto the projected faces, and those faces reach node.faces_to_particles as `advect` only, so particles move apart without gaining speed. rest is the fill's particles per cell (8).",
+    composition_notes: "The right-hand side of the GPU FLIP water step's density solve, from the cell_ranges of the sort that binned the step's particles by the lattice's cells. The solve's pressure goes through node.subtract_pressure onto the projected faces, and those faces reach node.faces_to_particles as `advect` only, so particles move apart without gaining speed. rest is the fill's particles per cell (8).",
     examples: [],
     picker: { label: "Density Source", category: Atom },
     summary: "Pushes apart liquid particles that have bunched up, so the water keeps its volume.",

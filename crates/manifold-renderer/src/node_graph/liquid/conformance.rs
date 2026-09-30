@@ -6,7 +6,7 @@
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, SWASH_DOMAIN_TYPE_ID};
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
@@ -16,7 +16,7 @@ use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, ST
 use crate::node_graph::primitives::face_grid_scenes::matter_dam_break_faces;
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
-use crate::node_graph::primitives::swash_preset::{EXTENDED_LAYERS, SHIPPED_PRESET, WaterScene, render_def};
+use crate::node_graph::primitives::gpu_flip_preset::{EXTENDED_LAYERS, SHIPPED_PRESET, WaterScene, render_def};
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -227,15 +227,15 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
      ticks, and no box scene a preset can carry";
 
-const SWASH_COUPLES_IN_P3B: &str = "owed to SWASH P3b (bodies join the pressure solve): until then the SWASH \
-     domain refuses Collider roles and a physics world by name, so no box scene exists";
+const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
+     docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
 
 const GPU_IMPULSES_IN_P8: &str = "owed to P8: GPU liquids refuse impulses until P8 routes them (LIQUID_SCENE_OWED)";
 
 /// GPU FLIP's step atoms that gather instead of scattering, the pressure
 /// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
 /// coarse solve has no codegen body; its own test checks it.
-const SWASH_ATOMIC_FREE: [&str; 14] = [
+const GPU_FLIP_ATOMIC_FREE: [&str; 14] = [
     "node.cells_with_particles",
     "node.particles_to_faces",
     "node.face_gravity",
@@ -384,46 +384,46 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         ],
     },
     LiquidSolverRow {
-        type_id: SWASH_DOMAIN_TYPE_ID,
-        fixture: swash_fixture,
+        type_id: GPU_FLIP_DOMAIN_TYPE_ID,
+        fixture: gpu_flip_fixture,
         gpu: true,
         coupled: false,
-        atomic_free: &SWASH_ATOMIC_FREE,
+        atomic_free: &GPU_FLIP_ATOMIC_FREE,
         refusals: &[
             RefusalCase {
-                what: "Resolution 63 on Dam Break SWASH: an odd side the pressure solve's transforms cannot take",
+                what: "Resolution 63 on Dam Break GPU FLIP: an odd side the multigrid levels cannot halve",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 63 }),
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 63 }),
                 names: &["resolution"],
             },
             RefusalCase {
-                what: "Resolution 256 on Dam Break SWASH: more particles than a count carries exactly",
+                what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
                 names: &["resolution", "fill_height"],
             },
             RefusalCase {
-                what: "Resolution 32 on Dam Break SWASH, whose solver is built for 64",
+                what: "Resolution 32 on Dam Break GPU FLIP, whose solver is built for 64",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 32 }),
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 32 }),
                 names: &["resolution", "domain_size"],
             },
             RefusalCase {
-                what: "Initial Fill Height at the top of Dam Break SWASH's domain",
+                what: "Initial Fill Height at the top of Dam Break GPU FLIP's domain",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, SWASH_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
                 names: &["fill_height"],
             },
             RefusalCase {
-                what: "Dam Break SWASH's initial volume turned 0.3 rad",
+                what: "Dam Break GPU FLIP's initial volume turned 0.3 rad",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, SWASH_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
+                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
                 names: &["initial_volume"],
             },
             RefusalCase {
-                what: "Dam Break SWASH's initial volume moved out of the domain",
+                what: "Dam Break GPU FLIP's initial volume moved out of the domain",
                 fixture: Fixture::DamBreak,
-                edit: |def| set_source_param(def, SWASH_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
+                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
                 names: &["initial_volume"],
             },
         ],
@@ -439,7 +439,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             record_bytes: std::mem::size_of::<FluidParticle>(),
         }),
         overflow: Some(OverflowCase {
-            what: "Mesh Capacity 3 on Dam Break SWASH's liquid surface",
+            what: "Mesh Capacity 3 on Dam Break GPU FLIP's liquid surface",
             fixture: Fixture::DamBreak,
             edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
             names: &["Mesh Capacity"],
@@ -447,17 +447,17 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         faces: Some(FaceSource {
             type_id: "node.liquid_state",
             port: "faces",
-            resample: swash_faces,
+            resample: gpu_flip_faces,
             valid_layers: EXTENDED_LAYERS as u32,
             // A gather: the published faces are the solver's projected faces.
             ulps: (0, ""),
         }),
         exempt: &[
-            (Check::CoupledWorldStepsOnce, SWASH_COUPLES_IN_P3B),
-            (Check::Collision, SWASH_COUPLES_IN_P3B),
-            (Check::FloatingDraft, SWASH_COUPLES_IN_P3B),
-            (Check::HydrostaticLift, SWASH_COUPLES_IN_P3B),
-            (Check::FreeFlight, SWASH_COUPLES_IN_P3B),
+            (Check::CoupledWorldStepsOnce, GPU_FLIP_OWES_SOLIDS),
+            (Check::Collision, GPU_FLIP_OWES_SOLIDS),
+            (Check::FloatingDraft, GPU_FLIP_OWES_SOLIDS),
+            (Check::HydrostaticLift, GPU_FLIP_OWES_SOLIDS),
+            (Check::FreeFlight, GPU_FLIP_OWES_SOLIDS),
             (Check::PauseDiscardsImpulses, GPU_IMPULSES_IN_P8),
         ],
     },
@@ -474,9 +474,9 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
     }
 }
 
-/// SWASH's scenes at the 64³ lattice its solver is built for, in the render
-/// graph the app shows. No box scene until SWASH P3b.
-fn swash_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
+/// GPU FLIP's scenes at the 64³ lattice its solver is built for, in the render
+/// graph the app shows. No box scene until GPU FLIP carries solids.
+fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
         Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
@@ -485,9 +485,9 @@ fn swash_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     }
 }
 
-/// SWASH's faces: component `axis` of the FaceSample lattice's padded cell,
+/// GPU FLIP's faces: component `axis` of the FaceSample lattice's padded cell,
 /// (cells + 1)³ records x fastest; 0 where no weight reached the face.
-pub(crate) fn swash_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
+pub(crate) fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
     let lattice: Vec<FaceSample> = bytemuck::pod_collect_to_vec(bytes);
     let m = cells.map(|n| n as usize + 1);
     std::array::from_fn(|axis| {

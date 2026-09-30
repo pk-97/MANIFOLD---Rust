@@ -344,7 +344,7 @@ pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
 pub(crate) mod liquid_stats;
 mod liquid_frame;
-pub(crate) mod swash_domain;
+pub(crate) mod gpu_flip_domain;
 pub(crate) mod cells_with_particles;
 pub(crate) mod particles_to_faces;
 mod face_gravity;
@@ -392,25 +392,25 @@ mod face_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_scene_tests;
 #[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) mod swash_preset;
+pub(crate) mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_solve_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
-mod swash_step_tests;
+mod gpu_flip_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
-mod swash_scene_tests;
+mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) mod swash_volume;
+pub(crate) mod gpu_flip_volume;
 #[cfg(all(test, feature = "water-race-probes"))]
-pub(crate) mod swash_race_tests;
+pub(crate) mod gpu_flip_race_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
-pub(crate) mod swash_still;
+pub(crate) mod gpu_flip_still;
 #[cfg(all(test, feature = "water-race-probes"))]
-mod swash_render_smoke_tests;
+mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
 pub(crate) mod volume_surface_mesh;

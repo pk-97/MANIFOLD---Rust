@@ -1,5 +1,5 @@
-//! `node.subtract_pressure` — the projection (docs/FFT_WATER_SOLVER_DESIGN.md
-//! section 3 step 8): faces touching water lose the pressure gradient, which
+//! `node.subtract_pressure` — the projection (docs/GPU_FLIP_PRESSURE_SOLVE.md
+//! section 1 (the step)): faces touching water lose the pressure gradient, which
 //! leaves the water's velocity without divergence. A per-element gather on
 //! the codegen path.
 

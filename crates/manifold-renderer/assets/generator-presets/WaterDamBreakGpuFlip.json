@@ -1,6 +1,6 @@
 {
-  "description": "A dam of water collapses across a 4 m tank, solved on the GPU by SWASH and meshed each frame by the Liquid Surface group. Resolution stays at 64 for now; Speed and Reset drive the water's clock.",
-  "name": "Water — Dam Break (SWASH)",
+  "description": "A dam of water collapses across a 4 m tank, solved on the GPU by GPU FLIP and meshed each frame by the Liquid Surface group. Resolution stays at 64 for now; Speed and Reset drive the water's clock.",
+  "name": "Water — Dam Break (GPU FLIP)",
   "nodes": [
     {
       "id": 0,
@@ -27,7 +27,7 @@
           "value": 64
         }
       },
-      "typeId": "node.swash_domain"
+      "typeId": "node.gpu_flip_domain"
     },
     {
       "id": 1,
@@ -7297,10 +7297,10 @@
       }
     ],
     "category": "Sim",
-    "displayName": "Water — Dam Break (SWASH)",
-    "id": "WaterDamBreakSwash",
+    "displayName": "Water — Dam Break (GPU FLIP)",
+    "id": "WaterDamBreakGpuFlip",
     "isLineBased": false,
-    "oscPrefix": "waterdambreakswash",
+    "oscPrefix": "waterdambreakgpuflip",
     "params": [
       {
         "defaultValue": 64.0,

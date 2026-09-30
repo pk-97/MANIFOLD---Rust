@@ -1805,8 +1805,8 @@ mod tests {
         }
     }
 
-    /// Two simulation steps per frame, each with its own Krylov region
-    /// (`docs/FFT_WATER_SOLVER_DESIGN.md` D8): the second region is seeded
+    /// Two simulation steps per frame, each with its own solve region
+    /// (`docs/GPU_FLIP_PRESSURE_SOLVE.md` section 1 (the step)): the second region is seeded
     /// through a node outside both regions, which is not chaining.
     #[test]
     fn substeps_region_two_regions_in_sequence_through_an_outside_node() {

@@ -1,10 +1,10 @@
-//! The FLIP Fluids engine's side of the FFT water race
-//! (docs/FFT_WATER_SOLVER_DESIGN.md P3): the shipped Dam Break
+//! The FLIP Fluids engine's side of the water race
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 6 (measures)): the shipped Dam Break
 //! (`WaterDamBreak.json`) with its obstacle unwired, built by the production
 //! world setup and stepped as the worker steps it. It reports the wall clock
 //! per tick, the engine's own counters and substeps, and the volume its
 //! surface mesh holds and how its particles move per frame, measured as
-//! `swash_race_tests` measures SWASH's. CPU only and minutes long: opt in
+//! `gpu_flip_race_tests` measures GPU FLIP's. CPU only and minutes long: opt in
 //! with `--features water-race-probes`.
 
 use std::time::Instant;
@@ -14,12 +14,12 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 
 use super::native::seeded_world;
 use super::{FluidSettings, Transform};
-use crate::node_graph::primitives::swash_race_tests::{
+use crate::node_graph::primitives::gpu_flip_race_tests::{
     Motion, Packing, Splash, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_motion, report_water,
     splash,
 };
-use crate::node_graph::primitives::swash_still::write_still;
-use crate::node_graph::primitives::swash_volume::{VolumeDrift, volume_and_area};
+use crate::node_graph::primitives::gpu_flip_still::write_still;
+use crate::node_graph::primitives::gpu_flip_volume::{VolumeDrift, volume_and_area};
 
 /// `WaterDamBreak.json`'s `node.fluid_surface` params, as that node builds
 /// its settings.
@@ -53,7 +53,7 @@ fn triangles(vertices: &[SurfaceVertex]) -> impl Iterator<Item = [[f32; 3]; 3]> 
 }
 
 /// The marker particles' motion after a step, read through the particle-frame
-/// seam in scene coordinates, their packing on the engine's own grid (SWASH's
+/// seam in scene coordinates, their packing on the engine's own grid (GPU FLIP's
 /// water measure) and how high they throw. The buffers grow to what the
 /// capture asks for.
 fn engine_motion(
@@ -194,25 +194,25 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
 }
 
 #[test]
-fn fft_water_engine_race() {
+fn gpu_flip_engine_race() {
     race(64, false, 300);
     race(64, true, 120);
 }
 
-/// The engine's side of `fft_water_splash_causes_64`: 150 frames at 64³,
+/// The engine's side of `gpu_flip_splash_causes_64`: 150 frames at 64³,
 /// whitewater off.
 #[test]
-fn fft_water_engine_splash_64() {
+fn gpu_flip_engine_splash_64() {
     race(64, false, 150);
 }
 
 /// The engine's side of the settle check: 15 s at 64³, whitewater off.
 #[test]
-fn fft_water_engine_settles() {
+fn gpu_flip_engine_settles() {
     race(64, false, 900);
 }
 
 #[test]
-fn fft_water_engine_race_refined() {
+fn gpu_flip_engine_race_refined() {
     race(128, false, 300);
 }

@@ -1,6 +1,6 @@
 //! `node.liquid_fill` — a liquid's starting particles: a pool on the floor
 //! plus one box, one particle per half-cell site, at rest
-//! (docs/FFT_WATER_SOLVER_DESIGN.md P3). The sites are the FLIP Fluids
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). The sites are the FLIP Fluids
 //! engine's seeding lattice, so both solvers start from the same water. A
 //! pure function of its params and wires, so it owns its storage, sized to
 //! exactly the particles it places, and fills it once per change. A source
@@ -133,7 +133,7 @@ crate::primitive! {
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites come from the liquid's domain; the lattice must be the one the FFT water step uses.",
+    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites come from the liquid's domain; the lattice must be the one the GPU FLIP water step uses.",
     examples: [],
     picker: { label: "Liquid Fill", category: Atom },
     summary: "Places the liquid's starting particles: a pool on the floor plus one block of water.",

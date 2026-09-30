@@ -1,4 +1,4 @@
-//! `node.face_sample_component` — one axis of SWASH's face lattice as the
+//! `node.face_sample_component` — one axis of GPU FLIP's face lattice as the
 //! seam's face array (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.2 (Grid
 //! outputs)). A per-element gather on the codegen path.
 
@@ -59,7 +59,7 @@ crate::primitive! {
         float_param!("nodes_z", "Cells Z", 64.0, 1.0, 1024.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Three of them, one per axis, on the last water step's extended faces publish SWASH's face grid (face_u, face_v, face_w) for whitewater and any other consumer of the liquid seam. The lattice params match the water step's.",
+    composition_notes: "Three of them, one per axis, on the last water step's extended faces publish GPU FLIP's face grid (face_u, face_v, face_w) for whitewater and any other consumer of the liquid seam. The lattice params match the water step's.",
     examples: [],
     picker: { label: "Face Grid Component", category: Atom },
     summary: "Hands one direction of the water's velocity grid to effects that follow the water.",
