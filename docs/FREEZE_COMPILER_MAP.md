@@ -161,8 +161,26 @@ so the dispatch writes the multiplied range (reflect_array's 2x mirror,
 analytic_echo_instances' 8x echo stride — BUG-orm4 (scene-mirror-blocked-output-multiplier-capacity));
 the fresh `dst` is sized to the
 same expression via the `// @fused_output_capacity:` marker on the kernel.
-Undeclared/non-expressible capacities (conditional, max-selector) refuse the
-region — fail closed to unfused. And a
+A lattice atom declaring `ParamProduct { params }` (its output is the
+product of Float lattice params, whatever its inputs hold: cosine_spectrum,
+cells_with_particles, face_divergence) counts from the fused uniforms,
+`u32(max(round(params.n<member>_<param>), 0.0))` per factor, and the
+marker carries the same `prod(par(…),…)` expression, which `node.wgsl_compute`
+evaluates over its own params. Such a region runs the capacity block even
+with no gather, and its count is the output's lattice clamped by every member
+lattice and coincident array external that does not provably bound it; a
+clamp that would bite at the configured params refuses the region. The
+probe hands a `ParamProduct` member its configured params.
+BUG-u8io (fft-water-fusion-param-capacity), pinned by
+`lattice_sized_region_counts_its_lattice` and
+`lattice_sized_region_clamps_by_its_members_and_coincident_reads`; SWASH's
+frozen solve and step match the unfrozen ones bit for bit. Not covered: a
+face-grid atom whose one axis is n + 1 (node.face_sample_component).
+Undeclared/non-expressible capacities (conditional, max-selector, one-input
+selector) refuse the region — fail closed to unfused. The probe runs twice,
+ascending and descending synthetics per slot, so a selector cannot pass as
+`MinInputs` by holding the smallest one: BUG-2efy (capacity probe admits an output that follows slot 0),
+pinned by `output_following_one_input_is_refused_under_min_inputs`. And a
 gathered slot can never be an in-place alias (read-write race within one
 dispatch); the same refusal covers a widened region writing in place over a
 shorter loop buffer. **Derived uniforms, ANY declared

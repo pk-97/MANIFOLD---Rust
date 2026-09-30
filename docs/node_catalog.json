@@ -9809,7 +9809,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is clamped inside the lattice box. Radius and id are kept; unused slots pass through.",
+      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands the grid's corrected motion back to the liquid particles and moves them one step.",
@@ -10095,7 +10095,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Real FFT of a lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k), every transformed length a power of two) into its half spectrum: nx/2 + 1 complex entries along x, unscaled, entry (kx, ky, kz) at kx + (nx/2 + 1)·(ky + ny·kz). Axes 3 transforms x, y and z; axes 2 transforms x and y of every z slice on its own. One vendor FFT call.",
+      "purpose": "Real FFT of a lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k), every transformed length even) into its half spectrum: nx/2 + 1 complex entries along x, unscaled, entry (kx, ky, kz) at kx + (nx/2 + 1)·(ky + ny·kz). Axes 3 transforms x, y and z; axes 2 transforms x and y of every z slice on its own. One vendor FFT call.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Breaks a 3D grid of numbers into the waves it is made of.",
@@ -16123,7 +16123,7 @@
           "name": "passes",
           "range": [
             "1",
-            "32"
+            "64"
           ],
           "type": "int"
         },
@@ -16195,7 +16195,7 @@
           "name": "passes",
           "range": [
             "1",
-            "32"
+            "64"
           ],
           "type": "int"
         },
@@ -16205,7 +16205,7 @@
           "name": "column",
           "range": [
             "0",
-            "31"
+            "63"
           ],
           "type": "int"
         }
@@ -16247,7 +16247,7 @@
           "name": "passes",
           "range": [
             "1",
-            "32"
+            "64"
           ],
           "type": "int"
         }

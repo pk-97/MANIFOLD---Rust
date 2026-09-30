@@ -173,6 +173,8 @@ struct Smoke {
     sampler: manifold_gpu::GpuTimestampSampler,
     /// Graph name of each plan step, for the stage split.
     step_names: Vec<String>,
+    /// Each plan step's node type, for the small-dispatch census.
+    step_types: Vec<String>,
     solid: NodeInstanceId,
     solid_values: Vec<f32>,
     frame_count: i64,
@@ -192,10 +194,39 @@ struct FrameResult {
     /// Dispatches the sampler couldn't time. Above zero the split is wrong:
     /// the timed spans stretch to the whole frame and the rest read as zero.
     untimed: usize,
+    /// On a profiled frame: timed dispatches, those under `SMALL_SPAN_MS`,
+    /// their own ms, every dispatch's own ms, and the gaps between them (the
+    /// untimed MPSGraph FFTs plus idle time).
+    census: Option<[f64; 5]>,
+    /// Dispatches under `SMALL_SPAN_MS` by node type: count and own ms.
+    small_by_type: Vec<(String, f64, f64)>,
 }
 
+/// A dispatch this short is mostly launch cost, not work: what fusing it
+/// into a neighbour would save.
+const SMALL_SPAN_MS: f64 = 0.02;
+
 impl Smoke {
+    /// The scene frozen, as the app renders a generator: the solves' cosine
+    /// pairs fused (`fft_water_frozen_step_matches_unfrozen` proves them bit
+    /// for bit). A fused kernel is named in the stage split by one of its
+    /// members; a pair never spans two stages.
     fn new(scene: WaterScene) -> Self {
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        let view = crate::node_graph::freeze::install::fuse_generator_view(&render_def(scene), &registry).expect("the render graph fuses");
+        let mut smoke = Self::with_def(scene, (*view.def).clone());
+        for name in &mut smoke.step_names {
+            let member = view.node_retarget.iter().filter(|(_, fused)| fused.as_str() == name.as_str()).map(|(member, _)| member.as_str()).min();
+            if let Some(member) = member {
+                *name = member.to_string();
+            }
+        }
+        smoke
+    }
+
+    /// The scene unfrozen: every atom its own dispatch.
+    fn unfrozen(scene: WaterScene) -> Self {
         Self::with_def(scene, render_def(scene))
     }
 
@@ -221,6 +252,10 @@ impl Smoke {
             runtime.graph.nodes().find(|n| n.id == id).map_or_else(String::new, |n| n.node_id.as_str().to_string())
         };
         let step_names = runtime.plan.steps().iter().map(|s| name_of(s.node)).collect();
+        let type_of = |id: NodeInstanceId| {
+            runtime.graph.nodes().find(|n| n.id == id).map_or_else(String::new, |n| n.node.type_id().as_str().to_string())
+        };
+        let step_types = runtime.plan.steps().iter().map(|s| type_of(s.node)).collect();
         let solid = runtime.graph.nodes().find(|n| n.node_id.as_str() == "solid").expect("solid source").id;
         let mut smoke = Self {
             device,
@@ -229,6 +264,7 @@ impl Smoke {
             scene,
             sampler,
             step_names,
+            step_types,
             solid,
             solid_values: scene.surface_solid(),
             frame_count: 0,
@@ -312,6 +348,8 @@ impl Smoke {
         );
         let mut stages = None;
         let mut unattributed = 0;
+        let mut census = None;
+        let mut small_by_type: Vec<(String, f64, f64)> = Vec::new();
         if profile {
             let steps = self.runtime.take_step_profiles();
             let mut split = vec![(0.0, 0.0); STAGES.len()];
@@ -323,11 +361,28 @@ impl Smoke {
             let mut spans: Vec<_> = result.spans.iter().collect();
             spans.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
             let mut end = 0.0_f64;
+            let mut counts = [0.0; 5];
             for span in spans {
                 // Untimed vendor work (the MPSGraph FFTs) shows as the gap
                 // before the next timed dispatch; it is that dispatch's stage.
-                let charged = span.millis + (span.start_ms - end).max(0.0);
+                let gap = (span.start_ms - end).max(0.0);
+                let charged = span.millis + gap;
                 end = end.max(span.start_ms + span.millis);
+                counts[0] += 1.0;
+                if span.millis < SMALL_SPAN_MS {
+                    counts[1] += 1.0;
+                    counts[2] += span.millis;
+                    let ty = step_of(&span.tag).and_then(|idx| self.step_types.get(idx)).map_or("unattributed", |t| t.as_str());
+                    match small_by_type.iter_mut().find(|(t, _, _)| t == ty) {
+                        Some(row) => {
+                            row.1 += 1.0;
+                            row.2 += span.millis;
+                        }
+                        None => small_by_type.push((ty.to_string(), 1.0, span.millis)),
+                    }
+                }
+                counts[3] += span.millis;
+                counts[4] += gap;
                 match step_of(&span.tag) {
                     Some(idx) if idx < self.step_names.len() => split[index(&self.step_names[idx])].0 += charged,
                     _ => {
@@ -337,6 +392,7 @@ impl Smoke {
                 }
             }
             stages = Some(split);
+            census = Some(counts);
         }
         self.runtime.set_profiling(false);
         FrameResult {
@@ -347,6 +403,8 @@ impl Smoke {
             profiled_total: result.total_ms,
             unattributed_spans: unattributed,
             untimed: result.overflow + result.invalid,
+            census,
+            small_by_type,
         }
     }
 
@@ -466,8 +524,13 @@ fn id_faults(particles: &[FluidParticle]) -> usize {
 
 /// The long run of one scene at one lattice. Panics at the first GPU fault,
 /// non-finite particle or collar past capacity (a collar past capacity would
-/// solve the wrong problem and read past the collar vectors).
+/// solve the wrong problem and read past the collar vectors). Frozen, as the
+/// app renders it.
 fn run(scene: WaterScene, label: &str, transport: bool) {
+    run_built(scene, label, transport, Smoke::new);
+}
+
+fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterScene) -> Smoke) {
     let n = scene.pressure.n;
     let dir = out_dir();
     let frames = frames();
@@ -484,9 +547,9 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         return;
     }
     let mem_before = snapshot.current_allocated_bytes as f64 / 1048576.0;
-    let build = Instant::now();
-    let mut smoke = Smoke::new(scene);
-    println!("SMOKE {tag}: runtime built in {:.2} s, GPU memory {mem_before:.0} → {:.0} MB", build.elapsed().as_secs_f64(), smoke.memory_mb());
+    let started = Instant::now();
+    let mut smoke = build(scene);
+    println!("SMOKE {tag}: runtime built in {:.2} s, GPU memory {mem_before:.0} → {:.0} MB", started.elapsed().as_secs_f64(), smoke.memory_mb());
     let dt = 1.0 / 60.0;
 
     // The first frame after the build starts from the fill; it is what every
@@ -520,6 +583,8 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     let mut stage_gpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let mut stage_cpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
     let (mut profiled_totals, mut unattributed, mut untimed) = (Vec::new(), 0usize, 0usize);
+    let mut census: [Vec<f64>; 5] = Default::default();
+    let mut small_by_type: Vec<(String, f64, f64)> = Vec::new();
     let (mut collar_peak, mut tri_peak, mut tri_low) = (0u32, 0u32, u32::MAX);
     let (mut box_low, mut box_high) = ([f64::MAX; 3], [f64::MIN; 3]);
     let mut memory: Vec<(usize, f64)> = Vec::new();
@@ -544,6 +609,20 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
             profiled_totals.push(r.profiled_total);
             unattributed += r.unattributed_spans;
             untimed += r.untimed;
+            if let Some(counts) = r.census {
+                for (column, value) in census.iter_mut().zip(counts) {
+                    column.push(value);
+                }
+            }
+            for (ty, count, ms) in &r.small_by_type {
+                match small_by_type.iter_mut().find(|(t, _, _)| t == ty) {
+                    Some(row) => {
+                        row.1 += count;
+                        row.2 += ms;
+                    }
+                    None => small_by_type.push((ty.clone(), *count, *ms)),
+                }
+            }
         } else {
             gpu.push((frame, r.gpu_ms));
             cpu.push((frame, r.cpu_ms));
@@ -694,6 +773,16 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
         stage_rows.push_str(&format!("{name},{g:.4},{:.4},{c:.4}\n", g * scale));
     }
     std::fs::write(dir.join(format!("{tag}_stages.csv")), stage_rows).expect("stage csv");
+    let [dispatches, small, small_ms, own_ms, gap_ms] = census.map(|column| percentile(&column, 0.5));
+    println!(
+        "SMOKE {tag} dispatches per timestamped frame: {dispatches:.0} timed, {small:.0} under {} µs ({small_ms:.2} ms of their own); every dispatch's own time {own_ms:.2} ms, gaps between them {gap_ms:.2} ms",
+        SMALL_SPAN_MS * 1000.0
+    );
+    let profiled = profiled_totals.len().max(1) as f64;
+    small_by_type.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (ty, count, ms) in small_by_type.iter().take(16) {
+        println!("SMOKE {tag}   under {} µs: {ty:<32} {:6.0} per frame, {:.2} ms", SMALL_SPAN_MS * 1000.0, count / profiled, ms / profiled);
+    }
 
     if transport {
         // Paused transport that keeps rendering: no time, no frame count.
@@ -732,14 +821,24 @@ fn run(scene: WaterScene, label: &str, transport: bool) {
     assert!(smoke.critical.is_empty(), "CRITICAL at {tag}: {:?}", smoke.critical);
 }
 
+const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
+
+fn preset_json(file: &str) -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
+    serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses")
+}
+
 /// `WaterDamBreakGpu.json` as shipped (FLIP engine and its GPU surface), with
 /// the studio floor left out as in Peter's exports and `overrides` applied.
-/// A node param a card param owns is set through the card's default, since
-/// the card overwrites it at build.
 fn preset_def(overrides: &Value) -> EffectGraphDef {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakGpu.json");
-    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses");
-    let left_out = ["studio_floor", "studio_floor_mesh", "studio_floor_material", "studio_floor_transform"];
+    preset_def_from("WaterDamBreakGpu.json", &STUDIO_FLOOR, overrides)
+}
+
+/// The generator preset `file` with the `left_out` nodes and their wires
+/// removed and `overrides` applied. A node param a card param owns is set
+/// through the card's default, since the card overwrites it at build.
+fn preset_def_from(file: &str, left_out: &[&str], overrides: &Value) -> EffectGraphDef {
+    let mut v = preset_json(file);
     let id = |n: &Value| n["id"].as_u64().expect("numeric id");
     let ids: Vec<u64> = v["nodes"].as_array().expect("nodes").iter().filter(|n| left_out.iter().any(|d| n["nodeId"] == *d)).map(id).collect();
     v["nodes"].as_array_mut().expect("nodes").retain(|n| !ids.contains(&id(n)));
@@ -769,35 +868,136 @@ fn render_preset(name: &str, overrides: &Value, stills: &[usize], dir: &Path) {
         .expect("preset builds on the device");
     let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "preset-look");
     for frame in 1..=*stills.iter().max().expect("a still") {
-        objc2::rc::autoreleasepool(|_| {
-            let time = frame as f64 / 60.0;
-            let ctx = PresetContext {
-                time,
-                beat: time * 2.0,
-                dt: 1.0 / 60.0,
-                width: WIDTH,
-                height: HEIGHT,
-                output_width: WIDTH,
-                output_height: HEIGHT,
-                aspect: WIDTH as f32 / HEIGHT as f32,
-                owner_key: 0,
-                is_clip_level: false,
-                frame_count: frame as i64,
-                anim_progress: 0.0,
-                trigger_count: 0,
-            };
-            let mut enc = device.create_encoder("preset-look");
-            {
-                let mut gpu = GpuEncoder::new(&mut enc, &device);
-                runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
-            }
-            enc.commit_and_wait_profiled(&device);
-        });
+        render_preset_frame(&mut runtime, &target, frame);
         if stills.contains(&frame) {
             let rgba = objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&device, &target.texture, WIDTH, HEIGHT));
             std::fs::write(dir.join(format!("preset_{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
         }
     }
+}
+
+/// One 60 fps frame of a preset, `frame` counted from 1.
+fn render_preset_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame: usize) {
+    let device = crate::test_device();
+    objc2::rc::autoreleasepool(|_| {
+        let time = frame as f64 / 60.0;
+        let ctx = PresetContext {
+            time,
+            beat: time * 2.0,
+            dt: 1.0 / 60.0,
+            width: WIDTH,
+            height: HEIGHT,
+            output_width: WIDTH,
+            output_height: HEIGHT,
+            aspect: WIDTH as f32 / HEIGHT as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame as i64,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = device.create_encoder("preset-look");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
+        }
+        enc.commit_and_wait_profiled(&device);
+    });
+}
+
+/// An H.264 file fed raw RGBA frames at 60 fps.
+fn encoder(path: &Path, crf: u32) -> std::process::Child {
+    std::process::Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{WIDTH}x{HEIGHT}"), "-r", "60", "-i", "-"])
+        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", &crf.to_string()])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("ffmpeg starts")
+}
+
+fn finish(mut encoder: std::process::Child) {
+    drop(encoder.stdin.take());
+    let status = encoder.wait().expect("ffmpeg ran");
+    assert!(status.success(), "ffmpeg: {status}");
+}
+
+fn write_frame(encoder: &mut std::process::Child, rgba: &[u8]) {
+    encoder.stdin.as_mut().expect("ffmpeg input").write_all(rgba).expect("clip frame written");
+}
+
+/// A preset's first `frames` frames as `{name}.mp4`, with stills: one column
+/// of the race clip.
+fn record_preset(def: EffectGraphDef, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
+    let registry = PrimitiveRegistry::with_builtin();
+    let device = crate::test_device();
+    let mut runtime = PresetRuntime::from_def_with_device(def, &registry, device.arc(), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None)
+        .expect("preset builds on the device");
+    let target = RenderTarget::new(&device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "race-clip");
+    let clip = dir.join(format!("{name}.mp4"));
+    let mut ffmpeg = encoder(&clip, 16);
+    let wall = Instant::now();
+    for frame in 1..=frames {
+        render_preset_frame(&mut runtime, &target, frame);
+        let rgba = objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&device, &target.texture, WIDTH, HEIGHT));
+        if stills.contains(&frame) {
+            std::fs::write(dir.join(format!("{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
+        }
+        write_frame(&mut ffmpeg, &rgba);
+    }
+    finish(ffmpeg);
+    println!("RACE CLIP {name}: {frames} frames in {:.1} s", wall.elapsed().as_secs_f64());
+    clip
+}
+
+/// SWASH's first `frames` frames through `render_def` as `{name}.mp4`, with
+/// stills, started as `run` starts it: the first frame, warm-up, then a
+/// trigger restart from the fill.
+fn record_swash(scene: WaterScene, name: &str, frames: usize, stills: &[usize], dir: &Path) -> PathBuf {
+    let dt = 1.0 / 60.0;
+    let mut smoke = Smoke::with_def(scene, render_def(scene));
+    smoke.frame(dt, false);
+    let mut warmups = 0;
+    while smoke.runtime.warmup_pending() && warmups < 600 {
+        smoke.frame(dt, false);
+        warmups += 1;
+    }
+    smoke.trigger += 1;
+    smoke.frame(dt, false);
+    let clip = dir.join(format!("{name}.mp4"));
+    let mut ffmpeg = encoder(&clip, 16);
+    let wall = Instant::now();
+    for frame in 1..=frames {
+        smoke.frame(dt, false);
+        let rgba = smoke.readback();
+        if stills.contains(&frame) {
+            std::fs::write(dir.join(format!("{name}_frame{frame:04}.png")), encode_rgba8_png(&rgba, WIDTH, HEIGHT)).expect("still written");
+        }
+        write_frame(&mut ffmpeg, &rgba);
+    }
+    finish(ffmpeg);
+    assert!(smoke.critical.is_empty(), "CRITICAL in {name}: {:?}", smoke.critical);
+    println!("RACE CLIP {name}: {frames} frames in {:.1} s", wall.elapsed().as_secs_f64());
+    clip
+}
+
+/// Clips side by side in the given order, each cropped to the tank and its
+/// splash as `contact_sheet` crops.
+fn side_by_side(columns: &[PathBuf], out: &Path) {
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-loglevel", "error"]);
+    for column in columns {
+        cmd.arg("-i").arg(column);
+    }
+    let mut filter: String = (0..columns.len()).map(|i| format!("[{i}:v]crop=1200:1080:360:0[c{i}];")).collect();
+    filter += &(0..columns.len()).map(|i| format!("[c{i}]")).collect::<String>();
+    filter += &format!("hstack=inputs={}[out]", columns.len());
+    let status = cmd
+        .args(["-filter_complex", &filter, "-map", "[out]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart"])
+        .arg(out)
+        .status()
+        .expect("ffmpeg runs");
+    assert!(status.success(), "side by side: {status}");
 }
 
 /// A contact sheet of stills in reading order, `cols` wide: each cropped to
@@ -927,6 +1127,53 @@ fn swash_look_variants_64() {
     }
 }
 
+/// The P3 demo (docs/FFT_WATER_SOLVER_DESIGN.md): the Dam Break at 64³ for
+/// 300 frames, left to right SWASH, the FLIP Fluids engine (whitewater as
+/// shipped) and MPM, through one camera, tank, light rig, water material and
+/// tone map. The studio floor is left out as in Peter's exports, and the
+/// obstacle too, since SWASH has no solids until P3b. Writes each column, the
+/// side-by-side clip with a phone copy, and a still row at frames 90 and 240
+/// under `SWASH_SMOKE_DIR`.
+#[test]
+fn swash_race_clips_64() {
+    const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
+    let dir = out_dir();
+    let (frames, stills) = (300, [90, 240]);
+    let left_out: Vec<&str> = STUDIO_FLOOR.iter().chain(&OBSTACLE).copied().collect();
+    // MPM's preset keeps the older water material: give it the engine's.
+    let water = |file: &str| {
+        let preset = preset_json(file);
+        let nodes = preset["nodes"].as_array().expect("nodes");
+        nodes.iter().find(|n| n["nodeId"] == "water_material").expect("water material")["params"].clone()
+    };
+    let (engine_water, mpm_water) = (water("WaterDamBreakGpu.json"), water("WaterDamBreakMatter.json"));
+    let mut material = serde_json::Map::new();
+    for (param, value) in engine_water.as_object().expect("material params") {
+        if mpm_water.get(param).is_some_and(|mpm| mpm != value) {
+            material.insert(param.clone(), value["value"].clone());
+        }
+    }
+    println!("RACE CLIP MPM water material from the engine preset: {material:?}");
+    let columns = [
+        record_swash(WaterScene::dam_break(64), "race_swash_64", frames, &stills, &dir),
+        record_preset(preset_def_from("WaterDamBreakGpu.json", &left_out, &json!({})), "race_engine_64", frames, &stills, &dir),
+        record_preset(
+            preset_def_from("WaterDamBreakMatter.json", &left_out, &json!({ "water_material": material })),
+            "race_mpm_64",
+            frames,
+            &stills,
+            &dir,
+        ),
+    ];
+    let clip = dir.join("race_64_swash_engine_mpm.mp4");
+    side_by_side(&columns, &clip);
+    phone_copy(&clip, &dir.join("race_64_swash_engine_mpm_phone.mp4"));
+    for frame in stills {
+        let row: Vec<PathBuf> = ["swash", "engine", "mpm"].iter().map(|c| dir.join(format!("race_{c}_64_frame{frame:04}.png"))).collect();
+        contact_sheet(&row, 3, 0.5, &dir.join(format!("race_64_frame{frame:04}.png")));
+    }
+}
+
 #[test]
 fn swash_render_smoke_32() {
     run(WaterScene::dam_break(32), "dam_break", true);
@@ -936,6 +1183,32 @@ fn swash_render_smoke_32() {
 fn swash_render_smoke_64() {
     run(WaterScene::dam_break(64), "dam_break", true);
     run(WaterScene::still_pool(64), "still_pool", true);
+}
+
+/// The shipped 64³ scene unfrozen, then frozen as the app renders it, for
+/// what fusing the solves' cosine pairs saves (BUG-u8io).
+#[test]
+fn swash_render_smoke_64_frozen() {
+    let scene = WaterScene::dam_break(64);
+    run_built(scene, "unfrozen", false, Smoke::unfrozen);
+    run(scene, "frozen", false);
+}
+
+/// The step's cadence levers at 64³, for the stage table: the density solve
+/// every step against once a frame (shipped), and one water step a frame.
+#[test]
+fn swash_render_smoke_64_cadence() {
+    let base = WaterScene::dam_break(64);
+    run(WaterScene { density_once: false, ..base }, "density_every_step", false);
+    run(base, "density_once", false);
+    let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
+    run(one_step, "one_step", false);
+}
+
+/// A mixed-radix lattice (96 = 2⁵·3), between the powers of two.
+#[test]
+fn swash_render_smoke_96() {
+    run(WaterScene::dam_break(96), "dam_break", true);
 }
 
 #[test]

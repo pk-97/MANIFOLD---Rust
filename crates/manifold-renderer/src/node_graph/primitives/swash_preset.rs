@@ -77,6 +77,11 @@ pub(super) struct WaterScene {
     pub spread_rate: f64,
     /// Krylov passes of the density solve.
     pub density_passes: usize,
+    /// Run the density solve on the frame's last step only. The spread rate
+    /// stays per step, so that one solve removes the same share. On in the
+    /// shipped cadence: at 64³ it holds the water measures within 1.5 points
+    /// of a solve every step (`fft_water_cadence_64`) and saves one solve.
+    pub density_once: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
     /// volume and mesh): the shipped Surface Detail 1 is 3.
     pub surface_scale: usize,
@@ -94,13 +99,13 @@ pub(super) const EXTENDED_LAYERS: usize = 2;
 /// Particles per cell the fill seeds: one per half-cell site.
 pub(super) const REST_PER_CELL: f64 = 8.0;
 
-/// The share of a cell's crowding the density solve removes per step:
-/// spread_rate × step dt. Linear theory says crowding goes as (1 − share)
-/// per step, so 1 removes it in one step; particles are discrete, so an
-/// overshoot crowds the next cell. Dam Break volume drift, max over the run
-/// (`fft_water_density_sweep`, `fft_water_refined_splash`): share 1 gives
-/// 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5 leaves
-/// twice the particles past rest at 128³ (32% against 16% at frame 29).
+/// The share of a cell's crowding one density solve removes: spread_rate ×
+/// step dt. Linear theory says crowding goes as (1 − share) per solve, so 1
+/// removes it in one solve; particles are discrete, so an overshoot crowds
+/// the next cell. Dam Break volume drift, max over the run, with a solve
+/// every step (`fft_water_density_sweep`, `fft_water_refined_splash`): share
+/// 1 gives 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5
+/// leaves twice the particles past rest at 128³ (32% against 16% at frame 29).
 pub(super) const SPREAD_PER_STEP: f64 = 1.0;
 
 /// The density solve's passes. It moves particles and is never kept as
@@ -121,8 +126,18 @@ impl WaterScene {
             surface: false,
             spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64,
             density_passes: DENSITY_PASSES,
+            density_once: true,
             surface_scale: 3,
             faces: false,
+        }
+    }
+
+    /// Density solves a frame: none, the last step's, or every step's.
+    pub fn density_solves(&self) -> usize {
+        match (self.spread_rate > 0.0, self.density_once) {
+            (false, _) => 0,
+            (true, true) => 1,
+            (true, false) => self.steps,
         }
     }
 
@@ -412,7 +427,8 @@ pub(super) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut faces = particles;
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
-        (particles, faces) = water_step(&mut b, scene, particles, (fill, "count"));
+        let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
+        (particles, faces) = water_step(&mut b, scene, particles, (fill, "count"), density);
     }
     b.prefix.clear();
     b.wire(particles, state, "in");
@@ -591,9 +607,9 @@ fn lattice_box(s: PressureShape, extra: &[(&str, Value)]) -> Value {
 
 /// One water step (section 3): sort, the water lattice, particles to faces,
 /// gravity, the pressure solve, the projection, the density solve on the
-/// same collar, faces back to particles. Returns the moved particles and the
-/// step's projected, extended faces.
-fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) -> (Port, Port) {
+/// same collar when `density`, faces back to particles. Returns the moved
+/// particles and the step's projected, extended faces.
+fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port, density: bool) -> (Port, Port) {
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -632,7 +648,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, particles: Port, count: Port) 
     let new = extend(b, "new", projected, n);
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
-    let advect = if scene.spread_rate > 0.0 {
+    let advect = if density {
         let outer = b.prefix.clone();
         b.prefix.push_str("density.");
         let crowding = b.node(

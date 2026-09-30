@@ -2,13 +2,13 @@
 //! back-substitution through the rotated Hessenberg matrix
 //! (docs/FFT_WATER_SOLVER_DESIGN.md D10). A per-element atom on the codegen
 //! path: each of the `passes` threads runs the whole back-substitution (at
-//! most 32² steps) and keeps its own coefficient.
+//! most [`MAX_PASSES`]² steps) and keeps its own coefficient.
 
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::krylov_givens::{pass_count, state_len};
+use super::krylov_givens::{MAX_PASSES, pass_count, pass_refusal, state_len};
 use super::sort_particles_into_cells::int_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -36,7 +36,7 @@ crate::primitive! {
         out: Array(f32),
     },
     params: [
-        int_param!("passes", "Passes", 24.0, 1.0, 32.0),
+        int_param!("passes", "Passes", 24.0, 1.0, MAX_PASSES as f32),
     ],
     depth_rule: Terminal,
     composition_notes: "After the Krylov loop: state from node.krylov_basis's out; wire out as coef into node.combine_rows over the basis (rows = passes, base_scale 0) for the solution.",
@@ -56,7 +56,15 @@ impl Primitive for KrylovSolve {
         (port == "out").then(|| pass_count(params))
     }
 
+    fn params_refusal(&self, params: &ParamValues) -> Option<String> {
+        pass_refusal(params)
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if let Some(reason) = pass_refusal(ctx.params) {
+            ctx.error(format!("Krylov Solve: {reason}"));
+            return;
+        }
         let passes = pass_count(ctx.params);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

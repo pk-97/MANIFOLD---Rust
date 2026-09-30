@@ -10,7 +10,7 @@ use super::swash_preset::WaterScene;
 use super::swash_scene_tests::{Run, divergence, particle_stats};
 use super::swash_still::write_still;
 use super::swash_volume::VolumeDrift;
-use crate::node_graph::fluid_particles::FluidParticle;
+use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 
 /// How the live particles move: mean, 99th-percentile and top speed (m/s),
 /// and the highest particle (m above the floor).
@@ -95,6 +95,35 @@ pub(crate) fn splash(positions: impl Iterator<Item = [f32; 4]>, floor: f64) -> S
     }
 }
 
+/// The water running up the side walls (within 25 cm of z = ±2): the share
+/// of live particles above 2 m and above 3 m, the highest, the mean vertical
+/// speed of those above 2 m (up positive), and how thick the sheet is above
+/// 2.5 m as distance from its wall (mean and 90th percentile). BUG-h8or (lid
+/// slabs): whether one solver's sheet runs up faster or thicker.
+pub(crate) fn print_side_sheet(label: &str, frame: usize, particles: &[([f32; 4], [f32; 3])], floor: f64) {
+    let near: Vec<(f64, f64, f64)> = particles
+        .iter()
+        .map(|(p, v)| (f64::from(p[1]) - floor, 2.0 - f64::from(p[2]).abs(), f64::from(v[1])))
+        .filter(|&(_, gap, _)| gap < 0.25)
+        .collect();
+    let live = particles.len().max(1) as f64;
+    let above = |y: f64| near.iter().filter(|p| p.0 > y).count() as f64 / live;
+    let high: Vec<&(f64, f64, f64)> = near.iter().filter(|p| p.0 > 2.0).collect();
+    let rising = high.iter().map(|p| p.2).sum::<f64>() / high.len().max(1) as f64;
+    let highest = near.iter().map(|p| p.0).fold(0.0, f64::max);
+    let mut gaps: Vec<f64> = near.iter().filter(|p| p.0 > 2.5).map(|p| p.1).collect();
+    gaps.sort_by(f64::total_cmp);
+    let mean_gap = gaps.iter().sum::<f64>() / gaps.len().max(1) as f64;
+    let p90 = gaps.get(gaps.len() * 9 / 10).copied().unwrap_or(0.0);
+    println!(
+        "{label} sheet frame {frame:3}: above 2 m {:.3}%, above 3 m {:.3}%, highest {highest:.2} m, rising {rising:+.2} m/s, thickness above 2.5 m mean {:.1} p90 {:.1} cm",
+        100.0 * above(2.0),
+        100.0 * above(3.0),
+        100.0 * mean_gap,
+        100.0 * p90
+    );
+}
+
 /// The water within 10 cm of the lid: how many particles, their mean
 /// vertical speed (m/s, up positive), and how full their cells are on the
 /// solver's own grid (particles sharing the cell: 1–2, 3–5, 6–8, 9 or more).
@@ -131,6 +160,11 @@ pub(crate) fn print_lid_layer(
         "{label} lid frame {frame:3}: {count} particles, mean vertical {:+.3} m/s, cells holding 1–2 / 3–5 / 6–8 / 9+: {fill:?}",
         vy / count.max(1) as f64
     );
+}
+
+/// The splash over time: the highest particle and the fastest.
+pub(crate) fn print_height(label: &str, frame: usize, m: &Motion) {
+    println!("{label} height frame {frame:3}: highest {:.2} m, top speed {:.2} m/s", m.highest, m.fastest);
 }
 
 pub(crate) fn print_splash(label: &str, frame: usize, s: &Splash) {
@@ -327,11 +361,18 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         record.motion.push(particle_motion(&particles));
         let pack = swash_packing(&particles, n, h);
         packed.push(pack);
-        if frame % 15 == 14 {
+        let sheet = frame % 5 == 4 && frame < 90;
+        if frame % 15 == 14 || sheet {
             let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| (p.position_radius, p.velocity)).collect();
             let floor = super::swash_preset::DAM_MIN[1];
-            print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
-            print_lid_layer(label, frame, &live, super::swash_preset::DAM_MIN, [n; 3], h, floor);
+            if sheet {
+                print_side_sheet(label, frame, &live, floor);
+                print_height(label, frame, &record.motion[frame]);
+            }
+            if frame % 15 == 14 {
+                print_splash(label, frame, &splash(live.iter().map(|p| p.0), floor));
+                print_lid_layer(label, frame, &live, super::swash_preset::DAM_MIN, [n; 3], h, floor);
+            }
         }
         if frame % 30 == 29 {
             let stats = particle_stats(&particles);
@@ -351,6 +392,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));
     println!("{label}: collar max {collar_max} of {}; water at most {:.1}% of cells, {:.1}% of 8³ blocks", scene.pressure.capacity, 100.0 * water_max, 100.0 * blocks_max);
     report_motion(label, &record.motion);
+    let top = record.motion.iter().map(|m| m.fastest).fold(0.0, f64::max);
+    println!("{label}: the top speed crosses {:.2} cells a step, {} steps a frame", top * scene.step_dt() / h, scene.steps);
     if let Some(oracle) = oracle {
         let drift: Vec<f64> = record.volume.iter().map(|v| v.abs()).collect();
         println!("{label}: particles hold {:.4} m³, mesh {:.4} m³ at frame 0, skin {:.2} mm", run.particle_volume(), raw[0], 1000.0 * oracle.skin());
@@ -414,6 +457,20 @@ fn fft_water_splash_causes_64() {
     dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
 }
 
+/// The step's cadence levers on the meshed 64³ Dam Break: the density solve
+/// every step against once a frame (drift, packing, missing, the lid), and one
+/// water step a frame (the same plus the splash height over time and the cells
+/// a step the top speed crosses). The engine's side is
+/// `fft_water_engine_splash_64`.
+#[test]
+fn fft_water_cadence_64() {
+    let base = WaterScene::dam_break(64).with_surface();
+    dam_break(WaterScene { density_once: false, ..base }, "CADENCE density every step 64³", 300);
+    dam_break(base, "CADENCE density once 64³", 300);
+    let one_step = WaterScene { steps: 1, spread_rate: super::swash_preset::SPREAD_PER_STEP * 60.0, ..base };
+    dam_break(one_step, "CADENCE one step 64³", 300);
+}
+
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
 #[test]
 fn fft_water_dam_break_settles() {
@@ -432,5 +489,139 @@ fn fft_water_density_sweep() {
     for (share, passes) in [(5.0 / 6.0, 8), (1.0, 8), (1.5, 8), (5.0 / 6.0, 24), (1.0, 24)] {
         let scene = WaterScene { spread_rate: share * per_second, density_passes: passes, ..base };
         dam_break(scene, &format!("SWEEP share {share:.2} passes {passes}"), 300);
+    }
+}
+
+/// Where a water cell sits: beside air inside the box (it borders the
+/// collar), touching a box wall, or neither.
+const PLACES: [&str; 3] = ["surface", "wall", "interior"];
+
+/// The projection's leftover divergence over one place's water cells.
+#[derive(Clone, Copy, Default)]
+struct Leftover {
+    cells: usize,
+    squares: f64,
+    max: f64,
+    /// Cells past 1/s.
+    past_one: usize,
+}
+
+/// [`Leftover`] per place over a face grid's water cells, and the worst
+/// cell: |divergence| (1/s), its place and its cell.
+fn leftover_by_place(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> ([Leftover; 3], (f64, usize, [usize; 3])) {
+    let m = n + 1;
+    let pad = |i: usize, j: usize, k: usize| i + m * (j + m * k);
+    let wet = |i: usize, j: usize, k: usize| water[i + n * (j + n * k)] > 0.5;
+    let mut places = [Leftover::default(); 3];
+    let mut worst = (0.0, 0, [0; 3]);
+    for k in 0..n {
+        for j in 0..n {
+            for i in 0..n {
+                if !wet(i, j, k) {
+                    continue;
+                }
+                let at = |p: usize, a: usize| f64::from(faces[p].velocity[a]);
+                let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1) - at(pad(i, j, k), 1)
+                    + at(pad(i, j, k + 1), 2)
+                    - at(pad(i, j, k), 2))
+                    / h;
+                let c = [i, j, k];
+                let on_wall = c.iter().any(|&v| v == 0 || v == n - 1);
+                let beside_air = (0..3).any(|a| {
+                    [-1i64, 1].iter().any(|&s| {
+                        let v = c[a] as i64 + s;
+                        if v < 0 || v >= n as i64 {
+                            return false;
+                        }
+                        let mut o = c;
+                        o[a] = v as usize;
+                        !wet(o[0], o[1], o[2])
+                    })
+                });
+                let place = if beside_air { 0 } else if on_wall { 1 } else { 2 };
+                let p = &mut places[place];
+                p.cells += 1;
+                p.squares += d * d;
+                p.max = p.max.max(d.abs());
+                p.past_one += usize::from(d.abs() > 1.0);
+                if d.abs() > worst.0 {
+                    worst = (d.abs(), place, c);
+                }
+            }
+        }
+    }
+    (places, worst)
+}
+
+/// The Dam Break step alone for `frames` frames: the pressure solve's
+/// leftover divergence against its right-hand side (the divergence of the
+/// forced faces over the water cells; the density solve is a separate solve
+/// whose result only moves particles), where the leftover sits, and how it
+/// follows the collar.
+fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
+    let mut run = Run::new(scene);
+    let (n, h) = (run.n(), scene.pressure.cell_size());
+    let mut totals = [Leftover::default(); 3];
+    let (mut rms, mut relative, mut by_collar) = (Vec::new(), Vec::new(), Vec::new());
+    let mut worst_cell = (0.0, 0, [0; 3], 0usize, 0u32);
+    for frame in 0..frames {
+        run.frame();
+        for step in 0..scene.steps {
+            let water = run.water(step);
+            let collar = run.collar(step);
+            let (places, cell) = leftover_by_place(&run.faces(step), &water, n, h);
+            let (rhs, _) = divergence(&run.forced(step), &water, n, h);
+            let cells: usize = places.iter().map(|p| p.cells).sum();
+            let r = (places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt();
+            rms.push(r);
+            relative.push(r / rhs.max(1e-30));
+            by_collar.push((collar, r));
+            for (t, p) in totals.iter_mut().zip(places) {
+                t.cells += p.cells;
+                t.squares += p.squares;
+                t.max = t.max.max(p.max);
+                t.past_one += p.past_one;
+            }
+            if cell.0 > worst_cell.0 {
+                worst_cell = (cell.0, cell.1, cell.2, frame, collar);
+            }
+            if frame % 30 == 29 && step == 0 {
+                let line: Vec<String> = PLACES
+                    .iter()
+                    .zip(places)
+                    .map(|(name, p)| format!("{name} {:.1e}/{:.1e}", (p.squares / p.cells.max(1) as f64).sqrt(), p.max))
+                    .collect();
+                println!("{label} frame {frame:3}: collar {collar}, rms {r:.2e} ({:.1e} of the rhs {rhs:.2e}); rms/max {}", r / rhs.max(1e-30), line.join(", "));
+            }
+        }
+    }
+    let all: usize = totals.iter().map(|p| p.cells).sum();
+    for (name, p) in PLACES.iter().zip(totals) {
+        println!(
+            "{label} {name}: {:.1}% of water cells, rms {:.2e}, max {:.2e} /s, {:.3}% of them past 1/s",
+            100.0 * p.cells as f64 / all.max(1) as f64,
+            (p.squares / p.cells.max(1) as f64).sqrt(),
+            p.max,
+            100.0 * p.past_one as f64 / p.cells.max(1) as f64
+        );
+    }
+    println!("{label}: rms median {:.2e} worst {:.2e}; relative to the rhs median {:.2e} worst {:.2e}", median(&rms), worst(&rms), median(&relative), worst(&relative));
+    let (max, place, cell, frame, collar) = worst_cell;
+    println!("{label}: worst cell {max:.2e} /s, {} cell {cell:?}, frame {frame}, collar {collar}", PLACES[place]);
+    by_collar.sort_by_key(|c| c.0);
+    let quarter = by_collar.len() / 4;
+    for (q, chunk) in by_collar.chunks(quarter.max(1)).take(4).enumerate() {
+        let r: Vec<f64> = chunk.iter().map(|c| c.1).collect();
+        println!("{label}: collar quarter {q} ({}..{} cells): rms median {:.2e}", chunk[0].0, chunk[chunk.len() - 1].0, median(&r));
+    }
+}
+
+/// The 128³ pressure solve's leftover divergence against its pass count
+/// (BUG-m632, residual bar): 24, 32 and 48 passes over the 300-frame Dam
+/// Break, the step alone.
+#[test]
+fn fft_water_refined_leftover_passes() {
+    for passes in [24, 32, 48] {
+        leftover_run(WaterScene::dam_break(128).with_passes(passes), &format!("LEFTOVER {passes} 128³"), 300);
     }
 }

@@ -45,7 +45,18 @@ impl Run {
     pub(super) fn new(scene: WaterScene) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+        Self::with_graph(scene, water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds"))
+    }
+
+    /// The scene frozen as the app renders it: the solves' cosine pairs fused.
+    pub(super) fn frozen(scene: WaterScene) -> Self {
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        let view = crate::node_graph::freeze::install::fuse_generator_view(&water_def(scene), &registry).expect("the scene fuses");
+        Self::with_graph(scene, (*view.def).clone().into_graph(&registry, &view.mesh_rules).expect("fused def builds"))
+    }
+
+    fn with_graph(scene: WaterScene, mut graph: Graph) -> Self {
         if scene.faces {
             for name in FACE_NODES {
                 graph.add_external_output(node_named(&graph, name), "out").expect("face grid output");
@@ -60,7 +71,7 @@ impl Run {
         let last = scene.steps - 1;
         let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
         for k in 0..scene.steps {
-            for name in ["water", "project", "collar_total"] {
+            for name in ["water", "gravity", "project", "collar_total"] {
                 watched.push(node_named(&graph, &format!("s{k}.{name}")));
             }
         }
@@ -166,6 +177,13 @@ impl Run {
     pub(super) fn face_grid(&self) -> [Vec<f32>; 3] {
         let cells = [self.n() as u32; 3];
         std::array::from_fn(|axis| self.read(FACE_NODES[axis], "out", face_len(cells, axis) as usize))
+    }
+
+    /// The face grid the pressure solve starts from: gravity added, walls 0.
+    /// Its divergence over the water cells is the solve's right-hand side.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn forced(&self, step: usize) -> Vec<FaceSample> {
+        self.read(&format!("s{step}.gravity"), "out", (self.n() + 1).pow(3))
     }
 
     pub(super) fn collar(&self, step: usize) -> u32 {
@@ -307,4 +325,23 @@ fn fft_water_still_pool_keeps_its_meshed_volume() {
     println!("SWASH still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
     println!("SWASH still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
+}
+
+/// The frozen 64³ Dam Break, every solve's cosine pairs fused (BUG-u8io,
+/// fft-water-fusion-param-capacity), moves every particle exactly as the
+/// unfrozen one through the collapse and into the splash.
+/// `fft_water_frozen_graphs_cover_every_dispatch` proves its arrays first.
+#[test]
+fn fft_water_frozen_step_matches_unfrozen() {
+    let scene = WaterScene::dam_break(64);
+    let (mut unfrozen, mut frozen) = (Run::new(scene), Run::frozen(scene));
+    let fused = frozen.graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
+    assert_eq!(fused, 5 * (scene.steps + scene.density_solves()), "every solve runs its five cosine pairs fused");
+    for frame in 0..90 {
+        unfrozen.frame();
+        frozen.frame();
+        let (a, b) = (unfrozen.particles(), frozen.particles());
+        let same = bytemuck::cast_slice::<FluidParticle, u8>(&a) == bytemuck::cast_slice::<FluidParticle, u8>(&b);
+        assert!(same, "frame {frame}: the frozen step moved particles differently");
+    }
 }

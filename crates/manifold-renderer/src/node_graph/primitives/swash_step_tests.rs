@@ -6,7 +6,7 @@ use super::density_source::DensitySource;
 use super::extend_faces::ExtendFaces;
 use super::face_divergence::FaceDivergence;
 use super::face_gravity::FaceGravity;
-use super::faces_to_particles::FacesToParticles;
+use super::faces_to_particles::{FacesToParticles, WALL_MARGIN_CELLS};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
 use super::particles_to_faces::ParticlesToFaces;
@@ -468,7 +468,8 @@ fn swash_faces_to_particles_blends_flip_and_moves_by_rk3() {
         let after = cpu_sample(q0, &faces);
         let before = cpu_sample(q0, &old);
         for a in 0..3 {
-            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0).clamp(0.001, N[a] as f64 - 0.001);
+            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
+                .clamp(WALL_MARGIN_CELLS, N[a] as f64 - WALL_MARGIN_CELLS);
             let position = f64::from(MIN[a]) + q1 * f64::from(H);
             let velocity =
                 f64::from(flip) * (f64::from(p.velocity[a]) + after[a] - before[a]) + (1.0 - f64::from(flip)) * after[a];

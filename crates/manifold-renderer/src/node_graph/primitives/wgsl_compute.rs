@@ -2093,9 +2093,11 @@ impl EffectNode for WgslCompute {
             // expression in the `// @fused_output_capacity:` marker — evaluate
             // it over the wired input capacities so dst is sized exactly to
             // the kernel's widened dispatch count. No marker = identity: the
-            // min-over-inputs default IS the legacy count anchor.
+            // min-over-inputs default IS the legacy count anchor. A
+            // lattice-sized region's expression reads this node's own
+            // `n<member>_<param>` params, the fields its count reads.
             if let Some(expr) = &self.fused_output_capacity {
-                return expr.eval(input_capacities);
+                return expr.eval_with(input_capacities, params);
             }
             return input_capacities.iter().map(|(_, c)| *c).min();
         }

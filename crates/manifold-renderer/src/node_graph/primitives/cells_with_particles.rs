@@ -7,6 +7,8 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::collar_cells::{cell_count, cell_lattice};
+use super::cosine_spectrum::LATTICE_PARAMS;
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -56,6 +58,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/cells_with_particles_body.wgsl"),
     input_access: [Coincident],
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS },
 }
 
 impl Primitive for CellsWithParticles {

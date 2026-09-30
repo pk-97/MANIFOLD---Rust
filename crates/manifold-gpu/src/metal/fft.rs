@@ -72,7 +72,9 @@ impl GpuFft {
     }
 
     /// Multi-dimensional plan over `axes` of the real `shape` (row-major, at
-    /// most four dimensions, every transformed length a power of two ≥ 2).
+    /// most four dimensions). Every transformed length is at least 2, any
+    /// factors; the last transformed one is even, because the half-spectrum
+    /// inverse is built for an even length (`setRoundToOddHermitean(false)`).
     pub fn new_nd(device: &super::GpuDevice, kind: FftKind, shape: &[usize], axes: &[usize]) -> Self {
         assert!(!shape.is_empty() && shape.len() <= 4, "GpuFft::new_nd: 1 to 4 dimensions (got {shape:?})");
         assert!(!axes.is_empty(), "GpuFft::new_nd: no axes");
@@ -80,11 +82,10 @@ impl GpuFft {
         for &a in axes {
             assert!(a < shape.len() && !seen[a], "GpuFft::new_nd: bad axes {axes:?} for shape {shape:?}");
             seen[a] = true;
-            assert!(
-                shape[a].is_power_of_two() && shape[a] >= 2,
-                "GpuFft::new_nd: transformed length must be a power of two ≥ 2 (got {shape:?})"
-            );
+            assert!(shape[a] >= 2, "GpuFft::new_nd: transformed length must be at least 2 (got {shape:?})");
         }
+        let last = *axes.iter().max().expect("at least one axis");
+        assert!(shape[last].is_multiple_of(2), "GpuFft::new_nd: the last transformed length must be even (got {shape:?})");
         build_plan(device.raw_device(), kind, shape, axes)
     }
 
@@ -328,14 +329,12 @@ mod tests {
         assert!(err < 1e-5, "inverse plan does not return the input: {err}");
     }
 
-    /// Plans past the power-of-two assertion, with every buffer checked on
-    /// the CPU against the plan's byte lengths before anything runs. These
-    /// tests are the ground for relaxing that assertion (BUG-l2h3.1,
-    /// mixed-radix lattices); once relaxed they go through `new_nd`.
+    /// Mixed-radix plans, with every buffer checked on the CPU against the
+    /// plan's byte lengths before anything runs.
     fn mixed_plans(device: &GpuDevice, shape: &[usize], values: &[f32]) -> (GpuFft, GpuFft, GpuBuffer, GpuBuffer, GpuBuffer) {
         let axes: Vec<usize> = (0..shape.len()).collect();
-        let forward = build_plan(device.raw_device(), FftKind::RealToHermitean, shape, &axes);
-        let inverse = build_plan(device.raw_device(), FftKind::HermiteanToReal, shape, &axes);
+        let forward = GpuFft::new_nd(device, FftKind::RealToHermitean, shape, &axes);
+        let inverse = GpuFft::new_nd(device, FftKind::HermiteanToReal, shape, &axes);
         let total: usize = shape.iter().product();
         let last = shape.len() - 1;
         let half: usize = shape[..last].iter().product::<usize>() * (shape[last] / 2 + 1);

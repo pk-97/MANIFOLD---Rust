@@ -15,7 +15,8 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 use super::native::seeded_world;
 use super::{FluidSettings, Transform};
 use crate::node_graph::primitives::swash_race_tests::{
-    Motion, Packing, Splash, motion, packing, print_lid_layer, print_splash, report_motion, report_water, splash,
+    Motion, Packing, Splash, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_motion, report_water,
+    splash,
 };
 use crate::node_graph::primitives::swash_still::write_still;
 use crate::node_graph::primitives::swash_volume::{VolumeDrift, volume_and_area};
@@ -116,12 +117,20 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
         let (m, pack, thrown, count) = engine_motion(&mut world, domain, &mut records, &mut solid);
         motions.push(m);
         packed.push(pack);
-        if frame % 15 == 14 {
+        let sheet = frame % 5 == 4 && frame < 90;
+        if frame % 15 == 14 || sheet {
             let label = format!("ENGINE {resolution}³");
-            print_splash(&label, frame as usize, &thrown);
             let live: Vec<_> = records[..count].iter().map(|p| (p.position_radius, p.velocity)).collect();
-            let (origin, cells) = engine_grid(domain);
-            print_lid_layer(&label, frame as usize, &live, origin, cells, domain.cell_size, f64::from(domain.min[1]));
+            let floor = f64::from(domain.min[1]);
+            if sheet {
+                print_side_sheet(&label, frame as usize, &live, floor);
+                print_height(&label, frame as usize, &m);
+            }
+            if frame % 15 == 14 {
+                print_splash(&label, frame as usize, &thrown);
+                let (origin, cells) = engine_grid(domain);
+                print_lid_layer(&label, frame as usize, &live, origin, cells, domain.cell_size, floor);
+            }
         }
         world.surface(&mut surface).expect("engine surface");
         let measure = volume_and_area(triangles(&surface), tank_min, tank_size);
@@ -188,6 +197,13 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
 fn fft_water_engine_race() {
     race(64, false, 300);
     race(64, true, 120);
+}
+
+/// The engine's side of `fft_water_splash_causes_64`: 150 frames at 64³,
+/// whitewater off.
+#[test]
+fn fft_water_engine_splash_64() {
+    race(64, false, 150);
 }
 
 /// The engine's side of the settle check: 15 s at 64³, whitewater off.
