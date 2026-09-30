@@ -360,6 +360,15 @@ impl Clone for GpuComputePipeline {
     }
 }
 
+impl GpuComputePipeline {
+    /// Threads one threadgroup of this pipeline can hold on this device. A
+    /// kernel's registers can put it under the declared workgroup size, and
+    /// dispatching past it is undefined.
+    pub fn max_threads_per_group(&self) -> u32 {
+        self.state.maxTotalThreadsPerThreadgroup() as u32
+    }
+}
+
 unsafe impl Send for GpuComputePipeline {}
 unsafe impl Sync for GpuComputePipeline {}
 

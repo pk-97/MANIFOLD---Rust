@@ -988,3 +988,829 @@ fn swash_collar_source_gather_and_pressure_match_cpu() {
     let got: Vec<f32> = run_into(&mut harness, &mut CollarPressure::new(), &inputs, cells, &params(&[]));
     assert_close(&got, &want, "collar pressure");
 }
+
+// Prototype: one GMRES pass's vector work (Σz, the collar gather, two
+// Gram–Schmidt rounds, the norm, the unit vector and the Givens update) in
+// one workgroup, with barriers where the atoms have dispatch boundaries. It
+// sweeps only the live collar entries plus the constant: every collar
+// vector is 0 past the running total.
+const ARNOLDI_PROTOTYPE: &str = r#"
+struct Params {
+    row_length: u32,
+    passes: u32,
+    column: u32,
+    cells: u32,
+};
+
+@group(0) @binding(0) var<uniform> u: Params;
+@group(0) @binding(1) var<storage, read> entries: array<u32>;
+@group(0) @binding(2) var<storage, read> total: array<u32>;
+@group(0) @binding(3) var<storage, read> grid: array<f32>;
+@group(0) @binding(4) var<storage, read> z: array<f32>;
+@group(0) @binding(5) var<storage, read_write> basis: array<f32>;
+@group(0) @binding(6) var<storage, read_write> current: array<f32>;
+@group(0) @binding(7) var<storage, read_write> state: array<f32>;
+
+const WG: u32 = __WG__u;
+const BATCH: u32 = 4u;
+const MAX_PASSES: u32 = 64u;
+
+var<workgroup> red: array<f32, __RED__>;
+var<workgroup> first: array<f32, 68>;
+var<workgroup> second: array<f32, 68>;
+
+fn element(t: u32, live: u32, k: u32) -> u32 {
+    return select(k, t, t < live);
+}
+
+// Sums each batch row red[b·WG ..][0 .. WG) into red[b·WG].
+fn reduce(tid: u32) {
+    workgroupBarrier();
+    for (var width = WG / 2u; width > 0u; width = width >> 1u) {
+        if tid < width {
+            for (var b = 0u; b < BATCH; b = b + 1u) {
+                red[b * WG + tid] = red[b * WG + tid] + red[b * WG + tid + width];
+            }
+        }
+        workgroupBarrier();
+    }
+}
+
+@compute @workgroup_size(__WG__, 1, 1)
+fn main(@builtin(local_invocation_index) tid: u32) {
+    let length = u.row_length;
+    let m = u.passes;
+    let j = u.column;
+    let cells = u.cells;
+    if length < 2u || m < 1u || m > MAX_PASSES || j >= m || cells < 1u
+        || arrayLength(&basis) / length < m + 1u
+        || arrayLength(&current) < length || arrayLength(&z) < length
+        || arrayLength(&entries) < length - 1u
+        || arrayLength(&grid) < cells || arrayLength(&total) < cells
+        || arrayLength(&state) < m * m + 4u * m + 1u {
+        return;
+    }
+    let k = length - 1u;
+    let live = min(total[cells - 1u], k);
+    let rows = j + 1u;
+    let row = rows * length;
+
+    var acc = 0.0;
+    for (var t = tid; t < live; t = t + WG) {
+        acc = acc + z[t];
+    }
+    red[tid] = acc;
+    for (var b = 1u; b < BATCH; b = b + 1u) {
+        red[b * WG + tid] = 0.0;
+    }
+    reduce(tid);
+    let sum_z = red[0];
+    workgroupBarrier();
+
+    let c = z[k];
+    for (var t = tid; t <= live; t = t + WG) {
+        let cell = entries[min(t, k - 1u)];
+        let gathered = select(0.0, grid[min(cell, cells - 1u)] - c, cell < cells);
+        basis[row + element(t, live, k)] = select(sum_z / f32(cells), gathered, t < live);
+    }
+
+    // Locals are assigned, never re-declared, inside loops: naga zeroes a
+    // declaration once per invocation, not once per loop trip.
+    var sq = 0.0;
+    var part: array<f32, 4>;
+    var projected: f32;
+    for (var round = 0u; round < 2u; round = round + 1u) {
+        for (var r0 = 0u; r0 < rows; r0 = r0 + BATCH) {
+            for (var b = 0u; b < BATCH; b = b + 1u) {
+                part[b] = 0.0;
+            }
+            for (var t = tid; t <= live; t = t + WG) {
+                let e = element(t, live, k);
+                let w = basis[row + e];
+                for (var b = 0u; b < BATCH; b = b + 1u) {
+                    if r0 + b < rows {
+                        part[b] = part[b] + basis[(r0 + b) * length + e] * w;
+                    }
+                }
+            }
+            for (var b = 0u; b < BATCH; b = b + 1u) {
+                red[b * WG + tid] = part[b];
+            }
+            reduce(tid);
+            if tid < BATCH && r0 + tid < rows {
+                let h = red[tid * WG];
+                if round == 0u {
+                    first[r0 + tid] = h;
+                } else {
+                    second[r0 + tid] = h;
+                }
+            }
+            workgroupBarrier();
+        }
+        sq = 0.0;
+        for (var t = tid; t <= live; t = t + WG) {
+            let e = element(t, live, k);
+            projected = 0.0;
+            for (var r = 0u; r < rows; r = r + 1u) {
+                projected = projected + select(first[r], second[r], round == 1u) * basis[r * length + e];
+            }
+            let w = basis[row + e] - projected;
+            basis[row + e] = w;
+            sq = sq + w * w;
+        }
+    }
+    red[tid] = sq;
+    for (var b = 1u; b < BATCH; b = b + 1u) {
+        red[b * WG + tid] = 0.0;
+    }
+    reduce(tid);
+    let norm = sqrt(max(red[0], 0.0));
+
+    for (var t = tid; t <= live; t = t + WG) {
+        let e = element(t, live, k);
+        let v = select(0.0, basis[row + e] / norm, norm >= 1e-30);
+        basis[row + e] = v;
+        current[e] = v;
+    }
+
+    if tid == 0u {
+        let off_c = m * (m + 1u);
+        let off_s = off_c + m;
+        let off_g = off_s + m;
+        var col: array<f32, 66>;
+        for (var i = 0u; i <= j; i = i + 1u) {
+            col[i] = first[i] + second[i];
+        }
+        col[j + 1u] = norm;
+        for (var i = 0u; i < j; i = i + 1u) {
+            let cs = state[off_c + i];
+            let sn = state[off_s + i];
+            let t = cs * col[i] + sn * col[i + 1u];
+            col[i + 1u] = -sn * col[i] + cs * col[i + 1u];
+            col[i] = t;
+        }
+        let r = sqrt(col[j] * col[j] + col[j + 1u] * col[j + 1u]);
+        let turning = r > 1e-30;
+        let cs = select(1.0, col[j] / r, turning);
+        let sn = select(0.0, col[j + 1u] / r, turning);
+        let start = j * (m + 1u);
+        for (var i = 0u; i <= m; i = i + 1u) {
+            state[start + i] = select(select(0.0, r, i == j), col[i], i < j);
+        }
+        let g = state[off_g + j];
+        state[off_c + j] = cs;
+        state[off_s + j] = sn;
+        state[off_g + j] = cs * g;
+        state[off_g + j + 1u] = -sn * g;
+    }
+}
+"#;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ArnoldiParams {
+    row_length: u32,
+    passes: u32,
+    column: u32,
+    cells: u32,
+}
+
+// Prototype two: the same pass as four dispatches of many workgroups. Each
+// finishes the last one's reduction in its prologue (every workgroup sums
+// the same partials in the same order), so a pass has three global sums and
+// four launches: Σz with the h1 partials; w1 with the h2 partials; w2 with
+// the |w2|² partials; the unit vector and the Givens update.
+const ARNOLDI_WIDE_PROTOTYPE: &str = r#"
+struct Params {
+    row_length: u32,
+    passes: u32,
+    column: u32,
+    cells: u32,
+    groups: u32,
+    per_thread: u32,
+    _pad0: u32,
+    _pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> u: Params;
+@group(0) @binding(1) var<storage, read> entries: array<u32>;
+@group(0) @binding(2) var<storage, read> total: array<u32>;
+@group(0) @binding(3) var<storage, read> grid: array<f32>;
+@group(0) @binding(4) var<storage, read> z: array<f32>;
+@group(0) @binding(5) var<storage, read_write> basis: array<f32>;
+@group(0) @binding(6) var<storage, read_write> current: array<f32>;
+@group(0) @binding(7) var<storage, read_write> state: array<f32>;
+@group(0) @binding(8) var<storage, read_write> partials: array<f32>;
+
+const WG: u32 = 256u;
+const BATCH: u32 = 4u;
+const MAX_E: u32 = 32u;
+const STRIDE: u32 = 64u;
+const H1: u32 = 0u;
+const H2: u32 = 65u;
+const SUMZ: u32 = 130u;
+const SQ: u32 = 131u;
+const SLOTS: u32 = 132u;
+const MAX_PASSES: u32 = 64u;
+
+// Sized from the batch, so no batch can index past it.
+var<workgroup> red: array<f32, BATCH * WG>;
+var<workgroup> h: array<f32, 68>;
+var<workgroup> h_first: array<f32, 68>;
+
+fn legal(g: u32) -> bool {
+    let length = u.row_length;
+    let m = u.passes;
+    return length >= 2u && m >= 1u && m <= MAX_PASSES && u.column < m && u.cells >= 1u
+        && u.groups >= 1u && u.groups <= STRIDE && g < u.groups
+        && u.per_thread >= 1u && u.per_thread <= MAX_E
+        && u.groups * WG * u.per_thread >= length
+        && arrayLength(&basis) / length >= m + 1u
+        && arrayLength(&current) >= length && arrayLength(&z) >= length
+        && arrayLength(&entries) >= length - 1u
+        && arrayLength(&grid) >= u.cells && arrayLength(&total) >= u.cells
+        && arrayLength(&state) >= m * m + 4u * m + 1u
+        && arrayLength(&partials) >= SLOTS * STRIDE;
+}
+
+fn element(t: u32, live: u32, k: u32) -> u32 {
+    return select(k, t, t < live);
+}
+
+fn reduce(tid: u32, batches: u32) {
+    workgroupBarrier();
+    for (var width = WG / 2u; width > 0u; width = width >> 1u) {
+        if tid < width {
+            for (var b = 0u; b < batches; b = b + 1u) {
+                red[b * WG + tid] = red[b * WG + tid] + red[b * WG + tid + width];
+            }
+        }
+        workgroupBarrier();
+    }
+}
+
+// This workgroup's partial dots of rows [0, rows) with the thread's values v
+// into partials[(base + r)·STRIDE + g].
+fn row_partials(tid: u32, g: u32, rows: u32, base: u32, v: ptr<function, array<f32, 32>>, live: u32) {
+    let length = u.row_length;
+    let k = length - 1u;
+    let step = u.groups * WG;
+    let first_t = g * WG + tid;
+    var part: array<f32, 4>;
+    for (var r0 = 0u; r0 < rows; r0 = r0 + BATCH) {
+        for (var b = 0u; b < BATCH; b = b + 1u) {
+            part[b] = 0.0;
+        }
+        for (var i = 0u; i < u.per_thread; i = i + 1u) {
+            let t = first_t + i * step;
+            if t <= live {
+                let e = element(t, live, k);
+                let x = (*v)[i];
+                for (var b = 0u; b < BATCH; b = b + 1u) {
+                    if r0 + b < rows {
+                        part[b] = part[b] + basis[(r0 + b) * length + e] * x;
+                    }
+                }
+            }
+        }
+        for (var b = 0u; b < BATCH; b = b + 1u) {
+            red[b * WG + tid] = part[b];
+        }
+        reduce(tid, BATCH);
+        if tid < BATCH && r0 + tid < rows {
+            partials[(base + r0 + tid) * STRIDE + g] = red[tid * WG];
+        }
+        workgroupBarrier();
+    }
+}
+
+// h[r] = Σ_g partials[(base + r)·STRIDE + g] for r < rows, the whole
+// workgroup at once: 64 lanes per row, four rows a trip, a fixed tree.
+fn finish(tid: u32, base: u32, rows: u32) {
+    let per = WG / STRIDE;
+    let g = tid % STRIDE;
+    var x: f32;
+    for (var r0 = 0u; r0 < rows; r0 = r0 + per) {
+        let r = r0 + tid / STRIDE;
+        x = 0.0;
+        if r < rows && g < u.groups {
+            x = partials[(base + r) * STRIDE + g];
+        }
+        red[tid] = x;
+        workgroupBarrier();
+        for (var width = STRIDE / 2u; width > 0u; width = width >> 1u) {
+            if g < width {
+                red[tid] = red[tid] + red[tid + width];
+            }
+            workgroupBarrier();
+        }
+        if g == 0u && r < rows {
+            h[r] = red[tid];
+        }
+        workgroupBarrier();
+    }
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn first_main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+    let g = wg.x;
+    if !legal(g) {
+        return;
+    }
+    let length = u.row_length;
+    let k = length - 1u;
+    let cells = u.cells;
+    let rows = u.column + 1u;
+    let row = rows * length;
+    let live = min(total[cells - 1u], k);
+    let step = u.groups * WG;
+    let c = z[k];
+    var v: array<f32, 32>;
+    var zsum = 0.0;
+    for (var i = 0u; i < u.per_thread; i = i + 1u) {
+        let t = g * WG + tid + i * step;
+        v[i] = 0.0;
+        if t < live {
+            let cell = entries[t];
+            let w = select(0.0, grid[min(cell, cells - 1u)] - c, cell < cells);
+            v[i] = w;
+            basis[row + t] = w;
+            zsum = zsum + z[t];
+        }
+    }
+    red[tid] = zsum;
+    reduce(tid, 1u);
+    if tid == 0u {
+        partials[SUMZ * STRIDE + g] = red[0];
+    }
+    workgroupBarrier();
+    row_partials(tid, g, rows, H1, &v, live);
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn second_main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+    let g = wg.x;
+    if !legal(g) {
+        return;
+    }
+    let length = u.row_length;
+    let k = length - 1u;
+    let rows = u.column + 1u;
+    let row = rows * length;
+    let live = min(total[u.cells - 1u], k);
+    let step = u.groups * WG;
+    finish(tid, SUMZ, 1u);
+    let w_k = h[0] / f32(u.cells);
+    workgroupBarrier();
+    finish(tid, H1, rows);
+    if tid < rows {
+        h[tid] = h[tid] + basis[tid * length + k] * w_k;
+    }
+    workgroupBarrier();
+    var v: array<f32, 32>;
+    var projected: f32;
+    for (var i = 0u; i < u.per_thread; i = i + 1u) {
+        let t = g * WG + tid + i * step;
+        v[i] = 0.0;
+        if t <= live {
+            let e = element(t, live, k);
+            projected = 0.0;
+            for (var r = 0u; r < rows; r = r + 1u) {
+                projected = projected + h[r] * basis[r * length + e];
+            }
+            let w = select(basis[row + e], w_k, t == live) - projected;
+            v[i] = w;
+            basis[row + e] = w;
+        }
+    }
+    row_partials(tid, g, rows, H2, &v, live);
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn third_main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+    let g = wg.x;
+    if !legal(g) {
+        return;
+    }
+    let length = u.row_length;
+    let k = length - 1u;
+    let rows = u.column + 1u;
+    let row = rows * length;
+    let live = min(total[u.cells - 1u], k);
+    let step = u.groups * WG;
+    finish(tid, H2, rows);
+    var sq = 0.0;
+    var projected: f32;
+    for (var i = 0u; i < u.per_thread; i = i + 1u) {
+        let t = g * WG + tid + i * step;
+        if t <= live {
+            let e = element(t, live, k);
+            projected = 0.0;
+            for (var r = 0u; r < rows; r = r + 1u) {
+                projected = projected + h[r] * basis[r * length + e];
+            }
+            let w = basis[row + e] - projected;
+            basis[row + e] = w;
+            sq = sq + w * w;
+        }
+    }
+    red[tid] = sq;
+    reduce(tid, 1u);
+    if tid == 0u {
+        partials[SQ * STRIDE + g] = red[0];
+    }
+}
+
+@compute @workgroup_size(256, 1, 1)
+fn fourth_main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+    let g = wg.x;
+    if !legal(g) {
+        return;
+    }
+    let length = u.row_length;
+    let k = length - 1u;
+    let m = u.passes;
+    let j = u.column;
+    let rows = j + 1u;
+    let row = rows * length;
+    let live = min(total[u.cells - 1u], k);
+    let step = u.groups * WG;
+    finish(tid, SQ, 1u);
+    let norm = sqrt(max(h[0], 0.0));
+    for (var i = 0u; i < u.per_thread; i = i + 1u) {
+        let t = g * WG + tid + i * step;
+        if t <= live {
+            let e = element(t, live, k);
+            let v = select(0.0, basis[row + e] / norm, norm >= 1e-30);
+            basis[row + e] = v;
+            current[e] = v;
+        }
+    }
+    if g != 0u {
+        return;
+    }
+    // The first workgroup rebuilds h1 and h2 for the Givens update.
+    workgroupBarrier();
+    finish(tid, SUMZ, 1u);
+    let w_k = h[0] / f32(u.cells);
+    workgroupBarrier();
+    finish(tid, H1, rows);
+    if tid < rows {
+        h_first[tid] = h[tid] + basis[tid * length + k] * w_k;
+    }
+    workgroupBarrier();
+    finish(tid, H2, rows);
+    if tid == 0u {
+        let off_c = m * (m + 1u);
+        let off_s = off_c + m;
+        let off_g = off_s + m;
+        var col: array<f32, 66>;
+        for (var i = 0u; i <= j; i = i + 1u) {
+            col[i] = h_first[i] + h[i];
+        }
+        col[j + 1u] = norm;
+        for (var i = 0u; i < j; i = i + 1u) {
+            let cs = state[off_c + i];
+            let sn = state[off_s + i];
+            let t = cs * col[i] + sn * col[i + 1u];
+            col[i + 1u] = -sn * col[i] + cs * col[i + 1u];
+            col[i] = t;
+        }
+        let r = sqrt(col[j] * col[j] + col[j + 1u] * col[j + 1u]);
+        let turning = r > 1e-30;
+        let cs = select(1.0, col[j] / r, turning);
+        let sn = select(0.0, col[j + 1u] / r, turning);
+        let start = j * (m + 1u);
+        for (var i = 0u; i <= m; i = i + 1u) {
+            state[start + i] = select(select(0.0, r, i == j), col[i], i < j);
+        }
+        let g0 = state[off_g + j];
+        state[off_c + j] = cs;
+        state[off_s + j] = sn;
+        state[off_g + j] = cs * g0;
+        state[off_g + j + 1u] = -sn * g0;
+    }
+}
+"#;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct WideParams {
+    row_length: u32,
+    passes: u32,
+    column: u32,
+    cells: u32,
+    groups: u32,
+    per_thread: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+/// A collar of `live` cells in an n³ lattice, in the solve's layout: vectors
+/// of 8n² entries plus the constant, 0 past the live entries.
+struct PassProblem {
+    cells: usize,
+    length: usize,
+    entries: Vec<u32>,
+    total: Vec<u32>,
+    grid: Vec<f32>,
+    start: Vec<f32>,
+    zs: Vec<Vec<f32>>,
+    state: Vec<f32>,
+}
+
+impl PassProblem {
+    fn new(n: usize, live: usize, passes: usize) -> Self {
+        let cells = n.pow(3);
+        let k = 8 * n * n;
+        let length = k + 1;
+        let stride = cells / live;
+        let offsets = random_values(live, 0xe17);
+        let mut entries = vec![u32::MAX; k];
+        for (t, entry) in entries.iter_mut().take(live).enumerate() {
+            *entry = (t * stride + ((offsets[t] + 0.5) * (stride - 1) as f32) as usize) as u32;
+        }
+        let mut total = vec![0u32; cells];
+        let (mut count, mut next) = (0u32, 0usize);
+        for (c, slot) in total.iter_mut().enumerate() {
+            if next < live && entries[next] as usize == c {
+                count += 1;
+                next += 1;
+            }
+            *slot = count;
+        }
+        let collar = |seed: u64| -> Vec<f32> {
+            let v = random_values(length, seed);
+            (0..length).map(|e| if e < live || e == k { v[e] } else { 0.0 }).collect()
+        };
+        let mut start = collar(0x57a7);
+        let norm = start.iter().map(|v| v * v).sum::<f32>().sqrt();
+        start.iter_mut().for_each(|v| *v /= norm);
+        // random_values makes its seed odd, so seeds one apart collide.
+        let zs = (0..passes).map(|j| collar(0x2000 + ((j as u64) << 8))).collect();
+        let mut state = vec![0.0f32; state_len(passes as u32) as usize];
+        state[residual_offset(passes as u32) as usize] = 1.7;
+        Self { cells, length, entries, total, grid: random_values(cells, 0x9e1d), start, zs, state }
+    }
+}
+
+/// f64 port of one pass's vector work on the GPU's own inputs: the new unit
+/// vector and the state after the Givens update.
+fn cpu_arnoldi_pass(p: &PassProblem, grid: &[f32], z: &[f32], basis: &[f32], state: &[f32], m: usize, j: usize) -> (Vec<f64>, Vec<f64>) {
+    let (l, k) = (p.length, p.length - 1);
+    let sum: f64 = z[..k].iter().map(|&v| f64::from(v)).sum();
+    let mut w: Vec<f64> = (0..l)
+        .map(|e| {
+            if e == k {
+                return sum / p.cells as f64;
+            }
+            let cell = p.entries[e] as usize;
+            if cell < p.cells { f64::from(grid[cell]) - f64::from(z[k]) } else { 0.0 }
+        })
+        .collect();
+    let row = |r: usize| &basis[r * l..(r + 1) * l];
+    let mut rounds = Vec::new();
+    for _ in 0..2 {
+        let h: Vec<f64> = (0..=j).map(|r| row(r).iter().zip(&w).map(|(&v, &x)| f64::from(v) * x).sum()).collect();
+        for (r, hr) in h.iter().enumerate() {
+            for (x, &v) in w.iter_mut().zip(row(r)) {
+                *x -= hr * f64::from(v);
+            }
+        }
+        rounds.push(h.iter().map(|&v| v as f32).collect::<Vec<f32>>());
+    }
+    let norm = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let next = w.iter().map(|x| if norm >= 1e-30 { x / norm } else { 0.0 }).collect();
+    (next, cpu_givens(state, &rounds[0], &rounds[1], norm as f32, m, j))
+}
+
+/// The prototype against the CPU pass by pass, then 24 passes in one command
+/// buffer against the atoms that do the same work today (sum, gather, two
+/// rounds of dots and combine, the norm, divide, Givens, and the basis
+/// region's three copies).
+#[test]
+fn swash_arnoldi_pass_prototype() {
+    use manifold_gpu::GpuBinding;
+    let m = 24;
+    let len = state_len(m as u32) as usize;
+    for (n, live) in [(32usize, 2_000usize), (64, 9_000), (64, 4_700), (128, 70_000)] {
+        let p = PassProblem::new(n, live, m);
+        let (l, k) = (p.length, p.length - 1);
+        let mut harness = Harness::new();
+        let (entries_slot, entries) = harness.array(&p.entries, k);
+        let (_, total) = harness.array(&p.total, p.cells);
+        let whole_total: Vec<u32> = (0..p.cells).map(|c| if c + 1 == p.cells { k as u32 } else { 0 }).collect();
+        let (_, whole) = harness.array(&whole_total, p.cells);
+        let (grid_slot, grid) = harness.array(&p.grid, p.cells);
+        let (z_slot, z) = harness.array(&p.zs[0], l);
+        let (basis_slot, basis) = harness.array(&p.start, l * (m + 1));
+        let (_, current) = harness.array(&p.start, l);
+        let (state_slot, state) = harness.array(&p.state, len);
+        let reset = |buffer: &GpuBuffer, values: &[f32]| {
+            buffer.zero_fill();
+            // SAFETY: shared buffer at least this long; no GPU work in flight.
+            unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+        };
+        // Every index the kernel can form, against the arrays it gets.
+        let bytes = |count: usize| (count * 4) as u64;
+        assert!(basis.size >= bytes((m + 1) * l) && current.size >= bytes(l) && z.size >= bytes(l));
+        assert!(entries.size >= bytes(k) && grid.size >= bytes(p.cells) && total.size >= bytes(p.cells));
+        assert!(whole.size >= bytes(p.cells) && state.size >= bytes(len) && m <= MAX_PASSES as usize);
+        let (_, partials) = harness.array::<f32>(&[], 132 * 64);
+        let groups = l.div_ceil(256).clamp(1, 64);
+        let per_thread = l.div_ceil(groups * 256);
+        assert!(per_thread <= 32 && groups * 256 * per_thread >= l && partials.size >= bytes(132 * 64));
+        let single: Vec<(u32, manifold_gpu::GpuComputePipeline)> = [256u32, 1024]
+            .into_iter()
+            .filter_map(|wg| {
+                let source = ARNOLDI_PROTOTYPE.replace("__WG__", &wg.to_string()).replace("__RED__", &(4 * wg).to_string());
+                let pipeline = harness.device.create_compute_pipeline(&source, "main", "swash arnoldi prototype");
+                let most = pipeline.max_threads_per_group();
+                (most >= wg).then_some((wg, pipeline)).or_else(|| {
+                    println!("SWASH arnoldi {n}³ live {live}: {wg} threads refused, the pipeline holds {most}");
+                    None
+                })
+            })
+            .collect();
+        let wide: Vec<manifold_gpu::GpuComputePipeline> = ["first_main", "second_main", "third_main", "fourth_main"]
+            .into_iter()
+            .map(|entry| harness.device.create_compute_pipeline(ARNOLDI_WIDE_PROTOTYPE, entry, "swash arnoldi wide prototype"))
+            .collect();
+        assert!(wide.iter().all(|p| p.max_threads_per_group() >= 256));
+        // One pass, as each variant encodes it: None is the four wide dispatches.
+        let encode = |native: &mut manifold_gpu::GpuEncoder, variant: Option<usize>, total: &GpuBuffer, j: usize| {
+            assert!(j < m);
+            let buffers = [&entries, total, &grid, &z, &basis, &current, &state, &partials];
+            let mut bindings: Vec<GpuBinding> =
+                buffers.iter().enumerate().map(|(i, &buffer)| GpuBinding::Buffer { binding: i as u32 + 1, buffer, offset: 0 }).collect();
+            match variant {
+                Some(which) => {
+                    let uniforms = ArnoldiParams { row_length: l as u32, passes: m as u32, column: j as u32, cells: p.cells as u32 };
+                    bindings.push(GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) });
+                    native.dispatch_compute(&single[which].1, &bindings, [1, 1, 1], "swash arnoldi prototype");
+                }
+                None => {
+                    let uniforms = WideParams {
+                        row_length: l as u32,
+                        passes: m as u32,
+                        column: j as u32,
+                        cells: p.cells as u32,
+                        groups: groups as u32,
+                        per_thread: per_thread as u32,
+                        _pad0: 0,
+                        _pad1: 0,
+                    };
+                    bindings.push(GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) });
+                    let labels = ["arnoldi wide 1 (Σz, gather, h1)", "arnoldi wide 2 (w1, h2)", "arnoldi wide 3 (w2, |w2|²)", "arnoldi wide 4 (unit, Givens)"];
+                    for (pipeline, label) in wide.iter().zip(labels) {
+                        native.dispatch_compute(pipeline, &bindings, [groups as u32, 1, 1], label);
+                    }
+                }
+            }
+        };
+        let median = |mut ms: Vec<f64>| {
+            ms.sort_by(f64::total_cmp);
+            ms[ms.len() / 2]
+        };
+        let variants: Vec<(Option<usize>, String)> = (0..single.len())
+            .map(|i| (Some(i), format!("one workgroup of {}", single[i].0)))
+            .chain(std::iter::once((None, format!("{groups} workgroups of 256"))))
+            .collect();
+        for (variant, name) in variants {
+            reset(&basis, &p.start);
+            reset(&current, &p.start);
+            reset(&state, &p.state);
+            for j in 0..m {
+                // A fresh grid each pass, as the box solve gives: with one
+                // grid, each pass's w is nearly in the span of the last, and
+                // the f32 remainder is all rounding.
+                let pass_grid = random_values(p.cells, 0x9e1d + ((j as u64) << 8));
+                reset(&grid, &pass_grid);
+                reset(&z, &p.zs[j]);
+                let before_basis: Vec<f32> = read(&basis, (j + 1) * l);
+                let before_state: Vec<f32> = read(&state, len);
+                let mut native = harness.device.create_encoder("swash arnoldi pass");
+                encode(&mut native, variant, &total, j);
+                native.commit_and_wait_completed();
+                let (next, want_state) = cpu_arnoldi_pass(&p, &pass_grid, &p.zs[j], &before_basis, &before_state, m, j);
+                let row: Vec<f32> = read(&basis, (j + 2) * l)[(j + 1) * l..].to_vec();
+                assert_close(&row, &next, &format!("{n}³ {name}, pass {j}: new basis row"));
+                assert_close(&read(&current, l), &next, &format!("{n}³ {name}, pass {j}: current"));
+                assert_close(&read(&state, len), &want_state, &format!("{n}³ {name}, pass {j}: state"));
+            }
+        }
+
+        // The same 24 passes through today's atoms.
+        let slot = |harness: &mut Harness, count: usize| harness.array::<f32>(&[], count);
+        let (sum_slot, _) = slot(&mut harness, 1);
+        let (w_slot, _) = slot(&mut harness, l);
+        let (h1_slot, _) = slot(&mut harness, m + 1);
+        let (w1_slot, _) = slot(&mut harness, l);
+        let (h2_slot, _) = slot(&mut harness, m + 1);
+        let (w2_slot, _) = slot(&mut harness, l);
+        let (norm_slot, _) = slot(&mut harness, 1);
+        let (next_slot, next) = slot(&mut harness, l);
+        let (givens_slot, givens) = slot(&mut harness, len);
+        let (mut sum, mut gather, mut h1, mut h2, mut norm) =
+            (DotProducts::new(), CollarGather::new(), DotProducts::new(), DotProducts::new(), DotProducts::new());
+        let (mut w1, mut w2, mut unit, mut rotate) =
+            (CombineRows::new(), CombineRows::new(), DivideByValue::new(), KrylovGivens::new());
+        let lf = l as f32;
+        let time_ours = |variant: Option<usize>, sweep: &GpuBuffer| {
+            let mut native = harness.device.create_encoder("swash arnoldi timing");
+            for j in 0..m {
+                encode(&mut native, variant, sweep, j);
+            }
+            native.commit_and_wait_completed_timed() * 1000.0
+        };
+        let mut time_atoms = || {
+                let mut errors = Vec::new();
+                let mut native = harness.device.create_encoder("swash arnoldi atoms");
+                {
+                    let mut gpu = RendererGpuEncoder::new(&mut native, &harness.device);
+                    let backend: &dyn Backend = &harness.backend;
+                    let e = &mut errors;
+                    for j in 0..m {
+                        let rows = (j + 1) as f32;
+                        let dots = params(&[("row_length", lf), ("rows", rows), ("max_rows", (m + 1) as f32)]);
+                        let combine = params(&[("row_length", lf), ("rows", rows), ("scale", -1.0), ("base_scale", 1.0)]);
+                        let sum_params = params(&[("row_length", k as f32), ("rows", 1.0), ("max_rows", 1.0)]);
+                        step_ports(&mut sum, &mut gpu, backend, e, &[("matrix", z_slot)], &[("out", sum_slot)], &sum_params);
+                        let gathered = [("entries", entries_slot), ("grid", grid_slot), ("vector", z_slot), ("sum", sum_slot)];
+                        step_ports(&mut gather, &mut gpu, backend, e, &gathered, &[("out", w_slot)], &params(&[]));
+                        step_ports(&mut h1, &mut gpu, backend, e, &[("matrix", basis_slot), ("vector", w_slot)], &[("out", h1_slot)], &dots);
+                        let first = [("base", w_slot), ("matrix", basis_slot), ("coef", h1_slot)];
+                        step_ports(&mut w1, &mut gpu, backend, e, &first, &[("out", w1_slot)], &combine);
+                        step_ports(&mut h2, &mut gpu, backend, e, &[("matrix", basis_slot), ("vector", w1_slot)], &[("out", h2_slot)], &dots);
+                        let second = [("base", w1_slot), ("matrix", basis_slot), ("coef", h2_slot)];
+                        step_ports(&mut w2, &mut gpu, backend, e, &second, &[("out", w2_slot)], &combine);
+                        let length = params(&[("row_length", lf), ("rows", 1.0), ("max_rows", 1.0), ("root", 1.0)]);
+                        step_ports(&mut norm, &mut gpu, backend, e, &[("matrix", w2_slot), ("vector", w2_slot)], &[("out", norm_slot)], &length);
+                        step_ports(&mut unit, &mut gpu, backend, e, &[("values", w2_slot), ("divisor", norm_slot)], &[("out", next_slot)], &params(&[]));
+                        let rotated = [("state", state_slot), ("first", h1_slot), ("second", h2_slot), ("norm", norm_slot)];
+                        let column = params(&[("passes", m as f32), ("column", j as f32)]);
+                        step_ports(&mut rotate, &mut gpu, backend, e, &rotated, &[("out", givens_slot)], &column);
+                        let row_bytes = (l * 4) as u64;
+                        gpu.native_enc.copy_buffer_range(&givens, 0, &state, 0, (len * 4) as u64);
+                        gpu.native_enc.copy_buffer_range(&next, 0, &basis, (j as u64 + 1) * row_bytes, row_bytes);
+                        gpu.native_enc.copy_buffer_range(&next, 0, &current, 0, row_bytes);
+                    }
+                }
+                assert!(errors.is_empty(), "{errors:?}");
+                native.commit_and_wait_completed_timed() * 1000.0
+        };
+        // Interleaved rounds, so other work on the GPU lands on every variant
+        // alike; the fastest round is the least contended.
+        let widest = single.iter().position(|(wg, _)| *wg == 1024);
+        let lines = [
+            ("today's atoms, whole rows, 13 dispatches and 3 copies", None, None),
+            ("4 dispatches of many workgroups, live entries", Some(None), Some(&total)),
+            ("4 dispatches of many workgroups, whole rows", Some(None), Some(&whole)),
+            ("1 dispatch of one workgroup of 1024, live entries", widest.map(Some), Some(&total)),
+        ];
+        let mut samples = vec![Vec::new(); lines.len()];
+        for _ in 0..9 {
+            for (i, (_, variant, sweep)) in lines.iter().enumerate() {
+                match (variant, sweep) {
+                    (None, _) => samples[i].push(time_atoms()),
+                    (Some(variant), Some(sweep)) => samples[i].push(time_ours(*variant, sweep)),
+                    _ => {}
+                }
+            }
+        }
+        // Where a wide pass's time goes: each dispatch's own GPU time.
+        if let Some(sampler) = harness.device.create_timestamp_sampler(512) {
+            let mut native = harness.device.create_encoder("swash arnoldi profiled");
+            native.enable_dispatch_profiling(sampler, &harness.device);
+            for j in 0..m {
+                encode(&mut native, None, &total, j);
+            }
+            let profile = native.commit_and_wait_profiled(&harness.device);
+            let mut own: Vec<(String, f64, usize)> = Vec::new();
+            for span in &profile.spans {
+                match own.iter_mut().find(|(label, _, _)| *label == span.label) {
+                    Some(entry) => {
+                        entry.1 += span.millis;
+                        entry.2 += 1;
+                    }
+                    None => own.push((span.label.clone(), span.millis, 1)),
+                }
+            }
+            for (label, ms, count) in own {
+                println!("SWASH arnoldi {n}³ live {live}: {label}: {:.1} µs own time each over {count}", 1000.0 * ms / count as f64);
+            }
+            println!("SWASH arnoldi {n}³ live {live}: profiled wide passes {:.1} µs each", 1000.0 * profile.total_ms / m as f64);
+        }
+        for ((label, _, _), ms) in lines.iter().zip(samples) {
+            if ms.is_empty() {
+                continue;
+            }
+            let fastest = ms.iter().copied().fold(f64::INFINITY, f64::min);
+            println!(
+                "SWASH arnoldi {n}³ live {live}: {label}: {:.1} µs per pass fastest, {:.1} median",
+                1000.0 * fastest / m as f64,
+                1000.0 * median(ms) / m as f64
+            );
+        }
+    }
+}
