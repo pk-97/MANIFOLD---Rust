@@ -1142,6 +1142,36 @@ mod tests {
         }
     }
 
+    /// Two simulation steps per frame, each with its own Krylov region
+    /// (`docs/FFT_WATER_SOLVER_DESIGN.md` D8): the second region is seeded
+    /// through a node outside both regions, which is not chaining.
+    #[test]
+    fn substeps_region_two_regions_in_sequence_through_an_outside_node() {
+        let mut graph = Graph::new();
+        let b1 = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let body1 = pass(&mut graph, "body1");
+        let between = pass(&mut graph, "between");
+        let b2 = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let body2 = pass(&mut graph, "body2");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((b1, "out"), (body1, "a")).unwrap();
+        graph.connect((body1, "out"), (b1, "in")).unwrap();
+        graph.connect((b1, "out"), (between, "a")).unwrap();
+        graph.connect((between, "out"), (b2, "seed")).unwrap();
+        graph.connect((between, "out"), (body2, "b")).unwrap();
+        graph.connect((b2, "out"), (body2, "a")).unwrap();
+        graph.connect((body2, "out"), (b2, "in")).unwrap();
+        graph.connect((b2, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let order: Vec<NodeInstanceId> = plan.steps().iter().map(|s| s.node).collect();
+        assert_eq!(order, vec![b1, body1, between, b2, body2, consumer]);
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].steps, vec![0, 1]);
+        assert_eq!(regions[1].steps, vec![3, 4]);
+    }
+
     #[test]
     fn substeps_region_contraction_orders_outside_readers_after_the_block() {
         // `late` is added before the body and only reads the boundary; plain
