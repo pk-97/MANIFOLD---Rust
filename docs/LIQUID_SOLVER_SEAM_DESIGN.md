@@ -423,15 +423,17 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Forbidden:** mux-gated step copies; a SWASH-only clock; importing any `matter_*` item; changing the step's numerics.
 - **Test scope:** focused renderer; GPU proofs.
 
-### P7b — SWASH's wired lattice (`feat/fft-water`)
+### P7b — GPU FLIP's Resolution knob (`feat/gpu-flip-liquid-fields`)
 
-- **Entry state:** P7a on the branch.
-- **Read-back:** `R/fluid/domain.rs`; `R/execution/array_growth.rs`; `krylov_basis.rs`; the SWASH extent rules.
-- **Deliverables:** `domain_layout_snapped(bounds, resolution, multiple)` beside `domain_layout`; SWASH uses the multiple its FFT plans accept (8 expected; ⚠ VERIFY-AT-IMPL in the `fft_3d` plan limits). The lattice is wired from `node.swash_domain` into every SWASH atom; capacities derive from one provided lattice-sized array, re-derived by `array_growth.rs` when Resolution changes; P7a's lattice refusal is deleted. ⚠ VERIFY-AT-IMPL: if array growth can't re-derive through the Krylov region's boundary, stop and escalate; no special path.
-- **Gate:** the CPU extent check at every resolution from 32 to the ceiling in steps of the multiple; GPU runs one size at a time (32, 40, 48, 56, 64 and up), each after its CPU proof, each with the conformance rows; the highest green size becomes SWASH's `LIQUID_MAX_RESOLUTION`.
-- **Demo:** L2: Dam Break SWASH at each size, PNGs.
+- **Entry state:** P7a built. `rg -n 'its lattice cannot change yet' crates/manifold-renderer/src/node_graph/primitives/gpu_flip_domain.rs` matches.
+- **Read-back:** `gpu_flip_preset.rs` whole (`water_def`, `render_def`, the V-cycle builders); `coarse_inverse.rs` (`multigrid_levels`, `multigrid_refusal`); `R/fluid/domain.rs`; the GPU FLIP extent rules in `R/liquid/extent.rs`.
+- **Decided (BUG-86kv (GPU FLIP Resolution knob), Peter, 2026-10-01):** changing Resolution rebuilds the water graph. The V-cycle's level count comes from the lattice at build (`multigrid_levels`), so the graph for a resolution is the one `water_def` builds at it. Resolution is set in rehearsal, never tuned live; a change costs a hitch and restarts the water, like Reset. There is no snap multiple: a resolution is legal when `domain_layout` gives a lattice `multigrid_refusal` accepts (every side halves evenly down to at most 64 coarse cells, so 32, 48, 64, 96, 128 and so on).
+- **⚠ Open call — BUG-znja (where the water graph is rebuilt):** (1) an undoable command regenerates the water nodes in the def at the new lattice and splices them by name, the way `render_def` splices the render, so the def stays fully expanded; or (2) the def keeps the solver compact and the preset runtime expands it at build, the way scene modifiers expand from their preparation params. Either way Resolution routes like a preparation param, applied once on release, never a modulation or MIDI target.
+- **Deliverables (after the call):** the rebuild path; `built_resolution` and its refusal deleted (the rebuild bakes the lattice into the atoms and sizes their arrays, so no lattice wiring and no `array_growth` re-derivation); an end-to-end water panel test on the GPU FLIP Dam Break (the panel walk is already solver-neutral through `is_liquid_domain` and the GPU FLIP dial row).
+- **Gate:** the CPU extent check at every legal resolution from 32 to the ceiling; GPU runs one legal size at a time upward from 32, each after its CPU proof, each with the conformance rows; the highest green size becomes GPU FLIP's refusal ceiling (D14).
+- **Demo:** L2: GPU FLIP Dam Break at each size, PNGs.
 - **Gesture:** raise Resolution on the water panel between songs; the water restarts at the new detail.
-- **Forbidden:** skipping a size on the GPU; a preset copy per resolution.
+- **Forbidden:** skipping a size on the GPU; a preset copy per resolution; a fixed level count that caps Resolution.
 - **Test scope:** focused renderer; GPU proofs.
 
 ### P8 — Forces and impulses for GPU liquids (supersedes MPM P3c)
