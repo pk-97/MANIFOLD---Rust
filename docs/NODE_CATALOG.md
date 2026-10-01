@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 373 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 375 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,12 +293,13 @@ _Generated from the node registry. Do not hand-edit. 373 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (66)
+### Particles 3D (68)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
 | Advect Whitewater | `node.advect_whitewater` | Filter | Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water. |
+| Age Whitewater | `node.age_whitewater` | Filter | Counts down each whitewater particle's life, spray fastest and bubbles slowest. |
 | Cells With Particles | `node.cells_with_particles` | Filter | Marks the grid cells that have liquid in them. |
 | Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
 | Coarse Inverse | `node.coarse_inverse` | Filter | Works out the exact pressure answer on the solver's smallest grid. |
@@ -348,6 +349,7 @@ _Generated from the node registry. Do not hand-edit. 373 nodes registered, group
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Restrict Lattice | `node.restrict_lattice` | Filter | Shrinks a grid of values to half size, averaging each neighbourhood. |
+| Retype Whitewater | `node.retype_whitewater` | Filter | Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved. |
 | Sample Faces at Particles | `node.sample_faces_at_particles` | Filter | Reads the liquid's flow at each particle, so whitewater knows how fast and which way the water there is moving. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
 | Shape Particle Blobs | `node.shape_particle_blobs` | Map | Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads. |

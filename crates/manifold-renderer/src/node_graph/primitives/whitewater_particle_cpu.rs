@@ -31,11 +31,11 @@ impl Box3 {
         std::array::from_fn(|a| (p[a] - (self.center[a] - 0.5 * self.size[a])) * self.cells[a] as f32 / self.size[a])
     }
 
-    fn in_grid(&self, c: [i32; 3]) -> bool {
+    pub(super) fn in_grid(&self, c: [i32; 3]) -> bool {
         (0..3).all(|a| c[a] >= 0 && c[a] < self.cells[a] as i32)
     }
 
-    fn index(&self, c: [i32; 3]) -> usize {
+    pub(super) fn index(&self, c: [i32; 3]) -> usize {
         let [nx, ny, _] = self.cells.map(|n| n as usize);
         c[0] as usize + nx * (c[1] as usize + ny * c[2] as usize)
     }

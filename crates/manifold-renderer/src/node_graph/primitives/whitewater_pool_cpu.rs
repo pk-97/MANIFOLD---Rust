@@ -341,6 +341,93 @@ pub(super) fn advect(
     (out, margin)
 }
 
+/// `node.retype_whitewater` for one slot, and the smallest gap between a
+/// deciding value and its threshold, in cells.
+pub(super) fn retype(particle: WhitewaterParticle, f: &Fields<'_>, distance: &[f32], cells: &[u32], grid: &Box3) -> (WhitewaterParticle, f32) {
+    let mut out = particle;
+    if particle.position_lifetime[3] <= 0.0 || particle.kind > 2 {
+        return (out, f32::INFINITY);
+    }
+    let h = grid.cell_size();
+    let q = grid.position([particle.position_lifetime[0], particle.position_lifetime[1], particle.position_lifetime[2]]);
+    let lo = BOX_INSET + BOX_EPSILON / h;
+    let mut margin = (0..3).map(|a| (q[a] - lo).abs().min((q[a] - (grid.cells[a] as f32 - lo)).abs())).fold(f32::INFINITY, f32::min);
+    let kind = if (0..3).any(|a| q[a] < lo || q[a] >= grid.cells[a] as f32 - lo) {
+        2
+    } else {
+        let s = q.map(|v| v - 0.5);
+        let lower = s.map(f32::floor);
+        let w: [f32; 3] = std::array::from_fn(|a| s[a] - lower[a]);
+        let mut d = 0.0;
+        for c in 0..8 {
+            let at: [i32; 3] = std::array::from_fn(|a| lower[a] as i32 + corner(c)[a]);
+            if grid.in_grid(at) {
+                d += corner_weight(w, c) * distance[grid.index(at)];
+            }
+        }
+        margin = margin.min((d.abs() - h).abs() / h);
+        let mut kind = if d > -h && d < h {
+            1
+        } else if d < -h {
+            0
+        } else {
+            2
+        };
+        if particle.kind == 1 && kind == 0 {
+            margin = margin.min((d + 2.0 * h).abs() / h);
+            if d > -2.0 * h {
+                kind = 1;
+            }
+        }
+        if kind != 0 {
+            let g = q.map(|v| v.floor() as i32);
+            margin = margin.min(q.iter().map(|v| (v - v.round()).abs()).fold(f32::INFINITY, f32::min));
+            let air = (-1..=1).any(|dz| {
+                (-1..=1).any(|dy| {
+                    (-1..=1).any(|dx| {
+                        let n = [g[0] + dx, g[1] + dy, g[2] + dz];
+                        (dx, dy, dz) != (0, 0, 0) && grid.in_grid(n) && cells[grid.index(n)] == 0
+                    })
+                })
+            });
+            if !air {
+                kind = 0;
+            }
+        }
+        kind
+    };
+    if particle.kind == 0 && kind != 0 {
+        out.velocity = velocity(q, f, grid);
+    }
+    out.kind = kind;
+    (out, margin)
+}
+
+/// `node.age_whitewater`'s settings, FLIP's defaults from [`Age::flip`].
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Age {
+    pub dt: f32,
+    pub bubble: f32,
+    pub foam: f32,
+    pub spray: f32,
+}
+
+impl Age {
+    pub fn flip() -> Self {
+        Self { dt: 1.0 / 60.0, bubble: 0.333, foam: 1.0, spray: 2.0 }
+    }
+}
+
+/// `node.age_whitewater` for one slot.
+pub(super) fn age(particle: WhitewaterParticle, s: Age) -> WhitewaterParticle {
+    let mut out = particle;
+    if particle.position_lifetime[3] <= 0.0 || particle.kind > 2 {
+        return out;
+    }
+    out.position_lifetime[3] -= [s.bubble, s.foam, s.spray][particle.kind as usize] * s.dt;
+    out
+}
+
 /// Fixtures shared by the CPU proof here and the GPU proofs.
 pub(super) mod fixture {
     use super::super::whitewater_cpu::Rng;

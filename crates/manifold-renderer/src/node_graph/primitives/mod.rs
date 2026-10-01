@@ -369,6 +369,8 @@ mod emission_count;
 mod spawn_whitewater;
 mod whitewater_type;
 mod advect_whitewater;
+mod retype_whitewater;
+mod age_whitewater;
 #[cfg(test)]
 mod whitewater_pool_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]

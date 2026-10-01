@@ -606,6 +606,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.spawn_whitewater", check: spawn_whitewater },
     ExtentRule { type_id: "node.whitewater_type", check: whitewater_type },
     ExtentRule { type_id: "node.advect_whitewater", check: advect_whitewater },
+    ExtentRule { type_id: "node.retype_whitewater", check: retype_whitewater },
+    ExtentRule { type_id: "node.age_whitewater", check: age_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
@@ -1426,6 +1428,21 @@ fn advect_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
     whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
     x.covers("solid", cell_total(nodes) * 4)?;
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The retype reads the distance, cells and face grid whole, and writes a
+/// record per pool slot.
+fn retype_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    x.covers("distance", cell_total(cells) * 4)?;
+    x.covers("cells", cell_total(cells) * 4)?;
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The age writes a record per pool slot.
+fn age_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.bytes("pool").unwrap_or(0))
 }
 
