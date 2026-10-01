@@ -9,6 +9,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
 use manifold_core::id::NodeId;
+use manifold_editing::commands::graph::scene_object_append_slot;
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
@@ -472,11 +473,9 @@ const BOX_PRESET: &str = "WaterFloatingBoxMatter";
 /// The preset's Box3D world, the box's start, body and drawn object.
 const BOX_NODES: [&str; 6] = ["box_world", "box_start", "box_body", "box_mesh", "box_material", "box_object"];
 
-/// The render scene's free object slot the box is drawn in.
-const BOX_OBJECT_PORT: &str = "object_6";
-
 /// `def` with [`BOX_PRESET`]'s box in its render scene, which pairs the
 /// box's world with the scene's liquid, and the Speed card on the world too.
+/// The box takes the scene's next free object slot, the one Add Object takes.
 fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
     let source = bundled(BOX_PRESET);
     let next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
@@ -503,11 +502,11 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
         def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
     };
     let (object, scene) = (id_of(&def, "box_object"), id_of(&def, "scene"));
-    assert!(
-        !def.wires.iter().any(|wire| wire.to_node == scene && wire.to_port == BOX_OBJECT_PORT),
-        "the render scene's {BOX_OBJECT_PORT} is taken"
-    );
-    def.wires.push(EffectGraphWire { from_node: object, from_port: "object".into(), to_node: scene, to_port: BOX_OBJECT_PORT.into() });
+    let slot = scene_object_append_slot(&def.nodes, &def.wires, scene)
+        .unwrap_or_else(|reason| panic!("{SHIPPED_PRESET}'s render scene has no free object slot for the box: {reason}"));
+    def.wires.push(EffectGraphWire { from_node: object, from_port: "object".into(), to_node: scene, to_port: format!("object_{slot}") });
+    let render = def.nodes.iter_mut().find(|node| node.id == scene).expect("the render scene");
+    render.params.insert("objects".into(), SerializedParamValue::Float { value: (slot + 1) as f32 });
     let metadata = def.preset_metadata.as_mut().expect("the render's cards");
     let speed = metadata
         .bindings

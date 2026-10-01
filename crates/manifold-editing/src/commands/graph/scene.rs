@@ -658,7 +658,7 @@ const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 /// Resolve the next physical render-scene object slot from content-owned
 /// state. Callers may carry a logical UI count for action compatibility, but
 /// it cannot identify a physical slot when a compound object has children.
-pub(super) fn scene_object_append_slot(
+pub fn scene_object_append_slot(
     nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
     render_id: u32,
