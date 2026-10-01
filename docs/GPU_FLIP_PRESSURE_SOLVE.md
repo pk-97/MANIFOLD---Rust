@@ -2,7 +2,7 @@
 
 <!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve with a fixed iteration count. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
-**Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: the two-way body coupling, BUG-6zj3 (step body owner code); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
+**Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-0d7t (open-face boundaries); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
 
 GPU FLIP is the liquid water solver: particles carry the water, a face (MAC) grid carries its velocity, and each step makes that velocity divergence-free with one pressure solve. The solve is the textbook multigrid-preconditioned conjugate gradient (McAdams, Sifakis and Teran, "A parallel multigrid Poisson solver for fluids simulation on large grids", 2010). It replaced the FFT capacitance solve on 2026-10-01: the same equation, 3.0× faster at 64³ and 3.7× at 128³, to a smaller residual.
@@ -266,7 +266,7 @@ Different on purpose:
 
 ### Solids in the water
 
-Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break has one. The domain takes Collider roles (static and moved by their transform); it still refuses a physics world by name, and the five coupled conformance checks are exempt in the GPU FLIP row (`GPU_FLIP_OWES_SOLIDS`). This phase lifts both.
+Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break has one. The domain takes Collider roles (static and moved by their transform) and owns a Box3D world for two-way coupling. The coupled conformance checks run on the GPU FLIP row except Collision, which needs open faces: in a closed tank the walls take the box's momentum at once (BUG-0d7t (GPU FLIP open-face boundaries)). The race rows, the draft against the engine's and the demo are owed: BUG-4jfv (GPU FLIP solids gate).
 
 - **Amended by** LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve) and D12 (solids through the shared distance lattice): body mass goes inside the pressure solve; solids come from the shared distance lattice; an analytic box clip is rejected. Where this section and the seam doc disagree, the seam doc wins.
 - **Why it is simpler now:** the FLIP Fluids engine's operator is a weighted Laplacian, each face carrying its open fraction w_f in [0, 1] (`pressuresolver.cpp` `_solidBoundaryWeights`). Multigrid takes weights directly: L gains w_f per face, the smoother and residual read the weights, and restriction averages them. The FFT solve needed a face collar to reach the same operator.
@@ -297,6 +297,11 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
   - The per-body sums are a fixed two-pass reduction (partials, then one workgroup of 64), so the result is the same run to run.
   - The friction reaction, ρh³·w·f·(u − v_s) per cut face, is ours: the engine keeps none.
   - The density solve stays uncoupled.
+- **Coupled, as built** (`gpu_flip_domain.rs`, `liquid/coupling.rs`). The domain owns the scene's Box3D world through the shared rigid owner: it steps the world once per settled tick, chains the reaction through the tick's steps, and hands it back at the host sync. Measured on the conformance scenes at 32³ (`tests/gpu_proofs/liquid_conformance.rs`):
+  - A box as dense as the water, held under it, feels 627.1 N against ρgV 627.8 N (−0.12%).
+  - A half-density box dropped tilted settles with its centre 0.26 cells under the waterline.
+  - Before contact the coupled box is drawn exactly where Box3D alone puts it; the world steps once per tick at 60 and 30 fps.
+  - Body force against iteration count (`gpu_flip_body_push_against_iterations`): at 4, 6, 8, 12 and 16 iterations the mean force and torque on both boxes are within 0.8% of 64 iterations, and the extra shake is under 0.003 cells. 4 is the smallest steady count, so Auto (8) stands with bodies. 16 matches 64 bit for bit: the solve reaches the f32 floor by then.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### Tracked in beads
