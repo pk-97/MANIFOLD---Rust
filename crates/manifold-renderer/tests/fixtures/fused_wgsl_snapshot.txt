@@ -15022,7 +15022,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:295 ===
+=== generator:WaterDamBreakGpuFlip node:484 ===
 struct Element {
     crossing: vec3<f32>,
     level: f32,
@@ -15201,7 +15201,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:296 ===
+=== generator:WaterDamBreakGpuFlip node:485 ===
 struct Element {
     position_radius: vec4<f32>,
     velocity: vec3<f32>,

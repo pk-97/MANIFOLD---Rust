@@ -14,6 +14,12 @@ impl GpuContext {
         }
     }
 
+    /// Light unit tests must not wait behind proof runs; proofs queue. Queues
+    /// only when the renderer is built with `gpu-proofs`.
+    pub fn new_for_tests(label: &str) -> Self {
+        Self { device: test_gpu_device(label) }
+    }
+
     /// Headless and test entry points: waits its turn on the machine-wide GPU
     /// queue first. The live app must use `new()`.
     pub fn new_queued(label: &str) -> Self {
@@ -26,5 +32,19 @@ impl GpuContext {
 impl Default for GpuContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Light unit tests must not wait behind proof runs; proofs queue. Queues
+/// only when the renderer is built with `gpu-proofs`.
+pub fn test_gpu_device(label: &str) -> std::sync::Arc<manifold_gpu::GpuDevice> {
+    #[cfg(feature = "gpu-proofs")]
+    {
+        std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued(label))
+    }
+    #[cfg(not(feature = "gpu-proofs"))]
+    {
+        let _ = label;
+        std::sync::Arc::new(manifold_gpu::GpuDevice::new())
     }
 }

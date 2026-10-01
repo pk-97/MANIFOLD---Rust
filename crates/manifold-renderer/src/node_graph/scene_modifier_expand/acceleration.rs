@@ -356,10 +356,10 @@ mod tests {
         }
     }
 
-    /// A matter domain is found by the same walk, through its group, but
-    /// takes no scene forces until it declares an acceleration_field input.
+    /// A matter domain is found by the same walk, through its group, and
+    /// takes scene forces and impulses on the same port FLIP does.
     #[test]
-    fn matter_surface_water_resolves_to_its_domain_without_force_port() {
+    fn matter_surface_water_resolves_to_its_domain_force_port() {
         let def = preset(include_str!(
             "../../../assets/generator-presets/WaterDamBreakMatter.json"
         ));
@@ -368,6 +368,17 @@ mod tests {
         let water = top("water_object");
         let domain = liquid_domain_of(&index, &water).unwrap().expect("matter water has a domain");
         assert_eq!(domain.node, NodeId::new("matter_domain"));
-        assert_eq!(recipient_key(&index, &water, &registry).unwrap(), None);
+        assert_eq!(
+            recipient_key(&index, &water, &registry).unwrap(),
+            Some((domain, "acceleration_field".to_string()))
+        );
+        let recipients = impulse_recipients_with_index(
+            &index,
+            &top("scene"),
+            &SceneTargetSelection::Explicit { objects: vec![water] },
+            &registry,
+        )
+        .unwrap();
+        assert_eq!(recipients, vec![(NodeId::new("matter_domain"), ImpulseTarget::Fluid)]);
     }
 }

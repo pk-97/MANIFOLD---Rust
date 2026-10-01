@@ -1315,6 +1315,10 @@ pub trait EffectNode: Send {
     ) {
     }
 
+    /// Drain the stamps of impulses discarded because the simulation's clock
+    /// was held (pause, Speed 0); they are never applied.
+    fn drain_discarded_impulses(&mut self, _consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {}
+
     #[cfg(feature = "gpu-proofs")]
     fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
         None

@@ -356,6 +356,7 @@ mod faces_to_particles;
 pub(crate) mod face_sample_component;
 pub(crate) mod matter_face_component;
 mod surface_crossings;
+mod liquid_blocks;
 mod nearest_crossing;
 mod crossing_distance;
 mod liquid_cells;
@@ -379,6 +380,8 @@ mod whitewater_particle_cpu;
 mod whitewater_particle_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_grid_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod liquid_blocks_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_field_tests;
 #[cfg(test)]

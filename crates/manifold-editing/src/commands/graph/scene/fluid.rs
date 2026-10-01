@@ -8,6 +8,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
     PresetMetadata, SerializedParamValue,
 };
+use manifold_core::liquid_domain::liquid_domains_in;
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
 
@@ -325,7 +326,10 @@ impl Command for AddSceneFluidCommand {
                     &wire.to_port,
                 ));
             }
-            let world_target = template.world_control_target.map(&lookup).transpose()?;
+            let domain = match liquid_domains_in(&body_nodes).as_slice() {
+                [domain] => domain.clone(),
+                _ => return Err("Add Fluid template must hold exactly one liquid domain"),
+            };
 
             let mut existing_node_ids = Vec::new();
             collect_node_ids(&def.nodes, &mut existing_node_ids);
@@ -422,9 +426,7 @@ impl Command for AddSceneFluidCommand {
                     params,
                 );
             }
-            if let Some(target) = world_target {
-                world_controls::share_world_controls(def, group_id, target, &self.world_metadata)?;
-            }
+            world_controls::share_world_controls(def, group_id, &domain, &self.world_metadata)?;
             Ok(())
         })(&mut candidate);
 

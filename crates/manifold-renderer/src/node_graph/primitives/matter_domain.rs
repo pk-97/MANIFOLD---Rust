@@ -7,14 +7,15 @@
 //! dials; P2a Collider roles as bodies, shapes and a distance atlas (D11);
 //! P2b the scene's Box3D bodies as two-way coupled bodies (section 5): the
 //! domain owns the rigid world in-thread and steps it one settled fluid tick
-//! at a time. Fields and liquid impulses join in later phases.
+//! at a time. Scene forces and impulses reach the liquid through the shared
+//! field lattices of `liquid::fields` (seam P8).
 //! Exempt from the codegen mandate as a CPU bridge (ADDING_PRIMITIVES.md
 //! exclusion 3).
 
 use std::borrow::Cow;
 
 use manifold_gpu::{FrameClock, GpuBinding, GpuBuffer, GpuComputePipeline};
-use manifold_physics::Seconds;
+use manifold_physics::FieldValue;
 
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
@@ -22,6 +23,7 @@ use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::LiquidClock;
 use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
+use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
 use crate::node_graph::matter::{
@@ -30,9 +32,9 @@ use crate::node_graph::matter::{
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
-    ResolvedRigidImpulse, RigidImpulseTargets, RigidSceneObservation, offline_simulation,
+    RigidImpulseTargets, RigidSceneObservation, offline_simulation,
 };
-use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse, map_rigid_receipt};
+use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
 
@@ -171,11 +173,6 @@ pub(crate) fn matter_geometry(
     Ok(MatterGeometry { layout, setup })
 }
 
-/// The refusal of an impulse on the liquid itself, owed to seam P8 (the
-/// scene contract test reads it).
-pub(crate) const FLUID_IMPULSES_UNSUPPORTED: &str =
-    "Matter coupling: impulses on the live liquid itself are not supported yet; target the bodies";
-
 const UPLOAD_SHADER: &str = include_str!("shaders/matter_domain_upload.wgsl");
 /// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
 const UPLOAD_GROUPS: usize = 254;
@@ -218,6 +215,7 @@ crate::primitive! {
         stiffness: ScalarF32 optional,
         cohesion: ScalarF32 optional,
         liveliness: ScalarF32 optional,
+        acceleration_field: VectorField optional,
         role_0: FluidRole optional,
         role_1: FluidRole optional,
         role_2: FluidRole optional,
@@ -313,8 +311,13 @@ crate::primitive! {
         momentum_unit: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
+        field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
+        field_spacing: ScalarF32,
+        force_lattices: ScalarF32,
+        impulse_tick: ScalarF32,
         bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(i32),
+        forces: Array(f32), impulses: Array(f32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
@@ -339,7 +342,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Rigid impulses reach the bodies; impulses on the liquid itself are refused for now.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the resolution per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -360,6 +363,9 @@ crate::primitive! {
         rows_fresh: bool = false,
         coupled: Coupling = Coupling::default(),
         reaction: Option<GpuBuffer> = None,
+        impulses: LiquidImpulses = LiquidImpulses::default(),
+        fields: LiquidFields = LiquidFields::default(),
+        acceleration: Option<FieldValue> = None,
     },
 }
 
@@ -441,7 +447,7 @@ fn closed_faces(params: &ParamValues) -> u32 {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 46] = [
+const OUTPUTS: [&str; 52] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
     "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
     "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
@@ -449,7 +455,8 @@ const OUTPUTS: [&str; 46] = [
     "dropped_seconds", "lambda", "cohesion", "liveliness", "density", "limited_by_substeps",
     "blocks_x", "blocks_y", "blocks_z", "block_center_x", "block_center_y", "block_center_z",
     "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
-    "body_count", "body_rows", "first_tick", "dynamic_count",
+    "body_count", "body_rows", "first_tick", "dynamic_count", "field_nodes_x", "field_nodes_y",
+    "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
 ];
 /// Wired role ports, in slot order (node.fluid_surface's names).
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
@@ -463,15 +470,21 @@ const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_63",
 ];
 const TICKS: usize = 20;
+const IMPULSE_TICK: usize = 51;
+const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
+const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
 impl Primitive for MatterDomain {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "shapes" | "atlas" | "reaction")
+        matches!(port, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        if port == "reaction" {
-            return self.reaction.as_ref();
+        match port {
+            "reaction" => return self.reaction.as_ref(),
+            "forces" => return self.fields.forces_buffer(),
+            "impulses" => return self.fields.impulses_buffer(),
+            _ => {}
         }
         let buffers = self.body_buffers.as_ref()?;
         match port {
@@ -489,7 +502,7 @@ impl Primitive for MatterDomain {
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         // Provided storage: a one-record hint, grown at run time.
-        matches!(port_name, "bodies" | "shapes" | "atlas" | "reaction").then_some(1)
+        matches!(port_name, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses").then_some(1)
     }
 
     fn warmup_pending(&self) -> bool {
@@ -535,6 +548,10 @@ impl Primitive for MatterDomain {
                 self.role_pending |= !ctx.inputs.slot_content_ready(input) || roles[slot].is_none();
             }
         }
+        self.acceleration = ctx.inputs.vector_field("acceleration_field");
+        if let Some(slot) = ctx.inputs.slot("acceleration_field") {
+            self.role_pending |= !ctx.inputs.slot_content_ready(slot) || self.acceleration.is_none();
+        }
         // Every output is published every frame, so no consumer reads a slot
         // this node left unwritten. While a role is still being prepared, or
         // on an error, the liquid holds: the last good outputs repeat with
@@ -544,6 +561,7 @@ impl Primitive for MatterDomain {
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
+            held[IMPULSE_TICK] = -1.0;
             held
         };
         self.coupled.failed = false;
@@ -566,6 +584,21 @@ impl Primitive for MatterDomain {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         self.upload_bodies(ctx, fresh && self.rows_fresh, values[TICKS] > 0.0);
+        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, offline_simulation())) {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                ctx.error(error);
+                false
+            }
+            None => false,
+        };
+        // A hit is "applied" only once its tick's fields are on the GPU; a
+        // frame that held or failed discards its hits with a receipt.
+        if fresh && uploaded {
+            self.impulses.commit_frame();
+        } else {
+            self.impulses.abandon_frame();
+        }
     }
 
     /// The liquid restarts in a new epoch, and a coupled pair together with
@@ -603,24 +636,21 @@ impl Primitive for MatterDomain {
     }
 
     fn physics_impulse_epoch(&self) -> Option<u64> {
-        self.coupled.owner.as_ref().and_then(|owner| owner.rigid().impulse_epoch())
+        self.impulses.epoch()
     }
 
-    /// An impulse fired this frame is stamped at the settled rigid tick, so
-    /// it reaches the bodies at the start of the next one.
+    /// A hit fired this frame is stamped at the liquid's simulated time, so
+    /// it lands on the first tick of the next frame (the rigid half at the
+    /// start of the next settled rigid tick).
     fn physics_impulse_stamp(
         &self,
         transport: manifold_core::Seconds,
         sequence: u64,
     ) -> Result<manifold_physics::input::EventStamp, String> {
         if self.role_pending || self.coupled.failed {
-            return Err("Matter coupling: cannot capture an impulse while the liquid is pending or failed".into());
+            return Err("Matter impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
-        let owner = self.coupled.owner.as_ref().ok_or("Matter coupling: no coupled rigid world")?;
-        if self.coupled.transport != Some(transport.0) {
-            return Err("Matter coupling: an impulse must be captured at the frame the liquid last ran".into());
-        }
-        owner.rigid().impulse_stamp(Seconds(owner.completed() as f64 * TICK), sequence)
+        self.impulses.stamp(transport.0, sequence)
     }
 
     fn enqueue_physics_impulse(
@@ -628,22 +658,18 @@ impl Primitive for MatterDomain {
         stamp: manifold_physics::input::EventStamp,
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
-        let ImpulseTarget::Rigid(targets) = impulse.target else {
-            return Err(FLUID_IMPULSES_UNSUPPORTED.into());
-        };
-        let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
-        owner.rigid_mut().enqueue_impulse(stamp, ResolvedRigidImpulse { field: impulse.field, targets })
+        self.impulses.enqueue(stamp, impulse, self.coupled.owner.as_mut())
     }
 
     fn drain_physics_impulses(
         &mut self,
         consume: &mut dyn FnMut(manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>),
     ) {
-        if let Some(owner) = &mut self.coupled.owner {
-            for event in owner.rigid_mut().drain_applied_impulses() {
-                map_rigid_receipt(event, &mut *consume);
-            }
-        }
+        self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
+    }
+
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
+        self.impulses.drain_discarded(consume);
     }
 }
 
@@ -789,9 +815,10 @@ impl MatterDomain {
             self.rebuild_owner()?;
         }
         self.coupled.owner_fresh = false;
+        self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
         let consumed = frame.simulation_time - f64::from(frame.ticks) * TICK;
         self.bodies.observe(roles, frame.epoch, frame.target_time, consumed)?;
-        let first_tick = (consumed / TICK).round() as u64;
+        let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
         // fill seeds around the colliders' starting poses. Otherwise a frame
         // without ticks keeps the last rows as the bodies' poses.
@@ -858,6 +885,9 @@ impl MatterDomain {
             display_time = owner.completed() as f64 * TICK;
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
+        let field = self
+            .fields
+            .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &frame, &self.impulses)?;
 
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
@@ -882,7 +912,7 @@ impl MatterDomain {
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u64;
-        for (name, value) in geometry.outputs().into_iter().chain(per_frame) {
+        for (name, value) in geometry.outputs().into_iter().chain(per_frame).chain(field.outputs()) {
             let slot = OUTPUTS.iter().position(|output| *output == name).expect("every output has a slot");
             values[slot] = value;
             written |= 1 << slot;

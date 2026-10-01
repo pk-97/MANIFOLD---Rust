@@ -6,12 +6,14 @@ Multigrid-preconditioned conjugate gradient (McAdams, Sifakis & Teran 2010),
 step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the
 masked Poisson equation L p = f on water cells, p = 0 on air, box walls
 closed. One V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before
-and 2 after, trilinear transfers, a coarse cell is air if any child is air,
-halving while every side is even and one is over 4, then the coarsest level
-solved exactly by its inverse (node.coarse_inverse's sweep and pinning).
+and 2 after, trilinear transfers, a coarse cell is air if any child is air.
+The graph runs `--depth 5 --coarse-sweeps 16`: five levels at every lattice,
+the coarsest smoothed by 16 rounds each way. Without them the levels halve
+while every side is even and one is over 4 and the coarsest is solved
+exactly by its inverse (node.coarse_inverse's sweep and pinning).
 
 Usage: scripts/mgpcg_reference.py crates/manifold-renderer/tests/fixtures/dambreak_pressure_problems.bin.zst
-           [--refine 2] [--iterations 4,6,8]
+           --depth 5 --coarse-sweeps 16 [--refine 2 | --coarsen 2] [--iterations 4,6,8] [--tol 1e-5]
        scripts/mgpcg_reference.py --frames DUMP.bin [...]
 The second form reads solves dumped from a running scene (per record:
 u32 frame, step, kind, n; then water, f and another solver's pressure as n³
@@ -149,28 +151,43 @@ def coarse_inverse(water):
 
 
 class Multigrid:
-    def __init__(self, water, h):
+    """`depth` fixes the level count (every side must halve evenly that many
+    times less one); None halves while every side is even and one is over 4.
+    `coarse_sweeps` solves the coarsest level by that many red-black rounds
+    before and after (a symmetric smoother, so the preconditioner stays
+    symmetric); None solves it exactly by its inverse."""
+
+    def __init__(self, water, h, depth=None, coarse_sweeps=None):
         self.levels = [Level(water, h)]
         self.P = []
-        while max(water.shape) > 4 and all(n % 2 == 0 for n in water.shape):
+        def halve(shape):
+            if depth is not None:
+                return len(self.levels) < depth
+            return max(shape) > 4 and all(n % 2 == 0 for n in shape)
+        while halve(water.shape):
             nz, ny, nx = water.shape
+            assert nz % 2 == ny % 2 == nx % 2 == 0, f"{water.shape} does not halve to {depth} levels"
             water = water.reshape(nz // 2, 2, ny // 2, 2, nx // 2, 2).all(axis=(1, 3, 5))
             h *= 2
             self.P.append([prolong_1d(n) for n in water.shape])
             self.levels.append(Level(water, h))
-        self.inverse = coarse_inverse(self.levels[-1].water)
+        self.coarse_sweeps = coarse_sweeps
+        self.inverse = coarse_inverse(self.levels[-1].water) if coarse_sweeps is None else None
 
     def vcycle(self, l, r):
         lv = self.levels[l]
         e = np.zeros_like(r)
-        if l == len(self.levels) - 1:
+        last = l == len(self.levels) - 1
+        if last and self.coarse_sweeps is None:
             return (-lv.h**2 * self.inverse @ r.ravel()).reshape(r.shape)
-        for _ in range(NU):
+        rounds = self.coarse_sweeps if last else NU
+        for _ in range(rounds):
             for color in (0, 1):
                 e = lv.sweep(e, r, color)
-        rc = apply_axes([M.T / 2.0 for M in self.P[l]], lv.residual(r, e)) * self.levels[l + 1].w
-        e = e + apply_axes(self.P[l], self.vcycle(l + 1, rc)) * lv.w
-        for _ in range(NU):
+        if not last:
+            rc = apply_axes([M.T / 2.0 for M in self.P[l]], lv.residual(r, e)) * self.levels[l + 1].w
+            e = e + apply_axes(self.P[l], self.vcycle(l + 1, rc)) * lv.w
+        for _ in range(rounds):
             for color in (1, 0):
                 e = lv.sweep(e, r, color)
         return e
@@ -181,9 +198,9 @@ def true_residual(p, water, f, h):
     return np.linalg.norm(lv.laplacian(p) - f * water) / np.linalg.norm(f * water)
 
 
-def solve(water, f, h, iterations):
+def solve(water, f, h, iterations, depth=None, coarse_sweeps=None):
     """Residual after each iteration, as the graph's fixed-count loop runs."""
-    mg = Multigrid(water, h)
+    mg = Multigrid(water, h, depth, coarse_sweeps)
     lv = mg.levels[0]
     x = np.zeros_like(f)
     r = f * lv.w
@@ -205,23 +222,43 @@ def solve(water, f, h, iterations):
     return out, len(mg.levels)
 
 
+def coarsen(water, f, k):
+    """A k-times coarser problem: a cell is water when at least half its
+    children are, and its divergence is their mean."""
+    nz, ny, nx = water.shape
+    shape = (nz // k, k, ny // k, k, nx // k, k)
+    water = water.reshape(shape).mean(axis=(1, 3, 5)) >= 0.5
+    f = f.reshape(shape).mean(axis=(1, 3, 5)) * water
+    return water, f
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("fixture", nargs="?")
     ap.add_argument("--frames")
     ap.add_argument("--refine", type=int, default=1)
+    ap.add_argument("--coarsen", type=int, default=1)
     ap.add_argument("--iterations", default="4,6,8")
+    ap.add_argument("--depth", type=int, help="a fixed level count (default: halve down to 4)")
+    ap.add_argument("--coarse-sweeps", type=int, help="red-black rounds on the coarsest level (default: its exact inverse)")
+    ap.add_argument("--tol", type=float, help="also print the iterations the residual takes to reach this")
     args = ap.parse_args()
     counts = [int(k) for k in args.iterations.split(",")]
     probs = frames(args.frames) if args.frames else load(args.fixture)
     for name, water, f, old in probs:
         if args.refine > 1:
             water, f = refine(water, f, args.refine)
+        if args.coarsen > 1:
+            water, f = coarsen(water, f, args.coarsen)
         h = L / water.shape[0]
-        res, levels = solve(water, f, h, max(counts))
+        res, levels = solve(water, f, h, max(counts), args.depth, args.coarse_sweeps)
         line = ", ".join(f"{k}: {res[k - 1]:.3e}" for k in counts)
         old_line = "" if old is None else f"; old solver {true_residual(old, water, f, h):.3e}"
-        print(f"{water.shape[0]}^3 {name}: {levels} levels; residual after {line}{old_line}", flush=True)
+        tol_line = ""
+        if args.tol is not None:
+            reached = next((k + 1 for k, r in enumerate(res) if r <= args.tol), None)
+            tol_line = f"; {args.tol:.0e} after {reached if reached else f'> {len(res)}'}"
+        print(f"{water.shape[0]}^3 {name}: {levels} levels; residual after {line}{old_line}{tol_line}", flush=True)
 
 
 if __name__ == "__main__":

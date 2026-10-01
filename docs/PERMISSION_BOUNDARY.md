@@ -312,3 +312,48 @@ same pass.
 
 Lesson: the failure mode is a wildcard on a script that takes a
 path-to-something-executable. Judge the script's *arguments*, never its name.
+
+## 7. Prompt sources and the worker no-prompt rule (2026-10-01)
+
+Obsolete when: the harness lets a subagent be spawned in a never-prompt mode (a per-agent `dontAsk`) — the PermissionRequest guard then has nothing to answer.
+
+A permission prompt stalls an unattended run until Peter answers. Four things
+can raise one in auto mode (docs: permission-modes, "When auto mode falls
+back"; hooks, "PermissionRequest"):
+
+1. A PreToolUse hook returning `ask` — the only source the telemetry log shows.
+2. The classifier pausing auto mode: 3 blocks in a row or 20 per session
+   (not configurable) and Claude Code "resumes prompting" for everything the
+   allow rules and hooks don't clear. Workers and lead share one session
+   counter, so a worker that is denied three times hands the whole run to
+   manual mode.
+3. The harness's own checks: an output redirect or `tee` target outside the
+   working directories, a write that symlink-resolves outside them, the first
+   read outside them, an explicit `permissions.ask` rule, a critical-path
+   `rm` (two-minute countdown).
+4. `AskUserQuestion`.
+
+Rules:
+
+- **Worker seats never prompt.** `permission-request-guard.py` answers every
+  `PermissionRequest` carrying an agent marker (`agent_id` / `agent_type` /
+  `teammate_name`) with `deny` plus a reroute note, whatever raised it; the
+  dispatcher (`hook_telemetry.py`, `worker_no_prompt`) turns a worker's
+  PreToolUse `ask` into `deny` with the original reason. Neither ever allows,
+  so section 4 (the bar for adding an allow rule) is untouched: a worker that
+  genuinely needs a human stops and reports up, and the lead or Peter decides.
+- **Every prompt and every classifier denial is logged.** The same hook
+  records `PermissionRequest` (verdict `prompt` for the lead, `deny` for a
+  worker) and `PermissionDenied` (with the classifier's reason) to
+  `.claude/telemetry/hook-fires.jsonl`, field `prompt_source`. The next
+  inventory is a filter on that field, not a transcript dig.
+- **A hook false positive is a bug, fixed at the guard.** The sed guard scans
+  only sed script arguments (`-e` values or the first non-option word), never
+  file operands, heredoc bodies, or the `-i ''` suffix; `test_preToolUseBash.py`
+  replays the real prompting commands. The probe-loop guard counts the GPU gate
+  wrapper only in command position and never counts markdown edits.
+- **Lead prompts are the human-decision residue** and stay prompts: force
+  rewrites of main, destructive outward actions, a real `sed w`, and whatever
+  the classifier pause leaves. Reduce them by keeping classifier denials low
+  (edits to `.claude/` hooks and settings are self-modification by design —
+  stage under `/tmp` and let Peter install, or land them on a branch Peter approved).

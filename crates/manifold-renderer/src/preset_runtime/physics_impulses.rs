@@ -422,6 +422,15 @@ impl PresetRuntime {
                 .drain_physics_impulses(&mut |event| consume(id, event));
         }
     }
+
+    /// Drain the stamps of impulses a held simulation discarded (pause,
+    /// Speed 0); resume never replays them.
+    pub fn drain_discarded_scene_impulses(&mut self, mut consume: impl FnMut(&NodeId, EventStamp)) {
+        for node in self.graph.nodes_mut() {
+            let id = &node.node_id;
+            node.node.drain_discarded_impulses(&mut |stamp| consume(id, stamp));
+        }
+    }
 }
 
 #[cfg(test)]

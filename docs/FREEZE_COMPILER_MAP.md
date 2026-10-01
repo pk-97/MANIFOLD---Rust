@@ -349,7 +349,11 @@ contract is tiered — this is written down nowhere else:
    store RTNE) after every body call; fp32-marked members are exact as-is.
    Induction: identical inputs + identical store rounding ⇒ identical forever.
    Proof: `oilyfluid_inloop_f16_fusion_matches_unfused`, watercolor in-loop.
-3. **Fused buffer regions: bit-exact** (f32 element registers, same math).
+3. **Fused buffer regions: bit-exact** (f32 element registers, same math),
+   provided the body writes every multiply-add as an explicit `fma()`: under
+   fast math the compiler contracts a bare `a * b + c` differently in the
+   standalone and the fused kernel (one ulp on `node.face_gravity` before it
+   did).
    Proofs: digitalplants / fluidsim / fluidsim3d `*_renders_like_unfused`.
 4. **Out-of-loop texture regions: ≈1 ulp, NOT bit-exact, and cannot be.**
    Body-level FMA/inlining differs across kernel contexts; the 2026-06-10

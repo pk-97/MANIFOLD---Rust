@@ -132,7 +132,13 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
   the diff touches GPU paths (scoped: mapped tests + smoke set from
   `scripts/gpu_scope.py`, 300s test-time budget, unmapped GPU path fails,
-  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly). (Bug status lives in beads since
+  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly).
+  Scoped runs skip any test measured over 60s in the committed
+  `scripts/gpu_test_times.json` (tests missing from it run). Nightly
+  `trunk_health.py` runs `--all --record-times /tmp/gpu_test_times.nightly.json`
+  and prints the diff; it never commits. To refresh: copy that file over
+  `scripts/gpu_test_times.json` on a branch and land it. Over-budget landing
+  fix: record times if the slow test is slow on purpose, else shorten it. (Bug status lives in beads since
   BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and its landing-time
   reflow are retired.) The post-merge housekeeper on main is a backstop, not
   the workflow — its remedies are worktree-shaped, never in-place edits to

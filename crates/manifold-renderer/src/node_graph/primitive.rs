@@ -480,6 +480,10 @@ pub trait Primitive: PrimitiveSpec {
     ) {
     }
 
+    /// Drain the stamps of impulses discarded because the simulation's clock
+    /// was held (pause, Speed 0); they are never applied.
+    fn drain_discarded_impulses(&mut self, _consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {}
+
     /// Sampler address mode for this atom's `Gather` inputs in a fused region —
     /// mirror of
     /// [`EffectNode::fused_gather_sampler_mode`](crate::node_graph::effect_node::EffectNode::fused_gather_sampler_mode).
@@ -929,6 +933,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         ),
     ) {
         Primitive::drain_physics_impulses(self, consume)
+    }
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
+        Primitive::drain_discarded_impulses(self, consume)
     }
     fn fused_gather_sampler_mode(
         &self,

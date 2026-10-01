@@ -5,6 +5,7 @@
 //! the face grid layout every solver publishes. Solver rules (substep bounds,
 //! reaction encodings, block sorting) stay with each solver.
 
+pub mod blocks;
 pub mod bodies;
 pub mod clock;
 #[cfg(any(test, feature = "gpu-proofs"))]
@@ -14,6 +15,7 @@ pub mod coupling;
 #[cfg(any(test, feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod extent;
+pub mod fields;
 pub mod frame_ring;
 pub mod grid;
 pub mod lattice;

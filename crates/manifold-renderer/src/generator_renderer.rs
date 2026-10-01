@@ -1082,6 +1082,9 @@ impl GeneratorRenderer {
                         diagnostics.late = diagnostics.late.saturating_add(1);
                     }
                 });
+                layer_state.generator.drain_discarded_scene_impulses(|_, _| {
+                    diagnostics.discarded = diagnostics.discarded.saturating_add(1);
+                });
             }
         }
 
@@ -2402,7 +2405,7 @@ mod warmup_tests {
     fn thumbnail_capture_survives_owner_drop_before_gpu_submission() {
         let _serial = crate::test_device();
         // Independent retirement owner: do not change the shared test device.
-        let device = std::sync::Arc::new(GpuDevice::new_queued("generator_renderer tests"));
+        let device = crate::gpu::test_gpu_device("generator_renderer tests");
         let event = device.create_event();
         let (sender, mut retirement) = manifold_gpu::RetireQueue::new();
         device.set_retirement(manifold_gpu::RetireMark::new(event.second_handle(), sender));

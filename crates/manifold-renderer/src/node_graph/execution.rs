@@ -3122,9 +3122,9 @@ mod tests {
         use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
         use crate::node_graph::MetalBackend;
         use crate::node_graph::ports::ArrayType;
-        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+        use manifold_gpu::GpuTextureFormat;
 
-        let device = std::sync::Arc::new(GpuDevice::new_queued("execution tests"));
+        let device = crate::gpu::test_gpu_device("execution tests");
         let particle_layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
 
         let mut g = Graph::new();

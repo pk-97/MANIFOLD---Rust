@@ -182,7 +182,7 @@ fn dispatch_tail_census_is_stable() {
     // jitter_particles, sample_faces_at_particles, energy_potential,
     // wavecrest_potential and emission_count, buffer atoms; its spawn adds
     // spawn_whitewater and whitewater_type, buffer atoms.
-    assert_eq!(total, 233, "standalone atom census drifted");
+    assert_eq!(total, 234, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

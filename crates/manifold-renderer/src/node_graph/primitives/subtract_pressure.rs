@@ -8,11 +8,12 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::cells_with_particles::{cell_count, cell_lattice};
-use super::particles_to_faces::{face_capacity, face_count};
+use super::particles_to_faces::face_count;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::FaceSample;
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -60,11 +61,12 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/subtract_pressure_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather],
+    output_capacity: FusedOutputCapacity::FromInput { input: "faces" },
 }
 
 impl Primitive for SubtractPressure {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| face_capacity(params)).flatten()
+    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
+        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "faces").map(|&(_, n)| n)).flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

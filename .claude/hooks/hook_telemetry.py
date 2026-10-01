@@ -26,6 +26,13 @@ Output, several hooks, merged the way the harness merges parallel hooks:
   - a hook that crashes fails OPEN: its siblings' verdicts stand and a systemMessage
     names the crash, instead of exit 1 discarding everyone's JSON.
 
+Worker seats never prompt (`worker_no_prompt`): when the payload carries an agent
+marker (agent_id / teammate_name / agent_type) and the final PreToolUse verdict is
+`ask`, the dispatcher emits `deny` with the original reason plus a reroute note. A
+prompt from a worker stalls an unattended run until Peter answers; a deny reaches the
+worker, which rewrites or reports up. Lead verdicts are untouched. The harness-level
+backstop for prompts the PreToolUse hooks never see is permission-request-guard.py.
+
 Telemetry: one JSONL line per hook to .claude/telemetry/hook-fires.jsonl
 ({"ts", "hook", "event", "exit", "out", "err", "ms", ...}). "Acted" is out > 0 or
 exit != 0. Census: scripts/hook_census.py. Logging never changes a verdict.
@@ -65,6 +72,10 @@ def _derive_decision(stdout: bytes):
         pd = hso.get("permissionDecision")
         if isinstance(pd, str) and pd:
             return pd
+        # PermissionRequest hooks answer with {"decision": {"behavior": allow|deny}}.
+        dec = hso.get("decision")
+        if isinstance(dec, dict) and isinstance(dec.get("behavior"), str):
+            return dec["behavior"]
     d = payload.get("decision")
     if isinstance(d, str) and d:
         return d
@@ -233,13 +244,16 @@ def _telemetry(stdin_data: bytes, name: str, code: int, out: bytes, err: bytes, 
                 event = payload.get("hook_event_name", "")
                 # Seat attribution: payloads carry the PARENT transcript for teammates,
                 # so record the fields that could discriminate seats.
-                for k in ("session_id", "teammate_name", "team_name", "tool_name"):
+                for k in ("session_id", "teammate_name", "team_name", "tool_name",
+                          "agent_id", "agent_type", "permission_mode"):
                     v = payload.get(k)
                     if v:
                         seat[k] = v
                 seat["keys"] = ",".join(sorted(payload.keys()))
                 # BUG-0x4w (permission prompts untraceable): record what was about to run.
-                if event == "PreToolUse":
+                # PermissionRequest / PermissionDenied carry the same tool_input, and
+                # those are exactly the prompts the PreToolUse log could never show.
+                if event in ("PreToolUse", "PermissionRequest", "PermissionDenied"):
                     ti = payload.get("tool_input") or {}
                     cmd = ti.get("command") or ti.get("file_path")
                     if isinstance(cmd, str) and cmd:
@@ -259,6 +273,39 @@ def _telemetry(stdin_data: bytes, name: str, code: int, out: bytes, err: bytes, 
             f.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
         pass
+
+
+_WORKER_KEYS = ("agent_id", "teammate_name", "agent_type")
+_WORKER_REROUTE = (
+    " [worker seat: an `ask` would prompt Peter and stall the unattended run, so the "
+    "dispatcher turned it into a deny. Rewrite the command into a pre-approved shape, "
+    "or stop and report this text up to the lead — never work around it.]"
+)
+
+
+def worker_no_prompt(payload: dict, out: bytes) -> bytes:
+    """Worker seats never prompt: a final PreToolUse `ask` from a subagent/teammate
+    becomes a `deny` carrying the original reason plus the reroute note. Lead
+    payloads (no agent marker — same discriminator as worker-seat-charge.py) pass
+    through untouched. `allow`/`deny`/no-verdict are never changed, so this can only
+    narrow what runs. Never raises; on any doubt returns `out` as-is."""
+    try:
+        if payload.get("hook_event_name") != "PreToolUse":
+            return out
+        if not any(payload.get(k) for k in _WORKER_KEYS):
+            return out
+        text = out.decode("utf-8", "replace").strip()
+        if not text:
+            return out
+        obj = json.loads(text)
+        hso = obj.get("hookSpecificOutput") if isinstance(obj, dict) else None
+        if not isinstance(hso, dict) or hso.get("permissionDecision") != "ask":
+            return out
+        hso["permissionDecision"] = "deny"
+        hso["permissionDecisionReason"] = (hso.get("permissionDecisionReason") or "") + _WORKER_REROUTE
+        return json.dumps(obj).encode()
+    except Exception:
+        return out
 
 
 def main() -> int:
@@ -290,6 +337,15 @@ def main() -> int:
         code, out, err = results[0][1:]
     else:
         code, out, err = merge(event, results)
+    try:
+        payload = json.loads(stdin_data) if stdin_data else {}
+    except (json.JSONDecodeError, AttributeError):
+        payload = {}
+    if isinstance(payload, dict):
+        rewritten = worker_no_prompt(payload, out)
+        if rewritten is not out:
+            _telemetry(stdin_data, "worker_no_prompt", 0, rewritten, b"", 0)
+            out = rewritten
     sys.stdout.buffer.write(out)
     sys.stderr.buffer.write(err)
     sys.stdout.buffer.flush()

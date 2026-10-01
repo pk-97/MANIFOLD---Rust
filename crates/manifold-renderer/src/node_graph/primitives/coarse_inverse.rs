@@ -1,10 +1,11 @@
-//! `node.coarse_inverse` — the exact solve at the bottom of the multigrid
-//! V-cycle (docs/GPU_FLIP_PRESSURE_SOLVE.md section 3 (the solve)): the
-//! inverse of the masked Poisson matrix on the coarsest level, built once per
-//! water lattice and applied by `node.combine_rows` in every V-cycle. A
-//! barriered solve (docs/ADDING_PRIMITIVES.md exclusion 1): each elimination
-//! step waits for the one before. Also the V-cycle's level rule and its
-//! named refusal.
+//! `node.coarse_inverse` — an exact solve for the bottom of a multigrid
+//! V-cycle: the inverse of the masked Poisson matrix on a lattice of at most
+//! 64 cells, built once per water lattice and applied by `node.combine_rows`
+//! in every V-cycle. GPU FLIP smooths its coarsest level instead, since a
+//! fixed level count leaves it past 64 cells at 128³
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 3 (the solve)). A barriered solve
+//! (docs/ADDING_PRIMITIVES.md exclusion 1): each elimination step waits for
+//! the one before.
 
 use std::borrow::Cow;
 
@@ -59,35 +60,6 @@ crate::primitive! {
     extra_fields: {
         inverse: Option<GpuComputePipeline> = None,
     },
-}
-
-/// A V-cycle halves the lattice while every side is even and one is over
-/// this.
-pub(crate) const COARSEST_SIDE: u32 = 4;
-
-/// The V-cycle's lattices, finest first: halved while every side is even and
-/// one is over [`COARSEST_SIDE`].
-pub(crate) fn multigrid_levels(cells: [u32; 3]) -> Vec<[u32; 3]> {
-    let mut levels = vec![cells];
-    while let Some(&last) = levels.last().filter(|l| l.iter().all(|&n| n % 2 == 0) && l.iter().any(|&n| n > COARSEST_SIDE)) {
-        levels.push(last.map(|n| n / 2));
-    }
-    levels
-}
-
-/// Why a lattice can't be solved: its coarsest level is past what the exact
-/// solve holds. An odd side stops the halving where it stands, so a lattice
-/// with an odd side over 4 is refused here.
-pub(crate) fn multigrid_refusal(cells: [u32; 3]) -> Option<String> {
-    let coarsest = *multigrid_levels(cells).last().expect("a level");
-    let count = cell_count(coarsest);
-    (count > MAX_COARSE_CELLS).then(|| {
-        let odd: Vec<u32> = coarsest.iter().copied().filter(|n| n % 2 == 1).collect();
-        let why = if odd.is_empty() { String::new() } else { format!(" (odd sides {odd:?} stop the halving)") };
-        format!(
-            "a {cells:?} cell lattice halves only to {coarsest:?}{why}, {count} cells, past the {MAX_COARSE_CELLS} the pressure solve's coarsest level solves exactly; every side must halve evenly down to {COARSEST_SIDE} or less"
-        )
-    })
 }
 
 /// The refusal at build and at run: a lattice past one workgroup.
@@ -176,21 +148,6 @@ mod tests {
                 }
                 assert!(j * cells + i < entries);
             }
-        }
-    }
-
-    #[test]
-    fn levels_halve_to_four_and_odd_sides_are_refused() {
-        assert_eq!(*multigrid_levels([64; 3]).last().unwrap(), [4; 3]);
-        assert_eq!(*multigrid_levels([128; 3]).last().unwrap(), [4; 3]);
-        assert_eq!(*multigrid_levels([96; 3]).last().unwrap(), [3; 3]);
-        for side in [15u32, 9, 63] {
-            let reason = multigrid_refusal([side; 3]).expect("refused");
-            assert!(reason.contains("odd sides"), "{side}: {reason}");
-        }
-        assert!(multigrid_refusal([80; 3]).is_some(), "80 halves to 5³ = 125 cells");
-        for side in [8u32, 16, 32, 48, 64, 96, 128] {
-            assert!(multigrid_refusal([side; 3]).is_none(), "{side}");
         }
     }
 }

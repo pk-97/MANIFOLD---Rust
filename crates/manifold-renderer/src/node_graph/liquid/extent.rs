@@ -31,7 +31,10 @@ use crate::node_graph::fluid_particles::{
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
+use crate::node_graph::liquid::blocks::block_total;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
+use crate::node_graph::liquid::clock::MAX_LIVE_TICKS;
+use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
 use crate::node_graph::liquid::frame_ring::RING;
 use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
 use crate::node_graph::liquid::lattice::LiquidLattice;
@@ -558,7 +561,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.cells_with_particles", check: cells_with_particles },
     ExtentRule { type_id: "node.particles_to_faces", check: particles_to_faces },
     ExtentRule { type_id: "node.extend_faces", check: face_map },
-    ExtentRule { type_id: "node.face_gravity", check: face_map },
+    ExtentRule { type_id: "node.face_gravity", check: face_gravity },
     ExtentRule { type_id: "node.face_divergence", check: face_divergence },
     ExtentRule { type_id: "node.subtract_pressure", check: subtract_pressure },
     ExtentRule { type_id: "node.density_source", check: density_source },
@@ -593,6 +596,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.switch_texture", check: texture_only },
     ExtentRule { type_id: "node.tone_map", check: texture_only },
     ExtentRule { type_id: "node.surface_crossings", check: surface_crossings },
+    ExtentRule { type_id: "node.liquid_blocks", check: liquid_blocks },
     ExtentRule { type_id: "node.nearest_crossing", check: nearest_crossing },
     ExtentRule { type_id: "node.crossing_distance", check: crossing_distance },
     ExtentRule { type_id: "node.liquid_cells", check: liquid_cells },
@@ -660,6 +664,17 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
+    // The walk takes a live frame's most force lattices and an impulse tick,
+    // so the field reads are checked.
+    let field = FieldFrame {
+        lattice: FieldLattice::of(&geometry.setup.lattice),
+        force_lattices: MAX_LIVE_TICKS,
+        impulse_tick: Some(0),
+    };
+    let forces = u64::from(MAX_LIVE_TICKS) * field.lattice.bytes();
+    for (name, value) in field.outputs() {
+        x.publish(name, value);
+    }
     // Body kernels clamp rows and body counts to the bodies array, so the
     // walk takes a scene without colliders; the reaction slot is sized for
     // every body a liquid holds.
@@ -669,11 +684,24 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("reaction", reaction),
+        ("forces", forces),
+        ("impulses", field.lattice.bytes()),
     ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
+    // The staging ring: the impulse lattice and the force lattices per slot.
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces));
     Ok(())
+}
+
+/// Field reads clamp to the field lattices the scalars name, so the wired
+/// buffers must hold them.
+fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| whole(x, name, 2.0).max(2));
+    let bytes = nodes.iter().map(|&n| u64::from(n)).product::<u64>() * 16;
+    x.covers_if_bound("forces", u64::from(whole(x, "force_lattices", 0.0)) * bytes)?;
+    x.covers_if_bound("impulses", bytes)
 }
 
 fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -786,13 +814,15 @@ fn matter_grid_update(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice();
     let nodes = node_extent(x, &lattice)?;
     x.covers("grid", grid_bytes(lattice.nodes()))?;
-    x.covers("accum", nodes * 16)
+    x.covers("accum", nodes * 16)?;
+    field_reads(x)
 }
 
 fn matter_body_reaction(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice();
     node_extent(x, &lattice)?;
-    x.covers("grid", grid_bytes(lattice.nodes()))
+    x.covers("grid", grid_bytes(lattice.nodes()))?;
+    field_reads(x)
 }
 
 fn grid_to_matter(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1044,10 +1074,25 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // GPU FLIP carries no bodies until it has solids: one empty record of each.
     x.publish("body_count", 0.0);
     x.publish("body_rows", 0.0);
-    for (port, bytes) in [("bodies", size_of::<LiquidBody>() as u64), ("shapes", size_of::<LiquidShape>() as u64), ("atlas", 4)] {
+    // The walk takes a live frame's most force lattices and an impulse tick,
+    // so the field reads are checked.
+    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: MAX_LIVE_TICKS, impulse_tick: Some(0) };
+    let forces = u64::from(MAX_LIVE_TICKS) * field.lattice.bytes();
+    for (name, value) in field.outputs() {
+        x.publish(name, value);
+    }
+    for (port, bytes) in [
+        ("bodies", size_of::<LiquidBody>() as u64),
+        ("shapes", size_of::<LiquidShape>() as u64),
+        ("atlas", 4),
+        ("forces", forces),
+        ("impulses", field.lattice.bytes()),
+    ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
+    // The staging ring: the impulse lattice and the force lattices per slot.
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces));
     Ok(())
 }
 
@@ -1151,6 +1196,11 @@ fn face_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_count(gpu_flip_cells(x)?) * FACE;
     x.covers("faces", faces)?;
     x.covers("out", faces)
+}
+
+fn face_gravity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    face_map(x)?;
+    field_reads(x)
 }
 
 fn face_divergence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1327,6 +1377,19 @@ fn surface_crossings(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| whole(x, name, 211.0));
     refinement(nodes, levels).map_err(Verdict::Refused)?;
     x.covers("out", cell_total(cells) * SURFACE_CROSSING_BYTES)?;
+    x.covers_if_bound("blocks", block_total(cells) * 4)?;
+    x.covers("solid", cell_total(nodes) * 4)?;
+    x.covers("level_set", cell_total(levels) * 4)
+}
+
+/// One thread per block; it gathers every cell of `water`, the closed
+/// footprint of the solid lattice and of the level set.
+fn liquid_blocks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| whole(x, name, 211.0));
+    refinement(nodes, levels).map_err(Verdict::Refused)?;
+    x.covers("out", block_total(cells) * 4)?;
+    x.covers("water", cell_total(cells) * 4)?;
     x.covers("solid", cell_total(nodes) * 4)?;
     x.covers("level_set", cell_total(levels) * 4)
 }
