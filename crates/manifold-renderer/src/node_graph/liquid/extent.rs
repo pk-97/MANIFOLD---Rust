@@ -609,6 +609,10 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.retype_whitewater", check: retype_whitewater },
     ExtentRule { type_id: "node.age_whitewater", check: age_whitewater },
     ExtentRule { type_id: "node.preserve_foam", check: preserve_foam },
+    ExtentRule { type_id: "node.keep_whitewater", check: keep_whitewater },
+    ExtentRule { type_id: "node.compact_whitewater", check: compact_whitewater },
+    ExtentRule { type_id: "node.live_whitewater_spawns", check: live_whitewater_spawns },
+    ExtentRule { type_id: "node.append_whitewater", check: append_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
@@ -1452,6 +1456,44 @@ fn age_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn preserve_foam(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;
     x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The keep searches its sort's bins and reads the solid lattice whole; one
+/// flag per pool slot. Unset bins are the sort's own rule on the grid's box
+/// and cell, as the atom's run works them out.
+fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    x.covers("solid", cell_total(nodes) * 4)?;
+    let ports = ["bins_x", "bins_y", "bins_z"];
+    if ports.map(|port| x.scalar(port, 0.0)) == [0.0; 3] && ports.iter().all(|port| !x.wired(port)) {
+        let size = ["size_x", "size_y", "size_z"].map(|name| x.scalar(name, 4.375));
+        let ranges = x.bytes("cell_ranges").ok_or_else(|| x.uncovered("cell_ranges is unbound".into()))?;
+        let bins = bin_counts(size, size[0] / cells[0] as f32).map(|n| n as f32);
+        searched_bins(bins, ranges, "search").map_err(|error| x.uncovered(error))?;
+    } else {
+        searched(x)?;
+    }
+    x.covers("out", x.items("pool").unwrap_or(0) * 4)
+}
+
+/// The compaction writes a record per pool slot; kept and scan are read up
+/// to their own lengths.
+fn compact_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// One flag per spawn slot.
+fn live_whitewater_spawns(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("out", x.items("spawns").unwrap_or(0) * 4)
+}
+
+/// The append writes a record per pool slot and reads the compacted pool
+/// whole, and one running total per spawn slot.
+fn append_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let pool = x.bytes("pool").unwrap_or(0);
+    x.covers("compacted", pool)?;
+    x.covers("live_scan", x.items("spawns").unwrap_or(0) * 4)?;
+    x.covers("out", pool)
 }
 
 /// The lifecycle's snapshot copies read the whole face grid, level and
