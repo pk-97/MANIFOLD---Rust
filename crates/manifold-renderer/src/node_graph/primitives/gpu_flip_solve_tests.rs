@@ -115,6 +115,7 @@ struct Solver {
     state: StateStore,
     water: GpuBuffer,
     f: GpuBuffer,
+    solid_faces: GpuBuffer,
     pressure: ResourceId,
     frames: i64,
 }
@@ -125,7 +126,7 @@ impl Solver {
         register_substep_test_nodes(&mut registry);
         let mut graph = pressure_def(shape).into_graph(&registry, &Default::default()).expect("pressure def builds");
         // The host fills the sources and reads the solution outside the frame.
-        for (name, port) in [("water", "out"), ("f", "out"), ("cg", "solution")] {
+        for (name, port) in [("water", "out"), ("f", "out"), ("solid_faces", "out"), ("cg", "solution")] {
             graph.add_external_output(node_named(&graph, name), port).expect("a host port exists");
         }
         let plan = compile(&graph).expect("pressure def compiles");
@@ -137,13 +138,24 @@ impl Solver {
             let slot = backend.slot_for(res).expect("source bound");
             Backend::array_buffer(&backend, slot).expect("source buffer").clone()
         };
-        let (water, f) = (buffer("water"), buffer("f"));
+        let (water, f, solid_faces) = (buffer("water"), buffer("f"), buffer("solid_faces"));
         let cells = shape.cells() as u64 * 4;
         assert!(water.size >= cells && f.size >= cells, "sources hold the lattice");
         let cg = node_named(&graph, "cg");
         let pressure = output_of(&plan, cg, "solution");
         let exec = Executor::new(Box::new(backend));
-        Self { shape, device, graph, plan, exec, state: StateStore::new(), water, f, pressure, frames: 0 }
+        let mut solver = Self { shape, device, graph, plan, exec, state: StateStore::new(), water, f, solid_faces, pressure, frames: 0 };
+        solver.load_faces(&open_faces(shape.n));
+        solver
+    }
+
+    /// The face grid's open fractions, node.solid_faces' layout: one weight
+    /// per axis per padded cell.
+    fn load_faces(&mut self, weights: &[[f32; 3]]) {
+        let records: Vec<[f32; 8]> = weights.iter().map(|w| [0.0, 0.0, 0.0, 0.0, w[0], w[1], w[2], 0.0]).collect();
+        assert!(self.solid_faces.size as usize >= records.len() * 32, "the face source holds the face grid");
+        // SAFETY: a shared buffer sized for the face grid; no frame runs.
+        unsafe { self.solid_faces.write(0, bytemuck::cast_slice(&records)) };
     }
 
     fn load(&mut self, water: &[bool], f: &[f32]) {
@@ -462,4 +474,15 @@ fn gpu_flip_real_frames_against_fft() {
         println!("GPU FLIP real {n}³ frame {frame} step {step} {kind:7}: {iterations} iterations {got:.3e}, FFT {old:.3e}");
         assert!(got <= old, "{n}³ frame {frame} step {step} {kind}: {got:.3e} is worse than the FFT solve's {old:.3e}");
     }
+}
+
+/// Every inner face of an `n`³ box whole, the walls closed.
+pub(super) fn open_faces(n: usize) -> Vec<[f32; 3]> {
+    let m = n + 1;
+    (0..m * m * m)
+        .map(|i| {
+            let p = [i % m, (i / m) % m, i / (m * m)];
+            std::array::from_fn(|a| f32::from(u8::from((0..3).all(|b| b == a || p[b] < n) && p[a] > 0 && p[a] < n)))
+        })
+        .collect()
 }

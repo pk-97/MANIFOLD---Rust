@@ -338,6 +338,8 @@ pub(crate) mod restrict_lattice;
 pub(crate) mod prolong_lattice;
 pub(crate) mod coarsen_water;
 pub(crate) mod coarse_inverse;
+pub(crate) mod solid_faces;
+pub(crate) mod coarsen_solid_faces;
 pub(crate) mod conjugate_gradient;
 pub(crate) mod zero_lattice;
 pub(crate) mod liquid_fill;

@@ -188,6 +188,13 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 - **Open, settled by measurement:** whether a body's pose updates every step or once per tick (`STEPS_PER_TICK` stays a builder constant so either fits).
 - **Kill check:** iterations to the empty tank's residual up more than 50% with the box → stop and report the numbers.
 - **Demo:** L2 — the Dam Break as shipped, obstacle included, GPU FLIP beside the engine, 300 frames headless. **Performer gesture:** the wave breaks around the box, then a floating box rides the slosh.
+- **Face weights, as built** (`node.solid_faces`, `node.coarsen_solid_faces`, `feat/gpu-flip-solids`). Measured by `scripts/mgpcg_reference.py --box`: on the seven committed Dam Break problems with a submerged box, the reference matches a direct sparse solve to 3e-15, and the iterations to the empty tank's residual rise by at most one (+25% at 4, +17% at 6, +12% at 8). Where it departs from the engine:
+  - A coarse face's weight is the mean of the four fine faces it covers. The engine has no multigrid, so this is ours.
+  - A water cell with every face closed drops out: smooth and residual give 0 there, the coarse inverse pins it.
+  - Divergence counts the box walls whole (weight 1, wall velocity), so the wall rule of section 2 is unchanged. Only solid faces are fractional.
+  - A closed face (weight 0) takes the solid's velocity and stays valid for extension. Velocity is 0 until the moving-solid step.
+  - The distance lattice is sampled at the step's pose, once per step.
+  - The freeze compiler's `ParamProduct` capacity gained `plus` (an `add(n, x)` term) so a face grid ((n + 1)³) fuses with its neighbours. `node.subtract_pressure` now declares it.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### Next, after landing: the surface and the transfer

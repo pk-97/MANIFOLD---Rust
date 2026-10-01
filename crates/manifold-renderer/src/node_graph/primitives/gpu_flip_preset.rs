@@ -402,7 +402,8 @@ pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     let cells = s.cells();
     let water = b.node("water", "test.value_source", json!({"max_capacity": capacity(cells)}));
     let f = b.node("f", "test.value_source", json!({"max_capacity": capacity(cells)}));
-    let levels = levels(&mut b, s, (water, "out"));
+    let faces = b.node("solid_faces", "test.face_source", json!({"max_capacity": capacity((s.n + 1).pow(3))}));
+    let levels = levels(&mut b, s, (water, "out"), (faces, "out"));
     let pressure = solve(&mut b, s, &levels, (f, "out"));
     let sink = b.node("sink", "test.value_sink", json!({}));
     b.wire(pressure, sink, "values");
@@ -485,7 +486,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        (particles, faces) = water_step(&mut b, scene, particles, count, domain, density);
+        (particles, faces) = water_step(&mut b, scene, particles, count, domain, density, k);
     }
     b.prefix.clear();
     let stats = b.node("stats", "node.liquid_stats", json!({}));
@@ -707,6 +708,7 @@ fn water_step(
     count: Port,
     domain: usize,
     density: bool,
+    step: usize,
 ) -> (Port, Port) {
     let s = scene.pressure;
     let n = [s.n; 3];
@@ -741,12 +743,14 @@ fn water_step(
     b.wire((domain, "gravity_x"), forced, "gravity_x");
     b.wire((domain, "gravity"), forced, "gravity_y");
     b.wire((domain, "gravity_z"), forced, "gravity_z");
+    let solid = solid_faces(b, scene, domain, (step + 1) as f64 * dt);
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
-    let levels = levels(b, s, water);
+    b.wire(solid, divergence, "solid_faces");
+    let levels = levels(b, s, water, solid);
     let p = solve(b, s, &levels, (divergence, "out"));
-    let projected = subtract(b, "project", (forced, "out"), p, water, s);
+    let projected = subtract(b, "project", (forced, "out"), p, &levels, s);
     let new = extend(b, "new", projected, n, scene.band_layers());
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
@@ -760,7 +764,7 @@ fn water_step(
         );
         b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
         let q = solve(b, PressureShape { iterations: scene.density_iterations, ..s }, &levels, (crowding, "out"));
-        let spread = subtract(b, "project", projected, q, water, s);
+        let spread = subtract(b, "project", projected, q, &levels, s);
         let advect = extend(b, "advect", spread, n, EXTENDED_LAYERS);
         b.prefix = outer;
         advect
@@ -783,13 +787,48 @@ fn water_step(
 }
 
 /// `faces` minus the gradient of `pressure` on the water's faces.
-fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Port, s: PressureShape) -> Port {
+fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, levels: &Levels, s: PressureShape) -> Port {
     let n = [s.n; 3];
     let id = b.node(name, "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(s.cell_size()))]));
     b.wire(faces, id, "faces");
     b.wire(pressure, id, "pressure");
-    b.wire(water, id, "water");
+    b.wire(levels.water[0], id, "water");
+    b.wire(levels.faces[0], id, "solid_faces");
     (id, "out")
+}
+
+/// The step's face open fractions: the domain's bodies as a solid distance on
+/// the box's corner lattice, posed `seconds` into the tick, then each face's
+/// open fraction. The box walls are the faces' own, so the lattice has none.
+fn solid_faces(b: &mut Builder, scene: WaterScene, domain: usize, seconds: f64) -> Port {
+    let s = scene.pressure;
+    let min = scene.min();
+    let corners = s.n + 1;
+    let distance = b.node(
+        "solid",
+        "node.liquid_solid_distance",
+        json!({
+            "lattice_min_x": float(min[0]),
+            "lattice_min_y": float(min[1]),
+            "lattice_min_z": float(min[2]),
+            "cell_size": float(s.cell_size()),
+            "nodes_x": int(corners),
+            "nodes_y": int(corners),
+            "nodes_z": int(corners),
+            "closed_faces": int(0),
+            "tick_seconds": float(seconds),
+        }),
+    );
+    b.wires(domain, distance, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wire((domain, "body_rows"), distance, "rows");
+    let reach = min.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let open = b.node(
+        "solid_faces",
+        "node.solid_faces",
+        Builder::lattice([s.n; 3], &[("cell_size", float(s.cell_size())), ("box_offset", float(reach))]),
+    );
+    b.wire((distance, "solid"), open, "solid");
+    (open, "out")
 }
 
 /// `layers` layers of face extension into the air around the water.
@@ -808,19 +847,24 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3], layers: usize
 /// from, and the coarsest level's inverse.
 struct Levels {
     water: Vec<Port>,
+    faces: Vec<Port>,
     zeros: Vec<Port>,
     inverse: Port,
 }
 
-fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
+fn levels(b: &mut Builder, s: PressureShape, water: Port, faces: Port) -> Levels {
     let sides = s.levels();
     let mut water_levels = vec![water];
+    let mut face_levels = vec![faces];
     let mut zeros = Vec::new();
     for (level, &side) in sides.iter().enumerate() {
         if level > 0 {
             let coarse = b.node(&format!("water_{level}"), "node.coarsen_water", Builder::lattice([side; 3], &[]));
             b.wire(water_levels[level - 1], coarse, "fine");
             water_levels.push((coarse, "out"));
+            let open = b.node(&format!("solid_faces_{level}"), "node.coarsen_solid_faces", Builder::lattice([side; 3], &[]));
+            b.wire(face_levels[level - 1], open, "fine");
+            face_levels.push((open, "out"));
         }
         // The coarsest level is solved exactly by its inverse; the finest
         // also gives the zero rhs of −L p.
@@ -832,7 +876,8 @@ fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
     let coarsest = *sides.last().expect("a level");
     let inverse = b.node("coarse_inverse", "node.coarse_inverse", Builder::lattice([coarsest; 3], &[]));
     b.wire(*water_levels.last().expect("a level"), inverse, "water");
-    Levels { water: water_levels, zeros, inverse: (inverse, "out") }
+    b.wire(*face_levels.last().expect("a level"), inverse, "solid_faces");
+    Levels { water: water_levels, faces: face_levels, zeros, inverse: (inverse, "out") }
 }
 
 /// One V-cycle for L e = rhs at `level`, from zero; returns e.
@@ -842,6 +887,7 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
     let h = s.cell_size() * (1u64 << level) as f64;
     let lattice = |extra: &[(&str, Value)]| Builder::lattice([side; 3], extra);
     let water = levels.water[level];
+    let faces = levels.faces[level];
     if level + 1 == sides.len() {
         // L = −A / h², so e = −h² · A⁻¹ · rhs; A⁻¹ is symmetric, so its rows
         // weighted by rhs are the product.
@@ -862,6 +908,7 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
         b.wire(water, id, "water");
         b.wire(rhs, id, "rhs");
         b.wire(e, id, "value");
+        b.wire(faces, id, "solid_faces");
         (id, "out")
     };
     for round in 0..SMOOTH_SWEEPS {
@@ -873,6 +920,7 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
     b.wire(water, residual, "water");
     b.wire(rhs, residual, "rhs");
     b.wire(e, residual, "value");
+    b.wire(faces, residual, "solid_faces");
     let restrict = b.node(&format!("mg{level}_restrict"), "node.restrict_lattice", Builder::lattice([sides[level + 1]; 3], &[]));
     b.wire((residual, "out"), restrict, "fine");
     b.wire(levels.water[level + 1], restrict, "water");
@@ -908,6 +956,7 @@ fn solve(b: &mut Builder, s: PressureShape, levels: &Levels, f: Port) -> Port {
     b.wire(levels.water[0], sp, "water");
     b.wire(levels.zeros[0], sp, "rhs");
     b.wire(p, sp, "value");
+    b.wire(levels.faces[0], sp, "solid_faces");
     let sp = (sp, "out");
     let ps = b.dot("p_dot_s", p, sp, cells);
     let alpha = b.divide("alpha", rz, ps);
@@ -956,7 +1005,7 @@ pub(super) mod tests {
     /// output capacity probe)); the walk sizes what they read and write.
     fn rules(frozen: bool) -> Vec<ExtentRule> {
         let mut rules = LIQUID_EXTENT_RULES.to_vec();
-        for type_id in ["test.value_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
+        for type_id in ["test.value_source", "test.face_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
             rules.push(ExtentRule { type_id, check: harness_node });
         }
         if frozen {

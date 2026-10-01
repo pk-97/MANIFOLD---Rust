@@ -573,6 +573,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.restrict_lattice", check: restrict_lattice },
     ExtentRule { type_id: "node.prolong_lattice", check: prolong_lattice },
     ExtentRule { type_id: "node.coarse_inverse", check: coarse_inverse },
+    ExtentRule { type_id: "node.solid_faces", check: solid_faces },
+    ExtentRule { type_id: "node.coarsen_solid_faces", check: coarsen_solid_faces },
     ExtentRule { type_id: "node.conjugate_gradient", check: conjugate_gradient },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
@@ -1156,6 +1158,7 @@ fn face_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn face_divergence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = gpu_flip_cells(x)?;
     x.covers("faces", face_count(nodes) * FACE)?;
+    x.covers("solid_faces", face_count(nodes) * FACE)?;
     x.covers("water", cell_count(nodes) * 4)?;
     x.covers("out", cell_count(nodes) * 4)
 }
@@ -1165,6 +1168,7 @@ fn subtract_pressure(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_count(nodes) * FACE;
     x.covers("faces", faces)?;
     x.covers("out", faces)?;
+    x.covers("solid_faces", faces)?;
     x.covers("pressure", cell_count(nodes) * 4)?;
     x.covers("water", cell_count(nodes) * 4)
 }
@@ -1238,13 +1242,31 @@ fn coarsen_water(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", cells * 4)
 }
 
-/// One red-black sweep or one residual: every array on the lattice.
+/// One red-black sweep or one residual: every array on the lattice, and the
+/// face grid's open fractions.
 fn pressure_sweep(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(gpu_flip_cells(x)?);
+    let nodes = gpu_flip_cells(x)?;
+    let cells = cell_count(nodes);
+    x.covers("solid_faces", face_count(nodes) * FACE)?;
     for port in ["water", "rhs", "value", "out"] {
         x.covers(port, cells * 4)?;
     }
     Ok(())
+}
+
+/// The open fractions on the box's corner lattice: one solid distance per
+/// face-grid cell.
+fn solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let faces = face_count(gpu_flip_cells(x)?);
+    x.covers("solid", faces * 4)?;
+    x.covers("out", faces * FACE)
+}
+
+/// A coarse face grid from the face grid twice as long per axis.
+fn coarsen_solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = gpu_flip_cells(x)?;
+    x.covers("fine", face_count(nodes.map(|n| 2 * n)) * FACE)?;
+    x.covers("out", face_count(nodes) * FACE)
 }
 
 fn restrict_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1273,8 +1295,10 @@ fn coarse_inverse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if let Some(reason) = coarse_refusal(x.params()) {
         return Err(x.uncovered(reason));
     }
-    let cells = cell_count(gpu_flip_cells(x)?);
+    let nodes = gpu_flip_cells(x)?;
+    let cells = cell_count(nodes);
     x.covers("water", cells * 4)?;
+    x.covers("solid_faces", face_count(nodes) * FACE)?;
     x.covers("out", cells * cells * 4)
 }
 

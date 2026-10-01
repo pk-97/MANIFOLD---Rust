@@ -129,6 +129,29 @@ fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
         .collect()
 }
 
+/// node.solid_faces' output: inner faces open (`solid` false), or one in
+/// four closed, one in four whole and the rest a fraction, each with a solid
+/// velocity; box walls closed.
+fn solid_faces(seed: u64, solid: bool) -> Vec<FaceSample> {
+    let mut rng = Stream::new(seed);
+    (0..face_len())
+        .map(|i| {
+            let p = pad_coords(i);
+            let mut face = FaceSample::default();
+            for a in 0..3 {
+                if face_exists(p, a) && p[a] > 0 && p[a] < N[a] {
+                    let r = rng.unit();
+                    face.weight[a] = if !solid || (0.25..0.5).contains(&r) { 1.0 } else if r < 0.25 { 0.0 } else { 0.05 + 0.95 * rng.unit() };
+                    if solid {
+                        face.velocity[a] = rng.signed(1.0);
+                    }
+                }
+            }
+            face
+        })
+        .collect()
+}
+
 fn random_water(seed: u64) -> Vec<f32> {
     let mut rng = Stream::new(seed);
     (0..cell_len()).map(|_| f32::from(u8::from(rng.unit() < 0.5))).collect()
@@ -314,23 +337,35 @@ fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
     let mut harness = Harness::new();
     let faces = random_faces(0xd1f, false);
     let water = random_water(0x3a7e);
-    let inputs = [("faces", harness.array(&faces, face_len()).0), ("water", harness.array(&water, cell_len()).0)];
-    let got: Vec<f32> = run_into(&mut harness, &mut FaceDivergence::new(), &inputs, cell_len(), &lattice(&[]));
-    for (c, g) in got.iter().enumerate() {
-        let p = cell_coords(c);
-        let want = if water[c] > 0.5 {
-            (0..3)
-                .map(|a| {
-                    let mut q = p;
-                    q[a] += 1;
-                    f64::from(faces[pad_index(q)].velocity[a]) - f64::from(faces[pad_index(p)].velocity[a])
-                })
-                .sum::<f64>()
-                / f64::from(H)
-        } else {
-            0.0
+    for solid in [false, true] {
+        let open = solid_faces(0xd2f, solid);
+        let inputs = [
+            ("faces", harness.array(&faces, face_len()).0),
+            ("water", harness.array(&water, cell_len()).0),
+            ("solid_faces", harness.array(&open, face_len()).0),
+        ];
+        let got: Vec<f32> = run_into(&mut harness, &mut FaceDivergence::new(), &inputs, cell_len(), &lattice(&[]));
+        // A wall face counts whole; an inner face by its open fraction.
+        let flux = |q: [usize; 3], a: usize| {
+            let w = if q[a] == 0 || q[a] == N[a] { 1.0 } else { f64::from(open[pad_index(q)].weight[a]) };
+            w * f64::from(faces[pad_index(q)].velocity[a])
         };
-        close(*g, want, 10.0, &format!("cell {p:?}"));
+        for (c, g) in got.iter().enumerate() {
+            let p = cell_coords(c);
+            let want = if water[c] > 0.5 {
+                (0..3)
+                    .map(|a| {
+                        let mut q = p;
+                        q[a] += 1;
+                        flux(q, a) - flux(p, a)
+                    })
+                    .sum::<f64>()
+                    / f64::from(H)
+            } else {
+                0.0
+            };
+            close(*g, want, 10.0, &format!("solid {solid} cell {p:?}"));
+        }
     }
 }
 
@@ -341,33 +376,43 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     let water = random_water(0xa7e2);
     let mut rng = Stream::new(0x9e55);
     let pressure: Vec<f32> = water.iter().map(|&w| if w > 0.5 { rng.signed(3.0) } else { 0.0 }).collect();
-    let inputs = [
-        ("faces", harness.array(&faces, face_len()).0),
-        ("pressure", harness.array(&pressure, cell_len()).0),
-        ("water", harness.array(&water, cell_len()).0),
-    ];
-    let got: Vec<FaceSample> = run_into(&mut harness, &mut SubtractPressure::new(), &inputs, face_len(), &lattice(&[]));
-    for (i, face) in got.iter().enumerate() {
-        let p = pad_coords(i);
-        for a in 0..3 {
-            let (velocity, weight) = if !face_exists(p, a) {
-                (0.0, 0.0)
-            } else if p[a] == 0 || p[a] == N[a] {
-                (f64::from(faces[i].velocity[a]), 1.0)
-            } else {
-                let mut below = p;
-                below[a] -= 1;
-                let (up, down) = (cell_index(p), cell_index(below));
-                let u = f64::from(faces[i].velocity[a]);
-                if water[up] > 0.5 || water[down] > 0.5 {
-                    (u - (f64::from(pressure[up]) - f64::from(pressure[down])) / f64::from(H), 1.0)
+    for solid in [false, true] {
+        let open = solid_faces(0x5c7, solid);
+        let inputs = [
+            ("faces", harness.array(&faces, face_len()).0),
+            ("pressure", harness.array(&pressure, cell_len()).0),
+            ("water", harness.array(&water, cell_len()).0),
+            ("solid_faces", harness.array(&open, face_len()).0),
+        ];
+        let got: Vec<FaceSample> = run_into(&mut harness, &mut SubtractPressure::new(), &inputs, face_len(), &lattice(&[]));
+        let mut closed = 0;
+        for (i, face) in got.iter().enumerate() {
+            let p = pad_coords(i);
+            for a in 0..3 {
+                let (velocity, weight) = if !face_exists(p, a) {
+                    (0.0, 0.0)
+                } else if p[a] == 0 || p[a] == N[a] {
+                    (f64::from(faces[i].velocity[a]), 1.0)
                 } else {
-                    (u, 0.0)
-                }
-            };
-            close(face.velocity[a], velocity, 30.0, &format!("velocity {p:?}/{a}"));
-            close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
+                    let mut below = p;
+                    below[a] -= 1;
+                    let (up, down) = (cell_index(p), cell_index(below));
+                    let u = f64::from(faces[i].velocity[a]);
+                    if open[i].weight[a] <= 0.0 {
+                        // A closed face moves with the solid.
+                        closed += 1;
+                        (f64::from(open[i].velocity[a]), 1.0)
+                    } else if water[up] > 0.5 || water[down] > 0.5 {
+                        (u - (f64::from(pressure[up]) - f64::from(pressure[down])) / f64::from(H), 1.0)
+                    } else {
+                        (u, 0.0)
+                    }
+                };
+                close(face.velocity[a], velocity, 30.0, &format!("velocity {p:?}/{a}"));
+                close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
+            }
         }
+        assert_eq!(closed > 20, solid, "the solid fixture closes faces, the open one none: {closed}");
     }
 }
 

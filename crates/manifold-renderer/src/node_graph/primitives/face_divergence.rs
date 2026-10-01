@@ -34,10 +34,11 @@ struct DivergenceUniforms {
 crate::primitive! {
     name: FaceDivergence,
     type_id: "node.face_divergence",
-    purpose: "Net outflow of each water cell through its six faces of a face grid (node.particles_to_faces' layout), per second: out[c] = (u(i+1) − u(i) + v(j+1) − v(j) + w(k+1) − w(k)) / cell_size where water[c] > 0.5, else 0.",
+    purpose: "Net outflow of each water cell through its six faces of a face grid (node.particles_to_faces' layout), per second: out[c] = (Σ over the high faces of o·u − Σ over the low faces of o·u) / cell_size where water[c] > 0.5, else 0, each inner face's velocity u times its open fraction o from solid_faces (node.solid_faces' face grid); a box wall face counts whole (o = 1).",
     inputs: {
         faces: Array(FaceSample) required,
         water: Array(f32) required,
+        solid_faces: Array(FaceSample) required,
         cell_size: ScalarF32 optional,
     },
     outputs: {
@@ -59,8 +60,8 @@ crate::primitive! {
     aliases: ["divergence", "outflow", "compression"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/face_divergence_body.wgsl"),
-    input_access: [BufferGather, Coincident],
-    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS },
+    input_access: [BufferGather, Coincident, BufferGather],
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 0 },
 }
 
 impl Primitive for FaceDivergence {
@@ -80,13 +81,16 @@ impl Primitive for FaceDivergence {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(faces), Some(water), Some(out)) =
-            (ctx.inputs.array("faces"), ctx.inputs.array("water"), ctx.outputs.array("out"))
-        else {
+        let (Some(faces), Some(water), Some(solid_faces), Some(out)) = (
+            ctx.inputs.array("faces"),
+            ctx.inputs.array("water"),
+            ctx.inputs.array("solid_faces"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
         let cells = cell_count(nodes);
-        if cells * 4 > water.size.min(out.size) || face_count(nodes) * 32 > faces.size {
+        if cells * 4 > water.size.min(out.size) || face_count(nodes) * 32 > faces.size.min(solid_faces.size) {
             ctx.error(format!("Face Divergence: a {nodes:?} lattice is larger than its arrays"));
             return;
         }
@@ -107,7 +111,8 @@ impl Primitive for FaceDivergence {
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: faces, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: water, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: solid_faces, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
             ],
             [(cells as u32).div_ceil(256), 1, 1],
             "node.face_divergence",

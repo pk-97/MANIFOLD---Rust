@@ -7,7 +7,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cells_with_particles::{cell_count, cell_lattice};
+use super::cells_with_particles::{LATTICE_PARAMS, cell_count, cell_lattice};
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use super::particles_to_faces::{face_capacity, face_count};
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
@@ -33,11 +34,12 @@ struct SubtractUniforms {
 crate::primitive! {
     name: SubtractPressure,
     type_id: "node.subtract_pressure",
-    purpose: "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces keep u and are valid (the solve took them as given); an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
+    purpose: "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces keep u and are valid (the solve took them as given); an inner face closed by a solid (open fraction 0 in solid_faces, node.solid_faces' face grid) takes the solid's velocity there and is valid; an open inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
     inputs: {
         faces: Array(FaceSample) required,
         pressure: Array(f32) required,
         water: Array(f32) required,
+        solid_faces: Array(FaceSample) required,
         cell_size: ScalarF32 optional,
     },
     outputs: {
@@ -59,7 +61,8 @@ crate::primitive! {
     aliases: ["projection", "pressure gradient", "make incompressible"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/subtract_pressure_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, Coincident],
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 1 },
 }
 
 impl Primitive for SubtractPressure {
@@ -79,16 +82,17 @@ impl Primitive for SubtractPressure {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(faces), Some(pressure), Some(water), Some(out)) = (
+        let (Some(faces), Some(pressure), Some(water), Some(solid_faces), Some(out)) = (
             ctx.inputs.array("faces"),
             ctx.inputs.array("pressure"),
             ctx.inputs.array("water"),
+            ctx.inputs.array("solid_faces"),
             ctx.outputs.array("out"),
         ) else {
             return;
         };
         let count = face_count(nodes);
-        if count * 32 > faces.size.min(out.size) || cell_count(nodes) * 4 > pressure.size.min(water.size) {
+        if count * 32 > faces.size.min(out.size).min(solid_faces.size) || cell_count(nodes) * 4 > pressure.size.min(water.size) {
             ctx.error(format!("Subtract Pressure: a {nodes:?} lattice is larger than its arrays"));
             return;
         }
@@ -110,7 +114,8 @@ impl Primitive for SubtractPressure {
                 GpuBinding::Buffer { binding: 1, buffer: faces, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: pressure, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: water, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: solid_faces, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.subtract_pressure",
