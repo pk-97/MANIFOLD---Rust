@@ -59,7 +59,7 @@ use crate::node_graph::primitives::sort_particles_into_cells::range_storage_byte
 use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
 use crate::node_graph::primitives::gpu_flip_step::{face_bytes, scratch_bytes as step_scratch_bytes};
-use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
+use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use crate::node_graph::primitives::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
@@ -1038,8 +1038,12 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    // The kernel places triangles up to Mesh Capacity, not the buffer.
-    x.covers("vertices", u64::from(mesh_capacity(x.params())) * size_of::<MeshVertex>() as u64)
+    // Provided and grown at run time; the kernel's dispatch count is the
+    // buffer's own whole-triangle slot count (`emit_slots`), so any size covers.
+    let start = start_capacity(x.params(), nodes) * size_of::<MeshVertex>() as u64;
+    x.provide("vertices", start);
+    x.hold(start);
+    Ok(())
 }
 
 // ── GPU FLIP ─────────────────────────────────────────────────────────────────
