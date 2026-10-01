@@ -64,6 +64,11 @@ TEST_RESULT_RE = re.compile(
 # Serial runs print each result line when its test finishes, so the gap between
 # consecutive result lines is that test's duration (libtest has no stable timing).
 TEST_LINE_RE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)\b")
+# Output written mid-test (native libraries print to the shared stream) splits
+# "test X ... " from its result, which then arrives on a line of its own. The
+# time still belongs to X, not to the next test that finishes on one line.
+TEST_START_RE = re.compile(r"^test (\S+) \.\.\. ")
+BARE_RESULT_RE = re.compile(r"^(ok|FAILED)\s*$")
 
 FAILURES_BLOCK_RE = re.compile(r"failures:\n((?:    \S.*\n)+)\ntest result:")
 
@@ -138,10 +143,19 @@ def record_timing(line: str, now: float, state: dict, timings: list) -> None:
     if m:
         state["t"], state["bin"] = now, m.group(1)
         return
+    if state.get("t") is None:
+        return
     m = TEST_LINE_RE.match(line)
-    if m and state.get("t") is not None:
-        timings.append((m.group(1), now - state["t"], state["bin"]))
-        state["t"] = now
+    name = m.group(1) if m else None
+    if name is None and state.get("open") and BARE_RESULT_RE.match(line):
+        name = state["open"]
+    if name is not None:
+        timings.append((name, now - state["t"], state["bin"]))
+        state["t"], state["open"] = now, None
+        return
+    m = TEST_START_RE.match(line)
+    if m:
+        state["open"] = m.group(1)
 
 
 def parse_binaries(output: str) -> list[tuple[str, str, int, int]]:
