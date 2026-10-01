@@ -1,5 +1,7 @@
 # Fleet stack handover — how to rebuild this harness setup elsewhere
 
+**Status:** RETIRED 2026-10-01. Describes the provider-proxy stack, which is gone. Kept for the record, never edit. Live policy: `docs/AGENT_ROUTING.md`.
+
 Written to be handed to someone else's Claude so it can reimplement the same
 thing on their machine and repo. Everything here is as-built on a Mac
 (homebrew, launchd) as of 2026-07-30. No secrets. Repo-side files referenced
