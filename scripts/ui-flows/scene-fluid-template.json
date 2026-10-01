@@ -1,0 +1,18 @@
+[
+  {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"ScrollTo":{"target":{"Query":{"name":"scene_setup.add_fluid"}}}},
+  {"Pointer":{"target":{"Query":{"name":"scene_setup.add_fluid"}},"gesture":{"Click":{"modifiers":{}}}}},
+  {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value","text":"Fluid 1"}},"check":"Exists"}},
+  {"Step":{"frames":30}},
+  {"SetParam":{"param":{"GeneratorParam":{"param":"24_pos_x"}},"value":0.5}},
+  {"ScrollTo":{"target":{"Query":{"name":"param_row.24_pos_x.value"}}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.24_pos_x.value"}},"check":{"TextEquals":"0.50"}}},
+  {"Step":{"frames":30}},
+  "Snapshot",
+  {"Key":{"key":"Z","modifiers":{"command":true}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.24_pos_x.value"}},"check":{"TextEquals":"0.00"}}},
+  {"Key":{"key":"Z","modifiers":{"command":true,"shift":true}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.24_pos_x.value"}},"check":{"TextEquals":"0.50"}}},
+  {"Step":{"frames":30}},
+  "Snapshot"
+]
