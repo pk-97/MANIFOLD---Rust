@@ -2508,6 +2508,15 @@ impl Executor {
                     // to ALSO emit a deterministic fallback (e.g. magenta
                     // clear) alongside the error report, so downstream
                     // consumers don't read garbage.
+                    // An errored node drew a fallback, so the frame is not
+                    // the one the graph describes: fail it.
+                    if !self.error_scratch.is_empty()
+                        && let Some(g) = gpu.as_deref_mut()
+                    {
+                        g.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
+                            crate::frame_status::FrameRenderFailure::NodeError,
+                        ));
+                    }
                     for msg in self.error_scratch.drain(..) {
                         eprintln!(
                             "[graph error] node {:?} ({}): {msg}",
@@ -2822,6 +2831,13 @@ impl Executor {
                 }
                 for (slot, value) in self.object_write_scratch.drain(..) {
                     self.backend.set_object(slot, value);
+                }
+                if !self.error_scratch.is_empty()
+                    && let Some(g) = gpu.as_deref_mut()
+                {
+                    g.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
+                        crate::frame_status::FrameRenderFailure::NodeError,
+                    ));
                 }
                 for msg in self.error_scratch.drain(..) {
                     eprintln!(
