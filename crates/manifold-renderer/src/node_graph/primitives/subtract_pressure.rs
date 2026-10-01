@@ -92,11 +92,13 @@ impl Primitive for SubtractPressure {
             ctx.error(format!("Subtract Pressure: a {nodes:?} lattice is larger than its arrays"));
             return;
         }
+        // DIAG PROBE (diag/gpu-flip-feel): a negative cell size asks for the separating lid.
+        let separating = super::faces_to_particles::FEEL_PROBE_MODE.load(std::sync::atomic::Ordering::Relaxed) & 4 != 0;
         let uniforms = SubtractUniforms {
             nodes_x: nodes[0] as f32,
             nodes_y: nodes[1] as f32,
             nodes_z: nodes[2] as f32,
-            cell_size,
+            cell_size: if super::faces_to_particles::FEEL_PROBE_MODE.load(std::sync::atomic::Ordering::Relaxed) & 16 != 0 { -cell_size - 1000.0 } else if separating { -cell_size } else { cell_size },
             dispatch_count: count as u32,
             _pad0: 0,
             _pad1: 0,

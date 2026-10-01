@@ -40,7 +40,9 @@ fn faces_to_particles_face(index: u32, grid: u32) -> Element2 {
     return buf_advect[index];
 }
 
-fn faces_to_particles_sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
+fn faces_to_particles_sample(q: vec3<f32>, n: vec3<i32>, grid: u32, skip_mode: u32) -> vec3<f32> {
+    let skip_lid = (skip_mode & 1u) != 0u;
+    let skip_walls = (skip_mode & 4u) != 0u;
     let m = n + vec3<i32>(1);
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
@@ -57,7 +59,7 @@ fn faces_to_particles_sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32>
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
             let c = min(base + bit, top);
             let face = faces_to_particles_face(u32(c.x + m.x * (c.y + m.y * c.z)), grid);
-            if face.face_weight[a] > 0.0 {
+            if face.face_weight[a] > 0.0 && !(skip_lid && a == 1 && c.y == n.y) && !(skip_walls && (c[a] == 0 || c[a] == n[a])) {
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
                 let w = w3.x * w3.y * w3.z;
                 sum = sum + w * face.face_velocity[a];
@@ -81,9 +83,12 @@ fn body(
     lattice_min_y: f32,
     lattice_min_z: f32,
     step_dt: f32,
-    flip: f32,
+    flip_in: f32,
 ) -> Element {
     var out = e_particles;
+    let mode = u32(floor(flip_in));
+    let flip = flip_in - f32(mode);
+    let skip_lid = mode;
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
     let m = n + vec3<i32>(1);
     let padded = u32(m.x) * u32(m.y) * u32(m.z);
@@ -94,14 +99,14 @@ fn body(
     let lo = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let per_cell = step_dt / cell_size;
     let q0 = (e_particles.position_radius.xyz - lo) / cell_size;
-    let k1 = faces_to_particles_sample(q0, n, 2u);
-    let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * k1, n, 2u);
-    let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 2u);
-    let edge = vec3<f32>(FACES_TO_PARTICLES_WALL_MARGIN);
+    let k1 = faces_to_particles_sample(q0, n, 2u, skip_lid);
+    let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * k1, n, 2u, skip_lid);
+    let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 2u, skip_lid);
+    let edge = vec3<f32>(select(FACES_TO_PARTICLES_WALL_MARGIN, 0.001, (mode & 2u) != 0u));
     let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0;
     let q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), faces_to_particles_finite(reached));
-    let after = faces_to_particles_sample(q0, n, 0u);
-    let before = faces_to_particles_sample(q0, n, 1u);
+    let after = faces_to_particles_sample(q0, n, 0u, skip_lid);
+    let before = faces_to_particles_sample(q0, n, 1u, skip_lid);
     let velocity = flip * (e_particles.velocity + after - before) + (1.0 - flip) * after;
     out.position_radius = vec4<f32>(lo + q1 * cell_size, e_particles.position_radius.w);
     out.velocity = velocity;

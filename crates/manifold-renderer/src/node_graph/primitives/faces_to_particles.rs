@@ -29,6 +29,10 @@ use crate::node_graph::primitive::Primitive;
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) const WALL_MARGIN_CELLS: f64 = 0.2;
 
+/// DIAG PROBE (diag/gpu-flip-feel): 1 = lid faces left out of the particle's
+/// sample, 2 = wall margin 0.001 cells, 4 = separating lid in node.subtract_pressure.
+pub(crate) static FEEL_PROBE_MODE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -104,7 +108,12 @@ impl Primitive for FacesToParticles {
         }
         let (min, cell_size) = lattice_box(ctx);
         let step_dt = ctx.scalar_or_param("step_dt", DEFAULT_STEP_DT);
-        let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
+        // DIAG PROBE (diag/gpu-flip-feel): mode bits 1 and 2 ride in flip's integer part.
+        let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 0.999)
+            + {
+            let m = FEEL_PROBE_MODE.load(std::sync::atomic::Ordering::Relaxed);
+            ((m & 3) | (((m >> 3) & 1) << 2)) as f32
+        };
         if !(cell_size.is_finite() && cell_size > 0.0 && step_dt.is_finite() && step_dt >= 0.0)
             || min.iter().any(|v| !v.is_finite())
         {

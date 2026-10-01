@@ -35,6 +35,8 @@ pub(crate) mod particle_ring;
 mod playback_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
 mod race_probe;
+#[cfg(all(test, feature = "water-race-probes"))]
+mod feel_probe;
 mod roles;
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};

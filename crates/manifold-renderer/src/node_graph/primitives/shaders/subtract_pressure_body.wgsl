@@ -7,7 +7,10 @@
 // and `water` are gathered through buf_pressure and buf_water; a lattice
 // longer than either gives zeros.
 
-fn body(idx: u32, count: u32, e_faces: Element, nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_size: f32) -> Element {
+fn body(idx: u32, count: u32, e_faces: Element, nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_size_in: f32) -> Element {
+    let separating = cell_size_in < 0.0;
+    let all_walls = cell_size_in < -500.0;
+    let cell_size = select(abs(cell_size_in), abs(cell_size_in) - 1000.0, all_walls);
     var out = Element(vec4<f32>(0.0), vec4<f32>(0.0));
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
     let m = n + vec3<i32>(1);
@@ -36,7 +39,13 @@ fn body(idx: u32, count: u32, e_faces: Element, nodes_x: f32, nodes_y: f32, node
         let lower = u32(below.x + n.x * (below.y + n.y * below.z));
         out.face_velocity[a] = e_faces.face_velocity[a];
         if buf_water[upper] > 0.5 || buf_water[lower] > 0.5 {
-            out.face_velocity[a] = e_faces.face_velocity[a] - (buf_pressure[upper] - buf_pressure[lower]) / cell_size;
+            var pu = buf_pressure[upper];
+            var pl = buf_pressure[lower];
+            let wall_u = any(p == vec3<i32>(0)) || any(p == n - vec3<i32>(1));
+            let wall_l = any(below == vec3<i32>(0)) || any(below == n - vec3<i32>(1));
+            if separating && (p.y == n.y - 1 || (all_walls && wall_u)) { pu = max(pu, 0.0); }
+            if separating && (below.y == n.y - 1 || (all_walls && wall_l)) { pl = max(pl, 0.0); }
+            out.face_velocity[a] = e_faces.face_velocity[a] - (pu - pl) / cell_size;
             out.face_weight[a] = 1.0;
         }
     }

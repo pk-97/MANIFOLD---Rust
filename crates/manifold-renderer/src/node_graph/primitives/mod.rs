@@ -410,6 +410,8 @@ pub(crate) mod gpu_flip_race_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod gpu_flip_still;
 #[cfg(all(test, feature = "water-race-probes"))]
+pub(crate) mod gpu_flip_feel_probe;
+#[cfg(all(test, feature = "water-race-probes"))]
 mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
