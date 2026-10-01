@@ -240,7 +240,6 @@ fn matter_look_lattice_alignment() {
     eprintln!("matter_look_lattice_alignment (largest 16-bin histogram bin over mean; fails above 1.5)");
     describe("matter L0", gate);
     describe("matter L0.9", matter(0.9));
-    eprintln!("  FLIP: {:?}", flip().alignment);
     assert_eq!(gate.alignment.len(), ALIGNMENT_TICKS.len());
     for (t, ratio, interior) in &gate.alignment {
         assert!(*interior > 10_000, "too few interior points at {t} s: {interior}");
