@@ -401,6 +401,9 @@ struct Record {
 pub(crate) struct Feel {
     pub runup: f64,
     pub at_lid: usize,
+    /// The farthest x of a particle more than 10 cm above the 0.16 m pool:
+    /// the collapsing column's front.
+    pub front: f64,
     /// The share of live particles faster than the step's CFL guard.
     pub past_guard: f64,
 }
@@ -408,7 +411,7 @@ pub(crate) struct Feel {
 /// [`Feel`] over (position and radius, velocity) pairs; `guard` is the
 /// speed the CFL guard allows (m/s).
 pub(crate) fn feel(particles: impl Iterator<Item = ([f32; 4], [f32; 3])>, floor: f64, guard: f64) -> Feel {
-    let mut out = Feel::default();
+    let mut out = Feel { front: f64::NEG_INFINITY, ..Feel::default() };
     let (mut live, mut fast) = (0usize, 0usize);
     for (p, v) in particles.filter(|(p, _)| p[3] > 0.0) {
         let height = f64::from(p[1]) - floor;
@@ -416,6 +419,9 @@ pub(crate) fn feel(particles: impl Iterator<Item = ([f32; 4], [f32; 3])>, floor:
             out.runup = out.runup.max(height);
         }
         out.at_lid += usize::from(height > 3.9);
+        if height > 0.26 {
+            out.front = out.front.max(f64::from(p[0]));
+        }
         live += 1;
         fast += usize::from(v.iter().map(|&c| f64::from(c).powi(2)).sum::<f64>().sqrt() > guard);
     }
@@ -430,6 +436,10 @@ pub(crate) fn report_feel(label: &str, feel: &[Feel]) {
     let contact: usize = feel.iter().take(131).skip(50).map(|f| f.at_lid).sum();
     let last = feel.iter().rposition(|f| f.at_lid > 0);
     println!("{label}: run-up at frames 59/74/89 {} m, lid contact {contact}, last frame at the lid {last:?}", runup.join(" / "));
+    let front: Vec<String> = [6, 12, 18, 24].iter().filter_map(|&f| feel.get(f)).map(|f| format!("{:.2}", f.front)).collect();
+    if let (Some(a), Some(b)) = (feel.get(6), feel.get(24)) {
+        println!("{label}: front x at frames 6/12/18/24 {} m, {:.2} m/s over frames 6–24", front.join(" / "), (b.front - a.front) * 60.0 / 18.0);
+    }
 }
 
 /// The Dam Break for `frames` frames: per-frame GPU and CPU encode ms, what

@@ -373,6 +373,64 @@ fn gpu_flip_still_pool() {
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
 }
 
+/// The closed wall at rest: a 1 m pool for 300 frames. Every box wall face of
+/// the projected grid is exactly 0, and the pressure is hydrostatic: forces
+/// added g·dt to every vertical face and the projection took it back, so a
+/// face between two water cells below the surface layer keeps under 1% of
+/// g·dt, which puts the pressure gradient, and so p = ρgh, within 1%.
+#[test]
+fn gpu_flip_hydrostatic_column_rests() {
+    let scene = WaterScene::still_pool(64);
+    let mut run = Run::new(scene);
+    let (n, h) = (run.n(), scene.pressure.cell_size());
+    let m = n + 1;
+    let g_dt = G * scene.step_dt();
+    // Cells wholly under the seeded top, one layer of margin below it.
+    let deep = ((scene.fill_height / h).floor() as usize).saturating_sub(2);
+    for frame in 0..300 {
+        run.frame();
+        if frame % 30 != 29 {
+            continue;
+        }
+        let last = scene.steps - 1;
+        let faces = run.faces(last);
+        let water = run.water(last);
+        let mut wall = 0.0_f64;
+        let mut worst = 0.0_f64;
+        for k in 0..m {
+            for j in 0..m {
+                for i in 0..m {
+                    let p = [i, j, k];
+                    let face = &faces[i + m * (j + m * k)];
+                    for a in 0..3 {
+                        if (0..3).any(|b| b != a && p[b] >= n) {
+                            continue;
+                        }
+                        if p[a] == 0 || p[a] == n {
+                            wall = wall.max(f64::from(face.velocity[a]).abs());
+                        } else if a == 1 && j <= deep {
+                            let below = i + n * ((j - 1) + n * k);
+                            let above = i + n * (j + n * k);
+                            if water[below] > 0.5 && water[above] > 0.5 {
+                                worst = worst.max(f64::from(face.velocity[a]).abs());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let stats = particle_stats(&run.particles());
+        println!(
+            "GPU FLIP hydrostatic {n}³ frame {frame:3}: wall faces max |v| {wall:.1e}, inner vertical faces max |v| {worst:.2e} m/s = {:.3}% of g·dt, fastest particle {:.2e} m/s",
+            100.0 * worst / g_dt,
+            stats.fastest
+        );
+        assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
+        assert!(worst <= 0.01 * g_dt, "frame {frame}: the pressure gradient is {:.3}% off ρg", 100.0 * worst / g_dt);
+        assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
+    }
+}
+
 /// How deep `p` sits inside the obstacle box at `pos` (m), negative outside.
 fn obstacle_depth(p: &FluidParticle, pos: [f64; 3]) -> f64 {
     let scale = DAM_OBSTACLE[1];

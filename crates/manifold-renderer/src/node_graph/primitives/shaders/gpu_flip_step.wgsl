@@ -163,20 +163,14 @@ fn classify(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = select(0.0, 1.0, ranges[idx].count > 0u);
 }
 
-// A box wall lets water leave and never enter: of the velocity on a wall
-// face it keeps only the part pointing into the box (up from the floor face,
-// index 0; down from the lid face, index n).
-fn wall(v: f32, low: bool) -> f32 {
-    return select(min(v, 0.0), max(v, 0.0), low);
-}
-
 // One thread per face record. Each face sums the engine's Wyvill weight
 // 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r² for s = |q − face|² < r²,
 // r = √3/2 cells, over every live particle in the 3 × 3 × 3 cells around p,
 // and the weighted velocity along its normal. A face over weight 1e-6 gets
 // the ratio; any other gets velocity 0 and weight 0 for the extension to
-// fill. A box wall face keeps only the part leaving the wall and is always
-// valid (weight 1), so the extension never writes it.
+// fill. A box wall face is closed: velocity 0, valid (weight 1), so the
+// extension never writes it (the engine's domain boundary, weight 0 in the
+// solve, its velocity the static solid's).
 @compute @workgroup_size(256)
 fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -241,7 +235,7 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     weight = select(vec3<f32>(0.0), weight, valid);
     for (var a = 0; a < 3; a = a + 1) {
         if exists[a] && (p[a] == 0 || p[a] == n[a]) {
-            velocity[a] = wall(velocity[a], p[a] == 0);
+            velocity[a] = 0.0;
             weight[a] = 1.0;
         }
     }
@@ -322,8 +316,8 @@ fn gravity_impulse(x: vec3<f32>, origin: vec3<f32>, axis: u32) -> f32 {
 // One thread per face record, `faces_in` to `faces_out`: each face gains
 // step_dt · (g + forces(x)) along its normal a, x its centre, plus the
 // impulses on step 0 of impulse_tick, read from the domain's coarse field
-// lattices (origin the box minimum). A box wall face then keeps only the
-// part leaving the wall. Weights pass through.
+// lattices (origin the box minimum). A box wall face stays 0. Weights pass
+// through.
 @compute @workgroup_size(256)
 fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -357,13 +351,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if impulse {
             v = v + gravity_impulse(x, origin, u32(a));
         }
-        if p[a] == 0 {
-            out.face_velocity[a] = max(v, 0.0);
-        } else if p[a] == n[a] {
-            out.face_velocity[a] = min(v, 0.0);
-        } else {
-            out.face_velocity[a] = v;
-        }
+        out.face_velocity[a] = select(v, 0.0, p[a] == 0 || p[a] == n[a]);
     }
     faces_out[idx] = out;
 }
@@ -721,11 +709,11 @@ fn water_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Open fraction of face a at record f: 1 on a box wall (it holds only the
-// part leaving the wall), else the solid's.
+// Open fraction of face a at record f: 0 on a box wall, which is closed in
+// the solve too, else the solid's.
 fn open_at(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
     if f[a] == 0 || f[a] == n[a] {
-        return 1.0;
+        return 0.0;
     }
     return solid_faces[flatten(f, m)].face_weight[a];
 }
@@ -839,8 +827,8 @@ fn surface_phi(cell: u32) -> f32 {
     return select(0.0, phi[cell], u.ghost == 1u);
 }
 
-// One thread per face record, in place on `faces_rw`. A box wall face keeps
-// its velocity and is valid. A closed inner face (open fraction 0) keeps its
+// One thread per face record, in place on `faces_rw`. A box wall face is 0
+// and valid. A closed inner face (open fraction 0) keeps its
 // velocity and is valid, for the constraint to give it the solid's
 // (PressureSolver::_applyPressureToVelocityField). An open inner face beside
 // water loses (p_upper − p_lower) / h, the air side's pressure the ghost
@@ -866,7 +854,6 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         if p[a] == 0 || p[a] == n[a] {
-            out.face_velocity[a] = here.face_velocity[a];
             out.face_weight[a] = 1.0;
             continue;
         }
@@ -898,7 +885,8 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
 // (FluidSimulation::_constrainVelocityFieldThread): on an inner face, a
 // closed face (open fraction 0) takes the solid's velocity v_s, a cut face
 // takes f·v_s + (1 − f)·u with f the solid's friction, an open face keeps u.
-// Box wall faces and the weights pass through.
+// A box wall face is 0, the static domain's velocity
+// (FluidSimulation::_constrainVelocityFields). Weights pass through.
 @compute @workgroup_size(256)
 fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -912,7 +900,11 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let open = solid_faces[idx];
     let solid_here = solid_velocity[idx];
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
+        if !face_exists(p, n, a) {
+            continue;
+        }
+        if p[a] == 0 || p[a] == n[a] {
+            out.face_velocity[a] = 0.0;
             continue;
         }
         let w = open.face_weight[a];

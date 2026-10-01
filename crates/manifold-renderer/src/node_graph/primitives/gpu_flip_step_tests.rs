@@ -298,7 +298,7 @@ fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
         let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
         if name == "dense" {
             assert!(checked > 200, "the fixture reaches most faces, got {checked}");
-            assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
+            assert!(walls[1] > 10, "the draw reaches wall faces with moving water: {walls:?}");
         } else {
             assert!(checked > 5 && invalid > 50, "{name}: {checked} faces reached, {invalid} not");
         }
@@ -315,7 +315,7 @@ fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize
         if d2 < rsq { 1.0 - 4.0 / 9.0 * d2.powi(3) / rsq.powi(3) + 17.0 / 9.0 * d2 * d2 / (rsq * rsq) - 22.0 / 9.0 * d2 / rsq } else { 0.0 }
     };
     let (mut checked, mut invalid) = (0, 0);
-    // Wall faces held (water moving into the wall) and kept (leaving it).
+    // Wall faces the particles reach still or moving, all held at 0.
     let mut walls = [0usize; 2];
     for (i, face) in got.iter().enumerate() {
         let p = pad_coords(i);
@@ -344,13 +344,11 @@ fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize
             let valid = weight > 1e-6;
             let velocity = if valid { momentum / weight } else { 0.0 };
             if p[a] == 0 || p[a] == N[a] {
-                // A wall keeps only what leaves it, and is always valid.
+                // A wall is closed: velocity 0 whatever the particles carry,
+                // and always valid.
                 close(face.weight[a], 1.0, 1.0, &format!("wall weight {p:?}/{a}"));
-                let leaving = if p[a] == 0 { velocity.max(0.0) } else { velocity.min(0.0) };
-                walls[usize::from(leaving != 0.0)] += 1;
-                if weight > 0.05 || leaving == 0.0 {
-                    close(face.velocity[a], leaving, 1.0, &format!("wall velocity {p:?}/{a}"));
-                }
+                walls[usize::from(velocity != 0.0)] += 1;
+                assert_eq!(face.velocity[a], 0.0, "wall velocity {p:?}/{a}");
                 continue;
             }
             if !valid {
@@ -388,10 +386,8 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
             let pushed = f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt);
             let (velocity, weight) = if !face_exists(p, a) {
                 (0.0, 0.0)
-            } else if p[a] == 0 {
-                (pushed.max(0.0), f64::from(before.weight[a]))
-            } else if p[a] == N[a] {
-                (pushed.min(0.0), f64::from(before.weight[a]))
+            } else if p[a] == 0 || p[a] == N[a] {
+                (0.0, f64::from(before.weight[a]))
             } else {
                 (pushed, f64::from(before.weight[a]))
             };
@@ -450,13 +446,7 @@ fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
                 let pushed = f64::from(before.velocity[a])
                     + (f64::from(g[a]) + f64::from(force)) * f64::from(dt)
                     + f64::from(impulse);
-                let velocity = if p[a] == 0 {
-                    pushed.max(0.0)
-                } else if p[a] == N[a] {
-                    pushed.min(0.0)
-                } else {
-                    pushed
-                };
+                let velocity = if p[a] == 0 || p[a] == N[a] { 0.0 } else { pushed };
                 close(face.velocity[a], velocity, 1.0, &format!("step {step} velocity {p:?}/{a}"));
                 close(face.weight[a], f64::from(before.weight[a]), 1.0, &format!("weight {p:?}/{a}"));
             }
@@ -480,12 +470,13 @@ fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
         let mut pushed = 0;
         for (c, g) in got.iter().enumerate() {
             let p = cell_coords(c);
-            // A wall face counts whole; an inner face by its open fraction,
-            // plus the solid's (c − w)·v_s, c the cell's open volume.
+            // A wall face is closed and carries nothing; an inner face counts
+            // by its open fraction, plus the solid's (c − w)·v_s, c the
+            // cell's open volume.
             let centre = f64::from(open[pad_index(p)].weight[3]);
             let flux = |q: [usize; 3], a: usize| {
                 if q[a] == 0 || q[a] == N[a] {
-                    return f64::from(faces[pad_index(q)].velocity[a]);
+                    return 0.0;
                 }
                 let w = f64::from(open[pad_index(q)].weight[a]);
                 w * f64::from(faces[pad_index(q)].velocity[a]) + (centre - w) * f64::from(moving[pad_index(q)].velocity[a])
@@ -555,7 +546,7 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 let (velocity, weight) = if !face_exists(p, a) {
                     (0.0, 0.0)
                 } else if p[a] == 0 || p[a] == N[a] {
-                    (f64::from(faces[i].velocity[a]), 1.0)
+                    (0.0, 1.0)
                 } else {
                     let mut below = p;
                     below[a] -= 1;
@@ -621,7 +612,18 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 }
             }
             let left = div(&got, q);
-            let want = div(&faces, q) - lp;
+            // The walls are closed: the divergence the solve saw carries no
+            // wall flux, as `divergence` writes it.
+            let mut walled = faces.clone();
+            for (i, face) in walled.iter_mut().enumerate() {
+                let p = pad_coords(i);
+                for a in 0..3 {
+                    if p[a] == 0 || p[a] == N[a] {
+                        face.velocity[a] = 0.0;
+                    }
+                }
+            }
+            let want = div(&walled, q) - lp;
             // f32 faces up to ~300 round by ~3e-5 each; six over h stays under 1e-3.
             assert!((left - want).abs() <= 5e-3, "divergence left in cell {q:?}: {left} vs {want}");
         }
@@ -1488,10 +1490,15 @@ fn cpu_constrain(faces: &[f32], open: &[f64], moving: &[f64], n: [usize; 3]) -> 
     for i in 0..m.iter().product::<usize>() {
         let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
         for a in 0..3 {
-            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) {
                 continue;
             }
             let (v, w) = (i * FACE_FLOATS + a, i * FACE_FLOATS + 4 + a);
+            // A box wall is the static domain's closed face.
+            if p[a] == 0 || p[a] == n[a] {
+                out[v] = 0.0;
+                continue;
+            }
             let solid = moving[v];
             if open[w] <= 0.0 {
                 out[v] = solid;
