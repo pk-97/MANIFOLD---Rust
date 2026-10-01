@@ -38,6 +38,11 @@ KNOWN_ARTIFACT_SUFFIXES = frozenset((
 KNOWN_FINGERPRINT_NAMES = frozenset(("invoked.timestamp",))
 KNOWN_BUILD_NAMES = frozenset(("invoked.timestamp", "output", "root-output", "stderr"))
 KNOWN_INCREMENTAL_NAMES = frozenset(("dep-graph.bin", "query-cache.bin", "work-products.bin"))
+# Mach-O (64-bit, fat) and ELF headers: a linked test or bin executable, which
+# Cargo writes extensionless as <target>-<16 hex> in deps/ and examples/.
+NATIVE_EXECUTABLE_MAGICS = frozenset((
+    b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\x7fELF",
+))
 
 
 class StorageSafetyError(RuntimeError):
@@ -73,6 +78,8 @@ class BuildCheck:
     free_bytes: int
     reserve_bytes: int = MAINTENANCE_GOAL_BYTES
     reason: str = ""
+    # True only for a reserve shortfall: the one refusal a cache reclaim can lift.
+    reclaimable: bool = False
 
     def __bool__(self) -> bool:
         return self.ok
@@ -336,7 +343,8 @@ def check_build(target_dir: Path, repo: Path, free_bytes: Optional[int] = None,
     available = disk_free(target.parent if target.parent.exists() else Path.cwd()) if free_bytes is None else free_bytes
     if available < reserve_bytes:
         return BuildCheck(False, target, available, reserve_bytes,
-                          f"REFUSED: only {available / GIB:.1f} GiB free; reserve is {reserve_bytes / GIB:.0f} GiB")
+                          f"REFUSED: only {available / GIB:.1f} GiB free; reserve is {reserve_bytes / GIB:.0f} GiB",
+                          reclaimable=True)
     return BuildCheck(True, target, available, reserve_bytes, "build target and free-space reserve are valid")
 
 
@@ -356,7 +364,7 @@ def _cache_path(target: Path, path: Path) -> bool:
         return False
     if any(part in ("", ".", "..") for part in parts):
         return False
-    return _recognized_cargo_file(parts[1], parts[2:])
+    return _recognized_cargo_file(parts[1], parts[2:], path)
 
 
 _HASHED_DIR = re.compile(r"^[A-Za-z0-9_.-]+-[0-9a-f]{6,}$")
@@ -369,10 +377,35 @@ _FINGERPRINT_METADATA = re.compile(
 # split-debuginfo = "unpacked" leaves one object per codegen unit beside each
 # artifact: <crate>-<16 hex>.<cgu name>[.<id>].rcgu.o
 _RCGU_OBJECT = re.compile(r"^[A-Za-z0-9_-]+-[0-9a-f]{16}(?:\.[A-Za-z0-9_-]+)+\.rcgu\.o$")
+# Linked executables carry the metadata hash and no extension. Every change in
+# feature unification mints a new hash, so a slot accumulates dozens of ~55 MB
+# copies per test target; they were the whole residue of a scrubbed slot.
+_HASHED_EXECUTABLE = re.compile(r"^[A-Za-z0-9_-]+-[0-9a-f]{16}$")
 
 
-def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
-    """Recognise Cargo's stable cache names while retaining ambiguous outputs."""
+def _native_executable(path: Path) -> bool:
+    """A regular, executable file that starts with a linker's object header."""
+    try:
+        stat = path.lstat()
+        if not stat_module.S_ISREG(stat.st_mode) or not stat.st_mode & 0o111:
+            return False
+        fd = os.open(os.fspath(path), os.O_RDONLY | O_NOFOLLOW)
+        try:
+            magic = os.read(fd, 4)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+    return magic in NATIVE_EXECUTABLE_MAGICS
+
+
+def _recognized_cargo_file(subtree: str, parts: tuple[str, ...],
+                           path: Optional[Path] = None) -> bool:
+    """Recognise Cargo's stable cache names while retaining ambiguous outputs.
+
+    An extensionless name is only a cache file when ``path`` proves it is a
+    linked executable; by name alone it is kept.
+    """
     if not parts or any(part in ("", ".", "..") for part in parts):
         return False
     name = parts[-1]
@@ -394,8 +427,11 @@ def _recognized_cargo_file(subtree: str, parts: tuple[str, ...]) -> bool:
             return False
         return len(parts) == 2 and _HASHED_DIR.match(parts[0]) and name in KNOWN_BUILD_NAMES
     if subtree in ("deps", "examples"):
-        if len(parts) != 1 or "." not in name:
+        if len(parts) != 1:
             return False
+        if "." not in name:
+            return (path is not None and bool(_HASHED_EXECUTABLE.match(name))
+                    and _native_executable(path))
         if _RCGU_OBJECT.match(name):
             return True
         return bool(_HASHED_ARTIFACT.match(name)) and name.endswith(tuple(KNOWN_ARTIFACT_SUFFIXES))

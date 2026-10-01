@@ -229,16 +229,67 @@ def test_real_cargo_names():
     check("fingerprint hash file recognized", rec(".fingerprint", ("deflate64-07af2637e01f5bd0", "lib-deflate64")))
     check("build-script run fingerprint recognized", rec(".fingerprint", (
         "coremidi-sys-bd69ec384c8c8575", "run-build-script-build-script-build.json")))
-    check("hashed executable still kept", not rec("deps", ("structured_modifier_echo-0f1c97c31eb2a77a",)))
+    check("hashed executable kept by name alone", not rec("deps", ("structured_modifier_echo-0f1c97c31eb2a77a",)))
     check("build-script output still kept", not rec("build", (
         "libmimalloc-sys-38e0194b3fec4450", "out", "077ae3504b1c7768-static.o")))
     check("object without a hash kept", not rec("deps", ("notes.3ffzzz.rcgu.o",)))
 
 
+def test_hashed_executables():
+    """The 2026-10-01 residue: a scrubbed slot kept 35 GiB of extensionless test
+    and bin executables because the manifest only knew names with a suffix."""
+    with fixture_directory() as raw:
+        target = Path(raw).resolve() / "target"
+        marker(target)
+        deps = target / "debug" / "deps"
+        deps.mkdir(parents=True)
+        examples = target / "debug" / "examples"
+        examples.mkdir(parents=True)
+        macho = b"\xcf\xfa\xed\xfe" + b"\0" * 60
+        exe = deps / "gen_node_catalog-0f1c97c31eb2a77a"
+        exe.write_bytes(macho)
+        exe.chmod(0o755)
+        example = examples / "blob_demo-45cffb150ab52a7e"
+        example.write_bytes(b"\xca\xfe\xba\xbe" + b"\0" * 60)
+        example.chmod(0o755)
+        no_exec_bit = deps / "quiet-45cffb150ab52a7e"
+        no_exec_bit.write_bytes(macho)
+        no_exec_bit.chmod(0o644)
+        script = deps / "helper-45cffb150ab52a7e"
+        script.write_bytes(b"#!/bin/sh\necho hi\n")
+        script.chmod(0o755)
+        short_hash = deps / "manifold-abcdef"
+        short_hash.write_bytes(macho)
+        short_hash.chmod(0o755)
+        unhashed = examples / "blob_demo"
+        unhashed.write_bytes(macho)
+        unhashed.chmod(0o755)
+        link = deps / "linked-45cffb150ab52a7e"
+        link.symlink_to(exe)
+        plan = sb.plan_cache_cleanup(target)
+        planned = {entry.path for entry in plan.entries}
+        check("hashed Mach-O test executable planned", exe in planned, str(planned))
+        check("hashed fat-binary example planned", example in planned, str(planned))
+        check("Mach-O without exec bit kept", no_exec_bit not in planned, str(planned))
+        check("executable shell script kept", script not in planned, str(planned))
+        check("short hash kept", short_hash not in planned, str(planned))
+        check("unhashed example kept", unhashed not in planned, str(planned))
+        check("symlink kept", link not in planned, str(planned))
+        applied = sb.apply_cache_cleanup(plan, dry_run=False, process_check=lambda _: False)
+        check("executables removed", applied[1] == 2 and not exe.exists() and not example.exists(), str(applied))
+        check("kept files remain", all(p.exists() for p in (no_exec_bit, script, short_hash, unhashed)) and link.is_symlink(), "kept file removed")
+        exe.write_bytes(macho)
+        exe.chmod(0o755)
+        plan = sb.plan_cache_cleanup(target)
+        exe.chmod(0o644)
+        result = sb.apply_cache_cleanup(plan, dry_run=False, process_check=lambda _: False)
+        check("mode change after plan is preserved", exe.exists() and result[2], str(result))
+
+
 for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_manifest_dry_run_apply_and_identity, test_live_and_uninspectable_refused,
              test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
-             test_real_cargo_names):
+             test_real_cargo_names, test_hashed_executables):
     try:
         test()
     except Exception as error:
