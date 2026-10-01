@@ -16,6 +16,9 @@ Usage: scripts/land_wave.py <wave-branch> ["merge message"]
        scripts/land_wave.py --batch <branch>[@<tip>] <branch>[@<tip>] ... \\
            [--gate "<cmd>"] [--message "<text>"]
 
+Both modes refuse to push unless the landing-gate marker is green for the exact
+tree being landed (scripts/landing_marker.py), even with a custom --gate.
+
 Exits non-zero (before pushing) when: the gate fails, the tree is dirty,
 origin/main advanced concurrently, or the wave is not ahead of origin/main.
 
@@ -45,12 +48,24 @@ import shlex
 import subprocess
 import sys
 
+import landing_marker
+
 
 def run(cmd, check=True, capture=True):
     r = subprocess.run(cmd, text=True, capture_output=capture)
     if check and r.returncode != 0:
         sys.exit(f"FAIL {' '.join(cmd)}\n{r.stdout}\n{r.stderr}")
     return r.stdout.strip() if capture else ""
+
+
+def require_marker(tree):
+    """Exit unless the landing-gate marker is green for exactly `tree`. This
+    script's commit-tree push is a subprocess the merge hook never sees, so it
+    checks the same marker itself — whatever gate command ran."""
+    problem = landing_marker.marker_problem(tree)
+    if problem:
+        sys.exit(f"not landing: {problem} (tree {tree[:12]}). "
+                 "Run scripts/landing_gate.py on the landing tip.")
 
 
 def parse_spec(spec):
@@ -118,6 +133,7 @@ def land_batch(specs, gate, message=None):
 
     land_tip = run(["git", "rev-parse", "HEAD"])
     tree = run(["git", "rev-parse", f"{land_tip}^{{tree}}"])
+    require_marker(tree)
     merge_sha = run(["git", "commit-tree", tree, "-p", origin_main, "-p", land_tip,
                      "-m", batch_message(included, dropped, message)])
     run(["git", "push", "origin", f"{merge_sha}:refs/heads/main"])
@@ -185,6 +201,7 @@ def main():
 
     # 3. canonical no-ff merge commit without the main checkout
     tree = run(["git", "rev-parse", f"{wave_tip}^{{tree}}"])
+    require_marker(tree)
     merge_sha = run([
         "git", "commit-tree", tree,
         "-p", origin_main, "-p", wave_tip, "-m", message])

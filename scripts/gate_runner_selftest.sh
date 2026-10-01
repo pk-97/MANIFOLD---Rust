@@ -2,7 +2,7 @@
 # Self-test for gate_runner.py (P1 gate).
 #
 # Runs known-pass and known-fail gates through per-lane, validates the JSONL
-# output, tests no-gate/show subcommands, and probes the I2 Edit guard.
+# output, tests the show subcommand and the retired bypass subcommands, and probes the I2 Edit guard.
 #
 # Usage: bash scripts/gate_runner_selftest.sh
 # Exit 0 on all passing, 1 on any failure.
@@ -18,7 +18,6 @@ export GATE_RUNNER_VERDICTS_DIR="$VERDICTS_DIR"
 TASK_PASS="selftest-pass-$$"
 TASK_FAIL="selftest-fail-$$"
 TASK_BOTH="selftest-both-$$"
-TASK_NOGATE="selftest-nogate-$$"
 BRIEF_PASS=$(mktemp /tmp/gate_selftest_pass.XXXXXX.md)
 BRIEF_FAIL=$(mktemp /tmp/gate_selftest_fail.XXXXXX.md)
 BRIEF_BOTH=$(mktemp /tmp/gate_selftest_both.XXXXXX.md)
@@ -28,7 +27,7 @@ FAILED=0
 cleanup() {
     rm -f "$BRIEF_PASS" "$BRIEF_FAIL" "$BRIEF_BOTH"
     rm -f "$VERDICTS_DIR/$TASK_PASS.jsonl" "$VERDICTS_DIR/$TASK_FAIL.jsonl"
-    rm -f "$VERDICTS_DIR/$TASK_BOTH.jsonl" "$VERDICTS_DIR/$TASK_NOGATE.jsonl"
+    rm -f "$VERDICTS_DIR/$TASK_BOTH.jsonl"
     rmdir "$VERDICTS_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -167,15 +166,14 @@ echo "$OUT" | grep -q "PASS" && ok "show shows PASS" || fail "show missing PASS"
 echo "$OUT" | grep -q "$TASK_PASS" && ok "show shows task ID" || fail "show missing task ID"
 echo ""
 
-# ===== Test 8: no-gate subcommand =====
-echo "--- Test 8: no-gate subcommand ---"
-OUT=$("$GATE_RUNNER" no-gate --task "$TASK_NOGATE" --reason "selftest bypass" 2>&1) && RC=$? || RC=$?
-if [ "$RC" -eq 0 ]; then ok "no-gate exit 0"; else fail "no-gate exit $RC (expected 0)"; fi
-echo "$OUT" | grep -q "no-gate" && ok "no-gate message printed" || fail "no-gate message missing"
-# Verify via show
-OUT=$("$GATE_RUNNER" show --task "$TASK_NOGATE" 2>&1)
-echo "$OUT" | grep -q "PASS" && ok "no-gate show shows PASS" || fail "no-gate show missing PASS"
-echo "$OUT" | grep -q "selftest" && ok "no-gate shows reason" || fail "no-gate missing reason"
+# ===== Test 8: no-gate and batch-no-gate are retired =====
+echo "--- Test 8: bypass subcommands retired ---"
+for SUB in no-gate batch-no-gate; do
+    OUT=$("$GATE_RUNNER" "$SUB" --task "selftest-retired-$$" --reason "selftest" 2>&1) && RC=$? || RC=$?
+    if [ "$RC" -ne 0 ]; then ok "$SUB rejected (exit $RC)"; else fail "$SUB still accepted"; fi
+done
+OUT=$("$GATE_RUNNER" show --task "selftest-retired-$$" 2>&1)
+echo "$OUT" | grep -q "No verdicts" && ok "rejected bypass wrote no verdict" || fail "rejected bypass left a verdict"
 echo ""
 
 # ===== Test 9: I3 — no gate commands =====

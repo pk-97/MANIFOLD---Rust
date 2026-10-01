@@ -287,7 +287,7 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/agent-worktree.py list` | read-only |
 | `scripts/agent-worktree.py acquire *` | bounded by the slot ring cap |
 | `scripts/gen_docs_index.py` | no arguments |
-| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `pre-wave` is NOT allowlisted |
+| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `pre-wave` is NOT allowlisted; `no-gate` / `batch-no-gate` were deleted from gate_runner.py on 2026-10-01 (no rule listed them) |
 | `scripts/token_report.py *` | reads transcripts, flags only |
 | `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
 | `scripts/move_identity_check.py *` | git refs only |

@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import land_wave
 
@@ -50,9 +51,38 @@ class BatchTests(unittest.TestCase):
         git("commit", "-q", "-m", name, cwd=self.work)
         return git("rev-parse", "HEAD", cwd=self.work)
 
-    def land(self, specs):
-        with contextlib.redirect_stdout(io.StringIO()):
+    def land(self, specs, problem=None):
+        """Land with the real marker lookup replaced by a recorder: it notes the
+        tree being checked and answers `problem` (None clears the landing)."""
+        self.checked = []
+
+        def marker_problem(tree):
+            self.checked.append(tree)
+            return problem
+
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(land_wave.landing_marker, "marker_problem", marker_problem):
             return land_wave.land_batch(specs, [self.gate], "Batch")
+
+    def test_marker_is_checked_against_the_tree_that_lands(self):
+        self.branch("a", "a.txt")
+        sha, _, _ = self.land([("a", None)])
+        self.assertEqual(self.checked, [git("rev-parse", f"{sha}^{{tree}}", cwd=self.work)])
+
+    def test_marker_problem_blocks_the_push_even_with_a_green_stub_gate(self):
+        self.branch("a", "a.txt")
+        before = git("rev-parse", "origin/main", cwd=self.work)
+        with self.assertRaises(SystemExit) as stopped:
+            self.land([("a", None)], problem="marker is for tree aaa, the branch tip's tree is bbb")
+        self.assertIn("not landing", str(stopped.exception))
+        self.assertEqual(git("ls-remote", self.origin, "main").split()[0], before)
+
+    def test_require_marker_exits_on_a_problem_and_passes_on_none(self):
+        with mock.patch.object(land_wave.landing_marker, "marker_problem", return_value="RED"):
+            with self.assertRaises(SystemExit):
+                land_wave.require_marker("t" * 40)
+        with mock.patch.object(land_wave.landing_marker, "marker_problem", return_value=None):
+            land_wave.require_marker("t" * 40)
 
     def test_order_and_message_listing(self):
         ta = self.branch("a", "a.txt")

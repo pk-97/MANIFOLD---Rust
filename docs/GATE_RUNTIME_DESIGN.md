@@ -1,6 +1,6 @@
 # Gate Runtime — verdicts the machine writes, not claims the lanes make
 
-**Status:** SHIPPED 2026-07-25 (L1) — P1–P5 on main (core, pre-wave, linter, pre-land clause + report with the I1 verdict-before-merge hook, SubagentStop firing) plus same-day follow-up fixes, all in beads/git. AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable). Owed: P5 SubagentStop live-fire confirm — first executor lane in a new session; payload log `/tmp/manifold_subagent_stop_payloads.jsonl` is the trail. · k3 (lead)
+**Status:** SHIPPED 2026-07-25 (L1) — P1–P5 on main. AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable). AMENDED 2026-10-01: D6/I1 per-bead verdict coverage and the `no-gate` bypass are retired; a merge to main needs the landing-gate marker for the tip's tree (`scripts/landing_marker.py`). Owed: P5 SubagentStop live-fire confirm — first executor lane in a new session; payload log `/tmp/manifold_subagent_stop_payloads.jsonl` is the trail. · k3 (lead)
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -47,9 +47,9 @@ Extend, don't redesign: every firing point is an existing hook; the only new sys
  "runner": "gate_runner.py@<subagent-stop|lead|preflight|lint>", "ts": "..."}
 ```
 
-`kind: no-gate` is the explicit bypass (docs-only landings, hook-only changes): the bypass is a verdict too, with a mandatory `reason`. JSONL, not JSON — append-only by construction; nothing ever rewrites history.
+`kind: no-gate` is retired (2026-10-01): no command writes it any more; the schema still accepts old trail lines. JSONL, not JSON — append-only by construction; nothing ever rewrites history.
 
-**D6 — Pre-land coverage rule.** `git merge --no-ff` to main requires, for every bead task named on the branch, a passing verdict (gate or no-gate) against the branch tip. The clause lives in `preToolUseBash.py`, shaped like workflow-gate's two-tier deny (violation denies with the missing verdicts spelled out). Consequences, stated honestly: this adds friction to small landings — a doc typo fix to main now needs a one-line no-gate verdict. That's seconds with `gate_runner no-gate --task BUG-xxx --reason "typo"`, and the alternative is the silent-bypass hole the rule exists to close.
+**D6 — Pre-land marker rule (replaces the 2026-07-25 per-bead coverage rule).** `git merge --no-ff` to main requires a green landing-gate marker for the exact tree being merged. `scripts/landing_gate.py` writes `.claude/orchestration/landing-gate-marker.json` (main checkout) at the end of every run: tree hash, pass, failing tests, pre-existing tests with their beads. The clause in `preToolUseBash.py` compares the marker's tree to `<source>^{tree}` and denies on a missing, red or mismatched marker, so any commit after the gate run needs a fresh run. A test that fails in the branch is pre-existing only if it also fails when rerun in the main checkout at origin/main and an open bead names it (filed on the spot if none); a test that passes on main stays red. No branch is exempt: docs-only merges, branches with no bead id, and `--named-red` landings all need the marker. `land_branch.py` and `land_wave.py` (single and `--batch`) check the same marker before pushing. Only landing_gate.py writes the marker (`worktree-guard.py` denies edits to it). Per-lane verdicts (D1-D5) are unchanged and no longer gate merges.
 
 **D7 — Wave report is a query, not a store.** `gate_runner report --wave <label>` counts verdicts, beads closes, and decisions.md entries between two refs/dates. Anything it can't compute from the trail is a trail gap, not a report feature.
 
@@ -68,7 +68,7 @@ The plausible-wrong turns, forbidden by name:
 
 ## 3. Invariants & enforcement
 
-- **I1 — No landing without verdict coverage.** Enforcement: `preToolUseBash.py` merge clause (P4), tested in `test_preToolUseBash.py`.
+- **I1 — No landing without a green gate marker for the merged tree (D6).** Enforcement: `preToolUseBash.py` merge clause, tested in `test_preToolUseBash.py`; `land_branch.py`/`land_wave.py` check the same marker.
 - **I2 — Verdicts are written only by gate_runner.** Enforcement: PreToolUse Edit|Write guard on `.claude/orchestration/verdicts/` (P1 — two-line matcher clause); gate_runner itself appends via Python, never through the Edit tool.
 - **I3 — Gate commands come from the brief, executed verbatim.** Enforcement: brief linter (P3) extracts and shell-parses every gate command; runner refuses inline ad-hoc gates at `per-lane` (cmd must match the brief's declared list).
 - **I4 — Schema is versioned; unknown versions fail loud.** Enforcement: runner validates every append against schema 1; a verdict it can't parse is a stop, not a skip.
@@ -81,7 +81,7 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 
 - **Entry state:** main contains `scripts/seat_tool.py` (e692762c) and `.claude/orchestration/` exists. Verify: `scripts/seat_tool.py show` exits 0.
 - **Read-back:** this doc's D1–D5, I1–I4; the workflow-gate two-tier pattern at `.claude/hooks/workflow-gate.py` (shape precedent).
-- **Deliverables:** `scripts/gate_runner.py` with subcommands `per-lane --task --brief --branch --commit` (runs the brief's declared gates, appends verdict), `no-gate --task --reason`, `show --task`; verdicts dir + I2's Edit|Write guard clause in the guard hook; a `tests/` -style self-check script `scripts/gate_runner_selftest.sh`.
+- **Deliverables:** `scripts/gate_runner.py` with subcommands `per-lane --task --brief --branch --commit` (runs the brief's declared gates, appends verdict), `show --task` (`no-gate` and `batch-no-gate` shipped here and were retired 2026-10-01); verdicts dir + I2's Edit|Write guard clause in the guard hook; a `tests/` -style self-check script `scripts/gate_runner_selftest.sh`.
 - **Gate:** selftest runs a known-pass gate (exit 0) and a known-fail gate (exit 1): jsonl validates against schema, `pass` fields correct, exit codes propagate, second appends don't rewrite line 1. `python3 -m json.tool` on each line. Negative gate: direct `Edit` of a verdicts file is denied by the I2 clause (probe with a scratch verdict).
 - **Demo:** none — L1.
 - **Forbidden moves:** lane-facing "validate my JSON" mode (D2); schema fields beyond D5 "just in case"; a README instead of docstring.
@@ -109,7 +109,7 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 - **Entry state:** P1 landed; `preToolUseBash.py` and `test_preToolUseBash.py` read.
 - **Read-back:** D6, D7, I1; workflow-gate's deny-with-spelled-out-fix pattern.
 - **Deliverables:** merge clause in `preToolUseBash.py` (I1) with the two-tier deny; `gate_runner report --wave <label> --since <ref>`; new test cases in `test_preToolUseBash.py`.
-- **Gate:** tests pass: merge denied with missing-verdict list when uncovered; merge passes with passing verdicts at branch tip; merge passes with a `no-gate` verdict + reason. Report over R1's dates prints nonzero counts (decisions.md D-50..D-56 exist to be counted).
+- **Gate:** tests pass: merge denied with missing-verdict list when uncovered; merge passes with passing verdicts at branch tip (superseded by the marker rule in D6). Report over R1's dates prints nonzero counts (decisions.md D-50..D-56 exist to be counted).
 - **Demo:** none — L1.
 - **Forbidden moves:** parsing git log for "task mentions" as coverage (coverage = verdict trail, D6); allowing `--no-verify`-style bypass flags; exempting "small" landings by diff size (D6's honest cost applies to everyone, lead included).
 
@@ -128,7 +128,7 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 2. Lanes never write verdicts (D2) — the trust boundary is the design.
 3. Trace id = bead id (D3) — no new identity system.
 4. JSONL append-only trail at `.claude/orchestration/verdicts/` (D5) — no database.
-5. Bypass = a `no-gate` verdict with a reason (D5/D6) — never silence.
+5. No bypass: a red gate is fixed or its failures proven pre-existing by execution (D6) — never a reason string.
 6. REVIEW rationale is lead discipline, not machinery (D8).
 7. The driver script is not in this design (forbidden turn #1) — Peter's call, separately.
 
@@ -189,7 +189,7 @@ stateDiagram-v2
 
     Review --> LaneRuns: REJECT (lead reads diff,<br/>sends back with reason)
     Review --> Landed: ACCEPT → lead merges
-    Landed --> [*]: pre-land clause verifies<br/>verdict coverage (I1) —<br/>no verdict, no merge
+    Landed --> [*]: pre-land clause verifies<br/>the gate marker (I1, D6) —<br/>no green marker, no merge
 
     WaveHalted --> [*]: surface to Peter
     LintRejected --> [*]: fix brief, re-lint

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Standalone test runner for preToolUseBash.py's guards (landing-protocol,
-worktree-ring, pre-land verdict coverage, compound-landing-merge, shell
+worktree-ring, landing-gate marker, compound-landing-merge, shell
 lints). Invokes the hook's functions directly with synthetic stdin — never
 spawns a real hook subprocess against a live session (per DESIGN.md: "test
 hooks by invoking them directly with synthetic stdin, not by observing your
@@ -33,18 +33,6 @@ def check(name, cond, detail=""):
         PASS.append(name)
     else:
         FAIL.append((name, detail))
-
-
-def with_orch_verdicts_dir(fn):
-    """Run `fn(orch_verdicts_dir)` with hook._ORCH_VERDICTS_DIR patched to a
-    scratch temp dir, restoring it afterward regardless of outcome."""
-    orig = hook._ORCH_VERDICTS_DIR
-    with tempfile.TemporaryDirectory() as td:
-        hook._ORCH_VERDICTS_DIR = Path(td)
-        try:
-            fn(Path(td))
-        finally:
-            hook._ORCH_VERDICTS_DIR = orig
 
 
 MAIN_CWD = str(hook._PROJECT_DIR)
@@ -188,163 +176,120 @@ def test_worktree_read_and_remove_unaffected():
 
 
 # ---------------------------------------------------------------------------
-# Pre-land verdict-coverage guard (I1) — merge_verdict_guard
+# Landing-gate marker guard — merge_marker_guard
 # ---------------------------------------------------------------------------
 
-def _make_verdict(task_id, kind="gate", pass_value=True):
-    """Create a schema-1 verdict dict for testing."""
-    return {
-        "schema": 1, "task": task_id, "phase": "per-lane", "brief": "",
-        "branch": "lane/test", "commit": "abc123",
-        "gates": [] if kind == "no-gate" else [{"cmd": "true", "exit": 0, "duration_s": 0.1, "tail": ""}],
-        "scope": {"files_changed": [], "in_scope": True},
-        "pass": pass_value, "kind": kind, "reason": None if kind == "gate" else "test bypass",
-        "runner": "gate_runner.py@lead", "ts": "2026-07-25T12:00:00Z",
-    }
+def _marker(tree="treeA", **over):
+    record = {"schema": 1, "tree": tree, "pass": True, "failing_tests": [],
+              "pre_existing_tests": [], "head": "h", "branch": "lane/x", "base": "b",
+              "skipped": [], "ts": "2026-10-01T00:00:00Z"}
+    record.update(over)
+    return record
 
 
-def _setup_mock_run(diff_output="crates/foo/src/lib.rs\n", log_output="feat\n\nBUG-abc123\n"):
-    """Create a configured subprocess.run mock returning specific diff/log."""
-    mock_run = unittest.mock.MagicMock()
-
-    def side_effect(cmd, *args, **kwargs):
+def _run_marker_guard(marker=None, tree="treeA", in_origin_main=False,
+                      cmd="git merge --no-ff lane/feat-x"):
+    """Run merge_marker_guard with the marker file, git and the branch mocked.
+    marker=None means no marker file exists."""
+    def side_effect(argv, *args, **kwargs):
         result = unittest.mock.MagicMock()
-        result.returncode = 0
-        cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
-        if "diff" in cmd_str:
-            result.stdout = diff_output
-        elif "log" in cmd_str:
-            result.stdout = log_output
+        result.stderr = ""
+        if "merge-base" in argv:
+            result.returncode = 0 if in_origin_main else 1
+            result.stdout = ""
+        elif "rev-parse" in argv:
+            result.returncode = 0
+            result.stdout = tree + "\n"
         else:
+            result.returncode = 0
             result.stdout = ""
         return result
 
-    mock_run.side_effect = side_effect
-    return mock_run
-
-
-def test_merge_denied_missing_verdict():
-    """Merge blocked when source branch BUG- ids lack passing verdicts."""
-    def run(orch_vd):
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nBUG-abc123\n",
-        )
-        orig_branch = hook._current_branch
+    orig_path, orig_branch = hook._LANDING_MARKER_PATH, hook._current_branch
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "landing-gate-marker.json"
+        if marker is not None:
+            path.write_text(json.dumps(marker))
+        hook._LANDING_MARKER_PATH = path
         hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
         try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/feat-x", MAIN_CWD
-            )
-            check("merge denied when verdict missing", reason is not None, reason)
-            check("deny names missing task", reason and "BUG-abc123" in reason, reason)
-            check("deny mentions gate_runner no-gate", reason and "no-gate" in reason, reason)
+            with unittest.mock.patch.object(hook.subprocess, "run", side_effect=side_effect):
+                return hook.merge_marker_guard(cmd, MAIN_CWD)
         finally:
-            mock_patcher.stop()
+            hook._LANDING_MARKER_PATH = orig_path
             hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
 
 
-def test_merge_passes_with_gate_verdict():
-    """Merge passes when a passing gate verdict exists in the trail."""
-    def run(orch_vd):
-        # Write a passing gate verdict
-        vpath = orch_vd / "BUG-abc123.jsonl"
-        vpath.write_text(json.dumps(_make_verdict("BUG-abc123", "gate", True)) + "\n")
-
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nBUG-abc123\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/feat-x", MAIN_CWD
-            )
-            check("merge passes with gate verdict", reason is None, reason)
-            check("context confirms passing", context and "passing" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
+def test_marker_merge_denied_without_a_marker():
+    reason, _ = _run_marker_guard(marker=None)
+    check("merge denied with no marker", reason is not None and "no landing-gate marker" in reason, reason)
+    check("deny points at running the gate", reason and "scripts/landing_gate.py --repo" in reason, reason)
 
 
-def test_merge_passes_with_no_gate_verdict():
-    """Merge passes when a no-gate verdict exists in the trail."""
-    def run(orch_vd):
-        # Write a no-gate verdict
-        vpath = orch_vd / "BUG-abc123.jsonl"
-        vpath.write_text(json.dumps(_make_verdict("BUG-abc123", "no-gate", True)) + "\n")
-
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nBUG-abc123\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/feat-x", MAIN_CWD
-            )
-            check("merge passes with no-gate verdict", reason is None, reason)
-            check("context confirms passing", context and "passing" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
+def test_marker_merge_denied_on_tree_mismatch():
+    reason, _ = _run_marker_guard(marker=_marker(tree="staleTree"), tree="treeA")
+    check("merge denied when the marker is for another tree",
+          reason is not None and "marker is for tree" in reason, reason)
 
 
-def test_merge_passes_no_bug_ids():
-    """Merge passes when merged branch has no BUG- ids in log."""
-    def run(orch_vd):
-        mock_run = _setup_mock_run(
-            diff_output="crates/foo/src/lib.rs\n",
-            log_output="feat: add X\n\nNo bug ids here.\n",
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/infra-fix", MAIN_CWD
-            )
-            check("merge passes with no BUG- ids", reason is None, reason)
-            check("context mentions pre-trail", context and "pre-trail" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
+def test_marker_merge_denied_on_red_marker():
+    reason, _ = _run_marker_guard(marker=_marker(**{"pass": False}))
+    check("merge denied on a red marker", reason is not None and "RED" in reason, reason)
 
 
-def test_merge_passes_docs_only():
-    """Docs-only merge passes without verdict check."""
-    def run(orch_vd):
-        mock_run = _setup_mock_run(
-            diff_output="docs/GATE_RUNTIME_DESIGN.md\n",
-            log_output="",  # never reached
-        )
-        orig_branch = hook._current_branch
-        hook._current_branch = lambda cwd: "main"
-        mock_patcher = unittest.mock.patch.object(hook.subprocess, 'run', mock_run)
-        mock_patcher.start()
-        try:
-            reason, context = hook.merge_verdict_guard(
-                "git merge --no-ff lane/doc-fix", MAIN_CWD
-            )
-            check("docs-only merge passes", reason is None, reason)
-            check("context names docs-only", context and "Docs-only" in context, context)
-        finally:
-            mock_patcher.stop()
-            hook._current_branch = orig_branch
-    with_orch_verdicts_dir(run)
+def test_marker_merge_denied_when_failing_tests_listed():
+    reason, _ = _run_marker_guard(marker=_marker(failing_tests=["manifold-gpu core::hang"]))
+    check("merge denied when failing tests are listed",
+          reason is not None and "failing tests" in reason, reason)
+
+
+def test_marker_merge_passes_with_pre_existing_failure_that_has_a_bead():
+    marker = _marker(pre_existing_tests=[{"test": "gpu-proofs proofs::flip", "bead": "BUG-xyz"}])
+    reason, context = _run_marker_guard(marker=marker)
+    check("merge passes with a pre-existing failure that has a bead", reason is None, reason)
+    check("context confirms the green marker", context and "green marker" in context, context)
+
+
+def test_marker_merge_denied_when_pre_existing_failure_has_no_bead():
+    reason, _ = _run_marker_guard(marker=_marker(pre_existing_tests=[{"test": "a b"}]))
+    check("merge denied when a pre-existing failure has no bead",
+          reason is not None and "no bead" in reason, reason)
+
+
+def test_marker_merge_passes_with_green_marker_at_tip():
+    reason, context = _run_marker_guard(marker=_marker())
+    check("merge passes with a green marker for the tip's tree", reason is None, reason)
+    check("context confirms the green marker", context and "green marker" in context, context)
+
+
+def test_marker_branch_with_no_bug_ids_still_needs_the_marker():
+    # The old guard waved through any branch whose log named no bug id.
+    reason, _ = _run_marker_guard(marker=None, cmd="git merge --no-ff lane/infra-fix")
+    check("a branch with no bug ids still needs the marker", reason is not None, reason)
+
+
+def test_marker_docs_only_merge_still_needs_the_marker():
+    # The old guard exempted docs-only merges; the gate runs for them too.
+    reason, _ = _run_marker_guard(marker=None, cmd="git merge --no-ff lane/doc-fix")
+    check("a docs-only merge still needs the marker", reason is not None, reason)
+
+
+def test_marker_merge_of_a_branch_already_in_origin_main_passes():
+    # `git merge origin/main`-style pulls land nothing new, so they cannot need a gate run.
+    reason, context = _run_marker_guard(marker=None, in_origin_main=True)
+    check("merge of a branch already in origin/main passes", reason is None and context is None,
+          (reason, context))
+
+
+def test_marker_guard_denies_when_the_marker_module_cannot_load():
+    orig = hook._LANDING_MARKER_MODULE
+    hook._LANDING_MARKER_MODULE = Path("/nonexistent/landing_marker.py")
+    try:
+        reason, _ = _run_marker_guard(marker=_marker())
+    finally:
+        hook._LANDING_MARKER_MODULE = orig
+    check("guard denies when it cannot load the marker check",
+          reason is not None and "could not load" in reason, reason)
 
 
 PIPEY_CMD = "python3 scripts/frob.py | tee /Users/peterkiemann/out.txt"
@@ -821,11 +766,17 @@ def main():
     test_sed_write_guard_asks_on_w_command()
     test_sed_write_guard_ignores_read_only_sed()
 
-    test_merge_denied_missing_verdict()
-    test_merge_passes_with_gate_verdict()
-    test_merge_passes_with_no_gate_verdict()
-    test_merge_passes_no_bug_ids()
-    test_merge_passes_docs_only()
+    test_marker_merge_denied_without_a_marker()
+    test_marker_merge_denied_on_tree_mismatch()
+    test_marker_merge_denied_on_red_marker()
+    test_marker_merge_denied_when_failing_tests_listed()
+    test_marker_merge_passes_with_pre_existing_failure_that_has_a_bead()
+    test_marker_merge_denied_when_pre_existing_failure_has_no_bead()
+    test_marker_merge_passes_with_green_marker_at_tip()
+    test_marker_branch_with_no_bug_ids_still_needs_the_marker()
+    test_marker_docs_only_merge_still_needs_the_marker()
+    test_marker_merge_of_a_branch_already_in_origin_main_passes()
+    test_marker_guard_denies_when_the_marker_module_cannot_load()
 
     test_flow_gate_unmapped_branch_unaffected()
     test_flow_gate_denies_missing_marker()

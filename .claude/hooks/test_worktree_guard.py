@@ -190,6 +190,19 @@ def test_no_merge_denies():
     check("no merge in progress -> deny unchanged", r is not None, r)
 
 
+def test_landing_marker_denies_in_main_and_worktree():
+    for tool in ("Edit", "Write", "MultiEdit"):
+        r = run_hook(edit(str(PROJ / ".claude/orchestration/landing-gate-marker.json"), tool=tool))
+        check(f"{tool} to the main-checkout landing marker -> deny", r is not None and "landing-gate marker" in r, r)
+    r = run_hook(edit(str(PROJ / ".claude/worktrees/slot-1/.claude/orchestration/landing-gate-marker.json")))
+    check("Edit to a worktree copy of the landing marker -> deny", r is not None and "landing-gate marker" in r, r)
+
+
+def test_landing_timing_log_not_caught_by_marker_rule():
+    r = run_hook(edit(str(PROJ / ".claude/worktrees/slot-1/.claude/orchestration/landing-gate-timings.jsonl")))
+    check("worktree timing log is not the marker rule", r is None or "landing-gate marker" not in r, r)
+
+
 def main():
     for fn in [
         test_main_source_absolute_denies,
@@ -213,6 +226,8 @@ def main():
         test_merge_conflicted_file_allowed,
         test_merge_nonconflicted_file_still_denies,
         test_no_merge_denies,
+        test_landing_marker_denies_in_main_and_worktree,
+        test_landing_timing_log_not_caught_by_marker_rule,
     ]:
         fn()
 

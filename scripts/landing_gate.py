@@ -205,7 +205,41 @@ def nextest_filter(failures):
     return " | ".join(f"(binary_id(={lit(b)}) & test(={lit(t)}))" for b, t in failures)
 
 
-def failing_on_main(repo, base, failures):
+LIBTEST_FAIL = re.compile(r"^test (\S+) \.\.\. FAILED\b")
+
+
+def parse_libtest_failures(text):
+    """Failed test names from libtest output ("test <name> ... FAILED"), as
+    ("gpu-proofs", name) pairs in first-seen order. The binary is not in libtest's
+    per-test lines, so every GPU proof shares one label."""
+    seen, failures = set(), []
+    for line in text.splitlines():
+        m = LIBTEST_FAIL.match(line)
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            failures.append(("gpu-proofs", m.group(1)))
+    return failures
+
+
+def rerun_nextest_on_main(failures):
+    cmd = ["cargo", "nextest", "run", "--no-fail-fast"]
+    for package in sorted({b.split("::")[0] for b, _ in failures}):
+        cmd += ["-p", package]
+    cmd += ["-E", nextest_filter(failures)]
+    return cmd, parse_nextest_failures
+
+
+def rerun_gpu_proofs_on_main(failures):
+    """The failing proofs only: exact names, serial, same feature set as the gate.
+    Runs inside the gate's hold on the machine-wide GPU lock (child processes
+    inherit it), so it never queues behind itself."""
+    cmd = ["cargo", "test", "-p", "manifold-renderer", "--features", "gpu-proofs",
+           "--no-fail-fast", "--tests", "--", "--test-threads=1", "--exact"]
+    cmd += [t for _, t in failures]
+    return cmd, parse_libtest_failures
+
+
+def failing_on_main(repo, base, failures, build_rerun, label):
     """Subset of `failures` that also fail in the main checkout, plus a note
     when that could not be established. Main must sit at `base` (origin/main):
     a rerun anywhere else proves nothing about trunk."""
@@ -214,17 +248,13 @@ def failing_on_main(repo, base, failures):
     if not main_head or main_head != base_sha:
         return set(), (f"main checkout is at {main_head[:12] or '?'}, not {base} "
                        f"({base_sha[:12] or '?'}): fast-forward it to rerun the failures there")
-    packages = sorted({b.split("::")[0] for b, _ in failures})
-    cmd = ["cargo", "nextest", "run", "--no-fail-fast"]
-    for package in packages:
-        cmd += ["-p", package]
-    cmd += ["-E", nextest_filter(failures)]
-    print(f"[tests] rerunning {len(failures)} failing test(s) in the main checkout at {base_sha[:12]}",
+    cmd, parse = build_rerun(failures)
+    print(f"[{label}] rerunning {len(failures)} failing test(s) in the main checkout at {base_sha[:12]}",
           flush=True)
-    exit_, out, err, _ = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=3600)
-    log = write_landing_log(repo, "tests-on-main", out, err)
-    print(f"[tests] main rerun transcript: {log}", flush=True)
-    return set(parse_nextest_failures(out + err)), None
+    exit_, out, err, _ = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=7200)
+    log = write_landing_log(repo, f"{label}-on-main", out, err)
+    print(f"[{label}] main rerun transcript: {log}", flush=True)
+    return set(parse(out + err)), None
 
 
 def bead_for_pre_existing(binary, test, branch, base):
@@ -246,16 +276,22 @@ def bead_for_pre_existing(binary, test, branch, base):
     return bead, None
 
 
-def classify_test_failures(repo, base, branch, output):
-    """Split a failed nextest run into new failures (the branch's fault) and
-    pre-existing ones. A test is pre-existing only if it fails when rerun in the
-    main checkout at origin/main AND an open bead names it. Returns
+def classify_test_failures(repo, base, branch, output, kind="tests"):
+    """Split a failed test run into new failures (the branch's fault) and
+    pre-existing ones. kind is "tests" (nextest) or "gpu-proofs" (libtest). A test
+    is pre-existing only if it fails when rerun in the main checkout at
+    origin/main AND an open bead names it. Returns
     (new_failures, pre_existing [(binary, test, bead)], notes)."""
-    failures = parse_nextest_failures(output)
+    if kind == "gpu-proofs":
+        failures, build_rerun = parse_libtest_failures(output), rerun_gpu_proofs_on_main
+    else:
+        failures, build_rerun = parse_nextest_failures(output), rerun_nextest_on_main
     if not failures:
-        return [], [], ["no failing test names in the nextest output (build error or crash)"]
-    on_main, note = failing_on_main(repo, base, failures)
+        return [], [], [f"no failing test names in the {kind} output (build error, crash or budget)"]
+    on_main, note = failing_on_main(repo, base, failures, build_rerun, kind)
     notes = [note] if note else []
+    if re.search(r"^error: could not compile", output, re.MULTILINE):
+        notes.append(f"the {kind} run also had a build error; failures cannot be waved through")
     new, pre_existing = [], []
     for binary, test in failures:
         if (binary, test) not in on_main:
@@ -268,6 +304,21 @@ def classify_test_failures(repo, base, branch, output):
             new.append((binary, test))
             notes.append(f"{test} fails on main but has no bead and none could be filed ({why})")
     return new, pre_existing, notes
+
+
+def classify_leg(ledger, repo, base, output, kind):
+    """Classify a failed test leg into the ledger. Returns (status, tail_lines):
+    "PASS" only when every failure is pre-existing with a bead and nothing else
+    went wrong; otherwise "FAIL"."""
+    new, pre_existing, notes = classify_test_failures(
+        repo, base, current_branch(repo), output, kind)
+    ledger["failing_tests"] += [f"{b} {t}" for b, t in new]
+    ledger["pre_existing_tests"] += [{"test": f"{b} {t}", "bead": bead}
+                                     for b, t, bead in pre_existing]
+    lines = (notes
+             + [f"pre-existing (red on main, bead {bead}): {b} {t}" for b, t, bead in pre_existing]
+             + [f"NEW failure (passes or is absent on main): {b} {t}" for b, t in new])
+    return ("PASS" if pre_existing and not new and not notes else "FAIL"), lines
 
 
 def current_branch(repo):
@@ -463,16 +514,8 @@ def _main(stack):
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         if exit_ != 0:
-            new, pre_existing, notes = classify_test_failures(
-                repo, args.base, current_branch(repo), out + err)
-            ledger["failing_tests"] += [f"{b} {t}" for b, t in new]
-            ledger["pre_existing_tests"] += [
-                {"test": f"{b} {t}", "bead": bead} for b, t, bead in pre_existing]
-            tail = notes + [f"pre-existing (red on main, bead {bead}): {b} {t}"
-                            for b, t, bead in pre_existing] + \
-                   [f"NEW failure (passes or is absent on main): {b} {t}" for b, t in new] + tail
-            if pre_existing and not new and not notes:
-                status = "PASS"
+            status, lines = classify_leg(ledger, repo, args.base, out + err, "tests")
+            tail = tail + lines
         results.append((status, "tests", duration, tail))
         print_result("tests", status, duration, tail if exit_ != 0 else None)
         if status == "FAIL" and not args.keep_going:
@@ -523,6 +566,9 @@ def _main(stack):
                 verdict = [l for l in lines if l.startswith("GPU-PROOFS GATE:")]
                 tail = (names + verdict) or lines[-20:]
             status = "PASS" if exit_ == 0 else "FAIL"
+            if exit_ != 0:
+                status, lines = classify_leg(ledger, repo, args.base, out + err, "gpu-proofs")
+                tail = tail + lines
             results.append((status, "gpu-proofs", duration, tail))
             print_result("gpu-proofs", status, duration, tail if exit_ != 0 else None)
             if status == "FAIL" and not args.keep_going:

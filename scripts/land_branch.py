@@ -6,15 +6,14 @@ branch (in its slot worktree), runs landing_gate.py, merges --no-ff to main
 in the main checkout, pushes, optionally closes beads, deletes the branch
 when it is an ancestor of origin/main.
 
-The JUDGMENT stays with the lead: the review, the named-red call (pass
---named-red BUG-id --reason "..."), the design-doc status edits. This
-script is the fixed git+gate sequence only — every step exits on failure
-with the step named, and push happens only after a green gate (or an
-explicit named red).
+The JUDGMENT stays with the lead: the review and the design-doc status edits.
+This script is the fixed git+gate sequence only — every step exits on failure
+with the step named, and the merge happens only when the landing-gate marker
+(scripts/landing_marker.py) is green for the exact tree being merged. There is
+no override: a red gate means fix the branch, or fix trunk.
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
-      [--named-red BUG-xxxx --reason '<why safe>'] \
       [--close-bead BUG-xxxx ...] [--close-reason '<closing note>'] \
       [--lead 'k3 (lead)']
 
@@ -28,7 +27,9 @@ from datetime import datetime, timezone
 import time
 from pathlib import Path
 
-MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
+import landing_marker
+
+MAIN =Path("/Users/peterkiemann/MANIFOLD - Rust")
 
 
 def step(name, cmd, cwd, check=True):
@@ -60,8 +61,6 @@ def main():
     p.add_argument("branch")
     p.add_argument("--worktree", required=True)
     p.add_argument("--message", required=True)
-    p.add_argument("--named-red")
-    p.add_argument("--reason")
     p.add_argument("--skip-gpu", metavar="REASON",
                    help="defer GPU proofs with a recorded reason; all other gates must pass")
     p.add_argument("--close-bead", action="append", default=[])
@@ -79,25 +78,22 @@ def main():
     gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py", "--repo", str(wt.resolve())]
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
-    elif a.named_red and a.reason:
-        # An override still requires the results of every mandatory check.
-        gate_cmd += ["--keep-going"]
     log_dir = wt / "target" / "landing-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     gate_log = (log_dir / f"landing-gate-{stamp}-{time.time_ns()}.log").resolve()
     gate_returncode = run_landing_gate(gate_cmd, wt, gate_log)
     if gate_returncode != 0:
-        if a.skip_gpu or not (a.named_red and a.reason):
-            print("[land] gate red and no --named-red/--reason given — stopping. "
-                  "Review the failure; land over it only with an explicit named red.", file=sys.stderr)
-            sys.exit(1)
-        step("no-gate verdict", ["scripts/gate_runner.py", "no-gate", "--task", a.named_red,
-                                 "--reason", f"{a.reason} {a.lead}"], MAIN)
-        step("commit verdict", ["git", "add", "--", ".beads/interactions.jsonl"], MAIN, check=False)
-        step("commit verdict", ["git", "commit", "-m",
-                                f"beads: no-gate verdict on {a.named_red} for landing {a.branch}. {a.lead}",
-                                "--", ".beads/interactions.jsonl"], MAIN, check=False)
+        print("[land] gate red — stopping. Fix the failure; there is no override.", file=sys.stderr)
+        sys.exit(1)
+
+    # The same check the merge hook runs; this script's merge is a subprocess
+    # the hook never sees.
+    tree = landing_marker.tree_of(MAIN, a.branch)
+    problem = landing_marker.marker_problem(tree) if tree else f"cannot resolve the tree of {a.branch}"
+    if problem:
+        print(f"[land] FAILED: {problem}. Not merging.", file=sys.stderr)
+        sys.exit(1)
 
     step("merge --no-ff to main", ["git", "merge", "--no-ff", a.branch, "-m", a.message], MAIN)
     step("push main", ["git", "push", "origin", "main"], MAIN)

@@ -7,7 +7,7 @@
       "file": ".claude/hooks/worktree-guard.py"
     },
     {
-      "transition": "raw `git worktree add` denied; landing protocol; pre-land verdict coverage (I1); persistent-cd denial; shell allowlist",
+      "transition": "raw `git worktree add` denied; landing protocol; pre-land landing-gate marker (I1); persistent-cd denial; shell allowlist",
       "enforcement": "hook",
       "file": ".claude/hooks/preToolUseBash.py"
     },

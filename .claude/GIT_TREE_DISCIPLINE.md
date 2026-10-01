@@ -114,10 +114,14 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   cannot cd, and a run on main's checkout refuses) → `git merge
   --no-ff` into main → push → if the push is rejected because someone landed
   first, repeat. **`scripts/land_branch.py` runs this whole ceremony in one
-  command (Peter, 2026-07-31)** — the lead reviews and makes the named-red
-  call, the script does fetch/merge-in/gate/merge/push/bead-close/branch-
-  delete with per-step exit checks; push happens only after a green gate or
-  an explicit `--named-red BUG-id --reason`. The gate script itself is the
+  command (Peter, 2026-07-31)** — the lead reviews, the script does
+  fetch/merge-in/gate/merge/push/bead-close/branch-delete with per-step exit
+  checks. **A merge to main needs a green gate marker at the tip's tree:**
+  `landing_gate.py` writes `.claude/orchestration/landing-gate-marker.json`,
+  the merge hook and both landing scripts check it, and a failure counts as
+  pre-existing only if it also fails at origin/main and an open bead names it
+  (`docs/GATE_RUNTIME_DESIGN.md` D6). There is no named-red or no-gate
+  override. The gate script itself is the
   whole landing gate and gates only what
   the branch touched: design-status housekeeping
   (`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines
