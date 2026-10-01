@@ -37,7 +37,7 @@ use super::prefix_scan::{PrefixScan, storage_words};
 use super::preserve_foam::PreserveFoam;
 use super::retype_whitewater::RetypeWhitewater;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
-use super::sort_particles_into_cells::{CellSort, CellSortPass, range_storage_bytes, whitewater_record_read};
+use super::sort_particles_into_cells::{ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read};
 use super::spawn_whitewater::SpawnWhitewater;
 use super::standalone_pipeline::standalone_pipeline;
 use super::surface_crossings::SurfaceCrossings;
@@ -443,14 +443,14 @@ const HAND_ENTRIES: [(&str, &str); 9] = [
     ("publish_counts", "node.whitewater_step.counts"),
 ];
 
-const SORT_LABELS: [&str; 6] = [
-    "node.whitewater_step.sort.clear",
-    "node.whitewater_step.sort.count",
-    "node.whitewater_step.sort.ranges",
-    "node.whitewater_step.sort.tail",
-    "node.whitewater_step.sort.scatter",
-    "node.whitewater_step.sort.stabilise",
-];
+const SORT_LABELS: SortLabels = SortLabels {
+    clear: "node.whitewater_step.sort.clear",
+    count: "node.whitewater_step.sort.count",
+    ranges: "node.whitewater_step.sort.ranges",
+    tail: "node.whitewater_step.sort.tail",
+    scatter: "node.whitewater_step.sort.scatter",
+    stabilise: "node.whitewater_step.sort.stabilise",
+};
 
 impl Pipelines {
     fn prepare(&mut self, device: &GpuDevice) {
@@ -514,7 +514,6 @@ struct Fields {
     typed: GpuBuffer,
     pools: [GpuBuffer; 2],
     order: GpuBuffer,
-    ranges: GpuBuffer,
     state: GpuBuffer,
     /// The slot scan's storage, level 0 at offset 0.
     scan: GpuBuffer,
@@ -533,7 +532,6 @@ impl Fields {
             typed: alloc(shape.spawn_bytes())?,
             pools: [alloc(shape.pool_bytes())?, alloc(shape.pool_bytes())?],
             order: alloc(u64::from(shape.capacity) * 4)?,
-            ranges: alloc(shape.range_bytes())?,
             state: alloc(STATE_WORDS * 4)?,
             scan,
         })
@@ -657,7 +655,7 @@ pub(crate) struct Step {
     particles: ParticleScratch,
     emission_scan: PrefixScan,
     slot_scan: PrefixScan,
-    sort: CellSort,
+    sort: ParticleSorter,
     /// Which of the two pool buffers holds the pool.
     current: usize,
     /// The pool stepped since an output last took it.
@@ -694,7 +692,7 @@ impl Step {
                 .map_err(|error| format!("the pool and its scratch need {held} bytes: {error}"))?;
             let scan = self.slot_scan.buffer(device, shape.slot_scan_values())?.clone();
             self.fields = Some(Fields::new(device, &shape, scan)?);
-            self.sort.reserve(device, bin_total(shape.bins) as u32, shape.capacity)?;
+            self.sort.reserve_ranges(device, shape.bins)?;
             self.shape = Some(shape);
         }
         if reseed {
@@ -716,7 +714,7 @@ impl Step {
             let offsets = self.emission_scan.buffer(device, emitters.max(1) as usize)?.clone();
             self.emit(enc, frame, inputs, &scratch, &offsets, slots, emitters);
             for _ in 0..frame.ticks {
-                self.tick(enc, frame, inputs);
+                self.tick(enc, device, frame, inputs)?;
             }
             self.owed = true;
         }
@@ -914,9 +912,15 @@ impl Step {
 
     /// One tick of FLIP's whitewater: advect, retype, age, sort, preserve
     /// foam, mark the slots to keep, compact.
-    fn tick(&mut self, enc: &mut manifold_gpu::GpuEncoder, frame: &StepFrame, inputs: &StepInputs<'_>) {
+    fn tick(
+        &mut self,
+        enc: &mut manifold_gpu::GpuEncoder,
+        device: &GpuDevice,
+        frame: &StepFrame,
+        inputs: &StepInputs<'_>,
+    ) -> Result<(), String> {
         let s = &frame.shape;
-        let f = self.fields();
+        let f = self.fields.as_ref().expect("the step's fields are allocated");
         let p = &self.pipelines;
         let cap = s.capacity;
         let (a, b) = (&f.pools[self.current], &f.pools[1 - self.current]);
@@ -956,19 +960,19 @@ impl Step {
         );
         atom::<AgeWhitewater>(enc, get(&p.age), &[("dt", dt)], &[a, b], cap, "node.whitewater_step.age");
         let bin_min: [f32; 3] = std::array::from_fn(|i| s.center[i] - 0.5 * s.size[i]);
-        let pass = CellSortPass {
+        let job = SortJob {
             particles: b,
             read: whitewater_record_read(),
+            capacity: cap,
             count: cap,
             bin_min,
             inv_cell: 1.0 / s.cell_size,
             bins: s.bins,
-            ranges: &f.ranges,
             sorted: None,
             order: Some(&f.order),
-            sorted_capacity: cap,
         };
-        self.sort.encode(enc, &pass, &SORT_LABELS);
+        self.sort.encode(device, enc, &job, &SORT_LABELS)?;
+        let ranges = self.sort.ranges().expect("ranges reserved with the shape");
         let bins = [("bins_x", bx), ("bins_y", by), ("bins_z", bz)];
         let mut preserve = [("", 0.0); 12];
         preserve[0] = ("enabled", f32::from(u8::from(frame.preserve_foam)));
@@ -982,19 +986,20 @@ impl Step {
             enc,
             get(&p.preserve),
             &preserve,
-            &[b, b, &f.ranges, &f.order, a],
+            &[b, b, ranges, &f.order, a],
             cap,
             "node.whitewater_step.preserve_foam",
         );
         let mut keep = [("", 0.0); 12];
         keep[..9].copy_from_slice(&place[..9]);
         keep[9..].copy_from_slice(&bins);
-        atom::<KeepWhitewater>(enc, get(&p.keep), &keep, &[a, a, &f.ranges, &f.order, inputs.solid, &f.scan], cap, "node.whitewater_step.keep");
+        atom::<KeepWhitewater>(enc, get(&p.keep), &keep, &[a, a, ranges, &f.order, inputs.solid, &f.scan], cap, "node.whitewater_step.keep");
         self.slot_scan.encode(enc, cap as usize);
         let params = HandParams { capacity: cap, spawn_slots: 0, emitters: 0, count: cap };
         self.hand(enc, Hand::Compact, params, self.bound(a, b, HandBuffers::default()));
         self.hand(enc, Hand::CompactState, HandParams { count: 1, ..params }, self.bound(a, b, HandBuffers::default()));
         self.current = 1 - self.current;
+        Ok(())
     }
 
     /// Split the pool into foam, bubbles and spray in output slot `index`,

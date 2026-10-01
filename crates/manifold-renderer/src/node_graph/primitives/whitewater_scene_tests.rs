@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::params::ParamManifest;
+use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use serde_json::{Value, json};
 
 use super::gpu_flip_preset::{WaterScene, render_def};
+use super::gpu_flip_step::face_bytes;
 use crate::gpu_encoder::GpuEncoder;
 use crate::headless_readback::{encode_rgba8_png, readback_srgb_rgba8};
 use crate::node_graph::depth_rule::DepthRule;
@@ -249,6 +250,8 @@ struct Show {
     trigger: u32,
     /// The transport is paused: frames hold the clock with dt 0.
     paused: bool,
+    /// The cards' values, as the clip hands them to the runtime.
+    cards: ParamManifest,
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
@@ -291,7 +294,19 @@ impl Show {
                 }
             }));
         }
-        let mut show = Self { device, runtime, target, size, sampler, step_label, labels, frame_count: 0, trigger: 0, paused: false };
+        let mut show = Self {
+            device,
+            runtime,
+            target,
+            size,
+            sampler,
+            step_label,
+            labels,
+            frame_count: 0,
+            trigger: 0,
+            paused: false,
+            cards: ParamManifest::default(),
+        };
         // The whole-graph dump, as the GPU FLIP smoke runs read arrays: a
         // node-scoped dump set holds nothing on this generator (BUG-bqwx).
         show.runtime.set_dump_all(!held.is_empty());
@@ -333,7 +348,7 @@ impl Show {
         let start = Instant::now();
         {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &ParamManifest::default());
+            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.cards);
         }
         let cpu_ms = start.elapsed().as_secs_f64() * 1000.0;
         let result = enc.commit_and_wait_profiled(&self.device);
@@ -386,6 +401,54 @@ impl Show {
     fn errors(&self) -> Vec<String> {
         self.runtime.errors().iter().map(|e| format!("{e:?}")).collect()
     }
+
+    /// Bytes of the storage the named node provides on `port`; none, 0.
+    fn provided_bytes(&self, name: &str, port: &str) -> u64 {
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        node.node.provided_array_output(port).map_or(0, |buffer| buffer.size)
+    }
+}
+
+/// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
+/// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 100 under a
+/// running clip. On the first frame at each size the state already holds that
+/// lattice's face grid; within 1.5 s the fill has restarted at that size, the
+/// step's faces are that lattice's and its water throws whitewater.
+#[test]
+fn gpu_flip_resolution_card_resizes_at_runtime() {
+    let scene = WaterScene::dam_break(64);
+    let def = whitewater_render_def(scene);
+    let spec = def
+        .preset_metadata
+        .as_ref()
+        .and_then(|cards| cards.params.iter().find(|card| card.id == "resolution"))
+        .expect("the Resolution card")
+        .clone();
+    let mut show = Show::new(def, (320, 180), true, &[]);
+    show.restart();
+    let step = format!("s{}.step", scene.steps - 1);
+    for n in [64u32, 32, 100] {
+        let mut card = Param::bundled(spec.clone());
+        card.value = n as f32;
+        card.base = n as f32;
+        show.cards = ParamManifest::from_params(vec![card]);
+        show.frame(false);
+        let faces = face_bytes([n; 3]);
+        assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
+        let mut last = [0.0; 8];
+        let mut gpu_ms = Vec::new();
+        for _ in 0..90 {
+            gpu_ms.push(show.frame(false).gpu_ms);
+            last = show.probes(LIFECYCLE_REPORTS);
+        }
+        let [count] = show.probes(["count"]);
+        println!("Resolution {n}: {count} particles, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
+        assert_eq!(show.provided_bytes(&step, "faces"), faces, "Resolution {n}: the step's faces");
+        assert_eq!(count as u64, WaterScene::dam_break(n as usize).particles(), "Resolution {n}: the fill");
+        assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
+    }
+    let errors = show.errors();
+    assert!(errors.is_empty(), "the resize ran with errors: {errors:#?}");
 }
 
 /// The shipped GPU FLIP Dam Break with its `node.whitewater_step`, as the app

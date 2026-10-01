@@ -3,10 +3,11 @@
 // other two, x fastest. Face f of that array is component `axis` of padded
 // cell f of the FaceSample lattice, (n+1)³ records x fastest; a face with
 // weight 0 reads 0. `faces` is gathered through buf_faces; a lattice
-// shorter than the params' gives zeros.
+// shorter than the params' gives zeros. nodes_x/y/z are the padded
+// lattice's (3 nodes of padding a side), so the box has nodes − 7 cells.
 
 fn body(idx: u32, count: u32, axis: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> f32 {
-    let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    let n = max(vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z)) - vec3<i32>(7), vec3<i32>(0));
     let m = n + vec3<i32>(1);
     if axis > 2u || u32(m.x) * u32(m.y) * u32(m.z) > arrayLength(&buf_faces) {
         return 0.0;

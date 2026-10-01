@@ -177,8 +177,9 @@ pub enum FusedOutputCapacity {
     /// long its array inputs are. The body guards its own gathers and
     /// returns a value past its lattice; a coincident array external is
     /// pre-read at `[idx]`, so the region clamps its count by that
-    /// external's length.
-    ParamProduct { params: &'static [&'static str] },
+    /// external's length. `plus` is added to each rounded param first: a
+    /// face grid holds `(nodes + 1)` per axis.
+    ParamProduct { params: &'static [&'static str], plus: u32 },
 }
 
 /// A region output's capacity expression over the ARRAY external slots,
@@ -206,6 +207,8 @@ pub enum CapacityExpr {
     Param(String),
     /// The product of the children — a `ParamProduct` member's lattice.
     Product(Vec<CapacityExpr>),
+    /// `n` + the child — a padded lattice side (`ParamProduct`'s `plus`).
+    Add(u32, Box<CapacityExpr>),
 }
 
 impl CapacityExpr {
@@ -217,6 +220,7 @@ impl CapacityExpr {
         match self {
             CapacityExpr::Slot(n) => format!("arrayLength(&src_{n})"),
             CapacityExpr::Mul(f, x) => format!("{f}u * {}", x.to_wgsl()),
+            CapacityExpr::Add(n, x) => format!("({}u + {})", n, x.to_wgsl()),
             CapacityExpr::Min(v) => {
                 let mut it = v.iter();
                 let first = it.next().map(CapacityExpr::to_wgsl).unwrap_or_default();
@@ -235,7 +239,7 @@ impl CapacityExpr {
         match self {
             CapacityExpr::Slot(_) => false,
             CapacityExpr::Param(_) => true,
-            CapacityExpr::Mul(_, x) => x.reads_params(),
+            CapacityExpr::Mul(_, x) | CapacityExpr::Add(_, x) => x.reads_params(),
             CapacityExpr::Min(v) | CapacityExpr::Product(v) => v.iter().any(CapacityExpr::reads_params),
         }
     }
@@ -248,6 +252,7 @@ impl CapacityExpr {
         match self {
             CapacityExpr::Slot(n) => format!("s{n}"),
             CapacityExpr::Mul(f, x) => format!("mul({f},{})", x.to_marker_payload()),
+            CapacityExpr::Add(n, x) => format!("add({n},{})", x.to_marker_payload()),
             CapacityExpr::Min(v) => {
                 let inner: Vec<String> = v.iter().map(CapacityExpr::to_marker_payload).collect();
                 format!("min({})", inner.join(","))
@@ -283,12 +288,13 @@ impl CapacityExpr {
             let field = field.trim();
             let identifier = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             identifier.then(|| (CapacityExpr::Param(field.to_string()), rest))
-        } else if let Some(rest) = text.strip_prefix("mul(") {
+        } else if let Some((add, rest)) = text.strip_prefix("mul(").map(|r| (false, r)).or_else(|| text.strip_prefix("add(").map(|r| (true, r))) {
             let (f_str, rest) = rest.split_once(',')?;
             let factor: u32 = f_str.trim().parse().ok()?;
             let (child, rest) = Self::parse_payload_node(rest)?;
             let rest = rest.trim_start().strip_prefix(')')?;
-            Some((CapacityExpr::Mul(factor, Box::new(child)), rest))
+            let child = Box::new(child);
+            Some((if add { CapacityExpr::Add(factor, child) } else { CapacityExpr::Mul(factor, child) }, rest))
         } else if let Some(rest) = text.strip_prefix('s') {
             let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             if digits.is_empty() {
@@ -338,6 +344,7 @@ impl CapacityExpr {
                 input_capacities.iter().find(|(p, _)| *p == name).map(|(_, c)| *c)
             }
             CapacityExpr::Mul(f, x) => x.eval_with(input_capacities, params)?.checked_mul(*f),
+            CapacityExpr::Add(n, x) => x.eval_with(input_capacities, params)?.checked_add(*n),
             CapacityExpr::Min(v) => all(v)?.into_iter().min(),
             CapacityExpr::Param(field) => match params.get(field.as_str()) {
                 Some(ParamValue::Float(value)) if value.is_finite() => {
@@ -560,6 +567,17 @@ mod tests {
         assert_eq!(lattice.eval_with(&[], &params(65536.0, 65536.0, 1.0)), None, "overflow");
         assert_eq!(clamped.eval_with(&[("src_1", 100)], &params(64.0, 64.0, 64.0)), Some(100));
         assert_eq!(lattice.eval(&[]), None, "no params, no lattice");
+
+        // A face grid: one more than the lattice per axis.
+        let padded = CapacityExpr::Product(
+            ["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|f| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(f.to_string())))).to_vec(),
+        );
+        assert!(padded.to_wgsl().starts_with("((1u + u32(max(round(params.n0_nodes_x), 0.0))) * "));
+        let payload = padded.to_marker_payload();
+        assert_eq!(payload, "prod(add(1,par(n0_nodes_x)),add(1,par(n0_nodes_y)),add(1,par(n0_nodes_z)))");
+        assert_eq!(CapacityExpr::parse_marker_payload(&payload), Some(padded.clone()));
+        assert_eq!(padded.eval_with(&[], &params(4.0, 3.0, 2.0)), Some(60));
+        assert_eq!(CapacityExpr::Add(1, Box::new(CapacityExpr::Slot(0))).eval(&[("src_0", u32::MAX)]), None, "overflow");
     }
 
     /// Every registered (non-fixture) primitive is either fusable or names

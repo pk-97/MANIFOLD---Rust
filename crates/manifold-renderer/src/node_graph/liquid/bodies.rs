@@ -25,6 +25,9 @@ pub(crate) const LIQUID_POSE: &str = include_str!("../primitives/shaders/liquid_
 /// Collider lattice sampling; needs [`LIQUID_POSE`] and the including body's
 /// `liquid_atlas_half`.
 pub(crate) const LIQUID_COLLIDER: &str = include_str!("../primitives/shaders/liquid_collider.wgsl");
+/// Body ownership of faces, face centres and the rigid basis for the atoms
+/// that couple bodies into the GPU FLIP pressure solve.
+pub(crate) const SOLID_BODY_FACES: &str = include_str!("../primitives/shaders/solid_body_faces.wgsl");
 
 /// A collider, source, drain or coupled body during one tick. 128 bytes.
 /// The domain uploads one per body per tick of the frame, holding the tick's

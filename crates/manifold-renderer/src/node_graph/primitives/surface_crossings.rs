@@ -12,6 +12,7 @@ use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::liquid::blocks::{LIQUID_BLOCKS_WGSL, block_total};
 use crate::node_graph::whitewater::{SURFACE_CROSSING_BYTES, SurfaceCrossing, WHITEWATER_COMMON, cell_total, grid_cells, grid_nodes, refinement};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -24,8 +25,8 @@ struct CrossingsUniforms {
     level_nodes_x: f32,
     level_nodes_y: f32,
     level_nodes_z: f32,
+    blocks_len: u32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 fn param_nodes(params: &ParamValues, names: [&str; 3], default: f32) -> [u32; 3] {
@@ -42,6 +43,7 @@ crate::primitive! {
     inputs: {
         level_set: Array(f32) required,
         solid: Array(f32) required,
+        blocks: Array(u32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         level_nodes_x: ScalarF32 optional, level_nodes_y: ScalarF32 optional, level_nodes_z: ScalarF32 optional,
     },
@@ -57,7 +59,7 @@ crate::primitive! {
         float_param!("level_nodes_z", "Level Nodes Z", 211.0, 2.0, 16385.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire level_set and level_nodes_x/y/z from the Liquid Surface group's level_set outputs, solid and nodes_x/y/z from the particle frame's solid_b and grid_nodes_x/y/z. The level set must refine the grid by the same whole number (1 to 4) on every axis, or nothing runs, a named error. Then node.nearest_crossing three times and node.crossing_distance.",
+    composition_notes: "Wire level_set and level_nodes_x/y/z from the Liquid Surface group's level_set outputs, solid and nodes_x/y/z from the particle frame's solid_b and grid_nodes_x/y/z. The level set must refine the grid by the same whole number (1 to 4) on every axis, or nothing runs, a named error. Wire blocks from node.liquid_blocks over the same level set and lattice to skip the footprint scan in blocks without surface; the output is identical either way, and a map shorter than the block lattice is a named error. Then node.nearest_crossing three times and node.crossing_distance.",
     examples: [],
     picker: { label: "Surface Crossings", category: Atom },
     summary: "Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface.",
@@ -66,8 +68,20 @@ crate::primitive! {
     aliases: ["zero crossing", "surface points", "redistance"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/surface_crossings_body.wgsl"),
-    input_access: [BufferGather, BufferGather],
-    wgsl_includes: [WHITEWATER_COMMON],
+    input_access: [BufferGather, BufferGather, BufferGather],
+    // Words in the wired block map, 0 unwired: the body skips only when the
+    // map covers every block.
+    derived_uniforms: ["blocks_len:u32"],
+    wgsl_includes: [WHITEWATER_COMMON, LIQUID_BLOCKS_WGSL],
+}
+
+// A fused region's derived block: the wired map's length, 0 unwired, as run() binds it.
+inventory::submit! {
+    crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
+        type_id: "node.surface_crossings",
+        array_ports: &["blocks"],
+        recompute: |ctx| Some(vec![(ctx.array_len)("blocks").unwrap_or(0) as f32]),
+    }
 }
 
 impl Primitive for SurfaceCrossings {
@@ -106,6 +120,13 @@ impl Primitive for SurfaceCrossings {
             ctx.error(format!("Surface Crossings: a {nodes:?}-node grid at refinement {s} is larger than its arrays"));
             return;
         }
+        let blocks = ctx.inputs.array("blocks");
+        let blocks_len = blocks.map_or(0, |map| (map.size / 4) as u32);
+        let need = block_total(cells);
+        if blocks.is_some() && u64::from(blocks_len) < need {
+            ctx.error(format!("Surface Crossings: the block map holds {blocks_len} blocks; the {cells:?}-cell grid has {need}. Build it over the same lattice"));
+            return;
+        }
         let uniforms = CrossingsUniforms {
             nodes_x: nodes[0] as f32,
             nodes_y: nodes[1] as f32,
@@ -113,8 +134,8 @@ impl Primitive for SurfaceCrossings {
             level_nodes_x: levels[0] as f32,
             level_nodes_y: levels[1] as f32,
             level_nodes_z: levels[2] as f32,
+            blocks_len,
             dispatch_count: count as u32,
-            _pad0: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
@@ -123,7 +144,9 @@ impl Primitive for SurfaceCrossings {
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: level_set, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: out, offset: 0 },
+                // Unwired, the solid stands in: blocks_len 0 means the body never reads it.
+                GpuBinding::Buffer { binding: 3, buffer: blocks.unwrap_or(solid), offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.surface_crossings",

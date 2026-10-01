@@ -27,7 +27,6 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::{ArrayType, PortType};
 use crate::node_graph::physics::PhysicsAuthoredSampleScope;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
-use crate::node_graph::substeps::MAX_REGION_DEPTH;
 
 
 /// Resolve a resource's slot dims for `Backend::acquire` / `release`.
@@ -115,11 +114,10 @@ struct FrameTally {
 /// Which pass is evaluating a step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StepPass {
-    /// The ordinary frame pass, including a top-level substep boundary's own
-    /// evaluate.
+    /// The ordinary frame pass, including a substep boundary's own evaluate.
     Frame,
     /// Inside a substep region's repeat; `first` on the frame's first visit
-    /// of the step (iteration 0 of every enclosing region).
+    /// of the step (iteration 0).
     Repeat { first: bool },
 }
 
@@ -158,11 +156,9 @@ pub struct Executor {
     growing_arrays: Vec<bool>,
     array_capacity_scratch: Vec<(&'static str, u32)>,
     /// A running substep region's per-iteration scalar output slots and the
-    /// values the boundary serves for the next iteration (reused scratch),
-    /// one pair per nesting level: an inner region runs between two writes
-    /// of its outer region's scalars.
-    substep_scalar_slots: [Vec<Option<Slot>>; MAX_REGION_DEPTH],
-    substep_scalar_values: [Vec<f32>; MAX_REGION_DEPTH],
+    /// values the boundary serves for the next iteration (reused scratch).
+    substep_scalar_slots: Vec<Option<Slot>>,
+    substep_scalar_values: Vec<f32>,
     /// Host syncs run inside substep regions since this executor was built.
     substep_host_syncs: u64,
     /// Per-step scratch the executor hands to [`NodeOutputs`] so control-rate
@@ -1726,8 +1722,7 @@ impl Executor {
         while idx < plan.steps().len() {
             // A substep region is one contiguous block, boundary first
             // (`docs/GPU_MPM_SOLVER_DESIGN.md` D7); its driver runs the whole
-            // block, nested regions included. A physics sample never advances
-            // a simulation region.
+            // block. A physics sample never advances a simulation region.
             let flow = if let Some(region) =
                 plan.substep_regions().iter().find(|region| region.steps[0] == idx)
             {
@@ -1739,8 +1734,6 @@ impl Executor {
                         graph,
                         plan,
                         region,
-                        StepPass::Frame,
-                        0,
                         env,
                         &mut tally,
                         &mut gpu,
@@ -2508,6 +2501,15 @@ impl Executor {
                     // to ALSO emit a deterministic fallback (e.g. magenta
                     // clear) alongside the error report, so downstream
                     // consumers don't read garbage.
+                    // An errored node drew a fallback, so the frame is not
+                    // the one the graph describes: fail it.
+                    if !self.error_scratch.is_empty()
+                        && let Some(g) = gpu.as_deref_mut()
+                    {
+                        g.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
+                            crate::frame_status::FrameRenderFailure::NodeError,
+                        ));
+                    }
                     for msg in self.error_scratch.drain(..) {
                         eprintln!(
                             "[graph error] node {:?} ({}): {msg}",
@@ -2823,6 +2825,13 @@ impl Executor {
                 for (slot, value) in self.object_write_scratch.drain(..) {
                     self.backend.set_object(slot, value);
                 }
+                if !self.error_scratch.is_empty()
+                    && let Some(g) = gpu.as_deref_mut()
+                {
+                    g.merge_frame_status(crate::frame_status::FrameRenderStatus::Failed(
+                        crate::frame_status::FrameRenderFailure::NodeError,
+                    ));
+                }
                 for msg in self.error_scratch.drain(..) {
                     eprintln!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
@@ -3122,9 +3131,9 @@ mod tests {
         use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
         use crate::node_graph::MetalBackend;
         use crate::node_graph::ports::ArrayType;
-        use manifold_gpu::{GpuDevice, GpuTextureFormat};
+        use manifold_gpu::GpuTextureFormat;
 
-        let device = std::sync::Arc::new(GpuDevice::new_queued("execution tests"));
+        let device = crate::gpu::test_gpu_device("execution tests");
         let particle_layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
 
         let mut g = Graph::new();

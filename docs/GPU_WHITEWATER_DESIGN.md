@@ -62,11 +62,11 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 | Job | Verdict | Nearest existing, and why it isn't it |
 |---|---|---|
-| Faces from SWASH, from MPM | new (seam P10) | `faces_to_particles` is SWASH's own transfer on its padded lattice |
+| Faces from SWASH, from MPM | new (seam P10) | the GPU FLIP step's `faces_to_particles` pass is its own transfer on its padded lattice |
 | Level set out of the surface group | one wire away | a group output |
 | Crossings, nearest crossing, signed distance | new | `smooth_lattice` smooths; `sample_volume_at_particles` reads Texture3D only |
-| Liquid, air and solid cells | new | `cells_with_particles` counts particles; `collar_cells` has no solid and no shrink |
-| Curvature, one layer of extension | new | `edge_slope_3d` is a Texture3D gradient; `extend_faces` extends `FaceSample` faces only |
+| Liquid, air and solid cells | new | the step's `classify` pass marks particle cells inside the step; `collar_cells` has no solid and no shrink |
+| Curvature, one layer of extension | new | `edge_slope_3d` is a Texture3D gradient; the step's `extend_faces` pass extends its own faces only |
 | Jitter | new | `position_jitter` is simplex noise on `InstanceTransform`; `spread_out` kicks 2D `Particle` velocity |
 | Faces at particles | new | none samples the seam arrays |
 | Energy, wavecrest, emission count, type | new | none |

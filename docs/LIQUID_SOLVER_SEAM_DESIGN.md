@@ -2,7 +2,7 @@
 
 <!-- index: The contract FLIP, GPU MLS-MPM and SWASH meet to join scenes — particle frames, face-grid outputs, Box3D coupling, clock/pause/export, scene recognition, safety rails — and the phases that move MPM and SWASH behind it. -->
 
-**Status:** PROPOSED · 2026-09-30 · P5, P6 and P9 shipped · P7, P8 and P10 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
+**Status:** PROPOSED · 2026-10-01 · P7b, P8 and P9 shipped, P8 owes its L3 flow · P5 and P6 retired (regions no longer nest) · P7a unaudited · P10–P12 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
 
 **Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs GPU FLIP's full step (GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
@@ -85,7 +85,7 @@ Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g 
 
 **D9 — One clock for GPU liquids: `LiquidClock`,** which is `MatterClock` moved, plus a `held` flag (section 3.4). Box3D and FLIP keep `HeldClock`. Rejected: `HeldClock` for GPU liquids (its debt batches suit a CPU worker, not a GPU tick region); SWASH's frame-count time.
 
-**D10 — SWASH's tick loop is a substep region, and its Krylov regions nest inside it, depth at most 2.** The outer boundary `node.liquid_state` names the clock port; its body is one SWASH step; count = ticks due × steps per tick; offline host syncs fall between ticks. The Krylov regions stay inside the step with clock `None` (SWASH D10). Fusion never crosses either border. This reopens SWASH D8, which rejected nesting because the compiler forbade it. Rejected: mux-gated fixed step copies (the dispatches still run, and they can't run every due tick offline, go above Speed 1, or host a coupled sync); refusing exports below 60 fps; unrolling the Krylov passes (SWASH D8 rejects it); running the whole frame graph once per tick (the mesher would run per tick).
+**D10 — SWASH's tick loop is a substep region.** The boundary `node.liquid_state` names the clock port; its body is one step; count = ticks due × steps per tick; offline host syncs fall between ticks. Fusion never crosses the border. Amended 2026-10-01: the pressure solve's loops now run inside `node.gpu_flip_step` (GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage design)), so nothing nests, and the compiler refuses a boundary inside another region's body. Rejected: mux-gated fixed step copies (the dispatches still run, and they can't run every due tick offline, go above Speed 1, or host a coupled sync); refusing exports below 60 fps; unrolling the Krylov passes (SWASH D8 rejects it); running the whole frame graph once per tick (the mesher would run per tick).
 
 **D11 — Scene recognition: one list, one walk, one contract (section 3.5).** Rejected: a solver branch at each site; keeping the walk in the renderer, where editing and the app can't reach it (which is how `scene_vm.rs:1234` grew its own FLIP-only walk).
 
@@ -286,6 +286,19 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 - `pub use` aliases for renamed items.
 - A reaction in grid units, or torque taken about the box centre instead of the centre of mass.
 
+### 3.10 Block occupancy map (BUG-1z1p (shared block occupancy map))
+
+One small map per tick says, for each block of cells, whether it may hold liquid, surface or solid. Consumers use it to skip empty blocks. It is solver-neutral: it is built from the published particle frame and the level set the Liquid Surface group already makes, so any solver whose frame feeds that group gets it for free.
+
+- **Block size: 4 cells per side** (`LIQUID_BLOCK_CELLS` in `R/liquid/blocks.rs`). A 4³ block is 64 cells, one threadgroup's worth for a later solver tile. At 64³ cells the map is 16³ = 4096 words, 16 KB. 8 per side skips too little at a thin surface; 2 makes the map as costly to build as the scans it saves. Edge blocks are partial (ceil division).
+- **Lattice:** the domain's cells, which is the solid lattice's nodes minus one per axis (the whitewater grid). Block `b` covers cells `4b .. 4b+3`, clipped to the lattice. The level set refines each cell by a whole factor `s`.
+- **Layout:** one u32 per block, index `bx + BX·(by + BY·bz)`. Bit 0 LIQUID: some cell in the block is liquid under the solver's own rule (a particle in the cell, the step's `classify` pass). Bit 1 SURFACE: the level set has a node `< 0` and a node `>= 0` in the block's closed footprint (refined nodes `4bs` to `min(4(b+1)s, L-1)` per axis). Bit 2 SOLID: some solid-lattice node `< 0` in the block's closed footprint. Bits 3–31 are zero.
+- **Meaning:** a set bit means "may hold", a clear bit guarantees absence. A consumer that ignores the map, or is given none, computes the same thing; the map only lets it skip work whose result it already knows.
+- **Which tick:** the published frame's tick, the state the solver hands the next tick.
+- **Writer:** one atom, `node.liquid_blocks`, in the Liquid Surface group, after the group's sort and level set. It refuses by name when the sort's bins are not the domain's cells or the refinement is not whole. Nothing else writes the map.
+- **Consumers:** whitewater's `node.surface_crossings` takes it as an optional `blocks` input and skips the footprint scan in blocks without SURFACE, giving bit-identical output. Unwired, it scans every cell. A map shorter than the block lattice is a refusal, never a silent full scan.
+- **Solver tile skipping (later, P12):** a per-tick map can gate a step's per-cell work only after it is dilated by `ceil(steps × max cell travel per step / 4)` blocks, since liquid moves during the tick. The graph cannot feed the map back into the tick region without a state capture, so the solver builds its own map inside the region from its `water` lattice with the same atom shape and the same block size. Pressure sweeps skip blocks with no LIQUID after dilation by one block (the solve's stencil reach). The mesher reads the clamped level set, which differs from the exported one only near solids, so it may skip only blocks with neither SURFACE nor SOLID; that is verified against `node.clamp_liquid_to_solids` before it ships.
+
 ## 4. Invariants & enforcement
 
 | # | Invariant | Check |
@@ -304,7 +317,8 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 | I12 | No atomics where a solver forbids them | `liquid_atomic_free_atoms` (scans each listed atom's WGSL for `atomic`) |
 | I13 | Live frames never wait on the GPU | `liquid_live_frames_never_wait` (a test-build wait counter on the frame clock stays 0 over 120 live frames) |
 | I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-renderer/src/node_graph/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
-| I15 | Fusion never crosses a region border, nested or not | `nested_region_fusion_stays_inside` (freeze tests) |
+| I15 | Fusion never crosses a region border; regions never nest | `substeps_freeze_never_fuses_across_border`, `substeps_region_nested_boundary_rejected` |
+| I17 | The block map never changes a consumer's output | `surface_crossings_block_skip_is_bit_identical` (gpu proof, map on vs off) |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |
 
 Rows I4–I8, I11, I13 and I16 run for every row of `LIQUID_SOLVERS` unless the row names an exemption.
@@ -388,6 +402,8 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P5 — Nested regions: the compiler
 
+**Retired 2026-10-01, with P6.** Nesting's only user was the pressure solve's Krylov loops, which now run inside `node.gpu_flip_step`. The nesting support was deleted; a boundary inside another region's body is a compile error (`substeps_region_nested_boundary_rejected`).
+
 - **Entry state:** `rg -n 'never nested' crates/manifold-renderer/src/node_graph/substeps.rs` matches.
 - **Read-back:** FREEZE_COMPILER_MAP.md section 4 (The cut rules — when fusion says no) and section 9 (Executor contracts fusion leans on), item 12; `R/substeps.rs` whole; MPM D7; SWASH D8 and D10 on the branch.
 - **Deliverables:** a region's body may contain whole regions, depth at most 2. An inner region lies wholly inside one outer body; only an outer region may name a clock; an inner region's escaping outputs feed only its outer body or the outer capture. Compile errors name the NodeIds for partial overlap, depth 3 and a clock on an inner region. Tests: `nested_region_contracts_inner_whole`, `nested_region_rejects_partial_overlap`, `nested_region_rejects_depth_three`, `nested_region_rejects_inner_clock`; every existing substep test unchanged.
@@ -397,6 +413,8 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Test scope:** focused renderer.
 
 ### P6 — Nested regions: executor and freeze
+
+**Retired 2026-10-01** (see P5).
 
 - **Entry state:** P5 on main.
 - **Read-back:** P5's deliverables; FREEZE_COMPILER_MAP.md section 9 (Executor contracts fusion leans on), item 12; the executor's region loop.
@@ -423,15 +441,19 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Forbidden:** mux-gated step copies; a SWASH-only clock; importing any `matter_*` item; changing the step's numerics.
 - **Test scope:** focused renderer; GPU proofs.
 
-### P7b — SWASH's wired lattice (`feat/fft-water`)
+### P7b — GPU FLIP's Resolution knob (`feat/gpu-flip-liquid-fields`)
 
-- **Entry state:** P7a on the branch.
-- **Read-back:** `R/fluid/domain.rs`; `R/execution/array_growth.rs`; `krylov_basis.rs`; the SWASH extent rules.
-- **Deliverables:** `domain_layout_snapped(bounds, resolution, multiple)` beside `domain_layout`; SWASH uses the multiple its FFT plans accept (8 expected; ⚠ VERIFY-AT-IMPL in the `fft_3d` plan limits). The lattice is wired from `node.swash_domain` into every SWASH atom; capacities derive from one provided lattice-sized array, re-derived by `array_growth.rs` when Resolution changes; P7a's lattice refusal is deleted. ⚠ VERIFY-AT-IMPL: if array growth can't re-derive through the Krylov region's boundary, stop and escalate; no special path.
-- **Gate:** the CPU extent check at every resolution from 32 to the ceiling in steps of the multiple; GPU runs one size at a time (32, 40, 48, 56, 64 and up), each after its CPU proof, each with the conformance rows; the highest green size becomes SWASH's `LIQUID_MAX_RESOLUTION`.
-- **Demo:** L2: Dam Break SWASH at each size, PNGs.
+**As built (2026-10-01, by GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage design)).** The step and its solver read the lattice at run time, so Resolution applies on change at any side from 1 to 1024 with no graph rebuild. The V-cycle depth follows the lattice down to 4³ and solves that level exactly, which supersedes the fixed five levels and the multiple-of-16 refusal below. Proof: `gpu_flip_resolution_card_resizes_at_runtime` (64 → 32 → 100, a step and whitewater frame at each).
+
+- **Entry state:** P7a built. `rg -n 'its lattice cannot change yet' crates/manifold-renderer/src/node_graph/primitives/gpu_flip_domain.rs` matches.
+- **Read-back:** `gpu_flip_preset.rs` whole (`water_def`, `render_def`, `Builder::lattice`, `lattice_box`, the V-cycle builders); `gpu_flip_domain.rs` (`MULTIGRID_LEVELS`, `multigrid_refusal`); `R/fluid/domain.rs`; `R/array_growth.rs`; the GPU FLIP extent rules in `R/liquid/extent.rs`.
+- **Decided (Peter, 2026-10-01; supersedes BUG-86kv (GPU FLIP Resolution knob) option (c) and closes BUG-znja (where the water graph is rebuilt)):** Resolution is a plain param that applies on change, with no graph rebuild and no new mechanism. The V-cycle has a fixed 5 levels at every lattice (`MULTIGRID_LEVELS`), so a lattice side must be a multiple of 16, refused by name otherwise. The coarsest level is 2³ at 32, 4³ at 64 and 8³ at 128; it is smoothed by 16 red-black rounds each way (`COARSE_SWEEPS`) instead of solved exactly. Measured with `scripts/mgpcg_reference.py --depth 5 --coarse-sweeps 16`, the conjugate gradient iterations to a 1e-5 residual match the exact coarse solve at every size: Dam Break 7–8 at 32, 64 and 128; deep pool 6 at 32 and 64, 7 at 128. Fewer rounds cost the deep pool one more iteration (2 rounds at 64, 4 or 8 at 128). So the fixed depth does not cap Resolution across 32–128.
+- **What still fixes the graph to one lattice:** every lattice atom holds `nodes_x/y/z`, `cell_size` and `lattice_min_*` as build params, the vector atoms hold `row_length`, and array capacities are planned from those params; `array_growth` regrows only CPU-origin arrays. The face extension band is lattice-dependent too: `band_layers` is 3 at 32, 4 at 64 and 6 at 128 `node.extend_faces` copies. Until these are lifted, `built_resolution` and its refusal stay.
+- **Deliverables (BUG-o65k (GPU FLIP lattice wiring)):** the lattice wired from `node.gpu_flip_domain`'s outputs into every lattice atom and `row_length`; GPU-origin array capacities re-derived from the wired lattice when it changes; the extension band fixed at the ceiling's count; `built_resolution` and its refusal deleted; an end-to-end water panel test on the GPU FLIP Dam Break (the panel walk is already solver-neutral through `is_liquid_domain` and the GPU FLIP dial row).
+- **Gate:** the CPU extent check at every multiple of 16 from 32 to the ceiling; GPU runs one size at a time upward from 32, each after its CPU proof, each with the conformance rows; the highest green size becomes GPU FLIP's refusal ceiling (D14).
+- **Demo:** L2: GPU FLIP Dam Break at each size, PNGs.
 - **Gesture:** raise Resolution on the water panel between songs; the water restarts at the new detail.
-- **Forbidden:** skipping a size on the GPU; a preset copy per resolution.
+- **Forbidden:** skipping a size on the GPU; a preset copy per resolution; a graph rebuild on a Resolution change.
 - **Test scope:** focused renderer; GPU proofs.
 
 ### P8 — Forces and impulses for GPU liquids (supersedes MPM P3c)
@@ -443,6 +465,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Gesture:** map a pad to Fire on a radial impulse; the pool splashes on every hit and ignores hits while paused.
 - **Forbidden:** per-node CPU field evaluation; a liquid-only force system or trigger router; replaying a paused hit on resume.
 - **Test scope:** focused renderer, app; GPU proofs.
+- **As built (the API a second domain calls):** `LiquidImpulses` owns the queue on the liquid's clock: `observe_frame(transport, &ClockFrame)` after the clock advances, then the four impulse hooks map to `stamp`, `enqueue` (a held clock discards at once, with a receipt), `drain_applied` and `drain_discarded`. A hit reads "applied" only after the domain calls `commit_frame` once its fields are on the GPU; a frame that fails or holds calls `abandon_frame` (drains do it as a backstop), so its hits come back discarded, never applied. `LiquidFields::prepare(lattice, field, &ClockFrame, &impulses)` records the scene field at the frame's target time and samples it at each tick's start onto a coarse lattice (`FieldLattice::of`, one node per 4 cells, covering the solver lattice): one lattice while the field holds still, one per tick while it moves, so tick k reads the same forces at 60 and 30 fps (`liquid_force_lattices_match_across_frame_rates`). Between frames the field is interpolated linearly, so a field that curves in time differs slightly across frame rates at the in-between ticks; exact replay is BUG-25nu (exact per-tick liquid force replay). `upload` writes the impulse lattice and the force lattices to the GPU; the domain publishes `forces`, `impulses` and the `FieldFrame` scalars (`field_nodes_x/y/z`, `field_spacing`, `force_lattices`, `impulse_tick`), and atoms pick their tick's lattice from `tick_index` and the domain's `first_tick` (`liquid_field_force_base`). Atoms read them with `LIQUID_FIELD` (`liquid_field.wgsl`, CPU twin `FieldLattice::sample`) and `FieldBinding::read`; MPM adds the force to gravity in `node.matter_grid_update` and the impulse on the impulse tick's first substep, and `node.matter_body_reaction` repeats both. GPU FLIP does the same (BUG-70l4 (wire GPU FLIP to liquid fields)): `node.gpu_flip_domain` owns a `LiquidImpulses` and a `LiquidFields` whose lattice covers the face grid from the box min (`GpuFlipGeometry::field_lattice`), and the step's `face_gravity` pass adds the force to gravity on each face and the impulse on the impulse tick's first step. GPU FLIP has no body owner yet, so it refuses an impulse aimed at a rigid body; the solids phase plugs its owner into the same hooks. A frame-held domain has no physics history, so firing at it observes nothing at the source (`observe_physics_at_source`).
 
 ### P9 — Add Fluid authors the default liquid template (seam brief; supersedes MPM P4b)
 
@@ -465,6 +488,14 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Demo:** L2: a face-speed slice of SWASH and MPM Dam Break at the same tick, side by side.
 - **Forbidden:** a consumer that switches on solver; node velocities as the contract; per-solver distance outputs; publishing every tick.
 - **Test scope:** focused renderer; GPU proofs.
+
+### P11 — Block occupancy map and its first consumer (BUG-1z1p (shared block occupancy map))
+
+`R/liquid/blocks.rs` (constants, WGSL include), `node.liquid_blocks` on the codegen path with a CPU-reference value proof and a fused-vs-unfused proof, an extent rule, and `node.surface_crossings` reading the map. Gate: I17, and a measured surface_crossings time with the map, net of the producer's cost.
+
+### P12 — Solver tile skipping (entry: P11 shipped and the dilation bound measured)
+
+The GPU FLIP step builds its in-region map from `water` per section 3.10 (block occupancy map) and gates face and pressure work on dilated LIQUID. Gate: a dam break with skipping on matches skipping off bit for bit over 300 ticks.
 
 ## 6. Decided — do not reopen
 

@@ -5,7 +5,7 @@
 //! capacity, a mesh leaving the tank, frame-time creep and memory growth; it
 //! splits each frame's GPU and CPU time by stage from timestamped frames, and
 //! checks what the transport does to the liquid's clock: pause, Reset,
-//! `clear_state`. `gpu_flip_rendered_scenes_cover_every_dispatch`
+//! the generator host's `reset_state`. `gpu_flip_rendered_scenes_cover_every_dispatch`
 //! proves every array these graphs allocate at each lattice run here, and
 //! each run first checks its arrays fit the device. Hours long at the large
 //! lattices, so opt-in: `--features water-race-probes`.
@@ -45,22 +45,24 @@ const PROFILE_EVERY: usize = 25;
 const STILLS: [usize; 4] = [90, 240, 600, 900];
 
 /// Stages in the order the table prints them.
-const STAGES: [&str; 23] = [
+const STAGES: [&str; 25] = [
     "fill + particle state",
     "particle sort",
-    "classify cells",
+    "particle distance + classify",
     "particle→face",
-    "gravity + walls",
+    "forces",
+    "solids",
     "extrapolation",
     "divergence",
-    "solve levels (coarse water, zeros)",
+    "solve levels (coarse water and faces)",
     "solve smoothing",
     "solve residual + transfers",
     "solve coarsest level",
     "solve vectors (CG)",
     "pressure gradient",
-    "density solve (source, passes, spread)",
+    "density source + spread",
     "face→particle + advect",
+    "step, other (CPU encode)",
     "surface sort",
     "surface blobs",
     "surface volume",
@@ -71,29 +73,29 @@ const STAGES: [&str; 23] = [
     "tone map + other",
 ];
 
-/// Which stage a node belongs to, by its graph name.
-fn stage(name: &str) -> &'static str {
-    let in_step = name.split_once('.').filter(|(p, _)| p.len() > 1 && p.starts_with('s') && p[1..].parse::<u32>().is_ok());
-    if let Some((_, local)) = in_step {
-        if local.starts_with("density.") {
-            return "density solve (source, passes, spread)";
-        }
-        return match local {
-            "sort" => "particle sort",
-            "water" => "classify cells",
-            "faces" => "particle→face",
-            "gravity" => "gravity + walls",
-            "divergence" => "divergence",
-            "project" => "pressure gradient",
-            "move" => "face→particle + advect",
-            l if l.starts_with("old_extend") || l.starts_with("new_extend") => "extrapolation",
-            l if l.contains("_pre") || l.contains("_post") => "solve smoothing",
-            l if l.starts_with("mg") && (l.ends_with("_residual") || l.ends_with("_restrict") || l.ends_with("_prolong")) => {
-                "solve residual + transfers"
-            }
-            l if l.starts_with("mg") && l.ends_with("_solve") => "solve coarsest level",
-            "cg" | "rz" | "beta" | "direction" | "minus_lp" | "p_dot_s" | "alpha" | "solution" | "residual" => "solve vectors (CG)",
-            _ => "solve levels (coarse water, zeros)",
+/// Which stage a dispatch belongs to: a step's by its dispatch label, any
+/// other by its node's graph name. CPU time has no label.
+fn stage(name: &str, label: &str) -> &'static str {
+    if name.split_once('.').is_some_and(|(p, local)| local == "step" && p.starts_with('s') && p[1..].parse::<u32>().is_ok()) {
+        let pass = label.strip_prefix("gpu_flip.").unwrap_or("");
+        return match pass {
+            p if p.starts_with("step.sort.") => "particle sort",
+            "step.distance" | "step.classify" => "particle distance + classify",
+            "step.particles_to_faces" => "particle→face",
+            "step.forces" => "forces",
+            "step.solid_distance" | "step.open_fractions" | "step.solid_velocity" | "step.phi_into_solids"
+            | "step.water_into_solids" | "step.constrain" | "step.constrain_old" => "solids",
+            p if p.starts_with("step.extend_") => "extrapolation",
+            "step.divergence" => "divergence",
+            "pressure.coarsen_water" | "pressure.coarsen_faces" | "pressure.coarse_inverse" => "solve levels (coarse water and faces)",
+            "pressure.smooth" => "solve smoothing",
+            "pressure.residual" | "pressure.restrict" | "pressure.prolong" => "solve residual + transfers",
+            "pressure.coarse_solve" => "solve coarsest level",
+            p if p.starts_with("pressure.") => "solve vectors (CG)",
+            "step.project" => "pressure gradient",
+            "step.density_source" | "step.spread" => "density source + spread",
+            "step.move" => "face→particle + advect",
+            _ => "step, other (CPU encode)",
         };
     }
     match name {
@@ -204,9 +206,8 @@ struct FrameResult {
 const SMALL_SPAN_MS: f64 = 0.02;
 
 impl Smoke {
-    /// The scene frozen, as the app renders a generator. Nothing in the
-    /// solve or the step fuses (`gpu_flip_solve_and_step_do_not_fuse`), so
-    /// every dispatch keeps its own stage.
+    /// The scene frozen, as the app renders a generator. The step is one
+    /// barriered node and never fuses, so its dispatches keep their labels.
     fn new(scene: WaterScene) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
@@ -342,9 +343,9 @@ impl Smoke {
         if profile {
             let steps = self.runtime.take_step_profiles();
             let mut split = vec![(0.0, 0.0); STAGES.len()];
-            let index = |name: &str| STAGES.iter().position(|s| *s == stage(name)).expect("known stage");
+            let index = |name: &str, label: &str| STAGES.iter().position(|s| *s == stage(name, label)).expect("known stage");
             for step in &steps {
-                split[index(&self.step_names[step.step_idx])].1 += step.cpu_nanos as f64 / 1e6;
+                split[index(&self.step_names[step.step_idx], "")].1 += step.cpu_nanos as f64 / 1e6;
             }
             let step_of = |tag: &str| tag.rsplit_once(":s").and_then(|(_, idx)| idx.parse::<usize>().ok());
             let mut spans: Vec<_> = result.spans.iter().collect();
@@ -373,7 +374,7 @@ impl Smoke {
                 counts[3] += span.millis;
                 counts[4] += gap;
                 match step_of(&span.tag) {
-                    Some(idx) if idx < self.step_names.len() => split[index(&self.step_names[idx])].0 += charged,
+                    Some(idx) if idx < self.step_names.len() => split[index(&self.step_names[idx], &span.label)].0 += charged,
                     _ => {
                         unattributed += 1;
                         split[STAGES.len() - 1].0 += charged;
@@ -417,10 +418,16 @@ impl Smoke {
         self.dumped("state", "out", self.scene.particles() as usize)
     }
 
-    /// Water cells in the step's lattice: the size of its pressure solve.
-    fn water_cells(&self, step: usize) -> u32 {
-        let cells = self.scene.pressure.cells();
-        self.dumped::<f32>(&format!("s{step}.water"), "out", cells).iter().filter(|&&w| w > 0.5).count() as u32
+    /// Cells holding a live particle after the frame: the size of the next
+    /// tick's pressure solve.
+    fn water_cells(&self) -> u32 {
+        let (n, h, min) = (self.scene.pressure.n, self.scene.pressure.cell_size(), self.scene.min());
+        let mut wet = vec![false; n.pow(3)];
+        for p in self.particles().iter().filter(|p| p.position_radius[3] > 0.0) {
+            let c: [usize; 3] = std::array::from_fn(|a| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize);
+            wet[c[0] + n * (c[1] + n * c[2])] = true;
+        }
+        wet.iter().filter(|&&w| w).count() as u32
     }
 
     /// Live triangles and, over their vertices, the bounding box and how many
@@ -569,7 +576,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     let mut ffmpeg = ffmpeg.ok();
 
     let mut csv = std::fs::File::create(dir.join(format!("{tag}_frames.csv"))).expect("csv");
-    writeln!(csv, "frame,profiled,gpu_ms,cpu_ms,water0,water1,triangles,mem_mb").unwrap();
+    writeln!(csv, "frame,profiled,gpu_ms,cpu_ms,water_cells,triangles,mem_mb").unwrap();
     let mut gpu: Vec<(usize, f64)> = Vec::new();
     let mut cpu: Vec<(usize, f64)> = Vec::new();
     let mut stage_gpu: Vec<Vec<f64>> = vec![Vec::new(); STAGES.len()];
@@ -618,8 +625,8 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
             gpu.push((frame, r.gpu_ms));
             cpu.push((frame, r.cpu_ms));
         }
-        let wet: Vec<u32> = (0..scene.steps).map(|k| smoke.water_cells(k)).collect();
-        water_peak = wet.iter().copied().fold(water_peak, u32::max);
+        let wet = smoke.water_cells();
+        water_peak = water_peak.max(wet);
         let (triangles, low, high, bad_vertices) = smoke.mesh();
         tri_peak = tri_peak.max(triangles);
         tri_low = tri_low.min(triangles);
@@ -647,12 +654,10 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         memory.push((frame, mem));
         writeln!(
             csv,
-            "{frame},{},{:.3},{:.3},{},{},{triangles},{mem:.1}",
+            "{frame},{},{:.3},{:.3},{wet},{triangles},{mem:.1}",
             u8::from(profile),
             r.gpu_ms,
             r.cpu_ms,
-            wet[0],
-            wet.get(1).copied().unwrap_or(0)
         )
         .unwrap();
         if frame % 10 == 0 || frame == 1 {
@@ -675,7 +680,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         if frame % 100 == 0 {
             rss.push((frame, host_rss_mb()));
             println!(
-                "SMOKE {tag} frame {frame}: {:.2} ms GPU, {:.2} ms CPU, water cells {wet:?}, {triangles} triangles, GPU mem {mem:.0} MB, fastest {bucket_fastest:.2} m/s over the last 100, {:.0} s wall",
+                "SMOKE {tag} frame {frame}: {:.2} ms GPU, {:.2} ms CPU, water cells {wet}, {triangles} triangles, GPU mem {mem:.0} MB, fastest {bucket_fastest:.2} m/s over the last 100, {:.0} s wall",
                 r.gpu_ms,
                 r.cpu_ms,
                 wall.elapsed().as_secs_f64()
@@ -732,7 +737,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     println!("SMOKE {tag} GPU memory: frame 1 {mem_first:.0} MB, max {mem_max:.0} MB, last {:.0} MB", memory.last().map_or(f64::NAN, |m| m.1));
     println!(
         "SMOKE {tag} capacity: water cells peak {water_peak} ({:.1}% of the lattice); triangles {tri_low}..{tri_peak}, vertices peak {} of {mesh_capacity} ({:.2}%)",
-        100.0 * f64::from(water_peak) / scene.pressure.cells() as f64,
+        100.0 * f64::from(water_peak) / scene.pressure.n.pow(3) as f64,
         3 * tri_peak,
         100.0 * 3.0 * f64::from(tri_peak) / mesh_capacity as f64
     );
@@ -807,12 +812,15 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         for _ in 0..30 {
             smoke.frame(dt, false);
         }
-        smoke.runtime.clear_state();
+        // The generator host's state reset (export start, resize): reset_state
+        // walks every node. clear_state is the effect chain's, over card
+        // handles a generator runtime does not have.
+        smoke.runtime.reset_state(&smoke.device);
         smoke.frame(dt, false);
         let cleared = max_diff(&first, &smoke.particles());
-        println!("SMOKE {tag} transport: clear_state mid-run, max |Δx| against the first frame {cleared:.3e} m");
+        println!("SMOKE {tag} transport: reset_state mid-run, max |Δx| against the first frame {cleared:.3e} m");
         if cleared > 0.0 {
-            smoke.critical.push(format!("clear_state mid-run left particles {cleared:.3e} m from the fill"));
+            smoke.critical.push(format!("reset_state mid-run left particles {cleared:.3e} m from the fill"));
         }
     }
     println!("SMOKE {tag} critical: {:?}", smoke.critical);

@@ -5,13 +5,13 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::standalone_pipeline::standalone_pipeline;
@@ -27,16 +27,20 @@ struct SolidDistanceUniforms {
     nodes_y: i32,
     nodes_z: i32,
     closed_faces: i32,
+    wall_inset: i32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
     name: LiquidSolidDistance,
     type_id: "node.liquid_solid_distance",
-    purpose: "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
+    purpose: "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall (Wall Inset nodes in from the lattice edge) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
     inputs: {
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,
@@ -45,6 +49,7 @@ crate::primitive! {
         cell_size: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
+        wall_inset: ScalarF32 optional,
         body_count: ScalarF32 optional,
         rows: ScalarF32 optional,
         tick_seconds: ScalarF32 optional,
@@ -61,6 +66,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wall_inset"), label: "Wall Inset (nodes)", ty: ParamType::Int, default: ParamValue::Float(PADDING_NODES as f32), range: Some((0.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("rows"), label: "Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -102,8 +108,11 @@ impl Primitive for LiquidSolidDistance {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Solid Distance") else {
+            return;
+        };
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
+        let wall_inset = ctx.scalar_or_param("wall_inset", PADDING_NODES as f32).round().clamp(0.0, 64.0) as i32;
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
         let tick_seconds = ctx.scalar_or_param("tick_seconds", TICK as f32);
@@ -137,35 +146,84 @@ impl Primitive for LiquidSolidDistance {
         let ((Some(bodies), Some(shapes), Some(atlas)), Some(solid)) = (inputs, self.solid.as_ref()) else {
             return;
         };
-        let rows = rows.min((bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32);
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = SolidDistanceUniforms {
-            lattice_min_x: lattice.min()[0],
-            lattice_min_y: lattice.min()[1],
-            lattice_min_z: lattice.min()[2],
+        let job = SolidDistanceJob {
+            min: lattice.min(),
             cell_size: lattice.cell_size(),
-            nodes_x: lattice.nodes()[0] as i32,
-            nodes_y: lattice.nodes()[1] as i32,
-            nodes_z: lattice.nodes()[2] as i32,
+            nodes: lattice.nodes(),
             closed_faces,
+            wall_inset,
             body_count,
             rows,
             tick_seconds,
-            dispatch_count: nodes,
+            bodies,
+            shapes,
+            atlas,
+            out: solid,
         };
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: bodies, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: shapes, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: solid, offset: 0 },
-            ],
-            [nodes.div_ceil(256), 1, 1],
-            "node.liquid_solid_distance",
-        );
+        encode_solid_distance(&mut self.pipeline, gpu.device, gpu.native_enc, &job, "node.liquid_solid_distance");
     }
+}
+
+/// One solid distance lattice: `nodes` lattice nodes from `min`, `cell_size` apart.
+pub(crate) struct SolidDistanceJob<'a> {
+    pub min: [f32; 3],
+    pub cell_size: f32,
+    pub nodes: [u32; 3],
+    /// Box walls that count as solid (bits −X +X −Y +Y −Z +Z), `wall_inset` nodes in from the lattice edge.
+    pub closed_faces: i32,
+    pub wall_inset: i32,
+    pub body_count: i32,
+    pub rows: i32,
+    pub tick_seconds: f32,
+    pub bodies: &'a GpuBuffer,
+    pub shapes: &'a GpuBuffer,
+    pub atlas: &'a GpuBuffer,
+    /// At least one f32 per node.
+    pub out: &'a GpuBuffer,
+}
+
+/// The node's kernel, for a stage that writes a solid lattice inside its own
+/// dispatch chain (`node.gpu_flip_step`). `slot` holds the codegen pipeline.
+pub(crate) fn encode_solid_distance(
+    slot: &mut Option<GpuComputePipeline>,
+    device: &GpuDevice,
+    encoder: &mut GpuEncoder,
+    job: &SolidDistanceJob<'_>,
+    label: &str,
+) {
+    let nodes = job.nodes.iter().map(|&n| u64::from(n)).product::<u64>() as u32;
+    let rows = job.rows.min((job.bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32);
+    let pipeline = standalone_pipeline::<LiquidSolidDistance>(slot, device);
+    let uniforms = SolidDistanceUniforms {
+        lattice_min_x: job.min[0],
+        lattice_min_y: job.min[1],
+        lattice_min_z: job.min[2],
+        cell_size: job.cell_size,
+        nodes_x: job.nodes[0] as i32,
+        nodes_y: job.nodes[1] as i32,
+        nodes_z: job.nodes[2] as i32,
+        closed_faces: job.closed_faces,
+        wall_inset: job.wall_inset,
+        body_count: job.body_count,
+        rows,
+        tick_seconds: job.tick_seconds,
+        dispatch_count: nodes,
+        _pad0: 0,
+        _pad1: 0,
+        _pad2: 0,
+    };
+    encoder.dispatch_compute(
+        pipeline,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: job.bodies, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: job.shapes, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: job.atlas, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: job.out, offset: 0 },
+        ],
+        [nodes.div_ceil(256), 1, 1],
+        label,
+    );
 }
 
 #[cfg(test)]
@@ -183,19 +241,26 @@ mod tests {
         for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>", "buf_solid[idx] = body(idx, params.dispatch_count,"] {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
-        assert_eq!(std::mem::size_of::<SolidDistanceUniforms>(), 48);
+        assert!(
+            wgsl.contains("closed_faces: i32,\n    wall_inset: i32,\n    body_count: i32,")
+                && wgsl.contains("dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,"),
+            "{wgsl}"
+        );
+        assert_eq!(std::mem::size_of::<SolidDistanceUniforms>(), 64);
     }
 
-    /// The kernel puts the walls where `LiquidLattice` pads them: the
-    /// authored box starts PADDING_NODES in and spans nodes − 1 − 2·PADDING
-    /// cells. Change both together.
+    /// By default the node puts the walls where `LiquidLattice` pads them:
+    /// the authored box starts PADDING_NODES in and spans
+    /// nodes − 1 − 2·PADDING cells.
     #[test]
     fn liquid_solid_distance_walls_sit_at_the_lattice_padding() {
-        use crate::node_graph::liquid::lattice::PADDING_NODES;
+        let inset = <LiquidSolidDistance as crate::node_graph::primitive::PrimitiveSpec>::PARAMS
+            .iter()
+            .find(|p| p.name == "wall_inset")
+            .map(|p| p.default.clone());
+        assert!(matches!(inset, Some(ParamValue::Float(v)) if v == PADDING_NODES as f32), "{inset:?}");
         let shader = include_str!("shaders/liquid_solid_distance_body.wgsl");
-        let inset = format!("vec3<f32>({}.0 * cell_size)", PADDING_NODES);
-        let span = format!("n - vec3<u32>({}u)", 1 + 2 * PADDING_NODES);
-        assert!(shader.contains(&inset) && shader.contains(&span), "the kernel's walls are not at padding {PADDING_NODES}");
+        assert!(shader.contains("f32(inset) * cell_size") && shader.contains("n - vec3<u32>(1u + 2u * inset)"));
     }
 
     /// The solid atom poses bodies the way node.matter_move_bodies does:

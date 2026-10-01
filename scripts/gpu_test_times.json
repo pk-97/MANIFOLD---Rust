@@ -1,0 +1,33 @@
+{
+  "measured_at": "2026-10-01",
+  "sha": "seed: /tmp/gpu_gate_scope/slowest.md + land-batch-gate2.log (not a full nightly run)",
+  "tests": {
+    "matter_bodies::matter_collider_penetration_bounded": 309.6,
+    "matter_bodies::matter_fill_skips_colliders": 260.9,
+    "matter_look::matter_momentum_conserved_free_blob": 173.8,
+    "matter_look::matter_look_splash_retention": 156.3,
+    "matter_look::matter_look_volume_drift": 117.4,
+    "rt_dynamic_catalog::rt_dynamic_catalog_all_stock_and_compositions": 23.5,
+    "encode_replay::encode_replay_parity": 22.1,
+    "cinematic_scene_tail::import_tail_is_byte_clean_passthrough_at_neutral_lens": 21.8,
+    "matter_cost_probe::matter_cost_probe": 21.3,
+    "water_basin::scene_physics_invalid_mesh_role_fails_instead_of_waiting_for_preparation": 18.9,
+    "encode_replay::encode_replay_probe": 15.2,
+    "liquid_conformance::liquid_live_frames_never_wait": 13.6,
+    "liquid_conformance::liquid_hydrostatic_lift": 13.4,
+    "gbuffer_velocity::gbuffer_velocity_two_frame_conformance": 11.7,
+    "cinematic_scene_tail::import_tail_frame_cost_reported_at_1080p": 9.2,
+    "camera_conformance::flatten_3d_and_render_scene_agree_with_each_other": 9.2,
+    "bug237_light_camera_commit_render_proof::camera_orbit_commit_visibly_changes_the_framing": 7.1,
+    "cinematic_scene_tail::import_tail_frame_cost_reported_at_4k": 7.0,
+    "fragment_storage::fragment_reads_storage_buffer_via_bytes_binding": 7.0,
+    "render_scene_fog::p3_night_garden_hires_acceptance_demo": 6.8,
+    "matter_scene::matter_fixed_point_headroom": 5.8,
+    "physics_solids::physics_imported_flower_shatter_release_preserves_authored_row_and_materials": 5.2,
+    "liquid_conformance::liquid_coupled_world_steps_once_per_tick": 5.0,
+    "liquid_conformance::liquid_floating_draft": 4.9,
+    "encode_replay::encode_replay_survives_changes": 4.9,
+    "rt_normal_tangent_mirror::normal_tangent_mirror_normal_map_reaches_the_traced_reflection": 4.8,
+    "water_basin::water_invalid_configuration_marks_frame_failed_for_export": 4.4
+  }
+}

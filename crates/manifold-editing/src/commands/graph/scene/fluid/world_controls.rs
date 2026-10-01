@@ -2,6 +2,7 @@
 
 use super::*;
 use manifold_core::effect_graph_def::{BindingTarget, GROUP_INPUT_TYPE_ID};
+use manifold_core::liquid_domain::{NestedLiquidDomain, liquid_dial_params};
 use manifold_core::scene_exposure::stamp_scene_node_exposures;
 
 const CONTROLS: [(&str, &str); 5] = [
@@ -16,6 +17,24 @@ pub(super) fn is_shared_fluid_control(name: &str) -> bool {
     CONTROLS.iter().any(|(_, fluid)| *fluid == name)
 }
 
+/// The body of the group `path` ends at, entering each group in turn.
+fn group_body_mut<'a>(
+    nodes: &'a mut [EffectGraphNode],
+    path: &[u32],
+) -> Result<&'a mut GroupDef, &'static str> {
+    let (first, rest) = path.split_first().ok_or("Add Fluid control group is unavailable")?;
+    let body = nodes
+        .iter_mut()
+        .find(|node| node.id == *first && node.type_id == GROUP_TYPE_ID)
+        .and_then(|node| node.group.as_deref_mut())
+        .ok_or("Add Fluid control group is unavailable")?;
+    if rest.is_empty() {
+        Ok(body)
+    } else {
+        group_body_mut(&mut body.nodes, rest)
+    }
+}
+
 fn next_id(def: &EffectGraphDef) -> Result<u32, &'static str> {
     max_node_id_over(&def.nodes)
         .checked_add(1)
@@ -25,7 +44,7 @@ fn next_id(def: &EffectGraphDef) -> Result<u32, &'static str> {
 pub(super) fn share_world_controls(
     def: &mut EffectGraphDef,
     group_id: u32,
-    fluid_id: u32,
+    domain: &NestedLiquidDomain,
     metadata: &[SceneParamMetadata],
 ) -> Result<(), &'static str> {
     if CONTROLS
@@ -77,18 +96,40 @@ pub(super) fn share_world_controls(
     let world_node_id = world.node_id.clone();
     let world_params = world.params.clone();
 
-    let input_id = next_id(def)?;
-    let input = scene_build_node(input_id, GROUP_INPUT_TYPE_ID, None, BTreeMap::new());
-    let group = def
-        .nodes
-        .iter_mut()
-        .find(|node| node.id == group_id)
-        .and_then(|node| node.group.as_deref_mut())
-        .ok_or("Add Fluid control group is unavailable")?;
-    if !group.nodes.iter().any(|node| node.id == fluid_id) {
-        return Err("Add Fluid simulation node is unavailable");
+    // The fluid group, then each group nested on the way to the domain.
+    let path: Vec<u32> = std::iter::once(group_id)
+        .chain(domain.groups.iter().copied())
+        .collect();
+    let mut inputs = Vec::with_capacity(path.len());
+    for depth in 0..path.len() {
+        let id = next_id(def)?;
+        let body = group_body_mut(&mut def.nodes, &path[..=depth])?;
+        let sentinels: Vec<u32> = body
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+            .map(|node| node.id)
+            .collect();
+        inputs.push(match sentinels.as_slice() {
+            [] => {
+                body.nodes
+                    .push(scene_build_node(id, GROUP_INPUT_TYPE_ID, None, BTreeMap::new()));
+                id
+            }
+            [existing] => *existing,
+            _ => return Err("Add Fluid control group has more than one input sentinel"),
+        });
     }
-    group.nodes.push(input);
+    let domain_type = group_body_mut(&mut def.nodes, &path)?
+        .nodes
+        .iter()
+        .find(|node| node.id == domain.node)
+        .map(|node| node.type_id.clone())
+        .ok_or("Add Fluid simulation node is unavailable")?;
+    let dials = liquid_dial_params(&domain_type).unwrap_or_default();
+    if CONTROLS.iter().any(|(_, fluid)| !dials.contains(fluid)) {
+        return Err("Add Fluid liquid domain lacks the shared World controls");
+    }
 
     for (world_param, fluid_param) in CONTROLS {
         let incoming: Vec<_> = def
@@ -148,24 +189,29 @@ pub(super) fn share_world_controls(
             (id, "out".to_owned())
         };
 
-        let group = def
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == group_id)
-            .unwrap()
-            .group
-            .as_deref_mut()
-            .unwrap();
-        group.interface.inputs.push(InterfacePortDef {
-            name: world_param.into(),
-            port_type: "Scalar(F32)".into(),
-        });
-        group.wires.push(scene_build_wire(
-            input_id,
-            world_param,
-            fluid_id,
-            fluid_param,
-        ));
+        for depth in 0..path.len() {
+            let body = group_body_mut(&mut def.nodes, &path[..=depth])?;
+            if body.interface.inputs.iter().any(|port| port.name == world_param) {
+                return Err("Add Fluid control group already has a World control input");
+            }
+            body.interface.inputs.push(InterfacePortDef {
+                name: world_param.into(),
+                port_type: "Scalar(F32)".into(),
+            });
+            let (to_node, to_port) = match path.get(depth + 1) {
+                Some(inner) => (*inner, world_param),
+                None => (domain.node, fluid_param),
+            };
+            if body
+                .wires
+                .iter()
+                .any(|wire| wire.to_node == to_node && wire.to_port == to_port)
+            {
+                return Err("Add Fluid template already drives a shared World control");
+            }
+            body.wires
+                .push(scene_build_wire(inputs[depth], world_param, to_node, to_port));
+        }
         def.wires.push(scene_build_wire(
             source_id,
             &source_port,

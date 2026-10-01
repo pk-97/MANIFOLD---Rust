@@ -330,32 +330,24 @@ mod shape_particle_blobs;
 pub(crate) mod particle_volume;
 mod smooth_lattice;
 pub(crate) mod dot_products;
-mod combine_rows;
 mod divide_by_value;
-pub(crate) mod pressure_smooth;
-pub(crate) mod pressure_residual;
-pub(crate) mod restrict_lattice;
-pub(crate) mod prolong_lattice;
-pub(crate) mod coarsen_water;
-pub(crate) mod coarse_inverse;
-pub(crate) mod conjugate_gradient;
-pub(crate) mod zero_lattice;
+pub(crate) mod gpu_flip_pressure;
+pub(crate) mod gpu_flip_step;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_pressure_tests;
+pub(crate) mod pressure_face_impulse;
+pub(crate) mod face_impulse_to_bodies;
+pub(crate) mod body_pressure_product;
+pub(crate) mod friction_face_impulse;
 pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
 pub(crate) mod liquid_stats;
 mod liquid_frame;
 pub(crate) mod gpu_flip_domain;
-pub(crate) mod cells_with_particles;
-pub(crate) mod particles_to_faces;
-mod face_gravity;
-mod face_divergence;
-mod density_source;
-mod subtract_pressure;
-mod extend_faces;
-mod faces_to_particles;
 pub(crate) mod face_sample_component;
 pub(crate) mod matter_face_component;
 mod surface_crossings;
+mod liquid_blocks;
 mod nearest_crossing;
 mod crossing_distance;
 mod liquid_cells;
@@ -392,6 +384,8 @@ mod whitewater_particle_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
+mod liquid_blocks_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_field_tests;
 #[cfg(test)]
 mod whitewater_extent_tests;
@@ -408,7 +402,7 @@ pub(crate) mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_solve_tests;
+mod gpu_flip_body_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

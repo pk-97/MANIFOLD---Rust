@@ -8,6 +8,8 @@ scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).
+- Scoped runs skip every test whose measured time (scripts/gpu_test_times.json)
+  is over SLOW_THRESHOLD_S; there is no hand-kept list.
 - glb_conformance (the ~16-minute glTF sample sweep) runs only when glTF import
   paths are touched, and is exempt from the time budget.
 - manifold-gpu core, shared WGSL and the proof harness map to BROAD, a bounded
@@ -19,6 +21,7 @@ Filters are libtest substring filters applied to the renderer lib binary
 Obsolete when: the GPU test suite is fast enough to run whole at every landing.
 """
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -55,15 +58,28 @@ RUNTIME_FILTERS = [
 # manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs.
 BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights"]
 
-# Too slow for the landing budget (583 s together, measured); scoped runs skip
-# them, --all and explicit --test/--filter still run them. Retires when
-# landing-sized variants exist (bead: Landing-sized versions of the three slow
-# matter acceptance tests).
-NIGHTLY_ONLY = [
-    "matter_bodies::matter_collider_penetration_bounded",
-    "matter_look::matter_look_splash_retention",
-    "matter_look::matter_look_volume_drift",
-]
+# Tests measured slower than this are skipped by scoped runs (nightly --all runs
+# them). The measurements live in scripts/gpu_test_times.json, written by
+# `gpu_proofs_gate.py --all --record-times PATH` (nightly trunk_health does this
+# into /tmp; a human commits the refresh). A test missing from the file runs.
+SLOW_THRESHOLD_S = 60
+TIMES_PATH = Path(__file__).resolve().parent / "gpu_test_times.json"
+
+
+def load_times(path=None):
+    """{test name: seconds} from the measured-times file; {} if absent."""
+    path = Path(path or TIMES_PATH)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text()).get("tests", {})
+
+
+def slow_tests(times=None):
+    """[(name, seconds)] measured over SLOW_THRESHOLD_S, slowest first."""
+    times = load_times() if times is None else times
+    return sorted(((n, s) for n, s in times.items() if s > SLOW_THRESHOLD_S),
+                  key=lambda t: -t[1])
+
 
 # A shader included by more primitives than this is "shared WGSL" -> BROAD.
 SHARED_WGSL_USERS = 12
@@ -91,6 +107,18 @@ EXPLICIT_ROWS = [
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
      (["matter_", "substeps_"], [])),
+    # GPU FLIP water (GPU_FLIP_PRESSURE_SOLVE.md): the step's proofs are scene
+    # proofs in other files (still pool, free fall, whitewater, resize), so a
+    # module filter alone would miss them.
+    ((RENDERER_SRC + "node_graph/liquid/",
+      RENDERER_SRC + "node_graph/primitives/gpu_flip_",
+      RENDERER_SRC + "node_graph/primitives/liquid_state",
+      RENDERER_SRC + "node_graph/primitives/liquid_fill",
+      RENDERER_SRC + "node_graph/primitives/face_sample_component",
+      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_",
+      RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
+      RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
+     (["gpu_flip_", "face_grid_tests::"], [])),
     # Graph runtime.
     ((RENDERER_SRC + "node_graph/execution",
       RENDERER_SRC + "node_graph/resource_allocation",
@@ -124,6 +152,16 @@ GLTF_PATHS = (
 
 DOC_SUFFIXES = (".md", ".txt")
 
+# Renderer files outside node_graph/ whose lib tests include GPU proofs.
+# preset_runtime/ drives every graph; layer_skin.rs's end-to-end proofs live
+# in preset_runtime's tests, so its row names both modules.
+PRESET_RUNTIME_DIR = RENDERER_SRC + "preset_runtime/"
+LIB_PROOF_ROWS = {
+    RENDERER_SRC + "layer_skin.rs": ["layer_skin::", "preset_runtime::layer_skin_tests::"],
+}
+
+PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
+
 
 def is_gpu_path(path):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
@@ -132,6 +170,8 @@ def is_gpu_path(path):
     if path.startswith("crates/manifold-gpu/") or path.startswith(RENDERER_SRC + "node_graph/"):
         return True
     if "shaders/" in path or "gpu_encoder" in path:
+        return True
+    if path.startswith(PRESET_RUNTIME_DIR) or path in LIB_PROOF_ROWS:
         return True
     return "tests/gpu_proofs/" in path or is_gltf_path(path)
 
@@ -159,7 +199,7 @@ class Plan:
 
     def final_skips(self):
         # A skip that would hide a filter we deliberately selected is dropped.
-        skips = set(self.skips) | set(NIGHTLY_ONLY)
+        skips = set(self.skips) | {n for n, _ in slow_tests()}
         return sorted(s for s in skips if not any(s in f for f in self.filters))
 
     def runs(self):
@@ -178,7 +218,8 @@ class Plan:
         lines.append(f"  filters: {', '.join(self.final_filters())}")
         if self.final_skips():
             lines.append(f"  skips: {', '.join(self.final_skips())}")
-        lines.append("  skipped, run nightly only: " + ", ".join(NIGHTLY_ONLY))
+        for name, secs in slow_tests():
+            lines.append(f"  {name}: skipped, run nightly only (measured {secs:.0f}s)")
         if self.broad:
             lines.append("  broad set (runtime + lighting) because: " +
                          "; ".join(f"{p} ({why})" for p, why in self.broad))
@@ -206,11 +247,34 @@ def module_filters(path):
     return ["::".join(m) + "::" for m in mods if m]
 
 
+def path_attr_filters(path, repo):
+    """Filters for a `<dir>/tests/<file>.rs` pulled in by `#[path] mod x;` in `<dir>/mod.rs`.
+
+    The test module is named by that declaration, not by the file path, so the
+    path-derived filter would select nothing. Unresolvable preset_runtime test
+    files fall back to the whole preset_runtime module rather than to nothing.
+    """
+    parts = path[len(RENDERER_SRC):].split("/")
+    if len(parts) < 3 or parts[-2] != "tests":
+        return None
+    dirs = parts[:-2]
+    try:
+        text = (Path(repo) / RENDERER_SRC / "/".join(dirs) / "mod.rs").read_text()
+    except OSError:
+        text = ""
+    for file_name, module in PATH_ATTR_MOD.findall(text):
+        if file_name == parts[-1]:
+            return ["::".join(dirs + [module]) + "::"]
+    if path.startswith(PRESET_RUNTIME_DIR):
+        return ["preset_runtime::"]
+    return None
+
+
 def default_shader_users(repo, wgsl_path, depth=3):
     """Rust files that (transitively through other .wgsl) include `wgsl_path`."""
     found, frontier, seen = set(), [wgsl_path], {wgsl_path}
     for _ in range(depth):
-        nxt = []
+        nxt = set()
         for current in frontier:
             out = subprocess.run(
                 ["rg", "-l", "-F", Path(current).name, "--glob", "*.rs", "--glob", "*.wgsl",
@@ -259,8 +323,11 @@ def plan_for_paths(paths, repo, shader_users=None):
             rel = path[len(PROOFS_DIR):].split("/")
             plan.filters.add(rel[0][:-3] + "::" if len(rel) == 1 else rel[0] + "::")
             continue
+        if path in LIB_PROOF_ROWS:
+            plan.filters.update(LIB_PROOF_ROWS[path])
+            continue
         if path.startswith(RENDERER_SRC) and path.endswith(".rs"):
-            plan.filters.update(module_filters(path))
+            plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue
         if is_gltf_path(path):
             continue

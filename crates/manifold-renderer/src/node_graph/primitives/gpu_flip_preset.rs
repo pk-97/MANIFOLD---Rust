@@ -5,50 +5,36 @@
 //! [`STEPS_PER_TICK`] water steps, the density solve on the last, then
 //! node.liquid_stats; node.liquid_frame publishes each tick to the liquid
 //! surface. `render_def` puts it in the render of the shipped
-//! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64. The solver's
-//! lattice is baked into its atoms' params, and the domain refuses any other
-//! (lifted in P7b).
+//! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64. Every node
+//! reads the domain's lattice off its wires, so a Resolution change reaches
+//! the running graph; the params only seed the planned sizes.
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
-use super::coarse_inverse::multigrid_levels;
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
+use super::gpu_flip_step::{AUTO_DENSITY_ITERATIONS, AUTO_PRESSURE_ITERATIONS, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS};
 use crate::node_graph::bundled_presets::bundled_preset_json;
-use crate::node_graph::effect_node::ParamValues;
+#[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
 use crate::node_graph::liquid::grid::FACE_INPUT_PORTS;
-use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::transform::Transform;
 
 /// The box is 4 m on its longest side; the lowest wave it holds is 2π / 4 m.
 pub(crate) const BOX_METRES: f64 = 4.0;
 
 /// Water steps per 60 Hz liquid tick (D8): copies of the step inside the tick
-/// region, the density solve on the last. A builder constant: whether a
-/// coupled body moves per step or per tick is the solids work's to settle (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)).
+/// region, the density solve on the last. A collider moves per step: each
+/// step places it where its tick's row has it at the step's end.
 pub(crate) const STEPS_PER_TICK: usize = 2;
 
-/// Iteration counts the GPU iteration trend runs; the CPU size proof covers each.
-#[cfg(test)]
-pub(super) const TREND_ITERATIONS: [usize; 5] = [3, 4, 6, 8, 12];
+/// The main solve's iterations: the step's Auto.
+pub(crate) const PRESSURE_ITERATIONS: usize = AUTO_PRESSURE_ITERATIONS as usize;
 
-/// The main solve's iterations at every lattice (Auto). A multigrid
-/// preconditioner's count does not grow with the lattice: on the seven Dam
-/// Break problems and the dumped splash solves, the f64 reference needed at
-/// most 7 iterations at 64³ and 5 at 128³ to reach the retired FFT solve's residual
-/// (`scripts/mgpcg_reference.py`, docs/GPU_FLIP_PRESSURE_SOLVE.md). One more
-/// is the margin.
-pub(crate) const PRESSURE_ITERATIONS: usize = 8;
-
-/// The density solve's iterations (Auto): the reference matched the retired
-/// FFT density solve's residual in 2 at 64³ and 1 at 128³, plus one.
-pub(crate) const DENSITY_ITERATIONS: usize = 3;
-
-/// Red-black sweeps before and after each coarse correction.
-const SMOOTH_SWEEPS: usize = 2;
+/// The density solve's iterations: the step's Auto.
+pub(crate) const DENSITY_ITERATIONS: usize = AUTO_DENSITY_ITERATIONS as usize;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PressureShape {
@@ -63,26 +49,28 @@ impl PressureShape {
         Self { n, iterations: PRESSURE_ITERATIONS }
     }
 
-    pub fn cells(&self) -> usize {
-        self.n * self.n * self.n
-    }
-
+    #[cfg(test)]
     pub fn cell_size(&self) -> f64 {
         BOX_METRES / self.n as f64
     }
-
-    /// The V-cycle's lattice sides, finest first, as the domain's refusal
-    /// counts them.
-    pub fn levels(&self) -> Vec<usize> {
-        multigrid_levels([self.n as u32; 3]).iter().map(|level| level[0] as usize).collect()
-    }
 }
 
-/// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`) with its
-/// obstacle unwired: a 4 m tank over the floor, a 0.16 m pool, and the
-/// `initial_column` block, seeded by the engine's half-cell site rule.
+/// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`): a 4 m tank
+/// over the floor, a 0.16 m pool, and the `initial_column` block, seeded by
+/// the engine's half-cell site rule.
 pub(crate) const DAM_FILL_HEIGHT: f64 = 0.16;
 pub(crate) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
+
+/// The Dam Break's box obstacle, the transform of `WaterDamBreak.json`'s
+/// `obstacle_transform`: a unit cube scaled to 0.6 × 1.16 × 0.85 m standing
+/// on the floor in the column's path. Position, then scale.
+pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
+
+/// Fluid role Collider and the role source's built-in cube, whose circumradius
+/// 0.866 makes it a unit cube before the transform.
+const COLLIDER_ROLE: usize = 3;
+const CUBE_SHAPE: usize = 1;
+const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 
 /// A liquid in the 4 m tank: a pool `fill_height` deep plus one box, both
 /// in metres.
@@ -98,7 +86,7 @@ pub(crate) struct WaterScene {
     pub column: [[f64; 2]; 3],
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
-    /// How fast crowded cells spread (1/s): node.density_source's rate. 0
+    /// How fast crowded cells spread (1/s): the step's Spread Rate. 0
     /// leaves the density solve out.
     pub spread_rate: f64,
     /// Iterations of the density solve. It moves particles and is never kept
@@ -118,33 +106,36 @@ pub(crate) struct WaterScene {
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
     /// The tick always hands its last step's faces to the state.
     pub faces: bool,
+    /// Place the free surface where the particles' distance crosses zero
+    /// (ghost fluid). Off wires zero distances: air at zero pressure on its
+    /// cell centres, the race's comparison.
+    pub ghost_fluid: bool,
+    /// The Dam Break's box as a Collider role (`obstacle_transform` into
+    /// `obstacle_collider` into the domain's `role_0`).
+    pub obstacle: bool,
 }
 
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
 pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
 
-/// Face layers past the water that `old` and `advect` are extended by. They
-/// are sampled only where a particle starts its step, inside a water cell,
-/// and a sample reads faces one cell out.
-pub(crate) const EXTENDED_LAYERS: usize = 2;
-
 /// The fastest water a step is built for (m/s): the Dam Break's splash tops
 /// out near 13 m/s at 64³ and 19–25 m/s at 128³, the FLIP Fluids engine's
-/// at 12 and 17. [`WaterScene::travel_cells`] turns it into the CFL guard.
-pub(crate) const TOP_SPEED: f64 = 20.0;
+/// at 12 and 17. The step turns it into the CFL guard.
+pub(crate) const TOP_SPEED: f64 = DEFAULT_TOP_SPEED as f64;
 
 /// Particles per cell the fill seeds: one per half-cell site.
-pub(crate) const REST_PER_CELL: f64 = 8.0;
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) const REST_PER_CELL: f64 = super::gpu_flip_step::REST_PER_CELL as f64;
 
 /// The share of a cell's crowding one density solve removes: spread_rate ×
 /// step dt. Crowding goes as (1 − share) per solve, so 1 removes it in one.
-/// It holds at 64³ and 128³ because node.density_source counts only half-full
-/// neighbours as water and node.faces_to_particles caps the move at half a
+/// It holds at 64³ and 128³ because the step's density source counts only
+/// half-full neighbours as water and its particle move caps the spread at half a
 /// cell (`gpu_flip_refined_density_causes`).
 pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
 
 impl WaterScene {
-    /// The engine's Dam Break, obstacle unwired.
+    /// The engine's Dam Break without its obstacle.
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
@@ -158,7 +149,15 @@ impl WaterScene {
             density_once: true,
             surface_scale: 2,
             faces: false,
+            ghost_fluid: true,
+            obstacle: false,
         }
+    }
+
+    /// The scene with the Dam Break's box obstacle.
+    #[cfg(test)]
+    pub fn with_obstacle(self) -> Self {
+        Self { obstacle: true, ..self }
     }
 
     /// A pool 1 m deep and nothing else (I5).
@@ -184,16 +183,6 @@ impl WaterScene {
     #[cfg(test)]
     pub fn free_fall(n: usize) -> Self {
         Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::dam_break(n) }
-    }
-
-    /// Density solves a tick: none, the last step's, or every step's.
-    #[cfg(test)]
-    pub fn density_solves(&self) -> usize {
-        match (self.spread_rate > 0.0, self.density_once) {
-            (false, _) => 0,
-            (true, true) => 1,
-            (true, false) => self.steps,
-        }
     }
 
     pub fn with_surface(self) -> Self {
@@ -223,37 +212,32 @@ impl WaterScene {
         Self { steps, spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64, ..self }
     }
 
+    #[cfg(test)]
     pub fn step_dt(&self) -> f64 {
         1.0 / (60.0 * self.steps as f64)
     }
 
-    /// node.faces_to_particles' FLIP share for one step. `flip` is the share
-    /// kept per 1/60 s, so the PIC damping a second does not depend on the
-    /// step count: k steps a frame keep flip^(1/k) each.
-    pub fn flip_per_step(&self) -> f64 {
-        self.flip.powf(60.0 * self.step_dt())
-    }
-
-    /// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
-    /// [`TOP_SPEED`] for one step rounded up. Faster water keeps its speed
-    /// and moves this far.
+    /// The step's CFL guard at this scene's step and cell size.
+    #[cfg(all(test, feature = "water-race-probes"))]
     pub fn travel_cells(&self) -> usize {
-        (TOP_SPEED * self.step_dt() / self.pressure.cell_size() - 1e-9).ceil().max(1.0) as usize
+        let travel = super::gpu_flip_step::travel_cells(DEFAULT_TOP_SPEED, self.step_dt() as f32, self.pressure.cell_size() as f32);
+        travel as usize
     }
 
-    /// Layers `new` is extended by: the RK3 stages sample up to ¾ of the
-    /// travel from where the particle started, and a sample reads faces one
-    /// cell further. The face grid's `face_valid_layers`.
+    /// The layers the step extends its projected faces by.
+    #[cfg(all(test, feature = "water-race-probes"))]
     pub fn band_layers(&self) -> usize {
-        (0.75 * self.travel_cells() as f64).ceil() as usize + 1
+        super::gpu_flip_step::band_layers(self.travel_cells() as u32) as usize
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn layout(&self) -> FluidDomainLayout {
         domain_layout(None, BOX_METRES as f32, self.pressure.n as u32).expect("the tank's layout")
     }
 
     /// The tank's lowest corner.
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn min(&self) -> [f64; 3] {
         self.layout().min.map(f64::from)
     }
@@ -272,16 +256,13 @@ impl WaterScene {
     /// lattice and the particle count, from node.gpu_flip_domain's function.
     pub fn geometry(&self) -> GpuFlipGeometry {
         let n = self.pressure.n as f32;
-        let mut params = ParamValues::default();
-        params.insert("built_resolution".into(), ParamValue::Float(n));
-        params.insert("built_domain_size".into(), ParamValue::Float(BOX_METRES as f32));
         let read = |name: &str, default: f32| match name {
             "resolution" => n,
             "domain_size" => BOX_METRES as f32,
             "fill_height" => self.fill_height as f32,
             _ => default,
         };
-        gpu_flip_geometry(read, &params, None, self.initial_volume()).expect("the scene fits its domain")
+        gpu_flip_geometry(read, None, self.initial_volume()).expect("the scene fits its domain")
     }
 
     #[cfg(test)]
@@ -309,25 +290,10 @@ fn int(v: usize) -> Value {
     json!({"type": "Int", "value": v})
 }
 
-/// An array capacity as an Int param. Params are f32, which counts exactly
-/// only to 2²⁴ (257³ is past it); above that the nearest f32 at or above `v`
-/// is used, so the array is never short.
-#[cfg(test)]
-fn capacity(v: usize) -> Value {
-    let mut f = v as f32;
-    if (f as u64) < v as u64 {
-        f = f32::from_bits(f.to_bits() + 1);
-    }
-    json!({"type": "Int", "value": f as u64})
-}
-
 #[derive(Default)]
 struct Builder {
     nodes: Vec<Value>,
     wires: Vec<Value>,
-    /// Prepended to every node name: each water step's copy of the solve
-    /// needs its own.
-    prefix: String,
 }
 
 type Port = (usize, &'static str);
@@ -335,7 +301,6 @@ type Port = (usize, &'static str);
 impl Builder {
     fn node(&mut self, name: &str, type_id: &str, params: Value) -> usize {
         let id = self.nodes.len();
-        let name = format!("{}{name}", self.prefix);
         self.nodes.push(json!({"id": id, "nodeId": name, "typeId": type_id, "params": params}));
         id
     }
@@ -350,65 +315,6 @@ impl Builder {
             self.wire((from, port), to, port);
         }
     }
-
-    /// Lattice params of the transform atoms.
-    fn lattice(nodes: [usize; 3], extra: &[(&str, Value)]) -> Value {
-        let mut params = json!({
-            "nodes_x": float(nodes[0] as f64),
-            "nodes_y": float(nodes[1] as f64),
-            "nodes_z": float(nodes[2] as f64),
-        });
-        for (name, value) in extra {
-            params[*name] = value.clone();
-        }
-        params
-    }
-
-    /// a · b over the first `length` elements, into one value.
-    fn dot(&mut self, name: &str, a: Port, b: Port, length: usize) -> Port {
-        let id = self.node(name, "node.dot_products", json!({"row_length": int(length), "rows": int(1), "max_rows": int(1)}));
-        self.wire(a, id, "matrix");
-        self.wire(b, id, "vector");
-        (id, "out")
-    }
-
-    /// values / divisor[0], zeros when the divisor is under 1e-30.
-    fn divide(&mut self, name: &str, values: Port, divisor: Port) -> Port {
-        let id = self.node(name, "node.divide_by_value", json!({}));
-        self.wire(values, id, "values");
-        self.wire(divisor, id, "divisor");
-        (id, "out")
-    }
-
-    /// base + scale · coef[0] · vector.
-    fn axpy(&mut self, name: &str, base: Port, vector: Port, coef: Port, scale: f64, length: usize) -> Port {
-        let id = self.node(
-            name,
-            "node.combine_rows",
-            json!({"row_length": int(length), "rows": int(1), "scale": float(scale), "base_scale": float(1.0)}),
-        );
-        self.wire(base, id, "base");
-        self.wire(vector, id, "matrix");
-        self.wire(coef, id, "coef");
-        (id, "out")
-    }
-}
-
-/// The whole solve for one step, from the water lattice and its divergence:
-/// the coarse levels, then the conjugate gradient region.
-#[cfg(test)]
-pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
-    let mut b = Builder::default();
-    let cells = s.cells();
-    let water = b.node("water", "test.value_source", json!({"max_capacity": capacity(cells)}));
-    let f = b.node("f", "test.value_source", json!({"max_capacity": capacity(cells)}));
-    let levels = levels(&mut b, s, (water, "out"));
-    let pressure = solve(&mut b, s, &levels, (f, "out"));
-    let sink = b.node("sink", "test.value_sink", json!({}));
-    b.wire(pressure, sink, "values");
-    let output = b.node("output", "system.final_output", json!({}));
-    b.wire((sink, "out"), output, "in");
-    serde_json::from_value(json!({"version": 3, "nodes": b.nodes, "wires": b.wires})).expect("pressure def")
 }
 
 /// The padded lattice's scalars, as the domain publishes them.
@@ -416,6 +322,12 @@ const LATTICE_WIRES: [&str; 7] = ["lattice_min_x", "lattice_min_y", "lattice_min
 
 /// The fill's sites, as the domain publishes them.
 const FILL_WIRES: [&str; 7] = ["pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1"];
+
+/// The scene's forces and impulses, as the domain publishes them.
+const FIELD_WIRES: [&str; 9] = [
+    "forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices",
+    "first_tick", "impulse_tick",
+];
 
 /// A scene as a running liquid on the seam. The domain seeds the fill and
 /// runs the clock; the state's region runs one tick per due tick: `steps`
@@ -425,17 +337,14 @@ const FILL_WIRES: [&str; 7] = ["pool_sites", "box_x0", "box_x1", "box_y0", "box_
 /// `surface`.
 pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::default();
-    let s = scene.pressure;
     let geometry = scene.geometry();
     let domain = b.node(
         "domain",
         GPU_FLIP_DOMAIN_TYPE_ID,
         json!({
-            "resolution": int(s.n),
+            "resolution": int(scene.pressure.n),
             "domain_size": float(BOX_METRES),
             "fill_height": float(scene.fill_height),
-            "built_resolution": int(s.n),
-            "built_domain_size": float(BOX_METRES),
         }),
     );
     if let Some(volume) = scene.initial_volume() {
@@ -453,13 +362,35 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         );
         b.wire((column, "transform"), domain, "initial_volume");
     }
+    if scene.obstacle {
+        let [pos, scale] = DAM_OBSTACLE;
+        let transform = b.node(
+            "obstacle_transform",
+            "node.transform_3d",
+            json!({
+                "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
+                "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
+            }),
+        );
+        let collider = b.node(
+            "obstacle_collider",
+            "node.fluid_role_source",
+            json!({
+                "role": {"type": "Enum", "value": COLLIDER_ROLE},
+                "shape": {"type": "Enum", "value": CUBE_SHAPE},
+                "radius": float(UNIT_CUBE_RADIUS),
+            }),
+        );
+        b.wire((transform, "transform"), collider, "transform");
+        b.wire((collider, "role"), domain, "role_0");
+    }
     // The params hold the domain's own sites, so the planned storage is the
     // fill's; the wires carry any change.
     let sites = geometry.setup.box_sites;
     let fill = b.node(
         "fill",
         "node.liquid_fill",
-        lattice_box(
+        padded_lattice(
             &scene,
             &[
                 ("pool_sites", int(geometry.setup.pool_sites as usize)),
@@ -475,6 +406,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         ),
     );
     b.wires(domain, fill, &FILL_WIRES);
+    b.wires(domain, fill, &LATTICE_WIRES);
+    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch"]);
     let count = (fill, "count");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
@@ -483,11 +416,12 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut particles: Port = (state, "out");
     let mut faces = particles;
     for k in 0..scene.steps {
-        b.prefix = format!("s{k}.");
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        (particles, faces) = water_step(&mut b, scene, particles, count, domain, density);
+        let step = water_step(&mut b, scene, (domain, state), k, density);
+        b.wire(particles, step, "particles");
+        b.wire(count, step, "count");
+        (particles, faces) = ((step, "out"), (step, "faces"));
     }
-    b.prefix.clear();
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
     b.wire((state, "stats"), stats, "stats");
@@ -495,14 +429,16 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((domain, "particle_mass"), stats, "particle_mass");
     b.wire(particles, state, "in");
     b.wire((stats, "stats_out"), state, "stats_in");
-    // The tick's last faces leave the region beside its particles.
+    // The tick's last faces leave the region beside its particles, into the
+    // lattice's face grid.
     b.wire(faces, state, "faces_in");
+    b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
     let solid = b.node("solid", "node.liquid_solid_distance", json!({}));
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, solid, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), solid, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(scene.band_layers())}));
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((solid, "solid"), frame, "solid");
@@ -510,10 +446,17 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, frame, &LATTICE_WIRES);
     b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch"]);
     if scene.faces {
+        let nodes = scene.geometry().setup.lattice.nodes();
         for (axis, name) in FACE_NODES.into_iter().enumerate() {
-            let params = Builder::lattice([scene.pressure.n; 3], &[("axis", json!({"type": "Enum", "value": axis}))]);
+            let params = json!({
+                "axis": {"type": "Enum", "value": axis},
+                "nodes_x": float(f64::from(nodes[0])),
+                "nodes_y": float(f64::from(nodes[1])),
+                "nodes_z": float(f64::from(nodes[2])),
+            });
             let id = b.node(name, "node.face_sample_component", params);
             b.wire((state, "faces"), id, "faces");
+            b.wires(domain, id, &["nodes_x", "nodes_y", "nodes_z"]);
             b.wire((id, "out"), frame, FACE_INPUT_PORTS[axis]);
         }
     }
@@ -683,241 +626,56 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     (id, "vertices")
 }
 
-/// Lattice params plus the lattice's box: cell size and lowest corner.
-fn lattice_box(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
-    let s = scene.pressure;
-    let mut params = Builder::lattice([s.n; 3], extra);
-    params["cell_size"] = float(s.cell_size());
-    let min = scene.min();
+/// The scene's padded lattice (the domain's `LATTICE_WIRES`) as params,
+/// plus `extra`. The wires carry any change at run time.
+fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
+    let lattice = scene.geometry().setup.lattice;
+    let mut params = json!({"cell_size": float(f64::from(lattice.cell_size()))});
     for (axis, name) in ["lattice_min_x", "lattice_min_y", "lattice_min_z"].into_iter().enumerate() {
-        params[name] = float(min[axis]);
+        params[name] = float(f64::from(lattice.min()[axis]));
+    }
+    for (axis, name) in ["nodes_x", "nodes_y", "nodes_z"].into_iter().enumerate() {
+        params[name] = int(lattice.nodes()[axis] as usize);
+    }
+    for (name, value) in extra {
+        params[*name] = value.clone();
     }
     params
 }
 
-/// One water step (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)):
-/// sort, the water lattice, particles to faces, the domain's gravity, the
-/// pressure solve, the projection, the density solve when `density`, faces
-/// back to particles.
-/// Returns the moved particles and the step's projected, extended faces.
-fn water_step(
-    b: &mut Builder,
-    scene: WaterScene,
-    particles: Port,
-    count: Port,
-    domain: usize,
-    density: bool,
-) -> (Port, Port) {
-    let s = scene.pressure;
-    let n = [s.n; 3];
-    let h = s.cell_size();
-    let dt = scene.step_dt();
-    let side = BOX_METRES;
-    let min = scene.min();
-    let sort = b.node(
-        "sort",
-        "node.sort_particles_into_cells",
-        json!({
-            "center_x": float(min[0] + 0.5 * side),
-            "center_y": float(min[1] + 0.5 * side),
-            "center_z": float(min[2] + 0.5 * side),
-            "size_x": float(side),
-            "size_y": float(side),
-            "size_z": float(side),
-            "cell_size": float(h),
-        }),
-    );
-    b.wire(particles, sort, "particles");
-    b.wire(count, sort, "count");
-    let water = b.node("water", "node.cells_with_particles", Builder::lattice(n, &[]));
-    b.wire((sort, "cell_ranges"), water, "cell_ranges");
-    let water = (water, "out");
-    let gather = b.node("faces", "node.particles_to_faces", lattice_box(&scene, &[]));
-    b.wire((sort, "sorted"), gather, "sorted");
-    b.wire((sort, "cell_ranges"), gather, "cell_ranges");
-    let old = extend(b, "old", (gather, "out"), n, EXTENDED_LAYERS);
-    let forced = b.node("gravity", "node.face_gravity", Builder::lattice(n, &[("step_dt", float(dt))]));
-    b.wire(old, forced, "faces");
-    b.wire((domain, "gravity_x"), forced, "gravity_x");
-    b.wire((domain, "gravity"), forced, "gravity_y");
-    b.wire((domain, "gravity_z"), forced, "gravity_z");
-    let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
-    b.wire((forced, "out"), divergence, "faces");
-    b.wire(water, divergence, "water");
-    let levels = levels(b, s, water);
-    let p = solve(b, s, &levels, (divergence, "out"));
-    let projected = subtract(b, "project", (forced, "out"), p, water, s);
-    let new = extend(b, "new", projected, n, scene.band_layers());
-    // The density solve moves particles apart through `advect` and is never
-    // kept as velocity: kept, a fast splash's correction becomes speed.
-    let advect = if density {
-        let outer = b.prefix.clone();
-        b.prefix.push_str("density.");
-        let crowding = b.node(
-            "source",
-            "node.density_source",
-            Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
-        );
-        b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
-        let q = solve(b, PressureShape { iterations: scene.density_iterations, ..s }, &levels, (crowding, "out"));
-        let spread = subtract(b, "project", projected, q, water, s);
-        let advect = extend(b, "advect", spread, n, EXTENDED_LAYERS);
-        b.prefix = outer;
-        advect
-    } else {
-        new
-    };
-    let moved = b.node(
-        "move",
-        "node.faces_to_particles",
-        lattice_box(
+/// Water step `k` of the tick (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1
+/// (the step)): one node.gpu_flip_step on the domain's lattice, gravity,
+/// fields and bodies, and the state's tick index. The caller wires its
+/// particles and count. The density solve runs when `density`.
+fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize, density: bool) -> usize {
+    let (domain, state) = tick;
+    let iterations = |n: usize, auto: u32| int(if n == auto as usize { 0 } else { n });
+    let step = b.node(
+        &format!("s{k}.step"),
+        "node.gpu_flip_step",
+        padded_lattice(
             &scene,
-            &[("step_dt", float(dt)), ("flip", float(scene.flip_per_step())), ("max_travel", float(scene.travel_cells() as f64))],
+            &[
+                ("steps_per_tick", int(scene.steps)),
+                ("step_in_tick", int(k)),
+                ("flip", float(scene.flip)),
+                ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
+                ("density_iterations", iterations(scene.density_iterations, AUTO_DENSITY_ITERATIONS)),
+                ("spread_rate", float(if density { scene.spread_rate } else { 0.0 })),
+                ("top_speed", float(TOP_SPEED)),
+                ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
+            ],
         ),
     );
-    b.wire((sort, "sorted"), moved, "particles");
-    b.wire(new, moved, "faces");
-    b.wire(old, moved, "old");
-    b.wire(advect, moved, "advect");
-    ((moved, "out"), new)
-}
-
-/// `faces` minus the gradient of `pressure` on the water's faces.
-fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Port, s: PressureShape) -> Port {
-    let n = [s.n; 3];
-    let id = b.node(name, "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(s.cell_size()))]));
-    b.wire(faces, id, "faces");
-    b.wire(pressure, id, "pressure");
-    b.wire(water, id, "water");
-    (id, "out")
-}
-
-/// `layers` layers of face extension into the air around the water.
-fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3], layers: usize) -> Port {
-    let mut faces = faces;
-    for layer in 1..=layers {
-        let id = b.node(&format!("{name}_extend_{layer}"), "node.extend_faces", Builder::lattice(n, &[]));
-        b.wire(faces, id, "faces");
-        faces = (id, "out");
-    }
-    faces
-}
-
-/// What every solve on one water lattice shares: the water at each V-cycle
-/// level, finest first, a zero lattice per level for the sweeps to start
-/// from, and the coarsest level's inverse.
-struct Levels {
-    water: Vec<Port>,
-    zeros: Vec<Port>,
-    inverse: Port,
-}
-
-fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
-    let sides = s.levels();
-    let mut water_levels = vec![water];
-    let mut zeros = Vec::new();
-    for (level, &side) in sides.iter().enumerate() {
-        if level > 0 {
-            let coarse = b.node(&format!("water_{level}"), "node.coarsen_water", Builder::lattice([side; 3], &[]));
-            b.wire(water_levels[level - 1], coarse, "fine");
-            water_levels.push((coarse, "out"));
-        }
-        // The coarsest level is solved exactly by its inverse; the finest
-        // also gives the zero rhs of −L p.
-        if level == 0 || level + 1 < sides.len() {
-            let zero = b.node(&format!("zero_{level}"), "node.zero_lattice", Builder::lattice([side; 3], &[]));
-            zeros.push((zero, "out"));
-        }
-    }
-    let coarsest = *sides.last().expect("a level");
-    let inverse = b.node("coarse_inverse", "node.coarse_inverse", Builder::lattice([coarsest; 3], &[]));
-    b.wire(*water_levels.last().expect("a level"), inverse, "water");
-    Levels { water: water_levels, zeros, inverse: (inverse, "out") }
-}
-
-/// One V-cycle for L e = rhs at `level`, from zero; returns e.
-fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs: Port) -> Port {
-    let sides = s.levels();
-    let side = sides[level];
-    let h = s.cell_size() * (1u64 << level) as f64;
-    let lattice = |extra: &[(&str, Value)]| Builder::lattice([side; 3], extra);
-    let water = levels.water[level];
-    if level + 1 == sides.len() {
-        // L = −A / h², so e = −h² · A⁻¹ · rhs; A⁻¹ is symmetric, so its rows
-        // weighted by rhs are the product.
-        let cells = side * side * side;
-        let id = b.node(
-            &format!("mg{level}_solve"),
-            "node.combine_rows",
-            json!({"row_length": int(cells), "rows": int(cells), "scale": float(-h * h), "base_scale": float(0.0)}),
-        );
-        b.wire(rhs, id, "base");
-        b.wire(levels.inverse, id, "matrix");
-        b.wire(rhs, id, "coef");
-        return (id, "out");
-    }
-    let mut e = levels.zeros[level];
-    let sweep = |b: &mut Builder, name: String, e: Port, color: usize| -> Port {
-        let id = b.node(&name, "node.pressure_smooth", lattice(&[("cell_size", float(h)), ("color", int(color))]));
-        b.wire(water, id, "water");
-        b.wire(rhs, id, "rhs");
-        b.wire(e, id, "value");
-        (id, "out")
-    };
-    for round in 0..SMOOTH_SWEEPS {
-        for color in [0, 1] {
-            e = sweep(b, format!("mg{level}_pre{round}_{color}"), e, color);
-        }
-    }
-    let residual = b.node(&format!("mg{level}_residual"), "node.pressure_residual", lattice(&[("cell_size", float(h))]));
-    b.wire(water, residual, "water");
-    b.wire(rhs, residual, "rhs");
-    b.wire(e, residual, "value");
-    let restrict = b.node(&format!("mg{level}_restrict"), "node.restrict_lattice", Builder::lattice([sides[level + 1]; 3], &[]));
-    b.wire((residual, "out"), restrict, "fine");
-    b.wire(levels.water[level + 1], restrict, "water");
-    let coarse = v_cycle(b, s, levels, level + 1, (restrict, "out"));
-    let prolong = b.node(&format!("mg{level}_prolong"), "node.prolong_lattice", lattice(&[]));
-    b.wire(e, prolong, "value");
-    b.wire(coarse, prolong, "coarse");
-    b.wire(water, prolong, "water");
-    e = (prolong, "out");
-    for round in 0..SMOOTH_SWEEPS {
-        for color in [1, 0] {
-            e = sweep(b, format!("mg{level}_post{round}_{color}"), e, color);
-        }
-    }
-    e
-}
-
-/// One multigrid-preconditioned conjugate gradient solve of L p = f on the
-/// water; returns the pressure. The loop body, per iteration: z = V-cycle(r),
-/// β = r·z / (last r·z), p = z + β p, s = −L p, α = r·z / (p·s),
-/// x = x − α p, r = r − α s.
-fn solve(b: &mut Builder, s: PressureShape, levels: &Levels, f: Port) -> Port {
-    let cells = s.cells();
-    let h = s.cell_size();
-    let cg = b.node("cg", "node.conjugate_gradient", json!({"iterations": int(s.iterations)}));
-    b.wire(f, cg, "rhs");
-    let r = (cg, "residual");
-    let z = v_cycle(b, s, levels, 0, r);
-    let rz = b.dot("rz", r, z, cells);
-    let beta = b.divide("beta", rz, (cg, "rz"));
-    let p = b.axpy("direction", z, (cg, "direction"), beta, 1.0, cells);
-    let sp = b.node("minus_lp", "node.pressure_residual", Builder::lattice([s.n; 3], &[("cell_size", float(h))]));
-    b.wire(levels.water[0], sp, "water");
-    b.wire(levels.zeros[0], sp, "rhs");
-    b.wire(p, sp, "value");
-    let sp = (sp, "out");
-    let ps = b.dot("p_dot_s", p, sp, cells);
-    let alpha = b.divide("alpha", rz, ps);
-    let x = b.axpy("solution", (cg, "solution"), p, alpha, -1.0, cells);
-    let r_next = b.axpy("residual", r, sp, alpha, -1.0, cells);
-    b.wire(r_next, cg, "residual_in");
-    b.wire(x, cg, "solution_in");
-    b.wire(p, cg, "direction_in");
-    b.wire(rz, cg, "rz_in");
-    (cg, "solution")
+    b.wires(domain, step, &LATTICE_WIRES);
+    b.wire((domain, "gravity_x"), step, "gravity_x");
+    b.wire((domain, "gravity"), step, "gravity_y");
+    b.wire((domain, "gravity_z"), step, "gravity_z");
+    b.wires(domain, step, &FIELD_WIRES);
+    b.wire((state, "tick_index"), step, "tick_index");
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wire((domain, "body_rows"), step, "rows");
+    step
 }
 
 /// Device bytes a scene holds inside the render graph at 1920×1080, as the
@@ -948,12 +706,9 @@ pub(super) fn fused_as_rendered(
 /// meshed, rendered and frozen.
 #[cfg(test)]
 pub(super) mod tests {
-    use ahash::AHashMap;
-
     use super::*;
     use crate::node_graph::liquid::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, LIQUID_EXTENT_RULES, Verdict, check_graph};
     use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
-    use crate::node_graph::validation::GraphError;
     use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, compile};
 
     fn registry() -> PrimitiveRegistry {
@@ -971,7 +726,7 @@ pub(super) mod tests {
     /// output capacity probe)); the walk sizes what they read and write.
     fn rules(frozen: bool) -> Vec<ExtentRule> {
         let mut rules = LIQUID_EXTENT_RULES.to_vec();
-        for type_id in ["test.value_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
+        for type_id in ["test.value_source", "test.face_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
             rules.push(ExtentRule { type_id, check: harness_node });
         }
         if frozen {
@@ -1004,43 +759,18 @@ pub(super) mod tests {
         walk(def, frozen).unwrap_or_else(|error| panic!("{what}: {error}"))
     }
 
-    /// Every lattice a scene may use, 16 to 256, the sides between the powers
-    /// of two included. Each is proven here before any GPU run at it. 256
-    /// holds the pool and column only with a lower fill: the Dam Break there
-    /// places more particles than a count carries, and the domain refuses it
-    /// by name (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
-    const LATTICES: [usize; 7] = [16, 24, 32, 48, 64, 96, 128];
-
-    /// Every lattice at every iteration count of the iteration trend.
-    #[test]
-    fn gpu_flip_pressure_arrays_cover_every_dispatch() {
-        for (n, iterations) in LATTICES.into_iter().chain([256]).flat_map(|n| TREND_ITERATIONS.map(|i| (n, i))) {
-            let shape = PressureShape { iterations, ..PressureShape::at(n) };
-            let def = pressure_def(shape);
-            let (_, plan) = built(&def);
-            assert_eq!(plan.substep_regions().len(), 1, "one conjugate gradient region");
-            let report = walked(&def, false, &format!("pressure {n}³, {iterations} iterations"));
-            let levels = shape.levels().len();
-            assert!(report.checked >= 11 * levels, "checked only {} nodes at {n}³", report.checked);
-        }
-    }
-
-    /// The V-cycle's levels: halved while every side is even and one is over
-    /// 4, so the coarsest fits the exact solve at every lattice a scene uses.
-    #[test]
-    fn gpu_flip_levels_halve_to_the_exact_solve() {
-        let sides = |n| PressureShape::at(n).levels();
-        assert_eq!(sides(64), vec![64, 32, 16, 8, 4]);
-        assert_eq!(sides(96), vec![96, 48, 24, 12, 6, 3]);
-        for n in LATTICES.into_iter().chain([256]) {
-            let coarsest = *sides(n).last().expect("a level");
-            assert!((coarsest.pow(3) as u64) <= super::super::coarse_inverse::MAX_COARSE_CELLS, "{n}³ ends at {coarsest}³");
-        }
-    }
+    /// Every lattice a scene may use, multiples of 16 from 16 to 256, the
+    /// sides between the powers of two included. Each is proven here before
+    /// any GPU run at it. 256 holds the pool and column only with a lower
+    /// fill: the Dam Break there places more particles than a count carries,
+    /// and the domain refuses it by name
+    /// (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
+    const LATTICES: [usize; 6] = [16, 32, 48, 64, 96, 128];
 
     /// Every running scene at every lattice, and the probes' variants, before
-    /// any GPU run of it: the tick region's steps, their solves, the stats,
-    /// the frame and the surface.
+    /// any GPU run of it: the tick region's steps, the stats, the frame and
+    /// the surface. The solves run inside each step, so the tick has no
+    /// inner region.
     #[test]
     fn gpu_flip_scenes_cover_every_dispatch() {
         let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::deep_pool, WaterScene::deep_drop, WaterScene::free_fall];
@@ -1059,15 +789,20 @@ pub(super) mod tests {
             WaterScene { density_once: false, ..WaterScene::dam_break(64) }.with_surface(),
             WaterScene { steps: 1, spread_rate: SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) }.with_surface(),
         ];
-        for scene in all.chain(probes) {
+        // The obstacle, bare and meshed, and in the still pool the kinematic
+        // proof moves it through.
+        let obstacle = LATTICES.into_iter().flat_map(|n| {
+            let dam = WaterScene::dam_break(n).with_obstacle();
+            [dam, dam.with_surface(), WaterScene::still_pool(n).with_obstacle()]
+        });
+        for scene in all.chain(probes).chain(obstacle) {
             let n = scene.pressure.n;
             let def = water_def(scene);
             let (graph, plan) = built(&def);
             let regions = plan.substep_regions();
             assert_eq!(regions.len(), 1, "one tick region");
-            assert_eq!(regions[0].inner.len(), scene.steps + scene.density_solves(), "one conjugate gradient region per solve, inside the tick");
             let report = walked(&def, false, &format!("scene {n}³, {} steps", scene.steps));
-            assert!(report.checked > 40 * scene.steps, "checked only {} nodes at {n}³, {} steps", report.checked, scene.steps);
+            assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³, {} steps", report.checked, scene.steps);
             let meshed = plan.steps().iter().any(|step| {
                 graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
             });
@@ -1085,13 +820,9 @@ pub(super) mod tests {
         let name = |step: usize| graph.get_node(plan.steps()[step].node).expect("plan node").node_id.as_str().to_string();
         assert_eq!(graph.get_node(region.boundary).expect("boundary").node_id.as_str(), "state");
         let body: Vec<String> = region.steps.iter().map(|&step| name(step)).collect();
-        for k in 0..scene.steps {
-            for node in ["sort", "water", "water_1", "faces", "gravity", "divergence", "project", "move", "cg"] {
-                let node = format!("s{k}.{node}");
-                assert!(body.contains(&node), "{node} is not in the tick");
-            }
-        }
-        assert!(body.iter().any(|node| node == "s1.density.cg") && !body.iter().any(|node| node == "s0.density.cg"));
+        let steps: Vec<String> = (0..scene.steps).map(|k| format!("s{k}.step")).collect();
+        let in_tick: Vec<String> = body.iter().filter(|node| node.starts_with('s') && node.ends_with(".step")).cloned().collect();
+        assert_eq!(in_tick, steps, "the tick runs its steps in order");
         assert!(body.iter().any(|node| node == "stats"), "the stats run every tick");
         let outside = ["domain", "fill", "solid", "frame", "initial_column"];
         assert!(!body.iter().any(|node| outside.contains(&node.as_str()) || node.starts_with("surface")), "{body:?}");
@@ -1115,21 +846,18 @@ pub(super) mod tests {
         }
     }
 
-    /// A lattice whose coarsest level is past the exact solve is refused once,
-    /// at build, naming the coarse inverse, never frame by frame: an odd side
-    /// can't halve, and 80 halves only to 5³. The domain refuses the same
-    /// Resolution by name first (the GPU FLIP conformance row).
+    /// Resolution is a card: the graph built at 64 runs at any Resolution,
+    /// odd and uneven sides included, because every lattice node reads the
+    /// domain's wires and the step's faces follow them (BUG-o65k (GPU FLIP
+    /// lattice wiring), BUG-9an1 (resolution change)).
     #[test]
-    fn gpu_flip_refuses_an_illegal_lattice_at_build() {
-        for n in [15, 63, 80, 81, 97] {
-            let graph = pressure_def(PressureShape::at(n)).into_graph(&registry(), &Default::default()).expect("pressure def builds");
-            match compile(&graph) {
-                Err(GraphError::IllegalParams { node, reason }) => {
-                    let kind = graph.get_node(node).expect("refused node exists").node.type_id().as_str().to_string();
-                    assert!(kind == "node.coarse_inverse" && reason.contains("one workgroup"), "{n}³ refused by {kind}: {reason}");
-                }
-                other => panic!("{n}³ must be refused at build, got {:?}", other.map(|_| "a plan")),
-            }
+    fn gpu_flip_any_resolution_walks_on_the_built_graph() {
+        for n in [16, 24, 32, 63, 72, 100, 128] {
+            let mut def = render_def(WaterScene::dam_break(64));
+            let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
+            domain.params.insert("resolution".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: n });
+            let report = walked(&def, false, &format!("the 64³ graph at Resolution {n}"));
+            assert!(report.scene_bytes > 0);
         }
     }
 
@@ -1140,9 +868,7 @@ pub(super) mod tests {
         let scene = WaterScene::dam_break(128);
         let mut def = water_def(scene);
         let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
-        for param in ["resolution", "built_resolution"] {
-            domain.params.insert(param.into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: 256 });
-        }
+        domain.params.insert("resolution".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: 256 });
         match walk(&def, false) {
             Err(ExtentError::Refused { node, reason }) => {
                 assert!(node.starts_with("domain") && reason.contains("Resolution") && reason.contains("Initial Fill Height"), "{node}: {reason}");
@@ -1172,9 +898,9 @@ pub(super) mod tests {
             let n = scene.pressure.n;
             let def = render_def(scene);
             let (_, plan) = built(&def);
-            assert_eq!(plan.substep_regions()[0].inner.len(), scene.steps + scene.density_solves());
+            assert_eq!(plan.substep_regions().len(), 1, "one tick region");
             let report = walked(&def, false, &format!("rendered {n}³"));
-            assert!(report.checked > 40 * scene.steps, "checked only {} nodes at {n}³", report.checked);
+            assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³", report.checked);
             let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).expect("the rendered scene builds");
             let shadowed: Vec<_> = runtime.shadowed_def_params().collect();
             assert!(shadowed.is_empty(), "{n}³ at surface scale {}: cards overwrite def params: {shadowed:?}", scene.surface_scale);
@@ -1197,37 +923,6 @@ pub(super) mod tests {
         assert_eq!((block.pool_sites(), block.particles()), (0, 32 * 32 * 32));
     }
 
-    /// The conjugate gradient region holds exactly one iteration: one V-cycle
-    /// (two sweep pairs down, the residual, the restriction, the coarse
-    /// solve, the prolongation, two sweep pairs up) and the vector updates.
-    /// The coarse water, the zero lattices and the coarse inverse are
-    /// outside it.
-    #[test]
-    fn gpu_flip_pressure_region_is_one_iteration() {
-        let (graph, plan) = built(&pressure_def(PressureShape::at(64)));
-        let region = &plan.substep_regions()[0];
-        let names: AHashMap<_, _> = graph.nodes().map(|n| (n.id, n.node_id.as_str().to_string())).collect();
-        let mut body: Vec<String> = region.steps.iter().map(|&i| names[&plan.steps()[i].node].clone()).collect();
-        body.sort();
-        let vectors = ["cg", "rz", "beta", "direction", "minus_lp", "p_dot_s", "alpha", "solution", "residual"];
-        let mut want: Vec<String> = vectors.iter().map(|s| (*s).to_string()).collect();
-        for level in 0..4 {
-            for round in 0..SMOOTH_SWEEPS {
-                for color in [0, 1] {
-                    want.push(format!("mg{level}_pre{round}_{color}"));
-                    want.push(format!("mg{level}_post{round}_{color}"));
-                }
-            }
-            for stage in ["residual", "restrict", "prolong"] {
-                want.push(format!("mg{level}_{stage}"));
-            }
-        }
-        want.push("mg4_solve".to_string());
-        want.sort();
-        assert_eq!(body, want);
-        assert!(!body.contains(&"coarse_inverse".to_string()), "the inverse is built once per water lattice");
-    }
-
     /// Each fused region of `def` as its members' node ids, `a + b`.
     fn fused_regions(def: &EffectGraphDef) -> Vec<String> {
         let report = crate::node_graph::fusion_report(def, &registry());
@@ -1243,19 +938,14 @@ pub(super) mod tests {
             let scene = WaterScene::dam_break(n);
             for scene in [scene.with_surface(), scene.with_faces()] {
                 let report = walked(&render_def(scene), true, &format!("frozen render {n}³"));
-                assert!(report.checked > 40 * scene.steps, "checked only {} nodes at {n}³", report.checked);
+                assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³", report.checked);
             }
         }
     }
 
-    /// Neither the solve nor the water step fuses: every lattice a sweep
-    /// writes is gathered by the next (its neighbours) or fans out to
-    /// several readers, and a buffer region has one output. The whole step
-    /// runs unfrozen, so no fused-vs-unfrozen solve proof exists to run;
-    /// each atom's own fused kernel is proven in `gpu_flip_atom_tests`.
+    /// The step is one boundary node: nothing in the water fuses.
     #[test]
-    fn gpu_flip_solve_and_step_do_not_fuse() {
-        assert_eq!(fused_regions(&pressure_def(PressureShape::at(64))), Vec::<String>::new());
+    fn gpu_flip_step_does_not_fuse() {
         assert_eq!(fused_regions(&water_def(WaterScene::dam_break(64))), Vec::<String>::new());
     }
 
@@ -1271,8 +961,8 @@ pub(super) mod tests {
         def
     }
 
-    /// The tick hands the state its last step's projected faces, extended by
-    /// the face grid's valid layers, whatever the step count.
+    /// The tick hands the state its last step's faces, whatever the step
+    /// count.
     #[test]
     fn gpu_flip_state_takes_the_last_steps_extended_faces() {
         for scene in [WaterScene::dam_break(64), WaterScene { steps: 1, ..WaterScene::dam_break(64) }] {
@@ -1285,21 +975,27 @@ pub(super) mod tests {
             let into: Vec<_> = wires.iter().filter(|w| w["toPort"] == "faces_in").collect();
             assert_eq!(into.len(), 1, "one faces_in wire");
             assert_eq!(name(&into[0]["toNode"]), "state");
-            assert_eq!(name(&into[0]["fromNode"]), format!("s{}.new_extend_{}", scene.steps - 1, scene.band_layers()));
+            assert_eq!(name(&into[0]["fromNode"]), format!("s{}.step", scene.steps - 1));
+            assert_eq!(into[0]["fromPort"], "faces");
         }
     }
 
-    /// The CFL guard and the band at the lattices the extent walk covers, and
-    /// the band the conformance row's face grid scene publishes.
+    /// The step's CFL guard and band at the lattices the extent walk covers,
+    /// never under the valid layers the frame publishes, which the
+    /// conformance row's face grid scene holds.
     #[test]
     fn gpu_flip_band_follows_the_cfl_guard() {
-        use crate::node_graph::liquid::conformance::{FACE_GRID_GPU_FLIP_LAYERS, FACE_GRID_RESOLUTION};
-        assert_eq!(WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).band_layers(), FACE_GRID_GPU_FLIP_LAYERS as usize);
+        use super::super::gpu_flip_step::{band_layers, travel_cells};
+        use crate::node_graph::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
+        assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         let at = |n: usize, steps: usize| {
             let s = WaterScene::dam_break(n).with_steps(steps);
-            (s.travel_cells(), s.band_layers())
+            let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.pressure.cell_size() as f32);
+            (travel, band_layers(travel))
         };
-        assert_eq!([at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)], [(3, 4), (6, 6), (6, 6), (4, 4), (1, 2)]);
+        let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
+        assert_eq!(bands, [(3, 4), (6, 6), (6, 6), (4, 4), (1, 2)]);
+        assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
     }
 
     /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,

@@ -132,7 +132,13 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
   the diff touches GPU paths (scoped: mapped tests + smoke set from
   `scripts/gpu_scope.py`, 300s test-time budget, unmapped GPU path fails,
-  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly). (Bug status lives in beads since
+  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly).
+  Scoped runs skip any test measured over 60s in the committed
+  `scripts/gpu_test_times.json` (tests missing from it run). Nightly
+  `trunk_health.py` runs `--all --record-times /tmp/gpu_test_times.nightly.json`
+  and prints the diff; it never commits. To refresh: copy that file over
+  `scripts/gpu_test_times.json` on a branch and land it. Over-budget landing
+  fix: record times if the slow test is slow on purpose, else shorten it. (Bug status lives in beads since
   BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and its landing-time
   reflow are retired.) The post-merge housekeeper on main is a backstop, not
   the workflow — its remedies are worktree-shaped, never in-place edits to
@@ -208,7 +214,16 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    2026-07-17; worst case ~270 GB fully warm) — all-busy is a loud `POOL
    FULL` error to surface to Peter, never to work around. A slot's
    `target/` past 25 GB is wiped at acquire. Idle = clean status + HEAD
-   is-ancestor of origin/main + lease absent or stale (8 h). The script
+   is-ancestor of origin/main + lease absent or stale (8 h). The wipe is
+   `scripts/storage_budget.py`'s file manifest: Cargo-named rlibs, objects,
+   fingerprints, incremental state and hashed native executables
+   (`deps/<target>-<16 hex>`, the bulk of a warm slot at ~55 MB per test
+   binary); build-script `out/` products are kept because Cargo would not
+   rerun the script if they vanished. The landing gate's storage admission
+   (100 GiB reserve) runs `agent-worktree.py reclaim` before refusing — it
+   frees landed, clean, lease-free, process-free slots only, LRU first,
+   until the reserve is met; dirty, unlanded and main caches are never
+   touched by it. The script
    writes a lease, copies missing GITIGNORED `tests/fixtures` files from
    the main checkout (non-ignored files would mark the slot permanently
    dirty — the exact bug that grew the old pool), and prints the step-0

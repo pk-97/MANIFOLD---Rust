@@ -105,9 +105,9 @@ fn gpu_flip_lattice(field: &Field) -> Vec<FaceSample> {
         .collect()
 }
 
-/// The matter lattice over the same box: n + 7 nodes, the first at m − 3h;
-/// every node carries mass.
-fn matter_nodes() -> [u32; 3] {
+/// The padded lattice over the box: n + 7 nodes, the first at m − 3h. Both
+/// components read their box from it.
+fn lattice_nodes() -> [u32; 3] {
     N.map(|n| n + 1 + 2 * PADDING_NODES)
 }
 
@@ -116,7 +116,7 @@ fn node_position(p: [u32; 3]) -> [f64; 3] {
 }
 
 fn matter_grid(field: &Field) -> Vec<MatterGridNode> {
-    let n = matter_nodes();
+    let n = lattice_nodes();
     (0..n.iter().product::<u32>())
         .map(|i| {
             let p = [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])];
@@ -140,7 +140,7 @@ fn liquid_face_grid_layout_gpu_flip() {
                 &mut FaceSampleComponent::new(),
                 ("faces", input.0),
                 face_len(N, axis) as usize,
-                &component_params(N, axis as u32),
+                &component_params(lattice_nodes(), axis as u32),
             );
             assert_faces(axis, &got, |f| field.at(seam_position(axis, f))[axis], &format!("GPU FLIP {name}"));
         }
@@ -152,7 +152,7 @@ fn liquid_face_grid_layout_gpu_flip() {
 #[test]
 fn liquid_face_grid_layout_matter() {
     let mut harness = Harness::new();
-    let nodes = matter_nodes();
+    let nodes = lattice_nodes();
     for (name, field) in [("uniform", Field::uniform()), ("shear", Field::shear())] {
         let grid = matter_grid(&field);
         let input = harness.array(&grid, grid.len());
@@ -192,7 +192,7 @@ fn face_sample_component_zeroes_unweighted_faces() {
             &mut FaceSampleComponent::new(),
             ("faces", input.0),
             face_len(N, axis) as usize,
-            &component_params(N, axis as u32),
+            &component_params(lattice_nodes(), axis as u32),
         );
         assert_faces(
             axis,
@@ -220,7 +220,7 @@ fn matter_face_component_skips_empty_nodes() {
         }
     }
     let input = harness.array(&grid, grid.len());
-    let n = matter_nodes();
+    let n = lattice_nodes();
     let pad = PADDING_NODES;
     let mut empty = 0;
     for axis in 0..3 {

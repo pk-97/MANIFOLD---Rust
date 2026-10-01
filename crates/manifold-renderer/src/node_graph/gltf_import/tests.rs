@@ -1796,6 +1796,48 @@ fn material_named_like_its_own_inner_handle_does_not_collide() {
     }
 }
 
+/// BUG-55lv (compound duplicate handle): a static multi-material asset folds
+/// every part into ONE group body, so each part's material-derived
+/// `node.scene_object` handle shares a namespace with every sibling's
+/// deterministic handles (`mat_{k}`, `output_{i}`, `part_transform_{k}`, …),
+/// not just its own. Each name below hits one of those: `mat_0` against the
+/// primary's own material node (the `MetalRoughSpheresNoTextures.glb` panic),
+/// `mat_2` against a sibling's material, `output_1` against a sibling's group
+/// output, and `part_transform_0` against the primary's part transform.
+#[test]
+fn compound_part_names_never_collide_with_sibling_inner_handles() {
+    let summary = GltfImportSummary {
+        materials: vec![
+            full_material(0, "mat_0", 100),
+            full_material(1, "mat_2", 100),
+            full_material(2, "output_1", 100),
+            full_material(3, "part_transform_0", 100),
+        ],
+        bbox_min: [-1.0, -1.0, -1.0],
+        bbox_max: [1.0, 1.0, 1.0],
+        camera_count: 0,
+        default_material_vertex_count: 0,
+        animations: Vec::new(),
+        animation_report_lines: Vec::new(),
+        extension_report_lines: Vec::new(),
+        lights: Vec::new(),
+        cameras: Vec::new(),
+        camera_report_lines: Vec::new(),
+        texture_dims: Vec::new(),
+    };
+    let path = std::path::Path::new("/tmp/synthetic_compound_collision.glb");
+    let (def, _report) =
+        build_import_graph(&summary, path).expect("build compound import graph");
+
+    let flattened = manifold_core::flatten::flatten_groups(&def).expect("flatten must succeed");
+    let mut seen = std::collections::HashSet::new();
+    for n in &flattened.nodes {
+        if let Some(h) = &n.handle {
+            assert!(seen.insert(h.clone()), "duplicate flattened handle: '{h}'");
+        }
+    }
+}
+
 // -----------------------------------------------------------------
 // SCENE_SETUP_PANEL_DESIGN.md P4 — merge_import_into_graph (D5)
 // -----------------------------------------------------------------
@@ -3747,7 +3789,6 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
 fn corrupted_assembler_output_fails_validation_naming_the_node() {
     use super::gltf_load::GltfMaterialInfo;
     use crate::node_graph::{ValidateKind, validate_def};
-    use manifold_gpu::GpuDevice;
 
     let mat = |material_index: u32, name: &str, verts: u32, tex: Option<u32>| GltfMaterialInfo {
         material_index,
@@ -3870,7 +3911,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
     }
 
     let registry = PrimitiveRegistry::with_builtin();
-    let device = std::sync::Arc::new(GpuDevice::new_queued("gltf_import tests"));
+    let device = crate::gpu::test_gpu_device("gltf_import tests");
     let report = validate_def(&def, &registry, ValidateKind::Generator, &device);
 
     assert!(

@@ -22,7 +22,8 @@ use manifold_core::Seconds;
 /// Build a minimal but real headless [`ContentThread`]. See the module doc
 /// for what's real vs. inert-defaulted.
 pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> ContentThread {
-    let native_device = Arc::new(manifold_gpu::GpuDevice::new_queued("app headless harness"));
+    // Light unit tests must not wait behind proof runs; proofs queue.
+    let native_device = manifold_renderer::gpu::test_gpu_device("app headless harness");
     // BUG-olp9: load the same pipeline caches the GUI path loads (app.rs).
     // Without them every headless run cold-compiles all ~150+ pipelines, and
     // each runtime MSL compile leaves slab-scale IOAccelerator allocations —
@@ -81,7 +82,8 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
             String::new(),
         ),
         transport_controller: manifold_playback::transport_controller::TransportController::new(),
-        gpu: manifold_renderer::gpu::GpuContext::new_queued("app headless harness"),
+        // Same: unqueued unless the renderer is built with gpu-proofs.
+        gpu: manifold_renderer::gpu::GpuContext::new_for_tests("app headless harness"),
         frame_count: 0,
         time_since_start: Seconds::ZERO,
         last_data_version: 0,

@@ -55,6 +55,37 @@ What's *not* part of that tax is extending adjacent primitives for port-shadow â
 
 Subsequent decompositions in the same family are far cheaper. Tesseract / Duocylinder will inherit the entire 3D wireframe pipeline from WireframeZoo; they'll likely be JSON-only changes plus one or two 4D primitive additions. Don't budget the second decomposition like the first.
 
+## 1.2 Specialised solvers are stage nodes
+
+Peter, 2026-10-01. The atom rule in section 1.1 exists so a user can swap a part they would plausibly rewire: Bloom's blur, AutoGain's envelope source. A numerical method's internals don't qualify. Nobody swaps a multigrid smoother or reroutes a particle-to-grid transfer; people play a simulation through its params (forces, emitters, solids, look). Built as atoms, a solver costs the show: hundreds of nodes, a dispatch and a fusion boundary per step, and region machinery to express loops that are plain Rust.
+
+A node qualifies as a solver stage only when all three hold:
+
+1. **Seam-typed ports.** Every input and output is a type the liquid seam (or the equivalent contract for another solver) already names: particles, face grids, solid lattices, forces. Nothing internal leaks out as a port.
+2. **One numerical method, proven at the boundary against an external reference.** The node reproduces a published method, and its tests compare its output with that reference (an f64 script, the vendored engine), not with a mirror of its own kernels.
+3. **No internal pass used twice outside the solver.** A pass that other graphs use stays a catalog atom (a prefix sum, spatial binning), and the stage calls its code, not its node.
+
+A stage node is allowed only when all three hold:
+
+1. Every port is a type another solver or a scene could plausibly rewire: particles, face grids, distance lattices, occupancy, clock scalars.
+2. The inside is one numerical method, proven at the boundary against an external reference (an f64 script, a vendored engine). Its internal passes mean nothing outside that method.
+3. No internal pass is used twice outside the solver. If it is, it stays a catalog atom that the stage wires to or calls.
+
+The test question: would a user swap one internal pass for a different node? If yes, use atoms. If the only reason to look inside is to debug the solver, use a stage. An effect or generator never qualifies, however complex: its parts are the look, and users swap them. FluidSim2D's `fluid_simulate` bundles noise, diffusion and injection, so it stays a decomposition target under section 1.1.
+
+Use as few stages as the ports allow. Fewer stages mean fewer wires nobody rewires and more room to fuse. GPU FLIP is one step node plus one whitewater node, not five stages.
+
+**Signs the cut is too fine.** Each of these means the atoms are slicing through one method. Move the boundary out; never patch the symptom.
+
+- A param needs the graph's shape to change, such as a level count or a band count that follows Resolution. The loop belongs inside a node, where the param is a loop count. A size rule (for example "multiple of 16") or a capped range that exists only because the graph is fixed is the symptom, never the fix.
+- State carried across frames by a convention in data, such as "the pool's last slot is a header". Cross-frame scalars are a node's own state, seeded on epoch.
+- Fused-vs-unfused proofs that fight last-digit rounding, or fusion refusing, between atoms of the same method.
+- A chain that fuses nowhere, where dispatch overhead shows up in the profile. GPU FLIP's coarsest multigrid sweeps were 7.5 ms of a 24 ms frame at 64Â³.
+
+**What a stage keeps.** One extent rule per stage type, whose inner sizes come from the same `pub(crate)` sizing functions the node dispatches with (`node.sort_particles_into_cells` is the precedent). A dispatch label per internal pass, so the profiler still splits the stage. The atomic-free conformance check covers its hand-written shaders. Sizes that follow a param are buffers the node provides, resized on change, not a graph rebuild (`liquid_state`'s faces buffer is the precedent).
+
+The worked example is GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage map). MPM's `matter_*` nodes are already stage-shaped: MLS-MPM is three dispatches.
+
 ## 2. The mental model
 
 A generator is a sub-graph from `system.generator_input` to `final_output`.

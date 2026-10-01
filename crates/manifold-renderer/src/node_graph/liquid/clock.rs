@@ -13,6 +13,9 @@ pub struct ClockFrame {
     /// This frame starts a new simulation (first frame, reset, setup change or
     /// backward seek); the state reseeds before any tick runs.
     pub restarted: bool,
+    /// Transport paused or Simulation Speed 0: simulated time did not move.
+    /// Impulses fired now are discarded, so resume never bursts.
+    pub held: bool,
     /// Simulated seconds at the end of this frame's ticks.
     pub simulation_time: f64,
     /// Simulated seconds this display frame reached (at most one tick past
@@ -81,6 +84,7 @@ impl LiquidClock {
             || setup_changed
             || reset_edge
             || transport < self.last_transport - 1e-9;
+        let mut held = false;
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
@@ -88,7 +92,9 @@ impl LiquidClock {
             self.ticks_done = 0;
             self.dropped_seconds = 0.0;
         } else {
-            self.target_time += (transport - self.last_transport).max(0.0) * f64::from(speed);
+            let advance = (transport - self.last_transport).max(0.0) * f64::from(speed);
+            held = advance <= 0.0;
+            self.target_time += advance;
         }
         self.last_transport = transport;
         let due = ((self.target_time / TICK + 1e-9).floor() as u64).saturating_sub(self.ticks_done);
@@ -114,6 +120,7 @@ impl LiquidClock {
             ticks: ticks as u32,
             epoch: self.epoch,
             restarted,
+            held,
             simulation_time: self.ticks_done as f64 * TICK,
             target_time: self.target_time,
             display_time: (self.target_time - TICK).max(0.0),
@@ -170,18 +177,24 @@ mod tests {
         clock.advance(0.0, TICK, 1.0, 0.0, false, false);
         let a = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
         assert_eq!(a.ticks, 1);
+        assert!(!a.held);
         // Paused transport holds.
         let held = clock.advance(TICK, 0.0, 1.0, 0.0, false, false);
         assert_eq!(held.ticks, 0);
+        assert!(held.held);
         assert_eq!(held.simulation_time, a.simulation_time);
-        // Speed 0.5 runs a tick every other frame.
-        let ticks: u32 = (2..6)
-            .map(|i| clock.advance(i as f64 * TICK, TICK, 0.5, 0.0, false, false).ticks)
-            .sum();
-        assert_eq!(ticks, 2);
+        // Speed 0 holds while transport runs.
+        assert!(clock.advance(2.0 * TICK, TICK, 0.0, 0.0, false, false).held);
+        // Speed 0.5 runs a tick every other frame and never holds.
+        let frames: Vec<_> = (3..7)
+            .map(|i| clock.advance(i as f64 * TICK, TICK, 0.5, 0.0, false, false))
+            .collect();
+        assert_eq!(frames.iter().map(|f| f.ticks).sum::<u32>(), 2);
+        assert!(frames.iter().all(|f| !f.held));
         // A changed reset counter restarts in a new epoch.
-        let reset = clock.advance(6.0 * TICK, TICK, 1.0, 1.0, false, false);
+        let reset = clock.advance(7.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!(reset.restarted);
+        assert!(!reset.held);
         assert_eq!(reset.epoch, 2);
         assert_eq!(reset.ticks, 0);
         // Seeking backwards restarts too.
@@ -192,6 +205,70 @@ mod tests {
         let next = clock.advance(3.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!((next.display_time - 0.0).abs() < 1e-12);
         assert_eq!(next.ticks, 1);
+    }
+
+    /// Pause runs zero ticks however long the host keeps drawing, and play
+    /// carries on in the same epoch with exactly the ticks an uninterrupted
+    /// run has at the same transport time: the water is the same water.
+    #[test]
+    fn liquid_clock_pause_resume_continues_the_same_state() {
+        let mut paused = LiquidClock::default();
+        let mut straight = LiquidClock::default();
+        for i in 0..=10 {
+            let t = i as f64 * TICK;
+            paused.advance(t, TICK, 1.0, 0.0, false, false);
+            straight.advance(t, TICK, 1.0, 0.0, false, false);
+        }
+        let before = paused.advance(10.0 * TICK, TICK, 1.0, 0.0, false, false);
+        // The host keeps drawing with real frame deltas while the transport
+        // stands still, including a long stall.
+        for interval in [TICK, TICK, 0.5, TICK, 0.0, 2.0] {
+            let held = paused.advance(10.0 * TICK, interval, 1.0, 0.0, false, false);
+            assert_eq!(held.ticks, 0);
+            assert_eq!(held, before);
+        }
+        for i in 11..=20 {
+            let t = i as f64 * TICK;
+            let resumed = paused.advance(t, TICK, 1.0, 0.0, false, false);
+            let reference = straight.advance(t, TICK, 1.0, 0.0, false, false);
+            assert!(!resumed.restarted);
+            assert_eq!(resumed, reference, "frame {i} after resume");
+        }
+    }
+
+    /// Live frames with jittery host deltas reach the same simulated time as
+    /// an offline run at the same transport times while nothing drops: export
+    /// and realtime show the same water at the same instant.
+    #[test]
+    fn liquid_clock_live_matches_offline_at_the_same_transport_time() {
+        let mut live = LiquidClock::default();
+        let mut offline = LiquidClock::default();
+        let mut transport = 0.0;
+        // A display near 60 fps that never runs more than three ticks late.
+        let jitter = [1.0, 0.7, 1.4, 1.0, 0.9, 1.6, 0.5, 1.0, 1.2, 0.8];
+        for step in 0..200 {
+            let interval = TICK * jitter[step % jitter.len()];
+            transport += interval;
+            let a = live.advance(transport, interval, 1.0, 0.0, false, false);
+            let b = offline.advance(transport, interval, 1.0, 0.0, false, true);
+            assert_eq!(a.dropped_seconds, 0.0, "frame {step} dropped live");
+            // Live keeps at most one tick of jitter debt; it never runs ahead.
+            let behind = b.simulation_time - a.simulation_time;
+            assert!((-1e-9..=TICK + 1e-9).contains(&behind), "frame {step}: live {behind} s behind");
+        }
+    }
+
+    /// At a steady 60 fps live runs one tick a frame, the same ticks as export.
+    #[test]
+    fn liquid_clock_steady_live_equals_offline() {
+        let mut live = LiquidClock::default();
+        let mut offline = LiquidClock::default();
+        for i in 0..=120 {
+            let t = i as f64 * TICK;
+            let a = live.advance(t, TICK, 1.0, 0.0, false, false);
+            let b = offline.advance(t, TICK, 1.0, 0.0, false, true);
+            assert_eq!(a, b, "frame {i}");
+        }
     }
 
     /// A coupled domain's cap: 0 holds without dropping the owed tick, 1 runs

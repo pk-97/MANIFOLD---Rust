@@ -38,6 +38,10 @@ pub struct TemplateExposure {
 /// A node's `handle` is a suffix: `Some("Simulation")` becomes
 /// `"<Fluid N> Simulation"`, `Some("")` is the bare fluid handle, `None`
 /// carries no handle. A node's `node_id` is the stable-id prefix.
+///
+/// The body holds exactly one liquid domain, at any group depth. The command
+/// finds it by `liquid_domains_in` and wires the shared World controls
+/// (gravity, speed, reset) to it through every group boundary on the way.
 #[derive(Clone, Debug)]
 pub struct LiquidTemplate {
     pub nodes: Vec<EffectGraphNode>,
@@ -47,9 +51,6 @@ pub struct LiquidTemplate {
     /// address card params by document id, so FLIP keeps its original order.
     pub group_id_slot: usize,
     pub exposures: Vec<TemplateExposure>,
-    /// The simulation node the shared World controls (gravity, speed, reset)
-    /// wire into. `None` skips sharing for solvers without those ports.
-    pub world_control_target: Option<u32>,
 }
 
 impl LiquidTemplate {
@@ -200,6 +201,5 @@ pub fn flip_scene_fluid_template() -> LiquidTemplate {
             TemplateExposure { node: MATERIAL, set: ExposureSet::Material, section: Some("Material") },
             TemplateExposure { node: OBJECT, set: ExposureSet::Object, section: None },
         ],
-        world_control_target: Some(FLUID),
     }
 }

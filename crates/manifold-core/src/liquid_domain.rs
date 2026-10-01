@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::SceneNodeRef;
+use crate::effect_graph_def::{EffectGraphNode, GROUP_TYPE_ID};
 use crate::scene_index::{FlatSceneIndex, SceneIndexError};
 
 /// The FLIP liquid domain.
@@ -21,6 +22,37 @@ pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN
 
 pub fn is_liquid_domain(type_id: &str) -> bool {
     LIQUID_DOMAIN_TYPE_IDS.contains(&type_id)
+}
+
+/// A liquid domain found under some graph level: the doc ids of the groups
+/// entered to reach it, outermost first, and its own doc id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NestedLiquidDomain {
+    pub groups: Vec<u32>,
+    pub node: u32,
+}
+
+/// Every liquid domain in `nodes` and in the groups nested under them. A GPU
+/// liquid keeps its domain inside a group (Live Matter), so a direct-child
+/// check misses it.
+pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
+    fn walk(nodes: &[EffectGraphNode], groups: &mut Vec<u32>, out: &mut Vec<NestedLiquidDomain>) {
+        for node in nodes {
+            if is_liquid_domain(&node.type_id) {
+                out.push(NestedLiquidDomain { groups: groups.clone(), node: node.id });
+            }
+            if node.type_id == GROUP_TYPE_ID
+                && let Some(body) = node.group.as_deref()
+            {
+                groups.push(node.id);
+                walk(&body.nodes, groups, out);
+                groups.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(nodes, &mut Vec::new(), &mut out);
+    out
 }
 
 /// Water-panel params per domain type, under FLIP's names where the meaning is
@@ -136,6 +168,33 @@ mod tests {
         assert!(is_liquid_domain(GPU_FLIP_DOMAIN_TYPE_ID));
         assert!(!is_liquid_domain("node.physics_world"));
         assert!(!is_liquid_domain("node.matter_state"));
+    }
+
+    #[test]
+    fn liquid_domains_in_finds_nested_gpu_domain() {
+        use crate::effect_graph_def::{GroupDef, GroupInterface};
+        let node = |id: u32, type_id: &str| -> EffectGraphNode {
+            serde_json::from_value(serde_json::json!({"id": id, "nodeId": format!("n{id}"), "typeId": type_id}))
+                .expect("node parses")
+        };
+        let group = |id: u32, nodes: Vec<EffectGraphNode>| {
+            let mut group = node(id, GROUP_TYPE_ID);
+            group.group = Some(Box::new(GroupDef {
+                interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+                nodes,
+                wires: vec![],
+                tint: None,
+            }));
+            group
+        };
+        let fluid_group = group(1, vec![group(2, vec![node(3, MATTER_DOMAIN_TYPE_ID)]), node(4, "node.value")]);
+        assert_eq!(
+            liquid_domains_in(&[fluid_group, node(5, FLIP_DOMAIN_TYPE_ID)]),
+            vec![
+                NestedLiquidDomain { groups: vec![1, 2], node: 3 },
+                NestedLiquidDomain { groups: vec![], node: 5 },
+            ]
+        );
     }
 
     #[test]

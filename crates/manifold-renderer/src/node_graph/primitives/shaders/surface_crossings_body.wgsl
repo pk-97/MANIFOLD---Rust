@@ -13,7 +13,9 @@
 // trilinear of the cell's eight solid corners. `level_set` and `solid` are
 // gathered; a lattice past its array gives no crossing and level 1e6. Most
 // cells are far from the surface: a footprint whose nodes all share a sign
-// has no edge to cross, so it skips the solid and the edge walk.
+// has no edge to cross, so it skips the solid and the edge walk. With a
+// block map wired (blocks_len words), a cell whose block lacks SURFACE skips
+// the scan too, with the same output.
 
 // The level set at the centre of the cell whose footprint starts at `base`:
 // trilinear on the eight refined nodes around it.
@@ -97,6 +99,7 @@ fn body(
     level_nodes_x: f32,
     level_nodes_y: f32,
     level_nodes_z: f32,
+    blocks_len: u32,
 ) -> Element {
     var out = Element(vec3<f32>(1e6), 1e6, vec3<f32>(0.0), 0.0);
     let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
@@ -115,6 +118,16 @@ fn body(
     let c = ww_cell(idx, cells);
     let side = s + 1u;
     let base = c * s;
+    // A block map that covers the grid lets a cell in a block with no
+    // surface skip the footprint scan: the block's closed footprint holds
+    // this one, so the scan would find one sign and take the branch below.
+    let block_count = lb_blocks(cells);
+    let block_total = block_count.x * block_count.y * block_count.z;
+    if blocks_len >= block_total && arrayLength(&buf_blocks) >= block_total
+        && (buf_blocks[lb_index(c, cells)] & LB_SURFACE) == 0u {
+        out.level = sc_centre_level(base, s, levels);
+        return out;
+    }
     // Which footprint nodes lie in the liquid, one bit each at
     // x + side·(y + side·z). An edge crosses only between nodes of opposite
     // sign.

@@ -120,7 +120,9 @@ impl Primitive for MatterToGrid {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter to Grid") else {
+            return;
+        };
         let count = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let lambda = ctx.scalar_or_param("lambda", 1.111e6);

@@ -134,6 +134,49 @@ s = fresh_session()
 run(bash("for f in a.glb b.glb; do cargo run --bin render-import -- $f; done", s))
 check("for-body probe counts", counter(s) == 1, f"count={counter(s)}")
 
+# --- wrapper named inside a quoted argument is a mention, not a run ---
+s = fresh_session()
+quoted_mentions = [
+    "bd create -t bug --title 'queue label' -d 'holder gpu_proofs_gate.py run with cwd at main'",
+    'git commit -m "scripts/gpu_proofs_gate.py now scoped" -- scripts/x.py',
+    "rg -n gpu_proofs_gate.py docs/",
+]
+for i in range(3):
+    for c in quoted_mentions:
+        out = run(bash(c, s))
+        check(f"quoted mention silent: {c[:40]}…", kind(out) == "silent", f"got {kind(out)}")
+check("quoted mentions never counted", counter(s) == 0, f"count={counter(s)}")
+
+# --- wrapper in command position counts, behind cd/env/for/queue prefixes ---
+s = fresh_session()
+runs = [
+    'cd "/Users/x/MANIFOLD - Rust/.claude/worktrees/slot-5" && scripts/gpu_proofs_gate.py',
+    "RUST_LOG=info scripts/gpu_proofs_gate.py --all",
+    "for f in a b; do scripts/gpu_proofs_gate.py --filter $f; done",
+    "scripts/gpu_queue.py -- scripts/gpu_proofs_gate.py",
+]
+for c in runs:
+    run(bash(c, s))
+check("command-position wrapper runs count", counter(s) == len(runs), f"count={counter(s)}")
+
+# --- markdown re-edits after a run are prose, not a loop ---
+s = fresh_session()
+md = "/Users/x/.claude/projects/p/memory/guide_decision_log.md"
+for i in range(8):
+    run(edit(md, s))
+    run(bash("cargo nextest run -p manifold-core", s))
+out = run(edit(md, s))
+check("markdown re-edit loop silent", kind(out) == "silent", f"got {kind(out)}")
+
+# --- source re-edits after a run still count as a loop ---
+s = fresh_session()
+rs = "/Users/x/wt/crates/manifold-core/src/a.rs"
+results = []
+for i in range(7):
+    results.append(kind(run(edit(rs, s))))
+    run(bash("cargo nextest run -p manifold-core", s))
+check("source edit-run loop still denies", results[-1] == "deny", results)
+
 # --- worker seats exempt ---
 s = fresh_session()
 out = run(bash(probe_cmd, s, agent_id="lane-1"))

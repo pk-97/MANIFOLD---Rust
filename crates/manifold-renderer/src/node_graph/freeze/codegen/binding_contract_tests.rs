@@ -171,20 +171,20 @@ fn dispatch_tail_census_is_stable() {
     // and liquid_solid_distance, buffer atoms. Matter coupling adds
     // matter_body_reaction, a buffer atom. The liquid surface's last step
     // before meshing adds clamp_liquid_to_solids, a buffer atom.
-    // GPU FLIP adds combine_rows, divide_by_value, liquid_fill, cells_with_particles, particles_to_faces, face_gravity,
-    // face_divergence, subtract_pressure, extend_faces, faces_to_particles and
-    // density_source; its multigrid pressure solve adds zero_lattice,
-    // coarsen_water, pressure_smooth, pressure_residual, restrict_lattice and
-    // prolong_lattice, all buffer atoms. The liquid face grid adds face_sample_component and
+    // GPU FLIP adds divide_by_value and liquid_fill, buffer atoms (its step
+    // and pressure solve are hand shaders). The liquid face grid adds face_sample_component and
     // matter_face_component, buffer atoms. The whitewater grid adds
     // surface_crossings, nearest_crossing, crossing_distance, liquid_cells,
     // lattice_curvature and extend_lattice, buffer atoms; its emitter adds
     // jitter_particles, sample_faces_at_particles, energy_potential,
     // wavecrest_potential and emission_count, buffer atoms; its spawn adds
-    // spawn_whitewater and whitewater_type, buffer atoms; its GPU lifecycle
-    // adds advect_whitewater, retype_whitewater, age_whitewater and
-    // preserve_foam, buffer atoms.
-    assert_eq!(total, 237, "standalone atom census drifted");
+    // spawn_whitewater and whitewater_type, buffer atoms. Solids' body
+    // coupling adds pressure_face_impulse, friction_face_impulse and
+    // body_pressure_product, buffer atoms. The liquid block map adds
+    // liquid_blocks. The whitewater GPU lifecycle adds advect_whitewater,
+    // retype_whitewater, age_whitewater, preserve_foam and keep_whitewater,
+    // buffer atoms.
+    assert_eq!(total, 227, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

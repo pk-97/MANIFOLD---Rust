@@ -1,6 +1,7 @@
 //! `node.matter_grid_update` — resolve the matter grid: momentum to velocity,
-//! gravity, closed walls and the CFL clamp (`docs/GPU_MPM_SOLVER_DESIGN.md`
-//! section 4.1 step 4). Colliders join in P2a, forces and impulses in P3c.
+//! gravity, the scene's forces and impulses (seam P8), closed walls,
+//! colliders and the CFL clamp (`docs/GPU_MPM_SOLVER_DESIGN.md` section 4.1
+//! step 4).
 
 use std::borrow::Cow;
 
@@ -9,6 +10,7 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{MatterGridNode, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -33,20 +35,30 @@ struct GridUpdateUniforms {
     lattice_min_y: f32,
     lattice_min_z: f32,
     body_count: i32,
+    tick_index: i32,
+    substep_in_tick: i32,
+    field_nodes_x: i32,
+    field_nodes_y: i32,
+    field_nodes_z: i32,
+    field_spacing: f32,
+    force_lattices: i32,
+    impulse_tick: i32,
+    first_tick: i32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 crate::primitive! {
     name: MatterGridUpdate,
     type_id: "node.matter_grid_update",
-    purpose: "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity, stop velocity into closed domain walls on the outer three nodes, project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
+    purpose: "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity and the scene's acceleration field (read from a coarse force lattice), add the scene's impulses once on the first substep of their tick (from a coarse impulse lattice), stop velocity into closed domain walls on the outer three nodes, project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
     inputs: {
         accum: Array(i32) required,
         grid: Array(MatterGridNode) required,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        forces: Array(f32) optional,
+        impulses: Array(f32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
@@ -55,6 +67,13 @@ crate::primitive! {
         momentum_unit: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         body_count: ScalarF32 optional,
+        tick_index: ScalarF32 optional,
+        substep_in_tick: ScalarF32 optional,
+        field_nodes_x: ScalarF32 optional, field_nodes_y: ScalarF32 optional, field_nodes_z: ScalarF32 optional,
+        field_spacing: ScalarF32 optional,
+        force_lattices: ScalarF32 optional,
+        impulse_tick: ScalarF32 optional,
+        first_tick: ScalarF32 optional,
     },
     outputs: {
         grid_out: Array(MatterGridNode),
@@ -74,9 +93,18 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("lattice_min_y"), label: "Lattice Min Y", ty: ParamType::Float, default: ParamValue::Float(-0.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("lattice_min_z"), label: "Lattice Min Z", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1000.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_nodes_x"), label: "Field Nodes X", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_nodes_y"), label: "Field Nodes Y", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_nodes_z"), label: "Field Nodes Z", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("field_spacing"), label: "Field Spacing", ty: ParamType::Float, default: ParamValue::Float(0.25), range: Some((1.0e-4, 400.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("force_lattices"), label: "Force Lattices", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("impulse_tick"), label: "Impulse Tick", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("first_tick"), label: "First Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces, the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt from the substep boundary. With bodies unwired no collider is read.",
+    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces, the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt, tick_index and substep_in_tick from the substep boundary. forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) come from node.matter_domain; the field lattices start at the lattice minimum. Every substep adds the force lattice of its tick: one lattice per tick from first_tick, or one for all ticks when force_lattices is 1 (0: no forces); impulses apply once, on substep 0 of tick impulse_tick (−1: none). With bodies unwired no collider is read; with forces or impulses unwired neither is read.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Grid Update", category: Atom },
     summary: "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",
@@ -85,8 +113,8 @@ crate::primitive! {
     aliases: ["grid update", "mpm grid", "resolve grid"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
-    input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS],
+    input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, MATTER_WALLS, LIQUID_FIELD],
 }
 
 impl Primitive for MatterGridUpdate {
@@ -106,7 +134,9 @@ impl Primitive for MatterGridUpdate {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Grid Update") else {
+            return;
+        };
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let gravity = [
             ctx.scalar_or_param("gravity_x", 0.0),
@@ -120,9 +150,19 @@ impl Primitive for MatterGridUpdate {
         let accum = ctx.inputs.array("accum");
         let grid = ctx.inputs.array("grid");
         let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
+        let substep_in_tick = ctx.scalar_or_param("substep_in_tick", 0.0).round().max(0.0) as i32;
+        let field = FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Matter Grid Update");
         let gpu = ctx.gpu_encoder();
         let (Some(accum), Some(grid)) = (accum, grid) else {
             return;
+        };
+        let field = match field {
+            Ok(field) => field,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
         };
         let nodes = lattice
             .node_count()
@@ -162,9 +202,18 @@ impl Primitive for MatterGridUpdate {
             lattice_min_y: lattice.min()[1],
             lattice_min_z: lattice.min()[2],
             body_count,
+            tick_index,
+            substep_in_tick,
+            field_nodes_x: field.nodes[0],
+            field_nodes_y: field.nodes[1],
+            field_nodes_z: field.nodes[2],
+            field_spacing: field.spacing,
+            force_lattices: field.force_lattices,
+            impulse_tick: field.impulse_tick,
+            first_tick: field.first_tick,
             dispatch_count: nodes,
-            _pad0: 0,
         };
+        // An unwired lattice is never read (force_lattices 0, impulse_tick −1).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -174,7 +223,9 @@ impl Primitive for MatterGridUpdate {
                 GpuBinding::Buffer { binding: 3, buffer: bodies, offset: 0 },
                 GpuBinding::Buffer { binding: 4, buffer: shapes, offset: 0 },
                 GpuBinding::Buffer { binding: 5, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: grid, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: field.forces.unwrap_or(grid), offset: 0 },
+                GpuBinding::Buffer { binding: 7, buffer: field.impulses.unwrap_or(grid), offset: 0 },
+                GpuBinding::Buffer { binding: 8, buffer: grid, offset: 0 },
             ],
             [nodes.div_ceil(256), 1, 1],
             "node.matter_grid_update",
@@ -196,8 +247,9 @@ mod tests {
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         assert!(wgsl.contains("var<storage, read> buf_accum: array<i32>"), "{wgsl}");
         assert!(wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
-        assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 64);
-        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>"] {
+        assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 96);
+        assert!(wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n}"), "{wgsl}");
+        for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>", "buf_forces: array<f32>", "buf_impulses: array<f32>"] {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
         let body = include_str!("shaders/matter_grid_update_body.wgsl");

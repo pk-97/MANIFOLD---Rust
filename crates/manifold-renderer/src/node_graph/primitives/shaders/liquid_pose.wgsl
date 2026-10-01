@@ -24,7 +24,19 @@ fn liquid_turn(q: vec4<f32>, w: vec3<f32>, t: f32) -> vec4<f32> {
     );
 }
 
+// a × b with every product-and-sum an explicit fma. Fast math contracts a
+// plain cross differently in a standalone and a fused kernel; a fixed form
+// keeps fused buffer regions bit-exact (docs/FREEZE_COMPILER_MAP.md
+// section 7 (precision contract)).
+fn liquid_cross_fma(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        fma(a.y, b.z, -(a.z * b.y)),
+        fma(a.z, b.x, -(a.x * b.z)),
+        fma(a.x, b.y, -(a.y * b.x)),
+    );
+}
+
 // The velocity of a body's material at world point x.
 fn liquid_body_velocity(linear: vec3<f32>, angular: vec3<f32>, centre: vec3<f32>, x: vec3<f32>) -> vec3<f32> {
-    return linear + cross(angular, x - centre);
+    return linear + liquid_cross_fma(angular, x - centre);
 }
