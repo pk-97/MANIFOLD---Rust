@@ -60,7 +60,7 @@ struct SortParams {
 
 /// Where the sort reads a record's position and liveness, in 4-byte words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RecordRead {
+pub(crate) struct RecordRead {
     stride_words: u32,
     position_word: u32,
     live_word: u32,
@@ -204,10 +204,7 @@ crate::primitive! {
     aliases: ["bin particles", "spatial hash", "counting sort", "neighbour grid"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
-        pipelines: Vec<GpuComputePipeline> = Vec::new(),
-        scan: PrefixScan = PrefixScan::default(),
-        rank: Option<GpuBuffer> = None,
-        slot_input: Option<GpuBuffer> = None,
+        sort: CellSort = CellSort::default(),
         ranges: Option<GpuBuffer> = None,
     },
 }
@@ -217,6 +214,115 @@ crate::primitive! {
 pub(crate) fn range_storage_bytes(bins: [u32; 3]) -> u64 {
     bin_total(bins).max(1) * std::mem::size_of::<CellRange>() as u64
 }
+
+/// One sort's buffers and grid: `count` records of `particles` are binned.
+pub(crate) struct CellSortPass<'a> {
+    pub particles: &'a GpuBuffer,
+    pub read: RecordRead,
+    pub count: u32,
+    pub bin_min: [f32; 3],
+    pub inv_cell: f32,
+    pub bins: [u32; 3],
+    pub ranges: &'a GpuBuffer,
+    pub sorted: Option<&'a GpuBuffer>,
+    pub order: Option<&'a GpuBuffer>,
+    pub sorted_capacity: u32,
+}
+
+/// The sort's passes, shared by this node and `node.whitewater_step`.
+#[derive(Default)]
+pub(crate) struct CellSort {
+    pipelines: Vec<GpuComputePipeline>,
+    scan: PrefixScan,
+    rank: Option<GpuBuffer>,
+    slot_input: Option<GpuBuffer>,
+    cell_counts: Option<GpuBuffer>,
+}
+
+impl CellSort {
+    /// Create the pipelines. Call before any early return (compile contract).
+    pub(crate) fn prepare(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.pipelines.is_empty() {
+            for entry in ENTRIES {
+                self.pipelines.push(device.create_compute_pipeline(SHADER, entry, "node.sort_particles_into_cells"));
+            }
+        }
+        self.scan.prepare(device);
+    }
+
+    /// Hold the per-bin scan and per-record scratch for `capacity` records
+    /// into `bin_total` bins, before any pass is encoded.
+    pub(crate) fn reserve(&mut self, device: &manifold_gpu::GpuDevice, bin_total: u32, capacity: u32) -> Result<(), String> {
+        self.cell_counts = Some(self.scan.buffer(device, bin_total as usize)?.clone());
+        let rank_bytes = u64::from(capacity.max(1)) * 4;
+        if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
+            self.rank = Some(device.create_buffer(rank_bytes));
+        }
+        if self.slot_input.as_ref().is_none_or(|slots| slots.size < rank_bytes) {
+            self.slot_input = Some(device.create_buffer(rank_bytes));
+        }
+        Ok(())
+    }
+
+    /// Encode the six passes and the scan; `reserve` first. `labels` name the
+    /// clear, count, ranges, tail, scatter and stabilise dispatches.
+    pub(crate) fn encode(&self, encoder: &mut manifold_gpu::GpuEncoder, pass: &CellSortPass<'_>, labels: &[&str; 6]) {
+        let bin_total = bin_total(pass.bins) as u32;
+        let cell_counts = self.cell_counts.as_ref().expect("sort reserved");
+        let rank = self.rank.as_ref().expect("sort reserved");
+        let slot_input = self.slot_input.as_ref().expect("sort reserved");
+        let uniforms = SortParams {
+            bin_min: pass.bin_min,
+            inv_cell: pass.inv_cell,
+            bins: pass.bins,
+            count: pass.count,
+            bin_total,
+            sorted_capacity: pass.sorted_capacity,
+            write_order: u32::from(pass.order.is_some()),
+            write_sorted: u32::from(pass.sorted.is_some()),
+            stride_words: pass.read.stride_words,
+            position_word: pass.read.position_word,
+            live_word: pass.read.live_word,
+            live_rule: pass.read.live_rule,
+        };
+        let bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: pass.particles, offset: 0 },
+            // Unwired outputs are never written (their write flag is 0); rank keeps
+            // the layout bound.
+            GpuBinding::Buffer { binding: 2, buffer: pass.sorted.unwrap_or(rank), offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: pass.ranges, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: cell_counts, offset: 0 },
+            GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
+            GpuBinding::Buffer { binding: 6, buffer: pass.order.unwrap_or(rank), offset: 0 },
+            GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
+        ];
+        let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
+        let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
+            unreachable!("six sort pipelines");
+        };
+        encoder.dispatch_compute(clear, &bindings, groups(bin_total), labels[0]);
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(count_pass, &bindings, groups(pass.count), labels[1]);
+        encoder.compute_memory_barrier_buffers();
+        self.scan.encode(encoder, bin_total as usize);
+        encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), labels[2]);
+        encoder.dispatch_compute(clear_tail, &bindings, groups(pass.sorted_capacity), labels[3]);
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(scatter, &bindings, groups(pass.count), labels[4]);
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(stabilise, &bindings, groups(bin_total), labels[5]);
+    }
+}
+
+const SORT_LABELS: [&str; 6] = [
+    "node.sort_particles_into_cells.clear",
+    "node.sort_particles_into_cells.count",
+    "node.sort_particles_into_cells.ranges",
+    "node.sort_particles_into_cells.tail",
+    "node.sort_particles_into_cells.scatter",
+    "node.sort_particles_into_cells.stabilise",
+];
 
 impl Primitive for SortParticlesIntoCells {
     fn provides_array_output(&self, port: &str) -> bool {
@@ -251,19 +357,7 @@ impl Primitive for SortParticlesIntoCells {
         let center = ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
-        {
-            let gpu = ctx.gpu_encoder();
-            if self.pipelines.is_empty() {
-                for entry in ENTRIES {
-                    self.pipelines.push(gpu.device.create_compute_pipeline(
-                        SHADER,
-                        entry,
-                        "node.sort_particles_into_cells",
-                    ));
-                }
-            }
-            self.scan.prepare(gpu.device);
-        }
+        self.sort.prepare(ctx.gpu_encoder().device);
         if ctx.scalar_or_param("enabled", 1.0) <= 0.5 {
             return;
         }
@@ -347,77 +441,35 @@ impl Primitive for SortParticlesIntoCells {
             refuse(ctx, "Sort Particles Into Cells: sorted holds liquid particle records; leave it unwired and use order for these points".into());
             return;
         }
-        let bin_total = bin_total as u32;
-        let cell_counts = match self.scan.buffer(ctx.gpu_encoder().device, bin_total as usize) {
-            Ok(buffer) => buffer.clone(),
-            Err(error) => {
-                refuse(ctx, format!("Sort Particles Into Cells: {error}"));
-                return;
-            }
-        };
+        let capacity = (particles.size / u64::from(layout.item_size)) as u32;
+        if let Err(error) = self.sort.reserve(ctx.gpu_encoder().device, bin_total as u32, capacity) {
+            refuse(ctx, format!("Sort Particles Into Cells: {error}"));
+            return;
+        }
         publish(ctx, bins);
         let ranges = self.ranges.as_ref().expect("ranges allocated above");
         // Either per-slot output may be unwired; the slots are those every wired one holds.
         let sorted = ctx.outputs.array("sorted");
         let order = ctx.outputs.array("order");
         let particle_size = std::mem::size_of::<FluidParticle>() as u64;
-        let capacity = (particles.size / u64::from(layout.item_size)) as u32;
         let sorted_capacity = [sorted.map(|b| b.size / particle_size), order.map(|b| b.size / 4)]
             .into_iter()
             .flatten()
             .fold(u64::from(capacity), u64::min) as u32;
         let count = requested.map_or(capacity, |count| (count.max(0.0) as u32).min(capacity)).min(sorted_capacity);
         let gpu = ctx.gpu_encoder();
-        let rank_bytes = u64::from(capacity.max(1)) * 4;
-        if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
-            self.rank = Some(gpu.device.create_buffer(rank_bytes));
-        }
-        if self.slot_input.as_ref().is_none_or(|slots| slots.size < rank_bytes) {
-            self.slot_input = Some(gpu.device.create_buffer(rank_bytes));
-        }
-        let rank = self.rank.as_ref().expect("rank scratch allocated");
-        let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
-        let uniforms = SortParams {
+        let pass = CellSortPass {
+            particles,
+            read,
+            count,
             bin_min: std::array::from_fn(|axis| center[axis] - 0.5 * size[axis]),
             inv_cell: 1.0 / cell_size,
             bins,
-            count,
-            bin_total,
+            ranges,
+            sorted,
+            order,
             sorted_capacity,
-            write_order: u32::from(order.is_some()),
-            write_sorted: u32::from(sorted.is_some()),
-            stride_words: read.stride_words,
-            position_word: read.position_word,
-            live_word: read.live_word,
-            live_rule: read.live_rule,
         };
-        let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-            // Unwired outputs are never written (their write flag is 0); rank keeps
-            // the layout bound.
-            GpuBinding::Buffer { binding: 2, buffer: sorted.unwrap_or(rank), offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
-            GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
-            GpuBinding::Buffer { binding: 6, buffer: order.unwrap_or(rank), offset: 0 },
-            GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
-        ];
-        let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
-        let encoder = &mut *gpu.native_enc;
-        let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
-            unreachable!("six sort pipelines");
-        };
-        encoder.dispatch_compute(clear, &bindings, groups(bin_total), "node.sort_particles_into_cells.clear");
-        encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(count_pass, &bindings, groups(count), "node.sort_particles_into_cells.count");
-        encoder.compute_memory_barrier_buffers();
-        self.scan.encode(encoder, bin_total as usize);
-        encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), "node.sort_particles_into_cells.ranges");
-        encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), "node.sort_particles_into_cells.tail");
-        encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(scatter, &bindings, groups(count), "node.sort_particles_into_cells.scatter");
-        encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(stabilise, &bindings, groups(bin_total), "node.sort_particles_into_cells.stabilise");
+        self.sort.encode(&mut *gpu.native_enc, &pass, &SORT_LABELS);
     }
 }
