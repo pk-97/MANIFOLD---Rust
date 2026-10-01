@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Reusable worktree ring with verified archival and bounded inactive caches.
 
-Commands: list; acquire TASK NEW_BRANCH; release SLOT; retire SLOT [--include FILE]; scrub.
+Commands: list; acquire TASK NEW_BRANCH; release SLOT; retire SLOT [--include FILE]; scrub;
+reclaim [--free-bytes N]. Reclaim is the landing gate's pre-admission pass: it
+frees Cargo caches of landed, clean, lease-free, process-free slots only, least
+recently built first, until the disk holds N free bytes. It never touches a
+dirty or unlanded slot, nor the main checkout.
 Acquire reuses clean landed slots, or clean inactive branches whose exact HEAD
 is freshly confirmed on origin. It never resets an existing branch name.
 Process inspection failures protect the checkout. The ring remains capped at ten.
@@ -38,7 +42,8 @@ from pathlib import Path
 # The lifecycle tests load this file through importlib from a child process;
 # make the sibling safety module importable there as well as when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from storage_budget import apply_cache_cleanup, plan_cache_cleanup, target_live_status
+from storage_budget import (MAINTENANCE_GOAL_BYTES, apply_cache_cleanup, disk_free,
+                            plan_cache_cleanup, target_live_status)
 
 def _main_checkout():
     """Anchor to the MAIN checkout even when this script's copy runs inside a
@@ -562,6 +567,49 @@ def cmd_scrub(_args):
           f"scrub target {SCRUB_TO_GB}G)")
 
 
+def reclaimable_for_landing(wt, holders):
+    """Strictly landed, clean, lease-free and process-free — the only slots whose
+    cache the landing gate may free unattended. A duplicate-of-unlanded slot is
+    RECLAIMABLE for acquire but not here: its branch is not on origin/main."""
+    if git(wt, "status", "--porcelain").stdout.strip():
+        return False, "dirty"
+    if not is_landed(wt):
+        return False, "unlanded"
+    blocked, why = lease_blocks(wt)
+    if blocked:
+        return False, why
+    if slot_has_live_session(wt):
+        return False, "live session"
+    return True, "landed, clean, idle"
+
+
+def cmd_reclaim(args):
+    need = args.free_bytes
+    free = disk_free(POOL)
+    if free >= need:
+        print(f"RECLAIM: {free / 2**30:.1f}G free already meets {need / 2**30:.0f}G")
+        return
+    holders = branch_holders()
+    victims = []
+    for wt in pool_slots():
+        ok, why = reclaimable_for_landing(wt, holders)
+        if not ok:
+            print(f"KEEP {wt.name}: {why}")
+        elif target_bytes(wt):
+            victims.append(wt)
+    for wt in sorted(victims, key=build_recency):
+        size = target_bytes(wt) / 2**30
+        removed, files, failures = _cleanup_target(wt, "RECLAIMED")
+        print(f"RECLAIMED {wt.name}: removed {files} files ({removed / 2**30:.1f}G) "
+              f"from {size:.1f}G target")
+        free = disk_free(POOL)
+        if free >= need:
+            break
+    print(f"RECLAIM: {free / 2**30:.1f}G free (need {need / 2**30:.0f}G)")
+    if free < need:
+        sys.exit(3)
+
+
 def cmd_release(args):
     """Dropping the lease is only ONE of the things that can pin a slot — a dirty
     tree or an unlanded branch pins it with no lease at all, and the old
@@ -609,10 +657,15 @@ def main():
     rem.add_argument("slot", help="slot name or exact registered worktree path")
     rem.add_argument("--recovery", type=Path, help="local recovery archive with blobs and ignored-files.json")
     sub.add_parser("scrub")
+    rec = sub.add_parser("reclaim", help="free landed idle slot caches until the "
+                         "disk holds --free-bytes (the landing gate's reserve)")
+    rec.add_argument("--free-bytes", type=int, default=MAINTENANCE_GOAL_BYTES,
+                     dest="free_bytes")
     args = parser.parse_args()
     with pool_lock():
         {"list": cmd_list, "acquire": cmd_acquire, "release": cmd_release,
-         "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub}[args.cmd](args)
+         "retire": cmd_retire, "remove": cmd_remove, "scrub": cmd_scrub,
+         "reclaim": cmd_reclaim}[args.cmd](args)
 
 
 

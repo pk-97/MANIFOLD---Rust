@@ -45,6 +45,40 @@ class StorageGateTests(unittest.TestCase):
             _, refusal = landing_gate.build_environment(["cargo", "test"], self.repo)
         self.assertIn("conflicting", refusal)
 
+    def test_reserve_shortfall_reclaims_then_admits(self):
+        short = BuildCheck(False, self.repo / "target", 10 * 2**30, 100 * 2**30,
+                           reason="REFUSED: only 10.0 GiB free", reclaimable=True)
+        good = BuildCheck(True, self.repo / "target", 200 * 2**30)
+        with patch.dict(os.environ, {}, clear=True), \
+                patch("storage_budget.check_build", side_effect=[short, good]) as check, \
+                patch("landing_gate.reclaim_landed_caches", return_value="\nRECLAIMED slot-0") as reclaim:
+            env, refusal = landing_gate.build_environment(["cargo", "clippy"], self.repo)
+        self.assertIsNone(refusal)
+        self.assertEqual(env["CARGO_TARGET_DIR"], str(self.repo / "target"))
+        reclaim.assert_called_once_with(100 * 2**30)
+        self.assertEqual(check.call_count, 2)
+
+    def test_reserve_shortfall_still_refuses_when_reclaim_is_not_enough(self):
+        short = BuildCheck(False, self.repo / "target", 10 * 2**30, 100 * 2**30,
+                           reason="REFUSED: only 10.0 GiB free", reclaimable=True)
+        with patch("storage_budget.check_build", return_value=short), \
+                patch("landing_gate.reclaim_landed_caches", return_value="\nKEEP slot-2: dirty") as reclaim, \
+                patch("landing_gate.subprocess.run") as execute:
+            result = landing_gate.run_cmd(["cargo", "nextest", "run"], self.repo, 10)
+        self.assertEqual(result[0], 2)
+        self.assertIn("only 10.0 GiB free", result[2])
+        self.assertIn("KEEP slot-2", result[2])
+        reclaim.assert_called_once()
+        execute.assert_not_called()
+
+    def test_non_reserve_refusals_never_reclaim(self):
+        unmanaged = BuildCheck(False, Path("/private/tmp/unmanaged"), 0, reason="REFUSED: unmanaged")
+        with patch("storage_budget.check_build", return_value=unmanaged), \
+                patch("landing_gate.reclaim_landed_caches") as reclaim:
+            _, refusal = landing_gate.build_environment(["cargo", "build"], self.repo)
+        self.assertIn("unmanaged", refusal)
+        reclaim.assert_not_called()
+
     def test_read_only_commands_do_not_require_space(self):
         with patch("storage_budget.check_build") as check:
             self.assertEqual(landing_gate.build_environment(
