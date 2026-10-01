@@ -22,6 +22,10 @@ slot. Active caches are protected; these are cleanup budgets, not build limits.
 Successful landings release their slot. Fixture copying prunes hidden and target
 subtrees so old quarantine fixtures cannot multiply across the pool.
 
+A lease reserves its slot until `release` removes it, whatever the git state:
+acquire never picks a leased slot. There is no expiry; a leaked lease costs a
+slot until someone runs `release`.
+
 Confirm the printed acquired HEAD before editing. Never bypass the slot cap.
 """
 
@@ -62,12 +66,7 @@ def _main_checkout():
 REPO = _main_checkout()
 POOL = REPO / ".claude" / "worktrees"
 POOL_LOCK_NAME = ".agent-worktree.lock"
-LEASE_NAME = ".worktree-lease.json"  # gitignored; mtime is the staleness clock
-LEASE_TTL_HOURS = 8
-DEAD_HOLDER_GRACE_H = 0.5  # a dead holder pid only shortens the TTL to this, never
-                           # to zero: a freshly acquired slot is clean+landed (HEAD
-                           # is the tip), so a pid probe that reads dead too eagerly
-                           # would hand a slot away seconds after someone took it.
+LEASE_NAME = ".worktree-lease.json"  # gitignored; only `release` removes it
 MAX_SLOTS = 10         # hard structural cap — there is no override flag
 TARGET_CAP_GB = 25     # per-slot target/ ceiling, enforced at acquire
 SCRUB_TO_GB = 40      # scrub trims the pool under this — below the sentinel's
@@ -148,22 +147,21 @@ def pool_lock():
 
 
 def lease_blocks(wt):
-    """Does this slot's lease still reserve it? Returns (blocks: bool, why: str).
+    """Does this slot's lease reserve it? Returns (blocks: bool, why: str).
 
-    A recorded holder pid that is gone shortens the TTL to DEAD_HOLDER_GRACE_H
-    rather than clearing it outright — dead-holder evidence is a reason to
-    expire sooner, never a licence to skip the never-destroy-work checks that
-    run before this."""
+    A lease reserves its slot until `release` removes it, whatever the git state.
+    An agent between tool calls has no process, a clean tree and a landed HEAD
+    (it just merged main), so no age, pid or git evidence can tell a live lane
+    from an abandoned one: expiring on any of them took slot-2 and slot-9 from
+    working lanes (BUG-wznn). holder_pid is shown for the operator only. A
+    leaked lease costs a slot until someone runs `release`; POOL FULL names it."""
     age_h, owner, task, holder_pid = lease_info(wt)
     if age_h is None:
         return False, "no lease"
-    if holder_pid is not None and pid_alive(holder_pid):
-        return True, f"holder pid {holder_pid} is alive ({owner}, {task}, {age_h:.1f}h ago)"
-    if age_h >= LEASE_TTL_HOURS:
-        return False, f"lease expired ({age_h:.1f}h > {LEASE_TTL_HOURS}h TTL)"
-    if holder_pid is not None and not pid_alive(holder_pid) and age_h >= DEAD_HOLDER_GRACE_H:
-        return False, f"holder pid {holder_pid} is gone ({owner}, {age_h:.1f}h)"
-    return True, f"leased by {owner} for {task} ({age_h:.1f}h ago)"
+    pid = ""
+    if holder_pid is not None:
+        pid = f", holder pid {holder_pid} {'alive' if pid_alive(holder_pid) else 'gone'}"
+    return True, f"leased by {owner} for {task} ({age_h:.1f}h ago{pid})"
 
 
 def branch_holders():
@@ -193,8 +191,8 @@ def slot_state(wt, holders=None):
     that frees this slot, so POOL FULL can tell an operator what to do per line.
 
     Order matters: the never-destroy-work checks (dirty, sole-holder-unlanded)
-    come FIRST, so no amount of dead-holder or expired-lease evidence can ever
-    reach a slot that is holding work which exists nowhere else."""
+    come FIRST, so nothing can reach a slot that is holding work which exists
+    nowhere else. A lease reserves the slot whatever its git state (BUG-wznn)."""
     if holders is None:
         holders = branch_holders()
     branch = git(wt, "branch", "--show-current").stdout.strip()
@@ -224,9 +222,6 @@ def slot_state(wt, holders=None):
     blocked, why = lease_blocks(wt)
     if blocked:
         return IN_USE, why, f"wait for the lease, or release {wt.name}"
-    if (wt / LEASE_NAME).exists():
-        return (RECLAIMABLE, f"clean, landed, {why}",
-                f"reclaimed automatically; by hand: release {wt.name}")
     return IDLE, "idle", "already free"
 
 
@@ -411,8 +406,8 @@ def pool_full_report(slots, states):
         f"\nPOOL FULL: {len(slots)}/{MAX_SLOTS} slots, none reclaimable "
         f"({dirty} holding uncommitted work, {unlanded} sole holders of unlanded "
         "commits). The ring never grows past its cap — this failure is deliberate "
-        "and loud. Clean or land a slot per the remedies above, wait for a lease "
-        f"(TTL {LEASE_TTL_HOURS}h), or surface this to Peter. Do NOT create a "
+        "and loud. Clean or land a slot per the remedies above, release a slot "
+        "whose lane is finished, or surface this to Peter. Do NOT create a "
         "worktree by hand."
     )
 
@@ -491,7 +486,7 @@ def cmd_acquire(args):
     # holder_pid makes the lease self-describing: liveness becomes a pid probe
     # instead of an 8h timeout. Default is the CALLER's pid (this script exits
     # immediately, so its own pid would read dead at once) — a shell that exits
-    # is a false "dead", which is exactly why DEAD_HOLDER_GRACE_H exists.
+    # is a false "dead", so holder_pid is informational and never frees a lease.
     (wt / LEASE_NAME).write_text(json.dumps(
         {"owner": args.owner, "task": args.name, "branch": args.branch,
          "holder_pid": args.holder_pid if args.holder_pid is not None else os.getppid(),
@@ -528,7 +523,7 @@ def cmd_scrub(_args):
             blocked, why = lease_blocks(wt)
             if blocked:
                 # A live lease is a contract — even a dirty tree doesn't make
-                # its cache fair game until the lease expires.
+                # its cache fair game until the lease is released.
                 print(f"KEEP {wt.name}: {why}")
             else:
                 pinned.append((wt, reason))
@@ -645,8 +640,8 @@ def main():
     acq.add_argument("--owner", default="unnamed-session",
                      help="who holds the lease (session id or label)")
     acq.add_argument("--holder-pid", type=int, default=None, dest="holder_pid",
-                     help="pid whose death expires this lease early (default: "
-                          "the calling process)")
+                     help="informational only: shown in list/POOL FULL, never "
+                          "frees the lease (default: the calling process)")
     rel = sub.add_parser("release")
     rel.add_argument("slot", help="slot name printed by acquire (e.g. slot-2)")
     ret = sub.add_parser("retire")
