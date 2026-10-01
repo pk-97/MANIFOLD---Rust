@@ -1007,6 +1007,13 @@ pub mod test_nodes {
                 ArrayType::of_known::<crate::node_graph::fluid_particles::FaceSample>(),
             ))
         });
+        registry.register("test.body_source", || {
+            Box::new(ArraySource::new("test.body_source", ArrayType::of_known::<crate::node_graph::liquid::bodies::LiquidBody>()))
+        });
+        registry.register("test.shape_source", || {
+            Box::new(ArraySource::new("test.shape_source", ArrayType::of_known::<crate::node_graph::liquid::bodies::LiquidShape>()))
+        });
+        registry.register("test.word_source", || Box::new(ArraySource::new("test.word_source", ArrayType::of_known::<u32>())));
         registry.register("test.face_sink", || {
             Box::new(ParticleSink {
                 type_id: EffectNodeType::new("test.face_sink"),

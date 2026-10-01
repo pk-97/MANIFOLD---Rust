@@ -10,15 +10,14 @@
 // pressure). With M⁻¹ in the sums this is ρh·G M⁻¹ Gᵀ p: the solve's
 // −L p plus it is the coupled operator. Air cells keep base.
 //
-// ABI: `base` and `water` are read coincident; `solid_faces`,
-// `solid_velocity`, `sums` and `bodies` gathered. A body past `sums` or
+// ABI: `base` is read coincident, the output's one anchor; `water`,
+// `solid_faces`, `solid_velocity`, `sums` and `bodies` gathered. A body past `sums` or
 // `bodies` adds nothing.
 
 fn body(
     idx: u32,
     count: u32,
     e_base: f32,
-    e_water: f32,
     lattice_min_x: f32,
     lattice_min_y: f32,
     lattice_min_z: f32,
@@ -33,7 +32,11 @@ fn body(
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
     let m = n + vec3<i32>(1);
     let faces = u32(m.x) * u32(m.y) * u32(m.z);
-    if idx >= u32(n.x) * u32(n.y) * u32(n.z) || !(e_water > 0.5) || faces > min(arrayLength(&buf_solid_faces), arrayLength(&buf_solid_velocity)) {
+    let cells = u32(n.x) * u32(n.y) * u32(n.z);
+    if idx >= cells || cells > arrayLength(&buf_water) || faces > min(arrayLength(&buf_solid_faces), arrayLength(&buf_solid_velocity)) {
+        return e_base;
+    }
+    if !(buf_water[idx] > 0.5) {
         return e_base;
     }
     let p = vec3<i32>(

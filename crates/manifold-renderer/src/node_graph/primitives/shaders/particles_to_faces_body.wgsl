@@ -1,17 +1,24 @@
 // node.particles_to_faces — fusable BUFFER body, GATHER. One thread per
 // padded cell p of the face grid ((nodes + 1) per axis); it owns the lower x,
 // y and z faces, face a at p on axis a and p + ½ on the other two, in cells
-// from the lattice minimum. Each face sums the tent weight
-// Π max(0, 1 − |q − face|) of every live particle (radius > 0) in the
-// 3 × 3 × 3 cells around p, q its position in cells, and the weighted
-// velocity component along the face's normal; the velocity is their ratio,
-// 0 where no particle reaches. A box wall face (index 0 or nodes along its
-// axis) keeps only the part of that velocity leaving the wall and is always
-// valid (weight 1), so node.extend_faces never writes it: the separating
-// wall the whole step uses. Faces past the lattice give zeros. `sorted`
-// (FluidParticle → Element) and `cell_ranges` (CellRange → Element2) are
-// gathered; a lattice larger than `cell_ranges` gives zeros and a range past
-// `sorted` is cut short. Output FaceSample (Element3).
+// from the lattice minimum. Each face sums the engine's Wyvill weight
+// 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r² for s = |q − face|² < r², r = √3/2
+// cells (half a cell's diagonal), over every live particle (radius > 0) in
+// the 3 × 3 × 3 cells around p, q its position in cells, and the weighted
+// velocity component along the face's normal. A face within r of q along
+// its normal lies in q's cell or the one below, and along the other axes in
+// q's cell or a neighbour, so the 27 cells hold every particle that reaches
+// it. A face whose weight is over 1e-6 gets the ratio; any other face gets
+// velocity 0 and weight 0, so node.extend_faces fills it. A box wall face
+// (index 0 or nodes along its axis) keeps only the part of that velocity
+// leaving the wall and is always valid (weight 1), so node.extend_faces
+// never writes it: the separating wall the whole step uses. Faces past the
+// lattice give zeros. `sorted` (FluidParticle → Element) and `cell_ranges`
+// (CellRange → Element2) are gathered; a lattice larger than `cell_ranges`
+// gives zeros and a range past `sorted` is cut short. Output FaceSample
+// (Element3).
+//
+// Ported from FLIP Fluids velocityadvector.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md
 
 fn body(
     idx: u32,
@@ -50,6 +57,10 @@ fn body(
     let first = max(p - vec3<i32>(1), vec3<i32>(0));
     let last = min(p + vec3<i32>(1), n - vec3<i32>(1));
     let particles = arrayLength(&buf_sorted);
+    let rsq = 0.75;
+    let coef1 = (4.0 / 9.0) / (rsq * rsq * rsq);
+    let coef2 = (17.0 / 9.0) / (rsq * rsq);
+    let coef3 = (22.0 / 9.0) / rsq;
     var weight = vec3<f32>(0.0);
     var momentum = vec3<f32>(0.0);
     for (var z = first.z; z <= last.z; z = z + 1) {
@@ -70,8 +81,12 @@ fn body(
                         }
                         var face = vec3<f32>(p) + vec3<f32>(0.5);
                         face[a] = f32(p[a]);
-                        let t = max(vec3<f32>(1.0) - abs(q - face), vec3<f32>(0.0));
-                        let w = t.x * t.y * t.z;
+                        let v = face - q;
+                        let d2 = dot(v, v);
+                        if !(d2 < rsq) {
+                            continue;
+                        }
+                        let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
                         weight[a] = weight[a] + w;
                         momentum[a] = momentum[a] + w * particle.velocity[a];
                     }
@@ -79,7 +94,9 @@ fn body(
             }
         }
     }
-    var velocity = select(vec3<f32>(0.0), momentum / max(weight, vec3<f32>(1e-30)), weight > vec3<f32>(0.0));
+    let valid = weight > vec3<f32>(1e-6);
+    var velocity = select(vec3<f32>(0.0), momentum / max(weight, vec3<f32>(1e-6)), valid);
+    weight = select(vec3<f32>(0.0), weight, valid);
     for (var a = 0; a < 3; a = a + 1) {
         if exists[a] && (p[a] == 0 || p[a] == n[a]) {
             velocity[a] = particles_to_faces_wall(velocity[a], p[a] == 0);

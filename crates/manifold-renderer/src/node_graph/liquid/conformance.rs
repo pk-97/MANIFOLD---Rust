@@ -239,9 +239,10 @@ const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the p
 /// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
 /// coarse inverse and face_impulse_to_bodies have no codegen body; their own
 /// tests check them.
-const GPU_FLIP_ATOMIC_FREE: [&str; 21] = [
+const GPU_FLIP_ATOMIC_FREE: [&str; 22] = [
     "node.cells_with_particles",
     "node.particles_to_faces",
+    "node.particle_distance",
     "node.face_gravity",
     "node.extend_faces",
     "node.face_divergence",

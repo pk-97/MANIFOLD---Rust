@@ -435,6 +435,7 @@ fn gpu_flip_residual_into_body_product_fuses() {
     chain.wire(z, "out", residual, "rhs");
     chain.wire(x, "out", residual, "value");
     chain.wire(s, "out", residual, "solid_faces");
+    chain.wire(z, "out", residual, "phi");
     let product = chain.node("product", "node.body_pressure_product", lattice_json(N, &float_extra(&body_params())));
     chain.wire(residual, "out", product, "base");
     chain.wire(w, "out", product, "water");
@@ -445,7 +446,7 @@ fn gpu_flip_residual_into_body_product_fuses() {
     let got = chain.fused_matches_unfused(product, cells);
     let unfused = run_atom(
         &mut super::pressure_residual::PressureResidual::new(),
-        &[("water", &water), ("rhs", &vec![0.0; cells]), ("value", &value), ("solid_faces", &solid)],
+        &[("water", &water), ("rhs", &vec![0.0; cells]), ("value", &value), ("solid_faces", &solid), ("phi", &vec![0.0; cells])],
         cells,
         &lattice_params(N, &[("cell_size", H)]),
     );

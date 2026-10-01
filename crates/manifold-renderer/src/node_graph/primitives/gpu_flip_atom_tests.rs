@@ -197,49 +197,99 @@ fn random_open_faces(n: [usize; 3], seed: u64, isolated: usize) -> Vec<f32> {
     faces
 }
 
-/// Σ w over a cell's in-box faces: the weighted operator's diagonal.
+/// Distances as the ghost rows can see them: water cells from −0.6h to 0.2h
+/// (some above the −0.005h the rows take at most), air cells from −0.3h to
+/// 2.9h (some below the 0 the rows take at least).
+pub(super) fn random_phi(water: &[f32], h: f64, seed: u64) -> Vec<f32> {
+    random_values(water.len(), seed)
+        .iter()
+        .zip(water)
+        .map(|(&u, &w)| {
+            let t = f64::from(u) + 0.5;
+            let cells = if w > 0.5 { -0.6 + 0.8 * t } else { -0.3 + 3.2 * t };
+            (cells * h) as f32
+        })
+        .collect()
+}
+
+/// An air neighbour's ghost ratio, clamp(φ_air / (φ_water + eps), ±25), φ_water
+/// taken at most −0.005h and φ_air at least 0: the engine's theta
+/// (pressuresolver.cpp).
+fn theta(air: f32, water: f32, h: f64, eps: f64) -> f64 {
+    (f64::from(air).max(0.0) / (f64::from(water).min(-0.005 * h) + eps)).clamp(-25.0, 25.0)
+}
+
+/// Σ w over a cell's in-box faces: the weighted operator's diagonal with no
+/// ghost rows, as the coarse levels have it.
 fn diagonal(faces: &[f32], c: usize, n: [usize; 3]) -> f64 {
     neighbours(c, n).iter().map(|&(_, a, d)| open(faces, c, a, d, n)).sum()
 }
 
-fn cpu_sweep(water: &[f32], rhs: &[f32], value: &[f64], faces: &[f32], n: [usize; 3], h: f64, color: usize) -> Vec<f64> {
-    (0..value.len())
-        .map(|c| {
-            let p = coords(c, n);
-            if water[c] <= 0.5 || (p[0] + p[1] + p[2]) % 2 != color {
-                return value[c];
-            }
-            let diag = diagonal(faces, c, n);
-            if diag == 0.0 {
-                return 0.0;
-            }
-            let sum: f64 = neighbours(c, n)
-                .iter()
-                .filter(|&&(q, _, _)| water[q] > 0.5)
-                .map(|&(q, a, d)| open(faces, c, a, d, n) * value[q])
-                .sum();
-            (sum - h * h * f64::from(rhs[c])) / diag
-        })
-        .collect()
+/// The pressure rows' fields: water, open fractions (a face grid) and φ.
+struct Rows<'a> {
+    water: &'a [f32],
+    faces: &'a [f32],
+    phi: &'a [f32],
+    n: [usize; 3],
+    h: f64,
 }
 
-fn cpu_residual(water: &[f32], rhs: &[f32], value: &[f32], faces: &[f32], n: [usize; 3], h: f64) -> Vec<f64> {
-    (0..value.len())
-        .map(|c| {
-            if water[c] <= 0.5 || diagonal(faces, c, n) == 0.0 {
-                return 0.0;
-            }
-            let own = f64::from(value[c]);
-            let lap: f64 = neighbours(c, n)
-                .iter()
-                .map(|&(q, a, d)| {
-                    let w = open(faces, c, a, d, n);
-                    if water[q] > 0.5 { w * (f64::from(value[q]) - own) } else { -w * own }
-                })
-                .sum();
-            f64::from(rhs[c]) - lap / (h * h)
-        })
-        .collect()
+impl Rows<'_> {
+    /// Water cell `c`'s diagonal: Σ w over its open in-box faces, less w · θ
+    /// per air neighbour (the engine's term / θ).
+    fn diag(&self, c: usize) -> f64 {
+        neighbours(c, self.n)
+            .iter()
+            .map(|&(q, a, d)| {
+                let w = open(self.faces, c, a, d, self.n);
+                if w <= 0.0 {
+                    0.0
+                } else if self.water[q] > 0.5 {
+                    w
+                } else {
+                    w * (1.0 - theta(self.phi[q], self.phi[c], self.h, 1e-9))
+                }
+            })
+            .sum()
+    }
+
+    /// Σ w · value over the water neighbours.
+    fn wet_sum(&self, c: usize, value: impl Fn(usize) -> f64) -> f64 {
+        neighbours(c, self.n)
+            .iter()
+            .filter(|&&(q, _, _)| self.water[q] > 0.5)
+            .map(|&(q, a, d)| open(self.faces, c, a, d, self.n) * value(q))
+            .sum()
+    }
+
+    fn sweep(&self, rhs: &[f32], value: &[f64], color: usize) -> Vec<f64> {
+        (0..value.len())
+            .map(|c| {
+                let p = coords(c, self.n);
+                if self.water[c] <= 0.5 || (p[0] + p[1] + p[2]) % 2 != color {
+                    return value[c];
+                }
+                let diag = self.diag(c);
+                if diag <= 0.0 {
+                    return 0.0;
+                }
+                (self.wet_sum(c, |q| value[q]) - self.h * self.h * f64::from(rhs[c])) / diag
+            })
+            .collect()
+    }
+
+    fn residual(&self, rhs: &[f32], value: &[f32]) -> Vec<f64> {
+        (0..value.len())
+            .map(|c| {
+                let diag = self.diag(c);
+                if self.water[c] <= 0.5 || diag <= 0.0 {
+                    return 0.0;
+                }
+                let sum = self.wet_sum(c, |q| f64::from(value[q]));
+                f64::from(rhs[c]) - (sum - diag * f64::from(value[c])) / (self.h * self.h)
+            })
+            .collect()
+    }
 }
 
 /// Share fine cell `f` takes from coarse cell `c` along one axis.
@@ -350,6 +400,28 @@ fn cpu_inverse(water: &[f32], faces: &[f32], n: [usize; 3]) -> (Vec<f64>, Vec<f6
 const FINE: [usize; 3] = [6, 4, 8];
 const COARSE: [usize; 3] = [3, 2, 4];
 
+fn run_sweep(rows: &Rows<'_>, rhs: &[f32], value: &[f32], color: usize) -> Vec<f32> {
+    run_atom(
+        &mut PressureSmooth::new(),
+        &[("water", rows.water), ("rhs", rhs), ("value", value), ("solid_faces", rows.faces), ("phi", rows.phi)],
+        value.len(),
+        &lattice_params(rows.n, &[("cell_size", rows.h as f32), ("color", color as f32)]),
+    )
+}
+
+fn run_residual(rows: &Rows<'_>, rhs: &[f32], value: &[f32]) -> Vec<f32> {
+    run_atom(
+        &mut PressureResidual::new(),
+        &[("water", rows.water), ("rhs", rhs), ("value", value), ("solid_faces", rows.faces), ("phi", rows.phi)],
+        value.len(),
+        &lattice_params(rows.n, &[("cell_size", rows.h as f32)]),
+    )
+}
+
+/// Open faces and zero distances give the plain Dirichlet rows the coarse
+/// levels use; solids weight the faces; real distances give the ghost-fluid
+/// rows; both together the full rows. A water cell with every face closed is
+/// out of the system.
 #[test]
 fn gpu_flip_smooth_sweeps_each_color() {
     let cells: usize = FINE.iter().product();
@@ -357,16 +429,15 @@ fn gpu_flip_smooth_sweeps_each_color() {
     let h = 0.3;
     let value64: Vec<f64> = value.iter().map(|&v| f64::from(v)).collect();
     let isolated = (0..cells).find(|&c| water[c] > 0.5 && coords(c, FINE).iter().sum::<usize>() % 2 == 1).expect("a water cell");
-    for (name, faces) in [("open", open_faces(FINE)), ("solid", random_open_faces(FINE, 0x5e4, isolated))] {
+    let (open, solid) = (open_faces(FINE), random_open_faces(FINE, 0x5e4, isolated));
+    let (zeros, phi) = (vec![0.0; cells], random_phi(&water, h, 0x5e5));
+    let cases = [("plain", &open, &zeros), ("solid", &solid, &zeros), ("ghost", &open, &phi), ("solid ghost", &solid, &phi)];
+    for (name, faces, phi) in cases {
+        let rows = Rows { water: &water, faces, phi, n: FINE, h };
         for color in [0, 1] {
-            let got = run_atom(
-                &mut PressureSmooth::new(),
-                &[("water", &water), ("rhs", &rhs), ("value", &value), ("solid_faces", &faces)],
-                cells,
-                &lattice_params(FINE, &[("cell_size", h as f32), ("color", color as f32)]),
-            );
-            assert_close(&got, &cpu_sweep(&water, &rhs, &value64, &faces, FINE, h, color), &format!("{name} sweep color {color}"));
-            if name == "solid" && color == 1 {
+            let got = run_sweep(&rows, &rhs, &value, color);
+            assert_close(&got, &rows.sweep(&rhs, &value64, color), &format!("{name} sweep color {color}"));
+            if name.starts_with("solid") && color == 1 {
                 assert_eq!(got[isolated], 0.0, "a water cell with every face closed is out of the system");
             }
         }
@@ -379,18 +450,46 @@ fn gpu_flip_residual_is_rhs_minus_the_masked_laplacian() {
     let (water, rhs, value) = (random_water(cells, 0x7e1), random_values(cells, 0x7e2), random_values(cells, 0x7e3));
     let h = 0.3;
     let isolated = (0..cells).find(|&c| water[c] > 0.5).expect("a water cell");
-    for (name, faces) in [("open", open_faces(FINE)), ("solid", random_open_faces(FINE, 0x7e4, isolated))] {
-        let got = run_atom(
-            &mut PressureResidual::new(),
-            &[("water", &water), ("rhs", &rhs), ("value", &value), ("solid_faces", &faces)],
-            cells,
-            &lattice_params(FINE, &[("cell_size", h as f32)]),
-        );
-        assert_close(&got, &cpu_residual(&water, &rhs, &value, &faces, FINE, h), &format!("{name} residual"));
-        if name == "solid" {
+    let (open, solid) = (open_faces(FINE), random_open_faces(FINE, 0x7e4, isolated));
+    let (zeros, phi) = (vec![0.0; cells], random_phi(&water, h, 0x7e5));
+    let cases = [("plain", &open, &zeros), ("solid", &solid, &zeros), ("ghost", &open, &phi), ("solid ghost", &solid, &phi)];
+    for (name, faces, phi) in cases {
+        let rows = Rows { water: &water, faces, phi, n: FINE, h };
+        let got = run_residual(&rows, &rhs, &value);
+        assert_close(&got, &rows.residual(&rhs, &value), &format!("{name} residual"));
+        if name.starts_with("solid") {
             assert_eq!(got[isolated], 0.0, "a water cell with every face closed is out of the system");
         }
     }
+}
+
+/// A lone water cell whose air neighbours all read φ = −h, inside the liquid
+/// by the engine's level set: the air floor takes their φ at 0, so θ is 0
+/// and the row is the plain one (diagonal 6). Without the floor θ would be 2
+/// and the diagonal −6. A lone cell with no neighbours has diagonal 0 and is
+/// out of the system, as a cell closed in by solids is: both give 0.
+#[test]
+fn gpu_flip_ghost_rows_floor_the_air_and_the_diagonal() {
+    let h = 0.3;
+    let n = [3, 3, 3];
+    let centre = cell([1, 1, 1], n);
+    let mut water = vec![0.0; 27];
+    water[centre] = 1.0;
+    let mut phi = vec![-h as f32; 27];
+    phi[centre] = (-0.5 * h) as f32;
+    let (rhs, value) = (random_values(27, 0xf10), random_values(27, 0xf11));
+    let faces = open_faces(n);
+    let rows = Rows { water: &water, faces: &faces, phi: &phi, n, h };
+    assert_eq!(rows.diag(centre), 6.0, "air inside the level set adds nothing");
+    let swept = run_sweep(&rows, &rhs, &value, 1);
+    let want = -h * h * f64::from(rhs[centre]) / 6.0;
+    assert!((f64::from(swept[centre]) - want).abs() <= 1e-6, "the plain row: {} vs {want}", swept[centre]);
+    let (one, lone, lone_faces) = ([1, 1, 1], vec![1.0f32], open_faces([1, 1, 1]));
+    let phi = vec![(-0.5 * h) as f32];
+    let rows = Rows { water: &lone, faces: &lone_faces, phi: &phi, n: one, h };
+    assert_eq!(rows.diag(0), 0.0, "no neighbours, no diagonal");
+    assert_eq!(run_sweep(&rows, &rhs[..1], &value[..1], 0)[0], 0.0, "a zero diagonal is out of the system");
+    assert_eq!(run_residual(&rows, &rhs[..1], &value[..1])[0], 0.0, "a zero diagonal is out of the system");
 }
 
 #[test]
@@ -698,27 +797,32 @@ fn gpu_flip_residual_into_sweep_fuses() {
     let h = 0.3;
     let (water, rhs, value, start) =
         (random_water(cells, 0xf1), random_values(cells, 0xf2), random_values(cells, 0xf3), random_values(cells, 0xf4));
+    let phi = random_phi(&water, h, 0xf5);
+    let faces = random_open_faces(FINE, 0xf6, 0);
     let mut chain = Chain::new();
     let w = chain.source("water", water.clone());
     let r = chain.source("rhs", rhs.clone());
     let v = chain.source("value", value.clone());
     let s = chain.source("start", start.clone());
-    let faces = random_open_faces(FINE, 0xf5, 0);
     let o = chain.face_source("open", faces.clone());
+    let d = chain.source("phi", phi.clone());
     let residual = chain.node("residual", "node.pressure_residual", lattice_json(FINE, &[("cell_size", h)]));
     chain.wire(w, "out", residual, "water");
     chain.wire(r, "out", residual, "rhs");
     chain.wire(v, "out", residual, "value");
     chain.wire(o, "out", residual, "solid_faces");
+    chain.wire(d, "out", residual, "phi");
     let sweep = chain.node("sweep", "node.pressure_smooth", lattice_json(FINE, &[("cell_size", h), ("color", 1.0)]));
     chain.wire(w, "out", sweep, "water");
     chain.wire(residual, "out", sweep, "rhs");
     chain.wire(s, "out", sweep, "value");
     chain.wire(o, "out", sweep, "solid_faces");
+    chain.wire(d, "out", sweep, "phi");
     let got = chain.fused_matches_unfused(sweep, cells);
-    let mid: Vec<f32> = cpu_residual(&water, &rhs, &value, &faces, FINE, h).iter().map(|&v| v as f32).collect();
+    let rows = Rows { water: &water, faces: &faces, phi: &phi, n: FINE, h };
+    let mid: Vec<f32> = rows.residual(&rhs, &value).iter().map(|&v| v as f32).collect();
     let start64: Vec<f64> = start.iter().map(|&v| f64::from(v)).collect();
-    assert_close(&got, &cpu_sweep(&water, &mid, &start64, &faces, FINE, h, 1), "fused residual into sweep");
+    assert_close(&got, &rows.sweep(&mid, &start64, 1), "fused residual into sweep");
 }
 
 /// A residual fused into a divide by one GPU value: the fused count follows
@@ -736,16 +840,20 @@ fn gpu_flip_residual_into_divide_fuses() {
     let d = chain.source("divisor", vec![-2.5]);
     let faces = random_open_faces(FINE, 0xd4, 0);
     let o = chain.face_source("open", faces.clone());
+    let phi = random_phi(&water, h, 0xd5);
+    let p = chain.source("phi", phi.clone());
     let residual = chain.node("residual", "node.pressure_residual", lattice_json(FINE, &[("cell_size", h)]));
     chain.wire(w, "out", residual, "water");
     chain.wire(r, "out", residual, "rhs");
     chain.wire(v, "out", residual, "value");
     chain.wire(o, "out", residual, "solid_faces");
+    chain.wire(p, "out", residual, "phi");
     let divide = chain.node("divide", "node.divide_by_value", json!({}));
     chain.wire(residual, "out", divide, "values");
     chain.wire(d, "out", divide, "divisor");
     let got = chain.fused_matches_unfused(divide, cells);
-    let want: Vec<f64> = cpu_residual(&water, &rhs, &value, &faces, FINE, h).iter().map(|&v| v / -2.5).collect();
+    let rows = Rows { water: &water, faces: &faces, phi: &phi, n: FINE, h };
+    let want: Vec<f64> = rows.residual(&rhs, &value).iter().map(|&v| v / -2.5).collect();
     assert_close(&got, &want, "fused residual into divide");
 }
 
@@ -799,9 +907,90 @@ fn gpu_flip_face_gravity_into_subtract_pressure_fuses() {
     chain.wire(gravity, "out", subtract, "faces");
     chain.wire(p, "out", subtract, "pressure");
     chain.wire(w, "out", subtract, "water");
+    let o = chain.face_source("open", open_faces(FINE));
+    chain.wire(o, "out", subtract, "solid_faces");
+    let d = chain.source("phi", random_values(cells, 0x6a6));
+    chain.wire(d, "out", subtract, "phi");
     let got = chain.fused_matches_unfused(subtract, faces * 8);
     assert!(got.iter().all(|v| v.is_finite()), "every face is finite");
     assert_ne!(got, before, "the forces and pressure moved the faces");
+}
+
+/// The particles' distance fused into a divide: the sort bins the particles
+/// on the lattice, the distance gathers its bins and the divide takes the
+/// distance coincident. Checked against the engine's scatter (each particle
+/// reaches the cells within 2r of it along each axis, r = √3·h/2), with 3h
+/// where no live particle is within one cell.
+#[test]
+fn gpu_flip_particle_distance_into_divide_fuses() {
+    use crate::node_graph::fluid_particles::FluidParticle;
+    let cells: usize = FINE.iter().product();
+    let h = 0.25_f64;
+    let min = [-0.4_f64, 0.2, 0.1];
+    let size: [f64; 3] = std::array::from_fn(|a| FINE[a] as f64 * h);
+    let jitter = random_values(3 * 60, 0xd15);
+    let particles: Vec<FluidParticle> = (0..60)
+        .map(|i| {
+            let position: [f32; 3] = std::array::from_fn(|a| (min[a] + (f64::from(jitter[3 * i + a]) + 0.5) * size[a]) as f32);
+            let radius = if i % 13 == 4 { 0.0 } else { 0.08 };
+            FluidParticle { position_radius: [position[0], position[1], position[2], radius], velocity: [0.0; 3], id: i as u32 + 1 }
+        })
+        .collect();
+    let mut chain = Chain::new();
+    let source = chain.typed_source("particles", "test.liquid_source", particles.len(), bytemuck::cast_slice(&particles).to_vec());
+    let sort = chain.node(
+        "sort",
+        "node.sort_particles_into_cells",
+        json!({
+            "center_x": {"type": "Float", "value": min[0] + 0.5 * size[0]},
+            "center_y": {"type": "Float", "value": min[1] + 0.5 * size[1]},
+            "center_z": {"type": "Float", "value": min[2] + 0.5 * size[2]},
+            "size_x": {"type": "Float", "value": size[0]},
+            "size_y": {"type": "Float", "value": size[1]},
+            "size_z": {"type": "Float", "value": size[2]},
+            "cell_size": {"type": "Float", "value": h},
+        }),
+    );
+    chain.wire(source, "out", sort, "particles");
+    let distance = chain.node(
+        "distance",
+        "node.particle_distance",
+        lattice_json(FINE, &[("cell_size", h), ("lattice_min_x", min[0]), ("lattice_min_y", min[1]), ("lattice_min_z", min[2])]),
+    );
+    chain.wire(sort, "sorted", distance, "sorted");
+    chain.wire(sort, "cell_ranges", distance, "cell_ranges");
+    let d = chain.source("divisor", vec![0.5]);
+    let divide = chain.node("divide", "node.divide_by_value", json!({}));
+    chain.wire(distance, "out", divide, "values");
+    chain.wire(d, "out", divide, "divisor");
+    let got = chain.fused_matches_unfused(divide, cells);
+    let r = 0.5 * 3f64.sqrt() * h;
+    let reaches = |q: f32, a: usize, p: usize| {
+        let q = f64::from(q) - min[a];
+        ((q - 2.0 * r) / h).floor() as i64 <= p as i64 && p as i64 <= ((q + 2.0 * r) / h).floor() as i64
+    };
+    let want: Vec<f64> = (0..cells)
+        .map(|c| {
+            let p = coords(c, FINE);
+            let centre: [f64; 3] = std::array::from_fn(|a| min[a] + (p[a] as f64 + 0.5) * h);
+            let mut phi = 3.0 * h;
+            let bin = |q: f32, a: usize| ((f64::from(q) - min[a]) / h).floor() as i64;
+            let live = || particles.iter().filter(|q| q.position_radius[3] > 0.0);
+            let near = live().any(|q| (0..3).all(|a| (bin(q.position_radius[a], a) - p[a] as i64).abs() <= 1));
+            for q in live().filter(|_| near) {
+                if (0..3).all(|a| reaches(q.position_radius[a], a, p[a])) {
+                    let d = (0..3).map(|a| (centre[a] - f64::from(q.position_radius[a])).powi(2)).sum::<f64>().sqrt();
+                    phi = phi.min(d - r);
+                }
+            }
+            if phi.abs() < 0.005 * h {
+                phi = if phi > 0.0 { 0.005 * h } else { -0.005 * h };
+            }
+            phi / 0.5
+        })
+        .collect();
+    assert!(want.iter().any(|&v| v < 0.0) && want.iter().any(|&v| v > 0.0), "the draw has water and air");
+    assert_close(&got, &want, "fused distance into divide");
 }
 
 /// The coarse water fused into the restriction's mask.
@@ -836,12 +1025,14 @@ fn gpu_flip_sweep_into_prolong_stays_unfused() {
     let w = chain.source("water", random_water(fine_cells, 0xb2));
     let r = chain.source("rhs", random_values(fine_cells, 0xb3));
     let s = chain.source("start", random_values(fine_cells, 0xb4));
+    let p = chain.source("phi", vec![0.0; fine_cells]);
     let sweep = chain.node("sweep", "node.pressure_smooth", lattice_json(FINE, &[("cell_size", 0.3), ("color", 0.0)]));
     chain.wire(w, "out", sweep, "water");
     chain.wire(r, "out", sweep, "rhs");
     chain.wire(s, "out", sweep, "value");
     let o = chain.face_source("open", open_faces(FINE));
     chain.wire(o, "out", sweep, "solid_faces");
+    chain.wire(p, "out", sweep, "phi");
     let prolong = chain.node("prolong", "node.prolong_lattice", lattice_json(FINE, &[]));
     chain.wire(sweep, "out", prolong, "value");
     chain.wire(c, "out", prolong, "coarse");
@@ -1089,12 +1280,16 @@ fn project_through(chain: &mut Chain, open: usize, n: [usize; 3], seed: u64) -> 
     chain.wire(p, "out", project, "pressure");
     chain.wire(w, "out", project, "water");
     chain.wire(open, "out", project, "solid_faces");
+    // A zero φ: air holds zero pressure at its centre, cpu_project's rows.
+    let d = chain.source("phi", vec![0.0; cells]);
+    chain.wire(d, "out", project, "phi");
     chain.sink = "test.face_sink";
     let got = chain.fused_matches_unfused(project, face_grid_len(n));
     (got, faces, pressure, water)
 }
 
-/// node.subtract_pressure's rule in f64, `open` the solid's face records.
+/// node.subtract_pressure's rule in f64 with a zero φ, `open` the solid's
+/// face records.
 fn cpu_project(faces: &[f32], open: &[f64], pressure: &[f32], water: &[f32], n: [usize; 3], h: f64) -> Vec<f64> {
     let m = n.map(|v| v + 1);
     let mut out = vec![0.0; face_grid_len(n)];
@@ -1116,7 +1311,10 @@ fn cpu_project(faces: &[f32], open: &[f64], pressure: &[f32], water: &[f32], n: 
             if open[w] <= 0.0 {
                 out[w] = 1.0;
             } else if water[up] > 0.5 || water[down] > 0.5 {
-                out[v] -= (f64::from(pressure[up]) - f64::from(pressure[down])) / h;
+                // With a zero φ an air side's ghost pressure is 0, whatever
+                // the pressure array holds there.
+                let p = |c: usize| if water[c] > 0.5 { f64::from(pressure[c]) } else { 0.0 };
+                out[v] -= (p(up) - p(down)) / h;
                 out[w] = 1.0;
             }
         }
@@ -1163,6 +1361,8 @@ fn gpu_flip_projection_into_constraint_fuses() {
     chain.wire(p, "out", project, "pressure");
     chain.wire(w, "out", project, "water");
     chain.wire(o, "out", project, "solid_faces");
+    let d = chain.source("phi", vec![0.0; cells]);
+    chain.wire(d, "out", project, "phi");
     let constrain = chain.node("constrain", "node.constrain_solid_faces", lattice_json(n, &[]));
     chain.wire(project, "out", constrain, "faces");
     chain.wire(o, "out", constrain, "solid_faces");

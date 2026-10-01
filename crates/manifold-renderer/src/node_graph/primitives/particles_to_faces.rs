@@ -1,8 +1,18 @@
 //! `node.particles_to_faces` — particles to the face grid by gather
 //! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): each face reads the particles
-//! around it through the sort's cell ranges and sums tent weights and
-//! momentum itself, so no atomics exist. A per-element gather on the codegen
-//! path.
+//! around it through the sort's cell ranges and sums weights and momentum
+//! itself, so no atomics exist. A per-element gather on the codegen path.
+//!
+//! Ported from FLIP Fluids velocityadvector.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md
+//!
+//! The weight is the engine's Wyvill kernel at its radius r = √3·h/2, which
+//! reaches about 0.87h along each axis where a tent reaches h and the box
+//! corners: fewer particles share a face, so a sheet keeps the velocity
+//! differences that tear it. The engine marks a face valid when its weight
+//! is over 1e-6 and keeps the raw sum on the rest; deviation: such a face is
+//! written with velocity 0 and weight 0 here, which extension then fills as
+//! the engine's does. Walls are this step's own rule (docs/GPU_FLIP_PRESSURE_SOLVE.md
+//! section 2 (the equation)).
 
 use std::borrow::Cow;
 
@@ -50,7 +60,7 @@ struct FacesUniforms {
 crate::primitive! {
     name: ParticlesToFaces,
     type_id: "node.particles_to_faces",
-    purpose: "Transfer liquid particles to a face grid (velocity on cell faces). The lattice has nodes_x/y/z cells of cell_size from lattice_min; out has (nodes + 1)³ padded cells, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k) owning the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h and the z face at (i + ½, j + ½, k)·h. Each face's weight is the sum over live particles (radius > 0) of Π max(0, 1 − |Δ|/h), and its velocity the weighted mean of the particles' velocity along the face normal (0 with no weight). A box wall face (the first and last along its axis) keeps only the part of that velocity leaving the wall and has weight 1: the box walls let water leave and never enter. Faces past the lattice are zero.",
+    purpose: "Transfer liquid particles to a face grid (velocity on cell faces). The lattice has nodes_x/y/z cells of cell_size from lattice_min; out has (nodes + 1)³ padded cells, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k) owning the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h and the z face at (i + ½, j + ½, k)·h. Each face's weight is the sum over live particles (radius > 0) within r = √3·h/2 of it of the Wyvill kernel 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r², s = |Δ|², and its velocity the weighted mean of the particles' velocity along the face normal; a face whose weight is 1e-6 or less gets velocity 0 and weight 0. A box wall face (the first and last along its axis) keeps only the part of that velocity leaving the wall and has weight 1: the box walls let water leave and never enter. Faces past the lattice are zero.",
     inputs: {
         sorted: Array(FluidParticle) required,
         cell_ranges: Array(CellRange) required,

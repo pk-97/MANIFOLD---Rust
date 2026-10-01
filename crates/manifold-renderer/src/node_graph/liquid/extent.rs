@@ -561,6 +561,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.liquid_frame", check: liquid_frame },
     ExtentRule { type_id: "node.cells_with_particles", check: cells_with_particles },
     ExtentRule { type_id: "node.particles_to_faces", check: particles_to_faces },
+    ExtentRule { type_id: "node.particle_distance", check: particle_distance },
     ExtentRule { type_id: "node.extend_faces", check: face_map },
     ExtentRule { type_id: "node.face_gravity", check: face_gravity },
     ExtentRule { type_id: "node.face_divergence", check: face_divergence },
@@ -1200,6 +1201,14 @@ fn particles_to_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("sorted", PARTICLE)
 }
 
+fn particle_distance(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = cell_count(gpu_flip_cells(x)?);
+    x.covers("cell_ranges", cells * RANGE)?;
+    x.covers("out", cells * 4)?;
+    // The ranges index the sorted particles; the kernel bounds them by its length.
+    x.covers("sorted", PARTICLE)
+}
+
 /// Face grid in, face grid out.
 fn face_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_count(gpu_flip_cells(x)?) * FACE;
@@ -1227,8 +1236,10 @@ fn subtract_pressure(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("faces", faces)?;
     x.covers("out", faces)?;
     x.covers("solid_faces", faces)?;
-    x.covers("pressure", cell_count(nodes) * 4)?;
-    x.covers("water", cell_count(nodes) * 4)
+    for port in ["pressure", "water", "phi"] {
+        x.covers(port, cell_count(nodes) * 4)?;
+    }
+    Ok(())
 }
 
 fn density_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1306,7 +1317,7 @@ fn pressure_sweep(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = gpu_flip_cells(x)?;
     let cells = cell_count(nodes);
     x.covers("solid_faces", face_count(nodes) * FACE)?;
-    for port in ["water", "rhs", "value", "out"] {
+    for port in ["water", "rhs", "value", "phi", "out"] {
         x.covers(port, cells * 4)?;
     }
     Ok(())

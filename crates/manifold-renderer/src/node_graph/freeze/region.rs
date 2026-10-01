@@ -4246,6 +4246,7 @@ mod tests {
                 {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "water"},
                 {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "rhs"},
                 {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "value"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "phi"},
                 {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
                 {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
                 {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},

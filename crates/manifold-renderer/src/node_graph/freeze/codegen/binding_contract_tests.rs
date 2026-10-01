@@ -175,7 +175,8 @@ fn dispatch_tail_census_is_stable() {
     // face_divergence, subtract_pressure, extend_faces, faces_to_particles and
     // density_source; its multigrid pressure solve adds zero_lattice,
     // coarsen_water, pressure_smooth, pressure_residual, restrict_lattice and
-    // prolong_lattice, all buffer atoms. The liquid face grid adds face_sample_component and
+    // prolong_lattice, all buffer atoms; its free surface adds
+    // particle_distance, a buffer atom. The liquid face grid adds face_sample_component and
     // matter_face_component, buffer atoms. The whitewater grid adds
     // surface_crossings, nearest_crossing, crossing_distance, liquid_cells,
     // lattice_curvature and extend_lattice, buffer atoms; its emitter adds
@@ -185,8 +186,9 @@ fn dispatch_tail_census_is_stable() {
     // add solid_faces, coarsen_solid_faces, solid_face_velocity and
     // constrain_solid_faces, buffer atoms; their body coupling adds
     // pressure_face_impulse, friction_face_impulse and body_pressure_product,
-    // buffer atoms. The liquid block map adds liquid_blocks.
-    assert_eq!(total, 241, "standalone atom census drifted");
+    // buffer atoms. The liquid block map adds liquid_blocks. The ghost-fluid
+    // free surface adds particle_distance, a buffer atom.
+    assert_eq!(total, 242, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

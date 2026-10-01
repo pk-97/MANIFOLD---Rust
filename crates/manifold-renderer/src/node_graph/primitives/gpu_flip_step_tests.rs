@@ -10,6 +10,7 @@ use super::face_gravity::FaceGravity;
 use super::faces_to_particles::{FacesToParticles, MAX_SPREAD_CELLS, WALL_MARGIN_CELLS};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
+use super::particle_distance::ParticleDistance;
 use super::particles_to_faces::ParticlesToFaces;
 use super::subtract_pressure::SubtractPressure;
 use crate::node_graph::effect_node::ParamValues;
@@ -271,16 +272,38 @@ fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
 }
 
 #[test]
-fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
+fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
     let mut harness = Harness::new();
-    let particles = random_particles(0x9261, 400);
-    let (sorted, ranges) = cpu_sort(&particles);
-    let inputs = [
-        ("sorted", harness.array(&sorted, sorted.len()).0),
-        ("cell_ranges", harness.array(&ranges, ranges.len()).0),
-    ];
-    let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
-    let mut checked = 0;
+    // Dense covers most faces and the walls; sparse leaves faces no particle
+    // reaches.
+    for (name, count) in [("dense", 400), ("sparse", 12)] {
+        let particles = random_particles(0x9261, count);
+        let (sorted, ranges) = cpu_sort(&particles);
+        let inputs = [
+            ("sorted", harness.array(&sorted, sorted.len()).0),
+            ("cell_ranges", harness.array(&ranges, ranges.len()).0),
+        ];
+        let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
+        let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
+        if name == "dense" {
+            assert!(checked > 200, "the fixture reaches most faces, got {checked}");
+            assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
+        } else {
+            assert!(checked > 5 && invalid > 50, "{name}: {checked} faces reached, {invalid} not");
+        }
+    }
+}
+
+/// Checks node.particles_to_faces' output against the engine's kernel
+/// (velocityadvector.cpp, in cells: r = √3/2). Returns the faces whose
+/// velocity was checked, the faces no particle reaches, and the wall faces
+/// held and kept.
+fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize, usize, [usize; 2]) {
+    let rsq = 0.75f64;
+    let wyvill = |d2: f64| {
+        if d2 < rsq { 1.0 - 4.0 / 9.0 * d2.powi(3) / rsq.powi(3) + 17.0 / 9.0 * d2 * d2 / (rsq * rsq) - 22.0 / 9.0 * d2 / rsq } else { 0.0 }
+    };
+    let (mut checked, mut invalid) = (0, 0);
     // Wall faces held (water moving into the wall) and kept (leaving it).
     let mut walls = [0usize; 2];
     for (i, face) in got.iter().enumerate() {
@@ -293,37 +316,49 @@ fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
             let centre: [f64; 3] = std::array::from_fn(|b| p[b] as f64 + if b == a { 0.0 } else { 0.5 });
             let (mut weight, mut momentum) = (0.0f64, 0.0f64);
             for particle in particles.iter().filter(|q| q.position_radius[3] > 0.0) {
-                let w: f64 = (0..3)
+                let d2: f64 = (0..3)
                     .map(|b| {
                         let q = (f64::from(particle.position_radius[b]) - f64::from(MIN[b])) / f64::from(H);
-                        (1.0 - (q - centre[b]).abs()).max(0.0)
+                        (q - centre[b]).powi(2)
                     })
-                    .product();
+                    .sum();
+                let w = wyvill(d2);
                 weight += w;
                 momentum += w * f64::from(particle.velocity[a]);
             }
-            let velocity = if weight > 0.0 { momentum / weight } else { 0.0 };
+            // A sum near the 1e-6 validity line can land on either side in f32.
+            if (1e-7..1e-5).contains(&weight) {
+                continue;
+            }
+            let valid = weight > 1e-6;
+            let velocity = if valid { momentum / weight } else { 0.0 };
             if p[a] == 0 || p[a] == N[a] {
                 // A wall keeps only what leaves it, and is always valid.
                 close(face.weight[a], 1.0, 1.0, &format!("wall weight {p:?}/{a}"));
                 let leaving = if p[a] == 0 { velocity.max(0.0) } else { velocity.min(0.0) };
                 walls[usize::from(leaving != 0.0)] += 1;
-                if weight > 1e-3 || leaving == 0.0 {
+                if weight > 0.05 || leaving == 0.0 {
                     close(face.velocity[a], leaving, 1.0, &format!("wall velocity {p:?}/{a}"));
                 }
                 continue;
             }
+            if !valid {
+                // Too little weight to trust: extension fills the face.
+                assert_eq!((face.velocity[a], face.weight[a]), (0.0, 0.0), "invalid face {p:?}/{a}");
+                invalid += 1;
+                continue;
+            }
             close(face.weight[a], weight, weight, &format!("weight {p:?}/{a}"));
-            // A face at the edge of a particle's reach has a tiny weight; its
-            // ratio carries the f32 rounding of that weight.
-            if weight > 1e-3 {
+            // Near the rim the kernel is 1 minus terms summing to about 1, so
+            // each particle's f32 weight is off by ~1e-7 absolute; a ratio is
+            // held to 1e-5 only where the weight dwarfs that.
+            if weight > 0.05 {
                 close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
                 checked += 1;
             }
         }
     }
-    assert!(checked > 200, "the fixture reaches most faces, got {checked}");
-    assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
+    (checked, invalid, walls)
 }
 
 #[test]
@@ -470,20 +505,43 @@ fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
     }
 }
 
+/// Distances as the ghost rows can see them: water cells from −0.6h to 0.2h
+/// (some above the −0.005h the solve takes at most), air from −0.3h to 2.9h
+/// (some below the 0 it takes at least).
+fn random_phi(water: &[f32], seed: u64) -> Vec<f32> {
+    let mut rng = Stream::new(seed);
+    water.iter().map(|&w| H * if w > 0.5 { -0.6 + 0.8 * rng.unit() } else { -0.3 + 3.2 * rng.unit() }).collect()
+}
+
+/// Zero distances leave air pressure at zero, the plain Dirichlet projection;
+/// real distances give the air side the ghost pressure
+/// clamp(max(φ_air, 0) / (min(φ_water, −0.005h) + 1e-9), ±25) · p_water.
 #[test]
 fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
-    let mut harness = Harness::new();
     let faces = random_faces(0x5b7, false);
     let water = random_water(0xa7e2);
     let mut rng = Stream::new(0x9e55);
     let pressure: Vec<f32> = water.iter().map(|&w| if w > 0.5 { rng.signed(3.0) } else { 0.0 }).collect();
-    for solid in [false, true] {
+    let ghost = |air: usize, wet: usize, phi: &[f32]| {
+        let surface = f64::from(phi[wet]).min(-0.005 * f64::from(H));
+        (f64::from(phi[air]).max(0.0) / (surface + 1e-9)).clamp(-25.0, 25.0) * f64::from(pressure[wet])
+    };
+    // Faces whose air side took a ghost pressure that is not zero.
+    let mut ghosts = 0;
+    let draws = [
+        (false, vec![0.0; cell_len()]),
+        (false, random_phi(&water, 0x9e56)),
+        (true, random_phi(&water, 0x9e57)),
+    ];
+    for (solid, phi) in draws {
         let open = solid_faces(0x5c7, solid);
+        let mut harness = Harness::new();
         let inputs = [
             ("faces", harness.array(&faces, face_len()).0),
             ("pressure", harness.array(&pressure, cell_len()).0),
             ("water", harness.array(&water, cell_len()).0),
             ("solid_faces", harness.array(&open, face_len()).0),
+            ("phi", harness.array(&phi, cell_len()).0),
         ];
         let got: Vec<FaceSample> = run_into(&mut harness, &mut SubtractPressure::new(), &inputs, face_len(), &lattice(&[]));
         let mut closed = 0;
@@ -498,23 +556,231 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     let mut below = p;
                     below[a] -= 1;
                     let (up, down) = (cell_index(p), cell_index(below));
+                    let (wet_up, wet_down) = (water[up] > 0.5, water[down] > 0.5);
                     let u = f64::from(faces[i].velocity[a]);
+                    let p_up = if wet_up { f64::from(pressure[up]) } else { ghost(up, down, &phi) };
+                    let p_down = if wet_down { f64::from(pressure[down]) } else { ghost(down, up, &phi) };
                     if open[i].weight[a] <= 0.0 {
                         // A closed face keeps its velocity for
                         // node.constrain_solid_faces to replace.
                         closed += 1;
                         (u, 1.0)
-                    } else if water[up] > 0.5 || water[down] > 0.5 {
-                        (u - (f64::from(pressure[up]) - f64::from(pressure[down])) / f64::from(H), 1.0)
                     } else {
-                        (u, 0.0)
+                        if wet_up != wet_down && (if wet_up { p_down } else { p_up }) != 0.0 {
+                            ghosts += 1;
+                        }
+                        if wet_up || wet_down { (u - (p_up - p_down) / f64::from(H), 1.0) } else { (u, 0.0) }
                     }
                 };
-                close(face.velocity[a], velocity, 30.0, &format!("velocity {p:?}/{a}"));
+                // Ghost pressures reach 25 × 3, a step of 300 over h.
+                close(face.velocity[a], velocity, 400.0, &format!("velocity {p:?}/{a}"));
                 close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
             }
         }
+        // The projection leaves exactly the residual of the rows the solve
+        // inverted: div(out) = div(faces) − L p, L node.pressure_smooth's
+        // ghost rows. A θ that differs from the matrix's (the engine's 1e-6
+        // here) leaves part of the surface pressure as divergence.
+        let h = f64::from(H);
+        let div = |f: &[FaceSample], c: [usize; 3]| -> f64 {
+            (0..3)
+                .map(|a| {
+                    let mut up = c;
+                    up[a] += 1;
+                    f64::from(f[pad_index(up)].velocity[a]) - f64::from(f[pad_index(c)].velocity[a])
+                })
+                .sum::<f64>()
+                / h
+        };
+        for c in (0..cell_len()).filter(|&c| water[c] > 0.5) {
+            let q = cell_coords(c);
+            let centre = f64::from(phi[c]).min(-0.005 * h);
+            let mut lp = 0.0;
+            for a in 0..3 {
+                for side in [-1i64, 1] {
+                    let at = q[a] as i64 + side;
+                    if at < 0 || at >= N[a] as i64 {
+                        continue;
+                    }
+                    let mut r = q;
+                    r[a] = at as usize;
+                    // A closed face kept its velocity: no pressure crossed it.
+                    let mut face = q;
+                    face[a] = q[a].max(r[a]);
+                    if open[pad_index(face)].weight[a] <= 0.0 {
+                        continue;
+                    }
+                    let j = cell_index(r);
+                    let theta = (f64::from(phi[j]).max(0.0) / (centre + 1e-9)).clamp(-25.0, 25.0);
+                    let p_j = if water[j] > 0.5 { f64::from(pressure[j]) } else { theta * f64::from(pressure[c]) };
+                    lp += (p_j - f64::from(pressure[c])) / (h * h);
+                }
+            }
+            let left = div(&got, q);
+            let want = div(&faces, q) - lp;
+            // f32 faces up to ~300 round by ~3e-5 each; six over h stays under 1e-3.
+            assert!((left - want).abs() <= 5e-3, "divergence left in cell {q:?}: {left} vs {want}");
+        }
         assert_eq!(closed > 20, solid, "the solid fixture closes faces, the open one none: {closed}");
+    }
+    assert!(ghosts > 20, "the draw puts ghost pressures on many faces: {ghosts}");
+}
+
+/// The engine's particle radius at its default scale: half a cell's diagonal.
+fn sdf_radius() -> f64 {
+    0.5 * 3f64.sqrt() * f64::from(H)
+}
+
+/// The cells a particle at `q` reaches along axis `a`: the engine's box,
+/// floor((q ± 2r − min) / h), before the lattice cuts it.
+fn scatter_box(q: f64, a: usize) -> [i64; 2] {
+    let (h, search) = (f64::from(H), 2.0 * sdf_radius());
+    let from = q - f64::from(MIN[a]);
+    [((from - search) / h).floor() as i64, ((from + search) / h).floor() as i64]
+}
+
+/// The engine's level set: fill with 3h, scatter |centre − p| − r from each
+/// live particle into every cell of its box, snap |φ| < 0.005h.
+fn cpu_scatter_distance(particles: &[FluidParticle]) -> Vec<f64> {
+    let h = f64::from(H);
+    let mut phi = vec![3.0 * h; cell_len()];
+    for particle in particles.iter().filter(|q| q.position_radius[3] > 0.0) {
+        let q: [f64; 3] = std::array::from_fn(|a| f64::from(particle.position_radius[a]));
+        let reach: [[i64; 2]; 3] = std::array::from_fn(|a| {
+            let [lo, hi] = scatter_box(q[a], a);
+            [lo.max(0), hi.min(N[a] as i64 - 1)]
+        });
+        for z in reach[2][0]..=reach[2][1] {
+            for y in reach[1][0]..=reach[1][1] {
+                for x in reach[0][0]..=reach[0][1] {
+                    let c = [x as usize, y as usize, z as usize];
+                    let centre: [f64; 3] = std::array::from_fn(|a| f64::from(MIN[a]) + (c[a] as f64 + 0.5) * h);
+                    let d = (0..3).map(|a| (centre[a] - q[a]).powi(2)).sum::<f64>().sqrt() - sdf_radius();
+                    let slot = &mut phi[cell_index(c)];
+                    *slot = slot.min(d);
+                }
+            }
+        }
+    }
+    snap(phi)
+}
+
+fn snap(phi: Vec<f64>) -> Vec<f64> {
+    let eps = 0.005 * f64::from(H);
+    phi.into_iter().map(|v| if v.abs() < eps { if v > 0.0 { eps } else { -eps } } else { v }).collect()
+}
+
+/// Whether a live particle sits in cell `c` or its 26 neighbours.
+fn has_near_particle(c: usize, sorted: &[FluidParticle], ranges: &[CellRange]) -> bool {
+    let p = cell_coords(c);
+    (p[2].saturating_sub(1)..=(p[2] + 1).min(N[2] - 1)).any(|z| {
+        (p[1].saturating_sub(1)..=(p[1] + 1).min(N[1] - 1)).any(|y| {
+            (p[0].saturating_sub(1)..=(p[0] + 1).min(N[0] - 1)).any(|x| {
+                let r = ranges[cell_index([x, y, z])];
+                sorted[r.start as usize..(r.start + r.count) as usize].iter().any(|q| q.position_radius[3] > 0.0)
+            })
+        })
+    })
+}
+
+/// node.particle_distance's own reading: the min over the 125 bins around
+/// each cell, from the sort's ranges, keeping a particle only when the cell
+/// is inside its box; 3h with no live particle in the 27 bins.
+fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f64> {
+    let h = f64::from(H);
+    let phi = (0..cell_len())
+        .map(|c| {
+            let p = cell_coords(c);
+            let centre: [f64; 3] = std::array::from_fn(|a| f64::from(MIN[a]) + (p[a] as f64 + 0.5) * h);
+            let mut phi = 3.0 * h;
+            if !has_near_particle(c, sorted, ranges) {
+                return phi;
+            }
+            for z in p[2].saturating_sub(2)..=(p[2] + 2).min(N[2] - 1) {
+                for y in p[1].saturating_sub(2)..=(p[1] + 2).min(N[1] - 1) {
+                    for x in p[0].saturating_sub(2)..=(p[0] + 2).min(N[0] - 1) {
+                        let r = ranges[cell_index([x, y, z])];
+                        for particle in &sorted[r.start as usize..(r.start + r.count) as usize] {
+                            let q: [f64; 3] = std::array::from_fn(|a| f64::from(particle.position_radius[a]));
+                            let inside = (0..3).all(|a| {
+                                let [lo, hi] = scatter_box(q[a], a);
+                                (lo..=hi).contains(&(p[a] as i64))
+                            });
+                            if particle.position_radius[3] > 0.0 && inside {
+                                let d = (0..3).map(|a| (centre[a] - q[a]).powi(2)).sum::<f64>().sqrt();
+                                phi = phi.min(d - sdf_radius());
+                            }
+                        }
+                    }
+                }
+            }
+            phi
+        })
+        .collect();
+    snap(phi)
+}
+
+/// The gather is the engine's scatter, cell for cell, wherever a live
+/// particle sits within one cell; elsewhere it reads 3h. A cell holding a
+/// live particle is always inside the liquid. A particle 0.499h from its
+/// cell's centre along each axis (0.0017h inside its ball's reach) puts
+/// that cell at −0.005h and the empty cell across the corner, 0.0017h
+/// outside, at +0.005h. In "boxed", cell (3, 1, 1) has a particle in its 27
+/// bins at 1.73h, and one two cells out along x at 1.53h whose box stops at
+/// cell 2: the cell reads 1.73h, as the engine's does.
+#[test]
+fn gpu_flip_particle_distance_is_the_engines_level_set() {
+    let h = f64::from(H);
+    let particle = |q: [f32; 3]| FluidParticle { position_radius: [q[0], q[1], q[2], 0.08], velocity: [0.0; 3], id: 1 };
+    let centre = |p: [usize; 3]| -> [f32; 3] { std::array::from_fn(|a| MIN[a] + (p[a] as f32 + 0.5) * H) };
+    let at = |cells: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| MIN[a] + cells[a] * H) };
+    let corner = centre([2, 1, 1]).map(|v| v + 0.499 * H);
+    let sets = [
+        ("random", random_particles(0xd157, 70)),
+        ("corner", vec![particle(corner)]),
+        ("boxed", vec![particle(at([2.001, 0.001, 0.001])), particle(at([1.1, 1.5, 1.5]))]),
+    ];
+    for (name, particles) in sets {
+        let (sorted, ranges) = cpu_sort(&particles);
+        let want = cpu_gather_distance(&sorted, &ranges);
+        let engine = cpu_scatter_distance(&particles);
+        let mut far = 0;
+        for (c, (a, b)) in want.iter().zip(&engine).enumerate() {
+            if has_near_particle(c, &sorted, &ranges) {
+                assert!((a - b).abs() < 1e-12, "{name} cell {:?}: gather {a} vs scatter {b}", cell_coords(c));
+            } else {
+                assert_eq!(*a, 3.0 * h, "{name} cell {:?}: no particle within a cell", cell_coords(c));
+                far += usize::from(*b < 3.0 * h);
+            }
+        }
+        if name == "corner" {
+            assert!(far > 0, "the lone particle reaches cells two out, which read 3h here");
+        }
+        let mut harness = Harness::new();
+        let inputs = [
+            ("sorted", harness.array(&sorted, sorted.len()).0),
+            ("cell_ranges", harness.array(&ranges, ranges.len()).0),
+        ];
+        let got: Vec<f32> = run_into(&mut harness, &mut ParticleDistance::new(), &inputs, cell_len(), &lattice(&[]));
+        let empty = ranges.iter().filter(|r| r.count == 0).count();
+        assert!(empty > 10 && empty < cell_len(), "{name}: the draw has empty and full cells ({empty} empty)");
+        for (c, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert!((f64::from(*g) - w).abs() <= 1e-5, "{name} cell {:?}: {g} vs {w}", cell_coords(c));
+            let r = ranges[c];
+            if sorted[r.start as usize..(r.start + r.count) as usize].iter().any(|q| q.position_radius[3] > 0.0) {
+                assert!(*w <= -0.005 * h, "{name}: occupied cell {:?} reads {w}", cell_coords(c));
+            }
+        }
+        let read = |c: [usize; 3], want: f64| (f64::from(got[cell_index(c)]) - want).abs() <= 1e-6;
+        if name == "corner" {
+            assert!(read([2, 1, 1], -0.005 * h), "the particle's cell snaps down");
+            assert!(read([3, 2, 2], 0.005 * h), "the empty cell across the corner snaps up");
+        }
+        if name == "boxed" {
+            let corner_reach = (3.0 * (1.499 * h).powi(2)).sqrt() - sdf_radius();
+            assert!(read([3, 1, 1], corner_reach), "cell 3 takes the near particle, not the boxed-out one");
+            assert!(read([2, 1, 1], 1.4 * h - sdf_radius()), "cell 2 is inside the far particle's box");
+        }
     }
 }
 

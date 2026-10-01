@@ -7,8 +7,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cells_with_particles::cell_lattice;
-use super::particles_to_faces::{face_count, lattice_box};
+use super::cells_with_particles::{LATTICE_PARAMS, cell_lattice};
+use super::particles_to_faces::{face_capacity, face_count, lattice_box};
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -109,13 +109,15 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/face_gravity_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather],
-    output_capacity: FusedOutputCapacity::FromInput { input: "faces" },
+    // The face grid of its own lattice, like every other face atom of the
+    // step, so a fused projection or constraint counts the same faces.
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 1 },
     wgsl_includes: [LIQUID_FIELD],
 }
 
 impl Primitive for FaceGravity {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "faces").map(|&(_, n)| n)).flatten()
+    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+        (port == "out").then(|| face_capacity(params)).flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {

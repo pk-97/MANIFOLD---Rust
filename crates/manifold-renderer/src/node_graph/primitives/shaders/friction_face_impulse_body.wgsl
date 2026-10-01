@@ -53,8 +53,11 @@ fn body(
         if !(friction_face_impulse_wet(lo, n) || friction_face_impulse_wet(p, n)) {
             continue;
         }
-        let f = e_solid_velocity.face_weight[a];
-        out.face_velocity[a] = mass * w * f * (e_faces.face_velocity[a] - e_solid_velocity.face_velocity[a]);
+        // `faces` is only ever a multiplicand: fused after a member that ends
+        // in fma(x, y, a·b), a subtraction from it would be re-contracted
+        // into fma(x, y, fma(a, b, −v)) and miss the standalone by an ulp.
+        let k = mass * w * e_solid_velocity.face_weight[a];
+        out.face_velocity[a] = fma(k, e_faces.face_velocity[a], -(k * e_solid_velocity.face_velocity[a]));
     }
     out.face_velocity.w = code;
     return out;

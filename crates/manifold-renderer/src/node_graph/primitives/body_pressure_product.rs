@@ -79,7 +79,7 @@ crate::primitive! {
     aliases: ["body coupling", "two-way coupling", "rigid coupling", "buoyancy"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/body_pressure_product_body.wgsl"),
-    input_access: [Coincident, Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "base" },
     wgsl_includes: [SOLID_BODY_FACES],
 }

@@ -355,7 +355,12 @@ contract is tiered — this is written down nowhere else:
    provided the body writes every multiply-add as an explicit `fma()`: under
    fast math the compiler contracts a bare `a * b + c` differently in the
    standalone and the fused kernel (one ulp on `node.face_gravity` before it
-   did).
+   did). Across members the same holds one level up: a consumer that adds to
+   or subtracts from an upstream member's value lets the compiler fold that
+   add into the producer's trailing `fma(x, y, a * b)`, which it cannot do
+   when the value was loaded from memory. Use upstream values only as
+   multiplicands (`fma(k, u, -(k * v))`, not `k * (u - v)`;
+   `node.friction_face_impulse` after `node.pressure_face_impulse`).
    Proofs: digitalplants / fluidsim / fluidsim3d `*_renders_like_unfused`.
 4. **Out-of-loop texture regions: ≈1 ulp, NOT bit-exact, and cannot be.**
    Body-level FMA/inlining differs across kernel contexts; the 2026-06-10
