@@ -47,15 +47,17 @@ pub(super) fn skeleton_pose_clip_durations(
 
 /// GLTF_ANIM_RUNTIME_V2_DESIGN.md D4 (P3): [`skeleton_pose_clip_durations`]'s
 /// sibling for the node-slot rigid palette — same shape (`[clip_index,
-/// duration_s]` rows + a fallback), keyed off `slot_nodes` directly rather
-/// than a skin's own joint list. Like that function, this is only a
-/// transient PRE-LOAD fallback (the primitive's own `AnimClip::duration_s`,
-/// computed from every channel in the resident clip once the shared cache
-/// loads, wins immediately after — see `gltf_skeleton_pose.rs`'s `run()`)
-/// — it doesn't need to walk ancestors to be correct, only to be a
-/// reasonable UI default before that happens.
+/// duration_s]` rows + a fallback).
+///
+/// Invariant: each row equals the runtime `AnimClip::duration_s` (the last
+/// keyframe of EVERY channel in the clip), because the pose node samples the
+/// whole hierarchy — ancestors included — on that clock once the shared cache
+/// loads. Counting only the slot nodes' own channels stamped a shorter clip
+/// whenever an ancestor animated longer (BoxAnimated: node 2's rotation ends
+/// at 2.5s, the node 0 translation it rides on ends at 3.71s), so the card,
+/// the pre-load fallback, and every reader of `duration_s` ran on a different
+/// clock from the sampler.
 pub(super) fn rigid_multi_node_clip_durations(
-    slot_nodes: &[u32],
     node_anims_by_clip: &[std::collections::BTreeMap<usize, gltf_load::GltfNodeAnimation>],
 ) -> (Vec<Vec<f32>>, f32) {
     let empty_anims = std::collections::BTreeMap::new();
@@ -66,13 +68,13 @@ pub(super) fn rigid_multi_node_clip_durations(
     for c in 0..clip_count {
         let node_anims = node_anims_by_clip.get(c).unwrap_or(&empty_anims);
         let mut duration_s: f32 = 0.0;
-        for &node_index in slot_nodes {
-            let Some(anim) = node_anims.get(&(node_index as usize)) else { continue };
+        for anim in node_anims.values() {
             let last = |t: &[f32]| t.last().copied().unwrap_or(0.0);
             duration_s = duration_s
                 .max(anim.translation.as_ref().map(|t| last(&t.times)).unwrap_or(0.0))
                 .max(anim.rotation.as_ref().map(|r| last(&r.times)).unwrap_or(0.0))
-                .max(anim.scale.as_ref().map(|s| last(&s.times)).unwrap_or(0.0));
+                .max(anim.scale.as_ref().map(|s| last(&s.times)).unwrap_or(0.0))
+                .max(anim.weights.as_ref().map(|w| last(&w.times)).unwrap_or(0.0));
         }
         let duration_s = duration_s.max(1e-3);
         clip_durations_rows.push(vec![c as f32, duration_s]);
