@@ -171,6 +171,7 @@ impl WaterScene {
 
     /// A pool `fill` deep in a tank `size` on a side at `n` cells: the
     /// conformance box scenes' water.
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub fn pool(n: usize, size: f64, fill: f64) -> Self {
         Self { size, fill_height: fill, ..Self::still_pool(n) }
     }
