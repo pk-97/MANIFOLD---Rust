@@ -91,6 +91,8 @@ pub(crate) struct WaterScene {
     pub pressure: PressureShape,
     /// Water steps per tick: copies of the step subgraph in the tick region.
     pub steps: usize,
+    /// The FLIP share kept per 1/60 s, the FLIP Fluids engine's 0.95 at its
+    /// one step a frame; [`Self::flip_per_step`] is what a step uses.
     pub flip: f64,
     pub fill_height: f64,
     pub column: [[f64; 2]; 3],
@@ -121,9 +123,15 @@ pub(crate) struct WaterScene {
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
 pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
 
-/// Face layers past the water GPU FLIP extends each step's faces by: the face
-/// grid's `face_valid_layers`.
+/// Face layers past the water that `old` and `advect` are extended by. They
+/// are sampled only where a particle starts its step, inside a water cell,
+/// and a sample reads faces one cell out.
 pub(crate) const EXTENDED_LAYERS: usize = 2;
+
+/// The fastest water a step is built for (m/s): the Dam Break's splash tops
+/// out near 13 m/s at 64³ and 19–25 m/s at 128³, the FLIP Fluids engine's
+/// at 12 and 17. [`WaterScene::travel_cells`] turns it into the CFL guard.
+pub(crate) const TOP_SPEED: f64 = 20.0;
 
 /// Particles per cell the fill seeds: one per half-cell site.
 pub(crate) const REST_PER_CELL: f64 = 8.0;
@@ -209,8 +217,35 @@ impl WaterScene {
         Self { pressure: PressureShape { iterations, ..self.pressure }, ..self }
     }
 
+    /// `steps` water steps a frame, each density solve's share kept.
+    #[cfg(test)]
+    pub fn with_steps(self, steps: usize) -> Self {
+        Self { steps, spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64, ..self }
+    }
+
     pub fn step_dt(&self) -> f64 {
         1.0 / (60.0 * self.steps as f64)
+    }
+
+    /// node.faces_to_particles' FLIP share for one step. `flip` is the share
+    /// kept per 1/60 s, so the PIC damping a second does not depend on the
+    /// step count: k steps a frame keep flip^(1/k) each.
+    pub fn flip_per_step(&self) -> f64 {
+        self.flip.powf(60.0 * self.step_dt())
+    }
+
+    /// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
+    /// [`TOP_SPEED`] for one step rounded up. Faster water keeps its speed
+    /// and moves this far.
+    pub fn travel_cells(&self) -> usize {
+        (TOP_SPEED * self.step_dt() / self.pressure.cell_size() - 1e-9).ceil().max(1.0) as usize
+    }
+
+    /// Layers `new` is extended by: the RK3 stages sample up to ¾ of the
+    /// travel from where the particle started, and a sample reads faces one
+    /// cell further. The face grid's `face_valid_layers`.
+    pub fn band_layers(&self) -> usize {
+        (0.75 * self.travel_cells() as f64).ceil() as usize + 1
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
@@ -467,7 +502,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, solid, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), solid, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(EXTENDED_LAYERS)}));
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(scene.band_layers())}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((solid, "solid"), frame, "solid");
@@ -700,7 +735,7 @@ fn water_step(
     let gather = b.node("faces", "node.particles_to_faces", lattice_box(&scene, &[]));
     b.wire((sort, "sorted"), gather, "sorted");
     b.wire((sort, "cell_ranges"), gather, "cell_ranges");
-    let old = extend(b, "old", (gather, "out"), n);
+    let old = extend(b, "old", (gather, "out"), n, EXTENDED_LAYERS);
     let forced = b.node("gravity", "node.face_gravity", Builder::lattice(n, &[("step_dt", float(dt))]));
     b.wire(old, forced, "faces");
     b.wire((domain, "gravity_x"), forced, "gravity_x");
@@ -712,7 +747,7 @@ fn water_step(
     let levels = levels(b, s, water);
     let p = solve(b, s, &levels, (divergence, "out"));
     let projected = subtract(b, "project", (forced, "out"), p, water, s);
-    let new = extend(b, "new", projected, n);
+    let new = extend(b, "new", projected, n, scene.band_layers());
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
     let advect = if density {
@@ -726,7 +761,7 @@ fn water_step(
         b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
         let q = solve(b, PressureShape { iterations: scene.density_iterations, ..s }, &levels, (crowding, "out"));
         let spread = subtract(b, "project", projected, q, water, s);
-        let advect = extend(b, "advect", spread, n);
+        let advect = extend(b, "advect", spread, n, EXTENDED_LAYERS);
         b.prefix = outer;
         advect
     } else {
@@ -735,7 +770,10 @@ fn water_step(
     let moved = b.node(
         "move",
         "node.faces_to_particles",
-        lattice_box(&scene, &[("step_dt", float(dt)), ("flip", float(scene.flip))]),
+        lattice_box(
+            &scene,
+            &[("step_dt", float(dt)), ("flip", float(scene.flip_per_step())), ("max_travel", float(scene.travel_cells() as f64))],
+        ),
     );
     b.wire((sort, "sorted"), moved, "particles");
     b.wire(new, moved, "faces");
@@ -754,10 +792,10 @@ fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Por
     (id, "out")
 }
 
-/// [`EXTENDED_LAYERS`] layers of face extension into the air around the water.
-fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
+/// `layers` layers of face extension into the air around the water.
+fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3], layers: usize) -> Port {
     let mut faces = faces;
-    for layer in 1..=EXTENDED_LAYERS {
+    for layer in 1..=layers {
         let id = b.node(&format!("{name}_extend_{layer}"), "node.extend_faces", Builder::lattice(n, &[]));
         b.wire(faces, id, "faces");
         faces = (id, "out");
@@ -1232,8 +1270,21 @@ pub(super) mod tests {
             let into: Vec<_> = wires.iter().filter(|w| w["toPort"] == "faces_in").collect();
             assert_eq!(into.len(), 1, "one faces_in wire");
             assert_eq!(name(&into[0]["toNode"]), "state");
-            assert_eq!(name(&into[0]["fromNode"]), format!("s{}.new_extend_{EXTENDED_LAYERS}", scene.steps - 1));
+            assert_eq!(name(&into[0]["fromNode"]), format!("s{}.new_extend_{}", scene.steps - 1, scene.band_layers()));
         }
+    }
+
+    /// The CFL guard and the band at the lattices the extent walk covers, and
+    /// the band the conformance row's face grid scene publishes.
+    #[test]
+    fn gpu_flip_band_follows_the_cfl_guard() {
+        use crate::node_graph::liquid::conformance::{FACE_GRID_GPU_FLIP_LAYERS, FACE_GRID_RESOLUTION};
+        assert_eq!(WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).band_layers(), FACE_GRID_GPU_FLIP_LAYERS as usize);
+        let at = |n: usize, steps: usize| {
+            let s = WaterScene::dam_break(n).with_steps(steps);
+            (s.travel_cells(), s.band_layers())
+        };
+        assert_eq!([at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)], [(3, 4), (6, 6), (6, 6), (4, 4), (1, 2)]);
     }
 
     /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,

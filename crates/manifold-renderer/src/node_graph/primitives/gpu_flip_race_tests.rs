@@ -327,17 +327,25 @@ struct Record {
 pub(crate) struct Feel {
     pub runup: f64,
     pub at_lid: usize,
+    /// The share of live particles faster than the step's CFL guard.
+    pub past_guard: f64,
 }
 
-pub(crate) fn feel(particles: impl Iterator<Item = [f32; 4]>, floor: f64) -> Feel {
+/// [`Feel`] over (position and radius, velocity) pairs; `guard` is the
+/// speed the CFL guard allows (m/s).
+pub(crate) fn feel(particles: impl Iterator<Item = ([f32; 4], [f32; 3])>, floor: f64, guard: f64) -> Feel {
     let mut out = Feel::default();
-    for p in particles.filter(|p| p[3] > 0.0) {
+    let (mut live, mut fast) = (0usize, 0usize);
+    for (p, v) in particles.filter(|(p, _)| p[3] > 0.0) {
         let height = f64::from(p[1]) - floor;
         if p[0] > 1.75 {
             out.runup = out.runup.max(height);
         }
         out.at_lid += usize::from(height > 3.9);
+        live += 1;
+        fast += usize::from(v.iter().map(|&c| f64::from(c).powi(2)).sum::<f64>().sqrt() > guard);
     }
+    out.past_guard = fast as f64 / live.max(1) as f64;
     out
 }
 
@@ -388,7 +396,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         }
         let particles = run.particles();
         record.motion.push(particle_motion(&particles, min));
-        record.feel.push(feel(particles.iter().map(|p| p.position_radius), min[1]));
+        let guard = scene.travel_cells() as f64 * h / scene.step_dt();
+        record.feel.push(feel(particles.iter().map(|p| (p.position_radius, p.velocity)), min[1], guard));
         let pack = gpu_flip_packing(&particles, min, n, h);
         packed.push(pack);
         let sheet = frame % 5 == 4 && frame < 90;
@@ -425,6 +434,14 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     report_feel(label, &record.feel);
     let top = record.motion.iter().map(|m| m.fastest).fold(0.0, f64::max);
     println!("{label}: the top speed crosses {:.2} cells a step, {} steps a frame", top * scene.step_dt() / h, scene.steps);
+    let guarded = record.feel.iter().map(|f| f.past_guard).fold(0.0, f64::max);
+    println!(
+        "{label}: CFL guard {} cells a step ({:.1} m/s), new extended {} layers; at most {:.3}% of particles faster in a frame",
+        scene.travel_cells(),
+        scene.travel_cells() as f64 * h / scene.step_dt(),
+        scene.band_layers(),
+        100.0 * guarded
+    );
     if let Some(oracle) = oracle {
         let drift: Vec<f64> = record.volume.iter().map(|v| v.abs()).collect();
         println!("{label}: particles hold {:.4} m³, mesh {:.4} m³ at frame 0, skin {:.2} mm", run.particle_volume(), raw[0], 1000.0 * oracle.skin());
@@ -525,8 +542,7 @@ fn gpu_flip_wall_feel_64() {
     std::fs::create_dir_all("/tmp/flip_parity").expect("out dir");
     for steps in [2, 1] {
         let label = format!("WALLS {steps} steps 64³");
-        let scene = WaterScene { steps, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0 * steps as f64, ..WaterScene::dam_break(64) };
-        let record = dam_break(scene.with_surface(), &label, 300);
+        let record = dam_break(WaterScene::dam_break(64).with_steps(steps).with_surface(), &label, 300);
         let rows: Vec<String> = record.volume.iter().enumerate().map(|(f, v)| format!("{f},{v:.5}")).collect();
         std::fs::write(format!("/tmp/flip_parity/gpu_volume_steps_{steps}.csv"), format!("frame,volume_drift\n{}\n", rows.join("\n"))).expect("csv");
     }

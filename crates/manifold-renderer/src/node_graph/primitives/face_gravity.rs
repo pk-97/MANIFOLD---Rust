@@ -36,7 +36,7 @@ struct GravityUniforms {
 crate::primitive! {
     name: FaceGravity,
     type_id: "node.face_gravity",
-    purpose: "Add gravity to a face grid (node.particles_to_faces' layout) for one step: every face gains gravity × step_dt along its normal, except the box walls (the first and last face along each axis), whose velocity is set to 0. Weights pass through.",
+    purpose: "Add gravity to a face grid (node.particles_to_faces' layout) for one step: every face gains gravity × step_dt along its normal; a box wall face (the first and last along each axis) then keeps only the part leaving the wall, so water may leave a wall and never enter it. Weights pass through.",
     inputs: {
         faces: Array(FaceSample) required,
         gravity_x: ScalarF32 optional, gravity_y: ScalarF32 optional, gravity_z: ScalarF32 optional,

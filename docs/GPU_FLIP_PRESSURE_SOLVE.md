@@ -2,7 +2,7 @@
 
 <!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve with a fixed iteration count. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
-**Status:** BUILT on `feat/gpu-flip-multigrid` · 2026-10-01 · owed: solids in the water (section 8 (owed)), BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes), BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
+**Status:** BUILT on `feat/gpu-flip-multigrid` · 2026-10-01 · owed: solids, the ghost-fluid surface, a narrower transfer kernel (section 8 (owed)), BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes), BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
 
 GPU FLIP is the liquid water solver: particles carry the water, a face (MAC) grid carries its velocity, and each step makes that velocity divergence-free with one pressure solve. The solve is the textbook multigrid-preconditioned conjugate gradient (McAdams, Sifakis and Teran, "A parallel multigrid Poisson solver for fluids simulation on large grids", 2010). It replaced the FFT capacitance solve on 2026-10-01: the same equation, 3.0× faster at 64³ and 3.7× at 128³, to a smaller residual.
@@ -17,13 +17,19 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 
 1. Sort particles into cells (`node.sort_particles_into_cells`, bins = grid cells).
 2. Water cells: a cell is water if it holds a particle (`node.cells_with_particles`); walls are the box faces.
-3. Particles to faces by gather, no atomics (`node.particles_to_faces`): each face reads the particles in its neighbouring cells. Extend two layers into air (`node.extend_faces`) and keep the copy for FLIP (`old`).
-4. Gravity, walls zeroed (`node.face_gravity`).
+3. Particles to faces by gather, no atomics (`node.particles_to_faces`): each face reads the particles in its neighbouring cells. A box wall face keeps only the velocity leaving the wall (section 2, walls). Extend two layers into air (`node.extend_faces`) and keep the copy for FLIP (`old`).
+4. Gravity, then the wall rule again on the wall faces (`node.face_gravity`).
 5. Divergence per water cell → f (`node.face_divergence`).
 6. The pressure solve, section 3.
-7. Subtract the pressure gradient on faces touching water (`node.subtract_pressure`), extend two layers (`new`).
+7. Subtract the pressure gradient on faces touching water (`node.subtract_pressure`); wall faces keep their velocity. Extend `band_layers` layers (`new`): far enough that every RK3 stage of step 9 samples valid faces.
 8. On the tick's last step, the density solve: `node.density_source` asks each water cell for −rate·e with e = count/8 − 1, solved like section 3 at `DENSITY_ITERATIONS`, subtracted from the projected faces into a separate `advect` grid. A cell is inside, and gets the two-sided source, only when each of its six neighbours holds at least half of rest (4) or is a wall; any other cell is at the surface and only spreads. Counting any particle as water made a part-full surface cell under a stray particle a sink, which pulled the surface down and packed the water below it. The share per solve, rate × step dt, is 1 (`SPREAD_PER_STEP`). It moves particles and never becomes their velocity: kept as velocity, a fast splash's correction became speed.
 9. Faces to particles (`node.faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density correction step dt · (`advect` − `new`), capped at half a cell so a particle never overshoots the cell it is spreading from; clamped 0.2 cells off the walls.
+
+The step's time rules:
+
+- **Step count.** `STEPS_PER_TICK` = 2, a fixed 1/120 s step. With the walls fixed, one step and two touch the lid about equally (section 6, walls), so the smaller step stays: at one step a 64³ splash crosses 3.9 cells a step, past what the band covers cheaply.
+- **The CFL guard.** `TOP_SPEED` = 20 m/s is the fastest water a step is built for. `travel_cells` is how far that moves in one step, rounded up (3 at 64³, 6 at 128³, two steps). Each RK3 stage moves at most that far; faster water keeps its speed and moves only that far that step. `new` is extended ceil(¾ · travel) + 1 layers (`band_layers`: 4 at 64³, 6 at 128³), because the stages sample up to ¾ of the travel from where the particle started, and a sample reads faces one cell further. With two layers, 128³ spray left the band and slowed in mid-air.
+- **PIC share per second.** `flip` is the FLIP share kept per 1/60 s (0.95, as the engine runs it at one step a frame). A step keeps flip^(60 · dt), so the PIC damping per second does not change with the step count.
 
 ## 2. The equation
 
@@ -31,6 +37,8 @@ On the water cells W of an n_x × n_y × n_z lattice with cell size h:
 
 - L p = f on W, p = 0 on air cells, walls closed (no flux through a box face).
 - (L q)_i = (Σ over in-box neighbours j of (j ∈ W ? q_j : 0) − inside_i · q_i) / h², where inside_i counts i's in-box neighbours.
+
+**Walls.** The box walls sit exactly on the outermost faces. A wall lets water leave and never enter: on a wall face, only the velocity component pointing into the box is kept, and the solve takes that velocity as given (the wall's flux, Neumann). Water pulled off the lid falls away with no suction, and water driven into the floor stops. The same rule writes the wall faces of `old` (in `node.particles_to_faces`, before extension), of the forced field (`node.face_gravity`) and so of `new` and `advect`, which inherit them. The FLIP change on a wall face is then the step's own change. Before this, `old` kept the particles' raw velocity on wall faces while `new` held them at 0, so new − old there was −v. That cancelled the velocity of water leaving the lid on every step, so more steps stuck more.
 
 Air at zero pressure is the first-order free surface. A water body that touches no air (a closed box full of water) makes L singular. It is tolerated, not refused: the density source's right-hand side need not sum to zero there, so no exact solution exists; the conjugate gradient removes the part it can and leaves the rest as residual, and the coarsest level pins one cell of each such body at zero instead of dividing by zero (section 3).
 
@@ -110,17 +118,45 @@ The water race, 300 frames of the Dam Break without its obstacle, measured as th
 
 | Row | GPU FLIP 64³ | FFT 64³ | GPU FLIP 128³ | FFT 128³ | Engine 64³ / 128³ |
 |---|---|---|---|---|---|
-| particles past rest, worst / last 30 frames | 14.7% / 6.3% | 14.7% / 6.7% | 17.1% / 7.5% | 16.2% / 7.4% | 20.6% / 12.6%; 24.0% / 15.0% |
-| particles missing inside, worst / last 30 frames | 9.3% / 5.3% | 10.3% / 5.3% | 10.4% / 6.9% | 12.0% / 6.7% | 22.2% / 21.6%; 22.8% / 22.5% |
-| divergence left, rms median / max worst (/s) | 6.7e-6 / 4.0e-3 | 1.3e-4 / 0.33 | 7.4e-5 / 0.13 | 2.7e-2 / 39 | not measured |
-| meshed volume, max / last | 4.25% / +2.39% | 3.10% / −0.99% | 4.65% / +1.30% | 5.14% / −1.00% | 13.9% / +13.9%; 11.1% / +10.4% |
-| top speed over the run | 12.3 m/s | 11.8 m/s | 19.0 m/s | 14.4 m/s | 12.2; 17.3 m/s |
-| settled speed p99, last 30 frames | 1.33 m/s | 1.36 m/s | 1.51 m/s | 1.51 m/s | 1.75; 1.40 m/s |
-| GPU ms per frame, step / meshed (contended) | 15.0 / 19.7 | — / 37 | 91 / 126 | 158 / 276 | 509; 2978 wall |
+| particles past rest, worst / last 30 frames | 10.4% / 5.8% | 14.7% / 6.7% | 12.1% / 7.2% | 16.2% / 7.4% | 20.6% / 12.6%; 24.0% / 15.0% |
+| particles missing inside, worst / last 30 frames | 13.8% / 6.9% | 10.3% / 5.3% | 14.5% / 7.8% | 12.0% / 6.7% | 22.2% / 21.6%; 22.8% / 22.5% |
+| divergence left, rms median / max worst (/s) | 4.2e-5 / 9.2e-3 | 1.3e-4 / 0.33 | 5.1e-4 / 0.29 | 2.7e-2 / 39 | not measured |
+| meshed volume, max / last (raw mesh at the last frame) | 11.6% / +6.0% (+1.2%) | 3.10% / −0.99% | 7.6% / +3.2% (+2.6%) | 5.14% / −1.00% | 13.9% / +13.9%; 11.1% / +10.4% |
+| top speed over the run | 15.8 m/s | 11.8 m/s | 23.4 m/s | 14.4 m/s | 12.2; 17.3 m/s |
+| settled speed p99, last 30 frames | 1.49 m/s | 1.36 m/s | 1.52 m/s | 1.51 m/s | 1.75; 1.40 m/s |
+| GPU ms per frame, step / meshed | 12.2 / 17.2 | — / 37 | 77 / 330 (contended) | 158 / 276 | 509; 2978 wall |
 
-Read it this way. The water measures (particles past rest and missing) are equal, within a point either way. The projection leaves 19× less divergence at 64³ and 360× less at 128³ (rms median). The FFT solve's leftover divergence sat at the surface and damped the splash, so GPU FLIP throws faster at 128³, nearer the engine's 17.3 m/s. The meshed-volume row is not same-tree: the surface changed after the FFT record (the solid clamp, `a86ae55fd`), and its frame-0 skin moved from 30.2 to 35.3 mm at 64³, so that row is a look item here, not a solver comparison.
+Read it this way. Fewer particles pack past rest than under the FFT solve (10.4% against 14.7% worst at 64³). More go missing inside: 3.5 points worse at the worst frame and 1.6 points worse over the last 30 frames at 64³; at 128³ the gaps are 2.5 and 1.1 points. The density share went from 0.5 to 1 between those records, which trades one for the other. The projection leaves 3× less divergence than the FFT solve at 64³ and 50× less at 128³ (rms median). Now that a wall face carries the leaving water's flux, the solve has more to remove there, and the leftover rose from 1.0e-5 at 64³. GPU FLIP throws faster than the FFT record: the FFT solve's leftover divergence damped the splash, and since the walls change a step keeps the PIC damping per second. The meshed-volume row is not same-tree: the surface changed after the FFT record (the solid clamp, `a86ae55fd`), and its frame-0 skin moved from 30.2 to 35.3 mm at 64³. The skin-corrected figure peaks during the splash at frame 29, before any lid contact. The raw mesh at the last frame is within 1.2% at 64³ and 2.6% at 128³, so the water keeps its volume. The 64³ step-alone ms is a quiet profiled frame (`gpu_flip_frame_by_node_type`); the other ms rows ran with other sessions on the GPU.
 
-The density share is 1 per step (`SPREAD_PER_STEP`). Share 1 once overshot at 128³ (48% of particles past rest at frame 119). The cause was the surface rule, not the share: a part-full surface cell under a stray particle counted as inside and became a sink, and a finer lattice has more of them. With the half-full rule and the half-cell cap on the correction (section 1, steps 8 and 9), share 1 gives 12.3% worst past rest at 128³ (`gpu_flip_refined_density_causes` runs share 1 and 0.5 at 64³ and 128³). The race table above predates that change; its rows are re-measured with the wall fixes.
+The density share is 1 per step (`SPREAD_PER_STEP`). Share 1 once overshot at 128³ (48% of particles past rest at frame 119). The cause was the surface rule, not the share: a part-full surface cell under a stray particle counted as inside and became a sink, and a finer lattice has more of them. With the half-full rule and the half-cell cap on the correction (section 1, steps 8 and 9), share 1 gives 12.1% worst past rest at 128³ (`gpu_flip_refined_density_causes` runs share 1 and 0.5 at 64³ and 128³).
+
+**Walls and steps** (`gpu_flip_wall_feel_64`, the meshed 64³ Dam Break, 300 frames; the engine's column is the parity audit's `/tmp/flip_feel/engine.csv`). Run-up is the highest particle within 25 cm of the far wall. Lid contact counts particle-frames within 10 cm of the lid over frames 50–130.
+
+| Row | Engine | Before the wall fix, 2 steps | 2 steps (shipped) | 1 step |
+|---|---|---|---|---|
+| run-up at frames 59 / 74 / 89 | 2.00 / 3.06 / 3.61 m | 3.02 / 3.99 / 3.99 m | 3.19 / 3.99 / 3.97 m | 2.81 / 3.99 / 3.98 m |
+| lid contact | 5,088 | 41,291 | 12,764 | 12,451 |
+| lid clear | from frame 127 | from frame 153 | empty at frame 104 and every 15th frame to 269; a late throw touches it at 284–290 | from frame 104 |
+| meshed volume, max / last | — | 9.7% / +5.0% | 11.6% / +6.0% | 9.2% / +4.9% |
+| fastest water, cells a step | about 3 | 1.6 | 2.1 | 4.3 |
+
+One step and two now touch the lid about equally, so extra steps no longer make water stick. Two steps stay, because at one step a 64³ splash crosses 4.3 cells and 128³ spray would cross about 12. GPU FLIP's wave still runs up faster and higher than the engine's. That is livelier water, not water held at the lid: the lid is empty by frame 104 in both. Matching the engine's damping is not a goal.
+
+**Pool height: do not tune toward the engine.** The engine's settled pool stands about 16% above the true depth, because its water gains volume: it marks liquid from a particle distance that reaches about 0.37 cells past the particles, and it has no volume control. GPU FLIP settles at the true depth (3.24 against 3.217 by the parity audit's level measure). The engine's meshed volume is +13.9% at 64³ and +10.4% at 128³ in the race table. A GPU FLIP pool lower than the engine's is correct.
+
+### Against the FLIP Fluids engine
+
+Matched on purpose: RK3 advection with 2/9, 3/9, 4/9 weights; particles kept 0.2 cells off solids; free-slip walls; extension by the mean of finished neighbours; the 95% FLIP blend per 1/60 s; one wall constraint written into both the FLIP reference and the current field (the engine's `_constrainVelocityFields` sets both, `fluidsimulation.cpp` 6933–6934).
+
+Different on purpose:
+
+| Stage | Engine | GPU FLIP | Why |
+|---|---|---|---|
+| Wall position | the zero face sits half a cell past the wall | exactly on the wall | the engine's offset lets water creep half a cell into the wall; it feels less sticky only by accident |
+| Wall type | bilateral: holds water on, pulls it back | separating: water leaves freely, never enters | liquid cannot pull on a wall; the separating rule is the physical one |
+| Step | CFL 5 (up to 5 cells a step), 12 extension layers | two 1/120 s steps, a 20 m/s guard, 4 layers at 64³ | big steps are an accuracy shortcut; ours keeps travel to a few cells |
+| Liquid cells | particle distance minus 0.866 cells: dilated | a cell holding a particle | the dilation is what grows the engine's volume |
+| Volume | no correction | the density solve | without it the GPU pool collapses by a third; with it, it holds the true depth |
 
 ## 7. Invariants & enforcement
 
@@ -135,6 +171,8 @@ The density share is 1 per step (`SPREAD_PER_STEP`). Share 1 once overshot at 12
 | I7 | The density correction never becomes velocity | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` |
 | I8 | No atomics in the step or the solve | the liquid conformance row's atomic-free list (`liquid/conformance.rs`); `coarse_inverse_uses_no_atomics` for the hand shader |
 | I10 | The coarsest level is solved exactly and symmetrically | `gpu_flip_coarse_inverse_matches_cpu`: bitwise symmetric, A·M the identity on unpinned water, a deep pool and an all-water box among the cases |
+| I11 | A box wall lets water leave and never enter, by one rule in `old`, the forced field and so `new` and `advect` | `gpu_flip_particles_to_faces_matches_the_tent_sum`, `gpu_flip_face_gravity_adds_gravity_and_holds_the_walls`, `gpu_flip_subtract_pressure_projects_faces_touching_water` (walls held and kept both drawn) |
+| I12 | No RK3 stage moves past the CFL guard, and `new` is extended far enough for it | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` (stages within and past the guard); `gpu_flip_band_follows_the_cfl_guard` |
 | I9 | The domain meets the liquid contract | the liquid conformance suite (`liquid_conformance_covers_every_domain`, `tests/gpu_proofs/liquid_conformance.rs`) |
 
 ## 8. Owed
@@ -151,6 +189,13 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 - **Kill check:** iterations to the empty tank's residual up more than 50% with the box → stop and report the numbers.
 - **Demo:** L2 — the Dam Break as shipped, obstacle included, GPU FLIP beside the engine, 300 frames headless. **Performer gesture:** the wave breaks around the box, then a floating box rides the slosh.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
+
+### Next, after landing: the surface and the transfer
+
+Each is its own step, measured on how a thin sheet breaks into drops against the engine's, at 64³ and 128³.
+
+- **Ghost-fluid free surface.** Air at zero pressure on the cell centre puts the surface half a cell out, and a one-cell sheet feels the wrong push and holds together. The engine's ghost-fluid rows give the surface its subcell place: the diagonal gains the air fraction from a particle distance surface. This is more accurate, not just the engine's way.
+- **A narrower particle-to-face kernel.** The tent reaches the box corners and about 1.15× further along each axis than the engine's Wyvill kernel (radius 0.866 cells). That averages over more particles, smooths sheets into ropes and blurs the velocity differences that tear them. Try the Wyvill kernel or a narrower tent; keep it only if sheet breakup improves.
 
 ### Tracked in beads
 
@@ -174,5 +219,4 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 | Warm start from last step's pressure | a measured iteration saving at the worst frame (it saved none for the FFT solve) |
 | Fewer dispatches per iteration (fused smoother levels, a single-pass dot) | the CG vectors row passes a third of the solve, or Vulkan's dispatch cost |
 | APIC on faces | a visible PIC/FLIP noise complaint |
-| Subcell (ghost-fluid) surface | the look or residual rows lose to the engine at the surface |
 | Wrap-around (torus) axes | the endless-ocean scene is asked for; multigrid wraps with periodic transfers |

@@ -1,7 +1,11 @@
 // node.face_gravity — fusable BUFFER body. One thread per padded cell of the
-// face grid: each face that exists gains gravity × step_dt along its normal,
-// except the box walls (face index 0 or nodes along its axis), whose velocity
-// is 0. Weights pass through; faces past the lattice give zeros.
+// face grid: each face that exists gains gravity × step_dt along its normal.
+// A box wall face (index 0 or nodes along its axis) then keeps only the part
+// leaving the wall, the rule node.particles_to_faces applies: water pulled
+// off the lid leaves it, water pushed into the floor stops. The pressure
+// solve takes a wall face's velocity as given, so a leaving wall face asks
+// no suction of the water. Weights pass through; faces past the lattice
+// give zeros.
 
 fn body(
     idx: u32,
@@ -34,8 +38,13 @@ fn body(
             continue;
         }
         out.face_weight[a] = e_faces.face_weight[a];
-        if p[a] > 0 && p[a] < n[a] {
-            out.face_velocity[a] = e_faces.face_velocity[a] + push[a];
+        let v = e_faces.face_velocity[a] + push[a];
+        if p[a] == 0 {
+            out.face_velocity[a] = max(v, 0.0);
+        } else if p[a] == n[a] {
+            out.face_velocity[a] = min(v, 0.0);
+        } else {
+            out.face_velocity[a] = v;
         }
     }
     return out;

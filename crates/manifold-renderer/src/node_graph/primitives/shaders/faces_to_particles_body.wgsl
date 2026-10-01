@@ -4,7 +4,8 @@
 // component over the faces with weight > 0, renormalised by their weights
 // (0 when none). Its new velocity blends FLIP and PIC:
 // flip · (v + new(q) − old(q)) + (1 − flip) · new(q). It then moves by RK3
-// through `faces` (stages at ½ and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus
+// through `faces` (stages at ½ and ¾ of step_dt, weights 2/9, 3/9, 4/9, each
+// stage at most max_travel cells long), plus
 // the spread step_dt · (advect(q) − faces(q)), at most
 // FACES_TO_PARTICLES_MAX_SPREAD cells long, and is kept
 // FACES_TO_PARTICLES_WALL_MARGIN cells inside each wall. Radius and id are
@@ -16,19 +17,27 @@
 // through buf_faces, buf_old and buf_advect; a grid shorter than the
 // lattice's leaves particles as they were.
 
-// The box walls sit on faces whose velocity is 0, so the grid's velocity
-// into a wall falls linearly to 0 across the last cell, and a particle d
-// cells off a wall moves away at d times the next face's speed. Held 0.001
-// cells off, water that hits the lid needs about 0.4 s at 1 m/s to get one
-// cell clear, so it hangs there; from 0.2 cells it takes about 0.1 s. The
-// FLIP Fluids engine keeps particles the same 0.2 cells off its solids
-// (`_solidBufferWidth`). Mirrored by `faces_to_particles::WALL_MARGIN_CELLS`.
+// A moved particle stays 0.2 cells inside each box wall, as the FLIP Fluids
+// engine keeps its particles off its solids (`_solidBufferWidth`). The wall
+// faces themselves carry only velocity leaving the wall, in `faces` and
+// `old` alike, so a particle on a wall leaves at the water's speed and the
+// FLIP change there is the step's own. Mirrored by
+// `faces_to_particles::WALL_MARGIN_CELLS`.
 const FACES_TO_PARTICLES_WALL_MARGIN: f32 = 0.2;
 
 // `advect` is `faces` plus a density solve's correction. A correction
 // longer than half a cell carries a particle past the cell it was spreading
 // from and crowds the next one. Mirrored by `faces_to_particles::MAX_SPREAD_CELLS`.
 const FACES_TO_PARTICLES_MAX_SPREAD: f32 = 0.5;
+
+// The CFL guard: one RK3 stage moves at most max_travel cells. The faces are
+// extended far enough for that travel, so every stage samples valid faces;
+// water faster than the step was built for keeps its speed and moves only
+// max_travel cells this step. A non-finite v stays non-finite.
+fn faces_to_particles_guard(v: vec3<f32>, per_cell: f32, max_travel: f32) -> vec3<f32> {
+    let cells = length(v) * per_cell;
+    return select(v, v * (max_travel / cells), cells > max_travel);
+}
 
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
 fn faces_to_particles_finite(v: vec3<f32>) -> bool {
@@ -89,6 +98,7 @@ fn body(
     lattice_min_z: f32,
     step_dt: f32,
     flip: f32,
+    max_travel: f32,
 ) -> Element {
     var out = e_particles;
     let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
@@ -102,13 +112,14 @@ fn body(
     let per_cell = step_dt / cell_size;
     let q0 = (e_particles.position_radius.xyz - lo) / cell_size;
     let after = faces_to_particles_sample(q0, n, 0u);
-    let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * after, n, 0u);
-    let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 0u);
+    let k1 = faces_to_particles_guard(after, per_cell, max_travel);
+    let k2 = faces_to_particles_guard(faces_to_particles_sample(q0 + 0.5 * per_cell * k1, n, 0u), per_cell, max_travel);
+    let k3 = faces_to_particles_guard(faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 0u), per_cell, max_travel);
     let spread = per_cell * (faces_to_particles_sample(q0, n, 2u) - after);
     let spread_cells = length(spread);
     let capped = select(spread, spread * (FACES_TO_PARTICLES_MAX_SPREAD / spread_cells), spread_cells > FACES_TO_PARTICLES_MAX_SPREAD);
     let edge = vec3<f32>(FACES_TO_PARTICLES_WALL_MARGIN);
-    let reached = q0 + per_cell * (2.0 * after + 3.0 * k2 + 4.0 * k3) / 9.0 + capped;
+    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + capped;
     let q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), faces_to_particles_finite(reached));
     let before = faces_to_particles_sample(q0, n, 1u);
     let velocity = flip * (e_particles.velocity + after - before) + (1.0 - flip) * after;

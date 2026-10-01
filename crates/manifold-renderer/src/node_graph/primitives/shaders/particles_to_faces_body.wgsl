@@ -5,7 +5,10 @@
 // Π max(0, 1 − |q − face|) of every live particle (radius > 0) in the
 // 3 × 3 × 3 cells around p, q its position in cells, and the weighted
 // velocity component along the face's normal; the velocity is their ratio,
-// 0 where no particle reaches. Faces past the lattice give zeros. `sorted`
+// 0 where no particle reaches. A box wall face (index 0 or nodes along its
+// axis) keeps only the part of that velocity leaving the wall and is always
+// valid (weight 1), so node.extend_faces never writes it: the separating
+// wall the whole step uses. Faces past the lattice give zeros. `sorted`
 // (FluidParticle → Element) and `cell_ranges` (CellRange → Element2) are
 // gathered; a lattice larger than `cell_ranges` gives zeros and a range past
 // `sorted` is cut short. Output FaceSample (Element3).
@@ -76,8 +79,21 @@ fn body(
             }
         }
     }
-    let velocity = select(vec3<f32>(0.0), momentum / max(weight, vec3<f32>(1e-30)), weight > vec3<f32>(0.0));
+    var velocity = select(vec3<f32>(0.0), momentum / max(weight, vec3<f32>(1e-30)), weight > vec3<f32>(0.0));
+    for (var a = 0; a < 3; a = a + 1) {
+        if exists[a] && (p[a] == 0 || p[a] == n[a]) {
+            velocity[a] = particles_to_faces_wall(velocity[a], p[a] == 0);
+            weight[a] = 1.0;
+        }
+    }
     out.face_velocity = vec4<f32>(velocity, 0.0);
     out.face_weight = vec4<f32>(weight, 0.0);
     return out;
+}
+
+// A box wall lets water leave and never enter: of the velocity on a wall
+// face it keeps only the part pointing into the box (up from the floor face,
+// index 0; down from the lid face, index nodes).
+fn particles_to_faces_wall(v: f32, low: bool) -> f32 {
+    return select(min(v, 0.0), max(v, 0.0), low);
 }

@@ -2,7 +2,8 @@
 //! RK3 move (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): PIC/FLIP
 //! blended velocity from the projected field, an RK3 move through it plus
 //! the density solve's correction (`advect` − `faces`) capped at
-//! `MAX_SPREAD_CELLS`, then kept `WALL_MARGIN_CELLS` inside the box. A
+//! `MAX_SPREAD_CELLS`, each RK3 stage at most `max_travel` cells (the CFL
+//! guard), then kept `WALL_MARGIN_CELLS` inside the box. A
 //! per-element gather on the codegen path.
 
 use std::borrow::Cow;
@@ -19,11 +20,9 @@ use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// How far inside each wall a moved particle is kept, in cells. The wall
-/// faces carry 0 velocity, so a particle d cells off a wall leaves it at d
-/// times the next face's speed: held on the wall, water that hits the lid
-/// hangs there. The FLIP Fluids engine keeps particles the same 0.2 cells off
-/// its solids. The kernel's `FACES_TO_PARTICLES_WALL_MARGIN` is this value;
+/// How far inside each wall a moved particle is kept, in cells: the FLIP
+/// Fluids engine keeps particles the same 0.2 cells off its solids. The
+/// kernel's `FACES_TO_PARTICLES_WALL_MARGIN` is this value;
 /// the CPU reference in `gpu_flip_step_tests` reads it here, so the value proof
 /// fails if the two drift.
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -35,6 +34,12 @@ pub(crate) const WALL_MARGIN_CELLS: f64 = 0.2;
 /// CPU reference the same way as [`WALL_MARGIN_CELLS`].
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) const MAX_SPREAD_CELLS: f64 = 0.5;
+
+/// The default CFL guard: the farthest one RK3 stage moves a particle, in
+/// cells. A graph sets it from the speed its step is built for and extends
+/// `faces` far enough to cover it (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1
+/// (the step)).
+const DEFAULT_MAX_TRAVEL: f32 = 3.0;
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
@@ -49,15 +54,15 @@ struct AdvectUniforms {
     lattice_min_z: f32,
     step_dt: f32,
     flip: f32,
+    max_travel: f32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
     name: FacesToParticles,
     type_id: "node.faces_to_particles",
-    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `faces` for step_dt, plus step_dt · (advect(x) − faces(x)) capped at half a cell, and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
+    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `faces` for step_dt, each stage at most max_travel cells long (the velocity is not capped), plus step_dt · (advect(x) − faces(x)) capped at half a cell, and is kept 0.2 cells inside each wall of the lattice box. Radius and id are kept; unused slots pass through.",
     inputs: {
         particles: Array(FluidParticle) required,
         faces: Array(FaceSample) required,
@@ -67,6 +72,7 @@ crate::primitive! {
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         flip: ScalarF32 optional,
+        max_travel: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -81,9 +87,10 @@ crate::primitive! {
         float_param!("lattice_min_z", "Lattice Min Z", -2.0, -1.0e4, 1.0e4),
         float_param!("step_dt", "Step (s)", DEFAULT_STEP_DT, 1.0e-5, 0.1),
         float_param!("flip", "FLIP Blend", 0.95, 0.0, 1.0),
+        float_param!("max_travel", "Max Travel (cells)", DEFAULT_MAX_TRAVEL, 0.25, 64.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The last atom of a GPU FLIP water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is `faces` itself, or `faces` with the density solve's correction subtracted and extended; the difference moves particles, at most half a cell a step, and never becomes their speed. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
+    composition_notes: "The last atom of a GPU FLIP water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is `faces` itself, or `faces` with the density solve's correction subtracted and extended; the difference moves particles, at most half a cell a step, and never becomes their speed. Extend `faces` at least ceil(¾ · max_travel) + 1 layers so every RK3 stage samples valid faces. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
     examples: [],
     picker: { label: "Faces To Particles", category: Atom },
     summary: "Hands the grid's corrected motion back to the liquid particles and moves them one step.",
@@ -112,10 +119,15 @@ impl Primitive for FacesToParticles {
         let (min, cell_size) = lattice_box(ctx);
         let step_dt = ctx.scalar_or_param("step_dt", DEFAULT_STEP_DT);
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
+        let max_travel = ctx.scalar_or_param("max_travel", DEFAULT_MAX_TRAVEL);
         if !(cell_size.is_finite() && cell_size > 0.0 && step_dt.is_finite() && step_dt >= 0.0)
             || min.iter().any(|v| !v.is_finite())
         {
             ctx.error("Faces To Particles: the lattice box and step must be finite, the cell positive".to_string());
+            return;
+        }
+        if !(max_travel.is_finite() && max_travel > 0.0) {
+            ctx.error(format!("Faces To Particles: Max Travel must be a positive number of cells, got {max_travel}"));
             return;
         }
         let gpu = ctx.gpu_encoder();
@@ -148,9 +160,9 @@ impl Primitive for FacesToParticles {
             lattice_min_z: min[2],
             step_dt,
             flip,
+            max_travel,
             dispatch_count: count,
             _pad0: 0,
-            _pad1: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(

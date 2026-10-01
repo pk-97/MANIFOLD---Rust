@@ -237,6 +237,8 @@ fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
     ];
     let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
     let mut checked = 0;
+    // Wall faces held (water moving into the wall) and kept (leaving it).
+    let mut walls = [0usize; 2];
     for (i, face) in got.iter().enumerate() {
         let p = pad_coords(i);
         for a in 0..3 {
@@ -256,8 +258,18 @@ fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
                 weight += w;
                 momentum += w * f64::from(particle.velocity[a]);
             }
-            close(face.weight[a], weight, weight, &format!("weight {p:?}/{a}"));
             let velocity = if weight > 0.0 { momentum / weight } else { 0.0 };
+            if p[a] == 0 || p[a] == N[a] {
+                // A wall keeps only what leaves it, and is always valid.
+                close(face.weight[a], 1.0, 1.0, &format!("wall weight {p:?}/{a}"));
+                let leaving = if p[a] == 0 { velocity.max(0.0) } else { velocity.min(0.0) };
+                walls[usize::from(leaving != 0.0)] += 1;
+                if weight > 1e-3 || leaving == 0.0 {
+                    close(face.velocity[a], leaving, 1.0, &format!("wall velocity {p:?}/{a}"));
+                }
+                continue;
+            }
+            close(face.weight[a], weight, weight, &format!("weight {p:?}/{a}"));
             // A face at the edge of a particle's reach has a tiny weight; its
             // ratio carries the f32 rounding of that weight.
             if weight > 1e-3 {
@@ -267,6 +279,7 @@ fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
         }
     }
     assert!(checked > 200, "the fixture reaches most faces, got {checked}");
+    assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
 }
 
 #[test]
@@ -280,12 +293,15 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
     for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
         let p = pad_coords(i);
         for a in 0..3 {
+            let pushed = f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt);
             let (velocity, weight) = if !face_exists(p, a) {
                 (0.0, 0.0)
-            } else if p[a] == 0 || p[a] == N[a] {
-                (0.0, f64::from(before.weight[a]))
+            } else if p[a] == 0 {
+                (pushed.max(0.0), f64::from(before.weight[a]))
+            } else if p[a] == N[a] {
+                (pushed.min(0.0), f64::from(before.weight[a]))
             } else {
-                (f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt), f64::from(before.weight[a]))
+                (pushed, f64::from(before.weight[a]))
             };
             close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
             close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
@@ -337,7 +353,7 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
             let (velocity, weight) = if !face_exists(p, a) {
                 (0.0, 0.0)
             } else if p[a] == 0 || p[a] == N[a] {
-                (0.0, 1.0)
+                (f64::from(faces[i].velocity[a]), 1.0)
             } else {
                 let mut below = p;
                 below[a] -= 1;
@@ -452,7 +468,8 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // or zero them, so the tick's stats see them.
     particles[2].position_radius[0] = f32::NAN;
     particles[3].velocity[1] = f32::INFINITY;
-    let (dt, flip) = (0.07f32, 0.9f32);
+    // A guard short enough that some RK3 stages hit it and some don't.
+    let (dt, flip, max_travel) = (0.07f32, 0.9f32, 0.45f32);
     let inputs = [
         ("particles", harness.array(&particles, particles.len()).0),
         ("faces", harness.array(&faces, face_len()).0),
@@ -460,10 +477,18 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         ("advect", harness.array(&advect, face_len()).0),
     ];
     let got: Vec<FluidParticle> =
-        run_into(&mut harness, &mut FacesToParticles::new(), &inputs, particles.len(), &lattice(&[("step_dt", dt), ("flip", flip)]));
+        run_into(&mut harness, &mut FacesToParticles::new(), &inputs, particles.len(), &lattice(&[("step_dt", dt), ("flip", flip), ("max_travel", max_travel)]));
     let per_cell = f64::from(dt) / f64::from(H);
     // Particles whose spread is within the cap, and past it.
     let mut spreads = [0usize; 2];
+    // RK3 stages within the CFL guard, and shortened by it.
+    let mut stages = [0usize; 2];
+    let mut guard = |v: [f64; 3]| {
+        let cells = v.iter().map(|c| c * c).sum::<f64>().sqrt() * per_cell;
+        let past = cells > f64::from(max_travel);
+        stages[usize::from(past)] += 1;
+        if past { v.map(|c| c * f64::from(max_travel) / cells) } else { v }
+    };
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
         if p.position_radius[3] <= 0.0 {
             assert_eq!(g, p, "unused slot {i} passes through");
@@ -479,8 +504,9 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
         let after = cpu_sample(q0, &faces);
-        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * after[a]), &faces);
-        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces);
+        let k1 = guard(after);
+        let k2 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces));
+        let k3 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces));
         let pushed = cpu_sample(q0, &advect);
         let spread: [f64; 3] = std::array::from_fn(|a| per_cell * (pushed[a] - after[a]));
         let length = spread.iter().map(|s| s * s).sum::<f64>().sqrt();
@@ -488,7 +514,7 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         spreads[usize::from(scale < 1.0)] += 1;
         let before = cpu_sample(q0, &old);
         for a in 0..3 {
-            let q1 = (q0[a] + per_cell * (2.0 * after[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0 + scale * spread[a])
+            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0 + scale * spread[a])
                 .clamp(WALL_MARGIN_CELLS, N[a] as f64 - WALL_MARGIN_CELLS);
             let position = f64::from(MIN[a]) + q1 * f64::from(H);
             let velocity =
@@ -499,6 +525,7 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         assert_eq!((g.position_radius[3], g.id), (p.position_radius[3], p.id), "particle {i} keeps radius and id");
     }
     assert!(spreads.iter().all(|&k| k > 10), "the draw covers spreads within and past the cap: {spreads:?}");
+    assert!(stages.iter().all(|&k| k > 30), "the draw covers stages within and past the CFL guard: {stages:?}");
 }
 
 fn cpu_fill_hash(x: u32) -> u32 {

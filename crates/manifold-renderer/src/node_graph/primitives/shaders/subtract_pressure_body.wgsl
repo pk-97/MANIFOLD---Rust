@@ -1,6 +1,8 @@
 // node.subtract_pressure — fusable BUFFER body, GATHER. One thread per padded
 // cell of the face grid. A box wall face (index 0 or nodes along its axis)
-// is 0 and valid. An inner face with water on either side loses the pressure
+// keeps its velocity and is valid: the solve took it as given, and
+// node.face_gravity left only the part leaving the wall. An inner face with
+// water on either side loses the pressure
 // step (p_upper − p_lower) / h and is valid (weight 1); between two air
 // cells it keeps its velocity and is invalid (weight 0), for
 // node.extend_faces to fill. Faces past the lattice give zeros. `pressure`
@@ -27,6 +29,7 @@ fn body(idx: u32, count: u32, e_faces: Element, nodes_x: f32, nodes_y: f32, node
             continue;
         }
         if p[a] == 0 || p[a] == n[a] {
+            out.face_velocity[a] = e_faces.face_velocity[a];
             out.face_weight[a] = 1.0;
             continue;
         }

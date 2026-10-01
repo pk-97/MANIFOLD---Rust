@@ -16,7 +16,7 @@ use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, ST
 use crate::node_graph::primitives::face_grid_scenes::matter_dam_break_faces;
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
-use crate::node_graph::primitives::gpu_flip_preset::{EXTENDED_LAYERS, SHIPPED_PRESET, WaterScene, render_def};
+use crate::node_graph::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,6 +40,11 @@ pub enum Fixture {
 /// The face grid scene's resolution: the publish path is the same at any
 /// size, and 32 keeps the check cheap.
 pub const FACE_GRID_RESOLUTION: u32 = 32;
+
+/// GPU FLIP's `face_valid_layers` in the face grid scene: its
+/// `WaterScene::band_layers` at [`FACE_GRID_RESOLUTION`], held to the
+/// builder by `gpu_flip_band_follows_the_cfl_guard`.
+pub const FACE_GRID_GPU_FLIP_LAYERS: u32 = 3;
 
 /// One conformance check (section 4 (Invariants & enforcement)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -448,7 +453,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             type_id: "node.liquid_state",
             port: "faces",
             resample: gpu_flip_faces,
-            valid_layers: EXTENDED_LAYERS as u32,
+            valid_layers: FACE_GRID_GPU_FLIP_LAYERS,
             // A gather: the published faces are the solver's projected faces.
             ulps: (0, ""),
         }),

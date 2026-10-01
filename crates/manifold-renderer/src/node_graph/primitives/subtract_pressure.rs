@@ -33,7 +33,7 @@ struct SubtractUniforms {
 crate::primitive! {
     name: SubtractPressure,
     type_id: "node.subtract_pressure",
-    purpose: "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces become 0 and valid; an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
+    purpose: "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces keep u and are valid (the solve took them as given); an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
     inputs: {
         faces: Array(FaceSample) required,
         pressure: Array(f32) required,

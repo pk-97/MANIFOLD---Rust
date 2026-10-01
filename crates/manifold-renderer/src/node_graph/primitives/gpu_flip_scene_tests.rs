@@ -7,7 +7,7 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::gpu_flip_preset::{EXTENDED_LAYERS, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
+use super::gpu_flip_preset::{FACE_NODES, REST_PER_CELL, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
 use super::gpu_flip_solve_tests::{node_named, output_of};
@@ -311,7 +311,7 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
         }
         let records = (n + 1).pow(3);
         let state: Vec<FaceSample> = run.read("state", "faces", records);
-        let last: Vec<FaceSample> = run.read(&format!("s{}.new_extend_{EXTENDED_LAYERS}", scene.steps - 1), "out", records);
+        let last: Vec<FaceSample> = run.read(&format!("s{}.new_extend_{}", scene.steps - 1, scene.band_layers()), "out", records);
         let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
         let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
         let grid = run.face_grid();

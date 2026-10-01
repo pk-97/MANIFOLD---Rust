@@ -50,7 +50,7 @@ struct FacesUniforms {
 crate::primitive! {
     name: ParticlesToFaces,
     type_id: "node.particles_to_faces",
-    purpose: "Transfer liquid particles to a face grid (velocity on cell faces). The lattice has nodes_x/y/z cells of cell_size from lattice_min; out has (nodes + 1)³ padded cells, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k) owning the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h and the z face at (i + ½, j + ½, k)·h. Each face's weight is the sum over live particles (radius > 0) of Π max(0, 1 − |Δ|/h), and its velocity the weighted mean of the particles' velocity along the face normal (0 with no weight). Faces past the lattice are zero.",
+    purpose: "Transfer liquid particles to a face grid (velocity on cell faces). The lattice has nodes_x/y/z cells of cell_size from lattice_min; out has (nodes + 1)³ padded cells, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k) owning the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h and the z face at (i + ½, j + ½, k)·h. Each face's weight is the sum over live particles (radius > 0) of Π max(0, 1 − |Δ|/h), and its velocity the weighted mean of the particles' velocity along the face normal (0 with no weight). A box wall face (the first and last along its axis) keeps only the part of that velocity leaving the wall and has weight 1: the box walls let water leave and never enter. Faces past the lattice are zero.",
     inputs: {
         sorted: Array(FluidParticle) required,
         cell_ranges: Array(CellRange) required,
