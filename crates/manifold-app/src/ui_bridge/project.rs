@@ -12,6 +12,11 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
+/// The one liquid Add Fluid authors. Today's FLIP scene fluid; switching
+/// solvers is this line (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 8).
+const DEFAULT_LIQUID_TEMPLATE: fn() -> manifold_editing::commands::graph::LiquidTemplate =
+    manifold_editing::commands::graph::flip_scene_fluid_template;
+
 fn scene_object_source_identity(
     project: &Project, target: &manifold_core::GraphTarget,
     default: &manifold_core::effect_graph_def::EffectGraphDef, render: u32, index: u32,
@@ -610,14 +615,21 @@ pub(super) fn dispatch_project(
         }
         ProjectAction::SceneSetupAddFluid(layer_id, render_scene_node_id) => {
             if let Some(default) = generator_catalog_default(project, layer_id) {
+                use manifold_editing::commands::graph::ExposureSet;
                 use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+                let template = DEFAULT_LIQUID_TEMPLATE();
+                let simulation = template
+                    .exposed_type_id(ExposureSet::Fluid)
+                    .map(metadata_for_node_type)
+                    .unwrap_or_default();
                 let command = manifold_editing::commands::graph::AddSceneFluidCommand::new(
                     manifold_core::GraphTarget::Generator(layer_id.clone()),
                     *render_scene_node_id,
-                    metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
+                    simulation,
                     metadata_for_node_type("node.transform_3d"),
                     metadata_for_node_type("node.pbr_material"),
                     metadata_for_node_type("node.scene_object"),
+                    template,
                     default,
                 )
                 .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))

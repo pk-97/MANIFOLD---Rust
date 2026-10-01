@@ -39,6 +39,7 @@
       "scene-fluid-object-lifecycle",
       "scene-forces-controls"
     ],
+    "crates/manifold-editing/src/commands/graph/scene/fluid": ["scene-fluid-authoring", "scene-fluid-template"],
     "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls"],
     "crates/manifold-renderer/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls"],
     "crates/manifold-renderer/src/node_graph/scene_vm.rs": [
@@ -150,6 +151,7 @@
   },
   "flows": {
     "scene-fluid-authoring": "fluidauthoring",
+    "scene-fluid-template": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",
     "scene-liquid-recognition": "waterdambreakmatter",
     "scene-item-ownership": "gltfscene",
