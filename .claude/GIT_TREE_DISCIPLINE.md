@@ -120,7 +120,9 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   merge into main whose branch touches flow-mapped paths without a green
   marker at that exact tip), `cargo deny check bans`, touched-crate clippy
   `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
-  the diff touches GPU paths. (Bug status lives in beads since
+  the diff touches GPU paths (scoped: mapped tests + smoke set from
+  `scripts/gpu_scope.py`, 300s test-time budget, unmapped GPU path fails,
+  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly). (Bug status lives in beads since
   BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and its landing-time
   reflow are retired.) The post-merge housekeeper on main is a backstop, not
   the workflow — its remedies are worktree-shaped, never in-place edits to
