@@ -5,35 +5,38 @@
 //! Collider roles as body rows, shapes and a distance atlas, and the padded
 //! lattice the solid distance and the particle frame read. Scene
 //! forces and impulses reach the water through the shared field lattices of
-//! `liquid::fields` (seam P8), sampled over the face grid's box. Every
-//! lattice atom reads the lattice from its wires, so Resolution applies on
-//! change. Exempt from the codegen mandate as a CPU bridge
-//! (ADDING_PRIMITIVES.md exclusion 3).
+//! `liquid::fields` (seam P8), sampled over the face grid's box. Paired with
+//! a physics world, the scene's Box3D bodies join the water two ways
+//! (LIQUID_SOLVER_SEAM_DESIGN.md section 3.3 (Two-way Box3D coupling)): the
+//! domain owns the rigid world in-thread and steps it one settled tick at a
+//! time with the steps' reaction. Every lattice atom reads the lattice from
+//! its wires, so Resolution applies on change. Exempt from the codegen
+//! mandate as a CPU bridge (ADDING_PRIMITIVES.md exclusion 3).
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use super::gpu_flip_pressure::lattice_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid::{FluidDomainLayout, TICK, domain_layout};
+use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::body_buffers::LiquidBodyBuffers;
 use crate::node_graph::liquid::clock::LiquidClock;
+use crate::node_graph::liquid::coupling::{
+    LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction,
+};
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
-use crate::node_graph::liquid::{EXACT_F32_COUNT, ROLE_PORTS};
+use crate::node_graph::liquid::{EXACT_F32_COUNT, ROLE_PORTS, WATER_DENSITY};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics::offline_simulation;
+use crate::node_graph::physics::{RigidImpulseTargets, RigidSceneObservation, offline_simulation};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
-
-/// Water, kg/m³: each fill particle weighs an eighth of a cell of it.
-const REST_DENSITY: f64 = 1000.0;
 
 /// Every wall of the tank is closed.
 const CLOSED_FACES: u32 = 63;
@@ -76,7 +79,7 @@ impl GpuFlipGeometry {
             ("box_y1", box_sites[1][1] as f32),
             ("box_z0", box_sites[2][0] as f32),
             ("box_z1", box_sites[2][1] as f32),
-            ("particle_mass", (REST_DENSITY * h * h * h / f64::from(SITES_PER_CELL)) as f32),
+            ("particle_mass", (f64::from(WATER_DENSITY) * h * h * h / f64::from(SITES_PER_CELL)) as f32),
         ]
     }
 }
@@ -152,22 +155,74 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 33] = [
+const OUTPUTS: [&str; 34] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
     "display_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
-    "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
+    "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
 ];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 32;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
+/// The coupled half of the domain: the paired physics world's latest
+/// observation, and the rigid owner built from it.
+#[derive(Default)]
+pub struct Coupling {
+    mode: bool,
+    observation: Option<RigidSceneObservation>,
+    colliders: RigidImpulseTargets,
+    error: Option<String>,
+    previous_reset: Option<f32>,
+    owner: Option<LiquidRigidOwner>,
+    /// Rows before the pending tick's first coupled body's (its Collider
+    /// roles'), so its reaction decodes against the bodies it ran with.
+    offset: Option<usize>,
+    /// The owner was built since the clock last restarted: the next frame
+    /// restarts the liquid with it.
+    owner_fresh: bool,
+    epochs: u64,
+    /// This frame's compute failed; nothing is published to the pair.
+    failed: bool,
+    /// This offline frame runs several coupled ticks, exchanging with Box3D
+    /// between them.
+    exchange: Option<Exchange>,
+    /// A host step failed; the next frame reports it and restarts the pair.
+    host_error: Option<String>,
+}
+
+impl Coupling {
+    fn reset(&mut self) {
+        let (mode, epochs) = (self.mode, self.epochs);
+        *self = Self { mode, epochs, ..Self::default() };
+    }
+}
+
+/// An offline frame of several coupled ticks: the region syncs before each
+/// later tick, and the domain settles the tick before it there.
+#[derive(Clone, Copy)]
+struct Exchange {
+    ticks: u32,
+    /// The frame's first tick; later ticks differ only in `tick`.
+    pending: PendingTick,
+    offset: usize,
+}
+
+/// The reaction's floats, once their last GPU writer has retired.
+fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
+    let buffer = buffer?;
+    let floats = buffer.mapped_ptr()?.cast::<f32>().cast_const();
+    // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
+    // retired (the caller checked the frame clock or waited on the GPU).
+    Some(unsafe { std::slice::from_raw_parts(floats, (buffer.size / 4) as usize) })
+}
+
 crate::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Fill, Inflow and Outflow roles and pairing with a physics world are refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
@@ -259,13 +314,14 @@ crate::primitive! {
         simulation_time: ScalarF32,
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
-        body_count: ScalarF32, body_rows: ScalarF32,
+        body_count: ScalarF32, body_rows: ScalarF32, dynamic_bodies: ScalarF32,
         first_tick: ScalarF32,
         field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
         field_spacing: ScalarF32,
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
         bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
+        reaction: Array(f32),
         forces: Array(f32), impulses: Array(f32),
     },
     params: [
@@ -279,7 +335,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, shapes, atlas and the padded lattice into every node.gpu_flip_step, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
     summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -296,7 +352,8 @@ crate::primitive! {
         role_pending: bool = false,
         body_rows: f32 = 0.0,
         rows_fresh: bool = false,
-        coupled: bool = false,
+        coupled: Coupling = Coupling::default(),
+        reaction: Option<GpuBuffer> = None,
         impulses: LiquidImpulses = LiquidImpulses::default(),
         fields: LiquidFields = LiquidFields::default(),
         acceleration: Option<FieldValue> = None,
@@ -306,11 +363,12 @@ crate::primitive! {
 
 impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "shapes" | "atlas" | "forces" | "impulses")
+        matches!(port, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
+            "reaction" => return self.reaction.as_ref(),
             "forces" => return self.fields.forces_buffer(),
             "impulses" => return self.fields.impulses_buffer(),
             _ => {}
@@ -324,19 +382,69 @@ impl Primitive for GpuFlipDomain {
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        matches!(port_name, "bodies" | "shapes" | "atlas" | "forces" | "impulses").then_some(1)
+        matches!(port_name, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses").then_some(1)
     }
 
     fn warmup_pending(&self) -> bool {
         self.role_pending
     }
 
-    fn set_coupled_physics(&mut self, enabled: bool) {
-        self.coupled = enabled;
+    /// Offline coupled frames sync before each later tick of the frame.
+    fn substep_host_sync(&self, iteration: u32) -> bool {
+        self.coupled.exchange.is_some_and(|x| iteration < x.ticks)
     }
 
+    /// Between two ticks of one offline frame: settle the tick the GPU just
+    /// finished, step Box3D over it, and hand the next tick the bodies' new
+    /// state and a cleared reaction.
+    fn substep_host_step(
+        &mut self,
+        iteration: u32,
+        _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
+    ) -> Result<(), String> {
+        let Some(exchange) = self.coupled.exchange else { return Ok(()) };
+        let result = self.exchange_tick(iteration, exchange);
+        if let Err(error) = &result {
+            // The pair restarts next frame with a fresh rigid owner.
+            self.coupled.exchange = None;
+            self.coupled.owner = None;
+            self.coupled.host_error = Some(error.clone());
+        }
+        result
+    }
+
+    /// The liquid restarts in a new epoch, and a coupled pair together with
+    /// a fresh rigid owner.
     fn clear_state(&mut self) {
+        self.coupled.reset();
         self.clock.restart();
+    }
+
+    fn set_coupled_physics(&mut self, enabled: bool) {
+        if self.coupled.mode != enabled {
+            self.coupled.mode = enabled;
+            self.clear_state();
+        }
+    }
+
+    fn set_coupled_rigid_inputs(
+        &mut self,
+        observation: Option<&RigidSceneObservation>,
+        colliders: RigidImpulseTargets,
+        error: Option<&str>,
+    ) {
+        self.set_coupled_physics(true);
+        self.coupled.observation = observation.cloned();
+        self.coupled.colliders = colliders;
+        self.coupled.error = error.map(str::to_owned);
+    }
+
+    fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
+        let coupled = &self.coupled;
+        if !coupled.mode || self.role_pending || coupled.failed || coupled.observation.is_none() || coupled.error.is_some() {
+            return None;
+        }
+        coupled.owner.as_ref().map(LiquidRigidOwner::frame)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -360,6 +468,7 @@ impl Primitive for GpuFlipDomain {
         // this node left unwritten. While a role or the field is still being
         // prepared, or on an error, the liquid holds: the last good outputs
         // repeat with zero ticks and no impulse.
+        self.coupled.exchange = None;
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -367,6 +476,7 @@ impl Primitive for GpuFlipDomain {
             held[IMPULSE_TICK] = -1.0;
             held
         };
+        self.coupled.failed = false;
         let (values, fresh) = match computed {
             Ok(Some(values)) => (values, true),
             Ok(None) => {
@@ -374,6 +484,7 @@ impl Primitive for GpuFlipDomain {
                 (held(), false)
             }
             Err(error) => {
+                self.coupled.failed = true;
                 ctx.error(error);
                 (held(), false)
             }
@@ -386,6 +497,21 @@ impl Primitive for GpuFlipDomain {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         if let Some(gpu) = ctx.gpu.as_deref_mut() {
+            // Sized for every body a liquid holds, so a pending reaction never
+            // moves when roles come and go.
+            let reaction = self.reaction.get_or_insert_with(|| {
+                let bytes = MAX_FLUID_ROLES * REACTION_FLOATS * 4;
+                let buffer = gpu.device.create_buffer_shared(bytes as u64);
+                // SAFETY: new shared buffer, not yet visible to the GPU.
+                unsafe { buffer.write(0, &vec![0u8; bytes]) };
+                buffer
+            });
+            // A coupled tick sums its reaction from zero; the floats stay put
+            // until the next tick so the owner reads them once the frame
+            // retires.
+            if values[TICKS] > 0.0 && self.coupled.owner.is_some() {
+                gpu.native_enc.clear_buffer(reaction);
+            }
             self.body_buffers.upload(gpu, &self.bodies, fresh && self.rows_fresh, "node.gpu_flip_domain.bodies");
         }
         let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, offline_simulation())) {
@@ -422,21 +548,19 @@ impl Primitive for GpuFlipDomain {
         self.impulses.stamp(transport.0, sequence)
     }
 
-    /// GPU FLIP carries no bodies yet, so a hit aimed at a rigid body is
-    /// refused; the solids work plugs its rigid owner in here.
     fn enqueue_physics_impulse(
         &mut self,
         stamp: manifold_physics::input::EventStamp,
         impulse: ResolvedNodeImpulse,
     ) -> Result<manifold_physics::TickStamp, String> {
-        self.impulses.enqueue(stamp, impulse, None)
+        self.impulses.enqueue(stamp, impulse, self.coupled.owner.as_mut())
     }
 
     fn drain_physics_impulses(
         &mut self,
         consume: &mut dyn FnMut(manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>),
     ) {
-        self.impulses.drain_applied(consume, None);
+        self.impulses.drain_applied(consume, self.coupled.owner.as_mut());
     }
 
     fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
@@ -452,9 +576,6 @@ impl GpuFlipDomain {
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        if self.coupled {
-            return Err("GPU FLIP: the water does not couple with a physics world yet; take the physics world out of this scene".into());
-        }
         let geometry = gpu_flip_geometry(
             |name, default| ctx.scalar_or_param(name, default),
             ctx.inputs.transform("domain"),
@@ -470,10 +591,43 @@ impl GpuFlipDomain {
             return Err("GPU FLIP: Simulation Speed must be between 0 and 4, and gravity must be finite".into());
         }
         let offline = offline_simulation();
-        if self.bodies.prepare(roles, &[], geometry.setup.lattice.cell_size(), offline)? == BodiesStatus::Pending {
+        if let Some(error) = self.coupled.host_error.take() {
+            return Err(error);
+        }
+        let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
+        if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
             return Ok(None);
         }
-        let restart = self.setup != Some(geometry.setup);
+        let coupled_geometries = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::geometries);
+        if self.bodies.prepare(roles, coupled_geometries, geometry.setup.lattice.cell_size(), offline)?
+            == BodiesStatus::Pending
+        {
+            return Ok(None);
+        }
+        let restart = self.setup != Some(geometry.setup) || self.coupled.owner_fresh;
+        // Live, the water runs at most the one tick whose bodies Box3D has
+        // settled, and none while the last tick's reaction is in flight.
+        // Offline waits for it, then runs every due tick, exchanging with
+        // Box3D between them through the region's host syncs.
+        let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
+            (Some(owner), Some(observation)) if !restart => {
+                let reaction = self.reaction.as_ref();
+                let offset = self.coupled.offset;
+                // This frame's clear is encoded after this read.
+                let ticks = owner.settle(
+                    &observation.inputs,
+                    |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
+                    |_, rows, impulses| {
+                        let offset = offset.ok_or("GPU FLIP coupling: the pending tick has no body offset")?;
+                        decode_reaction(offset, rows, reaction_floats(reaction), impulses)
+                    },
+                )?;
+                if offline && ticks > 0 { None } else { Some(ticks) }
+            }
+            (Some(_), _) => Some(1),
+            (None, _) => None,
+        };
+        self.clock.set_tick_cap(cap);
         self.setup = Some(geometry.setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
@@ -483,16 +637,46 @@ impl GpuFlipDomain {
             restart,
             offline,
         );
+        if frame.restarted && self.coupled.owner.is_some() && !self.coupled.owner_fresh {
+            self.rebuild_owner()?;
+        }
+        self.coupled.owner_fresh = false;
         self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
         let consumed = frame.simulation_time - f64::from(frame.ticks) * TICK;
         self.bodies.observe(roles, frame.epoch, frame.target_time, consumed)?;
+        let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
-        // fill seeds around the colliders' starting poses. Otherwise a frame
+        // fill seeds around the bodies' starting poses. Otherwise a frame
         // without ticks keeps the last rows as the bodies' poses.
         let row_ticks = if frame.restarted { frame.ticks.max(1) } else { frame.ticks };
         self.rows_fresh = row_ticks > 0;
+        let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
         if row_ticks > 0 {
-            self.body_rows = self.bodies.rows(fields::first_tick(&frame), row_ticks, &[]).len() as f32;
+            self.body_rows = self.bodies.rows(first_tick, row_ticks, coupled_rows).len() as f32;
+        }
+        let dynamic_bodies = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
+        let mut display_time = frame.display_time;
+        if let Some(owner) = &mut self.coupled.owner {
+            if frame.ticks > 0 {
+                if (frame.ticks != 1 && !offline) || first_tick != owner.completed() {
+                    return Err(format!(
+                        "GPU FLIP coupling: water ticks {first_tick}+{} do not follow rigid tick {}",
+                        frame.ticks,
+                        owner.completed()
+                    ));
+                }
+                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
+                let offset = self.bodies.count() - owner.rows().len();
+                owner.set_pending(pending);
+                self.coupled.offset = Some(offset);
+                if frame.ticks > 1 {
+                    self.coupled.exchange = Some(Exchange { ticks: frame.ticks, pending, offset });
+                }
+            }
+            // The water is shown at the tick Box3D has settled, with the
+            // bodies' accepted frame, which the scene takes before the region
+            // runs this frame's ticks.
+            display_time = owner.completed() as f64 * TICK;
         }
         let field = self.fields.prepare(geometry.field_lattice(), self.acceleration.as_ref(), &frame, &self.impulses)?;
         let per_frame = [
@@ -502,11 +686,12 @@ impl GpuFlipDomain {
             ("ticks", frame.ticks as f32),
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
-            ("display_time", frame.display_time as f32),
+            ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("body_count", self.bodies.count() as f32),
             ("body_rows", self.body_rows),
-            ("first_tick", fields::first_tick(&frame) as f32),
+            ("dynamic_bodies", dynamic_bodies as f32),
+            ("first_tick", first_tick as f32),
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u64;
@@ -517,6 +702,72 @@ impl GpuFlipDomain {
         }
         debug_assert_eq!(written, (1 << OUTPUTS.len()) - 1, "every output written once");
         Ok(Some(values))
+    }
+
+    /// Take the paired world's observation for this frame: check it shares
+    /// the water's clock, and build a new rigid owner (restarting the pair)
+    /// on its reset or a change of bodies. False while the world's inputs are
+    /// still pending.
+    fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
+        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, .. } = &mut self.coupled;
+        if let Some(error) = error {
+            return Err(error.clone());
+        }
+        let Some(observation) = observation.as_ref() else { return Ok(false) };
+        if speed != observation.speed {
+            return Err(format!(
+                "GPU FLIP coupling: water and rigid bodies require the same Simulation Speed and shared World control (water {speed}, rigid {})",
+                observation.speed
+            ));
+        }
+        if (observation.transport.0 - transport).abs() > 1e-9 {
+            return Err("GPU FLIP coupling: rigid observation transport does not match water transport".into());
+        }
+        CoupledRigidInputs { scene: &observation.inputs, colliders: *colliders, density: f64::from(WATER_DENSITY) }
+            .validate()?;
+        let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
+        *previous_reset = Some(observation.reset);
+        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *colliders)) {
+            *epochs += 1;
+            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *colliders, *epochs, owner.as_ref())?);
+            *owner_fresh = true;
+        }
+        Ok(true)
+    }
+
+    /// Exchange before tick `tick` of this frame (counted from its first):
+    /// the GPU has finished tick `tick − 1`, so its reaction is final and the
+    /// body rows are free to rewrite.
+    fn exchange_tick(&mut self, tick: u32, exchange: Exchange) -> Result<(), String> {
+        let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
+        let owner = self.coupled.owner.as_mut().ok_or("GPU FLIP coupling: no coupled rigid world")?;
+        let reaction = self.reaction.as_ref().ok_or("GPU FLIP coupling: the reaction is missing")?;
+        owner.settle(&observation.inputs, |_| true, |_, rows, impulses| {
+            decode_reaction(exchange.offset, rows, reaction_floats(Some(reaction)), impulses)
+        })?;
+        let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
+        let bodies = self.body_buffers.bodies().ok_or("GPU FLIP coupling: the body rows are missing")?;
+        let bytes: &[u8] = bytemuck::cast_slice(rows);
+        if offset + bytes.len() as u64 > bodies.size {
+            return Err("GPU FLIP coupling: the body rows outgrew their buffer".into());
+        }
+        // SAFETY: shared storage in bounds (checked above); the GPU has
+        // completed every command that touched it, and the next reader is
+        // encoded after this write.
+        unsafe { bodies.write(offset, bytes) };
+        reaction.zero_fill();
+        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), ..exchange.pending });
+        Ok(())
+    }
+
+    /// A restart the water's own clock found (its reset, a backward seek):
+    /// the rigid world restarts with it, keeping its hulls.
+    fn rebuild_owner(&mut self) -> Result<(), String> {
+        let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
+        self.coupled.epochs += 1;
+        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        self.coupled.owner = Some(owner);
+        Ok(())
     }
 }
 

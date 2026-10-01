@@ -19,11 +19,10 @@
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+pub(crate) use crate::node_graph::liquid::coupling::REACTION_FLOATS;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_bodies.wgsl");
 
-/// Floats one body's reaction holds.
-pub(crate) const REACTION_FLOATS: usize = 8;
 /// Workgroups per body in a partial sum, at most.
 const MAX_GROUPS: u32 = 64;
 /// Face records one partial thread covers before another group is added.

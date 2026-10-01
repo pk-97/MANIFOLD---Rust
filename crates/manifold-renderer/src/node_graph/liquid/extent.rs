@@ -45,7 +45,8 @@ use crate::node_graph::matter::{
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
-use crate::node_graph::primitives::gpu_flip_bodies::{HELD_BYTES as BODY_PASS_BYTES, REACTION_FLOATS};
+use crate::node_graph::liquid::coupling::REACTION_FLOATS;
+use crate::node_graph::primitives::gpu_flip_bodies::HELD_BYTES as BODY_PASS_BYTES;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
@@ -1052,9 +1053,12 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
-    // GPU FLIP carries no bodies until it has solids: one empty record of each.
+    // Body kernels clamp rows and body counts to the bodies array, so the
+    // walk takes a scene without colliders; the reaction is sized for every
+    // body a liquid holds.
     x.publish("body_count", 0.0);
     x.publish("body_rows", 0.0);
+    x.publish("dynamic_bodies", 0.0);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: MAX_LIVE_TICKS, impulse_tick: Some(0) };
@@ -1066,6 +1070,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("bodies", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
+        ("reaction", (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64),
         ("forces", forces),
         ("impulses", field.lattice.bytes()),
     ] {
@@ -1188,10 +1193,11 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     field_reads(x)?;
     let rows = body_rows(x)?;
     x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;
-    // A wired reaction holds every body's row; the body passes' sums come
-    // with it.
+    // A wired reaction holds every body of one tick, as the step clamps
+    // body_count; the body passes' sums come with it.
     if x.bytes("reaction").is_some() {
-        x.covers("reaction", rows * REACTION_FLOATS as u64 * 4)?;
+        let bodies = x.scalar("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as u64;
+        x.covers("reaction", bodies * REACTION_FLOATS as u64 * 4)?;
         x.hold(BODY_PASS_BYTES);
     }
     // It moves min(particles, out) records: every one.

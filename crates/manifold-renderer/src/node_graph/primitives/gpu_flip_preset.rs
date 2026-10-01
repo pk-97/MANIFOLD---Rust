@@ -415,12 +415,14 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, state, &["ticks", "epoch"]);
     let mut particles: Port = (state, "out");
     let mut faces = particles;
+    let mut reaction = (domain, "reaction");
     for k in 0..scene.steps {
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
         let step = water_step(&mut b, scene, (domain, state), k, density);
         b.wire(particles, step, "particles");
         b.wire(count, step, "count");
-        (particles, faces) = ((step, "out"), (step, "faces"));
+        b.wire(reaction, step, "reaction");
+        (particles, faces, reaction) = ((step, "out"), (step, "faces"), (step, "reaction_out"));
     }
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
@@ -673,7 +675,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }
