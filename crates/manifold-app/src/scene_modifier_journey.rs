@@ -386,7 +386,7 @@ fn capture_output_allow_uniform(
     capture_output_impl(ct, path, false)
 }
 
-fn set_generator_param(
+pub(super) fn set_generator_param(
     ct: &mut crate::content_thread::ContentThread,
     layer_id: &LayerId,
     param_id: &str,
