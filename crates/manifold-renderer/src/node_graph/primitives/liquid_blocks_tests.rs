@@ -363,11 +363,12 @@ fn dam_break_fields(n: usize) -> Vec<(String, Fields)> {
     // group, so the held level set is `levels` nodes a side.
     show.restart();
     let (frame_node, smooth) = (show.node_named("frame"), show.node_named("liquid_smooth_z"));
+    let held = [frame_node.clone(), smooth.clone()];
     let (min, h) = (lattice.min(), lattice.cell_size());
     let mut captured = Vec::new();
     for frame in 1..=*FRAMES.last().expect("frames") {
         let capture = FRAMES.contains(&frame);
-        show.set_dump_all(capture);
+        show.hold(if capture { &held } else { &[] });
         show.frame(false);
         if !capture {
             continue;

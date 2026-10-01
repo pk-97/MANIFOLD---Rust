@@ -224,7 +224,7 @@ impl PresetRuntime {
     /// chain that doesn't hold the requested effect clears its set, so only the
     /// watched chain pays. Hidden / off-scope nodes are simply absent from the
     /// set, so they keep memoization and their textures recycle (sub-changes
-    /// A + B).
+    /// A + B). Textures only: arrays are held through [`Self::set_dump_arrays`].
     pub fn set_dump_visible(&mut self, effect_id: Option<&EffectId>, visible: &[NodeId]) {
         self.set_dump_visible_with_context(effect_id, visible, None);
     }
@@ -235,6 +235,27 @@ impl PresetRuntime {
         visible: &[NodeId],
         context: Option<&super::ModifierPreviewContext>,
     ) {
+        let set = self.resolve_nodes(effect_id, visible, context);
+        self.executor.set_dump_set(set);
+    }
+
+    /// Hold the `Array` outputs of `nodes` after every frame, for
+    /// [`Self::dump_arrays`] and [`Self::dump_arrays_all`], resolved as
+    /// [`Self::set_dump_visible`] resolves; an empty list stops. The texture
+    /// atlas set never holds arrays, so a node-scoped array read comes here.
+    pub fn set_dump_arrays(&mut self, effect_id: Option<&EffectId>, nodes: &[NodeId]) {
+        let set = if nodes.is_empty() { None } else { self.resolve_nodes(effect_id, nodes, None) };
+        self.executor.set_dump_array_set(set);
+    }
+
+    /// `nodes` as runtime instances in the slot `effect_id` names (every slot
+    /// for `None`); `None` when this chain doesn't hold that effect.
+    fn resolve_nodes(
+        &self,
+        effect_id: Option<&EffectId>,
+        visible: &[NodeId],
+        context: Option<&super::ModifierPreviewContext>,
+    ) -> Option<ahash::AHashSet<NodeInstanceId>> {
         let mut set: ahash::AHashSet<NodeInstanceId> = ahash::AHashSet::new();
         let mut matched = effect_id.is_none();
         for slot in &self.effect_nodes {
@@ -262,7 +283,7 @@ impl PresetRuntime {
                 }
             }
         }
-        self.executor.set_dump_set(if matched { Some(set) } else { None });
+        matched.then_some(set)
     }
 
     /// Clear any thumbnail-atlas dump set on this chain (atlas off, or this
