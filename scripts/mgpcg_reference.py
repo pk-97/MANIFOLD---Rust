@@ -10,14 +10,17 @@ V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before and 2 after,
 trilinear transfers, a coarse cell is air if any child is air. A coarse
 face's weight is the mean of the four fine faces it covers
 (node.coarsen_solid_faces); a cell whose faces are all closed drops out.
-The graph runs `--depth 5 --coarse-sweeps 16`: five levels at every lattice,
-the coarsest smoothed by 16 rounds each way. Without them the levels halve
-while every side is even and one is over 4 and the coarsest is solved
-exactly by its inverse (node.coarse_inverse's sweep and pinning).
+By default each level halves every side, rounding up, until every side is
+4 or less, and that level is solved exactly by its inverse (the coarse
+inverse's sweep and pinning): the solver module's rule. An odd side's extra
+coarse half-cell is solid, so restriction stays the transpose of
+prolongation and the V-cycle stays symmetric (--symmetry checks it). The atom
+graph runs `--depth 5 --coarse-sweeps 16`: five levels at every lattice, the
+coarsest smoothed by 16 rounds each way.
 
 Usage: scripts/mgpcg_reference.py crates/manifold-renderer/tests/fixtures/dambreak_pressure_problems.bin.zst
-           --depth 5 --coarse-sweeps 16 [--refine 2 | --coarsen 2] [--iterations 4,6,8] [--tol 1e-5]
-           [--box 0.5,0.25,0.5,0.12,0.12,0.12]
+           [--refine 2 | --coarsen 2 | --side 25,37] [--iterations 4,6,8] [--tol 1e-5] [--symmetry]
+           [--depth 5 --coarse-sweeps 16] [--box 0.5,0.25,0.5,0.12,0.12,0.12]
        scripts/mgpcg_reference.py --frames DUMP.bin [...]
 The second form reads solves dumped from a running scene (per record:
 u32 frame, step, kind, n; then water, f and another solver's pressure as n³
@@ -153,11 +156,32 @@ class Level:
         return out
 
 
+def pad_to_even(x, axes, value):
+    """Pad each listed axis of odd length with one slab of `value` at its high
+    end: the virtual cell an odd side halves into is solid."""
+    pad = [(0, x.shape[ax] % 2 if ax in axes else 0) for ax in range(3)]
+    return np.pad(x, pad, constant_values=value)
+
+
+def coarsen_water(water):
+    """A coarse cell is air if any child is air; a virtual child (an odd
+    side's padding) is solid, never air."""
+    water = pad_to_even(water, range(3), True)
+    nz, ny, nx = water.shape
+    return water.reshape(nz // 2, 2, ny // 2, 2, nx // 2, 2).all(axis=(1, 3, 5))
+
+
 def coarsen_faces(faces):
-    """Every other face along its axis, the mean of each 2×2 across it."""
+    """Every other face along its axis, the mean of each 2×2 across it. An
+    odd side's virtual cell is solid, so its faces count 0: the last coarse
+    cell along that side keeps the open fraction its one real child gives."""
     out = []
     for ax, w in enumerate(faces):
+        # n + 1 faces along ax; an odd n gains the closed face 2·ceil(n/2).
+        if w.shape[ax] % 2 == 0:
+            w = np.concatenate([w, np.zeros_like(along(w, ax, slice(0, 1)))], axis=ax)
         w = along(w, ax, slice(None, None, 2))
+        w = pad_to_even(w, [b for b in range(3) if b != ax], 0.0)
         for b in range(3):
             if b != ax:
                 w = 0.5 * (along(w, b, slice(0, None, 2)) + along(w, b, slice(1, None, 2)))
@@ -165,9 +189,13 @@ def coarsen_faces(faces):
     return out
 
 
-def prolong_1d(nc):
-    P = np.zeros((2 * nc, nc))
-    for f in range(2 * nc):
+def prolong_1d(nc, nf=None):
+    """Trilinear prolongation along one axis, nc coarse cells to nf fine
+    (2·nc, or 2·nc − 1 on an odd side: the virtual cell's row is dropped)."""
+    nf = 2 * nc if nf is None else nf
+    assert nf in (2 * nc, 2 * nc - 1)
+    P = np.zeros((nf, nc))
+    for f in range(nf):
         c = f // 2
         other = max(c - 1, 0) if f % 2 == 0 else min(c + 1, nc - 1)
         P[f, c] += 0.75
@@ -229,11 +257,12 @@ def coarse_inverse(water, faces):
 
 
 class Multigrid:
-    """`depth` fixes the level count (every side must halve evenly that many
-    times less one); None halves while every side is even and one is over 4.
-    `coarse_sweeps` solves the coarsest level by that many red-black rounds
-    before and after (a symmetric smoother, so the preconditioner stays
-    symmetric); None solves it exactly by its inverse."""
+    """Each level halves every side, rounding up, until every side is 4 or
+    less; that level is solved exactly by its inverse. `depth` instead fixes
+    the level count and `coarse_sweeps` smooths the coarsest level by that
+    many red-black rounds before and after (a symmetric smoother, so the
+    preconditioner stays symmetric): the atom graph's rule, kept until the
+    step node replaces it."""
 
     def __init__(self, water, h, faces, depth=None, coarse_sweeps=None):
         self.levels = [Level(water, h, faces)]
@@ -241,14 +270,13 @@ class Multigrid:
         def halve(shape):
             if depth is not None:
                 return len(self.levels) < depth
-            return max(shape) > 4 and all(n % 2 == 0 for n in shape)
+            return max(shape) > 4
         while halve(water.shape):
-            nz, ny, nx = water.shape
-            assert nz % 2 == ny % 2 == nx % 2 == 0, f"{water.shape} does not halve to {depth} levels"
-            water = water.reshape(nz // 2, 2, ny // 2, 2, nx // 2, 2).all(axis=(1, 3, 5))
+            fine = water.shape
+            water = coarsen_water(water)
             faces = coarsen_faces(faces)
             h *= 2
-            self.P.append([prolong_1d(n) for n in water.shape])
+            self.P.append([prolong_1d(nc, nf) for nc, nf in zip(water.shape, fine)])
             self.levels.append(Level(water, h, faces))
         self.coarse_sweeps = coarse_sweeps
         last = self.levels[-1]
@@ -600,6 +628,32 @@ def coarsen(water, f, k):
     return water, f
 
 
+def resample(water, f, n):
+    """The problem at n cells a side, nearest cell: any side, odd included."""
+    for ax in range(3):
+        idx = ((np.arange(n) + 0.5) * water.shape[ax] / n).astype(int)
+        water = np.take(water, idx, axis=ax)
+        f = np.take(f, idx, axis=ax)
+    return water, f * water
+
+
+def symmetry(water, h, faces, trials=4, seed=7):
+    """The preconditioner as an operator on the water: the largest
+    |a·V(b) − b·V(a)| relative to |a||V(b)|, and the largest a·V(a)/|a|².
+    V approximates L⁻¹ and L = −A/h² is negative definite, so PCG needs V
+    symmetric and that largest value below zero."""
+    mg = Multigrid(water, h, faces)
+    w = mg.levels[0].w
+    rng = np.random.default_rng(seed)
+    worst, top = 0.0, -np.inf
+    for _ in range(trials):
+        a, b = rng.standard_normal(water.shape) * w, rng.standard_normal(water.shape) * w
+        va, vb = mg.vcycle(0, a), mg.vcycle(0, b)
+        worst = max(worst, abs(np.sum(a * vb) - np.sum(b * va)) / (np.linalg.norm(a) * np.linalg.norm(vb)))
+        top = max(top, np.sum(a * va) / np.sum(a * a))
+    return worst, top, [lv.water.shape[0] for lv in mg.levels]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("fixture", nargs="?")
@@ -613,6 +667,8 @@ def main():
     ap.add_argument("--box")
     ap.add_argument("--body", help="n,cx,cy,cz,hx,hy,hz,fill: a still pool and a box")
     ap.add_argument("--ratios", default="0,0.1,1,10")
+    ap.add_argument("--side", help="resample each problem to these sides, odd included (e.g. 24,25,37,40)")
+    ap.add_argument("--symmetry", action="store_true", help="also check the preconditioner is symmetric and negative definite")
     args = ap.parse_args()
     counts = [int(k) for k in args.iterations.split(",")]
     if args.body:
@@ -620,6 +676,8 @@ def main():
         body_gate(int(v[0]), v[1:7], v[7], [float(r) for r in args.ratios.split(",")], counts)
         return
     probs = frames(args.frames) if args.frames else load(args.fixture)
+    if args.side:
+        probs = [(name, *resample(water, f, n), None) for n in map(int, args.side.split(",")) for name, water, f, _ in probs]
     for name, water, f, old in probs:
         if args.refine > 1:
             water, f = refine(water, f, args.refine)
@@ -630,6 +688,9 @@ def main():
             box_gate(name, water, f, h, counts, [float(v) for v in args.box.split(",")])
             continue
         open_ = open_faces(water.shape)
+        if args.symmetry:
+            worst, top, sides = symmetry(water, h, open_)
+            print(f"{water.shape[0]}^3 {name}: levels {sides}; asymmetry {worst:.1e}, largest a·Va/|a|² {top:.3e}", flush=True)
         res, levels = solve(water, f, h, max(counts), open_, depth=args.depth, coarse_sweeps=args.coarse_sweeps)
         line = ", ".join(f"{k}: {res[k - 1]:.3e}" for k in counts)
         old_line = "" if old is None else f"; old solver {true_residual(old, water, f, h, open_):.3e}"

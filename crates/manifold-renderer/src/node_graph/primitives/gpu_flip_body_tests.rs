@@ -322,7 +322,7 @@ fn gpu_flip_face_impulse_to_bodies_matches_cpu() {
     let (i_slot, _i) = harness.array(&impulses, impulses.len());
     let (b_slot, _b) = harness.array(floats(&rows), rows.len() * 32);
     let (base_slot, _base) = harness.array(&base, base.len());
-    let (reaction_slot, reaction) = harness.array(&vec![7.0_f32; BODIES * 16], BODIES * 16);
+    let (reaction_slot, reaction) = harness.array(&[7.0_f32; BODIES * 16], BODIES * 16);
     let (out_slot, out) = harness.array::<f32>(&[], 64 * 16);
     let mut errors = Vec::new();
     let mut native = harness.device.create_encoder("body sums");
