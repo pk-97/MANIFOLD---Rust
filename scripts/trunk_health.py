@@ -78,6 +78,44 @@ def run_cmd(cmd, cwd, timeout):
     return r.returncode, r.stdout, r.stderr, duration
 
 
+def open_beads():
+    """Open beads as a list of dicts, or None when bd cannot answer."""
+    try:
+        r = subprocess.run([BD, "list", "--status", "open", "--json", "--flat", "-n", "0"],
+                           capture_output=True, text=True, timeout=30)
+        return json.loads(r.stdout) if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def find_open_bead(needle):
+    """Id of an open bead whose title or description contains `needle`, or None.
+    Raises RuntimeError when bd cannot list: "no bead" must never be a guess."""
+    beads = open_beads()
+    if beads is None:
+        raise RuntimeError("bd list failed")
+    for bead in beads:
+        if needle in (bead.get("title") or "") or needle in (bead.get("description") or ""):
+            return bead.get("id")
+    return None
+
+
+def file_bead(title, desc, labels="trunk-health,open", priority="1"):
+    """File a bug bead; returns (id, None) or (None, why). The one bead filer:
+    trunk-health files red nightly gates with it, landing_gate files pre-existing
+    test failures."""
+    try:
+        r = subprocess.run([BD, "create", title, "-t", "bug", "-p", priority, "-l", labels,
+                            "-d", desc, "--silent"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return None, str(e)
+    if r.returncode != 0:
+        return None, f"bd create exit {r.returncode}: {(r.stderr or '').strip()[:200]}"
+    lines = r.stdout.strip().splitlines()
+    return (lines[-1].strip() if lines else ""), None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true",
@@ -275,16 +313,11 @@ def main():
         # File new bead
         title = f"trunk-health red: {cmd_str[:60]}"
         desc = f"trunk-health: {cmd_str} red on main @{sha} ({datetime.now().strftime('%Y-%m-%d')}); tail: {tail}"
-        try:
-            r = subprocess.run([BD, "create", title, "-t", "bug", "-p", "1", "-l", "trunk-health,open", "-d", desc],
-                              capture_output=True, text=True, timeout=30)
-            if r.returncode != 0:
-                print(f"[trunk-health] failed to file bead (exit {r.returncode}): {(r.stderr or '').strip()[:200]}")
-                return 2
-            print(f"[trunk-health] filed bead: {title}")
-        except Exception as e:
-            print(f"[trunk-health] failed to file bead: {e}")
+        _, why = file_bead(title, desc)
+        if why:
+            print(f"[trunk-health] failed to file bead: {why}")
             return 2
+        print(f"[trunk-health] filed bead: {title}")
 
     # Auto-close beads for green gates — a gate that recovered closes its own
     # bead even when another gate is still red.

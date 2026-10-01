@@ -138,6 +138,20 @@ def is_verdicts_path(resolved):
     return False
 
 
+def is_landing_marker_path(resolved):
+    """True if resolved path is a `.claude/orchestration/landing-gate-marker.json`
+    anywhere (main checkout or a worktree copy) — I2 for the landing marker.
+
+    landing_gate.py is the only writer, via Python `open()`; an Edit/Write to the
+    marker would let an agent clear its own merge."""
+    parts = resolved.parts
+    for i, part in enumerate(parts):
+        if part == ".claude" and i + 2 < len(parts):
+            if parts[i + 1] == "orchestration" and parts[i + 2].startswith("landing-gate-marker.json"):
+                return True
+    return False
+
+
 def deny_reason(resolved):
     try:
         rel = resolved.relative_to(_PROJECT_DIR)
@@ -174,7 +188,8 @@ def main():
     if resolved is None:
         return 0
 
-    # I2: verdicts are written only by gate_runner, never via Edit|Write|MultiEdit.
+    # I2: verdicts are written only by gate_runner, never via Edit|Write|MultiEdit;
+    # the landing marker likewise only by landing_gate.
     if is_verdicts_path(resolved):
         print(json.dumps({
             "hookSpecificOutput": {
@@ -185,6 +200,22 @@ def main():
                     "Edit/Write/MultiEdit to the verdicts trail is never correct. "
                     "gate_runner appends via Python `open()`, not through the Edit "
                     "tool. Path: " + str(resolved)
+                ),
+            }
+        }))
+        return 0
+
+    if is_landing_marker_path(resolved):
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "Blocked: the landing-gate marker is written only by "
+                    "scripts/landing_gate.py when it finishes a run — direct "
+                    "Edit/Write/MultiEdit to it is never correct. Run the gate "
+                    "(scripts/landing_gate.py --repo <worktree path>). Path: "
+                    + str(resolved)
                 ),
             }
         }))

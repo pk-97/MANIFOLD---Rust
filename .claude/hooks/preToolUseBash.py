@@ -39,6 +39,7 @@ nothing.
 
 Obsolete when: the harness gains native argument-level Bash permissioning.
 """
+import importlib.util
 import json
 import os
 import re
@@ -551,8 +552,6 @@ def _main_checkout_path():
     return p
 
 
-_ORCH_VERDICTS_DIR = _main_checkout_path() / ".claude" / "orchestration" / "verdicts"
-
 
 def _git_checkout_dir(toks, cwd):
     """Resolve the effective working dir for a `git [-C dir]... <sub>` segment,
@@ -995,7 +994,7 @@ def manifold_gui_guard(cmd):
 # Covers what the audit convicted: force-push to ANY ref (the landing
 # guard only catches force-to-main; a force-push to a lane branch drops
 # landed work the same way), remote branch deletion, `gh pr merge`
-# (lands on origin outside the landing protocol — the verdict guards
+# (lands on origin outside the landing protocol — the merge guards
 # parse `git merge` syntax, not gh), and `bd delete` (permanently drops
 # tracker state). Ask, not deny: legitimate cases exist, a human
 # confirms them.
@@ -1073,8 +1072,8 @@ def destructive_outward_guard(cmd, cwd):
                 if toks[1] == "pr" and toks[2] == "merge":
                     return (
                         "`gh pr merge` lands on origin outside the landing "
-                        "protocol — verdict coverage and the merge-trunk "
-                        "gate only run on local `git merge`. Land locally "
+                        "protocol — the landing-gate marker check and the "
+                        "merge-trunk gate only run on local `git merge`. Land locally "
                         "per .claude/GIT_TREE_DISCIPLINE.md §2."
                     )
             elif toks[0] == "bd" and len(toks) >= 2 and toks[1] == "delete":
@@ -1088,18 +1087,33 @@ def destructive_outward_guard(cmd, cwd):
 
 
 # ---------------------------------------------------------------------------
-# Pre-land verdict-coverage guard (I1)
+# Pre-land landing-gate marker guard (GATE_RUNTIME_DESIGN.md I1/D6)
 #
 # When a `git merge` lands on main (current branch = main in the main
-# checkout), every BUG- task id named on the merged branch's commits since
-# origin/main must have a passing verdict (gate or no-gate) in the main
-# checkout's verdict trail at .claude/orchestration/verdicts/<task>.jsonl.
+# checkout), .claude/orchestration/landing-gate-marker.json must be a passing
+# marker for exactly the merged branch tip's tree. scripts/landing_gate.py is
+# the only writer; scripts/landing_marker.py holds the check, shared with
+# land_branch.py and land_wave.py (whose subprocess merges this hook never sees).
 #
-# - Docs-only branches (all changed files under docs/) pass with a note.
-# - Branches with no BUG- ids in the log pass (D6: pre-trail landings).
-# - Violations deny with the missing tasks and the exact fix command.
-# - Fails open: any error prints loudly and yields None (no guard).
+# - Every branch needs the marker: docs-only and no-bug-id branches included.
+# - A merge of something already in origin/main (`git merge origin/main`)
+#   lands nothing and passes.
+# - Violations deny and point at running the gate, never at stamping.
+# - Fails open on unexpected errors (prints loudly); a marker module that
+#   cannot load denies.
 # ---------------------------------------------------------------------------
+
+_LANDING_MARKER_PATH = (
+    _main_checkout_path() / ".claude" / "orchestration" / "landing-gate-marker.json"
+)
+_LANDING_MARKER_MODULE = _PROJECT_DIR / "scripts" / "landing_marker.py"
+
+
+def _load_landing_marker():
+    spec = importlib.util.spec_from_file_location("landing_marker", _LANDING_MARKER_MODULE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 _MERGE_OPT_VALUE = frozenset({
     "-m", "--message", "-F", "--file", "-e", "--edit", "--log", "--signoff",
@@ -1127,11 +1141,11 @@ def _get_merge_source_branch(rest_toks):
     return positional[0] if positional else None
 
 
-def merge_verdict_guard(cmd, cwd):
+def merge_marker_guard(cmd, cwd):
     """Return (deny_reason, allow_context) for a git merge targeting main.
 
-    I1: every BUG- task on the merged branch must have a passing verdict.
-    Fails open on error — prints loudly, returns None."""
+    The merge needs a passing landing-gate marker for the source tip's tree.
+    Fails open on unexpected errors — prints loudly, returns (None, None)."""
     try:
         for toks in _shlex_segments(cmd):
             toks = _strip_leading_keywords(toks)
@@ -1145,88 +1159,62 @@ def merge_verdict_guard(cmd, cwd):
             if _current_branch(target_dir) != "main":
                 continue
 
-            # Git merge while on main — extract source branch
             source_branch = _get_merge_source_branch(rest)
             if source_branch is None:
                 continue  # can't determine branch; skip guard
 
-            # --- Docs-only check ---
-            diff_r = subprocess.run(
-                ["git", "-C", str(target_dir), "diff", "--name-only",
-                 "origin/main", source_branch],
+            # Already in origin/main: the merge lands nothing new.
+            contained = subprocess.run(
+                ["git", "-C", str(target_dir), "merge-base", "--is-ancestor",
+                 source_branch, "origin/main"],
                 capture_output=True, text=True, timeout=15,
             )
-            if diff_r.returncode == 0:
-                changed = [l.strip()
-                           for l in diff_r.stdout.strip().split("\n") if l.strip()]
-                if changed and all(f.startswith("docs/") for f in changed):
-                    return (None,
-                            "Docs-only merge: no verdict coverage required (D6).")
+            if contained.returncode == 0:
+                return (None, None)
 
-            # --- Extract BUG- ids from branch commits ---
-            log_r = subprocess.run(
-                ["git", "-C", str(target_dir), "log", "--format=%B",
-                 f"origin/main..{source_branch}"],
+            tree_r = subprocess.run(
+                ["git", "-C", str(target_dir), "rev-parse",
+                 f"{source_branch}^{{tree}}"],
                 capture_output=True, text=True, timeout=15,
             )
-            if log_r.returncode != 0:
+            tree = tree_r.stdout.strip()
+            if tree_r.returncode != 0 or not tree:
                 print(
-                    f"merge_verdict_guard: git log failed "
-                    f"(exit {log_r.returncode}): {log_r.stderr.strip()}",
+                    f"merge_marker_guard: cannot resolve the tree of "
+                    f"{source_branch}: {tree_r.stderr.strip()}",
                     file=sys.stderr,
                 )
                 return (None, None)
 
-            bug_ids = re.findall(r"BUG-\w+", log_r.stdout)
-            if not bug_ids:
-                return (None,
-                        "No BUG- task ids in merged branch commits. "
-                        "Verdict coverage not required (D6: pre-trail landings).")
-
-            # --- Check verdicts in MAIN checkout trail ---
-            missing = []
-            for bid in sorted(set(bug_ids)):
-                vpath = _ORCH_VERDICTS_DIR / f"{bid}.jsonl"
-                has_passing = False
-                if vpath.exists():
-                    with open(vpath) as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                v = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-                            if (v.get("schema") == 1
-                                    and v.get("pass") is True
-                                    and v.get("kind") in ("gate", "no-gate")):
-                                has_passing = True
-                                break
-                if not has_passing:
-                    missing.append(bid)
-
-            if missing:
-                fixes = "\n".join(
-                    f'  gate_runner no-gate --task {m} '
-                    f'--reason "<why-safe-without-gates>"'
-                    for m in missing
-                )
+            try:
+                problem = _load_landing_marker().marker_problem(
+                    tree, _LANDING_MARKER_PATH)
+            except Exception as e:
                 return (
-                    f"Merge blocked by I1: {len(missing)} task(s) lack passing "
-                    f"verdicts:\n  {', '.join(missing)}\n\n"
-                    f"Add no-gate verdicts:\n{fixes}\n\n"
-                    f"Or run the design's declared gates (gate_runner per-lane) "
-                    f"and retry the merge. (I1: every BUG- task on the merged "
-                    f"branch needs verdict coverage.)",
+                    f"Merge blocked: the landing-marker check could not load "
+                    f"({e}). Restore scripts/landing_marker.py; the merge "
+                    f"guard never passes a merge it cannot check.",
                     None,
                 )
 
-            return (None,
-                    "All BUG- tasks have passing verdicts. Merge permitted.")
+            if problem is None:
+                return (None,
+                        f"Landing gate: green marker matches {source_branch}'s tree.")
+
+            return (
+                f"Merge blocked: {problem}. A merge to main needs a green "
+                f"landing-gate marker for the exact tree being merged "
+                f"({source_branch}: {tree[:12]}).\n\n"
+                f"In the branch's worktree, after merging origin/main into it, run:\n"
+                f"  scripts/landing_gate.py --repo <worktree path>\n"
+                f"(it writes the marker when it finishes), then retry the merge. "
+                f"scripts/land_branch.py does both steps. Any new commit on the "
+                f"branch changes the tree and needs a fresh gate run.",
+                None,
+            )
 
     except Exception as e:
-        print(f"merge_verdict_guard FAILED OPEN: {e}", file=sys.stderr)
+        print(f"merge_marker_guard FAILED OPEN: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
         return (None, None)
@@ -1246,7 +1234,7 @@ def merge_verdict_guard(cmd, cwd):
 # the merged branch touches flow-mapped paths (manifest path_triggers or flow
 # JSON files) and no green marker exists for exactly that branch tip.
 #
-# Fails open loudly, like merge_verdict_guard. Docs-only and unmapped
+# Fails open loudly, like merge_marker_guard. Docs-only and unmapped
 # branches never see it.
 #
 # Obsolete when: landing moves to a server-side CI gate that runs the flow
@@ -1635,10 +1623,10 @@ def main() -> int:
         json.dump(build_deny([compound_deny_reason]), sys.stdout)
         return 0
 
-    # 0e. Pre-land verdict-coverage guard (I1): a merge into main requires
-    # verdict coverage for every BUG- task on the merged branch. Denies with
-    # the missing tasks and fix commands; passes with a note otherwise.
-    merge_deny, merge_context = merge_verdict_guard(cmd, cwd)
+    # 0e. Pre-land marker guard (I1): a merge into main requires a green
+    # landing-gate marker for the merged branch tip's tree. Denies with the
+    # reason and the gate command; passes with a note otherwise.
+    merge_deny, merge_context = merge_marker_guard(cmd, cwd)
     if merge_deny:
         json.dump(build_deny([merge_deny]), sys.stdout)
         return 0

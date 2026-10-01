@@ -9,7 +9,6 @@ transcript and timings. Exit 0 iff all required checks pass.
 
 import argparse
 import contextlib
-import importlib.util
 import json
 import os
 import re
@@ -20,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import gpu_queue
+import landing_marker
+import trunk_health
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
@@ -179,6 +180,100 @@ def reverse_deps(repo, packages):
         return []
 
 
+NEXTEST_FAIL = re.compile(
+    r"^\s*(?:FAIL|SIGABRT|SIGSEGV|SIGBUS|SIGILL|SIGFPE|SIGKILL|SIGTERM|TIMEOUT|LEAK-FAIL|EXEC-FAIL)"
+    r"\s+\[[^\]]*\]\s+(\S+)\s+(\S.*?)\s*$")
+
+
+def parse_nextest_failures(text):
+    """Failed (binary_id, test_name) pairs in first-seen order. Nextest prints
+    each failure live and again in its summary; retries ("TRY n FAIL") are not
+    final results and do not match."""
+    seen, failures = set(), []
+    for line in text.splitlines():
+        m = NEXTEST_FAIL.match(line)
+        if m and (m.group(1), m.group(2)) not in seen:
+            seen.add((m.group(1), m.group(2)))
+            failures.append((m.group(1), m.group(2)))
+    return failures
+
+
+def nextest_filter(failures):
+    """Filterset selecting exactly these tests, matched by binary and exact name."""
+    def lit(value):
+        return re.sub(r"([\\),])", r"\\\1", value)
+    return " | ".join(f"(binary_id(={lit(b)}) & test(={lit(t)}))" for b, t in failures)
+
+
+def failing_on_main(repo, base, failures):
+    """Subset of `failures` that also fail in the main checkout, plus a note
+    when that could not be established. Main must sit at `base` (origin/main):
+    a rerun anywhere else proves nothing about trunk."""
+    main_head = run_cmd(["git", "rev-parse", "HEAD"], cwd=MAIN_CHECKOUT, timeout=30)[1].strip()
+    base_sha = run_cmd(["git", "rev-parse", base], cwd=repo, timeout=30)[1].strip()
+    if not main_head or main_head != base_sha:
+        return set(), (f"main checkout is at {main_head[:12] or '?'}, not {base} "
+                       f"({base_sha[:12] or '?'}): fast-forward it to rerun the failures there")
+    packages = sorted({b.split("::")[0] for b, _ in failures})
+    cmd = ["cargo", "nextest", "run", "--no-fail-fast"]
+    for package in packages:
+        cmd += ["-p", package]
+    cmd += ["-E", nextest_filter(failures)]
+    print(f"[tests] rerunning {len(failures)} failing test(s) in the main checkout at {base_sha[:12]}",
+          flush=True)
+    exit_, out, err, _ = run_cmd(cmd, cwd=MAIN_CHECKOUT, timeout=3600)
+    log = write_landing_log(repo, "tests-on-main", out, err)
+    print(f"[tests] main rerun transcript: {log}", flush=True)
+    return set(parse_nextest_failures(out + err)), None
+
+
+def bead_for_pre_existing(binary, test, branch, base):
+    """Id of the open bead naming this test, filing one when none exists.
+    Returns (id, None) or (None, why)."""
+    try:
+        bead = trunk_health.find_open_bead(test)
+    except RuntimeError as error:
+        return None, str(error)
+    if bead:
+        return bead, None
+    title = f"pre-existing test failure: {test}"[:120]
+    desc = (f"landing-gate found {binary} {test} failing on {base} as well as in the branch "
+            f"being landed ({branch}). It fails on trunk without the branch's changes. "
+            f"Root cause unknown; start from the test's own output.")
+    bead, why = trunk_health.file_bead(title, desc)
+    if why or not bead:
+        return None, why or "bd create returned no id"
+    return bead, None
+
+
+def classify_test_failures(repo, base, branch, output):
+    """Split a failed nextest run into new failures (the branch's fault) and
+    pre-existing ones. A test is pre-existing only if it fails when rerun in the
+    main checkout at origin/main AND an open bead names it. Returns
+    (new_failures, pre_existing [(binary, test, bead)], notes)."""
+    failures = parse_nextest_failures(output)
+    if not failures:
+        return [], [], ["no failing test names in the nextest output (build error or crash)"]
+    on_main, note = failing_on_main(repo, base, failures)
+    notes = [note] if note else []
+    new, pre_existing = [], []
+    for binary, test in failures:
+        if (binary, test) not in on_main:
+            new.append((binary, test))
+            continue
+        bead, why = bead_for_pre_existing(binary, test, branch, base)
+        if bead:
+            pre_existing.append((binary, test, bead))
+        else:
+            new.append((binary, test))
+            notes.append(f"{test} fails on main but has no bead and none could be filed ({why})")
+    return new, pre_existing, notes
+
+
+def current_branch(repo):
+    return run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, timeout=30)[1].strip()
+
+
 def skip(results, label, reason):
     """Record a SKIP; the reason travels to the live line and the summary."""
     results.append(("SKIP", label, None, [reason]))
@@ -210,7 +305,8 @@ def _main(stack):
     parser.add_argument("--skip-gpu", default=None, metavar="REASON",
                         help="skip gpu-proofs with a reason (does not fail gate)")
     parser.add_argument("--keep-going", action="store_true",
-                        help="collect every result for explicit named-red review")
+                        help="collect every result instead of stopping at the first failure "
+                             "(diagnosis only: the marker still records a red run)")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -235,6 +331,9 @@ def _main(stack):
     touches_gpu = touches_gpu_path(repo, base_sha)
 
     results = []
+    # Test failures the gate saw: new ones fail the landing, pre-existing ones
+    # (red on origin/main, open bead) ride along in the marker.
+    ledger = {"failing_tests": [], "pre_existing_tests": []}
 
     # Harness changes use the same focused tests advertised in worker briefs.
     from codex_checks import tooling_checks
@@ -251,7 +350,7 @@ def _main(stack):
         results.append((status, check["name"], duration, tail))
         print_result(check["name"], status, duration, tail if exit_ else None)
         if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+            return finish(repo, base_sha, results, ledger)
 
     # a. design-status
     exit_, out, err, duration = run_check("design-status",
@@ -262,7 +361,7 @@ def _main(stack):
     results.append((status, "design-status", duration, tail))
     print_result("design-status", status, duration, tail if exit_ != 0 else None)
     if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
+        return finish(repo, base_sha, results, ledger)
 
     # b. docs-index (only if docs added/renamed)
     if touches_docs:
@@ -280,7 +379,7 @@ def _main(stack):
         results.append((status, "docs-index", duration, tail))
         print_result("docs-index", status, duration, tail if status == "FAIL" else None)
         if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+            return finish(repo, base_sha, results, ledger)
     else:
         skip(results, "docs-index", "no docs added or renamed")
 
@@ -293,7 +392,7 @@ def _main(stack):
     results.append((status, "deny", duration, tail))
     print_result("deny", status, duration, tail if exit_ != 0 else None)
     if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
+        return finish(repo, base_sha, results, ledger)
 
     # d2. ignored-tests — no new #[ignore] beyond the ratchet baseline
     # (spec: .claude/hooks/ignored-test-guard.py docstring).
@@ -305,7 +404,7 @@ def _main(stack):
     results.append((status, "ignored-tests", duration, tail))
     print_result("ignored-tests", status, duration, tail if exit_ != 0 else None)
     if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
+        return finish(repo, base_sha, results, ledger)
 
     # Extend with direct reverse dependents
     dependents = reverse_deps(repo, packages) if packages else []
@@ -330,7 +429,7 @@ def _main(stack):
         results.append((status, "clippy", duration, tail))
         print_result("clippy", status, duration, tail if exit_ != 0 else None)
         if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+            return finish(repo, base_sha, results, ledger)
     else:
         skip(results, "clippy", "no touched packages")
 
@@ -343,7 +442,7 @@ def _main(stack):
     results.append((status, "flow-gate", duration, tail))
     print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
     if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
+        return finish(repo, base_sha, results, ledger)
 
     # Nextest tests call GpuDevice::new_queued; each would queue behind every
     # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
@@ -358,14 +457,26 @@ def _main(stack):
         pkg_args = []
         for p in gate_packages:
             pkg_args.extend(["-p", p])
-        cmd = ["cargo", "nextest", "run", *pkg_args]
+        # --no-fail-fast: classification needs every failing test, not the first.
+        cmd = ["cargo", "nextest", "run", "--no-fail-fast", *pkg_args]
         exit_, out, err, duration = run_check("tests", cmd, cwd=repo, timeout=3600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
+        if exit_ != 0:
+            new, pre_existing, notes = classify_test_failures(
+                repo, args.base, current_branch(repo), out + err)
+            ledger["failing_tests"] += [f"{b} {t}" for b, t in new]
+            ledger["pre_existing_tests"] += [
+                {"test": f"{b} {t}", "bead": bead} for b, t, bead in pre_existing]
+            tail = notes + [f"pre-existing (red on main, bead {bead}): {b} {t}"
+                            for b, t, bead in pre_existing] + \
+                   [f"NEW failure (passes or is absent on main): {b} {t}" for b, t in new] + tail
+            if pre_existing and not new and not notes:
+                status = "PASS"
         results.append((status, "tests", duration, tail))
         print_result("tests", status, duration, tail if exit_ != 0 else None)
         if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+            return finish(repo, base_sha, results, ledger)
     else:
         skip(results, "tests", "no touched packages")
 
@@ -382,7 +493,7 @@ def _main(stack):
                 message = gpu_scope.unmapped_message(plan)
                 print(message)
                 results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
-                return finish(repo, base_sha, results)
+                return finish(repo, base_sha, results, ledger)
             print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
             cmd = ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base,
@@ -415,14 +526,24 @@ def _main(stack):
             results.append((status, "gpu-proofs", duration, tail))
             print_result("gpu-proofs", status, duration, tail if exit_ != 0 else None)
             if status == "FAIL" and not args.keep_going:
-                return finish(repo, base_sha, results)
+                return finish(repo, base_sha, results, ledger)
     else:
         skip(results, "gpu-proofs", "no GPU paths touched")
 
-    return finish(repo, base_sha, results)
+    return finish(repo, base_sha, results, ledger)
 
 
-def finish(repo, base_sha, results):
+def finish(repo, base_sha, results, ledger):
+    # The marker names HEAD's tree, so the gate must have run on exactly that
+    # tree: uncommitted edits to tracked files mean it checked something else.
+    dirty = run_cmd(["git", "status", "--porcelain", "--untracked-files=no"],
+                    cwd=repo, timeout=60)[1].strip()
+    if dirty:
+        tail = ["tracked files differ from HEAD, so the gate did not check the tree "
+                "that will merge; commit or revert:"] + dirty.splitlines()[:10]
+        results.append(("FAIL", "clean-tree", None, tail))
+        print_result("clean-tree", "FAIL", None, tail)
+
     # Summary
     passed = sum(1 for s, _, _, _ in results if s == "PASS")
     failed = sum(1 for s, _, _, _ in results if s == "FAIL")
@@ -434,11 +555,14 @@ def finish(repo, base_sha, results):
             print(f"{status} {label} ({tail[0]})")
         else:
             print(f"{status} {label}")
+    for entry in ledger["pre_existing_tests"]:
+        print(f"PRE-EXISTING {entry['test']} (red on origin/main, bead {entry['bead']})")
+    for test in ledger["failing_tests"]:
+        print(f"NEW FAILURE {test}")
     print(f"landing gate: {passed} passed, {failed} failed, {skipped} skipped")
 
     # Timing log (JSONL append, main checkout — worktrees come and go)
-    branch = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                     cwd=repo, timeout=30)[1].strip()
+    branch = current_branch(repo)
     try:
         timings_path = MAIN_CHECKOUT / ".claude" / "orchestration" / "landing-gate-timings.jsonl"
         timings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -462,58 +586,37 @@ def finish(repo, base_sha, results):
     except Exception as e:
         print(f"[WARN] timing log failed: {e}")
 
-    # Self-verdict (only when gate passes)
-    if failed == 0:
-        try:
-            # Extract bead IDs from commit messages
-            log_out = run_cmd(["git", "log", f"{base_sha}..HEAD", "--format=%B"],
-                             cwd=repo, timeout=300)[1]
-            bead_ids = sorted(set(re.findall(r"BUG-\w+", log_out)))
-            # Load the MAIN checkout's gate_runner: its append_verdict writes to
-            # the main checkout's verdict trail, which is what the merge guard reads.
-            gate_runner_path = MAIN_CHECKOUT / "scripts" / "gate_runner.py"
-            if bead_ids and not gate_runner_path.exists():
-                print(f"[WARN] gate_runner.py not found at {gate_runner_path}")
-            elif bead_ids:
-                gate_runner_spec = importlib.util.spec_from_file_location(
-                    "gate_runner",
-                    str(gate_runner_path)
-                )
-                if gate_runner_spec and gate_runner_spec.loader:
-                    gate_runner = importlib.util.module_from_spec(gate_runner_spec)
-                    gate_runner_spec.loader.exec_module(gate_runner)
-                    commit = run_cmd(["git", "rev-parse", "HEAD"],
-                                    cwd=repo, timeout=30)[1].strip()
-                    for bead_id in bead_ids:
-                        verdict = {
-                            "schema": 1,
-                            "task": bead_id,
-                            "phase": "per-lane",
-                            "brief": "scripts/landing_gate.py",
-                            "branch": branch,
-                            "commit": commit,
-                            "gates": [
-                                {
-                                    "cmd": label,
-                                    "exit": 0 if status != "FAIL" else 1,
-                                    "duration_s": round(duration, 1) if duration is not None else 0.0,
-                                    "tail": status
-                                }
-                                for status, label, duration, _ in results
-                            ],
-                            "scope": {"files_changed": [], "in_scope": True},
-                            "pass": True,
-                            "kind": "gate",
-                            "reason": None,
-                            "runner": "gate_runner.py@lead",
-                            "ts": datetime.now(timezone.utc).isoformat()
-                        }
-                        gate_runner.append_verdict(bead_id, verdict)
-                        print(f"verdict stamped: {bead_id}")
-        except Exception as e:
-            print(f"[WARN] self-verdict failed: {e}")
+    # The landing marker: the one fact the merge guard and the landing scripts
+    # read. Written on every run, red included, so a stale green can never
+    # outlive a newer red for the same checkout.
+    passed_gate = failed == 0 and not ledger["failing_tests"]
+    tree = run_cmd(["git", "rev-parse", "HEAD^{tree}"], cwd=repo, timeout=30)[1].strip()
+    head = run_cmd(["git", "rev-parse", "HEAD"], cwd=repo, timeout=30)[1].strip()
+    if not tree:
+        print("[FAIL] could not resolve HEAD's tree: no marker written, the landing is not cleared")
+        return 1
+    record = {
+        "schema": landing_marker.SCHEMA,
+        "tree": tree,
+        "head": head,
+        "branch": branch,
+        "base": base_sha,
+        "pass": passed_gate,
+        "failing_tests": ledger["failing_tests"],
+        "pre_existing_tests": ledger["pre_existing_tests"],
+        "skipped": [f"{label}: {tail[0]}" for status, label, _, tail in results
+                    if status == "SKIP" and tail],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        marker_path = MAIN_CHECKOUT / ".claude" / "orchestration" / "landing-gate-marker.json"
+        landing_marker.write_marker(record, marker_path)
+        print(f"landing marker: tree {tree[:12]} {'GREEN' if passed_gate else 'RED'} -> {marker_path}")
+    except OSError as e:
+        print(f"[FAIL] landing marker not written ({e}): the landing is not cleared")
+        return 1
 
-    return 0 if failed == 0 else 1
+    return 0 if passed_gate else 1
 
 
 if __name__ == "__main__":
