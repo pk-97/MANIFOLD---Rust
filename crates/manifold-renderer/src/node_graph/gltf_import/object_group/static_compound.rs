@@ -51,13 +51,11 @@ pub(in super::super) fn build_static_compound_group(
             .find(|node| node.type_id == "node.transform_3d")
             .map(|node| node.id)
             .expect("static object group always creates a transform");
-        // Use the whole asset center as the one rotation/scale pivot.
+        // The shared transform pivots the whole asset about its centre (the
+        // world origin after recentering). Mesh sources keep their own
+        // `-own_center` shift; each part's local transform below carries the
+        // matching `own_center - center` offset.
         for node in &mut body.nodes {
-            if node.type_id == "node.gltf_mesh_source" {
-                node.params.insert("translate_x".to_string(), float(-ctx.center[0]));
-                node.params.insert("translate_y".to_string(), float(-ctx.center[1]));
-                node.params.insert("translate_z".to_string(), float(-ctx.center[2]));
-            }
             if node.id == transform_id {
                 node.params.insert("pos_x".to_string(), float(0.0));
                 node.params.insert("pos_y".to_string(), float(0.0));
@@ -211,11 +209,6 @@ pub(in super::super) fn build_static_compound_group(
             .expect("object group always creates a scene object");
 
         for node in &mut body.nodes {
-            if node.type_id == "node.gltf_mesh_source" {
-                node.params.insert("translate_x".to_string(), float(-ctx.center[0]));
-                node.params.insert("translate_y".to_string(), float(-ctx.center[1]));
-                node.params.insert("translate_z".to_string(), float(-ctx.center[2]));
-            }
             if node.type_id == GROUP_OUTPUT_TYPE_ID {
                 node.handle = Some(format!("output_{}", i + 1));
             }
@@ -287,6 +280,9 @@ pub(in super::super) fn build_static_compound_group(
     }
 
     // Keep each material draw editable below the asset's shared transform.
+    // BUG-221 holds per part: the mesh source is shifted by `-own_center`, so
+    // placing the part at `own_center - center` keeps the net layout while a
+    // part rotation or scale pivots about the part's own centre.
     let body = primary.group_node.group.as_mut().expect("group body");
     for (index, (object_id, _)) in boundary_pairs.iter().enumerate() {
         for edge in &mut body.wires {
@@ -294,12 +290,16 @@ pub(in super::super) fn build_static_compound_group(
                 edge.to_port = "parent_transform".into();
             }
         }
-        let local = plain_node(
+        let mut local = plain_node(
             (ctx.fresh_id)(),
             &format!("part_transform_{}", local_k_offset + index),
             "node.transform_3d",
             &format!("part_transform_{}", local_k_offset + index),
         );
+        let own_center = materials[index].own_center;
+        for (axis, param) in ["pos_x", "pos_y", "pos_z"].into_iter().enumerate() {
+            local.params.insert(param.to_string(), float(own_center[axis] - ctx.center[axis]));
+        }
         stamp_scene_node_exposures_into(
             &mut primary.card_params, &mut primary.card_bindings, local.id,
             &local.node_id, &local.type_id, &materials[index].name.clone().unwrap_or_else(|| format!("Submesh {}", index + 1)),
