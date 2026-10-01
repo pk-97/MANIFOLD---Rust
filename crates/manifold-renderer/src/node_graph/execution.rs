@@ -363,6 +363,11 @@ pub struct Executor {
     /// step's `evaluate` returns; READ BY NOTHING yet (P1 stub only — P2
     /// consumes this to gate dirty-caching decisions elsewhere).
     node_declared_unchanged: Vec<bool>,
+    /// Per-step "went pending without running this frame" flag: a readiness
+    /// input was pending (`ExecutionStep::readiness_inputs`). Reset every
+    /// frame. A skipped step never captures state, and a skipped substep
+    /// boundary never iterates its region.
+    pending_skipped: Vec<bool>,
     /// RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D5 — per-physical-slot write
     /// generation, indexed by `Slot.0`. Bumped at the single choke point
     /// where a step's outputs are committed (the same site `resource_epoch`
@@ -390,7 +395,7 @@ pub struct Executor {
     mesh_revisions: Vec<crate::node_graph::mesh_change::MeshRevision>,
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — per-resource mesh pending
     /// flags, indexed by `ResourceId`: the producing step's declared
-    /// pending OR any wired input's pending, so a pending source remains
+    /// pending OR any readiness input's pending, so a pending source remains
     /// pending through deformers, fusion, and scene bundles and no AS
     /// work may consume it.
     mesh_pending: Vec<bool>,
@@ -618,6 +623,7 @@ impl Executor {
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
             node_declared_unchanged: Vec::new(),
+            pending_skipped: Vec::new(),
             slot_pending: Vec::new(),
             mesh_revisions: Vec::new(),
             mesh_pending: Vec::new(),
@@ -1380,9 +1386,26 @@ impl Executor {
     /// Identical recopies retain content; first publication, shape changes and
     /// pending-to-ready transitions revise it. Mesh topology/positions follow
     /// their compiled rules when content changes. Pending follows the actual
-    /// selected input for aliases/muxes and all inputs for ordinary transforms.
+    /// selected input for aliases/muxes and all readiness inputs otherwise.
     /// Logical ResourceId state is authoritative; slot snapshots are refreshed
     /// even on skips so recycled storage cannot inherit another tenant's stamp.
+    fn resource_pending(&self, resource: ResourceId) -> bool {
+        self.mesh_pending.get(resource.0 as usize).copied().unwrap_or(false)
+            || self
+                .backend
+                .slot_for(resource)
+                .and_then(|s| self.slot_pending.get(s.0 as usize).copied())
+                .unwrap_or(false)
+    }
+
+    /// Whether any of the step's readiness inputs is pending. A mux or alias
+    /// counts only its selected source.
+    fn readiness_input_pending(&self, step: &ExecutionStep, selected_source: Option<ResourceId>) -> bool {
+        step.readiness_inputs.iter().any(|&resource| {
+            selected_source.is_none_or(|selected| resource == selected) && self.resource_pending(resource)
+        })
+    }
+
     fn commit_mesh_revisions(
         &mut self,
         plan: &ExecutionPlan,
@@ -1402,17 +1425,7 @@ impl Executor {
                 .slot_for(res)
                 .and_then(|s| self.slot_pending.get(s.0 as usize).copied())
                 .unwrap_or(false);
-            let input_pending = step.inputs.iter().any(|&(_, r)| {
-                if selected_source.is_some_and(|selected| r != selected) {
-                    return false;
-                }
-                self.mesh_pending.get(r.0 as usize).copied().unwrap_or(false)
-                    || self
-                        .backend
-                        .slot_for(r)
-                        .and_then(|s| self.slot_pending.get(s.0 as usize).copied())
-                        .unwrap_or(false)
-            });
+            let input_pending = self.readiness_input_pending(step, selected_source);
             self.mesh_pending[idx] = declared || input_pending;
 
             let shape = self
@@ -1619,6 +1632,7 @@ impl Executor {
             self.resource_storage_state.clear();
             self.mesh_revision_counter = 0;
             self.node_declared_unchanged.resize(plan.steps().len(), false);
+            self.pending_skipped.resize(plan.steps().len(), false);
             self.node_content_unchanged.resize(plan.steps().len(), false);
             self.alias_propagation_state.clear();
             self.alias_propagation_state.resize_with(plan.steps().len(), || None);
@@ -1638,6 +1652,7 @@ impl Executor {
         // must re-declare on every frame it wants to skip; the executor
         // never carries last frame's declaration forward.
         self.node_declared_unchanged.iter_mut().for_each(|v| *v = false);
+        self.pending_skipped.iter_mut().for_each(|v| *v = false);
         self.node_content_unchanged.iter_mut().for_each(|v| *v = false);
 
         // Reset preview capture for this frame. Re-resolved below if the
@@ -2309,7 +2324,24 @@ impl Executor {
                     self.alias_propagation_state[idx] = None;
                 }
 
-                if !performed_alias && !copied_passthrough {
+                // A pending readiness input makes the step pending without
+                // running: its output bytes are not written this frame.
+                let pending_skip = !performed_alias
+                    && !copied_passthrough
+                    && self.readiness_input_pending(step, selected_input_resource);
+                if pending_skip {
+                    self.pending_skipped[idx] = true;
+                    executed_pure_epoch = None;
+                    for &(_, resource) in &step.outputs {
+                        if let Some(slot) = self.backend.slot_for(resource) {
+                            let index = slot.0 as usize;
+                            if self.slot_pending.len() <= index { self.slot_pending.resize(index + 1, false); }
+                            self.slot_pending[index] = true;
+                        }
+                    }
+                }
+
+                if !performed_alias && !copied_passthrough && !pending_skip {
                     self.scalar_write_scratch.clear();
                     self.camera_write_scratch.clear();
                     self.light_write_scratch.clear();
@@ -2747,6 +2779,18 @@ impl Executor {
         } = env;
         {
             let step = &plan.steps()[step_idx];
+            // State only ever accepts content: a step that went pending
+            // captures nothing, and a pending back-edge keeps last frame's
+            // state.
+            let back_edge_pending = graph.get_node(step.node).is_some_and(|inst| {
+                !inst.node.runs_with_pending_inputs()
+                    && step.inputs.iter().any(|&(port, resource)| {
+                        inst.node.state_capture_input_ports().contains(&port) && self.resource_pending(resource)
+                    })
+            });
+            if self.pending_skipped[step_idx] || back_edge_pending {
+                return;
+            }
             // Attribution profiling: late-capture GPU work (a feedback node's
             // state-snapshot blit) belongs to ITS node's row, not whichever
             // step happened to set the tag last (final_output — the
@@ -4792,6 +4836,7 @@ mod tests {
     }
 
     /// Records `slot_content_ready` of its "in" port on every evaluate.
+    /// Opts in to running with a pending input so it can see one.
     struct ReadinessObservingNode {
         type_id: EffectNodeType,
         log: Arc<Mutex<Vec<bool>>>,
@@ -4803,6 +4848,9 @@ mod tests {
         }
         fn type_id(&self) -> &EffectNodeType {
             &self.type_id
+        }
+        fn runs_with_pending_inputs(&self) -> bool {
+            true
         }
         fn inputs(&self) -> &[NodeInput] {
             static INPUTS: [NodeInput; 1] = [NodePort {
@@ -4859,6 +4907,140 @@ mod tests {
 
         let log = log.lock().unwrap();
         assert_eq!(log.as_slice(), &[false, false, true]);
+    }
+
+    /// Texture2D node that counts its evaluates and late captures. With
+    /// `capture` set, its `in` port is a state-capture back-edge.
+    struct CountingNode {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        capture: &'static [&'static str],
+        evals: Arc<Mutex<u32>>,
+        captures: Arc<Mutex<u32>>,
+    }
+
+    impl CountingNode {
+        fn new(name: &'static str, inputs: &[&'static str], capture: &'static [&'static str]) -> Self {
+            Self {
+                type_id: EffectNodeType::new(name),
+                inputs: inputs.iter().map(|&port| input(port, PortType::Texture2D, false)).collect(),
+                capture,
+                evals: Arc::new(Mutex::new(0)),
+                captures: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    impl EffectNode for CountingNode {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &self.inputs
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"),
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn state_capture_input_ports(&self) -> &[&str] {
+            self.capture
+        }
+        fn persistent_output_ports(&self) -> &[&str] {
+            if self.capture.is_empty() { &[] } else { &["out"] }
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            *self.evals.lock().unwrap() += 1;
+        }
+        fn late_capture(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            *self.captures.lock().unwrap() += 1;
+        }
+    }
+
+    /// A node that does not opt in is not evaluated while its input is
+    /// pending; its output goes pending in turn, and it evaluates again
+    /// the frame the input is ready.
+    #[test]
+    fn pending_input_holds_consumer_without_running_it() {
+        let declare_pending = Arc::new(Mutex::new(true));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(PendingSourceNode {
+            type_id: EffectNodeType::new("test.pending_source"),
+            declare_pending: declare_pending.clone(),
+        }));
+        let mid = CountingNode::new("test.mid", &["in"], &[]);
+        let mid_evals = mid.evals.clone();
+        let mid = g.add_node(Box::new(mid));
+        let observer = g.add_node(Box::new(ReadinessObservingNode {
+            type_id: EffectNodeType::new("test.readiness_observer"),
+            log: log.clone(),
+        }));
+        g.connect((src, "out"), (mid, "in")).unwrap();
+        g.connect((mid, "out"), (observer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        exec.execute_frame(&mut g, &plan, frame_time());
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(*mid_evals.lock().unwrap(), 0, "a pending input holds the consumer");
+        *declare_pending.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+
+        assert_eq!(*mid_evals.lock().unwrap(), 1, "the consumer runs once its input is ready");
+        assert_eq!(log.lock().unwrap().as_slice(), &[false, false, true]);
+    }
+
+    /// A pending back-edge never gates the node that captures it, and a
+    /// pending capture keeps last frame's state: a feedback loop whose
+    /// source goes pending resumes once the source is ready.
+    #[test]
+    fn pending_back_edge_does_not_latch_feedback() {
+        let declare_pending = Arc::new(Mutex::new(false));
+        let mut g = Graph::new();
+        let src = g.add_node(Box::new(PendingSourceNode {
+            type_id: EffectNodeType::new("test.pending_source"),
+            declare_pending: declare_pending.clone(),
+        }));
+        let feedback = CountingNode::new("test.feedback", &["in"], &["in"]);
+        let (feedback_evals, captures) = (feedback.evals.clone(), feedback.captures.clone());
+        let feedback = g.add_node(Box::new(feedback));
+        let mix = CountingNode::new("test.mix", &["a", "b"], &[]);
+        let mix_evals = mix.evals.clone();
+        let mix = g.add_node(Box::new(mix));
+        let sink = g.add_node(Box::new(ReadinessObservingNode {
+            type_id: EffectNodeType::new("test.readiness_observer"),
+            log: Arc::new(Mutex::new(Vec::new())),
+        }));
+        g.connect((src, "out"), (mix, "a")).unwrap();
+        g.connect((feedback, "out"), (mix, "b")).unwrap();
+        g.connect((mix, "out"), (feedback, "in")).unwrap();
+        g.connect((mix, "out"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        let counts = || {
+            (*feedback_evals.lock().unwrap(), *captures.lock().unwrap(), *mix_evals.lock().unwrap())
+        };
+
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(counts(), (1, 1, 1));
+        *declare_pending.lock().unwrap() = true;
+        exec.execute_frame(&mut g, &plan, frame_time());
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(counts(), (3, 1, 1), "feedback runs, mix holds, nothing is captured");
+        *declare_pending.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(counts(), (4, 2, 2), "the loop resumes the frame the source is ready");
     }
 
     /// SCENE_MODIFIER_RT_DESIGN.md §3.2 — executor mesh revision and
@@ -6178,6 +6360,8 @@ mod content_revision_tests {
         }
         fn outputs(&self) -> &[NodeOutput] { &[] }
         fn parameters(&self) -> &[ParamDef] { &[] }
+        // Observes pending publications, so it must run while one is pending.
+        fn runs_with_pending_inputs(&self) -> bool { true }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             self.log.lock().unwrap().push((
                 ctx.inputs.content_version("in"),

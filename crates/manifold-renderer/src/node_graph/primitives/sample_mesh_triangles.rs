@@ -50,10 +50,6 @@ impl Primitive for SampleMeshTriangles {
         (port == "vertices").then_some(SAMPLE_MESH_TRIANGLES_CAPACITY)
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.slot("in").is_some_and(|slot| !ctx.inputs.slot_content_ready(slot)) {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let Some(src) = ctx.inputs.array("in") else {
             return;
         };

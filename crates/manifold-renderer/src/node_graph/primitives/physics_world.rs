@@ -388,22 +388,20 @@ impl PhysicsWorldNode {
         let mut bodies = std::array::from_fn(|_| None);
         let mut targeted_fields: [Option<FieldValue>; MAX_BODIES + 1] =
             std::array::from_fn(|_| None);
-        let mut body_inputs_pending = false;
+        let mut body_inputs_pending = ctx.inputs.any_pending();
         for (i, port) in BODY_PORTS.iter().enumerate() {
-            if let Some(slot) = ctx.inputs.slot(port) {
-                body_inputs_pending |= !ctx.inputs.slot_content_ready(slot);
+            if ctx.inputs.slot(port).is_some() {
                 bodies[i] = ctx.inputs.rigid_body(port);
                 body_inputs_pending |= bodies[i].is_none();
             }
         }
         let prototype = ctx.inputs.rigid_body("copies");
-        if let Some(slot) = ctx.inputs.slot("copies") {
-            body_inputs_pending |= !ctx.inputs.slot_content_ready(slot) || prototype.is_none();
+        if ctx.inputs.slot("copies").is_some() {
+            body_inputs_pending |= prototype.is_none();
         }
         let acceleration_field = ctx.inputs.vector_field("acceleration_field");
-        if let Some(slot) = ctx.inputs.slot("acceleration_field") {
-            body_inputs_pending |=
-                !ctx.inputs.slot_content_ready(slot) || acceleration_field.is_none();
+        if ctx.inputs.slot("acceleration_field").is_some() {
+            body_inputs_pending |= acceleration_field.is_none();
         }
         for (index, port) in TARGETED_ACCELERATION_PORTS.iter().enumerate() {
             let matching_body_wired = if index < BODY_PORTS.len() {
@@ -411,17 +409,13 @@ impl PhysicsWorldNode {
             } else {
                 ctx.inputs.slot("copies").is_some()
             };
-            let Some(slot) = ctx.inputs.slot(port) else {
+            if ctx.inputs.slot(port).is_none() {
                 continue;
-            };
+            }
             if !matching_body_wired {
                 return Err(format!(
                     "Physics World `{port}` requires its matching body input to be wired"
                 ));
-            }
-            if !ctx.inputs.slot_content_ready(slot) {
-                body_inputs_pending = true;
-                continue;
             }
             let Some(field) = ctx.inputs.vector_field(port) else {
                 body_inputs_pending = true;
@@ -649,6 +643,11 @@ impl Primitive for PhysicsWorldNode {
         retained.copies.clear();
         retained.copies.extend_from_slice(&frame.copies);
         self.coupled_frame_ready = true;
+    }
+    // While a body is pending the simulation clock holds instead of jumping
+    // when the body lands; coupled mode publishes the liquid's frame.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         if self.coupled_mode {

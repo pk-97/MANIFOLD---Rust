@@ -12,11 +12,7 @@ pub(super) fn run<P: Primitive>(
     last_key: &mut Option<[u64; 5]>,
     output_stride: u64,
 ) {
-    if ["in", "map"].iter().any(|port| {
-        ctx.inputs
-            .slot(port)
-            .is_none_or(|slot| !ctx.inputs.slot_content_ready(slot))
-    }) {
+    if ["in", "map"].iter().any(|port| ctx.inputs.slot(port).is_none()) {
         ctx.mark_outputs_pending();
         return;
     }
