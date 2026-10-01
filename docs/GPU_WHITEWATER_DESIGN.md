@@ -297,7 +297,7 @@ Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit,
 | I2 | Grid placement is derived | `whitewater_refuses_misplaced_face_grid`, `whitewater_refuses_fractional_refinement`, `whitewater_refuses_unextended_faces` |
 | I3 | Live never waits on the GPU or the lifecycle's thread; offline waits for both | `whitewater_live_holds_until_fence`, `whitewater_live_never_waits_for_the_worker`, `whitewater_offline_waits_for_its_snapshot_and_the_worker` |
 | I4 | A snapshot is consumed once, in order, after its fence; a dropped one is counted | `whitewater_ring_overflow_counts_dropped_ticks` |
-| I5 | Ticks 0 hold population and outputs, and capture nothing | `whitewater_pause_holds_population` |
+| I5 | Ticks 0 hold population and outputs, and capture nothing; a pool written before the hold publishes on the next tick, not on a held frame | `whitewater_pause_holds_population`, `whitewater_step_matches_cpu_across_frames`, the GPU FLIP smoke's per-render paused-pixel check |
 | I6 | A new epoch clears before any load, and work in flight for the old one is never published | `whitewater_epoch_restart_clears`, `whitewater_epoch_restart_drops_the_reply_in_flight` |
 | I7 | Emission rounds per tick | `emission_count_rounds_per_tick` (gpu_tests) |
 | I8 | No vendored edit | `git diff --stat origin/feat/fft-water -- crates/manifold-fluids/native/flip_engine crates/manifold-fluids/native/PROVENANCE.md` → empty |
