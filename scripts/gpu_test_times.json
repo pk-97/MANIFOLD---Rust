@@ -7,6 +7,8 @@
     "matter_bodies::matter_body_reaction_counts_field_velocity": 248.6,
     "matter_look::matter_momentum_conserved_free_blob": 173.8,
     "matter_scene::matter_block_path_matches_per_point": 148.0,
+    "node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache": 174.1,
+    "matter_look::matter_look_lattice_alignment": 104.3,
     "matter_look::matter_look_volume_drift": 117.4,
     "liquid_conformance::liquid_thumbnail_ignores_contention": 234.0,
     "liquid_conformance::gpu_flip_body_push_against_iterations": 85.1,
