@@ -6,13 +6,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cells_with_particles::cell_lattice;
-use super::particles_to_faces::face_count;
+use super::gpu_flip_step::face_bytes;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::liquid::grid::face_len;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -45,21 +46,22 @@ struct ComponentUniforms {
 crate::primitive! {
     name: FaceSampleComponent,
     type_id: "node.face_sample_component",
-    purpose: "Copy one axis of a face grid (node.particles_to_faces' layout, one FaceSample per padded cell) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. Faces with weight 0 read 0.",
+    purpose: "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so the box has nodes − 7 cells per axis. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
     inputs: {
         faces: Array(FaceSample) required,
+        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(f32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("axis"), label: "Axis", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 2.0)), enum_values: AXES },
-        float_param!("nodes_x", "Cells X", 64.0, 1.0, 1024.0),
-        float_param!("nodes_y", "Cells Y", 64.0, 1.0, 1024.0),
-        float_param!("nodes_z", "Cells Z", 64.0, 1.0, 1024.0),
+        float_param!("nodes_x", "Nodes X", 71.0, 8.0, 1024.0),
+        float_param!("nodes_y", "Nodes Y", 71.0, 8.0, 1024.0),
+        float_param!("nodes_z", "Nodes Z", 71.0, 8.0, 1024.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Three of them, one per axis, on the last water step's extended faces publish GPU FLIP's face grid (face_u, face_v, face_w) for whitewater and any other consumer of the liquid seam. The lattice params match the water step's.",
+    composition_notes: "Three of them, one per axis, on node.liquid_state's faces (the tick's last node.gpu_flip_step faces) publish GPU FLIP's face grid (face_u, face_v, face_w) for whitewater and any other consumer of the liquid seam. Wire nodes_x/y/z from the domain, so the arrays follow Resolution: their storage follows the faces input.",
     examples: [],
     picker: { label: "Face Grid Component", category: Atom },
     summary: "Hands one direction of the water's velocity grid to effects that follow the water.",
@@ -69,32 +71,37 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/face_sample_component_body.wgsl"),
     input_access: [BufferGather],
+    output_capacity: FusedOutputCapacity::MultipleOf { input: "faces", factor: 1 },
 }
 
 impl Primitive for FaceSampleComponent {
-    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
         if port != "out" {
             return None;
         }
-        let (cells, axis) = (cell_lattice(params)?, axis_param(params)?);
-        u32::try_from(face_len(cells, axis)).ok()
+        inputs.iter().find(|(name, _)| *name == "faces").map(|&(_, records)| records)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let (Some(nodes), Some(axis)) = (cell_lattice(ctx.params), axis_param(ctx.params)) else {
-            ctx.error("Face Grid Component: every lattice length must be 1 to 1024 and the axis X, Y or Z".to_string());
+        let Some(axis) = axis_param(ctx.params) else {
+            ctx.error("Face Grid Component: the axis must be X, Y or Z".to_string());
             return;
         };
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Face Grid Component") else {
+            return;
+        };
+        let cells = lattice.cells();
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let (Some(faces), Some(out)) = (ctx.inputs.array("faces"), ctx.outputs.array("out")) else {
             return;
         };
-        let count = face_len(nodes, axis);
-        if count * 4 > out.size || face_count(nodes) * 32 > faces.size {
-            ctx.error(format!("Face Grid Component: a {nodes:?} lattice is larger than its arrays"));
+        let count = face_len(cells, axis);
+        if count * 4 > out.size || face_bytes(cells) > faces.size {
+            ctx.error(format!("Face Grid Component: a {cells:?} cell lattice is larger than its arrays"));
             return;
         }
+        let nodes = lattice.nodes();
         let uniforms = ComponentUniforms {
             axis: axis as u32,
             nodes_x: nodes[0] as f32,

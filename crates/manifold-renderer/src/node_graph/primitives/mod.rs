@@ -338,9 +338,8 @@ pub(crate) mod restrict_lattice;
 pub(crate) mod prolong_lattice;
 pub(crate) mod coarsen_water;
 pub(crate) mod coarse_inverse;
-// node.gpu_flip_step (milestone b) is its caller; until then only its proofs reach it.
-#[allow(dead_code)]
 pub(crate) mod gpu_flip_pressure;
+pub(crate) mod gpu_flip_step;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
 pub(crate) mod solid_faces;
@@ -414,8 +413,6 @@ pub(crate) mod gpu_flip_preset;
 mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_body_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_flip_solve_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

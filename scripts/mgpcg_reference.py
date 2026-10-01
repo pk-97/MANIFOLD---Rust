@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The GPU FLIP pressure solve in f64: the oracle for the pinned residuals in
-crates/manifold-renderer/src/node_graph/primitives/gpu_flip_solve_tests.rs.
+crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure_tests.rs.
 
 Multigrid-preconditioned conjugate gradient (McAdams, Sifakis & Teran 2010),
 step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the

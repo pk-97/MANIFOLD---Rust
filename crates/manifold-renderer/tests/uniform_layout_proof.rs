@@ -551,6 +551,9 @@ const NON_STANDALONE: &[&str] = &[
     "node.cut_mesh_cells",
     "node.remap_mesh_cut",
     "node.remap_cut_weights",
+    // GPU FLIP's step: barriered sort, solve and particle passes over one
+    // hand shader, its StepParams reflected in uniform_layout_extended.
+    "node.gpu_flip_step",
     // The whitewater lifecycle runs FLIP's C++ on the CPU and writes its
     // outputs from there: no GPU kernel of its own, only buffer copies.
     "node.whitewater_lifecycle",

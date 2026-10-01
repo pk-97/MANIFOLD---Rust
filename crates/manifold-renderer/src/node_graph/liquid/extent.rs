@@ -59,6 +59,8 @@ use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale
 use crate::node_graph::primitives::particles_to_faces::face_count;
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
 use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
+use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
+use crate::node_graph::primitives::gpu_flip_step::{face_bytes, scratch_bytes as step_scratch_bytes};
 use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
@@ -559,6 +561,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.liquid_state", check: liquid_state },
     ExtentRule { type_id: "node.liquid_stats", check: liquid_stats },
     ExtentRule { type_id: "node.liquid_frame", check: liquid_frame },
+    ExtentRule { type_id: "node.gpu_flip_step", check: gpu_flip_step },
     ExtentRule { type_id: "node.cells_with_particles", check: cells_with_particles },
     ExtentRule { type_id: "node.particles_to_faces", check: particles_to_faces },
     ExtentRule { type_id: "node.particle_distance", check: particle_distance },
@@ -899,11 +902,11 @@ fn matter_face_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = gpu_flip_cells(x)?;
+    let cells = x.lattice()?.cells();
     let Some(axis) = axis_param(x.params()) else {
         return Err(Verdict::Refused("the axis is not X, Y or Z".into()));
     };
-    x.covers("faces", face_count(cells) * FACE)?;
+    x.covers("faces", face_bytes(cells))?;
     x.covers("out", face_len(cells, axis) * 4)
 }
 
@@ -1073,7 +1076,6 @@ const RANGE: u64 = size_of::<CellRange>() as u64;
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let geometry = gpu_flip_geometry(
         |name, default| x.scalar(name, default),
-        x.params(),
         x.transform("domain"),
         x.transform("initial_volume"),
     )
@@ -1108,9 +1110,9 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 /// Storage sized to exactly the particles the fill's wires place.
 fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = gpu_flip_cells(x)?;
+    let cells = x.lattice()?.cells();
     let (pool, sites) = fill_of(|name, default| x.scalar(name, default));
-    let placed = filled_sites(nodes, pool, sites);
+    let placed = filled_sites(cells, pool, sites);
     if placed > u64::from(EXACT_F32_COUNT) {
         return Err(Verdict::Refused(format!(
             "Liquid Fill: the fill places {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
@@ -1124,12 +1126,27 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    // The faces are the body's own size (written later in the plan: the
-    // second pass sees it), held only while something reads them.
-    let faces = x.bytes("faces_in").unwrap_or(0);
-    x.provide("faces", faces);
-    if x.feeds("faces") {
-        x.hold(faces);
+    // The faces are the lattice's face grid, sized before the region runs and
+    // held only while something reads them. The tick's faces (written later
+    // in the plan: the second pass sees them) must be exactly that grid.
+    let mut faces_check = Ok(());
+    if x.input("faces_in").is_some() {
+        if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| x.input(port).is_none()) {
+            return Err(Verdict::Refused("Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".into()));
+        }
+        let faces = face_bytes(x.lattice()?.cells());
+        let fed = x.feeds("faces");
+        x.provide("faces", if fed { faces } else { 0 });
+        if fed {
+            x.hold(faces);
+            faces_check = match x.bytes("faces_in") {
+                Some(have) if have == faces => Ok(()),
+                Some(have) => Err(x.uncovered(format!("faces_in holds {have} bytes; the lattice's face grid is {faces}"))),
+                None => Err(x.uncovered("faces_in is unbound".into())),
+            };
+        }
+    } else {
+        x.provide("faces", 0);
     }
     let stats = u64::from(LIQUID_STATS_WORDS) * 4;
     // The zeroed stats a new epoch copies, and the readback ring.
@@ -1143,7 +1160,8 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.covers(port, records)?;
     }
     x.covers("stats", stats)?;
-    x.covers("stats_in", stats)
+    x.covers("stats_in", stats)?;
+    faces_check
 }
 
 fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1180,6 +1198,29 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.covers("solid", solid)?;
     }
     cover_frame_faces(x, &lattice)
+}
+
+/// One GPU FLIP step: the face grid it provides, the sort, the solver and its
+/// own scratch at the wired lattice, the field and body reads, and every
+/// particle carried through.
+fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let cells = x.lattice()?.cells();
+    if let Some(reason) = lattice_refusal(cells) {
+        return Err(Verdict::Refused(format!("GPU FLIP Step: {reason}. Lower Resolution.")));
+    }
+    let faces = face_bytes(cells);
+    x.provide("faces", faces);
+    let slots = x.items("particles").unwrap_or(0);
+    let ranges = range_storage_bytes(cells);
+    search_fits(x, cells, ranges)?;
+    // The sort's ranges, cell counts, rank and slot scratch.
+    x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
+    x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots));
+    field_reads(x)?;
+    let rows = body_rows(x)?;
+    x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;
+    // It moves min(particles, out) records: every one.
+    x.covers("out", slots * PARTICLE)
 }
 
 /// A GPU FLIP atom's cell lattice, as its run() reads it.

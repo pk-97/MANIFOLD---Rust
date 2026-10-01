@@ -95,6 +95,13 @@ class ScopeTests(unittest.TestCase):
         p = plan([P + "matter_fill.rs"])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
+    def test_gpu_flip_row_reaches_the_scene_proofs(self):
+        for path in (P + "gpu_flip_step.rs", P + "liquid_state.rs", R + "node_graph/liquid/extent.rs"):
+            self.assertTrue({"gpu_flip_", "face_grid_tests::"} <= plan([path]).filters, path)
+        shader = P + "shaders/gpu_flip_step.wgsl"
+        p = plan([shader], users=lambda s: [P + "gpu_flip_step.rs"], repo=self._repo_with(shader))
+        self.assertIn("gpu_flip_", p.filters)
+
     def with_times(self, times):
         d = tempfile.mkdtemp()
         self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))

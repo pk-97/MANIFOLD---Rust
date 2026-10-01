@@ -711,10 +711,10 @@ impl Chain {
         register_substep_test_nodes(&mut registry);
         let mut graph = def.clone().into_graph(&registry, &Default::default()).expect("chain builds");
         // The host fills the sources and reads the sink's input outside the frame.
-        let sink = super::gpu_flip_solve_tests::node_named(&graph, "sink");
+        let sink = super::gpu_flip_scene_tests::node_named(&graph, "sink");
         let (into_node, into_port) = graph.wires_into(sink).map(|w| w.from).next().expect("the sink is wired");
         for name in self.sources.iter().map(|(name, _)| name) {
-            graph.add_external_output(super::gpu_flip_solve_tests::node_named(&graph, name), "out").expect("a source port");
+            graph.add_external_output(super::gpu_flip_scene_tests::node_named(&graph, name), "out").expect("a source port");
         }
         graph.add_external_output(into_node, into_port).expect("the sink's producer port");
         let plan = compile(&graph).expect("chain compiles");
@@ -723,8 +723,8 @@ impl Chain {
         let mut backend = MetalBackend::new(device.arc(), 8, 8, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&graph, &plan, &device, &mut backend).expect("pre-allocate");
         let output = |backend: &MetalBackend, name: &str, port: &str| {
-            let node = super::gpu_flip_solve_tests::node_named(&graph, name);
-            let slot = backend.slot_for(super::gpu_flip_solve_tests::output_of(&plan, node, port)).expect("bound");
+            let node = super::gpu_flip_scene_tests::node_named(&graph, name);
+            let slot = backend.slot_for(super::gpu_flip_scene_tests::output_of(&plan, node, port)).expect("bound");
             Backend::array_buffer(backend, slot).expect("buffer").clone()
         };
         for (name, values) in &self.sources {

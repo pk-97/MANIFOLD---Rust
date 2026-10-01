@@ -16,6 +16,7 @@ use super::subtract_pressure::SubtractPressure;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
 use crate::node_graph::liquid::fields::FieldLattice;
+use crate::node_graph::liquid::lattice::PADDING_NODES;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::KnownItem;
 use crate::node_graph::primitive::Primitive;
@@ -957,7 +958,17 @@ fn gpu_flip_liquid_fill_places_pool_then_box() {
     let placed = 96 + 90;
     let out = harness.array::<FluidParticle>(&[], 1);
     let count = harness.scalar();
-    let step = lattice(&[
+    // The fill reads the padded lattice the domain publishes: the box N at
+    // MIN, grown by the padding on every side.
+    let pad = PADDING_NODES as f32;
+    let step = params(&[
+        ("nodes_x", N[0] as f32 + 1.0 + 2.0 * pad),
+        ("nodes_y", N[1] as f32 + 1.0 + 2.0 * pad),
+        ("nodes_z", N[2] as f32 + 1.0 + 2.0 * pad),
+        ("cell_size", H),
+        ("lattice_min_x", MIN[0] - pad * H),
+        ("lattice_min_y", MIN[1] - pad * H),
+        ("lattice_min_z", MIN[2] - pad * H),
         ("pool_sites", pool as f32),
         ("box_x0", sites[0][0] as f32),
         ("box_x1", sites[0][1] as f32),

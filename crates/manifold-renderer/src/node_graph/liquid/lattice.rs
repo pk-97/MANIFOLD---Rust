@@ -84,6 +84,11 @@ impl LiquidLattice {
         self.nodes
     }
 
+    /// Minimum corner of the authored box: the first cell inside the padding.
+    pub fn box_min(&self) -> [f32; 3] {
+        self.min.map(|v| v + PADDING_NODES as f32 * self.cell_size)
+    }
+
     pub fn cell_size(&self) -> f32 {
         self.cell_size
     }

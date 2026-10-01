@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
@@ -139,35 +139,78 @@ impl Primitive for LiquidSolidDistance {
         let ((Some(bodies), Some(shapes), Some(atlas)), Some(solid)) = (inputs, self.solid.as_ref()) else {
             return;
         };
-        let rows = rows.min((bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32);
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = SolidDistanceUniforms {
-            lattice_min_x: lattice.min()[0],
-            lattice_min_y: lattice.min()[1],
-            lattice_min_z: lattice.min()[2],
+        let job = SolidDistanceJob {
+            min: lattice.min(),
             cell_size: lattice.cell_size(),
-            nodes_x: lattice.nodes()[0] as i32,
-            nodes_y: lattice.nodes()[1] as i32,
-            nodes_z: lattice.nodes()[2] as i32,
+            nodes: lattice.nodes(),
             closed_faces,
             body_count,
             rows,
             tick_seconds,
-            dispatch_count: nodes,
+            bodies,
+            shapes,
+            atlas,
+            out: solid,
         };
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: bodies, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: shapes, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: solid, offset: 0 },
-            ],
-            [nodes.div_ceil(256), 1, 1],
-            "node.liquid_solid_distance",
-        );
+        encode_solid_distance(&mut self.pipeline, gpu.device, gpu.native_enc, &job, "node.liquid_solid_distance");
     }
+}
+
+/// One solid distance lattice: `nodes` lattice nodes from `min`, `cell_size` apart.
+pub(crate) struct SolidDistanceJob<'a> {
+    pub min: [f32; 3],
+    pub cell_size: f32,
+    pub nodes: [u32; 3],
+    /// Box walls that count as solid (bits −X +X −Y +Y −Z +Z), 3 nodes in from the lattice edge.
+    pub closed_faces: i32,
+    pub body_count: i32,
+    pub rows: i32,
+    pub tick_seconds: f32,
+    pub bodies: &'a GpuBuffer,
+    pub shapes: &'a GpuBuffer,
+    pub atlas: &'a GpuBuffer,
+    /// At least one f32 per node.
+    pub out: &'a GpuBuffer,
+}
+
+/// The node's kernel, for a stage that writes a solid lattice inside its own
+/// dispatch chain (`node.gpu_flip_step`). `slot` holds the codegen pipeline.
+pub(crate) fn encode_solid_distance(
+    slot: &mut Option<GpuComputePipeline>,
+    device: &GpuDevice,
+    encoder: &mut GpuEncoder,
+    job: &SolidDistanceJob<'_>,
+    label: &str,
+) {
+    let nodes = job.nodes.iter().map(|&n| u64::from(n)).product::<u64>() as u32;
+    let rows = job.rows.min((job.bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32);
+    let pipeline = standalone_pipeline::<LiquidSolidDistance>(slot, device);
+    let uniforms = SolidDistanceUniforms {
+        lattice_min_x: job.min[0],
+        lattice_min_y: job.min[1],
+        lattice_min_z: job.min[2],
+        cell_size: job.cell_size,
+        nodes_x: job.nodes[0] as i32,
+        nodes_y: job.nodes[1] as i32,
+        nodes_z: job.nodes[2] as i32,
+        closed_faces: job.closed_faces,
+        body_count: job.body_count,
+        rows,
+        tick_seconds: job.tick_seconds,
+        dispatch_count: nodes,
+    };
+    encoder.dispatch_compute(
+        pipeline,
+        &[
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: job.bodies, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: job.shapes, offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: job.atlas, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: job.out, offset: 0 },
+        ],
+        [nodes.div_ceil(256), 1, 1],
+        label,
+    );
 }
 
 #[cfg(test)]

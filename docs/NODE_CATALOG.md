@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 382 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 383 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 382 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (75)
+### Particles 3D (76)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -321,6 +321,7 @@ _Generated from the node registry. Do not hand-edit. 382 nodes registered, group
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | Friction Face Impulse | `node.friction_face_impulse` | Filter | Works out how much the water drags on floating objects where they slide past it. |
 | GPU FLIP Domain | `node.gpu_flip_domain` | Source | Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed. |
+| GPU FLIP Step | `node.gpu_flip_step` | Filter | Moves the water forward one step: gravity, solids, incompressibility and the particles' motion. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Jitter Particles | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |

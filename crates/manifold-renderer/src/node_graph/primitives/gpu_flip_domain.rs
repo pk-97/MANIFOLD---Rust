@@ -4,9 +4,9 @@
 //! and turns it into the fixed-tick clock, the fill's sites, gravity and the
 //! padded lattice the solid distance and the particle frame read. Scene
 //! forces and impulses reach the water through the shared field lattices of
-//! `liquid::fields` (seam P8), sampled over the face grid's box. The
-//! solver's own lattice is still baked into the preset, so any other lattice
-//! is refused by name. Exempt from the codegen mandate as a CPU bridge
+//! `liquid::fields` (seam P8), sampled over the face grid's box. Every
+//! lattice atom reads the lattice from its wires, so Resolution applies on
+//! change. Exempt from the codegen mandate as a CPU bridge
 //! (ADDING_PRIMITIVES.md exclusion 3).
 
 use std::borrow::Cow;
@@ -14,6 +14,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBuffer;
 use manifold_physics::FieldValue;
 
+use super::gpu_flip_pressure::lattice_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -34,24 +35,6 @@ const REST_DENSITY: f64 = 1000.0;
 
 /// Every wall of the tank is closed.
 const CLOSED_FACES: u32 = 63;
-
-/// The pressure solve's V-cycle depth at every lattice: a fixed count, so the
-/// graph's shape never depends on Resolution. Each level halves every side,
-/// so a side must divide by 2^(levels − 1).
-pub(crate) const MULTIGRID_LEVELS: usize = 5;
-
-/// What every lattice side must be a multiple of: 16 for five levels.
-pub(crate) const SIDE_MULTIPLE: u32 = 1 << (MULTIGRID_LEVELS - 1);
-
-/// Why a lattice can't be solved: a side that does not halve evenly down
-/// every level.
-pub(crate) fn multigrid_refusal(cells: [u32; 3]) -> Option<String> {
-    cells.iter().any(|&n| n == 0 || n % SIDE_MULTIPLE != 0).then(|| {
-        format!(
-            "a {cells:?} cell lattice does not halve evenly through the pressure solve's {MULTIGRID_LEVELS} levels; every side must be a multiple of {SIDE_MULTIPLE}"
-        )
-    })
-}
 
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -135,37 +118,23 @@ fn fill_sites(
 
 /// The domain box, lattice and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`). Refused by name, in this order: a lattice
-/// the pressure solve cannot transform, a fill that does not fit the domain,
-/// a fill past the count a wire carries exactly, and a lattice other than the
-/// one the preset's solver is built for.
+/// the pressure solve cannot take, a fill that does not fit the domain, and
+/// a fill past the count a wire carries exactly.
 pub(crate) fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
-    params: &ParamValues,
     domain: Option<Transform>,
     initial_volume: Option<Transform>,
 ) -> Result<GpuFlipGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
-    if let Some(reason) = multigrid_refusal(layout.cells) {
-        return Err(format!("GPU FLIP: {reason}. Set Resolution to a multiple of {SIDE_MULTIPLE}."));
+    if let Some(reason) = lattice_refusal(layout.cells) {
+        return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
     }
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
             "GPU FLIP: the fill places {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution or Initial Fill Height."
-        ));
-    }
-    let float = |name: &str, default: f32| match params.get(name) {
-        Some(ParamValue::Float(v)) => *v,
-        _ => default,
-    };
-    let built_resolution = float("built_resolution", 64.0).round().max(8.0) as u32;
-    let built_size = float("built_domain_size", 4.0);
-    let built = domain_layout(None, built_size, built_resolution)?;
-    if layout.cells != built.cells || layout.min != built.min || layout.cell_size != built.cell_size {
-        return Err(format!(
-            "GPU FLIP: this solver is built for Resolution {built_resolution} and Domain Size {built_size} m with no domain box, and its lattice cannot change yet. Set Resolution to {built_resolution} and Domain Size to {built_size}."
         ));
     }
     let setup = GpuFlipSetup { lattice: LiquidLattice::from_layout(&layout), pool_sites, box_sites };
@@ -331,11 +300,9 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("speed"), label: "Simulation Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("built_resolution"), label: "Built Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("built_domain_size"), label: "Built Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites into node.liquid_fill, gravity, forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) into every step's node.face_gravity, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance and node.liquid_frame; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Built Resolution and Built Domain Size name the lattice the preset's atoms are built for.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, shapes, atlas and the padded lattice into every node.gpu_flip_step, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
     summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -506,7 +473,6 @@ impl GpuFlipDomain {
         refuse_roles(ctx)?;
         let geometry = gpu_flip_geometry(
             |name, default| ctx.scalar_or_param(name, default),
-            ctx.params,
             ctx.inputs.transform("domain"),
             ctx.inputs.transform("initial_volume"),
         )?;
@@ -562,33 +528,25 @@ const _: () = assert!(ROLE_PORTS.len() == MAX_FLUID_ROLES);
 mod tests {
     use super::*;
 
-    fn params(built_resolution: f32) -> ParamValues {
-        let mut params = ParamValues::default();
-        params.insert("built_resolution".into(), ParamValue::Float(built_resolution));
-        params.insert("built_domain_size".into(), ParamValue::Float(4.0));
-        params
-    }
-
-    /// A side that does not halve evenly through every level is refused.
-    #[test]
-    fn gpu_flip_lattice_must_halve_through_every_level() {
-        assert_eq!(SIDE_MULTIPLE, 16);
-        for side in [16u32, 32, 48, 64, 80, 96, 128, 256] {
-            assert!(multigrid_refusal([side; 3]).is_none(), "{side}");
-        }
-        for side in [0u32, 8, 24, 40, 63, 72, 100] {
-            assert!(multigrid_refusal([side; 3]).is_some(), "{side}");
-        }
-        assert!(multigrid_refusal([64, 64, 40]).is_some());
-    }
-
     fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<GpuFlipGeometry, String> {
         let read = |name: &str, default: f32| match name {
             "resolution" => resolution,
             "fill_height" => fill,
             _ => default,
         };
-        gpu_flip_geometry(read, &params(resolution.round()), None, volume)
+        gpu_flip_geometry(read, None, volume)
+    }
+
+    /// Any side the slider reaches is a lattice: the solver halves sides
+    /// rounding up, so none needs to divide by a power of two.
+    #[test]
+    fn gpu_flip_domain_takes_any_resolution() {
+        for resolution in [8.0, 24.0, 32.0, 63.0, 72.0, 100.0, 128.0] {
+            let at = geometry(resolution, 0.16, None).unwrap_or_else(|reason| panic!("{resolution}: {reason}"));
+            let n = resolution as u32;
+            assert_eq!(at.setup.lattice.cells(), [n; 3]);
+            assert_eq!(at.setup.lattice.nodes(), [n + 7; 3]);
+        }
     }
 
     /// The Dam Break's column, as the preset wires it: the engine's boxes on
@@ -607,19 +565,11 @@ mod tests {
     #[test]
     fn gpu_flip_domain_refuses_by_name() {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
-        for resolution in [63.0, 72.0, 100.0] {
-            let reason = refused(geometry(resolution, 0.16, None));
-            assert!(reason.contains("Resolution") && reason.contains("multiple of 16"), "{resolution}: {reason}");
-        }
         assert!(refused(geometry(64.0, 4.0, None)).contains("Initial Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
         assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Initial Fill Height"), "{over}");
-        // Any lattice but the built one.
-        let read = |name: &str, default: f32| if name == "resolution" { 32.0 } else { default };
-        let other = refused(gpu_flip_geometry(read, &params(64.0), None, None));
-        assert!(other.contains("Resolution") && other.contains("Domain Size"), "{other}");
     }
 }

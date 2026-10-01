@@ -5,9 +5,10 @@
 //! dispatch with.
 
 use super::face_sample_component::FaceSampleComponent;
+use super::gpu_flip_step::face_bytes;
 use super::matter_face_component::{MatterFaceComponent, matter_cells};
-use super::particles_to_faces::face_count;
 use crate::node_graph::effect_node::ParamValues;
+use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::fluid::domain_layout;
 use crate::node_graph::liquid::grid::{face_dims, face_len};
 use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
@@ -15,12 +16,9 @@ use crate::node_graph::matter::lattice_nodes;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 
-fn lattice_params(cells: [u32; 3], axis: u32) -> ParamValues {
+fn axis_params(axis: u32) -> ParamValues {
     let mut params = ParamValues::default();
     params.insert("axis".into(), ParamValue::Enum(axis));
-    for (name, n) in ["nodes_x", "nodes_y", "nodes_z"].into_iter().zip(cells) {
-        params.insert(name.into(), ParamValue::Float(n as f32));
-    }
     params
 }
 
@@ -42,14 +40,18 @@ fn matter_last_read(nodes: [u32; 3], axis: usize) -> u64 {
     q[0] + n[0] * (q[1] + n[1] * q[2])
 }
 
+/// The step's face grid holds one record per padded cell; the component's
+/// out holds one float per record, at least the axis's faces.
 fn check_gpu_flip(cells: [u32; 3]) {
+    let records = face_bytes(cells) / size_of::<FaceSample>() as u64;
     for axis in 0..3 {
         let count = face_len(cells, axis);
         let capacity = FaceSampleComponent::new()
-            .array_output_capacity("out", &lattice_params(cells, axis as u32), &[])
+            .array_output_capacity("out", &axis_params(axis as u32), &[("faces", records as u32)])
             .expect("out capacity");
-        assert_eq!(u64::from(capacity), count, "{cells:?} axis {axis}: out holds exactly the axis's faces");
-        assert!(gpu_flip_last_read(cells, axis) < face_count(cells), "{cells:?} axis {axis}: read past the lattice");
+        assert_eq!(u64::from(capacity), records, "{cells:?} axis {axis}: out follows the face grid");
+        assert!(count <= records, "{cells:?} axis {axis}: out is shorter than the faces");
+        assert!(gpu_flip_last_read(cells, axis) < records, "{cells:?} axis {axis}: read past the lattice");
         assert!(count <= u64::from(u32::MAX), "{cells:?} axis {axis}: dispatch count");
     }
 }
@@ -81,9 +83,9 @@ fn face_grid_extents_at_64() {
 }
 
 /// Where the face grid nodes fuse in their host graphs. GPU FLIP's component
-/// sizes its output from params, so the freeze compiler refuses it even
-/// beside a coincident consumer (BUG-u8io, param-sized outputs never fuse).
-/// The matter component sizes its output from its grid input, so it folds
+/// sizes its output from its faces input, so it is an eligible atom, but the
+/// u and v components feeding one consumer form no region: the region gates
+/// leave each one isolated. The matter component sizes its output from its grid input, so it folds
 /// into one region with its consumer and stands alone without one; the
 /// fused-vs-unfused GPU proof covers the folded case.
 #[test]
@@ -116,6 +118,7 @@ fn face_grid_fusion_in_host_graphs() {
     let sampled = of_type(&gpu_flip, "node.face_sample_component");
     assert_eq!(sampled.len(), 3);
     assert!(sampled.iter().all(|n| !n.fused), "GPU FLIP face components stay unfused: {sampled:?}");
+    assert!(sampled.iter().all(|n| n.kind == "pointwise"), "GPU FLIP face components are eligible atoms: {sampled:?}");
 
     let alone = report(matter_dam_break_faces(None, false));
     let components = of_type(&alone, "node.matter_face_component");
@@ -138,7 +141,7 @@ fn face_grid_fusion_in_host_graphs() {
 #[test]
 fn whitewater_refuses_unextended_faces() {
     use crate::node_graph::whitewater::require_extended_faces;
-    assert!(require_extended_faces(super::gpu_flip_preset::EXTENDED_LAYERS as f32).is_ok());
+    assert!(require_extended_faces(super::gpu_flip_step::FACE_VALID_LAYERS as f32).is_ok());
     assert!(require_extended_faces(1.0).is_ok());
     let layers = super::matter_face_component::MATTER_FACE_VALID_LAYERS as f32;
     assert!(require_extended_faces(layers).expect_err("MPM refused").contains("needs at least 1"));

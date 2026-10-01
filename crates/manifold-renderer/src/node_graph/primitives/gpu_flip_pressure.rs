@@ -55,6 +55,7 @@ fn face_records(n: [u32; 3]) -> u64 {
 /// Device bytes the solver holds for itself at `lattice`: four lattice
 /// vectors, each coarse level's water, faces, right-hand side and correction,
 /// the coarse inverse, the partial sums and the scalars.
+#[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
     let levels = level_lattices(lattice);
     let coarse: u64 = levels[1..].iter().map(|&n| 3 * cells(n) * 4 + face_records(n) * FACE_BYTES).sum();
@@ -66,6 +67,7 @@ const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
 
 /// Dispatches one [`PressureSolver::prepare`] and one
 /// [`PressureSolver::solve`] of `iterations` encode at `lattice`.
+#[cfg(test)]
 pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
     let coarse = level_lattices(lattice).len() - 1;
     let v_cycle = coarse * (4 * SMOOTH_ROUNDS + 3) + 1;
