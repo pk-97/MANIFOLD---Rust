@@ -17,7 +17,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark, RetireQueue};
-use manifold_renderer::frame_status::FrameRenderStatus;
+use manifold_renderer::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::TICK;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
@@ -274,6 +274,8 @@ struct LiquidRun {
     /// Ticks per frame: 1 is 60 fps, 2 is 30 fps.
     stride: u32,
     live: bool,
+    /// The check provokes a node error, so a frame it fails is expected.
+    errors_expected: bool,
     /// What the last warm-up frame published.
     start: Probe,
     clock: Option<Clocked>,
@@ -349,6 +351,7 @@ impl LiquidRun {
             transport: 0,
             stride,
             live,
+            errors_expected: false,
             start: Probe::EMPTY,
             clock,
             _scope: scope,
@@ -399,7 +402,9 @@ impl LiquidRun {
         }
         let pending_allowed = warming || self.live;
         assert!(
-            status == FrameRenderStatus::Complete || (pending_allowed && status == FrameRenderStatus::PendingGeometry),
+            status == FrameRenderStatus::Complete
+                || (pending_allowed && status == FrameRenderStatus::PendingGeometry)
+                || (self.errors_expected && status == FrameRenderStatus::Failed(FrameRenderFailure::NodeError)),
             "{}: frame {} rendered with status {status:?}",
             self.domain_type,
             self.frame
@@ -1177,6 +1182,7 @@ fn liquid_nonfinite_tick_not_published() {
             let (a, b) = (run.frame_words("particles_a"), run.frame_words("particles_b"));
             let state = row.state.as_ref().expect("a state array");
             assert!(tap.take().is_empty(), "{}: errors before the corruption", row.type_id);
+            run.errors_expected = true;
             run.poison(row, 100);
             run.step();
             assert!(run.totals(row).nonfinite > 0, "{}: the totals do not flag the NaN record", row.type_id);
@@ -1228,6 +1234,7 @@ fn liquid_overflow_is_reported() {
         (case.edit)(&mut def);
         let tap = NodeErrorTap::new();
         let mut run = LiquidRun::offline(row, def, 1);
+        run.errors_expected = true;
         let mut reported = None;
         for _ in 0..3 {
             run.step();
@@ -1258,8 +1265,11 @@ fn liquid_live_frames_never_wait() {
                 ticks += live.step().get("ticks");
             }
             let waits = FrameClock::waits_on_this_thread() - before;
-            let mut offline = LiquidRun::on(row, scene(row, fixture), 1, false, false, live.clock.take());
+            // Each run's physics scope restores the mode it found, so the live
+            // run goes before the offline one starts.
+            let held = live.clock.take();
             drop(live);
+            let mut offline = LiquidRun::on(row, scene(row, fixture), 1, false, false, held);
             let before = FrameClock::waits_on_this_thread();
             offline.steps(10);
             let offline_waits = FrameClock::waits_on_this_thread() - before;
