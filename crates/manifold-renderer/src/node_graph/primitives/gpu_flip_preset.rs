@@ -97,6 +97,9 @@ pub(crate) struct WaterScene {
     /// (ghost fluid). Off wires zero distances: air at zero pressure on its
     /// cell centres, the race's comparison.
     pub ghost_fluid: bool,
+    /// The step's density projection (Volume Projection); off is the
+    /// comparison without it.
+    pub volume_projection: bool,
     /// The Dam Break's box as a Collider role (`obstacle_transform` into
     /// `obstacle_collider` into the domain's `role_0`).
     pub obstacle: bool,
@@ -128,6 +131,7 @@ impl WaterScene {
             surface_scale: 2,
             faces: false,
             ghost_fluid: true,
+            volume_projection: true,
             obstacle: false,
         }
     }
@@ -655,6 +659,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize
                 ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
                 ("top_speed", float(TOP_SPEED)),
                 ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
+                ("volume_projection", int(usize::from(scene.volume_projection))),
             ],
         ),
     );

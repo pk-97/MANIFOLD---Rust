@@ -22,8 +22,8 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 5. Divergence per water cell → f (`divergence`).
 6. The pressure solve, section 3.
 7. Subtract the pressure gradient on faces touching water (`subtract_pressure`), the air side of a surface face at its ghost pressure; wall faces stay 0. Constrain the solid faces and the walls (`constrain_solid_faces`). Extend `band_layers` layers (`new`): far enough that every RK3 stage of step 9 samples valid faces.
-8. On the tick's last step, the density solve: `density_source` asks each water cell for −rate·e with e = count/8 − 1, solved like section 3 at `DENSITY_ITERATIONS`, subtracted from the projected faces into a separate `advect` grid. A cell is inside, and gets the two-sided source, only when each of its six neighbours holds at least half of rest (4) or is a wall; any other cell is at the surface and only spreads. Counting any particle as water made a part-full surface cell under a stray particle a sink, which pulled the surface down and packed the water below it. The share per solve, rate × step dt, is 1 (`SPREAD_PER_STEP`). It moves particles and never becomes their velocity: kept as velocity, a fast splash's correction became speed.
-9. Faces to particles (`faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density correction step dt · (`advect` − `new`), capped at half a cell so a particle never overshoots the cell it is spreading from; clamped 0.2 cells off the walls.
+8. Every step, the density projection of Kugelstadt et al. 2019, "Implicit Density Projection for Volume Conserving Liquids" (`density_source`; credit in `gpu_flip_step.rs`). Each water cell's density ρ is the tent-kernel sum of the particles within a cell of its centre, rest 8; a wall or body face neighbour adds 0.5625, what its particles would; a cell beside air reads at least rest, so a part-full surface cell only spreads. The source −(1/dt)·clamp(ρ/8 − 1, ±½) is solved like section 3 with air at zero, its gradient taken off a copy of the projected faces into `spread`. It is the whole error every step, no per-step share, and it moves particles only: it never becomes velocity, so it adds no speed. Off with Volume Projection 0.
+9. Faces to particles (`faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density move step dt · (`spread` − `new`), uncapped (the source clamp bounds it); clamped 0.2 cells off the walls.
 
 The step's time rules:
 
@@ -81,7 +81,7 @@ Deviations from the engine, each named:
 | φ from every particle whose box reaches the cell | a cell with no live particle in its 27 neighbouring bins stays 3h | the solve reads φ only at water cells and their neighbours, which always have one; skipping the outer ring elsewhere took the gather from 1.67 to 1.40 ms a profiled 64³ frame |
 | ε 1e-6 in the velocity update, 1e-9 in the matrix | 1e-9 in both | against a water φ of −0.005h the 1e-6 shifts θ by 0.3%, and the projection leaves that much of the surface pressure as divergence |
 | ghost rows on every level | the finest level and its conjugate gradient only; coarse levels plain Dirichlet | coarse water is all-eight-children water, so a coarse surface has no φ; the V-cycle stays symmetric, only a weaker preconditioner at the surface |
-| no density solve | the density solve plain Dirichlet | it spreads crowding and is not velocity; no engine rule to port |
+| no density solve | Kugelstadt's density projection, plain Dirichlet | it restores volume by moving particles, never velocity; the engine has no volume control |
 | surface tension, density ratio | none here | off in the scenes we race |
 | skips the last inner face of each axis in the velocity update | every inner face | the skip is an engine boundary quirk; our wall faces are their own rule |
 
@@ -242,7 +242,8 @@ Different on purpose:
 |---|---|---|---|
 | Wall position | the zero face sits half a cell past the wall | exactly on the wall | the engine's offset lets water creep half a cell into the wall; it feels less sticky only by accident |
 | Step | CFL 5 (up to 5 cells a step), 12 extension layers | two 1/120 s steps, a 20 m/s guard, 4 layers at 64³ | big steps are an accuracy shortcut; ours keeps travel to a few cells |
-| Volume | no correction | the density solve | without it the GPU pool collapses by a third; with it, it holds the true depth |
+| Volume | no correction | Kugelstadt et al. 2019's density projection | without it the interior thins 7% and the pool stands 13–21% high; see "Volume and energy" |
+| Wall collision | `_resolveCollision` marches each particle's move against the solid (`fluidsimulation.cpp` 8303–8378) | the walls are closed faces and the move is clamped 0.2 cells inside | deliberate non-port: judged on physics, not engine match. The march is what lowers the engine's run-up; our energy proof shows nothing in our step adds energy, so a higher run-up is not a fault |
 
 ## 7. Invariants & enforcement
 

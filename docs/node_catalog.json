@@ -14666,9 +14666,19 @@
             "1"
           ],
           "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Volume Projection",
+          "name": "volume_projection",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves the water forward one step: gravity, solids, incompressibility and the particles' motion.",

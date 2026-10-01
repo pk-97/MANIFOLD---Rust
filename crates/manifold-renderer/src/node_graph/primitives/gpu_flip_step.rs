@@ -1,7 +1,8 @@
 //! `node.gpu_flip_step` — one GPU FLIP water step (docs/GPU_FLIP_PRESSURE_SOLVE.md
 //! section 1 (the step)): sort, particle distance, particles to faces,
 //! extend, forces, solids, water mask from φ, divergence, pressure solve,
-//! projection, constraint, extend, then the particles move. One node
+//! projection, constraint, extend, density projection, then the particles
+//! move. One node
 //! because no pass has a consumer outside the step and the solve between them
 //! is a barriered reduction; the hand kernels live in
 //! `shaders/gpu_flip_step.wgsl`, the solver in [`super::gpu_flip_pressure`].
@@ -10,6 +11,17 @@
 //! before any pass is encoded, so no kernel reads `arrayLength`. The face
 //! grid output is this node's own storage, exactly one record per padded
 //! cell, reallocated when the lattice changes.
+//!
+//! The density projection is T. Kugelstadt, A. Longva, N. Thuerey and
+//! J. Bender, "Implicit Density Projection for Volume Conserving Liquids",
+//! IEEE TVCG 27(4), 2019: each step solves a second Poisson equation whose
+//! source is the particles' density error against rest, and moves the
+//! particles down its gradient. The move is position only and never enters
+//! velocity, so it cannot add speed; it restores the volume the divergence
+//! solve alone lets drift. Kernel, solid-neighbour weight, surface clamp and
+//! ±½ source clamp follow the paper as built in the MIT-licensed `blub`
+//! (Andreas Reich, github.com/Wumpf/blub,
+//! `density_projection_gather_error.comp`).
 
 use std::borrow::Cow;
 
@@ -104,8 +116,9 @@ pub(crate) struct StepParams {
     pub(crate) ghost: u32,
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
+    pub(crate) rate: f32,
     /// The shader's struct rounds up to 16 bytes.
-    pub(crate) pad: [u32; 2],
+    pub(crate) pad: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -133,6 +146,7 @@ struct Pipelines {
     distance: GpuComputePipeline,
     subtract: GpuComputePipeline,
     constrain: GpuComputePipeline,
+    density: GpuComputePipeline,
     advect: GpuComputePipeline,
 }
 
@@ -156,6 +170,7 @@ impl Pipelines {
             distance: pipe("particle_distance"),
             subtract: pipe("subtract_pressure"),
             constrain: pipe("constrain_solid_faces"),
+            density: pipe("density_source"),
             advect: pipe("faces_to_particles"),
         }
     }
@@ -288,6 +303,8 @@ struct Step<'a> {
     pressure_iterations: u32,
     band: u32,
     ghost: bool,
+    /// Run the density projection.
+    density: bool,
 }
 
 impl StepState {
@@ -525,6 +542,32 @@ impl StepState {
             );
         }
         extend(enc, pipes, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        // The density projection (module doc): its pressure's gradient is
+        // taken off a copy of the new faces in `l.f`, and the move reads the
+        // difference as a displacement. Air sits at zero at its centres.
+        let spread = if step.density {
+            enc.dispatch_compute(
+                &pipes.density,
+                &[
+                    uniform(&base),
+                    buffer(1, ranges),
+                    buffer(2, sorted),
+                    buffer(6, &l.water),
+                    buffer(9, &l.corners),
+                    buffer(5, &l.rhs),
+                ],
+                cells_groups,
+                "gpu_flip.step.density_source",
+            );
+            let flat = Water { phi: None, ..water };
+            self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure_iterations, None)?;
+            let plain = StepParams { ghost: 0, ..p };
+            subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
+            extend(enc, pipes, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
+            &l.f
+        } else {
+            out_faces
+        };
         enc.dispatch_compute(
             &pipes.advect,
             &[
@@ -533,6 +576,7 @@ impl StepState {
                 buffer(9, &l.corners),
                 buffer(3, out_faces),
                 buffer(17, &l.a),
+                buffer(18, spread),
                 buffer(19, step.out),
             ],
             groups(u64::from(p.particles)),
@@ -545,7 +589,7 @@ impl StepState {
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+    purpose: "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -601,6 +645,7 @@ crate::primitive! {
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
         float_param!("top_speed", "Top Speed", DEFAULT_TOP_SPEED, 0.1, 1000.0),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
+        int_param!("volume_projection", "Volume Projection", 1.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Inside node.liquid_state's tick region, once per step: steps_per_tick nodes in a chain, each with its step_in_tick, the first taking the state's particles and every later one the previous step's out. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and, on the first step, reaction, every later step taking the previous step's reaction_out; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last step's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
@@ -746,7 +791,10 @@ impl Primitive for GpuFlipStep {
                 ghost: u32::from(ghost),
                 particles: out_slots,
                 shapes_len,
-                pad: [0; 2],
+                // The whole density error each step: projected to rest, no
+                // per-step share.
+                rate: 1.0 / step_dt,
+                pad: 0,
             },
             particles,
             out,
@@ -761,6 +809,7 @@ impl Primitive for GpuFlipStep {
             pressure_iterations,
             band: band_layers(travel).max(FACE_VALID_LAYERS),
             ghost,
+            density: ctx.scalar_or_param("volume_projection", 1.0) > 0.5,
         };
         let gpu = ctx.gpu_encoder();
         let encoded = self.state.encode(gpu.device, gpu.native_enc, &step);
@@ -801,6 +850,7 @@ mod tests {
             "particle_distance",
             "subtract_pressure",
             "constrain_solid_faces",
+            "density_source",
             "faces_to_particles",
         ] {
             assert!(entries.contains(&entry), "missing entry {entry}");

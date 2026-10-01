@@ -7,7 +7,7 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::gpu_flip_preset::{DAM_FILL_HEIGHT, DAM_OBSTACLE, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
+use super::gpu_flip_preset::{BOX_METRES, DAM_COLUMN, DAM_FILL_HEIGHT, DAM_OBSTACLE, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
 use crate::gpu_encoder::GpuEncoder;
@@ -450,6 +450,122 @@ fn gpu_flip_hydrostatic_column_rests() {
         assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
         assert!(worst <= 0.01 * g_dt, "frame {frame}: the pressure gradient is {:.3}% off ρg", 100.0 * worst / g_dt);
         assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
+    }
+}
+
+/// Mean particles per cell over the interior water: cells that, with all
+/// 26 neighbours, are φ < 0. Unlike particles per water cell, a growing
+/// surface does not move it.
+pub(super) fn interior_density(run: &Run, particles: &[FluidParticle]) -> f64 {
+    let (n, h, min) = (run.n(), run.scene.pressure.cell_size(), run.scene.min());
+    let water = run.water_of(particles);
+    let mut count = vec![0u32; n.pow(3)];
+    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+        let c: [usize; 3] = std::array::from_fn(|a| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize);
+        count[c[0] + n * (c[1] + n * c[2])] += 1;
+    }
+    let (mut cells, mut total) = (0u64, 0u64);
+    for k in 1..n - 1 {
+        for j in 1..n - 1 {
+            for i in 1..n - 1 {
+                let all = (0..27).all(|d| {
+                    let (di, dj, dk) = (d % 3, (d / 3) % 3, d / 9);
+                    water[(i + di - 1) + n * ((j + dj - 1) + n * (k + dk - 1))] > 0.5
+                });
+                if all {
+                    cells += 1;
+                    total += u64::from(count[i + n * (j + n * k)]);
+                }
+            }
+        }
+    }
+    total as f64 / cells.max(1) as f64
+}
+
+/// The pool's depth as its volume reads it: the mean over the floor's
+/// columns of the highest particle's height, plus the quarter cell the fill
+/// seeds under a surface. A slosh moves water between columns, not out of
+/// them, so this holds while the pool still moves.
+fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
+    let (n, h, min) = (run.n(), run.scene.pressure.cell_size(), run.scene.min());
+    let mut top = vec![f64::NEG_INFINITY; n * n];
+    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+        let c = |a: usize| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize;
+        let at = c(0) + n * c(2);
+        top[at] = top[at].max(f64::from(p.position_radius[1]));
+    }
+    top.iter().map(|&y| if y.is_finite() { y - floor + 0.25 * h } else { 0.0 }).sum::<f64>() / (n * n) as f64
+}
+
+/// The Dam Break keeps its volume: by frame 1800 (30 s) the pool's column
+/// depth is the analytic volume, the 0.16 m pool plus the column, over the
+/// 4 m × 4 m floor, within 3%, and the interior density is within 2% of its
+/// start. Over the settling, frame 400 on, KE + PE never rises frame to
+/// frame past the noise floor of `gpu_flip_dam_break_energy_never_rises`
+/// (1e-4 of the start), and ends below where it stood at frame 400. A
+/// position projection does a little work no force accounts for; this bounds
+/// it at that floor.
+#[test]
+fn gpu_flip_dam_break_settles_to_its_volume() {
+    const FRAMES: usize = 1800;
+    const SETTLING: usize = 400;
+    for steps in [1, 2] {
+        let scene = WaterScene::dam_break(64).with_steps(steps);
+        let mut run = Run::new(scene);
+        let floor = scene.min()[1];
+        let start = run.particles();
+        let e0 = energy(&start, floor);
+        let rho0 = interior_density(&run, &start);
+        let column: f64 = DAM_COLUMN.iter().map(|[lo, hi]| hi - lo).product();
+        let want = (DAM_FILL_HEIGHT * BOX_METRES * BOX_METRES + column) / (BOX_METRES * BOX_METRES);
+        let (mut last, mut worst) = (e0, (f64::NEG_INFINITY, 0, 0.0, 0.0));
+        let mut last_terms = (0.0, 0.0);
+        let mut at_settling = e0;
+        for frame in 1..=FRAMES {
+            run.frame();
+            let particles = run.particles();
+            let e = energy(&particles, floor);
+            let ke: f64 = particles
+                .iter()
+                .filter(|p| p.position_radius[3] > 0.0)
+                .map(|p| 0.5 * p.velocity.iter().map(|&c| f64::from(c).powi(2)).sum::<f64>())
+                .sum();
+            let pe = e - ke;
+            if frame > SETTLING && e - last > worst.0 {
+                worst = (e - last, frame, ke - last_terms.0, pe - last_terms.1);
+            }
+            (last, last_terms) = (e, (ke, pe));
+            if frame == SETTLING {
+                at_settling = e;
+            }
+            if frame % 120 == 0 {
+                println!(
+                    "GPU FLIP settle {steps} steps frame {frame:4}: E/E0 {:.5}, KE/E0 {:.2e}, column depth {:.4} m, interior {:.3} a cell",
+                    e / e0,
+                    ke / e0,
+                    column_depth(&run, &particles, floor),
+                    interior_density(&run, &particles)
+                );
+            }
+        }
+        let particles = run.particles();
+        let (depth, rho) = (column_depth(&run, &particles, floor), interior_density(&run, &particles));
+        println!(
+            "GPU FLIP settle {steps} steps: column depth {depth:.4} m against {want:.4} m ({:+.2}%), interior {rho:.3} against {rho0:.3} a cell ({:+.2}%)",
+            100.0 * (depth / want - 1.0),
+            100.0 * (rho / rho0 - 1.0)
+        );
+        println!(
+            "GPU FLIP settle {steps} steps: worst frame-to-frame rise after frame {SETTLING} {:+.3e} E0 at frame {} (KE {:+.3e} E0, PE {:+.3e} E0)",
+            worst.0 / e0,
+            worst.1,
+            worst.2 / e0,
+            worst.3 / e0
+        );
+        assert!((depth / want - 1.0).abs() <= 0.03, "{steps} steps: column depth {depth} m, want {want} m");
+        assert!((rho / rho0 - 1.0).abs() <= 0.02, "{steps} steps: interior density {rho} against {rho0}");
+        assert!(last < at_settling, "{steps} steps: E {last} at frame {FRAMES} not under {at_settling} at frame {SETTLING}");
+        assert!(worst.0 <= 1e-4 * e0, "{steps} steps: energy rose {:e} E0 at frame {}", worst.0 / e0, worst.1);
     }
 }
 
