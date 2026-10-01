@@ -45,7 +45,7 @@ const PROFILE_EVERY: usize = 25;
 const STILLS: [usize; 4] = [90, 240, 600, 900];
 
 /// Stages in the order the table prints them.
-const STAGES: [&str; 25] = [
+const STAGES: [&str; 26] = [
     "fill + particle state",
     "particle sort",
     "particle distance + classify",
@@ -68,6 +68,7 @@ const STAGES: [&str; 25] = [
     "surface volume",
     "surface smoothing",
     "surface marching cubes",
+    "surface relaxation",
     "scene setup (env, lights, objects)",
     "scene render",
     "tone map + other",
@@ -109,6 +110,7 @@ fn stage(name: &str, label: &str) -> &'static str {
         n if n.ends_with("liquid_count") || n.ends_with("liquid_offsets") || n.ends_with("liquid_mesh") => {
             "surface marching cubes"
         }
+        n if n.contains("liquid_relax_") => "surface relaxation",
         _ => "scene setup (env, lights, objects)",
     }
 }
