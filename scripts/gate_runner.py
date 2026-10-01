@@ -36,8 +36,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,7 +57,6 @@ VERDICTS_DIR = Path(
 # Pre-wave checks: the main checkout is the canonical repo root
 # (worktrees are isolated but goldens/wave-base checks need the main checkout).
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
-DEFAULT_LITELLM_URL = "http://127.0.0.1:4000/health/liveliness"
 
 # Slot labels from the launch guard (single source of truth) — the guard
 # derives them from the session env, so gate_runner sees the same map the
@@ -760,120 +757,6 @@ def _print_check(status, name, detail):
     print(f"  [{status}] {name} — {detail}")
 
 
-def _check_seat_drift():
-    """Check a: seat_tool show — FAIL if any slot has DRIFT or NO."""
-    cmd_label = "seat drift"
-    start = time.time()
-    tail_parts = []
-    try:
-        r = subprocess.run(
-            ["python3", str(REPO / "scripts/seat_tool.py"), "show"],
-            capture_output=True, text=True, timeout=30,
-        )
-        duration = round(time.time() - start, 1)
-        lines = r.stdout.strip().split("\n")
-        failed = False
-        for line in lines:
-            if not line.strip() or line.strip().startswith("slot"):
-                continue  # skip header
-            if "<- DRIFT" in line:
-                failed = True
-                tail_parts.append(f"DRIFT: {line.strip()}")
-                continue
-            parts = line.split()
-            if len(parts) >= 5 and parts[4] == "NO":
-                failed = True
-                tail_parts.append(f"UNSERVED: {line.strip()}")
-        tail = "; ".join(tail_parts) if tail_parts else "all slots aligned"
-        exit_code = 1 if failed else 0
-        status = "FAIL" if failed else "PASS"
-        _print_check(status, cmd_label, tail)
-        return {"cmd": cmd_label, "exit": exit_code, "duration_s": duration, "tail": tail}
-    except Exception as e:
-        duration = round(time.time() - start, 1)
-        _print_check("FAIL", cmd_label, str(e))
-        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": str(e)}
-
-
-def _check_litellm(litellm_url):
-    """Check b: litellm /health/liveliness — FAIL unless 200."""
-    cmd_label = "litellm liveliness"
-    start = time.time()
-    try:
-        req = urllib.request.Request(litellm_url)
-        resp = urllib.request.urlopen(req, timeout=10)
-        status = resp.getcode()
-        duration = round(time.time() - start, 1)
-        if status == 200:
-            _print_check("PASS", cmd_label, f"HTTP {status}")
-            return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": f"HTTP {status}"}
-        else:
-            _print_check("FAIL", cmd_label, f"HTTP {status}")
-            return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": f"HTTP {status}"}
-    except Exception as e:
-        duration = round(time.time() - start, 1)
-        err = str(e)
-        _print_check("FAIL", cmd_label, err)
-        return {"cmd": cmd_label, "exit": 1, "duration_s": duration, "tail": err}
-
-
-def _check_quota():
-    """Check c: kimi usage — WARN-only, never FAIL."""
-    cmd_label = "quota"
-    start = time.time()
-    try:
-        key_r = subprocess.run(
-            ["cc-fleet", "keyget", "kimi-upstream"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if key_r.returncode != 0:
-            tail = f"keyget failed: {key_r.stderr.strip() or 'no key'}"
-            duration = round(time.time() - start, 1)
-            _print_check("WARN", cmd_label, tail)
-            return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
-
-        token = key_r.stdout.strip()
-        req = urllib.request.Request(
-            "https://api.kimi.com/coding/v1/usages",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp = urllib.request.urlopen(req, timeout=15)
-        data = json.loads(resp.read().decode())
-        duration = round(time.time() - start, 1)
-
-        # 5h (300-min) window — API returns strings, convert to int
-        pct_5h = None
-        for lim in data.get("limits", []):
-            if lim.get("window", {}).get("duration") == 300:
-                detail = lim.get("detail", {}) or {}
-                limit = int(detail.get("limit") or 0)
-                remaining = int(detail.get("remaining") or 0)
-                if limit > 0:
-                    pct_5h = (limit - remaining) * 100 // limit
-                break
-
-        # weekly quota
-        pct_7d = None
-        usage = data.get("usage") or {}
-        limit7 = int(usage.get("limit") or 0)
-        remaining7 = int(usage.get("remaining") or 0)
-        if limit7 > 0:
-            pct_7d = (limit7 - remaining7) * 100 // limit7
-
-        parts = []
-        if pct_5h is not None:
-            parts.append(f"5h {pct_5h}%")
-        if pct_7d is not None:
-            parts.append(f"7d {pct_7d}%")
-        tail = ", ".join(parts) if parts else "no quota data"
-        _print_check("WARN", cmd_label, tail)
-        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": tail}
-    except Exception as e:
-        duration = round(time.time() - start, 1)
-        _print_check("WARN", cmd_label, str(e))
-        return {"cmd": cmd_label, "exit": 0, "duration_s": duration, "tail": str(e)}
-
-
 def _check_goldens():
     """Check d: git status --porcelain on goldens dir — FAIL if dirty."""
     cmd_label = "goldens clean"
@@ -1066,13 +949,8 @@ def _check_enforcement_manifest():
 
 def cmd_pre_wave(args):
     """Run the pre-wave checks (P2 + hook liveness) and append a verdict."""
-    litellm_url = os.environ.get("LITELLM_URL") or args.litellm_url or DEFAULT_LITELLM_URL
-
     print("=== pre-wave preflight ===")
     checks = [
-        _check_seat_drift(),
-        _check_litellm(litellm_url),
-        _check_quota(),
         _check_goldens(),
         _check_wave_base(args.base),
         _check_hooks_registered(),
@@ -1546,7 +1424,6 @@ def main():
     sh.set_defaults(func=cmd_show)
 
     pw = sub.add_parser("pre-wave", help="Run pre-wave preflight checks (P2)")
-    pw.add_argument("--litellm-url", default=None, help="Override litellm health URL (default: env LITELLM_URL or built-in)")
     pw.add_argument("--base", default=None, help="Wave base SHA to verify is ancestor of origin/main")
     pw.set_defaults(func=cmd_pre_wave)
 

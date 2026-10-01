@@ -2347,6 +2347,7 @@ dependencies = [
 name = "manifold-fluids"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cc",
  "manifold-foundation",
  "manifold-physics",
@@ -2515,6 +2516,7 @@ dependencies = [
  "manifold-playback",
  "manifold-ui",
  "naga",
+ "objc2 0.6.4",
  "parking_lot",
  "png",
  "serde",

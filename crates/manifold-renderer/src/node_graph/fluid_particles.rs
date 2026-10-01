@@ -84,6 +84,46 @@ impl KnownItem for CellRange {
     const SPECS: &'static [ChannelSpec] = CELL_RANGE_SPECS;
 }
 
+/// The three lower faces of one cell of the GPU FLIP face grid
+/// (docs/GPU_FLIP_PRESSURE_SOLVE.md). A lattice of n cells per axis stores
+/// (n + 1)³ of these, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k):
+/// the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h, the
+/// z face at (i + ½, j + ½, k)·h from the lattice minimum. A face whose
+/// other two indices reach n does not exist and holds zeros.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct FaceSample {
+    /// Metres per second along each face's normal; w = 0.
+    pub velocity: [f32; 4],
+    /// Per face: the particle weight gathered there, or 1/0 valid after the
+    /// pressure step; w = 0.
+    pub weight: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<FaceSample>() == 32);
+
+pub const FACE_SAMPLE_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::FACE_VELOCITY, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::FACE_WEIGHT, ty: ChannelElementType::Vec4F },
+];
+
+impl KnownItem for FaceSample {
+    const SPECS: &'static [ChannelSpec] = FACE_SAMPLE_SPECS;
+}
+
+/// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
+/// 28; stride 32. The record is manifold_fluids' own, so the GPU spawn atoms
+/// and the lifecycle share one definition (GPU_WHITEWATER_DESIGN.md section 3.4).
+pub const WHITEWATER_SPAWN_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::POSITION_LIFETIME, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::KIND, ty: ChannelElementType::U32 },
+];
+
+impl KnownItem for manifold_fluids::WhitewaterSpawn {
+    const SPECS: &'static [ChannelSpec] = WHITEWATER_SPAWN_SPECS;
+}
+
 /// Spatial bins covering an axis-aligned box: `max(1, ceil(size / cell))`
 /// bins per axis, bin (i, j, k) spanning `min + (i, j, k)·cell`. Only the
 /// sort evaluates it; every atom that searches its bins takes the sort's
@@ -149,5 +189,6 @@ mod tests {
         );
         assert_eq!(std430_stride(FLUID_BLOB_SPECS) as usize, std::mem::size_of::<FluidBlob>());
         assert_eq!(std430_stride(CELL_RANGE_SPECS) as usize, std::mem::size_of::<CellRange>());
+        assert_eq!(std430_stride(FACE_SAMPLE_SPECS) as usize, std::mem::size_of::<FaceSample>());
     }
 }

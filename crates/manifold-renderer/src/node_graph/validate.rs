@@ -181,6 +181,7 @@ impl From<&GraphError> for ValidationIssue {
                 ..
             } => (Some(node.0), Some(missing_input.clone())),
             MalformedSubstepRegion { node, .. } => (Some(node.0), None),
+            IllegalParams { node, .. } => (Some(node.0), None),
         };
         ValidationIssue {
             node_id,

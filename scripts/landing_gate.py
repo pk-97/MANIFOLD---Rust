@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """One-command landing gate (GIT_TREE_DISCIPLINE.md section 2 (Landing protocol)).
 
-Gates only what the branch touched; the workspace-wide sweep lives in
+Gates only what the branch touched (GPU leg: scripts/gpu_scope.py); the workspace-wide sweep lives in
 scripts/trunk_health.py (nightly). Pass --repo <worktree path> of the branch
 being landed, after merging origin/main into it. Stop at the first failed check; preserve its
 transcript and timings. Exit 0 iff all required checks pass.
 """
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import os
@@ -22,64 +23,10 @@ import gpu_queue
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
-# GPU-proofs landing scope: narrow the gpu-proofs leg to the subsystem a branch
-# touches, so a raytracing-only landing does not pay for the whole ~4.5-min
-# suite. Each row is (path-substrings, (filters, skips)); a changed path whose
-# substring matches a row contributes that scope, and matching scopes UNION
-# (cargo test runs tests matching ANY filter). If no row matches, or any
-# GPU-touching path is left uncovered by a narrow scope, the leg falls back to
-# all tests in the gpu_proofs binary — never guess narrow. The nightly
-# trunk_health sweep keeps the full renderer-suite safety net.
-#   - `rt_` skips `particletext`: the freeze proof `particletext_*` hangs the
-#     GPU on main (BUG-i6eo), so keep it out of RT-scoped runs even though no
-#     rt_ test currently matches it.
-GPU_PROOFS_SCOPE = [
-    (
-        (
-            "crates/manifold-gpu/src/metal/raytrace.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/render_scene.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/render_scene.wgsl",
-            "crates/manifold-renderer/tests/gpu_proofs/rt_",
-        ),
-        (["rt_"], ["particletext"]),
-    ),
-    (
-        ("crates/manifold-renderer/src/node_graph/freeze/",),
-        (["freeze::"], []),
-    ),
-    # Live Matter (GPU_MPM_SOLVER_DESIGN.md) and the substep regions it runs
-    # in. particles_to_copies and the cell sort keep their proofs in the lib
-    # binary, which a scoped run skips, so they stay uncovered (FULL).
-    (
-        (
-            "crates/manifold-renderer/src/node_graph/matter.rs",
-            "crates/manifold-renderer/src/node_graph/matter/",
-            "crates/manifold-renderer/src/node_graph/substeps.rs",
-            "crates/manifold-renderer/src/node_graph/execution/substep_region.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_common.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_domain.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_fill",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_state.rs",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_stats",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_frame",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_to_grid",
-            "crates/manifold-renderer/src/node_graph/primitives/matter_grid_update",
-            "crates/manifold-renderer/src/node_graph/primitives/grid_to_matter",
-            "crates/manifold-renderer/src/node_graph/primitives/zero_array",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_fill",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_stats",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_frame",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_to_grid",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/matter_grid_update",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/grid_to_matter",
-            "crates/manifold-renderer/src/node_graph/primitives/shaders/zero_array",
-            "crates/manifold-renderer/tests/gpu_proofs/matter_",
-            "crates/manifold-renderer/tests/gpu_proofs/substeps",
-        ),
-        (["matter_", "substeps_"], []),
-    ),
-]
-
+# GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
+# run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
+# nightly via trunk_health.py.
+import gpu_scope
 
 
 def build_environment(cmd, cwd):
@@ -185,67 +132,12 @@ def get_touched_packages(repo, base_sha):
     return packages_for_paths(repo, [line.strip() for line in changed.splitlines() if line.strip()])
 
 
-def _path_is_gpu(path):
-    """Single-path GPU-trigger predicate.
-
-    Mirrors context-nudge triggers, plus the gpu-proofs test dirs — a change
-    to a proof itself (tests/gpu_proofs/rt_*.rs) must run the gpu-proofs leg,
-    otherwise the very tests a branch edits never execute at landing.
-    """
-    if path.endswith(".wgsl"):
-        return True
-    if path.startswith("crates/manifold-gpu/") or path.startswith("crates/manifold-renderer/src/node_graph/"):
-        return True
-    if "shaders/" in path or "gpu_encoder" in path:
-        return True
-    if "tests/gpu_proofs/" in path:
-        return True
-    if _path_is_conformance(path):
-        return True
-    return False
-
-
-def _path_is_conformance(path):
-    return (path == "crates/manifold-renderer/tests/glb_conformance.rs"
-            or path.startswith("tests/fixtures/gltf/khronos/"))
-
-
-def gpu_proofs_targets_for_paths(paths):
-    targets = ["gpu_proofs"]
-    if any(_path_is_conformance(path) for path in paths):
-        targets.append("glb_conformance")
-    return targets
-
-
 def touches_gpu_path(repo, base_sha):
     """Check if diff touches GPU-path files."""
     changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
                       cwd=repo, timeout=300)[1]
-    return any(_path_is_gpu(line.strip())
+    return any(gpu_scope.is_gpu_path(line.strip())
                for line in changed.strip().splitlines() if line.strip())
-
-
-def gpu_proofs_scope_for_paths(paths):
-    """Return (filters, skips) for changed `paths`, or None for the FULL suite.
-
-    Union of every GPU_PROOFS_SCOPE row a path matches; None (FULL) when no
-    row matches or when any GPU-touching path is left uncovered by a narrow
-    scope. Non-GPU paths (scripts/, docs/) never force FULL by themselves.
-    """
-    filters, skips = [], []
-    covered = set()
-    for pattern_group, (filters_, skips_) in GPU_PROOFS_SCOPE:
-        hits = {p for p in paths if any(pat in p for pat in pattern_group)}
-        if hits:
-            filters.extend(filters_)
-            skips.extend(skips_)
-            covered |= hits
-    if not filters:
-        return None
-    gpu_paths = {p for p in paths if _path_is_gpu(p)}
-    if gpu_paths - covered:
-        return None
-    return (sorted(set(filters)), sorted(set(skips)))
 
 
 def reverse_deps(repo, packages):
@@ -305,6 +197,11 @@ def print_result(label, status, duration=None, tail=None):
 
 
 def main():
+    with contextlib.ExitStack() as stack:
+        return _main(stack)
+
+
+def _main(stack):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=Path.cwd(),
                         help="worktree of the branch being landed (default: cwd)")
@@ -448,6 +345,14 @@ def main():
     if status == "FAIL" and not args.keep_going:
         return finish(repo, base_sha, results)
 
+    # Nextest tests call GpuDevice::new_queued; each would queue behind every
+    # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
+    # here through gpu-proofs: child test processes inherit an ancestor's hold,
+    # so the landing waits once (visibly, on stdout) then runs straight through.
+    if gate_packages or (touches_gpu and not args.skip_gpu):
+        print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
+        stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
+
     # f. tests (if packages touched)
     if gate_packages:
         pkg_args = []
@@ -472,25 +377,18 @@ def main():
             changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
                               cwd=repo, timeout=300)[1]
             paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
-            scope = gpu_proofs_scope_for_paths(paths)
-            cmd = ["python3", "scripts/gpu_proofs_gate.py"]
-            targets = gpu_proofs_targets_for_paths(paths)
-            for target in targets:
-                cmd += ["--test", target]
-            print(f"[gpu-proofs] test binaries: {', '.join(targets)}", flush=True)
-            if scope is None:
-                print("[gpu-proofs] all tests in selected binaries (no narrower scope covers the touched paths)")
-            else:
-                filters, skips = scope
-                for f in filters:
-                    cmd += ["--filter", f]
-                for s in skips:
-                    cmd += ["--skip", s]
-                print(f"[gpu-proofs] scoped to filters={filters} skips={skips}")
-            # Queue here, not inside the subprocess, so waiting behind another
-            # GPU run does not eat this leg's 2h timeout or its duration.
-            with gpu_queue.hold("landing_gate gpu-proofs"):
-                exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
+            plan = gpu_scope.plan_for_paths(paths, repo)
+            if plan.unmapped:
+                message = gpu_scope.unmapped_message(plan)
+                print(message)
+                results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
+                return finish(repo, base_sha, results)
+            print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
+            print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
+            cmd = ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base,
+                   "--budget", str(gpu_scope.LANDING_BUDGET_S)]
+            # The GPU hold was taken before the tests leg and is still held.
+            exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
@@ -505,7 +403,7 @@ def main():
                 names = []
                 in_section = False
                 for line in lines:
-                    if line.startswith(("Failed tests", "Drifted goldens")):
+                    if line.startswith(("Failed tests", "Drifted goldens", "Slowest tests")):
                         in_section = True
                     elif line.startswith(("Per-binary results", "GPU-PROOFS GATE:")):
                         in_section = False

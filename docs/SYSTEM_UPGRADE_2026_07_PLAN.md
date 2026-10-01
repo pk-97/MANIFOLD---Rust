@@ -9,7 +9,7 @@ The 2026-07 overnight Sonnet waves failed the same way everywhere: agents built 
 
 ## Operating model (supersedes prior practice; AGENT_ROUTING.md carries the rules)
 
-- Fable (or K3 when Fable is out of window) is the ONLY orchestrator. Never Sonnet-over-Sonnet.
+- Fable (or Opus 5.5) is the ONLY orchestrator. Never Sonnet-over-Sonnet.
 - Fable **steers**: chooses the approach, names the reuse target and conviction test in every brief, checks each lane's first commit.
 - Lanes make **exactly one commit, then STOP and report**. Lanes have NO landing rights — only the top session merges to main.
 - "Existing system doesn't cover X" is a report up, never a license to build. Any new helper module/harness = stop.
@@ -60,7 +60,7 @@ Pixels are for looking, not asserting. Nearly every UI bug of 2026-07 was a stat
 
 ## Later (blocked/queued)
 
-- K3 verification lanes per surface when K3 usage resets.
+- Verification lanes per surface (Opus lanes).
 - Hook trim pass (Step 1.6). Scope addition (Peter approved 2026-07-20): PreToolUse hook denies Agent-tool calls from `lane-*` subagent sessions — lanes never spawn sub-agents, structurally (W15-A incident); consult/investigation agents stay instruction-governed. Escape valve unchanged: lane stops and reports the fan-out need up.
 - `manifold-core/effects.rs` dead-mass audit.
 - God-file decomposition follows the widget-tree design — splitting before killing the duplication just spreads the mess.

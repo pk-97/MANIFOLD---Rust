@@ -33,6 +33,8 @@ mod native;
 pub(crate) mod particle_ring;
 #[cfg(test)]
 mod playback_tests;
+#[cfg(all(test, feature = "water-race-probes"))]
+mod race_probe;
 mod roles;
 mod take;
 pub use coupled::{CoupledRigidFrame, CoupledRigidInputs};
@@ -286,6 +288,13 @@ fn request_count(
     usize::try_from(due).map_err(|_| "Water preview catch-up request is too large".to_owned())
 }
 
+/// A whitewater particle's draw scale from its remaining lifetime: FLIP's
+/// native path and the GPU whitewater both shrink the last 0.2 seconds
+/// instead of leaving a full-sized particle until its removal.
+pub(crate) fn whitewater_fade(lifetime: f32) -> f32 {
+    (lifetime / 0.2).clamp(0.0, 1.0).sqrt()
+}
+
 /// Separate populations share the mesh publication epoch and tick. Each can use
 /// an ordinary scene object with its own material, mesh and live instance count.
 #[derive(Default, Clone)]
@@ -317,12 +326,9 @@ impl WhitewaterFrame {
     fn fill(&mut self, particles: &[WhitewaterParticle], domain: FluidDomainLayout) {
         self.clear();
         for particle in particles {
-            // Native lifetime is remaining time. Shrink the last 0.2 seconds
-            // instead of leaving a full-sized particle until its removal.
-            let fade = (particle.lifetime / 0.2).clamp(0.0, 1.0);
             let position = domain.to_scene(particle.position);
             let instance = InstanceTransform {
-                pos_scale: [position[0], position[1], position[2], fade.sqrt()],
+                pos_scale: [position[0], position[1], position[2], whitewater_fade(particle.lifetime)],
                 rot_pad: [0.0; 4],
             };
             match particle.kind {

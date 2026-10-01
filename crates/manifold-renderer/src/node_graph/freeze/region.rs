@@ -224,8 +224,10 @@ pub struct Region {
     /// anchor so the widened range (the mirrored half, the echo stride) is
     /// actually dispatched and written, and mirrors it to
     /// `node.wgsl_compute` through the `// @fused_output_capacity:` marker so
-    /// the fresh `dst` is sized to match. Resolved in `build_region`; texture
-    /// regions keep `None`.
+    /// the fresh `dst` is sized to match. A lattice-sized region (a
+    /// `ParamProduct` member) composes its count from the fused uniforms,
+    /// clamped as `lattice_count` describes. Resolved in `build_region`;
+    /// texture regions keep `None`.
     pub output_capacity: Option<CapacityExpr>,
 }
 
@@ -1037,17 +1039,27 @@ pub(crate) fn configured_construct(
     // then reconfigure (variadic nodes rebuild param-derived ports). Matches
     // `NodeInstance::new`. Unknown / mistyped params are skipped (the loader would
     // have rejected the def upstream; the freeze pass only needs a faithful shape).
+    let params = configured_params(boxed.as_ref(), node);
+    boxed.reconfigure(&params);
+    Some(boxed)
+}
+
+/// A node's params as the runtime seeds them: every declared default,
+/// overridden by the def's values.
+fn configured_params(
+    constructed: &dyn crate::node_graph::effect_node::EffectNode,
+    node: &EffectGraphNode,
+) -> crate::node_graph::effect_node::ParamValues {
     let mut params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
-    for p in boxed.parameters() {
+    for p in constructed.parameters() {
         params.insert(p.name.clone(), p.default.clone());
     }
     for (key, value) in &node.params {
-        if let Some(p) = boxed.parameters().iter().find(|p| p.name == key.as_str()) {
+        if let Some(p) = constructed.parameters().iter().find(|p| p.name == key.as_str()) {
             params.insert(p.name.clone(), value.clone().into());
         }
     }
-    boxed.reconfigure(&params);
-    Some(boxed)
+    params
 }
 
 /// How many texture outputs `doc_id` declares (0 if it's not in `def`, or the
@@ -1081,6 +1093,37 @@ fn capacity_bounded_by(value: &CapacityExpr, limit: &CapacityExpr) -> bool {
     value == limit
         || matches!(value, CapacityExpr::Min(children) if children.iter().any(|child| capacity_bounded_by(child, limit)))
         || matches!(limit, CapacityExpr::Min(children) if children.iter().all(|child| capacity_bounded_by(value, child)))
+}
+
+/// The count of a region with a lattice-sized member: the output's own
+/// capacity, clamped by every member capacity and coincident array external
+/// that does not provably bound it, so no member runs past its lattice and no
+/// pre-read runs past its array when live params change. At the configured
+/// params the clamps must not bite, or the fused count would differ from the
+/// output's unfused one: refuse (the graph is misconfigured; unfused reports
+/// it by name).
+fn lattice_count(
+    output: &CapacityExpr,
+    member_expr: &[Option<CapacityExpr>],
+    coincident_slots: &[usize],
+    params: &crate::node_graph::effect_node::ParamValues,
+) -> Result<CapacityExpr, &'static str> {
+    let clamps = member_expr.iter().flatten().cloned().chain(coincident_slots.iter().map(|&e| CapacityExpr::Slot(e)));
+    let mut children = vec![output.clone()];
+    for clamp in clamps {
+        if capacity_bounded_by(output, &clamp) || children.contains(&clamp) {
+            continue;
+        }
+        let slot_free = |e: &CapacityExpr| e.eval_with(&[], params).is_some();
+        if slot_free(&clamp) && slot_free(output) && clamp.eval_with(&[], params) < output.eval_with(&[], params) {
+            return Err("a member's lattice is smaller than the region output's");
+        }
+        children.push(clamp);
+    }
+    Ok(match children.len() {
+        1 => children.pop().expect("one child"),
+        _ => CapacityExpr::Min(children),
+    })
 }
 
 fn cut_reference_cache_boundary(node: &EffectGraphNode, def: &EffectGraphDef) -> bool {
@@ -1893,10 +1936,27 @@ fn build_region(
     // only when `in` == `reference`) refuses the region, which renders
     // unfused (always correct). Fail closed at every step.
     let mut output_capacity: Option<CapacityExpr> = None;
+    // A lattice-sized member (`ParamProduct`) counts by its params, never by
+    // its inputs' lengths, so its region always takes the composed count,
+    // gathered or not. Each member's configured params, keyed by the fused
+    // uniform field (`n<position>_<param>`) its `Param` leaves name.
+    let mut region_params: crate::node_graph::effect_node::ParamValues = AHashMap::default();
+    let mut lattice_sized = false;
+    if is_buffer {
+        for (pos, &doc_id) in order.iter().enumerate() {
+            let node = def.nodes.iter().find(|n| n.id == doc_id).ok_or("member id missing from def")?;
+            let constructed = configured_construct(registry, node).ok_or("unknown member type")?;
+            lattice_sized |= matches!(constructed.fused_output_capacity(), FusedOutputCapacity::ParamProduct { .. });
+            for (name, value) in configured_params(constructed.as_ref(), node) {
+                region_params.insert(format!("n{pos}_{name}").into(), value);
+            }
+        }
+    }
     if is_buffer
-        && members
-            .iter()
-            .any(|m| m.input_access.contains(&InputAccess::BufferGather))
+        && (lattice_sized
+            || members
+                .iter()
+                .any(|m| m.input_access.contains(&InputAccess::BufferGather)))
     {
         // Per-member composed capacity expression, indexed by POSITION in
         // `order` (topo order — a member's register producers are always
@@ -1907,18 +1967,33 @@ fn build_region(
         let mut multiplier_docs: Vec<u32> = Vec::new();
         let mut widened = false;
         let mut selected_input_count = false;
+        // Array external slots some member pre-reads at `[idx]`: a
+        // lattice-sized count is clamped by each one's length.
+        let mut coincident_slots: Vec<usize> = Vec::new();
         // Synthetic capacities for the probe: one DISTINCT ASCENDING value
         // per external SLOT (`CapacityExpr::Slot(e)` renders as `src_<e>`,
         // the same key `eval` looks up). Slot-distinct catches the non-min
         // selector families (max, conditional) the way input-distinct probes
         // did pre-BUG-orm4.
-        let slot_synthetics: Vec<(String, u32)> = externals
-            .iter()
-            .enumerate()
-            .map(|(e, _)| (format!("src_{e}"), 1009u32.saturating_add(1000 * e as u32)))
-            .collect();
+        // The probe runs twice, ascending and descending: a member whose
+        // capacity selects one input (not the min) would pass as MinInputs
+        // whenever that input happened to hold the smallest synthetic.
+        let synthetics = |descending: bool| -> Vec<(String, u32)> {
+            let last = externals.len().saturating_sub(1);
+            externals
+                .iter()
+                .enumerate()
+                .map(|(e, _)| {
+                    let rank = if descending { last - e } else { e };
+                    (format!("src_{e}"), 1009u32.saturating_add(1000 * rank as u32))
+                })
+                .collect()
+        };
+        let (slot_synthetics, reversed_synthetics) = (synthetics(false), synthetics(true));
         let slot_syn_refs: Vec<(&str, u32)> =
             slot_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        let reversed_syn_refs: Vec<(&str, u32)> =
+            reversed_synthetics.iter().map(|(n, c)| (n.as_str(), *c)).collect();
         for (pos, &doc_id) in order.iter().enumerate() {
             let member = members
                 .iter()
@@ -1946,9 +2021,36 @@ fn build_region(
             // (buffer members resolve array inputs first — see the codegen's
             // input-shape comment).
             let sources: Vec<&RegionInput> = member.inputs.iter().take(arr_inputs.len()).collect();
+            for (k, source) in sources.iter().enumerate() {
+                let access = member.input_access.get(k).copied().unwrap_or_default();
+                if let RegionInput::External(e) = source
+                    && !access.is_gather()
+                    && !coincident_slots.contains(e)
+                {
+                    coincident_slots.push(*e);
+                }
+            }
 
             let declared = constructed.fused_output_capacity();
             let expr = match declared {
+                FusedOutputCapacity::ParamProduct { params } => {
+                    let mut factors = Vec::with_capacity(params.len());
+                    for name in params {
+                        let param = constructed
+                            .parameters()
+                            .iter()
+                            .find(|p| p.name == *name)
+                            .ok_or("ParamProduct names an unknown param")?;
+                        if param.ty != crate::node_graph::parameters::ParamType::Float {
+                            return Err("ParamProduct names a param that is not a Float");
+                        }
+                        factors.push(CapacityExpr::Param(format!("n{pos}_{name}")));
+                    }
+                    match factors.len() {
+                        1 => factors.pop().expect("one factor"),
+                        _ => CapacityExpr::Product(factors),
+                    }
+                }
                 FusedOutputCapacity::MinInputs => {
                     // Identity: min over the member's own array input
                     // capacities — external slots read directly, member
@@ -2081,38 +2183,45 @@ fn build_region(
             // conditional identity (ordered_recon_mesh: `Some` only when
             // `in` == `reference`) answers None on distinct slots and
             // refuses here.
-            let port_caps: Vec<(&str, u32)> = {
-                let mut caps = Vec::with_capacity(sources.len());
-                for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
-                    let cap = match src {
-                        RegionInput::External(e) => slot_syn_refs
-                            .get(*e)
-                            .map(|(_, c)| *c)
-                            .ok_or("array input names an unknown external slot")?,
-                        RegionInput::Member(producer) => {
-                            let ppos = order
-                                .iter()
-                                .position(|id| id == producer)
-                                .ok_or("register producer not a region member")?;
-                            member_expr[ppos]
-                                .as_ref()
-                                .ok_or("register producer lacks a capacity expression")?
-                                .eval(&slot_syn_refs)
-                                .ok_or("register producer capacity does not evaluate")?
-                        }
-                        // Unwired optional: absent, no synthetic capacity.
-                        RegionInput::Unwired => continue,
-                        _ => return Err("member has a non-register array input"),
-                    };
-                    caps.push((*name, cap));
+            for syn_refs in [&slot_syn_refs, &reversed_syn_refs] {
+                let port_caps: Vec<(&str, u32)> = {
+                    let mut caps = Vec::with_capacity(sources.len());
+                    for ((name, _), src) in arr_inputs.iter().zip(sources.iter()) {
+                        let cap = match src {
+                            RegionInput::External(e) => syn_refs
+                                .get(*e)
+                                .map(|(_, c)| *c)
+                                .ok_or("array input names an unknown external slot")?,
+                            RegionInput::Member(producer) => {
+                                let ppos = order
+                                    .iter()
+                                    .position(|id| id == producer)
+                                    .ok_or("register producer not a region member")?;
+                                member_expr[ppos]
+                                    .as_ref()
+                                    .ok_or("register producer lacks a capacity expression")?
+                                    .eval_with(syn_refs, &region_params)
+                                    .ok_or("register producer capacity does not evaluate")?
+                            }
+                            // Unwired optional: absent, no synthetic capacity.
+                            RegionInput::Unwired => continue,
+                            _ => return Err("member has a non-register array input"),
+                        };
+                        caps.push((*name, cap));
+                    }
+                    caps
+                };
+                let composed = expr.eval_with(syn_refs, &region_params);
+                // A lattice-sized member answers from its configured params.
+                let black_box_params = match declared {
+                    FusedOutputCapacity::ParamProduct { .. } => configured_params(constructed.as_ref(), node),
+                    _ => Default::default(),
+                };
+                match (composed, constructed.array_output_capacity(out_port, &black_box_params, &port_caps),
+                ) {
+                    (Some(a), Some(b)) if a == b => {}
+                    _ => return Err("array output capacity disagrees with the declared fused shape"),
                 }
-                caps
-            };
-            let composed = expr.eval(&slot_syn_refs);
-            match (composed, constructed.array_output_capacity(out_port, &Default::default(), &port_caps),
-            ) {
-                (Some(a), Some(b)) if a == b => {}
-                _ => return Err("array output capacity disagrees with the declared fused shape"),
             }
             member_expr[pos] = Some(expr);
         }
@@ -2184,6 +2293,14 @@ fn build_region(
         output_capacity = member_expr[out_pos]
             .clone()
             .filter(|_| widened || selected_input_count);
+        if lattice_sized {
+            output_capacity = Some(lattice_count(
+                member_expr[out_pos].as_ref().ok_or("missing output capacity")?,
+                &member_expr,
+                &coincident_slots,
+                &region_params,
+            )?);
+        }
     }
 
     // ── Tier 6: element-space uniformity. The fused kernel iterates one grid,
@@ -4062,6 +4179,164 @@ mod tests {
              singletons are below MIN_REGION_LEN — nothing fuses, render \
              unfused (always correct)"
         );
+    }
+
+    /// BUG-2efy (capacity probe admits an output that follows slot 0): a
+    /// member whose output follows one input, declared MinInputs, never fuses.
+    /// test.follow_first's output follows `a`, the region's first external;
+    /// fused, the count would be the min over a and b. One ascending probe
+    /// order agrees with the black box by accident; the descending order
+    /// catches it. The divide's gathered divisor puts the region through the
+    /// probe.
+    #[test]
+    fn output_following_one_input_is_refused_under_min_inputs() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "a", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 2049}}},
+                {"id": 1, "nodeId": "b", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 2048}}},
+                {"id": 2, "nodeId": "follow", "typeId": "test.follow_first"},
+                {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
+                {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
+                {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
+            ]
+        }))
+        .expect("selector fixture");
+        let mut registry = registry();
+        crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+        let regions = partition_regions(&def, &registry);
+        let fused: Vec<Vec<u32>> = regions.iter().map(|r| r.members.iter().map(|m| m.doc_id).collect()).collect();
+        assert!(
+            fused.iter().all(|members| !members.contains(&2)),
+            "follow_first's output follows a alone, so it must not fuse as MinInputs: {fused:?}"
+        );
+        // Declared honestly (FromInput), the same shape fuses: the refusal
+        // above is the probe's, not a gate the chain trips anyway.
+        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a residual into the divide fuses");
+    }
+
+    /// The same chain with an honest producer: node.pressure_residual (its
+    /// output follows its coincident rhs, declared FromInput) into the divide.
+    fn honest_chain() -> EffectGraphDef {
+        let lattice = |n: f64| serde_json::json!({"type": "Float", "value": n});
+        serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
+                {"id": 1, "nodeId": "rhs", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
+                {"id": 2, "nodeId": "residual", "typeId": "node.pressure_residual", "params": {"nodes_x": lattice(8.0), "nodes_y": lattice(8.0), "nodes_z": lattice(8.0)}},
+                {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
+                {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
+                {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "water"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "rhs"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "value"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
+                {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
+            ]
+        }))
+        .expect("honest fixture")
+    }
+
+    /// A lattice's params, `n` a side, as def params.
+    fn lattice_params(n: [f64; 3]) -> serde_json::Value {
+        serde_json::json!({
+            "nodes_x": {"type": "Float", "value": n[0]},
+            "nodes_y": {"type": "Float", "value": n[1]},
+            "nodes_z": {"type": "Float", "value": n[2]},
+        })
+    }
+
+    fn lattice_field_product(member: usize) -> CapacityExpr {
+        CapacityExpr::Product(["nodes_x", "nodes_y", "nodes_z"].map(|p| CapacityExpr::Param(format!("n{member}_{p}"))).to_vec())
+    }
+
+    /// BUG-u8io (fft-water-fusion-param-capacity): a lattice-sized member
+    /// (`ParamProduct`) fuses with what reads it, and the region counts its
+    /// lattice from the fused uniforms: the multigrid's coarse water feeding
+    /// the restriction's mask.
+    #[test]
+    fn lattice_sized_region_counts_its_lattice() {
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [
+                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                {"id": 1, "nodeId": "values", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                {"id": 2, "nodeId": "coarse", "typeId": "node.coarsen_water", "params": lattice_params([8.0; 3])},
+                {"id": 3, "nodeId": "restrict", "typeId": "node.restrict_lattice", "params": lattice_params([8.0; 3])},
+                {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
+                {"id": 5, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": [
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "fine"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "fine"},
+                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},
+                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
+            ]
+        }))
+        .expect("multigrid fixture");
+        let mut registry = registry();
+        crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+        let regions = partition_regions(&def, &registry);
+        assert_eq!(regions.len(), 1, "the coarse water and the restriction fuse");
+        let region = &regions[0];
+        assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(region.output_capacity, Some(lattice_field_product(0)), "the count is the coarse water's lattice");
+    }
+
+    /// A lattice-sized region clamps its count by every lattice that does
+    /// not provably bound it and by every array it pre-reads at `[idx]`, and
+    /// refuses a graph whose clamp would bite at its configured params.
+    #[test]
+    fn lattice_sized_region_clamps_by_its_members_and_coincident_reads() {
+        let def = |water: f64| -> EffectGraphDef {
+            serde_json::from_value(serde_json::json!({
+                "version": 3,
+                "nodes": [
+                    {"id": 0, "nodeId": "ranges", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 1, "nodeId": "faces", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 2, "nodeId": "water", "typeId": "node.cells_with_particles", "params": lattice_params([water, 8.0, 8.0])},
+                    {"id": 3, "nodeId": "divergence", "typeId": "node.face_divergence", "params": lattice_params([8.0; 3])},
+                    {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
+                    {"id": 5, "nodeId": "output", "typeId": "system.final_output"}
+                ],
+                "wires": [
+                    {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "cell_ranges"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "faces"},
+                    {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},
+                    {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                    {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
+                ]
+            }))
+            .expect("water fixture")
+        };
+        let mut registry = registry();
+        crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+        let regions = partition_regions(&def(8.0), &registry);
+        assert_eq!(regions.len(), 1, "the water lattice and the divergence fuse");
+        let region = &regions[0];
+        let ranges = region.externals.iter().position(|e| e.from_node == 0).expect("the ranges are an external");
+        assert_eq!(
+            region.output_capacity,
+            Some(CapacityExpr::Min(vec![lattice_field_product(1), lattice_field_product(0), CapacityExpr::Slot(ranges)])),
+            "the divergence's lattice, clamped by the water's lattice and the ranges it pre-reads"
+        );
+        assert!(partition_regions(&def(6.0), &registry).is_empty(), "a water lattice smaller than the divergence's refuses");
     }
 
 }

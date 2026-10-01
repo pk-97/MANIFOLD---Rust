@@ -20,6 +20,11 @@
 #include <vector>
 
 #include "fluidsimulation.h"
+#include "diffuseparticlesimulation.h"
+#include "gridutils.h"
+#include "macvelocityfield.h"
+#include "meshlevelset.h"
+#include "particlelevelset.h"
 #include "surfaceframe.h"
 #include "rigidfluidcoupling.h"
 #include "aabb.h"
@@ -1913,6 +1918,479 @@ extern "C" int manifold_fluids_world_whitewater(void *world,
     });
 }
 
+// ---- Whitewater lifecycle (GPU_WHITEWATER_DESIGN.md D1, D6, section 3.4) ----
+// FLIP's DiffuseParticleSimulation with emission off, fed through its public
+// API: the fields are whole-array copies into engine-owned grids, the spawns
+// go through loadDiffuseParticles. Nothing under flip_engine/ changes.
+
+namespace {
+
+// FluidSimulation's defaults for what DiffuseParticleSimulation reads
+// (fluidsimulation.h: _CFLConditionNumber, _nearSolidGridCellSizeFactor,
+// _solidLevelSetExactBand).
+constexpr double WHITEWATER_CFL = 5.0;
+constexpr int NEAR_SOLID_FACTOR = 3;
+constexpr int SOLID_EXACT_BAND = 3;
+
+struct NativeWhitewater {
+    int isize = 0;
+    int jsize = 0;
+    int ksize = 0;
+    double dx = 0.0;
+    vmath::vec3 origin;
+    size_t capacity = 0;
+    std::unique_ptr<DiffuseParticleSimulation> simulation;
+    MACVelocityField velocity;
+    ParticleLevelSet liquid;
+    MeshLevelSet solid;
+    // The liquid field again, as the surface distance the type rule reads.
+    Array3d<float> surface;
+    // Read only by emission, which stays off; sized so no read can leave them.
+    Array3d<float> curvature;
+    Array3d<float> influence;
+    Array3d<bool> near_solid;
+    double near_solid_cell_size = 0.0;
+    ParticleSystem markers;
+    vmath::vec3 gravity;
+    // FLIP's per-particle id, 0–255, which spreads spray drag.
+    unsigned char next_id = 0;
+    bool fields_set = false;
+
+    NativeWhitewater(int i, int j, int k, double cell_size, vmath::vec3 min, size_t particles)
+        : isize(i), jsize(j), ksize(k), dx(cell_size), origin(min), capacity(particles),
+          velocity(i, j, k, cell_size), liquid(i, j, k, cell_size),
+          surface(i, j, k, 0.0f), curvature(i, j, k, 0.0f),
+          influence(i + 1, j + 1, k + 1, 1.0f) {
+        solid.constructMinimalLevelSet(i, j, k, cell_size);
+    }
+};
+
+void configure_whitewater(NativeWhitewater &native, uint64_t seed) {
+    native.simulation = std::make_unique<DiffuseParticleSimulation>();
+    DiffuseParticleSimulation &simulation = *native.simulation;
+    simulation.setRandomSeed(seed);
+    simulation.disableDiffuseParticleEmission();
+    simulation.enableFoam();
+    simulation.enableBubbles();
+    simulation.enableSpray();
+    simulation.disableDust();
+    simulation.disableBoundaryDustEmission();
+    simulation.setMaxNumDiffuseParticles(native.capacity);
+    native.next_id = 0;
+}
+
+NativeWhitewater &whitewater_of(void *lifecycle) {
+    if (lifecycle == nullptr) {
+        throw std::invalid_argument("whitewater lifecycle pointer must be non-null");
+    }
+    return *static_cast<NativeWhitewater *>(lifecycle);
+}
+
+// One axis of the seam's faces (dims `face`, x fastest) into the engine's
+// padded MAC array at `offset`; every face outside them is zero.
+void copy_faces(Array3d<float> &destination, const float *faces, const int face[3],
+                const int offset[3]) {
+    destination.fill(0.0f);
+    float *raw = destination.getRawArray();
+    const size_t row = static_cast<size_t>(face[0]) * sizeof(float);
+    for (int k = 0; k < face[2]; ++k) {
+        for (int j = 0; j < face[1]; ++j) {
+            const size_t to = (static_cast<size_t>(k + offset[2]) * destination.height +
+                               static_cast<size_t>(j + offset[1])) *
+                                  destination.width +
+                              static_cast<size_t>(offset[0]);
+            const size_t from = (static_cast<size_t>(k) * face[1] + j) * face[0];
+            std::memcpy(raw + to, faces + from, row);
+        }
+    }
+}
+
+// FluidSimulation::_updateNearSolidGrid on this grid's solid: coarse cells of
+// 3 cells holding a node within the exact band, feathered to reach the CFL
+// distance. Collisions are tested only where it is set.
+void rebuild_near_solid(NativeWhitewater &native) {
+    native.near_solid_cell_size = NEAR_SOLID_FACTOR * native.dx;
+    const int gi = static_cast<int>(std::ceil((native.isize * native.dx) / native.near_solid_cell_size));
+    const int gj = static_cast<int>(std::ceil((native.jsize * native.dx) / native.near_solid_cell_size));
+    const int gk = static_cast<int>(std::ceil((native.ksize * native.dx) / native.near_solid_cell_size));
+    if (native.near_solid.width != gi || native.near_solid.height != gj ||
+        native.near_solid.depth != gk) {
+        native.near_solid = Array3d<bool>(gi, gj, gk, false);
+    } else {
+        native.near_solid.fill(false);
+    }
+    const float band = static_cast<float>(SOLID_EXACT_BAND * native.dx);
+    for (int k = 0; k < native.ksize; ++k) {
+        for (int j = 0; j < native.jsize; ++j) {
+            for (int i = 0; i < native.isize; ++i) {
+                if (std::abs(native.solid(i, j, k)) < band) {
+                    native.near_solid.set(i / NEAR_SOLID_FACTOR, j / NEAR_SOLID_FACTOR,
+                                          k / NEAR_SOLID_FACTOR, true);
+                }
+            }
+        }
+    }
+    const int layers = static_cast<int>(
+        std::ceil(static_cast<float>(WHITEWATER_CFL) / static_cast<float>(NEAR_SOLID_FACTOR)));
+    for (int layer = 0; layer < layers; ++layer) {
+        GridUtils::featherGrid6(&native.near_solid, ThreadUtils::getMaxThreadCount());
+    }
+}
+
+bool finite3(const float *v) {
+    return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);
+}
+
+} // namespace
+
+extern "C" int manifold_fluids_whitewater_create(uint32_t isize, uint32_t jsize, uint32_t ksize,
+                                                 double cell_size, const float *origin,
+                                                 uint32_t capacity, uint64_t seed,
+                                                 void **lifecycle_out) {
+    return guarded([&] {
+        if (origin == nullptr || lifecycle_out == nullptr) {
+            throw std::invalid_argument("whitewater create pointers must be non-null");
+        }
+        *lifecycle_out = nullptr;
+        const uint32_t largest = static_cast<uint32_t>(std::numeric_limits<int>::max());
+        if (isize < 3 || jsize < 3 || ksize < 3 || isize > largest || jsize > largest ||
+            ksize > largest) {
+            throw std::invalid_argument("whitewater grid needs 3 or more cells a side");
+        }
+        if (!std::isfinite(cell_size) || !(cell_size > 0.0)) {
+            throw std::invalid_argument("whitewater cell size must be finite and positive");
+        }
+        if (!finite3(origin)) {
+            throw std::invalid_argument("whitewater grid origin must be finite");
+        }
+        if (capacity == 0) {
+            throw std::invalid_argument("whitewater capacity must be positive");
+        }
+        checked_product(checked_product(isize + 1, jsize + 1, "whitewater grid is too large"),
+                        ksize + 1, "whitewater grid is too large");
+        auto native = std::make_unique<NativeWhitewater>(
+            static_cast<int>(isize), static_cast<int>(jsize), static_cast<int>(ksize), cell_size,
+            vmath::vec3(origin[0], origin[1], origin[2]), capacity);
+        configure_whitewater(*native, seed);
+        *lifecycle_out = native.release();
+    });
+}
+
+extern "C" void manifold_fluids_whitewater_destroy(void *lifecycle) {
+    std::lock_guard<std::mutex> lock(NATIVE_MUTEX);
+    clear_error();
+    try {
+        delete static_cast<NativeWhitewater *>(lifecycle);
+    } catch (...) {
+        set_error("FLIP Fluids raised a native exception while destroying a whitewater lifecycle");
+    }
+}
+
+extern "C" int manifold_fluids_whitewater_clear(void *lifecycle, uint64_t seed) {
+    return guarded([&] { configure_whitewater(whitewater_of(lifecycle), seed); });
+}
+
+extern "C" int manifold_fluids_whitewater_set_fields(void *lifecycle, const float *face_u,
+                                                     const float *face_v, const float *face_w,
+                                                     const uint32_t *face_cells,
+                                                     const uint32_t *face_offset,
+                                                     const float *level, const float *solid,
+                                                     const float *gravity) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (face_u == nullptr || face_v == nullptr || face_w == nullptr || face_cells == nullptr ||
+            face_offset == nullptr || level == nullptr || solid == nullptr || gravity == nullptr) {
+            throw std::invalid_argument("whitewater field pointers must be non-null");
+        }
+        const int cells[3] = {native.isize, native.jsize, native.ksize};
+        int placed[3];
+        int offset[3];
+        for (int axis = 0; axis < 3; ++axis) {
+            if (face_cells[axis] == 0 ||
+                static_cast<uint64_t>(face_cells[axis]) + face_offset[axis] >
+                    static_cast<uint64_t>(cells[axis])) {
+                throw std::invalid_argument("whitewater face grid does not sit inside the grid");
+            }
+            placed[axis] = static_cast<int>(face_cells[axis]);
+            offset[axis] = static_cast<int>(face_offset[axis]);
+        }
+        if (!finite3(gravity)) {
+            throw std::invalid_argument("whitewater gravity must be finite");
+        }
+        const int u[3] = {placed[0] + 1, placed[1], placed[2]};
+        const int v[3] = {placed[0], placed[1] + 1, placed[2]};
+        const int w[3] = {placed[0], placed[1], placed[2] + 1};
+        copy_faces(*native.velocity.getArray3dU(), face_u, u, offset);
+        copy_faces(*native.velocity.getArray3dV(), face_v, v, offset);
+        copy_faces(*native.velocity.getArray3dW(), face_w, w, offset);
+        const size_t cell_count =
+            static_cast<size_t>(native.isize) * native.jsize * native.ksize;
+        std::memcpy(native.liquid.getPhiGrid()->getRawArray(), level, cell_count * sizeof(float));
+        std::memcpy(native.surface.getRawArray(), level, cell_count * sizeof(float));
+        const size_t node_count = static_cast<size_t>(native.isize + 1) * (native.jsize + 1) *
+                                  (native.ksize + 1);
+        std::memcpy(native.solid.getPhiArray3d()->getRawArray(), solid, node_count * sizeof(float));
+        rebuild_near_solid(native);
+        native.gravity = vmath::vec3(gravity[0], gravity[1], gravity[2]);
+        native.fields_set = true;
+    });
+}
+
+extern "C" int manifold_fluids_whitewater_load(void *lifecycle,
+                                               const ManifoldFluidsWhitewaterSpawn *spawns,
+                                               size_t count, uint32_t *loaded_out,
+                                               uint32_t *thinned_out) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (loaded_out == nullptr || thinned_out == nullptr || (count != 0 && spawns == nullptr)) {
+            throw std::invalid_argument("whitewater load pointers must be non-null");
+        }
+        *loaded_out = 0;
+        *thinned_out = 0;
+        size_t live = 0;
+        for (size_t index = 0; index < count; ++index) {
+            const ManifoldFluidsWhitewaterSpawn &spawn = spawns[index];
+            if (!(spawn.position_lifetime[3] > 0.0f)) {
+                continue;
+            }
+            if (!finite3(spawn.position_lifetime) || !std::isfinite(spawn.position_lifetime[3]) ||
+                !finite3(spawn.velocity) || spawn.kind > 2) {
+                throw std::invalid_argument("whitewater spawn record is not finite or not a type");
+            }
+            ++live;
+        }
+        if (live > std::numeric_limits<uint32_t>::max()) {
+            throw std::invalid_argument("whitewater load holds too many spawns");
+        }
+        const size_t current = native.simulation->getNumDiffuseParticles();
+        const size_t room = native.capacity > current ? native.capacity - current : 0;
+        const size_t take = std::min(live, room);
+        *loaded_out = static_cast<uint32_t>(take);
+        *thinned_out = static_cast<uint32_t>(live - take);
+        if (take == 0) {
+            return;
+        }
+        // Past the room, record j takes live index floor(j * live / take): a
+        // uniform subset (D8).
+        FragmentedVector<DiffuseParticle> particles;
+        particles.reserve(take);
+        size_t seen = 0;
+        size_t next = 0;
+        for (size_t index = 0; index < count && next < take; ++index) {
+            const ManifoldFluidsWhitewaterSpawn &spawn = spawns[index];
+            if (!(spawn.position_lifetime[3] > 0.0f)) {
+                continue;
+            }
+            // Both factors are under 2^32, so the product fits.
+            const size_t wanted = static_cast<size_t>(static_cast<uint64_t>(next) * live / take);
+            if (seen++ != wanted) {
+                continue;
+            }
+            ++next;
+            const vmath::vec3 position(spawn.position_lifetime[0], spawn.position_lifetime[1],
+                                       spawn.position_lifetime[2]);
+            DiffuseParticle particle(position - native.origin,
+                                     vmath::vec3(spawn.velocity[0], spawn.velocity[1],
+                                                 spawn.velocity[2]),
+                                     spawn.position_lifetime[3], native.next_id++);
+            particle.type = static_cast<DiffuseParticleType>(spawn.kind);
+            particles.push_back(particle);
+        }
+        native.simulation->loadDiffuseParticles(particles);
+        // loadDiffuseParticles appends to the attribute vectors without
+        // refreshing the particle system's cached size, and update() returns
+        // early on size 0: refresh it here or loaded spawns never move.
+        native.simulation->getDiffuseParticles()->update();
+    });
+}
+
+// One update of `dt` on the last fields, as FluidSimulation drives it.
+static DiffuseParticleSimulationParameters whitewater_update(NativeWhitewater &native, double dt) {
+    if (!std::isfinite(dt) || !(dt > 0.0)) {
+        throw std::invalid_argument("whitewater step must be finite and positive");
+    }
+    if (!native.fields_set) {
+        throw std::invalid_argument("whitewater step needs fields first");
+    }
+    DiffuseParticleSimulationParameters params;
+    params.isize = native.isize;
+    params.jsize = native.jsize;
+    params.ksize = native.ksize;
+    params.dx = native.dx;
+    params.deltaTime = dt;
+    params.CFLConditionNumber = WHITEWATER_CFL;
+    // FluidSimulation's marker radius, 1/8 of a cell's volume as a sphere.
+    params.markerParticleRadius =
+        std::cbrt(3.0 * native.dx * native.dx * native.dx / (32.0 * 3.141592653589793));
+    params.bodyForce = native.gravity;
+    params.markerParticles = &native.markers;
+    params.vfield = &native.velocity;
+    params.liquidSDF = &native.liquid;
+    params.solidSDF = &native.solid;
+    params.surfaceSDF = &native.surface;
+    params.meshingVolumeSDF = nullptr;
+    params.isMeshingVolumeSet = false;
+    params.curvatureGrid = &native.curvature;
+    params.influenceGrid = &native.influence;
+    params.nearSolidGrid = &native.near_solid;
+    params.nearSolidGridCellSize = native.near_solid_cell_size;
+    params.forceFieldGrid = nullptr;
+    params.isForceFieldGridSet = false;
+    return params;
+}
+
+extern "C" int manifold_fluids_whitewater_step(void *lifecycle, double dt) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        DiffuseParticleSimulationParameters params = whitewater_update(native, dt);
+        // update() rebuilds the material grid before it looks at the
+        // population; with nothing to advance there is nothing to rebuild for.
+        if (native.simulation->getNumDiffuseParticles() == 0) {
+            return;
+        }
+        native.simulation->update(params);
+    });
+}
+
+extern "C" int manifold_fluids_whitewater_count(void *lifecycle, size_t *count_out) {
+    return guarded([&] {
+        if (count_out == nullptr) {
+            throw std::invalid_argument("whitewater count pointer must be non-null");
+        }
+        *count_out = whitewater_of(lifecycle).simulation->getNumDiffuseParticles();
+    });
+}
+
+extern "C" int manifold_fluids_whitewater_particles(void *lifecycle,
+                                                    ManifoldFluidsWhitewaterParticle *particles,
+                                                    size_t capacity, size_t *count_out) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (count_out == nullptr) {
+            throw std::invalid_argument("whitewater output pointers must be non-null");
+        }
+        ParticleSystem *system = native.simulation->getDiffuseParticles();
+        const size_t count = system->size();
+        *count_out = count;
+        if (count > capacity) {
+            throw std::invalid_argument("whitewater output capacity is too small");
+        }
+        if (count == 0) {
+            return;
+        }
+        if (particles == nullptr) {
+            throw std::invalid_argument("whitewater particle output pointer must be non-null");
+        }
+        std::vector<vmath::vec3> *positions = system->getAttributeValuesVector3("POSITION");
+        std::vector<vmath::vec3> *velocities = system->getAttributeValuesVector3("VELOCITY");
+        std::vector<float> *lifetimes = system->getAttributeValuesFloat("LIFETIME");
+        std::vector<char> *types = system->getAttributeValuesChar("TYPE");
+        if (positions->size() < count || velocities->size() < count || lifetimes->size() < count ||
+            types->size() < count) {
+            throw std::runtime_error("FLIP Fluids whitewater attributes are shorter than its count");
+        }
+        for (size_t index = 0; index < count; ++index) {
+            const vmath::vec3 position = (*positions)[index] + native.origin;
+            const vmath::vec3 &velocity = (*velocities)[index];
+            const float lifetime = (*lifetimes)[index];
+            const unsigned char type = static_cast<unsigned char>((*types)[index]);
+            if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+                !std::isfinite(position.z) || !std::isfinite(velocity.x) ||
+                !std::isfinite(velocity.y) || !std::isfinite(velocity.z) ||
+                !std::isfinite(lifetime) || type > 2) {
+                throw std::runtime_error("FLIP Fluids returned invalid whitewater particle data");
+            }
+            ManifoldFluidsWhitewaterParticle &out = particles[index];
+            out.position[0] = position.x;
+            out.position[1] = position.y;
+            out.position[2] = position.z;
+            out.velocity[0] = velocity.x;
+            out.velocity[1] = velocity.y;
+            out.velocity[2] = velocity.z;
+            out.lifetime = lifetime;
+            out.type = type;
+        }
+    });
+}
+
 extern "C" const char *manifold_fluids_last_error(void) {
     return LAST_ERROR.c_str();
 }
+
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+#include "particlelevelset.h"
+
+extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t jsize,
+                                                uint32_t ksize, double dx,
+                                                float *surface_phi_out, float *curvature_out) {
+    return guarded([&] {
+        if (phi == nullptr || surface_phi_out == nullptr || curvature_out == nullptr) {
+            throw std::invalid_argument("oracle curvature pointers must be non-null");
+        }
+        const uint32_t largest = static_cast<uint32_t>(std::numeric_limits<int>::max());
+        if (isize < 3 || jsize < 3 || ksize < 3 || isize > largest || jsize > largest ||
+            ksize > largest) {
+            throw std::invalid_argument("oracle curvature grid needs 3 or more cells a side");
+        }
+        if (!std::isfinite(dx) || !(dx > 0.0)) {
+            throw std::invalid_argument("oracle curvature cell size must be finite and positive");
+        }
+        const size_t count = checked_product(
+            checked_product(isize, jsize, "oracle curvature grid is too large"), ksize,
+            "oracle curvature grid is too large");
+        const int i = static_cast<int>(isize);
+        const int j = static_cast<int>(jsize);
+        const int k = static_cast<int>(ksize);
+        ParticleLevelSet levelset(i, j, k, dx);
+        std::memcpy(levelset.getPhiGrid()->getRawArray(), phi, count * sizeof(float));
+        Array3d<float> surface_phi(i, j, k, 0.0f);
+        Array3d<float> curvature(i, j, k, 0.0f);
+        levelset.calculateCurvatureGrid(surface_phi, curvature);
+        std::memcpy(surface_phi_out, surface_phi.getRawArray(), count * sizeof(float));
+        std::memcpy(curvature_out, curvature.getRawArray(), count * sizeof(float));
+    });
+}
+
+// FLIP's own emitter on a lifecycle's last fields (GPU_WHITEWATER_DESIGN.md
+// section 3.7, O2): the liquid particles at `positions` (scene metres, three
+// floats each) become the markers, `curvature` (cell centres) the curvature
+// grid, and one update runs with emission on, turbulence emission 0 and
+// lifetime variance 0, so it emits, advances, retypes and ages as FLIP does.
+// Emission is off again afterwards.
+extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature,
+                                           const float *positions, size_t count, double dt) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (curvature == nullptr || (count != 0 && positions == nullptr)) {
+            throw std::invalid_argument("oracle emit pointers must be non-null");
+        }
+        DiffuseParticleSimulationParameters params = whitewater_update(native, dt);
+        const size_t cells = static_cast<size_t>(native.isize) * native.jsize * native.ksize;
+        std::memcpy(native.curvature.getRawArray(), curvature, cells * sizeof(float));
+        native.markers = ParticleSystem();
+        native.markers.addAttributeVector3("POSITION");
+        std::vector<vmath::vec3> *markers = native.markers.getAttributeValuesVector3("POSITION");
+        markers->reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const float *p = positions + 3 * index;
+            if (!finite3(p)) {
+                throw std::invalid_argument("oracle emit position is not finite");
+            }
+            markers->push_back(vmath::vec3(p[0], p[1], p[2]) - native.origin);
+        }
+        native.markers.update();
+        DiffuseParticleSimulation &simulation = *native.simulation;
+        simulation.enableDiffuseParticleEmission();
+        // As the engine sets it: FLIP's default box is -inf wide by +inf, whose
+        // far corner is NaN, so no point is inside it.
+        simulation.setEmitterGenerationBounds(AABB(0.0, 0.0, 0.0, native.isize * native.dx,
+                                                   native.jsize * native.dx,
+                                                   native.ksize * native.dx));
+        simulation.setDiffuseParticleTurbulenceEmissionRate(0.0);
+        simulation.setDiffuseParticleLifetimeVariance(0.0);
+        simulation.update(params);
+        simulation.disableDiffuseParticleEmission();
+        native.markers = ParticleSystem();
+    });
+}
+#endif

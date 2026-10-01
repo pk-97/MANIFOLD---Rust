@@ -38,21 +38,10 @@ the sonnet slot: success locks it in for the session; any non-401 error marks
 the session demoted and it uses branch 3 for every later call, permanently. A
 demoted pane never recovers — restart it.
 
-On the K3 seat the `k3m` alias sets `ANTHROPIC_DEFAULT_FABLE_MODEL=k3` with
-main model k3, so a demotion lands on the opus slot (`deepseek-v4-pro`).
-GLM is off the classifier path entirely (Peter 2026-08-04): sonnet slot =
-`deepseek-v4-flash`, the proxy's flash/pro → glm-4.7 fallbacks are removed,
-and a demotion now stays on DeepSeek. Prior state for context: glm-4.7 held
-the sonnet slot 2026-07-27→08-04 for reliability, until ZAI ran out of weekly
-quota and every classifier call froze.
-
-**Classifier auth ignores `apiKeyHelper` (2.1.219, found 2026-08-25).** The
-main loop authenticates through the seat profile's `apiKeyHelper`, but the
-auto-mode classifier's calls go out without it — keyless against the litellm
-proxy → 401 → fails closed, and because fallback never fires on 401 the pane
-freezes instead of demoting. Fix: every seat profile's `env` carries a literal
-`ANTHROPIC_API_KEY` (from `cc-fleet keyget <seat>`). If a virtual key is
-regenerated, refresh the profiles or the classifier dies again.
+With Claude models only, every slot is an Anthropic model, so the sonnet slot
+resolves to Sonnet 5.5 and a demotion lands on Opus (Fable or Opus 5.5 leads) or
+on the main model. The provider-proxy cases (non-Anthropic sonnet slot, classifier
+auth through a proxy key) are retired with the proxy; git history has them.
 
 Oracle: `claude --debug -p '…' --permission-mode auto`, then grep
 `~/.claude/debug/latest` for `classifier_request_started` (prints the model).
@@ -259,10 +248,6 @@ Bash(gh run watch *)
 Bash(bd *)
 Bash(sleep *)
 Bash(sed -n *)
-Bash(cc-fleet status *)
-Bash(cc-fleet spawn *)
-Bash(cc-fleet teardown *)
-Bash(.claude/hooks/oneshot *)
 Bash(pkill -f rust-analyzer)
 Bash(pkill -f "zola.*serve")
 Bash(memory_pressure -Q)
@@ -276,7 +261,6 @@ Bash(zola --root "/Users/peterkiemann/latent-space-site" serve --interface 127.0
 Bash(scripts/agent-worktree.py list)
 Bash(scripts/agent-worktree.py acquire *)
 Bash(scripts/gen_docs_index.py)
-Bash(scripts/seat_tool.py show)
 Bash(scripts/gate_runner.py show *)
 Bash(scripts/gate_runner.py report *)
 Bash(scripts/token_report.py *)
@@ -290,7 +274,6 @@ Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/o
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/**)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.5.2/src/**)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-foundation-0.2.2/src/**)
-Bash(psql postgresql://litellm:litellm-local@localhost:5432/litellm -c "select \\"startTime\\", model, \\"model_group\\", api_key, total_tokens from \\"LiteLLM_SpendLogs\\" order by \\"startTime\\" desc limit 15;")
 ```
 
 Removed in the 2026-07-26 audit (see section 3 for why): `Bash(python3 -c ' *)`,
@@ -304,8 +287,7 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/agent-worktree.py list` | read-only |
 | `scripts/agent-worktree.py acquire *` | bounded by the slot ring cap |
 | `scripts/gen_docs_index.py` | no arguments |
-| `scripts/seat_tool.py show` | read-only |
-| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `cc-fleet keyget` runs under `pre-wave`, which is NOT allowlisted |
+| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `pre-wave` is NOT allowlisted |
 | `scripts/token_report.py *` | reads transcripts, flags only |
 | `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
 | `scripts/move_identity_check.py *` | git refs only |
@@ -316,8 +298,7 @@ Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
 literal read-only query IS allowlisted — see block; the wildcard never),
 `curl` / `wget` (network egress), `rm`, `gate_runner.py per-lane` (executes
 commands extracted from a brief file), `agent-worktree.py release` (deletes a
-worktree and any uncommitted work in it), `seat_tool.py assign` (rewrites
-model routing).
+worktree and any uncommitted work in it).
 
 ## 6. Incident — 2026-07-26
 

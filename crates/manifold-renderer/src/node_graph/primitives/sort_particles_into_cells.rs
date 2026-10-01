@@ -95,6 +95,21 @@ macro_rules! float_param {
 }
 pub(crate) use float_param;
 
+/// An Int param: whole numbers in `[min, max]`, stored as a float.
+macro_rules! int_param {
+    ($name:literal, $label:literal, $default:expr, $min:expr, $max:expr) => {
+        ParamDef {
+            name: Cow::Borrowed($name),
+            label: $label,
+            ty: ParamType::Int,
+            default: ParamValue::Float($default),
+            range: Some(($min, $max)),
+            enum_values: &[],
+        }
+    };
+}
+pub(crate) use int_param;
+
 /// A searching atom's `bins_x/y/z` param, shadowed by the sort's output of the
 /// same name. 0 until wired.
 macro_rules! bin_param {

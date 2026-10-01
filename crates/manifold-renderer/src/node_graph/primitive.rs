@@ -796,6 +796,11 @@ pub trait Primitive: PrimitiveSpec {
     ) -> &'static [crate::node_graph::effect_node::ConditionalRequirement] {
         &[]
     }
+
+    /// See [`EffectNode::params_refusal`](crate::node_graph::effect_node::EffectNode::params_refusal).
+    fn params_refusal(&self, _params: &crate::node_graph::effect_node::ParamValues) -> Option<String> {
+        None
+    }
 }
 
 /// Blanket `EffectNode` impl for any `Primitive`. Reads all surface
@@ -1034,6 +1039,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         &self,
     ) -> &'static [crate::node_graph::effect_node::ConditionalRequirement] {
         Primitive::conditional_requirements(self)
+    }
+    fn params_refusal(&self, params: &crate::node_graph::effect_node::ParamValues) -> Option<String> {
+        Primitive::params_refusal(self, params)
     }
     fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
         P::FUSION_KIND

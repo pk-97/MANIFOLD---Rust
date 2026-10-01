@@ -19,14 +19,23 @@ class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
               "clippy", "flow-gate", "tests", "gpu-proofs"]
 
-    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head"):
+    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None):
         called, commands = [], []
-        paths = ["crates/manifold-gpu/src/metal/device.rs"]
+        self.events = events = []
+        paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
         labels = {
             "fake-tool-test.py": "tooling", "design_status_check.py": "design-status",
             "gen_docs_index.py": "docs-index", "ignored-test-guard.py": "ignored-tests",
             "run_ui_flows.py": "flow-gate", "gpu_proofs_gate.py": "gpu-proofs",
         }
+
+        @contextlib.contextmanager
+        def recording_hold(label, **kwargs):
+            events.append(f"hold-enter:{label}")
+            try:
+                yield
+            finally:
+                events.append("hold-exit")
 
         def run(cmd, cwd, timeout):
             commands.append(cmd)
@@ -50,6 +59,7 @@ class LandingTests(unittest.TestCase):
             label = ({"nextest": "tests"}.get(cmd[1], cmd[1]) if cmd[0] == "cargo"
                      else labels[Path(cmd[1]).name])
             called.append(label)
+            events.append(label)
             return (1 if label == failed else 0), f"output for {label}\n", "", 0.01
 
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
@@ -58,6 +68,9 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "argv", ["landing_gate.py", "--repo", d, *extra]))
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
+            # A tooling self-test must never wait on the machine-wide GPU lock.
+            stack.enter_context(patch.object(landing_gate.gpu_queue, "hold",
+                                             side_effect=recording_hold))
             stack.enter_context(patch.object(landing_gate, "get_touched_packages",
                                             return_value=["manifold-gpu"] if packages else []))
             deps = stack.enter_context(patch.object(landing_gate, "reverse_deps", return_value=[]))
@@ -91,11 +104,39 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(timings["checks"][-1]["label"], "docs-index")
 
     def test_success_runs_all_required_checks_with_explicit_gpu_binary(self):
-        code, called, timings, commands, *_ = self.exercise()
+        code, called, timings, commands, _, output, _ = self.exercise()
         self.assertEqual(code, 0)
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 0)
-        self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--test", "gpu_proofs"], commands)
+        self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main",
+                       "--budget", "300"], commands)
+        self.assertTrue(all("--all" not in c and "--full-suite" not in c for c in commands))
+        self.assertIn("[gpu-proofs] mode: scoped", output)
+        self.assertIn("manifold-gpu core", output)
+
+    def test_tests_and_gpu_proofs_legs_run_inside_one_hold(self):
+        code, *_ = self.exercise()
+        self.assertEqual(code, 0)
+        events = self.events
+        self.assertEqual([e for e in events if e.startswith("hold")],
+                         ["hold-enter:landing_gate tests+gpu-proofs", "hold-exit"])
+        enter, leave = events.index("hold-enter:landing_gate tests+gpu-proofs"), events.index("hold-exit")
+        self.assertLess(enter, events.index("tests"))
+        self.assertLess(events.index("gpu-proofs"), leave)
+        # Cheap prerequisites and clippy do not hold the GPU.
+        self.assertLess(events.index("clippy"), enter)
+
+    def test_tests_failure_still_releases_the_hold(self):
+        self.exercise("tests")
+        self.assertEqual(self.events[-1], "hold-exit")
+
+    def test_unmapped_gpu_path_fails_gate_naming_path(self):
+        code, called, _, _, _, output, _ = self.exercise(
+            paths=["crates/manifold-renderer/src/node_graph/orphan.bin"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("gpu-proofs", called)
+        self.assertIn("node_graph/orphan.bin", output)
+        self.assertIn("Add a mapping rule", output)
 
     def test_named_red_collection_does_not_skip_remaining_checks(self):
         code, called, timings, *_ = self.exercise("docs-index", extra=["--keep-going"])
@@ -143,7 +184,7 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(trunk_health.subprocess, "run",
                                             return_value=subprocess.CompletedProcess([], 0, "", "")))
             self.assertEqual(trunk_health.main(), 0)
-        self.assertIn("would run: python3 scripts/gpu_proofs_gate.py --full-suite", output.getvalue())
+        self.assertIn("would run: python3 scripts/gpu_proofs_gate.py --all", output.getvalue())
 
 
 class DeliveryTests(unittest.TestCase):

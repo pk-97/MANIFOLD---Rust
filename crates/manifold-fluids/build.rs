@@ -154,6 +154,9 @@ fn main() {
         .file(native_dir.join("coupling_viscosity_operator_probe.cpp"))
         .file(engine_dir.join("mixbox/mixbox_stub.cpp"))
         .file(generated_version);
+    if env::var_os("CARGO_FEATURE_WHITEWATER_ORACLE").is_some() {
+        build.define("MANIFOLD_WHITEWATER_ORACLE", "1");
+    }
     for source in sources {
         build.file(engine_dir.join(source));
     }

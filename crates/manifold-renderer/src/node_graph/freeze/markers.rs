@@ -82,13 +82,12 @@ pub enum Marker {
     },
     /// `// @fused_output_capacity: <expr>` — fused buffer codegen (BUG-orm4),
     /// own line right after the fresh `// @fused_output dst` binding, only
-    /// when a region member declared `FusedOutputCapacity::MultipleOf` (the
-    /// region's count is widened past the min-over-inputs default).
-    /// `<expr>` is the composed capacity expression over the array input
-    /// slots in the `min(…)`/`mul(<u32>,…)`/`s<slot>` grammar
-    /// (`CapacityExpr::to_marker_payload`). `node.wgsl_compute` evaluates it
-    /// over the wired input capacities to size `dst` exactly to the kernel's
-    /// dispatch count. Identity regions emit no marker (byte-identical WGSL;
+    /// when the region's count is not the min-over-inputs default (a member
+    /// declared `MultipleOf`, `FromInput` or `ParamProduct`). `<expr>` is the
+    /// composed capacity expression in the `min(…)`/`mul(<u32>,…)`/`s<slot>`/
+    /// `prod(…)`/`par(<field>)` grammar (`CapacityExpr::to_marker_payload`).
+    /// `node.wgsl_compute` evaluates it over the wired input capacities and
+    /// its own params to size `dst` exactly to the kernel's dispatch count. Identity regions emit no marker (byte-identical WGSL;
     /// the min-over-inputs default is then exactly right).
     FusedOutputCapacity { expr: CapacityExpr },
     /// `// @input_access: <port> <token>` — fused texture codegen (install),
