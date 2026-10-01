@@ -49,27 +49,21 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(filters, ["foo", "rt-quality"])
         self.assertEqual(hits["scripts/ui-flows/foo.json"], ["foo"])
 
-    def test_gpu_scope_union_and_full_for_uncovered(self):
-        paths = ["crates/manifold-gpu/src/metal/raytrace.rs", "crates/manifold-renderer/src/node_graph/freeze/x.rs"]
-        self.assertEqual(landing_gate.gpu_proofs_scope_for_paths(paths), (["freeze::", "rt_"], ["particletext"]))
-        self.assertIsNone(landing_gate.gpu_proofs_scope_for_paths(paths + ["crates/manifold-gpu/src/foo.rs"]))
-
-    def test_gpu_plan_selects_only_required_binaries(self):
+    def test_gpu_plan_passes_paths_and_scopes_glb_only_for_gltf(self):
         repo = Path(__file__).resolve().parents[1]
         rt = "crates/manifold-gpu/src/metal/raytrace.rs"
         glb = "crates/manifold-renderer/tests/glb_conformance.rs"
         fixture = "tests/fixtures/gltf/khronos/manifest.json"
-        for paths, targets in [([rt], ["gpu_proofs"]),
-                               ([glb], ["gpu_proofs", "glb_conformance"]),
-                               ([fixture], ["gpu_proofs", "glb_conformance"]),
-                               ([rt, glb], ["gpu_proofs", "glb_conformance"])]:
+        for paths, glb_expected in [([rt], False), ([glb], True), ([fixture], True), ([rt, glb], True)]:
             with self.subTest(paths=paths):
                 plan = codex_checks.build_plan(repo, paths)
                 cmd = next(c["argv"] for c in plan["checks"] if c["name"] == "gpu-proofs")
-                self.assertEqual([cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--test"], targets)
+                self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == "--path"], sorted(paths))
+                self.assertNotIn("--all", cmd)
                 self.assertNotIn("--full-suite", cmd)
-                if "glb_conformance" in targets:
-                    self.assertNotIn("--filter", cmd)
+                self.assertEqual(plan["gpu_scope"]["glb"], glb_expected)
+        plan = codex_checks.build_plan(repo, ["docs/README.md"])
+        self.assertFalse(any(c["name"] == "gpu-proofs" for c in plan["checks"]))
 
     def test_plan_has_exact_tool_commands(self):
         with tempfile.TemporaryDirectory() as d:

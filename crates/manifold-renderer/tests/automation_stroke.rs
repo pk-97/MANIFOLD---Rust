@@ -8,7 +8,7 @@ use manifold_ui::node::Color32;
 
 #[test]
 fn automation_stroke_has_antialiased_edges_and_continuous_centre() {
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("automation_stroke");
     let format = GpuTextureFormat::Rgba8Unorm;
     let mut ui = UIRenderer::new(&device, format);
     for scale in [1.0_f32, 2.0] {

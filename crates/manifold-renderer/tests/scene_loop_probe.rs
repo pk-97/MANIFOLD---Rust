@@ -54,7 +54,7 @@ fn wire(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectG
 }
 
 fn render(def: &EffectGraphDef) -> Vec<u8> {
-    let device = manifold_gpu::GpuDevice::new();
+    let device = manifold_gpu::GpuDevice::new_queued("scene_loop_probe");
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (64u32, 64u32);
     let ctx = PresetContext {

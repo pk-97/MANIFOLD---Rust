@@ -42,6 +42,8 @@ MATRIX = [
     ("manifold-renderer", "rt-perf-proofs"),
     ("manifold-renderer", "fluid-perf-proofs"),
     ("manifold-renderer", "matter-perf-proofs"),
+    ("manifold-renderer", "water-race-probes"),
+    ("manifold-renderer", "whitewater-oracle"),
     ("manifold-spectral", "gpu-proofs"),
 ]
 
@@ -52,6 +54,7 @@ EXEMPT = {
     ("manifold-spectral", "default"): "empty default set",
     ("manifold-spectral", "gpu"): "strict subset of its gpu-proofs row",
     ("manifold-renderer", "gpu-proofs"): "strict subset of its rt-perf-proofs row",
+    ("manifold-fluids", "whitewater-oracle"): "strict subset of manifold-renderer's whitewater-oracle row",
 }
 
 FEATURES_RE = re.compile(r"^\[features\]\s*$")

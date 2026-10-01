@@ -81,7 +81,7 @@ fn main() {
     let device = kinds
         .iter()
         .any(|kind| !matches!(kind, RequestedKind::SceneModifier))
-        .then(|| Arc::new(GpuDevice::new()));
+        .then(|| Arc::new(GpuDevice::new_queued("check-presets")));
     let scene_host = if kinds
         .iter()
         .any(|kind| matches!(kind, RequestedKind::SceneModifier))

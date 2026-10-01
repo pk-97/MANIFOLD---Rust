@@ -72,6 +72,14 @@ impl Harness {
         slot
     }
 
+    /// A wired transform input holding `value`.
+    pub fn transform_input(&mut self, value: crate::node_graph::transform::Transform) -> Slot {
+        let slot = self.backend.acquire(ResourceId(self.next), PortType::Transform, None, (0, 0));
+        self.next += 1;
+        Backend::set_transform(&mut self.backend, slot, value);
+        slot
+    }
+
     /// One frame of `prim.run()`, committed and waited. Returns the scalar
     /// writes and the node's errors.
     pub fn run<P: Primitive>(
@@ -710,6 +718,34 @@ fn fluid_running_total_matches_cpu_scan_and_total_lags_one_frame() {
         let (scalars, _) = run(&mut node, &mut harness);
         let lagged = scalars.iter().find(|(slot, _)| *slot == total_slot).map(|(_, v)| v.clone());
         assert_eq!(lagged, Some(ParamValue::Float(running as f32)), "size {size}: one frame late");
+    }
+}
+
+/// A total past the consumer's capacity is a named error on every frame it
+/// lasts, never silent; at or under capacity there is none.
+#[test]
+fn fluid_running_total_names_a_total_past_its_capacity() {
+    let mut harness = Harness::new();
+    let flags = vec![1u32; 100];
+    let (input, _) = harness.array(&flags, flags.len());
+    let (out_slot, _) = harness.array::<u32>(&[], flags.len());
+    for (capacity, expect_error) in [(100.0, false), (64.0, true)] {
+        let mut node = RunningTotal::new();
+        let mut params = ParamValues::default();
+        params.insert("capacity".into(), ParamValue::Float(capacity));
+        let mut run = || harness.run(&mut node, &[("in", input)], &[("out", out_slot)], &params).1;
+        assert!(run().is_empty(), "the first frame has no total yet");
+        for frame in 1..3 {
+            let errors = run();
+            if expect_error {
+                assert!(
+                    errors.iter().any(|e| e.contains("needs 100, holds 64")),
+                    "frame {frame}: an overflow must be named every frame: {errors:?}"
+                );
+            } else {
+                assert!(errors.is_empty(), "frame {frame}: capacity {capacity} holds 100: {errors:?}");
+            }
+        }
     }
 }
 

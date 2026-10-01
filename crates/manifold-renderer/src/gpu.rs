@@ -13,6 +13,14 @@ impl GpuContext {
             device: std::sync::Arc::new(manifold_gpu::GpuDevice::new()),
         }
     }
+
+    /// Headless and test entry points: waits its turn on the machine-wide GPU
+    /// queue first. The live app must use `new()`.
+    pub fn new_queued(label: &str) -> Self {
+        Self {
+            device: std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued(label)),
+        }
+    }
 }
 
 impl Default for GpuContext {

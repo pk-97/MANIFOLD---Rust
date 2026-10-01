@@ -108,6 +108,19 @@ impl Primitive for ArrayFeedback {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        emit_delayed(ctx, &mut self.last_reset_trigger);
+    }
+
+    fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        capture_for_next_frame(ctx);
+    }
+}
+
+/// The emit half of a one-frame array delay with ports `in` (a state
+/// capture), `seed`, `reset_trigger` and `out`. Item layout is opaque, so
+/// every typed feedback atom shares it.
+pub(super) fn emit_delayed(ctx: &mut EffectNodeContext<'_, '_>, last_reset_trigger: &mut Option<i32>) {
+    {
         // `evaluate` (= `run`) phase: emit only. The capture lives in
         // `late_capture` because state-capture nodes run BEFORE their
         // producer in topo order, so the producer's frame-N write
@@ -206,11 +219,11 @@ impl Primitive for ArrayFeedback {
         // but there's nothing meaningful to reset from — degenerate no-op.
         if let Some(ParamValue::Float(v)) = ctx.inputs.scalar("reset_trigger") {
             let current = v.round() as i32;
-            let edge = match self.last_reset_trigger {
+            let edge = match *last_reset_trigger {
                 Some(prev) => current != prev,
                 None => false,
             };
-            self.last_reset_trigger = Some(current);
+            *last_reset_trigger = Some(current);
             if edge && let Some(seed_buf) = ctx.inputs.array("seed") {
                 if in_place {
                     let copy_size = seed_buf.size.min(size);
@@ -239,8 +252,11 @@ impl Primitive for ArrayFeedback {
             gpu.native_enc.copy_buffer_to_buffer(prev, out_buf, size);
         }
     }
+}
 
-    fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+/// The capture half of [`emit_delayed`], run from `late_capture`.
+pub(super) fn capture_for_next_frame(ctx: &mut EffectNodeContext<'_, '_>) {
+    {
         // Post-frame snapshot: `in_buf` now holds THIS frame's
         // producer output (the back-edge slot was written during the
         // main step-loop pass). Captured here, it becomes next

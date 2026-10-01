@@ -1230,4 +1230,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gpu_queue
+
+    with gpu_queue.hold("rt_dynamic_acceptance"):
+        sys.exit(main())

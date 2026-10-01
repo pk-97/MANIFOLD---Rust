@@ -251,4 +251,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import gpu_queue
+
+    with gpu_queue.hold("rt_a2_term_cost"):
+        main()

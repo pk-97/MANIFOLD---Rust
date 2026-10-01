@@ -151,7 +151,7 @@ fn run_validate(args: &[String]) -> ExitCode {
     };
 
     let registry = PrimitiveRegistry::with_builtin();
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("graph-tool"));
     let report = validate_def(&def, &registry, kind, &device);
 
     if json_output {
@@ -272,7 +272,7 @@ fn run_render(args: &[String]) -> ExitCode {
         def
     };
 
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("graph-tool"));
     let result = if linear {
         manifold_renderer::preset_thumbnail::render_preset_thumbnail_to_file_linear(
             &device, kind, &def, size, size, &out,

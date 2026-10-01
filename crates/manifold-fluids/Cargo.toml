@@ -5,7 +5,12 @@ edition = "2024"
 publish = false
 build = "build.rs"
 
+[features]
+# FLIP's own whitewater fields as a test oracle (GPU_WHITEWATER_DESIGN.md O1, O2).
+whitewater-oracle = []
+
 [dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 serde = { workspace = true }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-physics = { path = "../manifold-physics" }

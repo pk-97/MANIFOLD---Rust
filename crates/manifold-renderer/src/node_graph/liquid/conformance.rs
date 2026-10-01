@@ -6,10 +6,17 @@
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue};
-use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
-use crate::node_graph::matter::{MatterPoint, MatterTickStats, STATS_WORDS, WATER_DENSITY};
+use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
+use crate::node_graph::liquid::grid::{face_coords, face_len};
+use crate::node_graph::liquid::lattice::PADDING_NODES;
+use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, STATS_WORDS, WATER_DENSITY};
+use crate::node_graph::primitives::face_grid_scenes::matter_dam_break_faces;
+use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
+use crate::node_graph::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,7 +32,19 @@ pub enum Fixture {
     FloatingBox,
     /// A density-1 box held under the surface.
     SubmergedBox,
+    /// The Dam Break at resolution [`FACE_GRID_RESOLUTION`] with its face
+    /// grid wired into the frame.
+    FaceGrid,
 }
+
+/// The face grid scene's resolution: the publish path is the same at any
+/// size, and 32 keeps the check cheap.
+pub const FACE_GRID_RESOLUTION: u32 = 32;
+
+/// GPU FLIP's `face_valid_layers` in the face grid scene: its
+/// `WaterScene::band_layers` at [`FACE_GRID_RESOLUTION`], held to the
+/// builder by `gpu_flip_band_follows_the_cfl_guard`.
+pub const FACE_GRID_GPU_FLIP_LAYERS: u32 = 3;
 
 /// One conformance check (section 4 (Invariants & enforcement)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,8 +73,11 @@ pub enum Check {
     LiveFramesNeverWait,
     /// Speed 0.5 runs half the water time.
     HalfSpeed,
-    /// Reset starts a new epoch.
+    /// Reset, and the runtime's state reset, start a new epoch.
     Reset,
+    /// P10 (D5): the frame publishes the faces the solver's grid gives at
+    /// its last tick, bit for bit, and holds them while paused.
+    FaceGridPublished,
 }
 
 const BOX_FALLS: &[Fixture] = &[
@@ -65,7 +87,7 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 13] = [
+    pub const ALL: [Check; 14] = [
         Check::CoupledWorldStepsOnce,
         Check::Collision,
         Check::FloatingDraft,
@@ -79,6 +101,7 @@ impl Check {
         Check::LiveFramesNeverWait,
         Check::HalfSpeed,
         Check::Reset,
+        Check::FaceGridPublished,
     ];
 
     /// Whether the check needs a Box3D body in the liquid.
@@ -99,6 +122,7 @@ impl Check {
             Check::HydrostaticLift => &[Fixture::SubmergedBox],
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
             Check::PauseDiscardsImpulses => &[Fixture::StillPool],
+            Check::FaceGridPublished => &[Fixture::FaceGrid],
             Check::ExportFrameRateIndependent | Check::LiveFramesNeverWait if coupled => &[Fixture::FloatingBox],
             _ => &[Fixture::DamBreak],
         }
@@ -140,6 +164,21 @@ pub struct StateArray {
     pub record_bytes: usize,
 }
 
+/// Where a row's solver keeps the grid its published faces come from, and
+/// how that grid reads as the seam's faces (section 3.2 (Grid outputs)).
+pub struct FaceSource {
+    pub type_id: &'static str,
+    pub port: &'static str,
+    /// The face arrays, x, y and z over `cells`, from the grid's bytes, as
+    /// the solver's resample computes them.
+    pub resample: fn(&[u8], [u32; 3]) -> [Vec<f32>; 3],
+    /// The frame's `face_valid_layers`.
+    pub valid_layers: u32,
+    /// Units in the last place a published face may sit from the CPU
+    /// resample, with the reason when it is not 0.
+    pub ulps: (u32, &'static str),
+}
+
 /// A setup change that overflows a run-time capacity. The error must carry
 /// the count and each of `names`.
 pub struct OverflowCase {
@@ -177,6 +216,8 @@ pub struct LiquidSolverRow {
     pub state: Option<StateArray>,
     /// Needed by [`Check::OverflowReported`].
     pub overflow: Option<OverflowCase>,
+    /// Needed by [`Check::FaceGridPublished`].
+    pub faces: Option<FaceSource>,
     /// A closed list, each with its reason.
     pub exempt: &'static [(Check, &'static str)],
 }
@@ -190,6 +231,31 @@ impl LiquidSolverRow {
 const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its bodies inside its native solve and \
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
      ticks, and no box scene a preset can carry";
+
+const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
+     docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
+
+const GPU_FLIP_IMPULSES_OWED: &str = "owed to BUG-70l4 (wire GPU FLIP to the liquid fields): the GPU FLIP domain refuses impulses until it is wired (LIQUID_SCENE_OWED)";
+
+/// GPU FLIP's step atoms that gather instead of scattering, the pressure
+/// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
+/// coarse inverse has no codegen body; its own test checks it.
+const GPU_FLIP_ATOMIC_FREE: [&str; 14] = [
+    "node.cells_with_particles",
+    "node.particles_to_faces",
+    "node.face_gravity",
+    "node.extend_faces",
+    "node.face_divergence",
+    "node.subtract_pressure",
+    "node.density_source",
+    "node.faces_to_particles",
+    "node.coarsen_water",
+    "node.pressure_smooth",
+    "node.pressure_residual",
+    "node.restrict_lattice",
+    "node.prolong_lattice",
+    "node.zero_lattice",
+];
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     LiquidSolverRow {
@@ -250,6 +316,17 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
             names: &["Mesh Capacity"],
         }),
+        faces: Some(FaceSource {
+            type_id: "node.matter_state",
+            port: "grid",
+            resample: matter_faces,
+            valid_layers: MATTER_FACE_VALID_LAYERS,
+            ulps: (
+                1,
+                "the component's f32 mean of up to four nodes is compiled with Metal's fast math, which may round a \
+                 sum or the division differently from the CPU; a few faces land one unit off",
+            ),
+        }),
         exempt: &[],
     },
     LiquidSolverRow {
@@ -281,6 +358,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         totals: None,
         state: None,
         overflow: None,
+        faces: None,
         exempt: &[
             (Check::CoupledWorldStepsOnce, FLIP_COUPLES_NATIVELY),
             (Check::Collision, FLIP_COUPLES_NATIVELY),
@@ -307,9 +385,157 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                 "FLIP conforms as built (D3): it grows its mesh and particle storage to fit, so its only run-time \
                  limit is device memory, which it refuses by name",
             ),
+            (Check::FaceGridPublished, "FLIP conforms as built and publishes no grid (D3)"),
+        ],
+    },
+    LiquidSolverRow {
+        type_id: GPU_FLIP_DOMAIN_TYPE_ID,
+        fixture: gpu_flip_fixture,
+        gpu: true,
+        coupled: false,
+        atomic_free: &GPU_FLIP_ATOMIC_FREE,
+        refusals: &[
+            RefusalCase {
+                what: "Resolution 63 on Dam Break GPU FLIP: an odd side the multigrid levels cannot halve",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 63 }),
+                names: &["resolution"],
+            },
+            RefusalCase {
+                what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
+                names: &["resolution", "fill_height"],
+            },
+            RefusalCase {
+                what: "Resolution 32 on Dam Break GPU FLIP, whose solver is built for 64",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 32 }),
+                names: &["resolution", "domain_size"],
+            },
+            RefusalCase {
+                what: "Initial Fill Height at the top of Dam Break GPU FLIP's domain",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "fill_height", SerializedParamValue::Float { value: 4.0 }),
+                names: &["fill_height"],
+            },
+            RefusalCase {
+                what: "Dam Break GPU FLIP's initial volume turned 0.3 rad",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "rot_y", 0.3),
+                names: &["initial_volume"],
+            },
+            RefusalCase {
+                what: "Dam Break GPU FLIP's initial volume moved out of the domain",
+                fixture: Fixture::DamBreak,
+                edit: |def| set_source_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "initial_volume", "pos_x", 10.0),
+                names: &["initial_volume"],
+            },
+        ],
+        totals: Some(TotalsReadout {
+            type_id: "node.liquid_state",
+            port: "stats",
+            words: LIQUID_STATS_WORDS as usize,
+            read: liquid_totals,
+        }),
+        state: Some(StateArray {
+            type_id: "node.liquid_state",
+            port: "out",
+            record_bytes: std::mem::size_of::<FluidParticle>(),
+        }),
+        overflow: Some(OverflowCase {
+            what: "Mesh Capacity 3 on Dam Break GPU FLIP's liquid surface",
+            fixture: Fixture::DamBreak,
+            edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
+            names: &["Mesh Capacity"],
+        }),
+        faces: Some(FaceSource {
+            type_id: "node.liquid_state",
+            port: "faces",
+            resample: gpu_flip_faces,
+            valid_layers: FACE_GRID_GPU_FLIP_LAYERS,
+            // A gather: the published faces are the solver's projected faces.
+            ulps: (0, ""),
+        }),
+        exempt: &[
+            (Check::CoupledWorldStepsOnce, GPU_FLIP_OWES_SOLIDS),
+            (Check::Collision, GPU_FLIP_OWES_SOLIDS),
+            (Check::FloatingDraft, GPU_FLIP_OWES_SOLIDS),
+            (Check::HydrostaticLift, GPU_FLIP_OWES_SOLIDS),
+            (Check::FreeFlight, GPU_FLIP_OWES_SOLIDS),
+            (Check::PauseDiscardsImpulses, GPU_FLIP_IMPULSES_OWED),
         ],
     },
 ];
+
+/// A particle liquid's tick statistics: it stores no elastic energy.
+fn liquid_totals(words: &[u32]) -> LiquidTotals {
+    let stats = LiquidTickStats::from_words(words);
+    LiquidTotals {
+        mass: f64::from(stats.mass),
+        momentum: stats.momentum.map(f64::from),
+        energy: f64::from(stats.kinetic),
+        nonfinite: stats.nonfinite,
+    }
+}
+
+/// GPU FLIP's scenes at the 64³ lattice its solver is built for, in the render
+/// graph the app shows. No box scene until GPU FLIP carries solids.
+fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
+    match fixture {
+        Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
+        Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
+        Fixture::FaceGrid => Some(render_def(WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).with_faces())),
+        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox => None,
+    }
+}
+
+/// GPU FLIP's faces: component `axis` of the FaceSample lattice's padded cell,
+/// (cells + 1)³ records x fastest; 0 where no weight reached the face.
+pub(crate) fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
+    let lattice: Vec<FaceSample> = bytemuck::pod_collect_to_vec(bytes);
+    let m = cells.map(|n| n as usize + 1);
+    std::array::from_fn(|axis| {
+        (0..face_len(cells, axis) as usize)
+            .map(|index| {
+                let f = face_coords(cells, axis, index).map(|n| n as usize);
+                let sample = lattice[f[0] + m[0] * (f[1] + m[1] * f[2])];
+                if sample.weight[axis] > 0.0 { sample.velocity[axis] } else { 0.0 }
+            })
+            .collect()
+    })
+}
+
+/// MPM's faces: the mean velocity of the four lattice nodes around each
+/// face's centre that carry mass, past the lattice's padding, summed in the
+/// component's order.
+fn matter_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
+    let grid: Vec<MatterGridNode> = bytemuck::pod_collect_to_vec(bytes);
+    let pad = PADDING_NODES as usize;
+    let nodes = cells.map(|n| n as usize + 1 + 2 * pad);
+    std::array::from_fn(|axis| {
+        let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
+        (0..face_len(cells, axis) as usize)
+            .map(|index| {
+                let f = face_coords(cells, axis, index).map(|n| n as usize + pad);
+                let (mut sum, mut hits) = (0.0_f32, 0.0_f32);
+                for db in 0..2 {
+                    for dc in 0..2 {
+                        let mut q = f;
+                        q[b] += db;
+                        q[c] += dc;
+                        let node = grid[q[0] + nodes[0] * (q[1] + nodes[1] * q[2])].velocity_mass;
+                        if node[3] > 0.0 {
+                            sum += node[axis];
+                            hits += 1.0;
+                        }
+                    }
+                }
+                if hits > 0.0 { sum / hits } else { 0.0 }
+            })
+            .collect()
+    })
+}
 
 fn matter_totals(words: &[u32]) -> LiquidTotals {
     let stats = MatterTickStats::from_words(words);
@@ -380,7 +606,7 @@ impl BoxScene {
                 edge: 0.2,
                 mass: density_ratio * FIXTURE_DENSITY * 0.2f32.powi(3),
             }),
-            Fixture::StillPool | Fixture::DamBreak => None,
+            Fixture::StillPool | Fixture::DamBreak | Fixture::FaceGrid => None,
         }
     }
 
@@ -420,6 +646,12 @@ fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     Some(match BoxScene::of(fixture) {
         Some(scene) => scene.apply("WaterFloatingBoxMatter", MATTER_DOMAIN_TYPE_ID),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
+        None if fixture == Fixture::FaceGrid => {
+            let mut def = matter_dam_break_faces(None, false);
+            let resolution = SerializedParamValue::Int { value: FACE_GRID_RESOLUTION as i32 };
+            set_type_param(&mut def, MATTER_DOMAIN_TYPE_ID, "resolution", resolution);
+            def
+        }
         None => bundled("WaterDamBreakMatter"),
     })
 }
@@ -432,7 +664,7 @@ fn flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
             Some(def)
         }
         Fixture::DamBreak => Some(bundled("WaterDamBreak")),
-        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox => None,
+        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox | Fixture::FaceGrid => None,
     }
 }
 
@@ -539,7 +771,11 @@ mod tests {
                 assert!(!row.exempt[..i].iter().any(|(c, _)| c == check), "{}: {check:?} is exempt twice", row.type_id);
             }
             for atom in row.atomic_free {
-                assert!(registry.construct(atom).is_some(), "{}: atomic-free atom {atom} is not registered", row.type_id);
+                let node = registry.construct(atom).unwrap_or_else(|| panic!("{}: atomic-free atom {atom} is not registered", row.type_id));
+                // Codegen wraps the body and its includes; any atomic lives there.
+                let body = node.wgsl_body().unwrap_or_else(|| panic!("{}: {atom} has no codegen body to check", row.type_id));
+                let atomic = std::iter::once(body).chain(node.wgsl_includes().iter().copied()).any(|wgsl| wgsl.contains("atomic"));
+                assert!(!atomic, "{}: atomic-free atom {atom} uses an atomic", row.type_id);
             }
             let mut scenes: Vec<Fixture> = Vec::new();
             for check in Check::ALL {
@@ -556,6 +792,11 @@ mod tests {
                 assert!(
                     check != Check::OverflowReported || row.overflow.is_some(),
                     "{}: {check:?} needs an overflow case",
+                    row.type_id
+                );
+                assert!(
+                    check != Check::FaceGridPublished || row.faces.is_some(),
+                    "{}: {check:?} needs the row's face source",
                     row.type_id
                 );
                 for &fixture in check.fixtures(row.coupled) {
