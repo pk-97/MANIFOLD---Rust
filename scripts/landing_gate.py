@@ -53,12 +53,36 @@ def build_environment(cmd, cwd):
     target = next(iter(targets), repo / "target")
     try:
         admission = check_build(target, repo)
+        note = ""
+        if not admission and admission.reclaimable:
+            note = reclaim_landed_caches(admission.reserve_bytes)
+            admission = check_build(target, repo)
     except OSError as error:
         return None, f"Storage admission refused: cannot inspect disk: {error}"
     if not admission:
-        return None, "Storage admission refused: " + admission.reason
+        return None, "Storage admission refused: " + admission.reason + note
     environment["CARGO_TARGET_DIR"] = str(admission.target)
     return environment, None
+
+
+def reclaim_landed_caches(reserve_bytes):
+    """Free landed idle slot caches before refusing a build on the reserve.
+
+    Delegates to the ring (`agent-worktree.py reclaim`), which only ever
+    touches target/ of slots that are landed, clean, lease-free and
+    process-free. Returns a transcript tail for the refusal message.
+    """
+    script = Path(__file__).resolve().parent / "agent-worktree.py"
+    try:
+        out = subprocess.run([sys.executable, str(script), "reclaim",
+                              "--free-bytes", str(reserve_bytes)],
+                             capture_output=True, text=True, timeout=900)
+        text = (out.stdout + out.stderr).strip()
+    except (OSError, subprocess.TimeoutExpired) as error:
+        text = f"reclaim failed: {error}"
+    tail = "\n".join(text.splitlines()[-12:])
+    print(f"[storage] reclaim:\n{tail}", flush=True)
+    return "\n" + tail
 
 
 def run_cmd(cmd, cwd, timeout):

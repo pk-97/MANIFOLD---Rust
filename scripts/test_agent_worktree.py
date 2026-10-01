@@ -53,7 +53,7 @@ def build_pool(tmp):
     # Mirrors the live .gitignore. The bare lease line is load-bearing: inside a
     # slot the lease sits at the WORKTREE root, so `.claude/*` never matches it
     # and every leased slot would read as dirty.
-    (repo / ".gitignore").write_text(".worktree-lease.json\n.claude/*\n")
+    (repo / ".gitignore").write_text(".worktree-lease.json\n.claude/*\ntarget/\n")
     sh(repo, "git", "add", "f.txt", ".gitignore")
     sh(repo, "git", "commit", "-qm", "base")
     sh(repo, "git", "remote", "add", "origin", str(origin))
@@ -475,6 +475,104 @@ def test_remove_requires_ignored_asset_backup(repo):
 
 
 TESTS.append(test_remove_requires_ignored_asset_backup)
+
+
+def fake_target(wt, name="gen_node_catalog-0f1c97c31eb2a77a", size=2 * 2**20):
+    """A Cargo-tagged target holding one hashed Mach-O executable in deps/."""
+    deps = wt / "target" / "debug" / "deps"
+    deps.mkdir(parents=True)
+    (wt / "target" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+    exe = deps / name
+    exe.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * (size - 4))
+    exe.chmod(0o755)
+    return exe
+
+
+def test_scrub_frees_an_idle_slot_over_its_cap(repo):
+    """BUG-vnp8: `release slot-0` reported "removed 0 files (0.0G) from 49.0G"
+    because the residue was all hashed executables. Over-cap idle slots must
+    actually lose that cache."""
+    wt = add_slot(repo, "slot-0", "lane/landed")
+    exe = fake_target(wt)
+    with patch.object(aw, "TARGET_CAP_GB", 0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.cmd_scrub(SimpleNamespace())
+    check("over-cap idle slot loses its executables", not exe.exists(), out.getvalue())
+    check("scrub reports the removed file", "removed 1 cache files" in out.getvalue(), out.getvalue())
+    check("checkout untouched", (wt / "f.txt").read_text() == "base\n")
+
+
+def test_reclaim_touches_only_landed_clean_idle_slots(repo):
+    landed = add_slot(repo, "slot-0", "lane/landed")
+    landed_exe = fake_target(landed)
+    dirty = add_slot(repo, "slot-1", "lane/dirty")
+    (dirty / "f.txt").write_text("uncommitted\n")
+    dirty_exe = fake_target(dirty)
+    unlanded = add_slot(repo, "slot-2", "lane/unlanded")
+    (unlanded / "g.txt").write_text("x\n")
+    sh(unlanded, "git", "add", "g.txt")
+    sh(unlanded, "git", "commit", "-qm", "unlanded")
+    unlanded_exe = fake_target(unlanded)
+    leased = add_slot(repo, "slot-3", "lane/leased")
+    write_lease(leased, holder_pid=os.getpid(), age_h=0.5)
+    leased_exe = fake_target(leased)
+    spare = add_slot(repo, "slot-4", "lane/spare")
+    spare_exe = fake_target(spare)
+    # Oldest build first: slot-0 is the LRU victim, slot-4 is newer.
+    old = time.time() - 3600
+    for path in (landed / "target", *(landed / "target").iterdir()):
+        os.utime(path, (old, old))
+
+    def free_space(_path):
+        return 10**15 if not landed_exe.exists() else 0
+
+    with patch.object(aw, "disk_free", side_effect=free_space), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
+    text = out.getvalue()
+    check("landed idle slot cache reclaimed", not landed_exe.exists(), text)
+    check("reclaim stops once the reserve is met", spare_exe.exists(), text)
+    check("dirty slot untouched", dirty_exe.exists() and (dirty / "f.txt").read_text() == "uncommitted\n", text)
+    check("unlanded slot untouched", unlanded_exe.exists(), text)
+    check("leased slot untouched", leased_exe.exists(), text)
+    check("reclaim names what it kept", "KEEP slot-1: dirty" in text and "KEEP slot-2: unlanded" in text, text)
+    check("reclaim reports the freed slot", "RECLAIMED slot-0" in text, text)
+
+    with patch.object(aw, "disk_free", return_value=0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()):
+        try:
+            aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
+            check("reclaim exits nonzero when the reserve stays unmet", False)
+        except SystemExit as e:
+            check("reclaim exits nonzero when the reserve stays unmet", e.code == 3, repr(e.code))
+    check("second pass still leaves pinned slots alone",
+          dirty_exe.exists() and unlanded_exe.exists() and leased_exe.exists())
+
+
+def test_reclaim_refuses_a_live_process(repo):
+    wt = add_slot(repo, "slot-0", "lane/live")
+    exe = fake_target(wt)
+    with patch.object(aw, "disk_free", return_value=0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=True), \
+            redirect_stdout(io.StringIO()) as out:
+        try:
+            aw.cmd_reclaim(SimpleNamespace(free_bytes=100 * 2**30))
+        except SystemExit:
+            pass
+    check("live target keeps its cache", exe.exists(), out.getvalue())
+    check("live refusal is reported", "live process" in out.getvalue(), out.getvalue())
+
+
+TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
+          test_reclaim_touches_only_landed_clean_idle_slots,
+          test_reclaim_refuses_a_live_process]
 
 
 def main():
