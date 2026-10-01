@@ -417,9 +417,9 @@ Preserve first-frame source readiness, section boundaries, seek/reset behavior, 
 
 Exact fixtures, numerical thresholds, commands and failure interpretation are in the acceptance document. Test names there are deliverables, not claims that they already exist.
 
-## 7. Phasing — K3 execution briefs
+## 7. Phasing — execution briefs
 
-All phases: fresh K3 session, read back this phase's decisions/forbidden moves before coding; use the existing slot ring from a verified `origin/main` tip. Lead owns diagnosis/review/landing; workers do not delegate or land. Re-run the inventory commands; a count/site change requires a written delta review before edits. Use `scripts/codex_prepare.py` for worker briefs and `scripts/codex_checks.py` for changed-file checks. No Claude/K3 configuration changes are part of this design.
+All phases: fresh session, read back this phase's decisions/forbidden moves before coding; use the existing slot ring from a verified `origin/main` tip. Lead owns diagnosis/review/landing; workers do not delegate or land. Re-run the inventory commands; a count/site change requires a written delta review before edits. Use `scripts/codex_prepare.py` for worker briefs and `scripts/codex_checks.py` for changed-file checks. No Claude configuration changes are part of this design.
 
 Checks below use an absolute shell variable `RT_WORKTREE` for the acquired slot. No app implementation is performed by this design-authoring task. Each phase updates its marker and this header when actually landed. No phase may claim acceptance from its own report alone: the lead reviews code and gate output, runs the required landing gate, and owns Peter's demo handoff.
 

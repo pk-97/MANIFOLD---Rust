@@ -200,25 +200,25 @@ echo ""
 echo "--- P2 Test 1: pre-wave against live fleet ---"
 OUT=$("$GATE_RUNNER" pre-wave 2>&1) && RC=$? || RC=$?
 if [ "$RC" -eq 0 ]; then ok "pre-wave exit 0"; else fail "pre-wave exit $RC (expected 0): $(echo "$OUT" | tail -3)"; fi
-# Must print eight check lines (P2's five + hook liveness x2 + enforcement manifest)
+# Must print five check lines (goldens, wave base, hooks registered, hooks fire, enforcement manifest)
 CHECK_COUNT=$(echo "$OUT" | grep -cE '^\s+\[(PASS|FAIL|WARN)\]' || true)
-if [ "$CHECK_COUNT" -eq 8 ]; then ok "pre-wave prints 8 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 8)"; fi
-echo "$OUT" | grep -qE 'pre-wave: [0-9]+/8 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
+if [ "$CHECK_COUNT" -eq 5 ]; then ok "pre-wave prints 5 check lines"; else fail "pre-wave prints $CHECK_COUNT check lines (expected 5)"; fi
+echo "$OUT" | grep -qE 'pre-wave: [0-9]+/5 checks passed' && ok "pre-wave summary line" || fail "pre-wave missing summary line"
 echo ""
 
 # Clean up the pre-wave verdict from live run so induced-failure test starts clean
 PREWAVE_JSONL="$VERDICTS_DIR/pre-wave.jsonl"
 [ -f "$PREWAVE_JSONL" ] && rm -f "$PREWAVE_JSONL"
 
-echo "--- P2 Test 2: induced failure via bad LITELLM_URL ---"
-OUT=$(LITELLM_URL="http://127.0.0.1:9/" "$GATE_RUNNER" pre-wave 2>&1) && RC=$? || RC=$?
-if [ "$RC" -eq 1 ]; then ok "pre-wave exit 1 with bad litellm URL"; else fail "pre-wave exit $RC (expected 1): $(echo "$OUT" | tail -3)"; fi
+echo "--- P2 Test 2: induced failure via a wave base that is not on origin/main ---"
+OUT=$("$GATE_RUNNER" pre-wave --base 0000000000000000000000000000000000000000 2>&1) && RC=$? || RC=$?
+if [ "$RC" -eq 1 ]; then ok "pre-wave exit 1 with bad wave base"; else fail "pre-wave exit $RC (expected 1): $(echo "$OUT" | tail -3)"; fi
 echo "$OUT" | grep -q "FAIL" && ok "pre-wave output contains FAIL" || fail "pre-wave output missing FAIL"
-echo "$OUT" | grep -q "liveliness" && ok "pre-wave names liveliness as failing check" || fail "pre-wave missing liveliness"
+echo "$OUT" | grep -q "wave base merged" && ok "pre-wave names wave base as failing check" || fail "pre-wave missing wave base check"
 echo ""
 
 echo "--- P2 Test 3: pre-wave verdict validates ---"
-# The bad-URL run wrote a verdict; validate it via json.tool
+# The bad-base run wrote a verdict; validate it via json.tool
 if [ -f "$PREWAVE_JSONL" ]; then
     ok "pre-wave verdict file exists"
     PREWAVE_LINES=$(wc -l < "$PREWAVE_JSONL" | tr -d ' ')
@@ -238,9 +238,9 @@ assert v['schema'] == 1, 'schema != 1'
 assert v['phase'] == 'pre-wave', 'phase != pre-wave'
 assert v['kind'] == 'gate', 'kind != gate'
 assert 'preflight' in v['runner'], 'runner missing preflight'
-assert len(v['gates']) == 8, f'expected 8 gates, got {len(v[\"gates\"])}'
-# At least one gate must be failure (the liveliness one)
-assert not v['pass'], 'verdict should not pass with bad liveliness'
+assert len(v['gates']) == 5, f'expected 5 gates, got {len(v[\"gates\"])}'
+# At least one gate must be failure (the wave base one)
+assert not v['pass'], 'verdict should not pass with a bad wave base'
 print('schema validation: OK')
 " && ok "pre-wave verdict schema valid" || fail "pre-wave verdict schema invalid"
     done < "$PREWAVE_JSONL"

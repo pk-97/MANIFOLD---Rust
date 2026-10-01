@@ -16,7 +16,7 @@ Companion docs: `docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implem
 | Two-tier gate pattern (deny-once + re-check) | `.claude/hooks/workflow-gate.py` | exists — precedent for P4's merge clause |
 | Blocking idle hook (feedback to lane) | `.claude/hooks/lane-report-enforcer.py` | exists — TeammateIdle can block; proves hooks steer lanes mid-flight |
 | Bash interception point | `.claude/hooks/preToolUseBash.py` (+ `test_preToolUseBash.py`) | exists — P4's merge clause is one rule here, not a new hook |
-| Slot truth source + drift flags | `scripts/seat_tool.py` (`show` prints per-slot drift) | exists (e692762c) — preflight pack shells out to it |
+| Slot truth source + drift flags | `scripts/seat_tool.py` (`show` prints per-slot drift) | retired 2026-10-01 — script deleted with the provider proxy; pre-wave no longer calls it |
 | Quota/liveliness reads | `~/.claude/statusline.sh` (kimi usage API), litellm `/health/liveliness` | exists — lift, don't reinvent |
 | SubagentStop / TaskCompleted hook support | claude binary 2.1.219 (`strings`: `SubagentStop`, `executeTaskCompletedHooks`) | exists — ⚠ VERIFY-AT-IMPL: payload semantics undocumented; probe in P5 |
 | Verdict store | — | **genuinely new** |
@@ -90,7 +90,7 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 
 - **Entry state:** P1 landed (verdict on main). Verify: `git merge-base --is-ancestor <p1-sha> origin/main`.
 - **Read-back:** D1, D4; `scripts/seat_tool.py` show output shape; the R2 queue's blocking pre-flight list (these checks subsume its mechanical half).
-- **Deliverables:** `gate_runner pre-wave` checks, each a named PASS/FAIL line + one verdict: seat_tool drift (parse `show`, no `<- DRIFT`), litellm liveliness (200), per-seat quota read (lift the kimi usage call from statusline.sh; warn-only), goldens clean (`git status --porcelain tests/fixtures/gltf/goldens/` empty), wave base merged (`git merge-base --is-ancestor` per the queue's check).
+- **Deliverables:** `gate_runner pre-wave` checks, each a named PASS/FAIL line + one verdict. As built, the seat drift, litellm liveliness and per-seat quota checks were removed 2026-10-01 with the provider proxy; five checks remain: goldens clean (`git status --porcelain tests/fixtures/gltf/goldens/` empty), wave base merged (`git merge-base --is-ancestor` per the queue's check).
 - **Gate:** live run against the fleet prints all-PASS and exits 0; induced failure (preflight against `LITELLM_URL=http://127.0.0.1:9`) exits 1 naming the dead check.
 - **Demo:** none — L1.
 - **Forbidden moves:** SessionStart-hook auto-run (D4); hard-failing on quota percentage (warn-only — quota is information, not a gate); re-deriving slot state instead of calling seat_tool.

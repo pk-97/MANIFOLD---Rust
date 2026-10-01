@@ -99,6 +99,16 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   exactly the failure mode: two landing spots is what produced the twins.
   "Last-known-good" is now a property of the gate (clippy + tests before any
   merge), not of linearity.
+- **More than one branch ready → land them as one batch.** Merge each onto
+  `origin/main` in queue order into one landing branch, run
+  `scripts/landing_gate.py` once on the result, and land it as one no-ff
+  merge whose message lists every branch and tip. If the gate goes red, find
+  the culprit by re-gating without each branch in turn, drop it with its name
+  and the failure in the report, and land the rest. A single ready branch
+  still lands alone. Why: the gate costs 30-60 minutes (GPU proofs alone
+  about 16), so four branches one at a time cost four gates, and back-to-back
+  gates on the shared GPU run flaky. Mechanism: `scripts/land_wave.py --batch`
+  (module docstring is the spec, tests in `scripts/test_land_wave.py`).
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → run `scripts/landing_gate.py --repo <worktree path>` (agents
   cannot cd, and a run on main's checkout refuses) → `git merge
@@ -120,7 +130,9 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   merge into main whose branch touches flow-mapped paths without a green
   marker at that exact tip), `cargo deny check bans`, touched-crate clippy
   `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
-  the diff touches GPU paths. (Bug status lives in beads since
+  the diff touches GPU paths (scoped: mapped tests + smoke set from
+  `scripts/gpu_scope.py`, 300s test-time budget, unmapped GPU path fails,
+  `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly). (Bug status lives in beads since
   BUG_BACKLOG.md froze 2026-07-25 — `bug_status.py` and its landing-time
   reflow are retired.) The post-merge housekeeper on main is a backstop, not
   the workflow — its remedies are worktree-shaped, never in-place edits to

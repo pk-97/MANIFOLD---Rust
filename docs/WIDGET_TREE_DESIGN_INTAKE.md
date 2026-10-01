@@ -11,7 +11,7 @@ Design the queryable widget/param layer at the UI↔engine boundary — the stru
 - Method: `docs/DESIGN_AUTHORING.md` first, whole; deliverable conforms to `docs/DESIGN_DOC_STANDARD.md`.
 - Design only — no implementation, no lanes, until Peter approves the doc. Decomposition of the god files FOLLOWS this design; splitting before killing the duplication spreads the mess.
 - The testing doctrine (plan doc section Testing doctrine) is a hard constraint: the layer must make state-level testing (hit-test geometry as math, click→command dispatch, display-value resolution) the natural default. Pixels are for looking, not asserting.
-- K3 consult is available at a genuine design fork (AGENT_ROUTING.md section consult triggers).
+- A Fable consult fork is available at a genuine design fork (`docs/AGENT_ROUTING.md` section The consult seat).
 
 ## Must-reads, in order
 
