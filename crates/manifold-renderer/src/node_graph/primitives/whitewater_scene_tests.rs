@@ -13,7 +13,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
@@ -299,8 +298,9 @@ impl Show {
             }));
         }
         let mut show = Self { device, runtime, target, size, sampler, step_label, labels, frame_count: 0, trigger: 0, paused: false };
-        let held: Vec<NodeId> = held.iter().map(|name| NodeId::from(name.as_str())).collect();
-        show.runtime.set_dump_visible(None, &held);
+        // The whole-graph dump, as the GPU FLIP smoke runs read arrays: a
+        // node-scoped dump set holds nothing on this generator (BUG-bqwx).
+        show.runtime.set_dump_all(!held.is_empty());
         show
     }
 
