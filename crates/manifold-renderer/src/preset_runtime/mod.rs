@@ -93,6 +93,7 @@ use core::assert_manifest_gate;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use core::GRAPH_FORMAT;
 
+mod dump_sets;
 mod instrumentation;
 mod scene_viewport;
 mod modifier_preview;

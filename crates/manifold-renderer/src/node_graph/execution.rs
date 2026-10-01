@@ -261,6 +261,10 @@ pub struct Executor {
     /// the pool. `None` = atlas off. Coexists with [`dump_all`] via
     /// [`should_dump`](Self::should_dump) (Cmd+D still dumps everything).
     dump_set: Option<ahash::AHashSet<NodeInstanceId>>,
+    /// Arrays held for these nodes only, every frame it is `Some`: the
+    /// node-scoped array read for tests and tools. Separate from [`dump_set`]
+    /// because the atlas reads textures only and must not pin or copy arrays.
+    dump_array_set: Option<ahash::AHashSet<NodeInstanceId>>,
     /// Resources recorded into the dump this frame, so the release loop can pin
     /// exactly those past the frame (their slots must not be reacquired and
     /// overwritten before the host reads them) and recycle everything else.
@@ -288,11 +292,11 @@ pub struct Executor {
     dump_resources:
         Vec<(NodeInstanceId, &'static str, ResourceId, Option<manifold_gpu::GpuTexture>)>,
     /// Same, for `Array` (storage-buffer) outputs — particle/instance/edge
-    /// buffers. Recorded only under [`dump_all`]: the atlas has no array
-    /// reader. Read via [`dump_array_buffer`] and decoded against the
+    /// buffers. Recorded under [`dump_all`] or for [`dump_array_set`] nodes;
+    /// never for the atlas. Read via [`dump_array_buffer`] and decoded against the
     /// resource's `ArrayType` channel layout.
     dump_array_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
-    /// Per resource on a [`dump_all`] frame: a later step gives this
+    /// Per resource on a frame that holds arrays: a later step gives this
     /// array's storage to a different array, so the post-frame read must
     /// come from [`dump_array_snapshots`] (see
     /// [`arrays_overwritten_later`](super::resource_allocation::arrays_overwritten_later)).
@@ -598,6 +602,7 @@ impl Executor {
             preview_scalar_outputs: Vec::new(),
             dump_all: false,
             dump_set: None,
+            dump_array_set: None,
             dump_pinned_resources: ahash::AHashSet::new(),
             dump_resources: Vec::new(),
             dump_array_resources: Vec::new(),
@@ -755,11 +760,28 @@ impl Executor {
         self.dump_set = set;
     }
 
+    /// Hold the `Array` outputs of these nodes after every frame, readable
+    /// through [`dump_array_resources`](Self::dump_array_resources); `None`
+    /// stops. The node-scoped counterpart of [`set_dump_all`](Self::set_dump_all)
+    /// for arrays.
+    pub fn set_dump_array_set(&mut self, set: Option<ahash::AHashSet<NodeInstanceId>>) {
+        self.dump_array_set = set;
+    }
+
+    /// Whether any array is held this frame.
+    pub(super) fn dumps_arrays(&self) -> bool {
+        self.dump_all || self.dump_array_set.is_some()
+    }
+
+    fn dumps_array_of(&self, node: NodeInstanceId) -> bool {
+        self.dump_all || self.dump_array_set.as_ref().is_some_and(|s| s.contains(&node))
+    }
+
     /// Whether `node`'s outputs should be recorded into the dump this frame:
     /// everything under the Cmd+D `dump_all`, or only the listed nodes under
-    /// the atlas `dump_set`. False on the live path (both off).
+    /// the atlas `dump_set` or the `dump_array_set`. False on the live path.
     fn should_dump(&self, node: NodeInstanceId) -> bool {
-        self.dump_all || self.dump_set.as_ref().is_some_and(|s| s.contains(&node))
+        self.dump_all || [&self.dump_set, &self.dump_array_set].iter().any(|set| set.as_ref().is_some_and(|s| s.contains(&node)))
     }
 
     /// Record every Texture2D / Array output of `step` into the dump buffers,
@@ -783,7 +805,7 @@ impl Executor {
     ) {
         for &(port, res) in &step.outputs {
             match plan.resource_type(res) {
-                Some(t) if t.is_texture_2d() => {
+                Some(t) if t.is_texture_2d() && (self.dump_all || self.dump_set.as_ref().is_some_and(|s| s.contains(&step.node))) => {
                     let tex = self
                         .backend
                         .slot_for(res)
@@ -792,7 +814,7 @@ impl Executor {
                     self.dump_resources.push((step.node, port, res, tex));
                     self.dump_pinned_resources.insert(res);
                 }
-                Some(crate::node_graph::ports::PortType::Array(_)) if self.dump_all => {
+                Some(crate::node_graph::ports::PortType::Array(_)) if self.dumps_array_of(step.node) => {
                     if !self.dump_array_overwritten.get(res.0 as usize).copied().unwrap_or(false) {
                         self.dump_array_snapshots.remove(&res);
                     } else if !self.snapshot_dump_array(res, gpu.as_deref_mut()) {
@@ -1630,7 +1652,7 @@ impl Executor {
         self.dump_resources.clear();
         self.dump_array_resources.clear();
         self.dump_pinned_resources.clear();
-        if self.dump_all {
+        if self.dumps_arrays() {
             let backend = &*self.backend;
             self.dump_array_overwritten = super::resource_allocation::arrays_overwritten_later(
                 graph, plan, |r| backend.slot_for(r).map(|slot| slot.0),
@@ -3505,6 +3527,43 @@ mod tests {
         exec.set_dump_set(None);
         exec.execute_frame(&mut g, &plan, frame_time());
         assert!(exec.dump_resources().is_empty(), "no dump set, no records");
+    }
+
+    /// The array set holds the listed nodes' arrays and nothing else; the
+    /// texture atlas set holds no arrays (BUG-bqwx (node-scoped array dump)).
+    #[test]
+    fn dump_array_set_holds_only_listed_arrays() {
+        use crate::node_graph::ports::ArrayType;
+        let array = || PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::Vec4Vertex>());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(RecordingNode::new("a", vec![], vec![output("out", array())], log.clone())));
+        let b = g.add_node(Box::new(RecordingNode::new(
+            "b",
+            vec![input("in", array(), true)],
+            vec![output("out", array())],
+            log.clone(),
+        )));
+        let c = g.add_node(Box::new(RecordingNode::new("c", vec![input("in", array(), true)], vec![], log.clone())));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        g.connect((b, "out"), (c, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+        let held = |exec: &Executor| exec.dump_array_resources().iter().map(|(n, _, _)| *n).collect::<Vec<_>>();
+
+        exec.set_dump_set(Some([a, b].into_iter().collect()));
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert!(held(&exec).is_empty(), "the texture atlas holds no arrays");
+        exec.set_dump_set(None);
+
+        exec.set_dump_array_set(Some([a].into_iter().collect()));
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(held(&exec), vec![a], "only the listed node's array");
+        assert!(exec.dump_resources().is_empty(), "the array set holds no textures");
+
+        exec.set_dump_array_set(None);
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert!(held(&exec).is_empty(), "no array set, nothing held");
     }
 
     #[test]
