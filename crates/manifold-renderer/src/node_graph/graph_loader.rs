@@ -2458,7 +2458,7 @@ mod tests {
         use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
         use crate::node_graph::{compile, MetalBackend};
 
-        let device = std::sync::Arc::new(GpuDevice::new_queued("graph_loader tests"));
+        let device = crate::gpu::test_gpu_device("graph_loader tests");
         let mut graph = Graph::new();
         let seed = graph.add_node(Box::new(SeedParticles::new()));
         let step = graph.add_node(Box::new(EulerStepParticles::new()));
@@ -2499,7 +2499,7 @@ mod tests {
         use crate::node_graph::primitives::SeedParticles;
         use crate::node_graph::{compile, MetalBackend};
 
-        let device = std::sync::Arc::new(GpuDevice::new_queued("graph_loader tests"));
+        let device = crate::gpu::test_gpu_device("graph_loader tests");
         let mut graph = Graph::new();
         graph.add_node(Box::new(SeedParticles::new()));
         let plan = compile(&graph).expect("seed-only graph compiles");
