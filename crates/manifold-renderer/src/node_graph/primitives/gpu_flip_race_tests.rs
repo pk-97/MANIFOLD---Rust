@@ -649,6 +649,19 @@ fn gpu_flip_ghost_fluid_refined() {
     ghost_fluid_race(128);
 }
 
+/// The particle-to-face kernel on the meshed Dam Break as shipped: sheet
+/// breakup and the race rows, read against the ghost rows of
+/// `gpu_flip_ghost_fluid_64` and `_refined` and the engine's.
+#[test]
+fn gpu_flip_transfer_kernel_64() {
+    dam_break(WaterScene::dam_break(64).with_surface(), "TRANSFER 64³", 300);
+}
+
+#[test]
+fn gpu_flip_transfer_kernel_refined() {
+    dam_break(WaterScene::dam_break(128).with_surface(), "TRANSFER 128³", 300);
+}
+
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
 #[test]
 fn gpu_flip_dam_break_settles() {

@@ -228,16 +228,38 @@ fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
 }
 
 #[test]
-fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
+fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
     let mut harness = Harness::new();
-    let particles = random_particles(0x9261, 400);
-    let (sorted, ranges) = cpu_sort(&particles);
-    let inputs = [
-        ("sorted", harness.array(&sorted, sorted.len()).0),
-        ("cell_ranges", harness.array(&ranges, ranges.len()).0),
-    ];
-    let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
-    let mut checked = 0;
+    // Dense covers most faces and the walls; sparse leaves faces no particle
+    // reaches.
+    for (name, count) in [("dense", 400), ("sparse", 12)] {
+        let particles = random_particles(0x9261, count);
+        let (sorted, ranges) = cpu_sort(&particles);
+        let inputs = [
+            ("sorted", harness.array(&sorted, sorted.len()).0),
+            ("cell_ranges", harness.array(&ranges, ranges.len()).0),
+        ];
+        let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
+        let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
+        if name == "dense" {
+            assert!(checked > 200, "the fixture reaches most faces, got {checked}");
+            assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
+        } else {
+            assert!(checked > 5 && invalid > 50, "{name}: {checked} faces reached, {invalid} not");
+        }
+    }
+}
+
+/// Checks node.particles_to_faces' output against the engine's kernel
+/// (velocityadvector.cpp, in cells: r = √3/2). Returns the faces whose
+/// velocity was checked, the faces no particle reaches, and the wall faces
+/// held and kept.
+fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize, usize, [usize; 2]) {
+    let rsq = 0.75f64;
+    let wyvill = |d2: f64| {
+        if d2 < rsq { 1.0 - 4.0 / 9.0 * d2.powi(3) / rsq.powi(3) + 17.0 / 9.0 * d2 * d2 / (rsq * rsq) - 22.0 / 9.0 * d2 / rsq } else { 0.0 }
+    };
+    let (mut checked, mut invalid) = (0, 0);
     // Wall faces held (water moving into the wall) and kept (leaving it).
     let mut walls = [0usize; 2];
     for (i, face) in got.iter().enumerate() {
@@ -250,37 +272,49 @@ fn gpu_flip_particles_to_faces_matches_the_tent_sum() {
             let centre: [f64; 3] = std::array::from_fn(|b| p[b] as f64 + if b == a { 0.0 } else { 0.5 });
             let (mut weight, mut momentum) = (0.0f64, 0.0f64);
             for particle in particles.iter().filter(|q| q.position_radius[3] > 0.0) {
-                let w: f64 = (0..3)
+                let d2: f64 = (0..3)
                     .map(|b| {
                         let q = (f64::from(particle.position_radius[b]) - f64::from(MIN[b])) / f64::from(H);
-                        (1.0 - (q - centre[b]).abs()).max(0.0)
+                        (q - centre[b]).powi(2)
                     })
-                    .product();
+                    .sum();
+                let w = wyvill(d2);
                 weight += w;
                 momentum += w * f64::from(particle.velocity[a]);
             }
-            let velocity = if weight > 0.0 { momentum / weight } else { 0.0 };
+            // A sum near the 1e-6 validity line can land on either side in f32.
+            if (1e-7..1e-5).contains(&weight) {
+                continue;
+            }
+            let valid = weight > 1e-6;
+            let velocity = if valid { momentum / weight } else { 0.0 };
             if p[a] == 0 || p[a] == N[a] {
                 // A wall keeps only what leaves it, and is always valid.
                 close(face.weight[a], 1.0, 1.0, &format!("wall weight {p:?}/{a}"));
                 let leaving = if p[a] == 0 { velocity.max(0.0) } else { velocity.min(0.0) };
                 walls[usize::from(leaving != 0.0)] += 1;
-                if weight > 1e-3 || leaving == 0.0 {
+                if weight > 0.05 || leaving == 0.0 {
                     close(face.velocity[a], leaving, 1.0, &format!("wall velocity {p:?}/{a}"));
                 }
                 continue;
             }
+            if !valid {
+                // Too little weight to trust: extension fills the face.
+                assert_eq!((face.velocity[a], face.weight[a]), (0.0, 0.0), "invalid face {p:?}/{a}");
+                invalid += 1;
+                continue;
+            }
             close(face.weight[a], weight, weight, &format!("weight {p:?}/{a}"));
-            // A face at the edge of a particle's reach has a tiny weight; its
-            // ratio carries the f32 rounding of that weight.
-            if weight > 1e-3 {
+            // Near the rim the kernel is 1 minus terms summing to about 1, so
+            // each particle's f32 weight is off by ~1e-7 absolute; a ratio is
+            // held to 1e-5 only where the weight dwarfs that.
+            if weight > 0.05 {
                 close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
                 checked += 1;
             }
         }
     }
-    assert!(checked > 200, "the fixture reaches most faces, got {checked}");
-    assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
+    (checked, invalid, walls)
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 <!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve with a fixed iteration count. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
-**Status:** BUILT on `feat/gpu-flip-multigrid` · 2026-10-01 · owed: solids, a narrower transfer kernel (section 8 (owed)), BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes), BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
+**Status:** BUILT on `feat/gpu-flip-multigrid` · 2026-10-01 · owed: solids (section 8 (owed)), BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes), BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
 
 GPU FLIP is the liquid water solver: particles carry the water, a face (MAC) grid carries its velocity, and each step makes that velocity divergence-free with one pressure solve. The solve is the textbook multigrid-preconditioned conjugate gradient (McAdams, Sifakis and Teran, "A parallel multigrid Poisson solver for fluids simulation on large grids", 2010). It replaced the FFT capacitance solve on 2026-10-01: the same equation, 3.0× faster at 64³ and 3.7× at 128³, to a smaller residual.
@@ -183,9 +183,26 @@ One step and two now touch the lid about equally, so extra steps no longer make 
 
 Read it this way. At 64³ the ghost rows move the breakup toward the engine's (mean 0.30% to 0.38%, against 0.42%); at 128³ they barely move it (0.56% to 0.58%, against 0.86%). Packing, holes, divergence and volume are the same or a little better. More water reaches the lid (1.7× at 64³, 1.2× at 128³), but at 64³ it leaves sooner: the lid is clear from frame 102, against 184 with plain rows. 16 iterations instead of 8 change none of this, so the shipped count does not hold the surface back. The surface costs 1.1 ms a frame at 64³ and 5 ms at 128³, most of it `node.particle_distance`.
 
+**The transfer kernel** (`gpu_flip_transfer_kernel_64`, `_refined`: the same scene with the ghost rows, the tent against the engine's Wyvill kernel at r = √3·h/2). The tent reached the box corners and about 1.15× further along each axis, averaging over more particles and blurring the velocity differences that tear a sheet.
+
+| Row | Tent 64³ | Wyvill 64³ | Tent 128³ | Wyvill 128³ |
+|---|---|---|---|---|
+| breakup peak / mean | 0.70% / 0.38% | 0.77% / 0.42% | 1.17% / 0.58% | 1.24% / 0.65% |
+| pieces peak / mean | 659 / 425 | 731 / 469 | 6,244 / 3,658 | 6,761 / 4,180 |
+| particles past rest, worst / last 30 | 10.5% / 5.9% | 10.3% / 6.0% | 12.0% / 7.1% | 11.9% / 7.2% |
+| particles missing inside, worst / last 30 | 13.7% / 7.0% | 13.6% / 6.8% | 14.3% / 7.7% | 14.5% / 7.8% |
+| divergence left, rms median / worst | 3.7e-5 / 2.9e-4 | 3.2e-5 / 3.1e-4 | 4.9e-4 / 4.4e-3 | 3.5e-4 / 4.2e-3 |
+| water volume drift, max / last | 12.0% / +6.0% | 12.9% / +5.5% | 7.4% / +3.4% | 7.8% / +3.1% |
+| top speed | 15.3 m/s | 15.5 m/s | 24.0 m/s | 23.9 m/s |
+| settled speed p99, last 30 | 1.61 m/s | 1.35 m/s | 1.66 m/s | 1.62 m/s |
+| lid contact / last frame at the lid | 20,379 / 102 | 20,933 / 103 | 173,198 / 299 | 190,955 / 299 |
+| GPU ms per frame, median | 18.1 | 17.8 | 106 | 110 |
+
+Breakup moves toward the engine's at both sizes: at 64³ the mean now matches it (0.42%), at 128³ it closes a quarter of the gap. The other rows hold within a point; the settled pool is calmer, the peak volume drift is 0.9 points higher at 64³, and 10% more water touches the lid at 128³. Kept. Where no particle reaches a face, extension fills it; beside a side wall it copies the wall face's held zero, so a thin film on that wall carries none across it (`face_grid_demo_gpu_flip_and_matter_side_by_side` allows 1% of a layer for these).
+
 ### Against the FLIP Fluids engine
 
-Matched on purpose: RK3 advection with 2/9, 3/9, 4/9 weights; particles kept 0.2 cells off solids; free-slip walls; extension by the mean of finished neighbours; the 95% FLIP blend per 1/60 s; one wall constraint written into both the FLIP reference and the current field (the engine's `_constrainVelocityFields` sets both, `fluidsimulation.cpp` 6933–6934).
+Matched on purpose: the Wyvill particle-to-face kernel at radius √3·h/2 (`velocityadvector.cpp`); RK3 advection with 2/9, 3/9, 4/9 weights; particles kept 0.2 cells off solids; free-slip walls; extension by the mean of finished neighbours; the 95% FLIP blend per 1/60 s; one wall constraint written into both the FLIP reference and the current field (the engine's `_constrainVelocityFields` sets both, `fluidsimulation.cpp` 6933–6934).
 
 Different on purpose:
 
@@ -210,7 +227,7 @@ Different on purpose:
 | I7 | The density correction never becomes velocity | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` |
 | I8 | No atomics in the step or the solve | the liquid conformance row's atomic-free list (`liquid/conformance.rs`); `coarse_inverse_uses_no_atomics` for the hand shader |
 | I10 | The coarsest level is solved exactly and symmetrically | `gpu_flip_coarse_inverse_matches_cpu`: bitwise symmetric, A·M the identity on unpinned water, a deep pool and an all-water box among the cases |
-| I11 | A box wall lets water leave and never enter, by one rule in `old`, the forced field and so `new` and `advect` | `gpu_flip_particles_to_faces_matches_the_tent_sum`, `gpu_flip_face_gravity_adds_gravity_and_holds_the_walls`, `gpu_flip_subtract_pressure_projects_faces_touching_water` (walls held and kept both drawn) |
+| I11 | A box wall lets water leave and never enter, by one rule in `old`, the forced field and so `new` and `advect` | `gpu_flip_particles_to_faces_matches_the_wyvill_sum`, `gpu_flip_face_gravity_adds_gravity_and_holds_the_walls`, `gpu_flip_subtract_pressure_projects_faces_touching_water` (walls held and kept both drawn) |
 | I12 | No RK3 stage moves past the CFL guard, and `new` is extended far enough for it | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` (stages within and past the guard); `gpu_flip_band_follows_the_cfl_guard` |
 | I13 | The ghost rows are the engine's: θ clamped to ±25, the diagonal floored at 0, the water side's φ at most −0.005h, the air side's at least 0; zero φ gives the plain rows; the projection uses the solve's θ, leaving exactly its residual; φ is the engine's level set at r = √3·h/2 | `gpu_flip_smooth_sweeps_each_color`, `gpu_flip_residual_is_rhs_minus_the_masked_laplacian`, `gpu_flip_ghost_rows_floor_the_air_and_the_diagonal`, `gpu_flip_subtract_pressure_projects_faces_touching_water` (plain and ghost each; divergence left equals div − L p per water cell), `gpu_flip_particle_distance_is_the_engines_level_set` |
 | I9 | The domain meets the liquid contract | the liquid conformance suite (`liquid_conformance_covers_every_domain`, `tests/gpu_proofs/liquid_conformance.rs`) |
@@ -229,12 +246,6 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 - **Kill check:** iterations to the empty tank's residual up more than 50% with the box → stop and report the numbers.
 - **Demo:** L2 — the Dam Break as shipped, obstacle included, GPU FLIP beside the engine, 300 frames headless. **Performer gesture:** the wave breaks around the box, then a floating box rides the slosh.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
-
-### Next: the transfer
-
-Measured on how a thin sheet breaks into drops against the engine's, at 64³ and 128³.
-
-- **A narrower particle-to-face kernel.** The tent reaches the box corners and about 1.15× further along each axis than the engine's Wyvill kernel (radius 0.866 cells). That averages over more particles, smooths sheets into ropes and blurs the velocity differences that tear them. Try the Wyvill kernel or a narrower tent; keep it only if sheet breakup improves.
 
 ### Tracked in beads
 
