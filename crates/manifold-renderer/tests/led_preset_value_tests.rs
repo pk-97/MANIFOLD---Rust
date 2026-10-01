@@ -75,7 +75,7 @@ fn preset_def(id: &str) -> EffectGraphDef {
 
 impl LedPresetFixture {
     fn new(id: &str) -> Self {
-        let device = Arc::new(GpuDevice::new());
+        let device = Arc::new(GpuDevice::new_queued("led_preset_value_tests"));
         let registry = PrimitiveRegistry::with_builtin();
         let runtime = PresetRuntime::from_def_with_device(
             preset_def(id),

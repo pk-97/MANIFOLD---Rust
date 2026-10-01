@@ -132,7 +132,7 @@ fn open_session(def: &EffectGraphDef, device: &Arc<GpuDevice>, w: u32, h: u32) -
 /// composited onto the render — `/tmp/viewport_p6_pick_highlight.png`.
 #[test]
 fn pick_object_highlights_the_clicked_object() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("viewport_p6_demo"));
     let def: EffectGraphDef = serde_json::from_str(&scene_json(false)).expect("parse scene def");
     let (w, h) = (320_u32, 240_u32);
     let mut session = open_session(&def, &device, w, h);
@@ -159,7 +159,7 @@ fn pick_object_highlights_the_clicked_object() {
 /// "wired axis locks gray" refusal visibly.
 #[test]
 fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("viewport_p6_demo"));
     let def: EffectGraphDef = serde_json::from_str(&scene_json(false)).expect("parse scene def");
     let (w, h) = (320_u32, 240_u32);
     let mut session = open_session(&def, &device, w, h);
@@ -214,7 +214,7 @@ fn each_gizmo_mode_renders_and_locked_axis_shows_gray() {
 /// `/tmp/viewport_p6_move_before.png` / `_after.png`.
 #[test]
 fn move_gizmo_drag_moves_the_rendered_object() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("viewport_p6_demo"));
     let def: EffectGraphDef = serde_json::from_str(&scene_json(false)).expect("parse scene def");
     let (w, h) = (320_u32, 240_u32);
     let mut session = open_session(&def, &device, w, h);

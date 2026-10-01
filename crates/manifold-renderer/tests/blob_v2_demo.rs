@@ -424,7 +424,7 @@ fn observed_tracks(runtime: &PresetRuntime, effect: &PresetInstance) -> Vec<Demo
 
 #[test]
 fn blob_v2_tracking_demo() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let mask_effect = effect("MaskBlob");
     let mut mask_runtime = build(&device, &registry, &mask_effect);
@@ -532,7 +532,7 @@ fn source_bytes(pixels: &[[f32; 4]]) -> Vec<u8> {
 
 #[test]
 fn blob_v2_mask_shape_blends_to_tracking_boxes() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let mut effect = effect("MaskBlob");
     set_param(&mut effect, "expand", 0.0);
@@ -567,7 +567,7 @@ fn blob_v2_mask_shape_blends_to_tracking_boxes() {
 
 #[test]
 fn blob_v2_mask_demo() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let mut effect = effect("MaskBlob");
     let mut runtime = build(&device, &registry, &effect);
@@ -690,7 +690,7 @@ fn blob_v2_mask_demo() {
 
 #[test]
 fn blob_v2_low_latency_mask_publication() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let mut effect = effect("MaskBlob");
     set_param(&mut effect, "denoise", 0.0);
@@ -764,7 +764,7 @@ fn blob_v2_low_latency_mask_publication() {
 
 #[test]
 fn blob_v2_separation_mask() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let mut effect = effect("MaskBlob");
     set_param(&mut effect, "denoise", 0.0);
@@ -862,7 +862,7 @@ fn blob_v2_separation_mask() {
 
 #[test]
 fn blob_v2_source_variants_demo() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let input = input_texture(&device, "blob-v2-source-variants-input");
     let red = [0.95, 0.04, 0.03];
@@ -1055,7 +1055,7 @@ fn blob_v2_source_variants_demo() {
 
 #[test]
 fn blob_v2_detection_mode() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let input = input_texture(&device, "blob-v2-detection-mode-input");
 
@@ -1168,7 +1168,7 @@ fn blob_v2_detection_mode() {
 
 #[test]
 fn blob_v2_shared_mask_detection() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let input = input_texture(&device, "blob-v2-shared-mask-input");
     let source = dim_contrast_scene();
@@ -1269,7 +1269,7 @@ fn blob_v2_shared_mask_detection() {
 
 #[test]
 fn blob_v2_box_area() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("blob_v2_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let input = input_texture(&device, "blob-v2-box-area-input");
     let source = bounded_outline_scene();

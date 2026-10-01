@@ -31,7 +31,7 @@ fn quant(v: f32) -> u8 {
 
 #[test]
 fn edge_extend_half_widths_is_identity_mapping() {
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("led_edge_identity");
 
     // Source at the shape the controller feeds the blit: the HDR LED
     // composite, here Rgba16Float at the native grid.
