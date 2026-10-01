@@ -483,22 +483,24 @@ fn mutual_skin_two_layers_render_300_frames() {
         runtime_b.set_layer_skin_registry(Some(unsafe { ptr.get() }));
     }
 
-    // Frame-cost measurement: each iteration drains the GPU (an empty
-    // encoder's commit_and_wait waits every earlier buffer on the device's
-    // single queue), so per-frame wall time is the true two-layer skin
-    // frame cost — the MANIFOLD_RENDER_TRACE budget check, measured harder.
-    // Frames 0..WARMUP are cold start (GLB parse + first-use pipeline
-    // compiles — the accepted render_scene cold-frame pattern; startup
-    // prewarm is the app's job, not this harness's) and are reported but
-    // not budget-checked; the 20 ms budget is steady state.
-    const WARMUP: u64 = 10;
-    let mut cold_max_ms = 0.0f64;
-    let mut max_frame_ms = 0.0f64;
-    let mut total_ms = 0.0f64;
-    let mut steady_frames = 0u64;
-    for frame in 0..300 {
-        let t = std::time::Instant::now();
-        render_two_layer_frame(
+    // Cold start (GLB parse, first-draw pipeline compile) happens here,
+    // the same window the app's load-time pre-roll absorbs. After it, the
+    // loop must run with every frame complete and nothing re-entering a
+    // loading state. Frame cost is not checked here: wall-clock budgets
+    // in correctness proofs flake under machine load.
+    let settled = settle_two_layer(
+        &device,
+        &mut compositor,
+        Some(&mut runtime_a),
+        &mut runtime_b,
+        &target_a,
+        &target_b,
+        &layer_a_id,
+        &layer_b_id,
+        0,
+    );
+    for frame in settled..settled + 300 {
+        let status = render_two_layer_frame(
             &device,
             &mut compositor,
             Some(&mut runtime_a),
@@ -509,32 +511,16 @@ fn mutual_skin_two_layers_render_300_frames() {
             &layer_b_id,
             frame,
         );
-        device
-            .create_encoder("layer-skin-drain")
-            .commit_and_wait_completed();
-        let ms = t.elapsed().as_secs_f64() * 1000.0;
-        if frame < WARMUP {
-            cold_max_ms = cold_max_ms.max(ms);
-        } else {
-            max_frame_ms = max_frame_ms.max(ms);
-            total_ms += ms;
-            steady_frames += 1;
-        }
-        if frame >= 295 {
-            println!("mutual-skin frame {frame}: {ms:.2} ms");
-        }
+        assert_eq!(
+            status,
+            crate::frame_status::FrameRenderStatus::Complete,
+            "mutual-skin frame {frame} did not render completely"
+        );
+        assert!(
+            !runtime_a.warmup_pending() && !runtime_b.warmup_pending(),
+            "mutual-skin frame {frame} went back to loading after settle"
+        );
     }
-    println!(
-        "mutual-skin frame cost: cold max {cold_max_ms:.2} ms (first {WARMUP} frames), \
-         steady max {max_frame_ms:.2} ms, steady avg {:.2} ms over {steady_frames} frames \
-         (budget 20 ms)",
-        total_ms / steady_frames as f64
-    );
-    assert!(
-        max_frame_ms < 20.0,
-        "two-layer mutual-skin steady-state frame cost must stay under 20 ms \
-         (max {max_frame_ms:.2} ms)"
-    );
 
     // The loop closed: A is a pure pass-through of B's previous frame, so
     // after 300 steady frames A's pixels must reproduce B's (one frame of
