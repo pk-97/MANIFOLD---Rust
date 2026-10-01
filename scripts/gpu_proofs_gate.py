@@ -7,7 +7,8 @@ rounds. This wrapper streams output live, then parses the full captured run
 into one summary: every failed test name, every golden-mismatch detail (file +
 diff), and a per-binary pass/fail count. Every selected test binary runs to
 completion with `--no-fail-fast`. Never nextest — process-per-test
-defeats the GPU device lock.
+defeats the GPU device lock. The whole run holds the machine-wide GPU queue
+(scripts/gpu_queue.py) and waits its turn behind any other GPU run.
 
 Default mode is SCOPED: the branch's diff against `--base` (default
 origin/main, plus uncommitted and untracked files) is mapped by
@@ -31,6 +32,7 @@ import sys
 import time
 from pathlib import Path
 
+import gpu_queue
 import gpu_scope
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
@@ -350,13 +352,16 @@ def main() -> int:
         runs = [dict(r, full=False) for r in plan.runs()]
 
     exit_code, outputs, all_timings = 0, [], []
-    for run in runs:
-        run_timings: list = []
-        code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
-                                run["full"], run["lib"], run_timings)
-        exit_code = exit_code or code
-        outputs.append(output)
-        all_timings += [(n, s, b, run["budgeted"]) for n, s, b in run_timings]
+    # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
+    # cargo runs so another run cannot interleave between test binaries.
+    with gpu_queue.hold("gpu_proofs_gate"):
+        for run in runs:
+            run_timings: list = []
+            code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
+                                    run["full"], run["lib"], run_timings)
+            exit_code = exit_code or code
+            outputs.append(output)
+            all_timings += [(n, s, b, run["budgeted"]) for n, s, b in run_timings]
     output = "".join(outputs)
     if args.timings_md:
         write_timings_md(args.timings_md, all_timings)

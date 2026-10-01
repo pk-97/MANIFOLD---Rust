@@ -118,7 +118,7 @@ fn ctx(width: u32, height: u32, frame_count: i64) -> PresetContext {
 /// isolated renderer session, then asserts the rendered framing changed.
 #[test]
 fn viewport_input_orbit_drag_changes_framing() {
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("viewport_p5c_demo"));
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse scene def");

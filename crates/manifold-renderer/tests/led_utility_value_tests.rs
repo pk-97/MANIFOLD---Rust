@@ -82,7 +82,7 @@ fn slot(spec: &ParamSpecDef, value: f32) -> Param {
 
 impl LedUtilityFixture {
     fn new(id: &str) -> Self {
-        let device = Arc::new(GpuDevice::new());
+        let device = Arc::new(GpuDevice::new_queued("led_utility_value_tests"));
         let registry = PrimitiveRegistry::with_builtin();
         let def = preset_def(id);
         let specs = def

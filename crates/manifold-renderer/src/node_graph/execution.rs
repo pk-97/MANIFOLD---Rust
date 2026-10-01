@@ -3124,7 +3124,7 @@ mod tests {
         use crate::node_graph::ports::ArrayType;
         use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("execution tests"));
         let particle_layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
 
         let mut g = Graph::new();

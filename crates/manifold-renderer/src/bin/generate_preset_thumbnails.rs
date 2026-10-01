@@ -66,7 +66,7 @@ fn main() {
         );
         std::process::exit(2);
     }
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("generate-preset-thumbnails"));
 
     let total = jobs.len();
     let mut written = 0usize;

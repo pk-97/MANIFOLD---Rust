@@ -150,6 +150,7 @@ class GpuProofsGateTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "argv", ["gpu_proofs_gate.py", *argv]))
             stack.enter_context(patch.object(gate, "run_gate", side_effect=fake_run_gate))
             stack.enter_context(patch.object(gate, "changed_paths", return_value=repo_changed or []))
+            stack.enter_context(patch.object(gate.gpu_queue, "hold", return_value=contextlib.nullcontext()))
             stack.enter_context(contextlib.redirect_stdout(out))
             code = gate.main()
         return code, calls, out.getvalue()

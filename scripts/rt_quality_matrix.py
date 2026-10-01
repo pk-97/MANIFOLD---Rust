@@ -656,4 +656,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gpu_queue
+
+    with gpu_queue.hold("rt_quality_matrix"):
+        sys.exit(main())
