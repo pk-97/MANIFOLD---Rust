@@ -9,13 +9,12 @@ use manifold_gpu::GpuBinding;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use crate::node_graph::liquid::fields::LIQUID_FIELD;
+use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{MatterGridNode, REACTION_WORDS, momentum_unit_fits};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use super::matter_common::MATTER_WALLS;
-use super::matter_grid_update::FieldBinding;
 use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]

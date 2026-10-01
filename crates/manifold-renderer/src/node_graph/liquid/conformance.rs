@@ -235,8 +235,6 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
 const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
      docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
 
-const GPU_FLIP_IMPULSES_OWED: &str = "owed to BUG-70l4 (wire GPU FLIP to the liquid fields): the GPU FLIP domain refuses impulses until it is wired (LIQUID_SCENE_OWED)";
-
 /// GPU FLIP's step atoms that gather instead of scattering, the pressure
 /// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
 /// coarse inverse has no codegen body; its own test checks it.
@@ -463,7 +461,6 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             (Check::FloatingDraft, GPU_FLIP_OWES_SOLIDS),
             (Check::HydrostaticLift, GPU_FLIP_OWES_SOLIDS),
             (Check::FreeFlight, GPU_FLIP_OWES_SOLIDS),
-            (Check::PauseDiscardsImpulses, GPU_FLIP_IMPULSES_OWED),
         ],
     },
 ];

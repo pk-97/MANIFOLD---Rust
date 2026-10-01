@@ -311,7 +311,7 @@ _Generated from the node registry. Do not hand-edit. 372 nodes registered, group
 | Extend Face Velocity | `node.extend_faces` | Filter | Carries the liquid's motion one cell out into the air, so particles at the surface move smoothly. |
 | Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
 | Face Divergence | `node.face_divergence` | Filter | Measures how much liquid each cell is trying to push out or suck in. |
-| Face Gravity | `node.face_gravity` | Filter | Pulls the liquid down for one step and stops it going through the tank walls. |
+| Face Gravity | `node.face_gravity` | Filter | Pulls the liquid with gravity and the scene's forces for one step and stops it going through the tank walls. |
 | Face Grid Component | `node.face_sample_component` | Filter | Hands one direction of the water's velocity grid to effects that follow the water. |
 | Faces To Particles | `node.faces_to_particles` | Filter | Hands the grid's corrected motion back to the liquid particles and moves them one step. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |

@@ -2,7 +2,9 @@
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P7a, `docs/GPU_FLIP_PRESSURE_SOLVE.md`):
 //! it speaks `node.fluid_surface`'s scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity and the
-//! padded lattice the solid distance and the particle frame read. The
+//! padded lattice the solid distance and the particle frame read. Scene
+//! forces and impulses reach the water through the shared field lattices of
+//! `liquid::fields` (seam P8), sampled over the face grid's box. The
 //! solver's own lattice is still baked into the preset, so any other lattice
 //! is refused by name. Exempt from the codegen mandate as a CPU bridge
 //! (ADDING_PRIMITIVES.md exclusion 3).
@@ -10,18 +12,20 @@
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBuffer;
+use manifold_physics::FieldValue;
 
-use super::coarse_inverse::multigrid_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
 use crate::node_graph::fluid_role::{FluidRoleKind, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::LiquidClock;
+use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, ROLE_PORTS};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::offline_simulation;
+use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
 
@@ -30,6 +34,24 @@ const REST_DENSITY: f64 = 1000.0;
 
 /// Every wall of the tank is closed.
 const CLOSED_FACES: u32 = 63;
+
+/// The pressure solve's V-cycle depth at every lattice: a fixed count, so the
+/// graph's shape never depends on Resolution. Each level halves every side,
+/// so a side must divide by 2^(levels − 1).
+pub(crate) const MULTIGRID_LEVELS: usize = 5;
+
+/// What every lattice side must be a multiple of: 16 for five levels.
+pub(crate) const SIDE_MULTIPLE: u32 = 1 << (MULTIGRID_LEVELS - 1);
+
+/// Why a lattice can't be solved: a side that does not halve evenly down
+/// every level.
+pub(crate) fn multigrid_refusal(cells: [u32; 3]) -> Option<String> {
+    cells.iter().any(|&n| n == 0 || n % SIDE_MULTIPLE != 0).then(|| {
+        format!(
+            "a {cells:?} cell lattice does not halve evenly through the pressure solve's {MULTIGRID_LEVELS} levels; every side must be a multiple of {SIDE_MULTIPLE}"
+        )
+    })
+}
 
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,7 +147,7 @@ pub(crate) fn gpu_flip_geometry(
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
     if let Some(reason) = multigrid_refusal(layout.cells) {
-        return Err(format!("GPU FLIP: {reason}. Change Resolution."));
+        return Err(format!("GPU FLIP: {reason}. Set Resolution to a multiple of {SIDE_MULTIPLE}."));
     }
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
@@ -150,6 +172,14 @@ pub(crate) fn gpu_flip_geometry(
     Ok(GpuFlipGeometry { layout, setup, particles })
 }
 
+impl GpuFlipGeometry {
+    /// The field lattice over the face grid's box: from its minimum corner
+    /// to its far wall faces.
+    pub(crate) fn field_lattice(&self) -> FieldLattice {
+        FieldLattice::covering(self.layout.min, self.layout.cell_size as f32, self.layout.cells.map(|n| n + 1))
+    }
+}
+
 /// The refusal of any wired role until sources, drains and solids reach
 /// GPU FLIP (solids are owed: GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)).
 fn refuse_roles(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
@@ -168,13 +198,17 @@ fn refuse_roles(ctx: &EffectNodeContext<'_, '_>) -> Result<(), String> {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 26] = [
+const OUTPUTS: [&str; 33] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
-    "display_time", "dropped_seconds", "body_count", "body_rows",
+    "display_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
+    "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
 ];
 const TICKS: usize = 19;
+const IMPULSE_TICK: usize = 32;
+const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
+const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
 /// Empty body, shape and atlas storage: GPU FLIP carries no bodies yet, and
 /// node.liquid_solid_distance reads them with a body count of 0.
@@ -187,10 +221,11 @@ pub struct EmptyBodies {
 crate::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. The solver's lattice is baked into its preset: any other Resolution, Domain Size or domain box is refused by name, as are every role and pairing with a physics world.",
+    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. The solver's lattice is baked into its preset: any other Resolution, Domain Size or domain box is refused by name, as are every role and pairing with a physics world.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
+        acceleration_field: VectorField optional,
         resolution: ScalarF32 optional,
         domain_size: ScalarF32 optional,
         fill_height: ScalarF32 optional,
@@ -279,7 +314,13 @@ crate::primitive! {
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32,
+        first_tick: ScalarF32,
+        field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
+        field_spacing: ScalarF32,
+        force_lattices: ScalarF32,
+        impulse_tick: ScalarF32,
         bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
+        forces: Array(f32), impulses: Array(f32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
@@ -294,7 +335,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("built_domain_size"), label: "Built Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites into node.liquid_fill, gravity into every step's node.face_gravity, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance and node.liquid_frame; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Built Resolution and Built Domain Size name the lattice the preset's atoms are built for.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites into node.liquid_fill, gravity, forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) into every step's node.face_gravity, and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance and node.liquid_frame; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Built Resolution and Built Domain Size name the lattice the preset's atoms are built for.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
     summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -308,15 +349,24 @@ crate::primitive! {
         published: Option<[f32; OUTPUTS.len()]> = None,
         empty: Option<EmptyBodies> = None,
         coupled: bool = false,
+        impulses: LiquidImpulses = LiquidImpulses::default(),
+        fields: LiquidFields = LiquidFields::default(),
+        acceleration: Option<FieldValue> = None,
+        holding: bool = false,
     },
 }
 
 impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "shapes" | "atlas")
+        matches!(port, "bodies" | "shapes" | "atlas" | "forces" | "impulses")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        match port {
+            "forces" => return self.fields.forces_buffer(),
+            "impulses" => return self.fields.impulses_buffer(),
+            _ => {}
+        }
         let empty = self.empty.as_ref()?;
         match port {
             "bodies" => Some(&empty.bodies),
@@ -332,7 +382,7 @@ impl Primitive for GpuFlipDomain {
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        matches!(port_name, "bodies" | "shapes" | "atlas").then_some(1)
+        matches!(port_name, "bodies" | "shapes" | "atlas" | "forces" | "impulses").then_some(1)
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {
@@ -361,24 +411,90 @@ impl Primitive for GpuFlipDomain {
                 atlas: zeroed(4),
             });
         }
+        self.acceleration = ctx.inputs.vector_field("acceleration_field");
+        let pending = ctx
+            .inputs
+            .slot("acceleration_field")
+            .is_some_and(|slot| !ctx.inputs.slot_content_ready(slot) || self.acceleration.is_none());
         // Every output is published every frame, so no consumer reads a slot
-        // this node left unwritten. On an error the liquid holds: the last
-        // good outputs repeat with zero ticks.
-        let values = match self.compute(ctx) {
-            Ok(values) => {
-                self.published = Some(values);
-                values
-            }
+        // this node left unwritten. While the field is still being prepared,
+        // or on an error, the liquid holds: the last good outputs repeat with
+        // zero ticks and no impulse.
+        let computed = if pending { Ok(None) } else { self.compute(ctx).map(Some) };
+        let held = || {
+            let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
+            held[TICKS] = 0.0;
+            held[IMPULSE_TICK] = -1.0;
+            held
+        };
+        let (values, fresh) = match computed {
+            Ok(Some(values)) => (values, true),
+            Ok(None) => (held(), false),
             Err(error) => {
                 ctx.error(error);
-                let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
-                held[TICKS] = 0.0;
-                held
+                (held(), false)
             }
         };
+        self.holding = !fresh;
+        if fresh {
+            self.published = Some(values);
+        }
         for (name, value) in OUTPUTS.iter().zip(values) {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
+        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, offline_simulation())) {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                ctx.error(error);
+                false
+            }
+            None => false,
+        };
+        // A hit is "applied" only once its tick's fields are on the GPU; a
+        // frame that held or failed discards its hits with a receipt.
+        if fresh && uploaded {
+            self.impulses.commit_frame();
+        } else {
+            self.impulses.abandon_frame();
+        }
+    }
+
+    fn physics_impulse_epoch(&self) -> Option<u64> {
+        self.impulses.epoch()
+    }
+
+    /// A hit fired this frame is stamped at the liquid's simulated time, so
+    /// it lands on the first tick of the next frame.
+    fn physics_impulse_stamp(
+        &self,
+        transport: manifold_core::Seconds,
+        sequence: u64,
+    ) -> Result<manifold_physics::input::EventStamp, String> {
+        if self.holding {
+            return Err("GPU FLIP impulses: cannot capture an impulse while the liquid is pending or failed".into());
+        }
+        self.impulses.stamp(transport.0, sequence)
+    }
+
+    /// GPU FLIP carries no bodies yet, so a hit aimed at a rigid body is
+    /// refused; the solids work plugs its rigid owner in here.
+    fn enqueue_physics_impulse(
+        &mut self,
+        stamp: manifold_physics::input::EventStamp,
+        impulse: ResolvedNodeImpulse,
+    ) -> Result<manifold_physics::TickStamp, String> {
+        self.impulses.enqueue(stamp, impulse, None)
+    }
+
+    fn drain_physics_impulses(
+        &mut self,
+        consume: &mut dyn FnMut(manifold_physics::input::AppliedEvent<ResolvedNodeImpulse>),
+    ) {
+        self.impulses.drain_applied(consume, None);
+    }
+
+    fn drain_discarded_impulses(&mut self, consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {
+        self.impulses.drain_discarded(consume);
     }
 }
 
@@ -413,6 +529,8 @@ impl GpuFlipDomain {
             restart,
             offline_simulation(),
         );
+        self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
+        let field = self.fields.prepare(geometry.field_lattice(), self.acceleration.as_ref(), &frame, &self.impulses)?;
         let per_frame = [
             ("gravity_x", gravity[0]),
             ("gravity", gravity[1]),
@@ -424,10 +542,11 @@ impl GpuFlipDomain {
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("body_count", 0.0),
             ("body_rows", 0.0),
+            ("first_tick", fields::first_tick(&frame) as f32),
         ];
         let mut values = [0.0; OUTPUTS.len()];
-        let mut written = 0u32;
-        for (name, value) in geometry.outputs().into_iter().chain(per_frame) {
+        let mut written = 0u64;
+        for (name, value) in geometry.outputs().into_iter().chain(per_frame).chain(field.outputs()) {
             let slot = OUTPUTS.iter().position(|output| *output == name).expect("every output has a slot");
             values[slot] = value;
             written |= 1 << slot;
@@ -448,6 +567,19 @@ mod tests {
         params.insert("built_resolution".into(), ParamValue::Float(built_resolution));
         params.insert("built_domain_size".into(), ParamValue::Float(4.0));
         params
+    }
+
+    /// A side that does not halve evenly through every level is refused.
+    #[test]
+    fn gpu_flip_lattice_must_halve_through_every_level() {
+        assert_eq!(SIDE_MULTIPLE, 16);
+        for side in [16u32, 32, 48, 64, 80, 96, 128, 256] {
+            assert!(multigrid_refusal([side; 3]).is_none(), "{side}");
+        }
+        for side in [0u32, 8, 24, 40, 63, 72, 100] {
+            assert!(multigrid_refusal([side; 3]).is_some(), "{side}");
+        }
+        assert!(multigrid_refusal([64, 64, 40]).is_some());
     }
 
     fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<GpuFlipGeometry, String> {
@@ -475,7 +607,10 @@ mod tests {
     #[test]
     fn gpu_flip_domain_refuses_by_name() {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
-        assert!(refused(geometry(63.0, 0.16, None)).contains("Resolution"));
+        for resolution in [63.0, 72.0, 100.0] {
+            let reason = refused(geometry(resolution, 0.16, None));
+            assert!(reason.contains("Resolution") && reason.contains("multiple of 16"), "{resolution}: {reason}");
+        }
         assert!(refused(geometry(64.0, 4.0, None)).contains("Initial Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
         assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));

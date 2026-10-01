@@ -560,7 +560,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.cells_with_particles", check: cells_with_particles },
     ExtentRule { type_id: "node.particles_to_faces", check: particles_to_faces },
     ExtentRule { type_id: "node.extend_faces", check: face_map },
-    ExtentRule { type_id: "node.face_gravity", check: face_map },
+    ExtentRule { type_id: "node.face_gravity", check: face_gravity },
     ExtentRule { type_id: "node.face_divergence", check: face_divergence },
     ExtentRule { type_id: "node.subtract_pressure", check: subtract_pressure },
     ExtentRule { type_id: "node.density_source", check: density_source },
@@ -1072,10 +1072,25 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // GPU FLIP carries no bodies until it has solids: one empty record of each.
     x.publish("body_count", 0.0);
     x.publish("body_rows", 0.0);
-    for (port, bytes) in [("bodies", size_of::<LiquidBody>() as u64), ("shapes", size_of::<LiquidShape>() as u64), ("atlas", 4)] {
+    // The walk takes a live frame's most force lattices and an impulse tick,
+    // so the field reads are checked.
+    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: MAX_LIVE_TICKS, impulse_tick: Some(0) };
+    let forces = u64::from(MAX_LIVE_TICKS) * field.lattice.bytes();
+    for (name, value) in field.outputs() {
+        x.publish(name, value);
+    }
+    for (port, bytes) in [
+        ("bodies", size_of::<LiquidBody>() as u64),
+        ("shapes", size_of::<LiquidShape>() as u64),
+        ("atlas", 4),
+        ("forces", forces),
+        ("impulses", field.lattice.bytes()),
+    ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
+    // The staging ring: the impulse lattice and the force lattices per slot.
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces));
     Ok(())
 }
 
@@ -1179,6 +1194,11 @@ fn face_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_count(gpu_flip_cells(x)?) * FACE;
     x.covers("faces", faces)?;
     x.covers("out", faces)
+}
+
+fn face_gravity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    face_map(x)?;
+    field_reads(x)
 }
 
 fn face_divergence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

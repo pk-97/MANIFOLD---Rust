@@ -460,11 +460,13 @@ struct Chain {
     nodes: Vec<serde_json::Value>,
     wires: Vec<serde_json::Value>,
     sources: Vec<(&'static str, Vec<f32>)>,
+    /// The sink's type: f32 values unless the chain ends in a face grid.
+    sink: &'static str,
 }
 
 impl Chain {
     fn new() -> Self {
-        Self { nodes: Vec::new(), wires: Vec::new(), sources: Vec::new() }
+        Self { nodes: Vec::new(), wires: Vec::new(), sources: Vec::new(), sink: "test.value_sink" }
     }
 
     fn node(&mut self, name: &str, type_id: &str, params: serde_json::Value) -> usize {
@@ -474,7 +476,13 @@ impl Chain {
     }
 
     fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
-        let id = self.node(name, "test.value_source", json!({"max_capacity": {"type": "Int", "value": values.len()}}));
+        let len = values.len();
+        self.typed_source(name, "test.value_source", len, values)
+    }
+
+    /// A source of `items` records of `type_id`'s item, as raw f32 words.
+    fn typed_source(&mut self, name: &'static str, type_id: &str, items: usize, values: Vec<f32>) -> usize {
+        let id = self.node(name, type_id, json!({"max_capacity": {"type": "Int", "value": items}}));
         self.sources.push((name, values));
         id
     }
@@ -487,7 +495,7 @@ impl Chain {
         let mut nodes = self.nodes.clone();
         let mut wires = self.wires.clone();
         let sink = nodes.len();
-        nodes.push(json!({"id": sink, "typeId": "test.value_sink", "nodeId": "sink", "params": {}}));
+        nodes.push(json!({"id": sink, "typeId": self.sink, "nodeId": "sink", "params": {}}));
         nodes.push(json!({"id": sink + 1, "typeId": "system.final_output", "nodeId": "output", "params": {}}));
         wires.push(json!({"fromNode": into, "fromPort": "out", "toNode": sink, "toPort": "values"}));
         wires.push(json!({"fromNode": sink, "fromPort": "out", "toNode": sink + 1, "toPort": "in"}));
@@ -553,8 +561,19 @@ impl Chain {
         let (unfused, none) = self.run(&def, len);
         let (fused, regions) = self.run(&fused_def, len);
         assert_eq!((none, regions), (0, 1), "one fused region");
-        let differ = unfused.iter().zip(&fused).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
-        assert_eq!(differ, 0, "fused differs from unfused in {differ} of {len}");
+        let differ: Vec<(usize, f32, f32)> = unfused
+            .iter()
+            .zip(&fused)
+            .enumerate()
+            .filter(|(_, (a, b))| a.to_bits() != b.to_bits())
+            .map(|(i, (&a, &b))| (i, a, b))
+            .collect();
+        assert!(
+            differ.is_empty(),
+            "fused differs from unfused in {} of {len} (index, unfused, fused): {:?}",
+            differ.len(),
+            &differ[..differ.len().min(12)]
+        );
         fused
     }
 }
@@ -618,6 +637,61 @@ fn gpu_flip_residual_into_divide_fuses() {
     let got = chain.fused_matches_unfused(divide, cells);
     let want: Vec<f64> = cpu_residual(&water, &rhs, &value, FINE, h).iter().map(|&v| v / -2.5).collect();
     assert_close(&got, &want, "fused residual into divide");
+}
+
+/// Face gravity reading the scene's force and impulse lattices, fused into
+/// the pressure subtraction: a step's face chain from gravity to projection.
+#[test]
+fn gpu_flip_face_gravity_into_subtract_pressure_fuses() {
+    use crate::node_graph::liquid::fields::FieldLattice;
+    let (h, min) = (0.3f32, [-1.0f32, 0.25, -1.5]);
+    let faces = super::particles_to_faces::face_count(FINE.map(|n| n as u32)) as usize;
+    let cells: usize = FINE.iter().product();
+    let field = FieldLattice::covering(min, h, FINE.map(|n| n as u32 + 1));
+    let nodes = field.nodes();
+    let before = random_values(faces * 8, 0x6a1);
+    let mut chain = Chain::new();
+    chain.sink = "test.face_sink";
+    let f = chain.typed_source("faces", "test.face_source", faces, before.clone());
+    let forces = chain.source("forces", random_values(2 * field.node_count() * 4, 0x6a2));
+    let impulses = chain.source("impulses", random_values(field.node_count() * 4, 0x6a3));
+    let p = chain.source("pressure", random_values(cells, 0x6a4));
+    let w = chain.source("water", random_water(cells, 0x6a5));
+    let mut params = lattice_json(
+        FINE,
+        &[
+            ("cell_size", f64::from(h)),
+            ("lattice_min_x", f64::from(min[0])),
+            ("lattice_min_y", f64::from(min[1])),
+            ("lattice_min_z", f64::from(min[2])),
+            ("step_dt", 1.0 / 120.0),
+            ("field_spacing", f64::from(field.spacing())),
+        ],
+    );
+    let ints = [
+        ("tick_index", 11),
+        ("substep_in_tick", 0),
+        ("field_nodes_x", nodes[0] as i64),
+        ("field_nodes_y", nodes[1] as i64),
+        ("field_nodes_z", nodes[2] as i64),
+        ("force_lattices", 2),
+        ("first_tick", 10),
+        ("impulse_tick", 11),
+    ];
+    for (name, value) in ints {
+        params[name] = json!({"type": "Int", "value": value});
+    }
+    let gravity = chain.node("gravity", "node.face_gravity", params);
+    chain.wire(f, "out", gravity, "faces");
+    chain.wire(forces, "out", gravity, "forces");
+    chain.wire(impulses, "out", gravity, "impulses");
+    let subtract = chain.node("subtract", "node.subtract_pressure", lattice_json(FINE, &[("cell_size", f64::from(h))]));
+    chain.wire(gravity, "out", subtract, "faces");
+    chain.wire(p, "out", subtract, "pressure");
+    chain.wire(w, "out", subtract, "water");
+    let got = chain.fused_matches_unfused(subtract, faces * 8);
+    assert!(got.iter().all(|v| v.is_finite()), "every face is finite");
+    assert_ne!(got, before, "the forces and pressure moved the faces");
 }
 
 /// The coarse water fused into the restriction's mask.

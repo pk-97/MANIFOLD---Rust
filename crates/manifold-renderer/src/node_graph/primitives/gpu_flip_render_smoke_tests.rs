@@ -87,11 +87,11 @@ fn stage(name: &str) -> &'static str {
             "project" => "pressure gradient",
             "move" => "face→particle + advect",
             l if l.starts_with("old_extend") || l.starts_with("new_extend") => "extrapolation",
+            l if l.starts_with("mg") && l.contains("_coarse_") => "solve coarsest level",
             l if l.contains("_pre") || l.contains("_post") => "solve smoothing",
             l if l.starts_with("mg") && (l.ends_with("_residual") || l.ends_with("_restrict") || l.ends_with("_prolong")) => {
                 "solve residual + transfers"
             }
-            l if l.starts_with("mg") && l.ends_with("_solve") => "solve coarsest level",
             "cg" | "rz" | "beta" | "direction" | "minus_lp" | "p_dot_s" | "alpha" | "solution" | "residual" => "solve vectors (CG)",
             _ => "solve levels (coarse water, zeros)",
         };

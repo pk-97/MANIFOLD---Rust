@@ -14,8 +14,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
-use super::coarse_inverse::multigrid_levels;
-use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
+use super::gpu_flip_domain::{GpuFlipGeometry, MULTIGRID_LEVELS, gpu_flip_geometry};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -50,6 +49,14 @@ pub(crate) const DENSITY_ITERATIONS: usize = 3;
 /// Red-black sweeps before and after each coarse correction.
 const SMOOTH_SWEEPS: usize = 2;
 
+/// Red-black sweeps before and after on the coarsest level, which is smoothed
+/// rather than solved exactly. With five levels at every lattice the coarsest
+/// grows with Resolution (8³ at 128); 16 keeps the iterations to 1e-5 at the
+/// count an exact coarse solve needs on the deep pool at 128³, where fewer
+/// rounds cost one more iteration (`scripts/mgpcg_reference.py --depth 5
+/// --coarse-sweeps`).
+const COARSE_SWEEPS: usize = 16;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PressureShape {
     /// Cells per side of the cubic lattice.
@@ -71,10 +78,10 @@ impl PressureShape {
         BOX_METRES / self.n as f64
     }
 
-    /// The V-cycle's lattice sides, finest first, as the domain's refusal
-    /// counts them.
-    pub fn levels(&self) -> Vec<usize> {
-        multigrid_levels([self.n as u32; 3]).iter().map(|level| level[0] as usize).collect()
+    /// The V-cycle's lattice sides, finest first, each half the one before;
+    /// the domain refuses a side that does not halve evenly to the last.
+    pub fn levels(&self) -> [usize; MULTIGRID_LEVELS] {
+        std::array::from_fn(|level| self.n >> level)
     }
 }
 
@@ -417,6 +424,12 @@ const LATTICE_WIRES: [&str; 7] = ["lattice_min_x", "lattice_min_y", "lattice_min
 /// The fill's sites, as the domain publishes them.
 const FILL_WIRES: [&str; 7] = ["pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1"];
 
+/// The scene's forces and impulses, as the domain publishes them.
+const FIELD_WIRES: [&str; 9] = [
+    "forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices",
+    "first_tick", "impulse_tick",
+];
+
 /// A scene as a running liquid on the seam. The domain seeds the fill and
 /// runs the clock; the state's region runs one tick per due tick: `steps`
 /// water steps from `state.out`, then the tick's stats, closing into
@@ -485,7 +498,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        (particles, faces) = water_step(&mut b, scene, particles, count, domain, density);
+        (particles, faces) = water_step(&mut b, scene, particles, count, (domain, state, k), density);
     }
     b.prefix.clear();
     let stats = b.node("stats", "node.liquid_stats", json!({}));
@@ -696,18 +709,20 @@ fn lattice_box(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
 }
 
 /// One water step (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)):
-/// sort, the water lattice, particles to faces, the domain's gravity, the
-/// pressure solve, the projection, the density solve when `density`, faces
-/// back to particles.
+/// sort, the water lattice, particles to faces, the domain's gravity, forces
+/// and impulses, the pressure solve, the projection, the density solve when
+/// `density`, faces back to particles. `tick` is the domain, the tick
+/// boundary and the step's index in the tick.
 /// Returns the moved particles and the step's projected, extended faces.
 fn water_step(
     b: &mut Builder,
     scene: WaterScene,
     particles: Port,
     count: Port,
-    domain: usize,
+    tick: (usize, usize, usize),
     density: bool,
 ) -> (Port, Port) {
+    let (domain, state, step) = tick;
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -736,11 +751,17 @@ fn water_step(
     b.wire((sort, "sorted"), gather, "sorted");
     b.wire((sort, "cell_ranges"), gather, "cell_ranges");
     let old = extend(b, "old", (gather, "out"), n, EXTENDED_LAYERS);
-    let forced = b.node("gravity", "node.face_gravity", Builder::lattice(n, &[("step_dt", float(dt))]));
+    let forced = b.node(
+        "gravity",
+        "node.face_gravity",
+        lattice_box(&scene, &[("step_dt", float(dt)), ("substep_in_tick", int(step))]),
+    );
     b.wire(old, forced, "faces");
     b.wire((domain, "gravity_x"), forced, "gravity_x");
     b.wire((domain, "gravity"), forced, "gravity_y");
     b.wire((domain, "gravity_z"), forced, "gravity_z");
+    b.wires(domain, forced, &FIELD_WIRES);
+    b.wire((state, "tick_index"), forced, "tick_index");
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
@@ -804,58 +825,37 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3], layers: usize
 }
 
 /// What every solve on one water lattice shares: the water at each V-cycle
-/// level, finest first, a zero lattice per level for the sweeps to start
-/// from, and the coarsest level's inverse.
+/// level, finest first, and a zero lattice per level for the sweeps to start
+/// from (the finest's is also the zero rhs of −L p).
 struct Levels {
     water: Vec<Port>,
     zeros: Vec<Port>,
-    inverse: Port,
 }
 
 fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
-    let sides = s.levels();
     let mut water_levels = vec![water];
     let mut zeros = Vec::new();
-    for (level, &side) in sides.iter().enumerate() {
+    for (level, side) in s.levels().into_iter().enumerate() {
         if level > 0 {
             let coarse = b.node(&format!("water_{level}"), "node.coarsen_water", Builder::lattice([side; 3], &[]));
             b.wire(water_levels[level - 1], coarse, "fine");
             water_levels.push((coarse, "out"));
         }
-        // The coarsest level is solved exactly by its inverse; the finest
-        // also gives the zero rhs of −L p.
-        if level == 0 || level + 1 < sides.len() {
-            let zero = b.node(&format!("zero_{level}"), "node.zero_lattice", Builder::lattice([side; 3], &[]));
-            zeros.push((zero, "out"));
-        }
+        let zero = b.node(&format!("zero_{level}"), "node.zero_lattice", Builder::lattice([side; 3], &[]));
+        zeros.push((zero, "out"));
     }
-    let coarsest = *sides.last().expect("a level");
-    let inverse = b.node("coarse_inverse", "node.coarse_inverse", Builder::lattice([coarsest; 3], &[]));
-    b.wire(*water_levels.last().expect("a level"), inverse, "water");
-    Levels { water: water_levels, zeros, inverse: (inverse, "out") }
+    Levels { water: water_levels, zeros }
 }
 
-/// One V-cycle for L e = rhs at `level`, from zero; returns e.
+/// One V-cycle for L e = rhs at `level`, from zero; returns e. The coarsest
+/// level is [`COARSE_SWEEPS`] sweep pairs down and the same back up, so the
+/// whole cycle stays symmetric for the conjugate gradient.
 fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs: Port) -> Port {
     let sides = s.levels();
     let side = sides[level];
     let h = s.cell_size() * (1u64 << level) as f64;
     let lattice = |extra: &[(&str, Value)]| Builder::lattice([side; 3], extra);
     let water = levels.water[level];
-    if level + 1 == sides.len() {
-        // L = −A / h², so e = −h² · A⁻¹ · rhs; A⁻¹ is symmetric, so its rows
-        // weighted by rhs are the product.
-        let cells = side * side * side;
-        let id = b.node(
-            &format!("mg{level}_solve"),
-            "node.combine_rows",
-            json!({"row_length": int(cells), "rows": int(cells), "scale": float(-h * h), "base_scale": float(0.0)}),
-        );
-        b.wire(rhs, id, "base");
-        b.wire(levels.inverse, id, "matrix");
-        b.wire(rhs, id, "coef");
-        return (id, "out");
-    }
     let mut e = levels.zeros[level];
     let sweep = |b: &mut Builder, name: String, e: Port, color: usize| -> Port {
         let id = b.node(&name, "node.pressure_smooth", lattice(&[("cell_size", float(h)), ("color", int(color))]));
@@ -864,6 +864,19 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
         b.wire(e, id, "value");
         (id, "out")
     };
+    if level + 1 == sides.len() {
+        for round in 0..COARSE_SWEEPS {
+            for color in [0, 1] {
+                e = sweep(b, format!("mg{level}_coarse_down{round}_{color}"), e, color);
+            }
+        }
+        for round in 0..COARSE_SWEEPS {
+            for color in [1, 0] {
+                e = sweep(b, format!("mg{level}_coarse_up{round}_{color}"), e, color);
+            }
+        }
+        return e;
+    }
     for round in 0..SMOOTH_SWEEPS {
         for color in [0, 1] {
             e = sweep(b, format!("mg{level}_pre{round}_{color}"), e, color);
@@ -938,7 +951,6 @@ pub(super) mod tests {
     use super::*;
     use crate::node_graph::liquid::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, LIQUID_EXTENT_RULES, Verdict, check_graph};
     use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
-    use crate::node_graph::validation::GraphError;
     use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, compile};
 
     fn registry() -> PrimitiveRegistry {
@@ -989,12 +1001,13 @@ pub(super) mod tests {
         walk(def, frozen).unwrap_or_else(|error| panic!("{what}: {error}"))
     }
 
-    /// Every lattice a scene may use, 16 to 256, the sides between the powers
-    /// of two included. Each is proven here before any GPU run at it. 256
-    /// holds the pool and column only with a lower fill: the Dam Break there
-    /// places more particles than a count carries, and the domain refuses it
-    /// by name (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
-    const LATTICES: [usize; 7] = [16, 24, 32, 48, 64, 96, 128];
+    /// Every lattice a scene may use, multiples of 16 from 16 to 256, the
+    /// sides between the powers of two included. Each is proven here before
+    /// any GPU run at it. 256 holds the pool and column only with a lower
+    /// fill: the Dam Break there places more particles than a count carries,
+    /// and the domain refuses it by name
+    /// (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
+    const LATTICES: [usize; 6] = [16, 32, 48, 64, 96, 128];
 
     /// Every lattice at every iteration count of the iteration trend.
     #[test]
@@ -1005,21 +1018,25 @@ pub(super) mod tests {
             let (_, plan) = built(&def);
             assert_eq!(plan.substep_regions().len(), 1, "one conjugate gradient region");
             let report = walked(&def, false, &format!("pressure {n}³, {iterations} iterations"));
-            let levels = shape.levels().len();
-            assert!(report.checked >= 11 * levels, "checked only {} nodes at {n}³", report.checked);
+            assert!(report.checked >= 11 * MULTIGRID_LEVELS, "checked only {} nodes at {n}³", report.checked);
         }
     }
 
-    /// The V-cycle's levels: halved while every side is even and one is over
-    /// 4, so the coarsest fits the exact solve at every lattice a scene uses.
+    /// The solve's shape is the same at every lattice: the same nodes under
+    /// the same names, only their lattice params differ.
     #[test]
-    fn gpu_flip_levels_halve_to_the_exact_solve() {
-        let sides = |n| PressureShape::at(n).levels();
-        assert_eq!(sides(64), vec![64, 32, 16, 8, 4]);
-        assert_eq!(sides(96), vec![96, 48, 24, 12, 6, 3]);
-        for n in LATTICES.into_iter().chain([256]) {
-            let coarsest = *sides(n).last().expect("a level");
-            assert!((coarsest.pow(3) as u64) <= super::super::coarse_inverse::MAX_COARSE_CELLS, "{n}³ ends at {coarsest}³");
+    fn gpu_flip_solve_shape_does_not_depend_on_the_lattice() {
+        assert_eq!(PressureShape::at(64).levels(), [64, 32, 16, 8, 4]);
+        assert_eq!(PressureShape::at(32).levels()[4], 2);
+        assert_eq!(PressureShape::at(128).levels()[4], 8);
+        let names = |n| {
+            let mut names: Vec<String> = pressure_def(PressureShape::at(n)).nodes.iter().map(|node| node.node_id.as_str().to_string()).collect();
+            names.sort();
+            names
+        };
+        let at64 = names(64);
+        for n in LATTICES {
+            assert_eq!(names(n), at64, "{n}³");
         }
     }
 
@@ -1100,20 +1117,19 @@ pub(super) mod tests {
         }
     }
 
-    /// A lattice whose coarsest level is past the exact solve is refused once,
-    /// at build, naming the coarse inverse, never frame by frame: an odd side
-    /// can't halve, and 80 halves only to 5³. The domain refuses the same
-    /// Resolution by name first (the GPU FLIP conformance row).
+    /// A Resolution that does not halve evenly through every level is
+    /// refused by the domain, by name, before any GPU work.
     #[test]
     fn gpu_flip_refuses_an_illegal_lattice_at_build() {
-        for n in [15, 63, 80, 81, 97] {
-            let graph = pressure_def(PressureShape::at(n)).into_graph(&registry(), &Default::default()).expect("pressure def builds");
-            match compile(&graph) {
-                Err(GraphError::IllegalParams { node, reason }) => {
-                    let kind = graph.get_node(node).expect("refused node exists").node.type_id().as_str().to_string();
-                    assert!(kind == "node.coarse_inverse" && reason.contains("one workgroup"), "{n}³ refused by {kind}: {reason}");
+        for n in [24, 63, 72, 100] {
+            let mut def = water_def(WaterScene::dam_break(64));
+            let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
+            domain.params.insert("resolution".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: n });
+            match walk(&def, false) {
+                Err(ExtentError::Refused { node, reason }) => {
+                    assert!(node.starts_with("domain") && reason.contains("multiple of 16"), "{n}³ refused by {node}: {reason}");
                 }
-                other => panic!("{n}³ must be refused at build, got {:?}", other.map(|_| "a plan")),
+                other => panic!("{n}³ must be refused by the domain, got {other:?}"),
             }
         }
     }
@@ -1183,10 +1199,9 @@ pub(super) mod tests {
     }
 
     /// The conjugate gradient region holds exactly one iteration: one V-cycle
-    /// (two sweep pairs down, the residual, the restriction, the coarse
-    /// solve, the prolongation, two sweep pairs up) and the vector updates.
-    /// The coarse water, the zero lattices and the coarse inverse are
-    /// outside it.
+    /// (two sweep pairs down, the residual, the restriction, the coarsest
+    /// level's sweeps, the prolongation, two sweep pairs up) and the vector
+    /// updates. The coarse water and the zero lattices are outside it.
     #[test]
     fn gpu_flip_pressure_region_is_one_iteration() {
         let (graph, plan) = built(&pressure_def(PressureShape::at(64)));
@@ -1207,10 +1222,14 @@ pub(super) mod tests {
                 want.push(format!("mg{level}_{stage}"));
             }
         }
-        want.push("mg4_solve".to_string());
+        for round in 0..COARSE_SWEEPS {
+            for color in [0, 1] {
+                want.push(format!("mg4_coarse_down{round}_{color}"));
+                want.push(format!("mg4_coarse_up{round}_{color}"));
+            }
+        }
         want.sort();
         assert_eq!(body, want);
-        assert!(!body.contains(&"coarse_inverse".to_string()), "the inverse is built once per water lattice");
     }
 
     /// Each fused region of `def` as its members' node ids, `a + b`.
