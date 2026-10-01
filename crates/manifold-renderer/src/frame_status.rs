@@ -38,13 +38,26 @@ pub enum FrameRenderFailure {
     RtAllocation,
     /// Encoding the RT update itself failed.
     RtEncode,
+    /// A node reported `ctx.error` this frame; its output is a fallback.
+    NodeError,
 }
 
 impl FrameRenderStatus {
+    /// Whether live display may show this frame and warmup may call it done.
+    /// A node error drew a deterministic fallback that waiting cannot fix,
+    /// so live keeps presenting it and surfaces the error; only export
+    /// rejects it.
+    pub fn presentable(self) -> bool {
+        matches!(self, Self::Complete | Self::Failed(FrameRenderFailure::NodeError))
+    }
+
     /// Fold `next` into `self`: failure beats pending beats complete; the
-    /// FIRST failure is kept when several land in one frame.
+    /// FIRST failure is kept when several land in one frame, except that a
+    /// specific failure replaces [`FrameRenderFailure::NodeError`].
     pub fn merge(&mut self, next: Self) {
         *self = match (*self, next) {
+            // NodeError is the generic failure: a specific reason replaces it.
+            (Self::Failed(FrameRenderFailure::NodeError), failed @ Self::Failed(_)) => failed,
             (failed @ Self::Failed(_), _) => failed,
             (_, failed @ Self::Failed(_)) => failed,
             (pending @ Self::PendingGeometry, _) => pending,
@@ -86,5 +99,11 @@ mod tests {
             other,
             FrameRenderStatus::Failed(FrameRenderFailure::RtAllocation)
         );
+        // A specific reason replaces the generic node error, never the reverse.
+        let mut node = FrameRenderStatus::Failed(FrameRenderFailure::NodeError);
+        node.merge(FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
+        assert_eq!(node, FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
+        node.merge(FrameRenderStatus::Failed(FrameRenderFailure::NodeError));
+        assert_eq!(node, FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
     }
 }

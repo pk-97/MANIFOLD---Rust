@@ -1043,7 +1043,7 @@ impl LayerCompositor {
             if let Some(chain) = self.effect_chains.get(&group_id)
                 && let Some(cg) = chain.as_ref()
                 && !cg.warmup_pending()
-                && warmup_frame_status == crate::frame_status::FrameRenderStatus::Complete
+                && warmup_frame_status.presentable()
             {
                 outcome = WarmupOutcome::Quiescent;
                 break;
@@ -1052,7 +1052,7 @@ impl LayerCompositor {
             // Paced wait: if async work is still in flight, yield so the
             // background threads can land without burning a whole frame budget
             // on spin-rendered no-ops.
-            if (warmup_frame_status != crate::frame_status::FrameRenderStatus::Complete)
+            if !warmup_frame_status.presentable()
                 || self
                     .effect_chains
                     .get(&group_id)
@@ -1272,13 +1272,13 @@ impl LayerCompositor {
 
             if let Some(cg) = chain.as_ref()
                 && !cg.warmup_pending()
-                && warmup_frame_status == crate::frame_status::FrameRenderStatus::Complete
+                && warmup_frame_status.presentable()
             {
                 outcome = WarmupOutcome::Quiescent;
                 break;
             }
 
-            if warmup_frame_status != crate::frame_status::FrameRenderStatus::Complete
+            if !warmup_frame_status.presentable()
                 || chain.as_ref().is_some_and(|cg| cg.warmup_pending())
             {
                 std::thread::sleep(std::time::Duration::from_millis(2));

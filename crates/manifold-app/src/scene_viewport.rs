@@ -46,7 +46,7 @@ impl SceneViewportFrame {
     }
 
     pub fn has_image(&self) -> bool {
-        self.status == Ok(FrameRenderStatus::Complete)
+        matches!(self.status, Ok(status) if status.presentable())
     }
 
     pub fn diagnostic(&self) -> Option<&'static str> {
