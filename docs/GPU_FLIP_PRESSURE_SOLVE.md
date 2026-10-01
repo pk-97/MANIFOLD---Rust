@@ -2,7 +2,7 @@
 
 <!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve with a fixed iteration count. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
-**Status:** BUILT on `feat/gpu-flip-multigrid` · 2026-10-01 · owed: solids in the water (section 8 (owed)), BUG-l2h3 (SWASH to a live instrument) children .10 (occupied-block passes) and .3 (planner reuses no temporaries), BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
+**Status:** BUILT on `feat/gpu-flip-multigrid` · 2026-10-01 · owed: solids in the water (section 8 (owed)), BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes), BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
 
 GPU FLIP is the liquid water solver: particles carry the water, a face (MAC) grid carries its velocity, and each step makes that velocity divergence-free with one pressure solve. The solve is the textbook multigrid-preconditioned conjugate gradient (McAdams, Sifakis and Teran, "A parallel multigrid Poisson solver for fluids simulation on large grids", 2010). It replaced the FFT capacitance solve on 2026-10-01: the same equation, 2.3× faster at 64³ and 2.4× at 128³, to a smaller residual.
@@ -153,7 +153,6 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 ### Tracked in beads
 
 - Occupied-block passes (only blocks near water dispatch): BUG-l2h3 child .10.
-- The planner reuses no temporaries, so 256³ is refused by device memory: BUG-l2h3 child .3.
 - Lid slabs: BUG-h8or.
 
 ## 9. Decided — do not reopen
