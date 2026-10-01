@@ -43,6 +43,14 @@ pub enum FrameRenderFailure {
 }
 
 impl FrameRenderStatus {
+    /// Whether live display may show this frame and warmup may call it done.
+    /// A node error drew a deterministic fallback that waiting cannot fix,
+    /// so live keeps presenting it and surfaces the error; only export
+    /// rejects it.
+    pub fn presentable(self) -> bool {
+        matches!(self, Self::Complete | Self::Failed(FrameRenderFailure::NodeError))
+    }
+
     /// Fold `next` into `self`: failure beats pending beats complete; the
     /// FIRST failure is kept when several land in one frame, except that a
     /// specific failure replaces [`FrameRenderFailure::NodeError`].

@@ -1463,7 +1463,7 @@ impl GeneratorRenderer {
         }
         t.last_frame_status = gpu.frame_status();
         t.ready = !t.runtime.warmup_pending()
-            && t.last_frame_status == crate::frame_status::FrameRenderStatus::Complete;
+            && t.last_frame_status.presentable();
         t.ready.then_some(&t.rt.texture)
     }
 
@@ -1476,7 +1476,7 @@ impl GeneratorRenderer {
             .filter(|t| {
                 t.ready
                     && !t.runtime.warmup_pending()
-                    && t.last_frame_status == crate::frame_status::FrameRenderStatus::Complete
+                    && t.last_frame_status.presentable()
             })
             .map(|t| &t.rt.texture)
     }
@@ -1769,7 +1769,7 @@ impl ClipRenderer for GeneratorRenderer {
 
             if let Some(ls) = self.layer_generators.get(&layer_id)
                 && !ls.generator.warmup_pending()
-                && warmup_frame_status == crate::frame_status::FrameRenderStatus::Complete
+                && warmup_frame_status.presentable()
             {
                 outcome = manifold_core::WarmupOutcome::Quiescent;
                 break;
@@ -1778,7 +1778,7 @@ impl ClipRenderer for GeneratorRenderer {
             // Paced wait: if async work is still in flight, yield so the
             // background threads (GLB parse, accel build) can land without
             // burning a whole frame budget on spin-rendered no-ops.
-            if warmup_frame_status != crate::frame_status::FrameRenderStatus::Complete
+            if !warmup_frame_status.presentable()
                 || self
                     .layer_generators
                     .get(&layer_id)
@@ -2295,6 +2295,25 @@ mod warmup_tests {
                 last_frame_status: status,
             },
         );
+    }
+
+    /// A node error leaves a fallback frame on display; only a simulation or
+    /// geometry failure hides it.
+    #[test]
+    fn node_error_frame_stays_presentable() {
+        use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
+        let device = crate::test_device();
+        let mut renderer = GeneratorRenderer::new(
+            device.arc(),
+            CANVAS_W,
+            CANVAS_H,
+            GpuTextureFormat::Rgba16Float,
+            0,
+        );
+        insert_test_thumb(&mut renderer, "errored", true, FrameRenderStatus::Failed(FrameRenderFailure::NodeError));
+        insert_test_thumb(&mut renderer, "broken", true, FrameRenderStatus::Failed(FrameRenderFailure::Simulation));
+        assert!(renderer.thumb_texture("errored").is_some());
+        assert!(renderer.thumb_texture("broken").is_none());
     }
 
     #[test]
