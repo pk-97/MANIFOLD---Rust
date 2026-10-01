@@ -58,6 +58,9 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "argv", ["landing_gate.py", "--repo", d, *extra]))
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
+            # A tooling self-test must never wait on the machine-wide GPU lock.
+            stack.enter_context(patch.object(landing_gate.gpu_queue, "hold",
+                                             side_effect=lambda *a, **k: contextlib.nullcontext()))
             stack.enter_context(patch.object(landing_gate, "get_touched_packages",
                                             return_value=["manifold-gpu"] if packages else []))
             deps = stack.enter_context(patch.object(landing_gate, "reverse_deps", return_value=[]))
