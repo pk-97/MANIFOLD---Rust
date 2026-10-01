@@ -210,6 +210,8 @@ impl GpuDevice {
     /// Create from the system default Metal device.
     /// Uses a dedicated command queue for content-thread work.
     pub fn new() -> Self {
+        // One GPU-using process on the machine at a time (crate::queue).
+        crate::queue::acquire_for_process();
         static NEXT_RESOURCE_SCOPE: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let resource_scope_id = NEXT_RESOURCE_SCOPE
