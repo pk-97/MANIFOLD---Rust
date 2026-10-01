@@ -35,7 +35,7 @@ const BTN_H: f32 = 28.0;
 
 #[test]
 fn overlong_label_stays_inside_button() {
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("text_clip_to_node_bounds");
     let mut ui = UIRenderer::new(&device, FORMAT);
 
     let style = UIStyle {
@@ -145,7 +145,7 @@ fn overlong_label_stays_inside_button() {
 /// last, when the pad was applied unconditionally.
 #[test]
 fn flush_fit_label_keeps_edge_glyphs() {
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("text_clip_to_node_bounds");
     let mut ui = UIRenderer::new(&device, FORMAT);
 
     let base = UIStyle {

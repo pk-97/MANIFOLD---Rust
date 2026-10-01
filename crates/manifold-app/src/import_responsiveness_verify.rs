@@ -64,7 +64,7 @@ fn corrupt_glb_fails_through_worker_as_failed_event() {
         .expect("write corrupt fixture");
 
     let (tx, rx) = crossbeam_channel::unbounded::<ImportProgress>();
-    let device = Arc::new(manifold_gpu::GpuDevice::new());
+    let device = Arc::new(manifold_gpu::GpuDevice::new_queued("import_responsiveness_verify"));
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let req = ImportRequest {
         path: bad_path.clone(),

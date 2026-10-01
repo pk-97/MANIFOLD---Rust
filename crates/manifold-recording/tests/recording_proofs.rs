@@ -602,7 +602,7 @@ fn hdr_blocked_by_bug_053() {
     // tests in this binary share `test_device()`'s cached device. Isolating
     // this test's device means a faulted command queue can't leak into
     // unrelated tests.
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("recording proofs");
 
     let out = scratch_output("hdr_blocked_by_bug_053");
     let mut config = video_only_config(out);

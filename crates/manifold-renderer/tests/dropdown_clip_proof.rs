@@ -78,7 +78,7 @@ fn rebuild_emulating_overlay_driver(
 }
 
 fn render(tree: &UITree, h: u32) -> Vec<u8> {
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("dropdown_clip_proof");
     let mut ui = UIRenderer::new(&device, FORMAT);
     ui.begin_frame();
     ui.render_tree(tree, None);
