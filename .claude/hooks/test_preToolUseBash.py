@@ -630,6 +630,50 @@ def test_sed_write_guard_ignores_read_only_sed():
               hook.sed_write_guard(cmd) is None, cmd)
 
 
+def test_sed_write_guard_file_operands_are_not_scripts():
+    """The three false-positive shapes that prompted Peter 2026-09-29..10-01:
+    an unquoted `$W/path` file operand (`$` address + `W` command), a BSD
+    `sed -i ''` empty suffix shadowing the script, and a heredoc body with an
+    apostrophe after a sed segment (shlex failure read as 'unparseable')."""
+    silent = [
+        'W="/x/slot-2"; sed -n 1,99p $W/particle_tests.rs; rg -n busy $W/../ -l | head',
+        'W=".claude/worktrees/slot-1"; rg -n fn -A40 $W/crates/a.rs | sed -n 10,40p',
+        'sed -n 720,790p $W/crates/manifold-renderer/src/node_graph/gltf_import/object_group.rs',
+        "sed -i '' 's/a/b/' $W/f.rs",
+        "sed -i '' 's/^## Owed before any engine work$/## Owed before engine work/' docs/X.md; "
+        "git commit -q -F - -- docs/X.md <<'EOF'\nP4 is\nPeter's call.\nEOF\ngit push -q origin main",
+        "git commit -m 'hook: quoted \"$VAR\" is not a sed w command'",
+        'rg -n "var w = |var acc" "$R/swash_tests.rs" | sed -n 1,40p',
+        "git worktree list | rg -i 'fft'; for w in $(git worktree list --porcelain | cut -d' ' -f2-); do :; done",
+        # merge markers inside a perl script are not heredoc openers
+        "F='/x/t.rs'; perl -0pi -e 's/<<<<<<< HEAD\\n.*?=======\\n//s' \"$F\"; sed -n '38,75p' \"$F\"",
+        # shlex-unparseable (`\\'` inside double quotes) falls back to span scan, stays silent
+        "OUT=\"$S/x.wgsl\"; { printf '%s\\n' \"// FLIP Fluids\\' tables\" \"const A = 1;\"; } > /tmp/x; sed -n 1,5p $W/a.rs",
+    ]
+    for cmd in silent:
+        check(f"sed_write_guard silent (operand/heredoc): {cmd[:60]}",
+              hook.sed_write_guard(cmd) is None, cmd)
+    asks = [
+        "sed -i '' 'w /tmp/x' f",
+        "sed -i '' -e p -e '1w out' f",
+        "sed -n w/tmp/x docs/README.md",
+        "sed -f script.sed f",
+        "rg x | sed -n '$w out'",
+        "sed -n 'p' f <<'EOF'\nbody\nEOF\nsed -n 'w /tmp/y' g",
+        # operator glued to the previous word must still start a new segment
+        "cat x; sed -n 'w /tmp/out' f",
+        "rg a f|sed -n 'w /tmp/out'",
+        "echo \"it\\'s\"; sed -n 'w /tmp/out' f",
+        # unparseable quoting + a real quoted w command still asks (fallback path)
+        "sed -n 'w /tmp/out' f; echo \"unbalanced",
+    ]
+    for cmd in asks:
+        check(f"sed_write_guard asks (real w): {cmd[:60]}",
+              hook.sed_write_guard(cmd) is not None, cmd)
+    check("heredoc bodies stripped before parsing",
+          "Peter's" not in hook._strip_heredoc_bodies("x <<'EOF'\nPeter's call\nEOF\ny"))
+
+
 # ---------------------------------------------------------------------------
 # Pre-land flow-gate guard — flow_gate_guard
 # ---------------------------------------------------------------------------
@@ -820,6 +864,7 @@ def main():
 
     test_sed_write_guard_asks_on_w_command()
     test_sed_write_guard_ignores_read_only_sed()
+    test_sed_write_guard_file_operands_are_not_scripts()
 
     test_merge_denied_missing_verdict()
     test_merge_passes_with_gate_verdict()
