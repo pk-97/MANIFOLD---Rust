@@ -2,7 +2,7 @@
 
 <!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to FFT_WATER_SOLVER_DESIGN.md, MPM water presets are test scenes, P4's water targets are withdrawn · BUG-osqh (coupled MPM export below 60 fps drops ticks) fixed on the branch, bead open until it lands · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
+**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to GPU_FLIP_PRESSURE_SOLVE.md, MPM water presets are test scenes, P4's water targets are withdrawn · BUG-osqh (coupled MPM export below 60 fps drops ticks) fixed on the branch, bead open until it lands · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -287,10 +287,10 @@ export and Record), the executor asks the owner `substep_host_sync(iteration)`; 
 commits the frame's command buffer, waits for it to complete, and calls the owner's
 `substep_host_step(iteration, gpu)`, which may read what the GPU wrote and rewrite shared
 buffers before the rest of the region is encoded. Live frames never ask. A boundary with
-no clock never commits or waits mid-region anywhere, which regions such as the FFT water's
+no clock never commits or waits mid-region anywhere, which regions such as GPU FLIP's
 pressure loop rely on. Matter opts in through `node.matter_state`'s `ticks` port, owned by
-`node.matter_domain`, to exchange with Box3D between ticks (section 5); the FFT water's
-Box3D coupling uses the same seam. Proofs: `substeps_host_sync_runs_offline_between_iterations`,
+`node.matter_domain`, to exchange with Box3D between ticks (section 5); GPU FLIP's
+Box3D coupling will use the same seam. Proofs: `substeps_host_sync_runs_offline_between_iterations`,
 `substeps_host_sync_never_runs_live`, `substeps_host_sync_off_by_default_in_export`,
 `substeps_region_unwired_clock_port_rejected`.
 
@@ -863,7 +863,7 @@ call and recorded in the phase's decision bead. P1 and P4 capture at Liveliness 
 0.9; the gate is evaluated at the default, and both sets of numbers go to Peter.
 
 **Withdrawn 2026-09-30.** MPM water look is out of scope: liquid water moves to
-[FFT_WATER_SOLVER_DESIGN.md](FFT_WATER_SOLVER_DESIGN.md), and the MPM water presets are
+[GPU_FLIP_PRESSURE_SOLVE.md](GPU_FLIP_PRESSURE_SOLVE.md), and the MPM water presets are
 test scenes. A2, A4, A6, the still-pool settle and the P4 targets A7–A11 are not gated.
 A1, A3 and A5 stay as solver-health gates. The metric functions stay in `matter::look`
 for `fluid_capture --look-metrics`.
@@ -1551,7 +1551,7 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liq
 
 ### P5a–P5d — Materials, one phase each, goo first
 
-Paused until the water solver settles (FFT_WATER_SOLVER_DESIGN.md). Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
+Paused until the water solver settles (GPU_FLIP_PRESSURE_SOLVE.md). Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
 Shared deliverables: the Material Enum value, its branch, its params on the domain's
 param surface, a preset, and the D4 hardening bound on c. Shared gate: the phase tests,
 the GPU filter, check-presets and graph-tool, P1's A1–A3 on the new material, an L2

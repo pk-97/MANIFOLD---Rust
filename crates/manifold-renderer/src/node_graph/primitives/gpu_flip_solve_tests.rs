@@ -388,11 +388,14 @@ fn gpu_flip_iteration_trend_refined() {
 /// Solves dumped from a running Dam Break (per record: u32 frame, step,
 /// kind 0 main / 1 density, n; then water, f and the FFT solve's pressure,
 /// n³ f32 each), read from the file `GPU_FLIP_DUMP` names: the GPU residual
-/// at the shipped iterations beside the FFT pressure's.
+/// at the shipped iterations beside the FFT pressure's. No-op unset, like the
+/// other opt-in probes.
 #[cfg(feature = "water-race-probes")]
 #[test]
 fn gpu_flip_real_frames_against_fft() {
-    let path = std::env::var("GPU_FLIP_DUMP").expect("GPU_FLIP_DUMP names a dump");
+    let Ok(path) = std::env::var("GPU_FLIP_DUMP") else {
+        return;
+    };
     let raw = std::fs::read(&path).expect("dump reads");
     let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().expect("four bytes")) as usize;
     let floats = |at: usize, count: usize| -> Vec<f32> {

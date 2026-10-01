@@ -135,11 +135,14 @@ pub(crate) const REST_PER_CELL: f64 = 8.0;
 /// The share of a cell's crowding one density solve removes: spread_rate ×
 /// step dt. Linear theory says crowding goes as (1 − share) per solve, so 1
 /// removes it in one solve; particles are discrete, so an overshoot crowds
-/// the next cell. Dam Break volume drift, max over the run, with a solve
-/// every step (`gpu_flip_density_sweep`, `gpu_flip_refined_splash`): share
-/// 1 gives 19.5% at 64³ and 9.0% at 128³; 5/6 gives 26.3% and 12.9%; 1.5
-/// leaves twice the particles past rest at 128³ (32% against 16% at frame 29).
-pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
+/// the next cell. The move a solve makes grows with the water's depth in
+/// cells, so a converged solve overshoots first at the finest lattice: at
+/// share 1, 128³ Dam Break held 48% of its particles past rest at frame 119
+/// against 9% at 0.5, and more iterations did not help
+/// (`gpu_flip_refined_density_causes`). 0.5 holds the water at 64³ and 128³
+/// (`gpu_flip_half_share_race`, docs/GPU_FLIP_PRESSURE_SOLVE.md section 6
+/// (measures)).
+pub(crate) const SPREAD_PER_STEP: f64 = 0.5;
 
 impl WaterScene {
     /// The engine's Dam Break, obstacle unwired.

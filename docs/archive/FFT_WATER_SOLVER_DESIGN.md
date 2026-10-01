@@ -2,9 +2,10 @@
 
 <!-- index: Benchmark-gated challenger to the FLIP Fluids CPU engine for water: particles on a face (MAC) grid with pressure solved each step by a capacitance collar, whole-box cosine transforms and a six-view surface-FFT helper inside fixed-pass GMRES. Phases: engine 3D FFT/DCT, the collar solve on saved Dam Break problems, the full liquid step raced end to end against the FLIP Fluids engine, solid objects in the water, the active region, then Peter's call. MPM is secondary information; nothing MPM owns is touched. -->
 
-**Status:** APPROVED · 2026-09-30 · P4 decided 2026-09-30: SWASH is the water solver · P0–P1 built on `feat/fft-water`; P3's step built there, with the position-only density solve; P3c's read-back window measured and taken out (see P3c) · owed: the quiet race timing, BUG-h8or (lid slabs), BUG-l2h3 (SWASH live-instrument epic) children .2 (collar at its proven bound) and .3 (planner reuses no temporaries), BUG-u8io (fft-water-fusion-param-capacity), BUG-m632 (swash-residual-bar) · SWASH is on the liquid seam (LIQUID_SOLVER_SEAM_DESIGN.md P7a (SWASH on the contract), shipped as `WaterDamBreakSwash.json`); P3b is next.
-**Evidence:** `docs/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record) and the P1 measurements below.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
+**Status:** SUPERSEDED 2026-10-01 · historical record, frozen · the live contract is `docs/GPU_FLIP_PRESSURE_SOLVE.md`.
+**Evidence:** `docs/archive/FFT_CAPACITANCE_PRESSURE_FINDINGS.md` (the research record) and the P1 measurements below.
+
+**Outcome (2026-10-01).** The FFT capacitance solve was replaced by a multigrid-preconditioned conjugate gradient on the same equation, and SWASH was renamed GPU FLIP (`node.gpu_flip_domain`, `WaterDamBreakGpuFlip.json`). On the seven Dam Break problems and dumped splash solves, 8 iterations reach a smaller residual than 24 passes here (median 6.6e-6 against about 1e-3 at 64³), at 4.1 ms per solve against 9.4 at 64³ and 21.1 against 51.5 at 128³. The collar, the charts, the Krylov basis and the transforms went with it, and with them this doc's open items: the collar capacity, the residual bar, the fusion of the transform pairs and the GPU-sized FFTs. The step (section 3), the density solve and the race method carried over unchanged, except the density share, which is 0.5 now: a converged density solve overshoots at share 1 at 128³. Decided item 8 below ("No multigrid FLIP") is reversed. Everything below is the record as it stood.
 
 Peter's decisions, 2026-09-30, not reopened:
 

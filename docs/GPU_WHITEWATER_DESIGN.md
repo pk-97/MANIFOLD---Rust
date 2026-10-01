@@ -2,15 +2,15 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P6 built on `feat/gpu-whitewater`; the Whitewater group ships in the SWASH Dam Break preset; O1 and O2 green · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
-**Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step (FFT_WATER_SOLVER_DESIGN.md P3) on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P6 built on `feat/gpu-whitewater`; the Whitewater group ships in the GPU FLIP Dam Break preset; O1 and O2 green · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
+**Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
 
 FLIP's whitewater costs 42–55 ms per tick at 64, and about 92% of that is two jobs that are parallel by nature: scanning every liquid particle for emitters, and the curvature grid (BUG-imy3 notes). The life of the few thousand whitewater particles afterwards (advection, buoyancy, drag, collisions, lifetime, removal) costs about 1 ms and is FLIP's tuned behaviour. **So the GPU finds emitters and spawns whitewater from what the seam already publishes, and the unchanged vendored C++ advances it, fed through shared memory after a fence.** Any solver that publishes the seam's face grid gets whitewater; FLIP keeps its native whitewater as the reference (seam D3).
 
-Companions: [LIQUID_SOLVER_SEAM_DESIGN.md](LIQUID_SOLVER_SEAM_DESIGN.md) (the seam; D5 and section 3.2 (Grid outputs) fix the face layout and the level-set source), [GPU_FLUID_SURFACE_DESIGN.md](GPU_FLUID_SURFACE_DESIGN.md) (the particle frame and the level set; its P8 fixes the whitewater output shape), FFT_WATER_SOLVER_DESIGN.md (SWASH, on `feat/fft-water`), [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md) (its P6 whitewater plan is superseded here), [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) and [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (atom rules).
+Companions: [LIQUID_SOLVER_SEAM_DESIGN.md](LIQUID_SOLVER_SEAM_DESIGN.md) (the seam; D5 and section 3.2 (Grid outputs) fix the face layout and the level-set source), [GPU_FLUID_SURFACE_DESIGN.md](GPU_FLUID_SURFACE_DESIGN.md) (the particle frame and the level set; its P8 fixes the whitewater output shape), [GPU_FLIP_PRESSURE_SOLVE.md](GPU_FLIP_PRESSURE_SOLVE.md) (GPU FLIP, the host solver; it was SWASH until 2026-10-01, so below SWASH means GPU FLIP and `swash_*` files are `gpu_flip_*`), [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md) (its P6 whitewater plan is superseded here), [DECOMPOSING_GENERATORS.md](DECOMPOSING_GENERATORS.md) and [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) (atom rules).
 
 Binding from outside this doc: never a GPU port of FLIP's solver; no FLIP tuning or integration (seam D3); no edit to vendored FLIP here; no fallback modes; a CPU extent proof before every new GPU size, and GPU runs at res 64 only.
 
@@ -250,7 +250,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 - **Lifecycle** (CPU, manifold-fluids, `whitewater.rs`): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
 - **Handoff** (renderer, `gpu-proofs`, `whitewater_handoff_tests.rs`): what the node publishes equals the lifecycle run on the CPU with the same spawns and fields; pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts; an output slot is rewritten only after its readers retired. A hand-retired fence stands in for the frame clock; every frame still commits on the device.
 - **Extents** (`whitewater_extent_tests.rs`, CPU): every atom's dispatch and array lengths at 64, and the named refusals for a misplaced face grid, a fractional refinement and `face_valid_layers` < 1, before any GPU run at that size.
-- **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, `lifecycle_ms` live (content thread) and `worker_ms` (lifecycle thread); p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; content thread per D11. Timings are printed, never asserted; what is asserted is structural: FLIP's update refuses any thread but its own (`whitewater_update_refuses_other_threads`, `whitewater_update_runs_on_its_own_thread`, and the live scene `whitewater_live_scene_updates_on_the_lifecycle_thread`).
+- **Cost:** GPU ms per whitewater node from the frame timestamps, snapshot blit ms, `lifecycle_ms` live (content thread) and `worker_ms` (lifecycle thread); p50 and p95 over 300 frames at 64, beside FLIP's whitewater ms (simulation ms with whitewater on minus off, the method of archive/FFT_WATER_SOLVER_DESIGN.md P3). Defaulted targets with triggers: GPU ≤ 2 ms p95; content thread per D11. Timings are printed, never asserted; what is asserted is structural: FLIP's update refuses any thread but its own (`whitewater_update_refuses_other_threads`, `whitewater_update_runs_on_its_own_thread`, and the live scene `whitewater_live_scene_updates_on_the_lifecycle_thread`).
 
 ### 3.8 Wrong turns, forbidden by name
 
@@ -258,7 +258,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 - Any edit under `flip_engine/`: `Array3d` aliasing, a `friend`, a jitter setter, `#define private public`.
 - The CPU reading a graph array in place, or `wait` on the live path.
 - A liquid field rebuilt from particles, or a solver publishing one.
-- A whitewater atom or the lifecycle branching on which solver fed it, or importing `matter_*`, `swash_*` or `fluid_surface` items.
+- A whitewater atom or the lifecycle branching on which solver fed it, or importing `matter_*`, `gpu_flip_*` or `fluid_surface` items.
 - `InstanceSnapshotUpload` for whitewater; `InstanceTransform` outputs.
 - Silent clipping at capacity or on a full ring.
 - A lock (`Arc<Mutex>`, `Arc<RwLock>`) for the lifecycle, or a slot shared with its thread rather than loaned.
@@ -270,7 +270,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| I1 | Whitewater reads only seam ports | negative gate: `rg -n -e matter_ -e swash_ -e fluid_surface -e "type_id ==" crates/manifold-renderer/src/node_graph/primitives/whitewater_*.rs crates/manifold-renderer/src/node_graph/primitives/*crossing*.rs` → 0 |
+| I1 | Whitewater reads only seam ports | negative gate: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface -e "type_id ==" crates/manifold-renderer/src/node_graph/primitives/whitewater_*.rs crates/manifold-renderer/src/node_graph/primitives/*crossing*.rs` → 0 |
 | I2 | Grid placement is derived | `whitewater_refuses_misplaced_face_grid`, `whitewater_refuses_fractional_refinement`, `whitewater_refuses_unextended_faces` |
 | I3 | Live never waits on the GPU or the lifecycle's thread; offline waits for both | `whitewater_live_holds_until_fence`, `whitewater_live_never_waits_for_the_worker`, `whitewater_offline_waits_for_its_snapshot_and_the_worker` |
 | I4 | A snapshot is consumed once, in order, after its fence; a dropped one is counted | `whitewater_ring_overflow_counts_dropped_ticks` |
@@ -296,7 +296,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 - **Entry state:** this design approved; `origin/feat/fft-water` merged into the branch; anchors `swash_preset.rs:609`, `matter_state.rs:157`, `R/matter.rs:287` re-read.
 - **Read-back:** LIQUID_SOLVER_SEAM_DESIGN.md section 3.2 (Grid outputs) and P10 (Grid outputs); ADDING_PRIMITIVES.md; this doc's section 3.1 (Grids) and section 3.6 (Solver feeds). Restate D2, the seam's P10 forbidden list, and the entry findings.
 - **Deliverables:** `R/liquid/grid.rs` with `FACE_GRID_PORTS`; `node.face_sample_component`, `node.matter_face_component`; `matter_frame` inputs and outputs for the grid; group outputs `level_set`, `level_set_bounds`, `level_set_nodes_x/y/z` in every preset that embeds the Liquid Surface group (`rg -l '"liquid_surface"' crates/manifold-renderer/assets/generator-presets`), thumbnails regenerated; `face_grid_extent_tests.rs`; `liquid_face_grid_layout` (uniform and linear-shear fields, both producers, within 1e-5 of the seam positions).
-- **Gate:** `cargo nextest run -p manifold-renderer face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e swash_ -e fluid_surface crates/manifold-renderer/src/node_graph/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
+- **Gate:** `cargo nextest run -p manifold-renderer face_grid liquid_face_grid_layout`; `scripts/gpu_proofs_gate.py` green; `graph-tool validate` clean on every touched preset; every regenerated thumbnail pixel-identical to its previous PNG (new outputs must not change the render; any changed pixel stops the phase and is reported). Negative: `rg -n -e matter_ -e gpu_flip_ -e fluid_surface crates/manifold-renderer/src/node_graph/liquid/grid.rs` → 0, and `type_id ==` in the two new atoms → 0 (the atoms are the solver-specific producers, so I1 itself does not apply to them).
 - **Demo:** L2, the seam's P10 demo: a face-speed slice of SWASH and MPM Dam Break at the same tick, side by side, PNG (`face_grid_demo_swash_and_matter_side_by_side`, path in `FACE_GRID_DEMO_PNG`).
 - **Forbidden:** a consumer switching on solver; node velocities as the contract; publishing every tick; `liquid_frame` (P7a's).
 - **Test scope:** focused renderer; GPU proofs.
@@ -353,7 +353,7 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 
 ### P6 — Side by side and cost
 
-- **Entry state:** P5 on the branch; `swash_preset.rs:437` and `:465` re-read; the FLIP render path of FFT_WATER_SOLVER_DESIGN.md P3's demo found (⚠ VERIFY-AT-IMPL: its demo command).
+- **Entry state:** P5 on the branch; `swash_preset.rs:437` and `:465` re-read; the FLIP render path of archive/FFT_WATER_SOLVER_DESIGN.md P3's demo found (⚠ VERIFY-AT-IMPL: its demo command).
 - **Read-back:** this doc's section 3.6 (Solver feeds) and section 3.7 (Proofs); the demo rules of DESIGN_DOC_STANDARD.md section 5 (Phase briefs). Restate them.
 - **Deliverables:** the SWASH side rendered from the SWASH Dam Break preset with its whitewater; `whitewater_side_by_side` writing `side_by_side.mp4` (1080p, 211 frames at 60 fps, FLIP engine with native whitewater left, SWASH with GPU whitewater right, `WaterDamBreakGpu.json`'s camera, the studio floor removed on both) and `counts.png` (foam, bubble and spray counts over time, both); the cost table in this phase's notes.
 - **Gate:** the test exits 0 and writes both files; cost measured and reported against the targets; the GPU and CPU targets met or escalated per D11.

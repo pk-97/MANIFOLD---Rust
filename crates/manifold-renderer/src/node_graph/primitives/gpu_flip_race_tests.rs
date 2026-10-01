@@ -252,12 +252,12 @@ fn report_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) 
     }
     let live = particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
     println!(
-        "GPU FLIPpacking: {live} particles in {} cells, {:.2} per cell (the fill is 8), mean height {:.3} m",
+        "GPU FLIP packing: {live} particles in {} cells, {:.2} per cell (the fill is 8), mean height {:.3} m",
         occupied.len(),
         live as f64 / occupied.len() as f64,
         height / live as f64
     );
-    println!("GPU FLIPpacking: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
+    println!("GPU FLIP packing: cells holding 1–4 / 5–7 / 8 / 9–12 / 13–24 / 25+: {histogram:?}; {on_wall} on a wall, {high} near the lid");
 }
 
 fn gpu_flip_packing(particles: &[FluidParticle], min: [f64; 3], n: usize, h: f64) -> Packing {
@@ -401,8 +401,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
 /// The race rows at a lattice: the step alone, then meshed; the difference
 /// is the surface. The spread rate is the scene's default.
 fn cost_probe(n: usize) {
-    dam_break(WaterScene::dam_break(n), &format!("GPU FLIPstep {n}³"), 300);
-    dam_break(WaterScene::dam_break(n).with_surface(), &format!("GPU FLIPmeshed {n}³"), 300);
+    dam_break(WaterScene::dam_break(n), &format!("GPU FLIP step {n}³"), 300);
+    dam_break(WaterScene::dam_break(n).with_surface(), &format!("GPU FLIP meshed {n}³"), 300);
 }
 
 #[test]
@@ -442,6 +442,23 @@ fn gpu_flip_refined_splash_causes() {
     let refined = WaterScene::dam_break(128).with_surface();
     dam_break(WaterScene { spread_rate: 0.0, ..refined }, "SPLASH rate 0 128³", 120);
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
+}
+
+/// The 128³ crowding against the density solve's strength, two steps a
+/// frame: share 1 and 0.5 at the shipped iterations, and share 1 at 1, 5 and
+/// 8 iterations. Measured 2026-10-01 at frame 119, particles past rest:
+/// share 1 48%, 0.5 9%; share 1 at 1, 5 and 8 iterations 61%, 48% and 48%.
+#[test]
+fn gpu_flip_refined_density_causes() {
+    let refined = WaterScene::dam_break(128);
+    let per_second = 1.0 / refined.step_dt();
+    for share in [1.0, 0.5] {
+        dam_break(WaterScene { spread_rate: share * per_second, ..refined }, &format!("DENSITY share {share} 128³"), 120);
+    }
+    for iterations in [1, 5, 8] {
+        let scene = WaterScene { spread_rate: per_second, density_iterations: iterations, ..refined };
+        dam_break(scene, &format!("DENSITY share 1, {iterations} iterations 128³"), 120);
+    }
 }
 
 /// How high the 64³ splash throws and whether it stays at the lid (BUG-h8or,

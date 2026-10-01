@@ -2,7 +2,7 @@
 
 <!-- index: Research record for a free-surface liquid pressure solve built from FFTs: capacitance unknowns on a one-cell air collar, whole-box FFT/DCT solves, and a surface-FFT |k| helper that keeps the pass count flat as the grid grows. Measured 2D/3D/GPU results, the rejected routes with their numbers (Dodd-Ferrante air split, naive masked FFT helper, warm start, edge band), the math found on the way (split ringing, waterbed law), literature status, and what is owed before engine work. -->
 
-**Status: RESEARCH · 2026-09-30 · Claude + Peter, reviewed by Astra (Codex). Beats multigrid ~1.5× on MPM's Dam Break in Python/MLX; not in the engine. Engine work: `docs/FFT_WATER_SOLVER_DESIGN.md`. Tracker: BUG-wsim (FFT pressure split research).**
+**Status: SUPERSEDED 2026-10-01 · historical record, frozen. The engine's FFT solve (`docs/archive/FFT_WATER_SOLVER_DESIGN.md`) was replaced by a multigrid-preconditioned conjugate gradient, which on the GPU ran 2.3× faster than it at 64³ to a smaller residual (`docs/GPU_FLIP_PRESSURE_SOLVE.md`). Research as of 2026-09-30: beat multigrid ~1.5× on MPM's Dam Break in Python/MLX. Tracker: BUG-wsim (FFT pressure split research).**
 
 ## The result
 
