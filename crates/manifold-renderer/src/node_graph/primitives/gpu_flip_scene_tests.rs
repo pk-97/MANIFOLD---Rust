@@ -199,15 +199,31 @@ impl Run {
         self.read(&format!("s{step}.step"), "out", self.scene.particles() as usize)
     }
 
-    /// The step's water cells, 1 or 0: the cells its particles started in,
-    /// binned as the step's sort bins them (clamped into the lattice).
+    /// The step's water cells, 1 or 0: φ < 0 over the particles it started
+    /// from, so a cell whose centre is within √3·h/2 of one (the eps snap
+    /// makes an exact touch water). Bodies are not counted.
     pub(super) fn water(&self, step: usize) -> Vec<f32> {
         let started = if step == 0 { self.entering.clone() } else { self.moved(step - 1) };
         let (n, h, min) = (self.n(), self.scene.pressure.cell_size(), self.scene.min());
+        let radius = 0.866_025_4 * h;
         let mut water = vec![0.0; n.pow(3)];
         for p in started.iter().filter(|p| p.position_radius[3] > 0.0) {
-            let c: [usize; 3] = std::array::from_fn(|a| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize);
-            water[c[0] + n * (c[1] + n * c[2])] = 1.0;
+            let q: [f64; 3] = std::array::from_fn(|a| f64::from(p.position_radius[a]));
+            let c: [i64; 3] = std::array::from_fn(|a| ((q[a] - min[a]) / h).floor() as i64);
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let cell = [c[0] + dx, c[1] + dy, c[2] + dz];
+                        if cell.iter().any(|&i| i < 0 || i >= n as i64) {
+                            continue;
+                        }
+                        let d2: f64 = (0..3).map(|a| (min[a] + (cell[a] as f64 + 0.5) * h - q[a]).powi(2)).sum();
+                        if d2 <= radius * radius {
+                            water[cell[0] as usize + n * (cell[1] as usize + n * cell[2] as usize)] = 1.0;
+                        }
+                    }
+                }
+            }
         }
         water
     }
@@ -429,6 +445,43 @@ fn gpu_flip_hydrostatic_column_rests() {
         assert!(worst <= 0.01 * g_dt, "frame {frame}: the pressure gradient is {:.3}% off ρg", 100.0 * worst / g_dt);
         assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
     }
+}
+
+/// The tank's first standing wave: 4 m long, 1 m deep, so wavelength 8 m and
+/// linear theory's period 2π/√(gk·tanh kd) = 2.795 s at k = π/4. The water's
+/// centre of mass in x swings with it (the step's third harmonic weighs 1/27
+/// in that measure); its zero crossings over 3 s to 9 s give the period, which
+/// must sit within 3% of 2.80 s. Water too narrow in the pressure solve lags
+/// the swing; too wide, it leads.
+#[test]
+fn gpu_flip_standing_wave_keeps_its_period() {
+    let scene = WaterScene::slosh(64);
+    let mut run = Run::new(scene);
+    let mut centre = Vec::new();
+    for frame in 0..600 {
+        run.frame();
+        let live: Vec<f64> =
+            run.particles().iter().filter(|p| p.position_radius[3] > 0.0).map(|p| f64::from(p.position_radius[0])).collect();
+        centre.push(live.iter().sum::<f64>() / live.len() as f64);
+        if frame % 60 == 59 {
+            let stats = particle_stats(&run.particles());
+            println!("GPU FLIP slosh frame {frame:3}: centre x {:+.4} m, fastest {:.3} m/s", centre[frame], stats.fastest);
+            assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
+        }
+    }
+    // Crossings of the rest centre, x = 0, interpolated between frames.
+    let crossings: Vec<f64> = centre
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| (w[0] < 0.0) != (w[1] < 0.0))
+        .map(|(i, w)| (i as f64 + w[0] / (w[0] - w[1])) / 60.0)
+        .filter(|t| (3.0..9.0).contains(t))
+        .collect();
+    println!("GPU FLIP slosh crossings (s): {crossings:.3?}");
+    assert!(crossings.len() >= 3, "only {} crossings between 3 s and 9 s", crossings.len());
+    let period = 2.0 * (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64;
+    println!("GPU FLIP slosh period {period:.3} s, {:+.2}% off 2.80 s", 100.0 * (period / 2.80 - 1.0));
+    assert!((period / 2.80 - 1.0).abs() <= 0.03, "standing-wave period {period:.3} s, outside 3% of 2.80 s");
 }
 
 /// How deep `p` sits inside the obstacle box at `pos` (m), negative outside.

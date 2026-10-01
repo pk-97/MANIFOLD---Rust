@@ -48,7 +48,7 @@ const STILLS: [usize; 4] = [90, 240, 600, 900];
 const STAGES: [&str; 25] = [
     "fill + particle state",
     "particle sort",
-    "particle distance + classify",
+    "particle distance + water mask",
     "particle→face",
     "forces",
     "solids",
@@ -80,11 +80,11 @@ fn stage(name: &str, label: &str) -> &'static str {
         let pass = label.strip_prefix("gpu_flip.").unwrap_or("");
         return match pass {
             p if p.starts_with("step.sort.") => "particle sort",
-            "step.distance" | "step.classify" => "particle distance + classify",
+            "step.distance" | "step.water_from_phi" => "particle distance + water mask",
             "step.particles_to_faces" => "particle→face",
             "step.forces" => "forces",
             "step.solid_distance" | "step.open_fractions" | "step.solid_velocity" | "step.phi_into_solids"
-            | "step.water_into_solids" | "step.constrain" | "step.constrain_old" => "solids",
+            | "step.constrain" | "step.constrain_old" => "solids",
             p if p.starts_with("step.extend_") => "extrapolation",
             "step.divergence" => "divergence",
             "pressure.coarsen_water" | "pressure.coarsen_faces" | "pressure.coarse_inverse" => "solve levels (coarse water and faces)",

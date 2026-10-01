@@ -234,13 +234,19 @@ fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>)
 }
 
 #[test]
-fn gpu_flip_classify_marks_occupied_cells() {
+fn gpu_flip_water_is_negative_phi() {
     let mut rng = Stream::new(0xce11);
-    let ranges: Vec<CellRange> =
-        (0..cell_len()).map(|c| CellRange { start: c as u32 * 3, count: u32::from(rng.unit() < 0.4) * 3 }).collect();
-    let got: Vec<f32> = Pass::new().bind(1, &ranges).run("classify", &lattice(), 5, cell_len(), cell_len());
-    for (c, (g, r)) in got.iter().zip(&ranges).enumerate() {
-        assert_eq!(*g, f32::from(u8::from(r.count > 0)), "cell {c}");
+    // Draws straddle zero, with the eps snap's ±0.005h values among them.
+    let phi: Vec<f32> = (0..cell_len())
+        .map(|c| match c % 4 {
+            0 => 0.005,
+            1 => -0.005,
+            _ => rng.unit() * 2.0 - 1.0,
+        })
+        .collect();
+    let got: Vec<f32> = Pass::new().bind(7, &phi).run("water_from_phi", &lattice(), 5, cell_len(), cell_len());
+    for (c, (g, f)) in got.iter().zip(&phi).enumerate() {
+        assert_eq!(*g, f32::from(u8::from(*f < 0.0)), "cell {c}");
     }
 }
 

@@ -1,6 +1,6 @@
 //! `node.gpu_flip_step` — one GPU FLIP water step (docs/GPU_FLIP_PRESSURE_SOLVE.md
-//! section 1 (the step)): sort, particle distance, classify, particles to
-//! faces, extend, forces, solids, divergence, pressure solve, projection,
+//! section 1 (the step)): sort, particle distance, particles to faces,
+//! extend, forces, solids, water mask from φ, divergence, pressure solve, projection,
 //! constraint, extend, density solve, then the particles move. One node
 //! because no pass has a consumer outside the step and the solve between them
 //! is a barriered reduction; the hand kernels live in
@@ -126,14 +126,13 @@ pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams
 }
 
 struct Pipelines {
-    classify: GpuComputePipeline,
     gather: GpuComputePipeline,
     extend: GpuComputePipeline,
     gravity: GpuComputePipeline,
     open: GpuComputePipeline,
     solid_velocity: GpuComputePipeline,
     phi_into_solids: GpuComputePipeline,
-    water_into_solids: GpuComputePipeline,
+    water_from_phi: GpuComputePipeline,
     divergence: GpuComputePipeline,
     distance: GpuComputePipeline,
     subtract: GpuComputePipeline,
@@ -151,14 +150,13 @@ impl Pipelines {
         let source = step_source();
         let pipe = |entry: &str| device.create_compute_pipeline(&source, entry, "node.gpu_flip_step");
         Self {
-            classify: pipe("classify"),
             gather: pipe("particles_to_faces"),
             extend: pipe("extend_faces"),
             gravity: pipe("face_gravity"),
             open: pipe("open_fractions"),
             solid_velocity: pipe("solid_face_velocity"),
             phi_into_solids: pipe("phi_into_solids"),
-            water_into_solids: pipe("water_into_solids"),
+            water_from_phi: pipe("water_from_phi"),
             divergence: pipe("divergence"),
             distance: pipe("particle_distance"),
             subtract: pipe("subtract_pressure"),
@@ -377,21 +375,13 @@ impl StepState {
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
 
-        // The solids read the particles' φ even with the ghost rows off.
+        // The water mask is φ < 0, so φ is built every step.
         let solids = p.body_count > 0;
-        if step.ghost || solids {
-            enc.dispatch_compute(
-                &pipes.distance,
-                &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
-                cells_groups,
-                "gpu_flip.step.distance",
-            );
-        }
         enc.dispatch_compute(
-            &pipes.classify,
-            &[uniform(&base), buffer(1, ranges), buffer(5, &l.water)],
+            &pipes.distance,
+            &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
             cells_groups,
-            "gpu_flip.step.classify",
+            "gpu_flip.step.distance",
         );
         enc.dispatch_compute(
             &pipes.gather,
@@ -460,13 +450,13 @@ impl StepState {
                 cells_groups,
                 "gpu_flip.step.phi_into_solids",
             );
-            enc.dispatch_compute(
-                &pipes.water_into_solids,
-                &[uniform(&base), buffer(9, &l.corners), buffer(7, &l.phi), buffer(5, &l.water)],
-                cells_groups,
-                "gpu_flip.step.water_into_solids",
-            );
         }
+        enc.dispatch_compute(
+            &pipes.water_from_phi,
+            &[uniform(&base), buffer(7, &l.phi), buffer(5, &l.water)],
+            cells_groups,
+            "gpu_flip.step.water_from_phi",
+        );
         enc.dispatch_compute(
             &pipes.divergence,
             &[
@@ -836,14 +826,13 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"));
         let entries: Vec<&str> = module.entry_points.iter().map(|e| e.name.as_str()).collect();
         for entry in [
-            "classify",
             "particles_to_faces",
             "extend_faces",
             "face_gravity",
             "open_fractions",
             "solid_face_velocity",
             "phi_into_solids",
-            "water_into_solids",
+            "water_from_phi",
             "divergence",
             "particle_distance",
             "subtract_pressure",

@@ -153,16 +153,6 @@ fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {
     return all(other < n);
 }
 
-// One thread per cell: 1 where the sort put a particle in it, else 0.
-@compute @workgroup_size(256)
-fn classify(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    cell_out[idx] = select(0.0, 1.0, ranges[idx].count > 0u);
-}
-
 // One thread per face record. Each face sums the engine's Wyvill weight
 // 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r² for s = |q − face|² < r²,
 // r = √3/2 cells, over every live particle in the 3 × 3 × 3 cells around p,
@@ -695,18 +685,17 @@ fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// One thread per cell, in place on `cell_out`: the water cells, after
-// `phi_into_solids` wrote `phi`. The cells it moved become water.
+// One thread per cell, `phi` to `cell_out`: water is φ < 0, after
+// `phi_into_solids`. The engine's pressure cells are its liquid SDF's
+// negative cells (PressureSolver::_initialize), which reach 0.866h past the
+// particles rather than stopping at the cells that hold one.
 @compute @workgroup_size(256)
-fn water_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= cell_total() {
         return;
     }
-    let n = lattice();
-    if phi[idx] < 0.5 * u.cell_size && solid_centre(unflatten(idx, n), n + vec3<i32>(1)) < 0.0 {
-        cell_out[idx] = 1.0;
-    }
+    cell_out[idx] = select(0.0, 1.0, phi[idx] < 0.0);
 }
 
 // Open fraction of face a at record f: 0 on a box wall, which is closed in

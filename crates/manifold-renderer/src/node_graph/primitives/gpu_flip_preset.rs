@@ -188,6 +188,14 @@ impl WaterScene {
         Self { column: [[-0.5, 0.5], [3.2, 3.7], [-0.5, 0.5]], ..Self::deep_pool(n) }
     }
 
+    /// A 0.9 m pool with a 0.2 m slab over its left half: 1 m mean depth,
+    /// a step in the surface whose sloshing is mostly the tank's first
+    /// standing wave.
+    #[cfg(test)]
+    pub fn slosh(n: usize) -> Self {
+        Self { fill_height: 0.9, column: [[-2.0, 0.0], [0.9, 1.1], [-2.0, 2.0]], ..Self::dam_break(n) }
+    }
+
     /// A 1 m block of water high in the tank, clear of every wall.
     #[cfg(test)]
     pub fn free_fall(n: usize) -> Self {
