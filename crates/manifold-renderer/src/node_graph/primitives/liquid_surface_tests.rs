@@ -1971,8 +1971,8 @@ fn fluid_relax_surface_mesh_matches_umbrella_reference_on_a_bumpy_sphere() {
         let mut copies: Vec<Option<[u32; 3]>> = vec![None; neighbours.len()];
         for (slot, &w) in welded.iter().enumerate() {
             let v = &got[slot];
-            for a in 0..3 {
-                worst = worst.max((f64::from(v.position[a]) - want[w][a]).abs());
+            for (&got, &want) in v.position.iter().zip(&want[w]) {
+                worst = worst.max((f64::from(got) - want).abs());
             }
             let bits = v.position.map(f32::to_bits);
             assert_eq!(*copies[w].get_or_insert(bits), bits, "pass {pass}: copies of welded vertex {w} differ");
@@ -2030,5 +2030,54 @@ fn fluid_relax_surface_mesh_follows_the_live_extent() {
     assert!(
         bytemuck::cast_slice::<MeshVertex, u8>(&relaxed[..shrunk]) == bytemuck::cast_slice::<MeshVertex, u8>(&fresh[..shrunk]),
         "the indirect pass relaxes the live vertices as a full pass does"
+    );
+}
+
+/// Relaxation gathers every input, so it never fuses as a consumer. As a
+/// producer it could head a region with a coincident mesh atom after it, but
+/// no fused capacity shape covers a gathered anchor beside other gathers, so
+/// the region builder refuses it. Pinned on the shipped Dam Break with a
+/// rotate after the relax chain: once this fails, the fused-vs-unfused render
+/// proof is owed (BUG-xwf1 (Liquid Surface mesh relaxation)).
+#[test]
+fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use serde_json::{Value, json};
+
+    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+        "WaterDamBreakGpuFlip",
+    ))
+    .expect("Dam Break bundled");
+    let mut preset: Value = serde_json::from_str(&json).expect("Dam Break parses");
+    let nodes = preset["nodes"].as_array_mut().expect("nodes");
+    let group = &mut nodes.iter_mut().find(|n| n["nodeId"] == "surface").expect("the Liquid Surface group")["group"];
+    let id = |group: &Value, key: &str, name: &str| {
+        let nodes = group["nodes"].as_array().expect("group nodes");
+        nodes.iter().find(|n| n[key] == name).unwrap_or_else(|| panic!("no {name}"))["id"].clone()
+    };
+    let (last, out) = (id(group, "nodeId", "liquid_relax_2"), id(group, "typeId", "system.group_output"));
+    let turn = json!(100);
+    group["nodes"].as_array_mut().expect("group nodes").push(json!({
+        "id": turn, "typeId": "node.rotate_3d", "nodeId": "liquid_turn",
+        "params": {"angle_y": {"type": "Float", "value": 0.01}}
+    }));
+    let wires = group["wires"].as_array_mut().expect("group wires");
+    let into_output = wires
+        .iter_mut()
+        .find(|w| w["fromNode"] == last && w["toNode"] == out)
+        .expect("the relax chain feeds the group output");
+    into_output["toNode"] = turn.clone();
+    into_output["toPort"] = json!("in");
+    wires.push(json!({"fromNode": turn, "fromPort": "out", "toNode": out, "toPort": "vertices"}));
+
+    let def: EffectGraphDef = serde_json::from_value(preset).expect("the variant loads");
+    let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
+        .expect("the Dam Break fuses and builds");
+    let relaxes = view.def.nodes.iter().filter(|n| n.type_id == "node.relax_surface_mesh").count();
+    assert_eq!(relaxes, 2, "both relax passes stay their own dispatch");
+    assert!(
+        !view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("rsm_cell_edge"))),
+        "relaxation fused into a kernel: prove it renders like the unfused graph"
     );
 }
