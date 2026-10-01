@@ -2028,6 +2028,74 @@
       "id": 487,
       "nodeId": "spray_copies",
       "typeId": "node.particles_to_copies"
+    },
+    {
+      "handle": "Studio Floor Mesh",
+      "id": 488,
+      "nodeId": "studio_floor_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Studio Floor Material",
+      "id": 489,
+      "nodeId": "studio_floor_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.006000000052154064
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.004000000189989805
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.003000000026077032
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.6499999761581421
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Studio Floor Transform",
+      "id": 490,
+      "nodeId": "studio_floor_transform",
+      "params": {
+        "pos_y": {
+          "type": "Float",
+          "value": -0.2800000011920929
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 2000.0
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.20000000298023224
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 2000.0
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "handle": "Studio Floor",
+      "id": 491,
+      "nodeId": "studio_floor",
+      "typeId": "node.scene_object"
     }
   ],
   "presetMetadata": {
@@ -3666,6 +3734,30 @@
       "fromPort": "spray_count",
       "toNode": 484,
       "toPort": "instance_count"
+    },
+    {
+      "fromNode": 488,
+      "fromPort": "vertices",
+      "toNode": 491,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 489,
+      "fromPort": "out",
+      "toNode": 491,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 490,
+      "fromPort": "transform",
+      "toNode": 491,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 491,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_6"
     }
   ]
 }
