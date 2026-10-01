@@ -14,6 +14,7 @@
 // bindings, not here. Silence the unused-unsafe lint crate-wide.
 #![allow(unused_unsafe)]
 
+pub mod queue;
 pub mod types;
 pub use types::*;
 pub mod trace_planner;

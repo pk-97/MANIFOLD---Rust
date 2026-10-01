@@ -3870,7 +3870,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
     }
 
     let registry = PrimitiveRegistry::with_builtin();
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("gltf_import tests"));
     let report = validate_def(&def, &registry, ValidateKind::Generator, &device);
 
     assert!(

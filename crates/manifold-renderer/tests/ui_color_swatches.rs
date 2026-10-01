@@ -43,7 +43,7 @@ fn browser_popup_thumbnails_paint() {
     use manifold_ui::panels::InspectorTab;
     use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui_color_swatches");
     let mut ui = UIRenderer::new(&device, FORMAT);
 
     // A real committed factory thumbnail (verified elsewhere to render as a
@@ -132,7 +132,7 @@ fn clip_waveform_sheet() {
     use std::sync::Arc;
     use std::time::Instant;
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui_color_swatches");
     let mut ui = UIRenderer::new(&device, FORMAT);
     let mut content = ClipContentGpu::new(&device, FORMAT);
     let out_dir = std::env::var("SWATCH_OUT")
@@ -281,7 +281,7 @@ fn box_downsample_averages_high_frequency() {
     // 256×256 1px checkerboard into 64×64 and assert the centre reads mid-grey.
     use manifold_renderer::clip_thumb_gpu::create_box_downsample_pipeline;
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui_color_swatches");
     let pipe = create_box_downsample_pipeline(&device, FORMAT, 64, 64);
     let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
         min_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -395,7 +395,7 @@ fn browser_popup_real_registry_p1_demo() {
     use manifold_ui::panels::picker_core::{PickerItem, Source};
     use manifold_ui::{Rect, UIFlags, UITree, ZTier};
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui_color_swatches");
     let mut ui = UIRenderer::new(&device, FORMAT);
     let out_dir = std::env::var("SWATCH_OUT")
         .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
@@ -553,7 +553,7 @@ fn browser_popup_real_registry_p3_demo() {
     const PW: u32 = 1920;
     const PH: u32 = 1080;
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui_color_swatches");
     let mut ui = UIRenderer::new(&device, FORMAT);
     let out_dir = std::env::var("SWATCH_OUT").unwrap_or_else(|_| "/tmp".to_string());
 

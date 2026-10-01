@@ -148,6 +148,7 @@ pub(super) fn author_scene() -> (Project, GraphTarget, EffectGraphDef, manifold_
         metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"),
         metadata_for_node_type("node.scene_object"),
+        manifold_editing::commands::graph::flip_scene_fluid_template(),
         baseline.clone(),
     )
     .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))

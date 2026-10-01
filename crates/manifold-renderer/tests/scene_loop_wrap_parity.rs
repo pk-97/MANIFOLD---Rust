@@ -450,7 +450,7 @@ fn build_migrated_pre_corridor_graph() -> EffectGraphDef {
 
 /// Render one frame at the given beat value.
 fn render_frame(def: &EffectGraphDef, beat: f64) -> Vec<u8> {
-    let device = manifold_gpu::GpuDevice::new();
+    let device = manifold_gpu::GpuDevice::new_queued("scene_loop_wrap_parity");
     let registry = PrimitiveRegistry::with_builtin();
     let width = 64u32;
     let height = 64u32;

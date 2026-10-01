@@ -621,7 +621,7 @@ mod tests {
     fn prewarm_layer_decodes_image_clips() {
         // Load-time image warmup should decode and cache the clip's source
         // so the first play is a cache hit instead of a disk decode.
-        let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new());
+        let device = std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued("media image_renderer test"));
         let mut renderer = ImageRenderer::new(device, 320, 180);
         let mut layer = Layer::new(
             "ImageWarmup".to_string(),

@@ -52,7 +52,7 @@ pub fn gpu_guard() -> MutexGuard<'static, ()> {
 /// concurrently by other tests in the same binary.
 pub fn test_device() -> Arc<GpuDevice> {
     static SHARED: OnceLock<Arc<GpuDevice>> = OnceLock::new();
-    SHARED.get_or_init(|| Arc::new(GpuDevice::new())).clone()
+    SHARED.get_or_init(|| Arc::new(GpuDevice::new_queued("recording proofs"))).clone()
 }
 
 /// Allocate a fresh Rgba16Float texture usable as both a compute-shader

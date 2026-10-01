@@ -1407,7 +1407,7 @@ mod cache_path_full_render {
         ui.layout.timeline_split_ratio = 0.6;
         sync_build(&mut ui, &data, 24.0);
 
-        let device = GpuDevice::new();
+        let device = GpuDevice::new_queued("ui-snap");
         let mut ui_renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
         // D8: scale factor 1.0 always, at the fixture's logical size — layout
         // is a function of logical size, never shrink the window for speed.
@@ -1623,7 +1623,7 @@ mod editor_window_harness {
         let canvas_height = dock_rects.canvas.height;
         let card_x = canvas_x + canvas_width;
 
-        let device = GpuDevice::new();
+        let device = GpuDevice::new_queued("ui-snap");
         let mut renderer = UIRenderer::new(&device, FORMAT);
         let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor-harness");
 
@@ -1888,7 +1888,7 @@ mod overlay_fidelity_proof {
         // BUG-097 is gone and this test should be revisited, not silently pass.
         assert!(start >= 1, "overlay range must exclude its region root at start-1");
 
-        let device = GpuDevice::new();
+        let device = GpuDevice::new_queued("ui-snap");
         let mut renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
         let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);

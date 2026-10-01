@@ -92,7 +92,7 @@ pub fn render_ui_to_png(
 ) {
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui-snap render");
     let mut renderer = UIRenderer::new(&device, UI_FORMAT);
     let dpi = f64::from(scale);
 
@@ -216,7 +216,7 @@ pub fn render_graph_to_png(
 
     // BUG-152: `Arc<GpuDevice>` — see the `render_graph_editor_to_png` call
     // site's comment for why.
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("ui-snap render"));
     let mut renderer = UIRenderer::new(&device, UI_FORMAT);
     let target = RenderTarget::new(&device, tex_w, tex_h, UI_FORMAT, "ui-snap-graph");
     let dpi = f64::from(scale);
@@ -370,7 +370,7 @@ pub fn render_graph_editor_to_png(
     // (BUG-054's constructor signature). Every other use of `device` in this
     // function keeps working unchanged via `&Arc<GpuDevice>`'s `Deref`
     // coercion to `&GpuDevice`.
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("ui-snap render"));
     let mut renderer = UIRenderer::new(&device, UI_FORMAT);
     let target_tex = RenderTarget::new(&device, tex_w, tex_h, UI_FORMAT, "ui-snap-editor");
     let dpi = f64::from(scale);
@@ -629,7 +629,7 @@ pub fn render_transform_proof_to_png(path: &str) {
     const TEX_H: u32 = 768;
     assert_eq!(TEX_W % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui-snap render");
     let mut renderer = UIRenderer::new(&device, UI_FORMAT);
     let target = RenderTarget::new(&device, TEX_W, TEX_H, UI_FORMAT, "ui-snap-transform");
 

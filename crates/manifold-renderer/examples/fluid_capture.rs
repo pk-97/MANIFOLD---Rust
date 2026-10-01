@@ -1143,7 +1143,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         )?;
     }
     let frame_dt = 1.0 / f64::from(options.fps);
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("fluid_capture"));
     let offline_target = RenderTarget::new(
         &device,
         options.width,
