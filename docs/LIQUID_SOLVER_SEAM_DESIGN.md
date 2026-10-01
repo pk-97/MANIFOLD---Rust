@@ -2,7 +2,7 @@
 
 <!-- index: The contract FLIP, GPU MLS-MPM and SWASH meet to join scenes — particle frames, face-grid outputs, Box3D coupling, clock/pause/export, scene recognition, safety rails — and the phases that move MPM and SWASH behind it. -->
 
-**Status:** PROPOSED · 2026-10-01 · P5, P6 and P9 shipped · P8 built on `feat/liquid-forces-impulses`, not landed, owes its L3 flow; its GPU FLIP half on `feat/gpu-flip-liquid-fields` · P7 and P10–P12 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
+**Status:** PROPOSED · 2026-10-01 · P5, P6, P8 and P9 shipped, P8 owes its L3 flow · P7 and P10–P12 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
 
 **Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs GPU FLIP's full step (GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
