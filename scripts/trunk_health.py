@@ -127,8 +127,11 @@ def main():
         ["cargo", "deny", "check", "bans"],
         ["python3", "scripts/feature_matrix.py"],
         # Full renderer coverage, including the asset-conformance sweep, belongs
-        # here. Landing selects the affected GPU proof binaries explicitly.
-        ["python3", "scripts/gpu_proofs_gate.py", "--full-suite"],
+        # here (landing runs only the scoped set; see scripts/gpu_scope.py).
+        # --record-times refreshes the measured-times file into /tmp and prints
+        # the diff; it never commits (a human adopts it, GIT_TREE_DISCIPLINE.md).
+        ["python3", "scripts/gpu_proofs_gate.py", "--all",
+         "--record-times", "/tmp/gpu_test_times.nightly.json"],
         # RT temporal stability. Nightly and not at landing: it costs an app
         # build plus a 300-frame render, three times over. Skips green (loudly)
         # while its ceilings are unvalidated, so it files no beads until the

@@ -21,6 +21,7 @@ construction and checks the reported number against it. Covers:
 Run: scripts/test_rt_noise_gate.py
 """
 
+import contextlib
 import importlib.util
 import copy
 import json
@@ -391,6 +392,7 @@ def case_main_executed_verdict(tmp):
              patch.object(gate, "build_binary", return_value=binary) as build, \
              patch.object(gate, "capture_once", return_value=(tmp, "")) as capture, \
              patch.object(gate, "measure", return_value=(stats, 100)), \
+             patch.object(gate.gpu_queue, "hold", return_value=contextlib.nullcontext()), \
              patch.object(gate.subprocess, "run", side_effect=AssertionError("real subprocess invoked")):
             check("executed gate verdict", gate.main(), expected)
             build.assert_called_once()

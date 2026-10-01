@@ -38,21 +38,10 @@ the sonnet slot: success locks it in for the session; any non-401 error marks
 the session demoted and it uses branch 3 for every later call, permanently. A
 demoted pane never recovers — restart it.
 
-On the K3 seat the `k3m` alias sets `ANTHROPIC_DEFAULT_FABLE_MODEL=k3` with
-main model k3, so a demotion lands on the opus slot (`deepseek-v4-pro`).
-GLM is off the classifier path entirely (Peter 2026-08-04): sonnet slot =
-`deepseek-v4-flash`, the proxy's flash/pro → glm-4.7 fallbacks are removed,
-and a demotion now stays on DeepSeek. Prior state for context: glm-4.7 held
-the sonnet slot 2026-07-27→08-04 for reliability, until ZAI ran out of weekly
-quota and every classifier call froze.
-
-**Classifier auth ignores `apiKeyHelper` (2.1.219, found 2026-08-25).** The
-main loop authenticates through the seat profile's `apiKeyHelper`, but the
-auto-mode classifier's calls go out without it — keyless against the litellm
-proxy → 401 → fails closed, and because fallback never fires on 401 the pane
-freezes instead of demoting. Fix: every seat profile's `env` carries a literal
-`ANTHROPIC_API_KEY` (from `cc-fleet keyget <seat>`). If a virtual key is
-regenerated, refresh the profiles or the classifier dies again.
+With Claude models only, every slot is an Anthropic model, so the sonnet slot
+resolves to Sonnet 5.5 and a demotion lands on Opus (Fable or Opus 5.5 leads) or
+on the main model. The provider-proxy cases (non-Anthropic sonnet slot, classifier
+auth through a proxy key) are retired with the proxy; git history has them.
 
 Oracle: `claude --debug -p '…' --permission-mode auto`, then grep
 `~/.claude/debug/latest` for `classifier_request_started` (prints the model).
@@ -259,10 +248,6 @@ Bash(gh run watch *)
 Bash(bd *)
 Bash(sleep *)
 Bash(sed -n *)
-Bash(cc-fleet status *)
-Bash(cc-fleet spawn *)
-Bash(cc-fleet teardown *)
-Bash(.claude/hooks/oneshot *)
 Bash(pkill -f rust-analyzer)
 Bash(pkill -f "zola.*serve")
 Bash(memory_pressure -Q)
@@ -276,7 +261,6 @@ Bash(zola --root "/Users/peterkiemann/latent-space-site" serve --interface 127.0
 Bash(scripts/agent-worktree.py list)
 Bash(scripts/agent-worktree.py acquire *)
 Bash(scripts/gen_docs_index.py)
-Bash(scripts/seat_tool.py show)
 Bash(scripts/gate_runner.py show *)
 Bash(scripts/gate_runner.py report *)
 Bash(scripts/token_report.py *)
@@ -290,7 +274,6 @@ Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/o
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.2.2/**)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-0.5.2/src/**)
 Read(//Users/peterkiemann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-foundation-0.2.2/src/**)
-Bash(psql postgresql://litellm:litellm-local@localhost:5432/litellm -c "select \\"startTime\\", model, \\"model_group\\", api_key, total_tokens from \\"LiteLLM_SpendLogs\\" order by \\"startTime\\" desc limit 15;")
 ```
 
 Removed in the 2026-07-26 audit (see section 3 for why): `Bash(python3 -c ' *)`,
@@ -304,8 +287,7 @@ Rationale for the script rules (unchanged from the original audit):
 | `scripts/agent-worktree.py list` | read-only |
 | `scripts/agent-worktree.py acquire *` | bounded by the slot ring cap |
 | `scripts/gen_docs_index.py` | no arguments |
-| `scripts/seat_tool.py show` | read-only |
-| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `cc-fleet keyget` runs under `pre-wave`, which is NOT allowlisted |
+| `scripts/gate_runner.py show *` / `report *` | read-only (verdicts trail / subprocess-free report); `pre-wave` is NOT allowlisted |
 | `scripts/token_report.py *` | reads transcripts, flags only |
 | `scripts/run_ui_flows.py *` | bounded by `scripts/ui-flows/manifest.json` — which is agent-editable, so this is a section 4 residual-risk rule |
 | `scripts/move_identity_check.py *` | git refs only |
@@ -316,8 +298,7 @@ Deliberately NOT allowlisted, keep classified: `psql` in wildcard form (one
 literal read-only query IS allowlisted — see block; the wildcard never),
 `curl` / `wget` (network egress), `rm`, `gate_runner.py per-lane` (executes
 commands extracted from a brief file), `agent-worktree.py release` (deletes a
-worktree and any uncommitted work in it), `seat_tool.py assign` (rewrites
-model routing).
+worktree and any uncommitted work in it).
 
 ## 6. Incident — 2026-07-26
 
@@ -331,3 +312,48 @@ same pass.
 
 Lesson: the failure mode is a wildcard on a script that takes a
 path-to-something-executable. Judge the script's *arguments*, never its name.
+
+## 7. Prompt sources and the worker no-prompt rule (2026-10-01)
+
+Obsolete when: the harness lets a subagent be spawned in a never-prompt mode (a per-agent `dontAsk`) — the PermissionRequest guard then has nothing to answer.
+
+A permission prompt stalls an unattended run until Peter answers. Four things
+can raise one in auto mode (docs: permission-modes, "When auto mode falls
+back"; hooks, "PermissionRequest"):
+
+1. A PreToolUse hook returning `ask` — the only source the telemetry log shows.
+2. The classifier pausing auto mode: 3 blocks in a row or 20 per session
+   (not configurable) and Claude Code "resumes prompting" for everything the
+   allow rules and hooks don't clear. Workers and lead share one session
+   counter, so a worker that is denied three times hands the whole run to
+   manual mode.
+3. The harness's own checks: an output redirect or `tee` target outside the
+   working directories, a write that symlink-resolves outside them, the first
+   read outside them, an explicit `permissions.ask` rule, a critical-path
+   `rm` (two-minute countdown).
+4. `AskUserQuestion`.
+
+Rules:
+
+- **Worker seats never prompt.** `permission-request-guard.py` answers every
+  `PermissionRequest` carrying an agent marker (`agent_id` / `agent_type` /
+  `teammate_name`) with `deny` plus a reroute note, whatever raised it; the
+  dispatcher (`hook_telemetry.py`, `worker_no_prompt`) turns a worker's
+  PreToolUse `ask` into `deny` with the original reason. Neither ever allows,
+  so section 4 (the bar for adding an allow rule) is untouched: a worker that
+  genuinely needs a human stops and reports up, and the lead or Peter decides.
+- **Every prompt and every classifier denial is logged.** The same hook
+  records `PermissionRequest` (verdict `prompt` for the lead, `deny` for a
+  worker) and `PermissionDenied` (with the classifier's reason) to
+  `.claude/telemetry/hook-fires.jsonl`, field `prompt_source`. The next
+  inventory is a filter on that field, not a transcript dig.
+- **A hook false positive is a bug, fixed at the guard.** The sed guard scans
+  only sed script arguments (`-e` values or the first non-option word), never
+  file operands, heredoc bodies, or the `-i ''` suffix; `test_preToolUseBash.py`
+  replays the real prompting commands. The probe-loop guard counts the GPU gate
+  wrapper only in command position and never counts markdown edits.
+- **Lead prompts are the human-decision residue** and stay prompts: force
+  rewrites of main, destructive outward actions, a real `sed w`, and whatever
+  the classifier pause leaves. Reduce them by keeping classifier denials low
+  (edits to `.claude/` hooks and settings are self-modification by design —
+  stage under `/tmp` and let Peter install, or land them on a branch Peter approved).

@@ -3747,7 +3747,6 @@ fn round_trip_preserves_blend_alpha_mode_and_opacity_binding() {
 fn corrupted_assembler_output_fails_validation_naming_the_node() {
     use super::gltf_load::GltfMaterialInfo;
     use crate::node_graph::{ValidateKind, validate_def};
-    use manifold_gpu::GpuDevice;
 
     let mat = |material_index: u32, name: &str, verts: u32, tex: Option<u32>| GltfMaterialInfo {
         material_index,
@@ -3870,7 +3869,7 @@ fn corrupted_assembler_output_fails_validation_naming_the_node() {
     }
 
     let registry = PrimitiveRegistry::with_builtin();
-    let device = std::sync::Arc::new(GpuDevice::new_queued("gltf_import tests"));
+    let device = crate::gpu::test_gpu_device("gltf_import tests");
     let report = validate_def(&def, &registry, ValidateKind::Generator, &device);
 
     assert!(

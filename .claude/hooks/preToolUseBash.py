@@ -1008,36 +1008,131 @@ def manifold_gui_guard(cmd):
 # otherwise auto-approve it (BUG-lu32 permission audit, 2026-07-28). Matches a
 # w command at script start, after `;`/`{`, after an address, or as an s///w
 # flag. False positives just prompt.
-_SED_W_RE = re.compile(r"(?:^|[;{])\s*(?:[0-9$.,/*^\[\]-]+\s*)?[wW]\s|/[wW]\s")
+_SED_W_RE = re.compile(r"(?:^|[;{\n])\s*(?:[0-9$.,/*^\[\]-]+\s*)?[wW][\s/]|/[wW][\s/]")
+_SED_W_REASON = (
+    "sed script contains a `w` (write-file) command — this writes "
+    "to a path the allow rule never reviewed. If intended, approve; "
+    "otherwise use an explicit redirect or the Write tool."
+)
+
+
+# `<<` not inside a longer run of `<` — a merge marker `<<<<<<< HEAD` inside a
+# perl/sed script is text, not a heredoc opener.
+_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _strip_heredoc_bodies(cmd):
+    """Replace every heredoc body with a neutral word so quote-parsing sees
+    only shell structure. Same delimiter rules as `sanitize`."""
+    out, i = [], 0
+    while True:
+        m = _HEREDOC_OPEN_RE.search(cmd, i)
+        if not m:
+            out.append(cmd[i:])
+            return "".join(out)
+        end = re.compile(r"\n[ \t]*" + re.escape(m.group(2)) + r"[ \t]*(?:\n|$)")
+        em = end.search(cmd, m.end())
+        out.append(cmd[i:m.start()] + "HEREDOC")
+        if not em:
+            return "".join(out)
+        out.append("\n")
+        i = em.end()
+
+
+def _sed_scripts(seg):
+    """The script texts of one `sed` segment: every `-e`/`--expression` value,
+    else the first non-option argument. Only these are sed programs — file
+    operands (`$W/fluid.rs`) never are, and scanning them read `$W/` as `$`
+    address + `W` command (false positives that prompted Peter, 2026-09-29
+    and 2026-10-01). A script file (`-f`) is unreviewable, so it yields a
+    marker that always matches."""
+    scripts, explicit, i = [], False, 1
+    while i < len(seg):
+        t = seg[i]
+        if t == "":
+            # BSD `sed -i ''` — the empty backup suffix is an operand of -i,
+            # never the script (2026-10-01: it shadowed the real script).
+            i += 1
+            continue
+        if t in ("-e", "--expression", "-f", "--file") and i + 1 < len(seg):
+            explicit = True
+            scripts.append("w " if t in ("-f", "--file") else seg[i + 1])
+            i += 2
+            continue
+        if t.startswith(("--expression=", "--file=")):
+            explicit = True
+            scripts.append("w " if t.startswith("--file=") else t.split("=", 1)[1])
+        elif not t.startswith("-") and not explicit:
+            scripts.append(t)
+            break
+        i += 1
+    return scripts
+
+
 _QUOTED_SPAN_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"")
+
+
+def _sed_segments(cmd):
+    """Command-position segments for the sed guard. Unlike `_shlex_segments`,
+    an operator glued to a word (`cat x; sed ...`, `rg a|sed ...`) still
+    splits — shlex's punctuation mode emits `;`, `|`, `&` as their own tokens.
+    Heredoc bodies are stripped first and newlines read as `;`. Raises
+    ValueError on quoting shlex cannot follow (caller falls back)."""
+    text = _strip_heredoc_bodies(cmd).replace("\n", " ; ")
+    lex = shlex.shlex(text, posix=True, punctuation_chars=";|&")
+    lex.whitespace_split = True
+    segments, current = [], []
+    for t in lex:
+        if t and set(t) <= set(";|&"):
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(t)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _sed_write_guard_quoted_spans(cmd):
+    """Fallback when the command does not tokenize: scan every quoted span as
+    if it were a sed script. A double-quoted shell variable (`"$W"`) is a
+    path, not a script. Over-asks on prose that happens to look like a `w`
+    command; never misses a quoted `w`."""
+    for m in _QUOTED_SPAN_RE.finditer(cmd):
+        if m.group(2) is not None and re.fullmatch(r"\$\{?\w+\}?", m.group(2)):
+            continue
+        span = (m.group(1) or m.group(2) or "") + " "
+        if _SED_W_RE.search(span):
+            return _SED_W_REASON
+    return None
 
 
 def sed_write_guard(cmd):
     """ASK when a sed command's script contains a file-writing w command."""
     if not re.search(r"(?:^|[|;&(\s])sed\s", cmd):
         return None
-    for m in _QUOTED_SPAN_RE.finditer(cmd):
-        # A double-quoted shell variable (`"$W"`, `"${SRC}"`) is a path
-        # argument, not a sed script — `$W` otherwise reads as `$` address +
-        # `w` command (false positive seen 2026-09-29, prompted Peter).
-        if m.group(2) is not None and re.fullmatch(r"\$\{?\w+\}?", m.group(2)):
+    # Heredoc bodies are data (commit messages, file contents), never a sed
+    # script, and an apostrophe inside one breaks shlex — which used to read
+    # as "unparseable, ask" (false positive on a `git commit -F - <<EOF`
+    # chained after a sed, 2026-09-30).
+    try:
+        segments = _sed_segments(cmd)
+    except ValueError:
+        segments = []
+    if not segments:
+        # Quoting shlex can't follow (a `\'` inside double quotes, an unbalanced
+        # quote in a printf body): the script can't be located, so fall back
+        # to scanning quoted spans — the pre-2026-10 behaviour, which asks on a
+        # real `'w /path'` and stays silent on a `"$VAR"` path.
+        return _sed_write_guard_quoted_spans(cmd)
+    for seg in segments:
+        seg = _strip_leading_keywords(seg)
+        if not seg or os.path.basename(seg[0]) != "sed":
             continue
-        span = (m.group(1) or m.group(2) or "") + " "
-        if _SED_W_RE.search(span):
-            return (
-                "sed script contains a `w` (write-file) command — this writes "
-                "to a path the allow rule never reviewed. If intended, approve; "
-                "otherwise use an explicit redirect or the Write tool."
-            )
-    # unquoted script token (e.g. `sed -n w/tmp/x f` — no space needed after w)
-    unquoted_w = re.compile(r"(?:^|[;{])\s*(?:[0-9$.,*^\[\]-]+\s*)?[wW][\s/]")
-    for tok in cmd.split():
-        if not tok.startswith("-") and unquoted_w.search(tok + " "):
-            return (
-                "sed script contains a `w` (write-file) command — this writes "
-                "to a path the allow rule never reviewed. If intended, approve; "
-                "otherwise use an explicit redirect or the Write tool."
-            )
+        for script in _sed_scripts(seg):
+            if _SED_W_RE.search(script + " "):
+                return _SED_W_REASON
     return None
 
 

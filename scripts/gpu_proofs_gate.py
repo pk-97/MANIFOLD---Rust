@@ -10,11 +10,16 @@ completion with `--no-fail-fast`. Never nextest — process-per-test
 defeats the GPU device lock. The whole run holds the machine-wide GPU queue
 (scripts/gpu_queue.py) and waits its turn behind any other GPU run.
 
-The default runs only the `gpu_proofs` test binary. `--test NAME` can be
-repeated for an explicit set of binaries; `--full-suite` restores the broad
-on-demand and nightly-trunk_health run. Optional `--filter` / `--skip` args
-pass through to cargo test so a landing can run just the proofs for the
-subsystem it touched (scripts/landing_gate.py computes the scope).
+Default mode is SCOPED: the branch's diff against `--base` (default
+origin/main, plus uncommitted and untracked files) is mapped by
+scripts/gpu_scope.py to the focused tests for what changed plus a fixed smoke
+set. A touched GPU path with no mapping fails loudly; there is no silent
+run-everything fallback. `--all` runs the whole suite (nightly trunk_health).
+Explicit `--test NAME` / `--filter` / `--skip` bypass scoping for a hand-picked
+run. `--budget SECONDS` fails a run whose budgeted tests exceed it and names the
+slowest tests. Scoped runs skip tests measured over
+gpu_scope.SLOW_THRESHOLD_S (scripts/gpu_test_times.json); `--record-times PATH` writes
+fresh measurements. The chosen mode and why are always printed.
 
 Exit 0 iff the underlying cargo run exited 0.
 
@@ -23,12 +28,15 @@ and the landing docs point at that instead.
 """
 
 import argparse
+import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import gpu_queue
+import gpu_scope
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
@@ -53,6 +61,10 @@ TEST_RESULT_RE = re.compile(
 #       test_two
 #
 #   test result: FAILED. ...
+# Serial runs print each result line when its test finishes, so the gap between
+# consecutive result lines is that test's duration (libtest has no stable timing).
+TEST_LINE_RE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)\b")
+
 FAILURES_BLOCK_RE = re.compile(r"failures:\n((?:    \S.*\n)+)\ntest result:")
 
 
@@ -66,6 +78,8 @@ def run_gate(
     skips: list[str],
     targets: list[str] | None = None,
     full_suite: bool = False,
+    lib: bool = False,
+    timings: list | None = None,
 ) -> tuple[int, str]:
     if full_suite and targets is not None:
         raise ValueError("full_suite and targets are mutually exclusive")
@@ -82,7 +96,9 @@ def run_gate(
         str(manifest_path),
     ]
     if not full_suite:
-        for target in targets or ["gpu_proofs"]:
+        if lib:
+            cmd.append("--lib")
+        for target in targets or ([] if lib else ["gpu_proofs"]):
             cmd.extend(["--test", target])
     # Serial test threads, always: ~135 proofs share one Metal device, and
     # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
@@ -105,12 +121,27 @@ def run_gate(
         bufsize=1,
     )
     lines: list[str] = []
+    state: dict = {"t": None, "bin": ""}
     assert proc.stdout is not None
     for line in proc.stdout:
         print(line, end="", flush=True)
         lines.append(line)
+        if timings is not None:
+            record_timing(line, time.monotonic(), state, timings)
     exit_code = proc.wait()
     return exit_code, "".join(lines)
+
+
+def record_timing(line: str, now: float, state: dict, timings: list) -> None:
+    """Append (test, seconds, binary) when `line` is a finished-test line."""
+    m = RUNNING_BINARY_RE.match(line)
+    if m:
+        state["t"], state["bin"] = now, m.group(1)
+        return
+    m = TEST_LINE_RE.match(line)
+    if m and state.get("t") is not None:
+        timings.append((m.group(1), now - state["t"], state["bin"]))
+        state["t"] = now
 
 
 def parse_binaries(output: str) -> list[tuple[str, str, int, int]]:
@@ -144,10 +175,66 @@ def parse_golden_mismatches(output: str) -> list[tuple[str, str, str, str]]:
     return GOLDEN_MISMATCH_RE.findall(output)
 
 
-def print_summary(output: str, exit_code: int) -> None:
+def slowest(timings: list, n: int) -> list:
+    return sorted(timings, key=lambda t: t[1], reverse=True)[:n]
+
+
+def budgeted_seconds(timings: list) -> float:
+    return sum(t[1] for t in timings if t[3])
+
+
+def write_timings_md(path: Path, timings: list, n: int = 25) -> None:
+    rows = ["# Slowest GPU tests", "", f"{len(timings)} tests, "
+            f"{sum(t[1] for t in timings):.0f}s total test time.", "",
+            "| # | seconds | test | binary |", "|---|---|---|---|"]
+    for i, (name, secs, binary, _) in enumerate(slowest(timings, n), 1):
+        rows.append(f"| {i} | {secs:.1f} | `{name}` | {binary} |")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(rows) + "\n")
+
+
+def write_times_json(path: Path, timings: list) -> str:
+    """Write measured per-test seconds; return a diff against the committed file."""
+    old = gpu_scope.load_times()
+    new = {n: round(secs, 1) for n, secs, _b, _bud in timings}
+    sha = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"measured_at": time.strftime("%Y-%m-%d"), "sha": sha,
+         "tests": dict(sorted(new.items(), key=lambda kv: -kv[1]))}, indent=2) + "\n")
+    thr = gpu_scope.SLOW_THRESHOLD_S
+    lines = [f"GPU test times written to {path} (threshold {thr}s)"]
+    for n in sorted(set(old) | set(new)):
+        o, c = old.get(n), new.get(n)
+        if c is None and o > thr:
+            lines.append(f"  gone: {n} (was {o:.0f}s)")
+        elif o is None and c > thr:
+            lines.append(f"  new SLOW: {n} {c:.0f}s")
+        elif o is not None and c is not None:
+            if (o > thr) != (c > thr):
+                lines.append(f"  {'now SLOW' if c > thr else 'now fast'}: {n} {o:.0f}s -> {c:.0f}s")
+            elif c > thr and abs(c - o) > 0.25 * o:
+                lines.append(f"  moved: {n} {o:.0f}s -> {c:.0f}s")
+    if len(lines) == 1:
+        lines.append("  no threshold crossings vs the committed file")
+    lines.append("To adopt: review, then commit this file as scripts/gpu_test_times.json on a branch.")
+    return "\n".join(lines)
+
+
+def print_summary(
+    output: str,
+    exit_code: int,
+    timings: list | None = None,
+    budget: float | None = None,
+) -> int:
+    """Print the consolidated report; return the final exit code."""
     failed_tests = parse_failed_tests(output)
     goldens = parse_golden_mismatches(output)
     binaries = parse_binaries(output)
+    timings = timings or []
+    spent = budgeted_seconds(timings)
+    over_budget = budget is not None and spent > budget
 
     print("\n" + "=" * 72)
     print("GPU-PROOFS GATE SUMMARY")
@@ -167,6 +254,12 @@ def print_summary(output: str, exit_code: int) -> None:
     else:
         print("\nDrifted goldens: none")
 
+    if timings:
+        print(f"\nSlowest tests (budgeted test time {spent:.0f}s"
+              + (f" of {budget:.0f}s budget" if budget is not None else "") + "):")
+        for name, secs, binary, _ in slowest(timings, 10):
+            print(f"  - {secs:7.1f}s {name} [{binary}]")
+
     if binaries:
         print("\nPer-binary results:")
         for label, status, passed, failed in binaries:
@@ -175,6 +268,14 @@ def print_summary(output: str, exit_code: int) -> None:
         print("\nPer-binary results: none parsed")
 
     print()
+    if exit_code == 0 and over_budget:
+        print(f"GPU-PROOFS GATE: FAIL (over time budget: {spent:.0f}s > {budget:.0f}s; "
+              "to fix: if these tests are slow on purpose, record times with "
+              "`scripts/gpu_proofs_gate.py --all --record-times /tmp/t.json` and commit it as "
+              "scripts/gpu_test_times.json (tests over "
+              f"{gpu_scope.SLOW_THRESHOLD_S}s are skipped at landing); otherwise shorten the "
+              "slowest tests listed above. Do not raise the budget)")
+        return 3
     if exit_code == 0:
         print("GPU-PROOFS GATE: PASS")
     else:
@@ -182,6 +283,27 @@ def print_summary(output: str, exit_code: int) -> None:
             f"GPU-PROOFS GATE: FAIL ({len(failed_tests)} failed tests, "
             f"{len(goldens)} drifted goldens)"
         )
+    return exit_code
+
+
+def git_lines(repo: Path, *args: str) -> list[str]:
+    out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {out.stderr.strip()}")
+    return [p for p in out.stdout.split("\0") if p]
+
+
+def changed_paths(repo: Path, base: str) -> list[str]:
+    """Branch diff vs merge-base(base, HEAD) plus uncommitted and untracked files."""
+    mb = subprocess.run(["git", "-C", str(repo), "merge-base", base, "HEAD"],
+                        capture_output=True, text=True)
+    if mb.returncode != 0 or not mb.stdout.strip():
+        raise RuntimeError(f"cannot resolve merge-base with {base}: {mb.stderr.strip()}; "
+                           "fetch it, or pass --base / --path / --all explicitly")
+    paths = set(git_lines(repo, "diff", "--name-only", "--no-renames", "-z", f"{mb.stdout.strip()}..HEAD"))
+    paths |= set(git_lines(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD"))
+    paths |= set(git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z"))
+    return sorted(paths)
 
 
 def main() -> int:
@@ -197,7 +319,7 @@ def main() -> int:
         action="append",
         default=[],
         metavar="TESTNAME",
-        help="cargo test filter (repeatable); omit for the full suite",
+        help="cargo test filter (repeatable); explicit mode, bypasses scoping",
     )
     parser.add_argument(
         "--skip",
@@ -213,24 +335,78 @@ def main() -> int:
         dest="targets",
         default=None,
         metavar="NAME",
-        help="run a named test binary (repeatable; default: gpu_proofs)",
+        help="run a named test binary (repeatable); explicit mode, bypasses scoping",
     )
     scope.add_argument(
+        "--all",
         "--full-suite",
         action="store_true",
-        help="run every test binary (retains cargo --no-fail-fast)",
+        dest="all_tests",
+        help="run every test binary, including glb_conformance (nightly / on demand)",
     )
+    parser.add_argument("--base", default="origin/main",
+                        help="scoped mode: diff base (default origin/main)")
+    parser.add_argument("--path", action="append", default=None, metavar="PATH",
+                        help="scoped mode: use these touched paths instead of the git diff")
+    parser.add_argument("--budget", type=float, default=None, metavar="SECONDS",
+                        help="fail if budgeted test time exceeds this (landing passes "
+                        f"{gpu_scope.LANDING_BUDGET_S})")
+    parser.add_argument("--timings-md", type=Path, default=None,
+                        help="write the 25 slowest tests as markdown to this path")
+    parser.add_argument("--record-times", type=Path, default=None, metavar="PATH",
+                        help="write measured per-test seconds as JSON to PATH and print the diff "
+                        "vs scripts/gpu_test_times.json (use with --all; never writes the repo file)")
     args = parser.parse_args()
 
     manifest_path = args.manifest_path or default_manifest_path()
-    # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for the
-    # whole cargo run so another run cannot interleave between test binaries.
+    repo = manifest_path.parent
+    explicit = bool(args.filter or args.skip or args.targets)
+
+    if args.all_tests:
+        print("GPU-PROOFS MODE: all (--all: every test binary, no scoping)", flush=True)
+        runs = [{"targets": None, "lib": False, "filters": args.filter, "skips": args.skip,
+                 "budgeted": False, "full": True}]
+    elif explicit:
+        print("GPU-PROOFS MODE: explicit (--test/--filter/--skip given; no scoping)", flush=True)
+        runs = [{"targets": args.targets, "lib": False, "filters": args.filter,
+                 "skips": args.skip, "budgeted": True, "full": False}]
+    else:
+        try:
+            paths = args.path if args.path is not None else changed_paths(repo, args.base)
+        except RuntimeError as error:
+            print(f"GPU-PROOFS SCOPE: FAIL - {error}")
+            return 2
+        plan = gpu_scope.plan_for_paths(paths, repo)
+        if plan.unmapped:
+            print(gpu_scope.unmapped_message(plan))
+            return 2
+        if not plan.active:
+            print(f"GPU-PROOFS MODE: scoped - no GPU paths touched vs {args.base}; nothing to run "
+                  "(use --all for the whole suite)")
+            return 0
+        print("GPU-PROOFS MODE: scoped (default; --all runs the whole suite)\n" + plan.describe(),
+              flush=True)
+        for note in plan.notes:
+            print(f"  note: {note}")
+        runs = [dict(r, full=False) for r in plan.runs()]
+
+    exit_code, outputs, all_timings = 0, [], []
+    # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
+    # cargo runs so another run cannot interleave between test binaries.
     with gpu_queue.hold("gpu_proofs_gate"):
-        exit_code, output = run_gate(
-            manifest_path, args.filter, args.skip, args.targets, args.full_suite
-        )
-    print_summary(output, exit_code)
-    return exit_code
+        for run in runs:
+            run_timings: list = []
+            code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
+                                    run["full"], run["lib"], run_timings)
+            exit_code = exit_code or code
+            outputs.append(output)
+            all_timings += [(n, s, b, run["budgeted"]) for n, s, b in run_timings]
+    output = "".join(outputs)
+    if args.timings_md:
+        write_timings_md(args.timings_md, all_timings)
+    if args.record_times:
+        print(write_times_json(args.record_times, all_timings))
+    return print_summary(output, exit_code, all_timings, args.budget)
 
 
 if __name__ == "__main__":

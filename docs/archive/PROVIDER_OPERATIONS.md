@@ -1,5 +1,7 @@
 # Provider Operations — seats, upstreams, fallbacks, key rotation
 
+**Status:** RETIRED 2026-10-01. The rig is Claude models only; there is no proxy, provider seat or key rotation to run. Kept for the record, never edit. Live policy: `docs/AGENT_ROUTING.md`.
+
 Operational runbook for changing anything in the fleet's model supply chain.
 Roster doctrine (who sits in which seat and why) lives in
 `docs/AGENT_ROUTING.md`; spend analysis in `docs/TOKEN_ECONOMICS.md`;

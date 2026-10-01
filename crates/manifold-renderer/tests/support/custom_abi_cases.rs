@@ -208,6 +208,20 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "gpu_flip_pressure.rs",
+        rust_struct: "Params",
+        shader: "shaders/gpu_flip_pressure.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_pressure.rs",
+        rust_struct: "InverseParams",
+        shader: "shaders/coarse_inverse.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "face_impulse_to_bodies.rs",
         rust_struct: "SumParams",
         shader: "shaders/face_impulse_to_bodies.wgsl",

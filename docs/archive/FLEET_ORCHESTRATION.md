@@ -1,5 +1,7 @@
 # Fleet Orchestration — Two-Layer Model
 
+**Status:** RETIRED 2026-10-01. Built on cc-fleet panes, which are no longer used. Kept for the record, never edit. Live policy: `docs/AGENT_ROUTING.md`.
+
 How Peter and the top-level Fable session run parallel work through cc-fleet panes. Simple by design.
 
 ## The two layers

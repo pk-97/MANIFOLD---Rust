@@ -31,7 +31,14 @@ CHARGE = (
     "outside the paths your brief names; a hook denial is a STOP — report "
     "the denial text up, never work around it; any fork or gap in the brief "
     "= stop and report up. If you write records (commits, docs), sign as "
-    "your own model and seat, never as the lead's."
+    "your own model and seat, never as the lead's. You can never prompt Peter: "
+    "any action that would need a permission prompt is auto-denied for worker "
+    "seats (permission-request-guard.py). Stay in pre-approved shapes — "
+    "read-only tools; `git -C`/`cargo --manifest-path` workflow; Edit/Write "
+    "inside your worktree or the session scratchpad; redirects only to a "
+    "literal unquoted /tmp/... path; scratch scripts written with the Write "
+    "tool and run as `chmod +x <path> && <path>` (never `python3 -c`/heredoc); "
+    "no `sed w`, no `tee`, no `cd`."
 )
 
 

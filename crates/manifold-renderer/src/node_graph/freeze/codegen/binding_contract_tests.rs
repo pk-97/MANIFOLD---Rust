@@ -185,8 +185,8 @@ fn dispatch_tail_census_is_stable() {
     // add solid_faces, coarsen_solid_faces, solid_face_velocity and
     // constrain_solid_faces, buffer atoms; their body coupling adds
     // pressure_face_impulse, friction_face_impulse and body_pressure_product,
-    // buffer atoms.
-    assert_eq!(total, 240, "standalone atom census drifted");
+    // buffer atoms. The liquid block map adds liquid_blocks.
+    assert_eq!(total, 241, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

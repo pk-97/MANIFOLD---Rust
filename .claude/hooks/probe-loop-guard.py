@@ -12,12 +12,15 @@ PROBE — every action counts:
     render_scene.rs, *.wgsl under crates/);
   - Bash RUNNING the suite or probe binary (cargo test/run with gpu-proofs, the
     render-import bin, the gate wrapper). Quoted strings are stripped first, so
-    naming a marker in a commit message or bead never counts.
+    naming a marker in a commit message or bead never counts. The wrapper counts
+    only in command position (first word of a shell segment, after env/interpreter
+    prefixes) — its path is usually quoted, so the quote strip can't decide it.
 
 LOOP — per file, max across files: one cycle = an edit to a file already edited
 this session with an observation run in between (cargo test/t/nextest/run/r, or a
 target/debug|release binary). check/clippy/build are compile-fix iteration and
 never mark a run. Healthy work spreads edits across files; a grind hammers one.
+Markdown edits (docs, memory, beads prose) never count: prose is not a debug loop.
 
 Read-only git plumbing is exempt: merge-base, rev-parse, log, branch segments are
 stripped before matching. For-loop word lists are data, not execution.
@@ -40,6 +43,7 @@ Obsolete when: the debug escalation ladder in docs/AGENT_ROUTING.md is retired.
 import json
 import os
 import re
+import shlex
 import sys
 import time
 
@@ -69,10 +73,40 @@ EXEC_CMD = re.compile(
     r"\bcargo\s+(?:test|t|nextest|run|r)\b"
     r"|(?:^|[\s;&|])\.?/?target/(?:debug|release)/\S+"
 )
-# The gate wrapper's path is normally quoted (the repo path has a space), so
-# it must match the RAW command; end-of-token anchor keeps prose mentions
-# like "gpu_proofs_gate.py: …" in commit messages from counting.
-WRAPPER_RUN = re.compile(r"gpu_proofs_gate\.py['\"]?(?=\s|$)")
+WRAPPER = "gpu_proofs_gate.py"
+# Words that may precede the program in a shell segment.
+SEGMENT_PREFIXES = {"python3", "python", "exec", "time", "env", "do", "then",
+                    "else", "!", "--", "gpu_queue.py"}
+SEPARATOR = re.compile(r"^[;&|]+$")
+
+
+def runs_wrapper(raw: str) -> bool:
+    """True when the gate wrapper is the program a shell segment runs.
+
+    A mention inside a quoted argument (a bead description, a commit message)
+    is an argument token, never a segment's program, so it doesn't count.
+    """
+    try:
+        lex = shlex.shlex(raw, posix=True, punctuation_chars=";&|")
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        # Unbalanced quotes: judge only the unquoted text.
+        toks = QUOTED.sub("", raw).split()
+    at_start = True
+    for t in toks:
+        if SEPARATOR.match(t):
+            at_start = True
+            continue
+        if not at_start:
+            continue
+        base = os.path.basename(t)
+        if base in SEGMENT_PREFIXES or re.fullmatch(r"[A-Za-z_]\w*=.*", t):
+            continue
+        if base == WRAPPER:
+            return True
+        at_start = False
+    return False
 QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 # Read-only git plumbing is bookkeeping, not probing (BUG-0c28): a landing's
 # merge-base/rev-parse/log/branch loops must never feed the probe counter,
@@ -105,11 +139,13 @@ def main() -> None:
         edit_path = ""
         if tool in ("Edit", "Write", "MultiEdit"):
             edit_path = ti.get("file_path", "")
+            if edit_path.endswith(".md"):
+                return
             is_probe = bool(KERNEL_PATH.search(edit_path))
         elif tool == "Bash":
             raw = ti.get("command", "")
             cmd = GIT_PLUMBING.sub("", FOR_HEADER.sub("", QUOTED.sub("", raw)))
-            is_probe = bool(PROBE_CMD.search(cmd)) or bool(WRAPPER_RUN.search(raw))
+            is_probe = bool(PROBE_CMD.search(cmd)) or runs_wrapper(raw)
             is_exec = is_probe or bool(EXEC_CMD.search(cmd))
         if not (is_probe or is_exec or edit_path):
             return
@@ -185,12 +221,11 @@ def main() -> None:
             f"LOOP GUARD ({' + '.join(shape)} this session) — lead escalation ladder "
             "(widened to ALL lead iteration loops, not just probes): (1) LEAD semantic "
             "code review of the seam first — 'does this look correct?' is the fastest, "
-            "cheapest oracle; (2) STUCK? ask a tool-using GLM review lane for "
-            "adversarial review (one-shots fabricate code citations — "
-            ".claude/hooks/oneshot is mechanical-tasks-only) "
-            "--model glm-5.2, or a lane); (3) instrument probes are the LAST RESORT, for "
+            "cheapest oracle; (2) STUCK? the consult seat — a Fable fork reading the "
+            "seam fresh, read-and-discuss only; (3) instrument probes are the LAST RESORT, for "
             "when nothing makes sense and you need a new direction — and they are DELEGATED "
-            "(DeepSeek lane), not lead-run. Write the evidence table to "
+            "to an Opus diagnosis lane with the evidence table in the brief, never "
+            "lead-run (docs/AGENT_ROUTING.md). Write the evidence table to "
             "/tmp/manifold_seam_review.md (>=200 chars) to reset this guard. "
             "Before the next iteration, run the DEBUG_INVESTIGATION skeleton as a "
             "checklist (docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md section 10): SCHEMA_SEARCH before "
