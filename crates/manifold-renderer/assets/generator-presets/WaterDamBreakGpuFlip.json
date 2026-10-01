@@ -555,7 +555,7 @@
             "params": {
               "max_capacity": {
                 "type": "Int",
-                "value": 8388606
+                "value": 0
               },
               "resolution_scale": {
                 "type": "Int",

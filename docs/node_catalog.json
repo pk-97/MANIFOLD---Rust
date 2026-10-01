@@ -44515,7 +44515,7 @@
       "label": "Volume Surface Mesh",
       "outputs": [
         {
-          "capacity": "param:max_capacity=1572864",
+          "capacity": "fixed:3",
           "name": "vertices",
           "type": "Array"
         }
@@ -44622,17 +44622,17 @@
           "type": "int"
         },
         {
-          "default": "1572864",
-          "label": "Mesh Capacity (vertices)",
+          "default": "0",
+          "label": "Starting Mesh Capacity (vertices)",
           "name": "max_capacity",
           "range": [
-            "3",
+            "0",
             "16777215"
           ],
           "type": "int"
         }
       ],
-      "purpose": "Build the triangle-list mesh of a level set's zero crossing (marching cubes): one output vertex per thread, placed by binary search over the running total of per-cell triangle counts, with a gradient normal pointing outward. Slots past the live triangles are zero; a surface needing more than max_capacity vertices becomes an empty mesh and an error.",
+      "purpose": "Build the triangle-list mesh of a level set's zero crossing (marching cubes): one output vertex per thread, placed by binary search over the running total of per-cell triangle counts, with a gradient normal pointing outward. Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material.",

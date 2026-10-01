@@ -1156,6 +1156,17 @@ impl SphereLevelSet {
         Self { nodes, min, size, center, radius, values }
     }
 
+    /// Foam: a random sign at every node, so the surface has far more area
+    /// than the lattice's own box.
+    fn foam(nodes: u32, seed: u64) -> Self {
+        let mut level_set = Self::new(nodes, 0.5);
+        let mut rng = Rng(seed);
+        for value in &mut level_set.values {
+            *value = rng.next_f32() - 0.5;
+        }
+        level_set
+    }
+
     fn phi(&self, p: [u32; 3]) -> f64 {
         f64::from(self.values[(p[0] + self.nodes * (p[1] + self.nodes * p[2])) as usize])
     }
@@ -1197,6 +1208,18 @@ fn run_marching_cubes(
     capacity: u32,
     reported_total: Option<f32>,
 ) -> MeshRun {
+    run_marching_cubes_on(harness, &mut VolumeSurfaceMesh::new(), level_set, capacity, reported_total)
+}
+
+/// One frame of `mesh`, which keeps its grown buffer between calls. Reads
+/// the whole buffer the node provides.
+fn run_marching_cubes_on(
+    harness: &mut Harness,
+    mesh: &mut VolumeSurfaceMesh,
+    level_set: &SphereLevelSet,
+    capacity: u32,
+    reported_total: Option<f32>,
+) -> MeshRun {
     let (levelset_slot, _) = harness.array(&level_set.values, level_set.values.len());
     let (counts_slot, _) = harness.array::<u32>(&[], level_set.values.len());
     let n = level_set.nodes as f32;
@@ -1223,7 +1246,7 @@ fn run_marching_cubes(
         assert!(errors.is_empty(), "{errors:?}");
         total = scalars.iter().find(|(slot, _)| *slot == total_slot).map(|(_, v)| v.clone());
     }
-    let (vertices_slot, vertices_buf) = harness.array::<MeshVertex>(&[], capacity as usize);
+    let (vertices_slot, _) = harness.array::<MeshVertex>(&[], 3);
     let centre = level_set.min + 0.5 * level_set.size;
     let mut mesh_params = params(&[
         ("center_x", centre),
@@ -1242,12 +1265,14 @@ fn run_marching_cubes(
         mesh_params.insert(Cow::Borrowed("total"), ParamValue::Float(total));
     }
     let (_, errors) = harness.run(
-        &mut VolumeSurfaceMesh::new(),
+        mesh,
         &[("levelset", levelset_slot), ("scan", scan_slot)],
         &[("vertices", vertices_slot)],
         &mesh_params,
     );
-    MeshRun { vertices: read(&vertices_buf, capacity as usize), errors, total }
+    let provided = harness.buffer(vertices_slot);
+    let slots = (provided.size / std::mem::size_of::<MeshVertex>() as u64) as usize;
+    MeshRun { vertices: read(&provided, slots), errors, total }
 }
 
 /// Res 64 at Surface Detail 2 is a 261³ lattice: more than 65,535 threadgroups
@@ -1350,23 +1375,62 @@ fn volume_surface_mesh_sphere_is_watertight() {
     }
 }
 
+/// A surface with no more area than the lattice's box fits the starting
+/// buffer whatever Starting Mesh Capacity says: no frame waits on the total.
 #[test]
-fn volume_surface_mesh_overflow_writes_empty() {
+fn volume_surface_mesh_starts_at_the_box_surface() {
     let mut harness = Harness::new();
     let sphere = SphereLevelSet::new(33, 0.55);
-    let run = run_marching_cubes(&mut harness, &sphere, 999, None);
-    assert!(run.vertices.iter().all(is_zero), "an overflow is an empty mesh, never a truncated one");
+    let fixed = run_marching_cubes(&mut harness, &sphere, 200_000, None);
+    let Some(ParamValue::Float(triangles)) = fixed.total else { panic!("total") };
+    let live = triangles as usize * 3;
+    let run = run_marching_cubes(&mut harness, &sphere, 0, None);
+    assert!(run.errors.is_empty(), "{:?}", run.errors);
+    assert_eq!(run.vertices.len(), 12 * 3 * 32 * 32, "the box surface of 32³ cells");
+    assert_eq!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&run.vertices[..live]),
+        bytemuck::cast_slice::<MeshVertex, u8>(&fixed.vertices[..live]),
+        "the first frame is the whole mesh"
+    );
 }
 
+/// Foam outgrows the starting buffer mid-run: the frame that overflows is an
+/// empty mesh, never a truncated one; the next names the overflow with its
+/// count and grows; and the grown mesh is the fixed-capacity mesh bit for bit.
 #[test]
-fn fluid_surface_overflow_reports_error() {
+fn fluid_surface_mesh_grows_past_capacity_mid_run() {
     let mut harness = Harness::new();
-    let sphere = SphereLevelSet::new(33, 0.55);
-    let first = run_marching_cubes(&mut harness, &sphere, 999, None);
-    let Some(ParamValue::Float(triangles)) = first.total else { panic!("total") };
-    assert!(first.errors.is_empty(), "nothing is reported before the total arrives");
-    let next = run_marching_cubes(&mut harness, &sphere, 999, Some(triangles));
-    assert!(next.errors.iter().any(|e| e.contains("Mesh Capacity is 999")), "{:?}", next.errors);
+    let foam = SphereLevelSet::foam(33, 0xf0a3_5eed);
+    let fixed = run_marching_cubes(&mut harness, &foam, 2_000_000, None);
+    let Some(ParamValue::Float(triangles)) = fixed.total else { panic!("total") };
+    let live = triangles as usize * 3;
+    let start = 999;
+    assert!(live > start && fixed.vertices.len() >= live, "foam ({live} vertices) outgrows the start ({start})");
+
+    let mut mesh = VolumeSurfaceMesh::new();
+    let first = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, None);
+    assert!(first.errors.is_empty(), "nothing is reported before the total arrives: {:?}", first.errors);
+    assert_eq!(first.vertices.len(), start, "an explicit Starting Mesh Capacity wins");
+    assert!(first.vertices.iter().all(is_zero), "an overflow is an empty mesh, never a truncated one");
+
+    let grown = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, Some(triangles));
+    assert!(
+        grown.errors.iter().any(|e| e.contains(&format!("Mesh Capacity is {start}")) && e.contains(&live.to_string())),
+        "{:?}",
+        grown.errors
+    );
+    assert!(grown.vertices.len() >= 2 * live, "grown to {} for {live} live vertices", grown.vertices.len());
+    assert_eq!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&grown.vertices[..live]),
+        bytemuck::cast_slice::<MeshVertex, u8>(&fixed.vertices[..live]),
+        "the grown mesh is the fixed-capacity mesh"
+    );
+    assert!(grown.vertices[live..].iter().all(is_zero), "the grown tail is zeroed");
+
+    // Steady state: the same surface neither grows nor reports again.
+    let steady = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, Some(triangles));
+    assert!(steady.errors.is_empty(), "{:?}", steady.errors);
+    assert_eq!(steady.vertices.len(), grown.vertices.len(), "no allocation once the surface fits");
 }
 
 // --- P6b: live triangles only ---------------------------------------------
@@ -1481,13 +1545,13 @@ fn fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices() {
     let sentinel = MeshVertex { position: [9.0; 3], _pad0: 0.0, normal: [1.0, 0.0, 0.0], _pad1: 0.0, uv: [0.0; 2], _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4] };
     let tail = vec![sentinel; capacity - sentinel_from];
     // SAFETY: shared buffer, no GPU work in flight between harness runs.
-    unsafe { live.vertices.1.write((sentinel_from * std::mem::size_of::<MeshVertex>()) as u64, bytemuck::cast_slice(&tail)) };
+    unsafe { harness.buffer(live.vertices.0).write((sentinel_from * std::mem::size_of::<MeshVertex>()) as u64, bytemuck::cast_slice(&tail)) };
 
     assert_eq!(live.frame(&mut harness, &big, capacity), first);
     let shrunk = live.frame(&mut harness, &small, capacity);
     assert!(shrunk < first, "the small sphere has fewer vertices ({shrunk} of {first})");
     live.frame(&mut harness, &small, capacity);
-    let vertices: Vec<MeshVertex> = read(&live.vertices.1, capacity);
+    let vertices: Vec<MeshVertex> = read(&harness.buffer(live.vertices.0), capacity);
     assert!(vertices[..shrunk].iter().all(|v| v.normal != [0.0; 3]), "live vertices are written");
     assert!(vertices[shrunk..sentinel_from].iter().all(is_zero), "vacated slots are cleared");
     assert!(
