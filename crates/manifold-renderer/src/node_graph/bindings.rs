@@ -423,7 +423,7 @@ impl<'a> NodeInputs<'a> {
     pub fn any_pending_except(&self, handled: impl Fn(&str) -> bool) -> bool {
         self.bindings
             .iter()
-            .any(|&(port, slot)| !handled(port) && !self.slot_content_ready(slot))
+            .any(|&(port, slot)| !self.slot_content_ready(slot) && !handled(port))
     }
 
     /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name

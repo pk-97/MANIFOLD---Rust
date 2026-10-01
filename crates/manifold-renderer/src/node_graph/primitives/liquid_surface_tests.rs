@@ -655,17 +655,18 @@ fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
     assert_ne!(run(&mut harness, &second, 1.0), enabled, "re-enabled, it sorts the new particles");
 }
 
-/// Before its first frame the producer publishes zero particles and zero lattice
-/// nodes, which the group's bin-size math turns into a negative cell size.
+/// A producer without a frame yet is pending, so the executor holds this node;
+/// a lattice that reaches it is real, and a broken one is an error even with
+/// no particles.
 #[test]
-fn fluid_sort_particles_into_cells_is_silent_before_the_first_frame() {
+fn fluid_sort_particles_into_cells_rejects_a_broken_lattice_at_any_count() {
     let mut harness = Harness::new();
     let no_lattice = Lattice { center: [0.0; 3], size: [4.0; 3], cell: -4.0 };
     let (input, _) = harness.array(&[particle([0.0; 3], 0.02, 1)], 1);
     let (sorted, _) = harness.array::<FluidParticle>(&[], 1);
     let (ranges, _) = harness.array::<CellRange>(&[], 64);
     let mut sort = SortParticlesIntoCells::new();
-    for (count, expect_error) in [(0.0, false), (1.0, true)] {
+    for (count, expect_error) in [(0.0, true), (1.0, true)] {
         let count_slot = harness.scalar_input(count);
         let (_, errors) = harness.run(
             &mut sort,
