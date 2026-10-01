@@ -55,6 +55,16 @@ RUNTIME_FILTERS = [
 # manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs.
 BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights"]
 
+# Too slow for the landing budget (583 s together, measured); scoped runs skip
+# them, --all and explicit --test/--filter still run them. Retires when
+# landing-sized variants exist (bead: Landing-sized versions of the three slow
+# matter acceptance tests).
+NIGHTLY_ONLY = [
+    "matter_bodies::matter_collider_penetration_bounded",
+    "matter_look::matter_look_splash_retention",
+    "matter_look::matter_look_volume_drift",
+]
+
 # A shader included by more primitives than this is "shared WGSL" -> BROAD.
 SHARED_WGSL_USERS = 12
 
@@ -149,7 +159,8 @@ class Plan:
 
     def final_skips(self):
         # A skip that would hide a filter we deliberately selected is dropped.
-        return sorted(s for s in self.skips if not any(s in f for f in self.filters))
+        skips = set(self.skips) | set(NIGHTLY_ONLY)
+        return sorted(s for s in skips if not any(s in f for f in self.filters))
 
     def runs(self):
         """[{targets, lib, filters, skips, budgeted}] cargo invocations to make."""
@@ -167,6 +178,7 @@ class Plan:
         lines.append(f"  filters: {', '.join(self.final_filters())}")
         if self.final_skips():
             lines.append(f"  skips: {', '.join(self.final_skips())}")
+        lines.append("  skipped, run nightly only: " + ", ".join(NIGHTLY_ONLY))
         if self.broad:
             lines.append("  broad set (runtime + lighting) because: " +
                          "; ".join(f"{p} ({why})" for p, why in self.broad))

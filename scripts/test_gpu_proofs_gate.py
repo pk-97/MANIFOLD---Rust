@@ -183,6 +183,16 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertTrue(calls[0]["full"])
         self.assertIn("GPU-PROOFS MODE: all", text)
 
+    def test_all_keeps_nightly_only_tests_and_scoped_skips_them(self):
+        import gpu_scope
+        code, calls, _ = self.run_main(["--all"])
+        self.assertEqual(calls[0]["skips"], [])
+        self.assertTrue(calls[0]["full"])
+        code, calls, _ = self.run_main(
+            [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/matter_fill.rs"])
+        for t in gpu_scope.NIGHTLY_ONLY:
+            self.assertIn(t, calls[0]["skips"])
+
     def test_explicit_filter_bypasses_scoping(self):
         code, calls, text = self.run_main(["--filter", "water_"], repo_changed=["docs/X.md"])
         self.assertEqual(calls[0]["filters"], ["water_"])

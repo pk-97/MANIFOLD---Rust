@@ -75,16 +75,24 @@ class ScopeTests(unittest.TestCase):
     def test_rt_row_keeps_particletext_skip_and_union_with_freeze(self):
         p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", R + "node_graph/freeze/x.rs"])
         self.assertTrue({"rt_", "freeze::"} <= p.filters)
-        self.assertEqual(p.final_skips(), ["particletext"])
+        self.assertEqual(sorted(set(p.final_skips()) - set(g.NIGHTLY_ONLY)), ["particletext"])
         self.assertEqual(p.broad, [])
 
     def test_skip_dropped_when_it_would_hide_a_selected_filter(self):
         p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", P + "particletext.rs"])
-        self.assertEqual(p.final_skips(), [])
+        self.assertEqual(sorted(set(p.final_skips()) - set(g.NIGHTLY_ONLY)), [])
 
     def test_matter_row(self):
         p = plan([P + "matter_fill.rs"])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
+
+    def test_matter_path_skips_nightly_only_tests(self):
+        p = plan([P + "matter_fill.rs"])
+        self.assertEqual(len(g.NIGHTLY_ONLY), 3)
+        for t in g.NIGHTLY_ONLY:
+            self.assertIn(t, p.final_skips())
+        self.assertIn("run nightly only", p.describe())
+        self.assertEqual(p.runs()[0]["skips"], p.final_skips())
 
     def test_proof_file_maps_to_its_own_module(self):
         p = plan([g.PROOFS_DIR + "render_scene_fog.rs"])
