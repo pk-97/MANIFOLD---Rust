@@ -10,6 +10,15 @@
 // prolongation over 8 and the V-cycle stays symmetric
 // (scripts/mgpcg_reference.py --symmetry).
 //
+// The free surface is ghost fluid on the finest level only (`ghost` 1): an
+// air neighbour a of water cell c adds −w·θ to c's diagonal, θ =
+// clamp(φ_a / φ_c, −25, 25) with φ_c taken at most −0.005h and φ_a at least
+// 0 (FLIP Fluids pressuresolver.cpp, MIT, Copyright (C) 2026 Ryan L. Guy &
+// Dennis Fassbaender; see THIRD_PARTY_NOTICES.md). θ ≤ 0, so a cell's
+// diagonal is positive exactly when one of its faces is open, and the
+// operator stays symmetric. Coarse levels and the density solve run zero φ:
+// the plain rows.
+//
 // The CPU sizes every buffer for the lattice before it dispatches; each pass
 // only checks its thread is inside the lattice.
 
@@ -29,7 +38,8 @@ struct Params {
     cell_size: f32,
     // The conjugate gradient iteration, or the scalar a dot product writes.
     slot: u32,
-    _pad0: u32,
+    // smooth and residual: 1 reads φ (the finest level's ghost rows).
+    ghost: u32,
     _pad1: u32,
 };
 
@@ -48,6 +58,7 @@ struct FaceSample {
 @group(0) @binding(7) var<storage, read_write> scalars: array<f32>;
 @group(0) @binding(8) var<storage, read> coarse_water: array<f32>;
 @group(0) @binding(9) var<storage, read_write> out_faces: array<FaceSample>;
+@group(0) @binding(10) var<storage, read> phi: array<f32>;
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 
@@ -90,15 +101,27 @@ fn face_weight(p: vec3<i32>, a: i32, d: i32, n: vec3<i32>) -> f32 {
     return faces[cell(face, n + vec3<i32>(1))].weight[a];
 }
 
-// Σ w over p's faces, and Σ w · value over its water neighbours, reading
-// `value` from `out` (smoothing in place) or `aux`.
+// The ghost ratio θ an air neighbour `air` of water cell `own` puts on the
+// diagonal as −w·θ; 0 off the finest level.
+fn ghost_ratio(own: u32, air: u32) -> f32 {
+    if u.ghost == 0u {
+        return 0.0;
+    }
+    let centre = min(phi[own], -0.005 * u.cell_size);
+    return clamp(max(phi[air], 0.0) / (centre + 1e-9), -25.0, 25.0);
+}
+
+// The diagonal: Σ w over p's faces, less w·θ per air neighbour; and Σ w ·
+// value over its water neighbours, reading `value` from `out` (smoothing in
+// place), `aux`, or nowhere (mode 2: the diagonal only).
 struct Stencil {
     diagonal: f32,
     sum: f32,
 };
 
-fn stencil_out(p: vec3<i32>, n: vec3<i32>) -> Stencil {
+fn stencil(p: vec3<i32>, n: vec3<i32>, source: u32) -> Stencil {
     var s = Stencil(0.0, 0.0);
+    let own = cell(p, n);
     for (var a = 0; a < 3; a = a + 1) {
         for (var d = -1; d <= 1; d = d + 2) {
             let w = face_weight(p, a, d, n);
@@ -108,26 +131,13 @@ fn stencil_out(p: vec3<i32>, n: vec3<i32>) -> Stencil {
                 q[a] = p[a] + d;
                 let at = cell(q, n);
                 if is_water(at) {
-                    s.sum = s.sum + w * out[at];
-                }
-            }
-        }
-    }
-    return s;
-}
-
-fn stencil_aux(p: vec3<i32>, n: vec3<i32>) -> Stencil {
-    var s = Stencil(0.0, 0.0);
-    for (var a = 0; a < 3; a = a + 1) {
-        for (var d = -1; d <= 1; d = d + 2) {
-            let w = face_weight(p, a, d, n);
-            if w > 0.0 {
-                s.diagonal = s.diagonal + w;
-                var q = p;
-                q[a] = p[a] + d;
-                let at = cell(q, n);
-                if is_water(at) {
-                    s.sum = s.sum + w * aux[at];
+                    if source == 0u {
+                        s.sum = s.sum + w * out[at];
+                    } else if source == 1u {
+                        s.sum = s.sum + w * aux[at];
+                    }
+                } else {
+                    s.diagonal = s.diagonal - w * ghost_ratio(own, at);
                 }
             }
         }
@@ -137,7 +147,7 @@ fn stencil_aux(p: vec3<i32>, n: vec3<i32>) -> Stencil {
 
 // One red-black Gauss-Seidel sweep of L e = rhs in place in `out` (e), rhs
 // in `src`. A water cell of the swept color becomes
-// (Σ w · water neighbours' e − h² · rhs) / Σ w, or 0 with no open face.
+// (Σ w · water neighbours' e − h² · rhs) / diagonal, or 0 with no open face.
 // From zero (mode 1) every other cell is written 0 and neighbours read 0.
 @compute @workgroup_size(256, 1, 1)
 fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -155,14 +165,7 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let h2 = u.cell_size * u.cell_size;
-    var s = Stencil(0.0, 0.0);
-    if u.mode == 1u {
-        for (var a = 0; a < 3; a = a + 1) {
-            s.diagonal = s.diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
-        }
-    } else {
-        s = stencil_out(p, n);
-    }
+    let s = stencil(p, n, select(0u, 2u, u.mode == 1u));
     out[idx] = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
 }
 
@@ -177,7 +180,7 @@ fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     var result = 0.0;
     if is_water(idx) {
-        let s = stencil_aux(coords(idx, n), n);
+        let s = stencil(coords(idx, n), n, 1u);
         if s.diagonal > 0.0 {
             let rhs = select(src[idx], 0.0, u.mode == 1u);
             result = rhs - (s.sum - s.diagonal * aux[idx]) / (u.cell_size * u.cell_size);
@@ -340,7 +343,8 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
 }
 
 // The conjugate gradient's start: r = f (`src`) on water with an open face,
-// else 0, into `out`.
+// else 0, into `out`. The ghost rows only add to a diagonal, so an open
+// face is the whole test.
 @compute @workgroup_size(256, 1, 1)
 fn init_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();

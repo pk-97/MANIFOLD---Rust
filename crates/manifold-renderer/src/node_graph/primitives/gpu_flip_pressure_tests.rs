@@ -60,6 +60,20 @@ pub(crate) fn resample(p: &Problem, n: usize, m: usize) -> Problem {
 /// |masked Laplacian(p) − f| / |f|: air neighbours hold zero pressure,
 /// neighbours past the box walls are missing.
 pub(crate) fn residual(p: &[f32], water: &[bool], f: &[f32], n: usize, h: f64) -> f64 {
+    ghost_residual(p, water, f, None, n, h)
+}
+
+/// The ghost fluid's θ for air neighbour `air` of water cell `own`: the air
+/// side holds θ times the water's pressure (docs/GPU_FLIP_PRESSURE_SOLVE.md
+/// section 2 (the equation)).
+fn ghost_ratio(phi: &[f32], own: usize, air: usize, h: f64) -> f64 {
+    let centre = f64::from(phi[own]).min(-0.005 * h);
+    (f64::from(phi[air]).max(0.0) / (centre + 1e-9)).clamp(-25.0, 25.0)
+}
+
+/// [`residual`] with the free surface's ghost rows when `phi` is given: an
+/// air neighbour holds θ·p of the water cell instead of 0.
+fn ghost_residual(p: &[f32], water: &[bool], f: &[f32], phi: Option<&[f32]>, n: usize, h: f64) -> f64 {
     let (mut miss, mut size) = (0.0, 0.0);
     for c in (0..n * n * n).filter(|&c| water[c]) {
         let at = [c % n, (c / n) % n, c / (n * n)];
@@ -69,7 +83,11 @@ pub(crate) fn residual(p: &[f32], water: &[bool], f: &[f32], n: usize, h: f64) -
         for a in 0..3 {
             for next in [at[a].checked_sub(1), Some(at[a] + 1).filter(|&q| q < n)].into_iter().flatten() {
                 let neighbour = c + next * stride[a] - at[a] * stride[a];
-                let value = if water[neighbour] { f64::from(p[neighbour]) } else { 0.0 };
+                let value = match (water[neighbour], phi) {
+                    (true, _) => f64::from(p[neighbour]),
+                    (false, Some(phi)) => ghost_ratio(phi, c, neighbour, h) * centre,
+                    (false, None) => 0.0,
+                };
                 sum += value - centre;
             }
         }
@@ -109,6 +127,8 @@ struct Rig {
     faces: GpuBuffer,
     rhs: GpuBuffer,
     pressure: GpuBuffer,
+    /// The free surface's distance, when the rig solves the ghost rows.
+    phi: Option<GpuBuffer>,
 }
 
 impl Rig {
@@ -127,7 +147,22 @@ impl Rig {
             faces,
             device,
             solver: PressureSolver::default(),
+            phi: None,
         }
+    }
+
+    fn with_phi(mut self, phi: &[f32]) -> Self {
+        let buffer = self.device.create_buffer_shared(phi.len() as u64 * 4);
+        // SAFETY: a shared buffer sized for φ; no GPU work is queued.
+        unsafe { buffer.write(0, bytemuck::cast_slice(phi)) };
+        self.phi = Some(buffer);
+        self
+    }
+
+    fn pressure(&self) -> &[f32] {
+        let ptr = self.pressure.mapped_ptr().expect("shared pressure");
+        // SAFETY: the solve completed; the buffer holds `cells` floats.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), self.n * self.n * self.n) }
     }
 
     fn cell_size(&self) -> f64 {
@@ -148,18 +183,14 @@ impl Rig {
             enc.enable_dispatch_profiling(sampler, &self.device);
         }
         let n = self.n as u32;
-        let lattice = Water { lattice: [n; 3], cell_size: self.cell_size() as f32, water: &self.water, faces: &self.faces };
+        let lattice = Water { lattice: [n; 3], cell_size: self.cell_size() as f32, water: &self.water, faces: &self.faces, phi: self.phi.as_ref() };
         self.solver.prepare(&self.device, &mut enc, &lattice).expect("prepares");
         self.solver.solve(&mut enc, &lattice, &self.rhs, &self.pressure, iterations).expect("solves");
         enc.commit_and_wait_profiled(&self.device)
     }
 
     fn residual_of(&self, p: &Problem) -> f64 {
-        let cells = self.n * self.n * self.n;
-        let ptr = self.pressure.mapped_ptr().expect("shared pressure");
-        // SAFETY: the solve completed; the buffer holds `cells` floats.
-        let pressure = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), cells) };
-        residual(pressure, &p.water, &p.f, self.n, self.cell_size())
+        residual(self.pressure(), &p.water, &p.f, self.n, self.cell_size())
     }
 
     fn solve(&mut self, p: &Problem, iterations: u32) -> f64 {
@@ -290,6 +321,68 @@ fn pressure_module_matches_reference_deep_pool() {
     check("deep_pool_pressure_problems", 128, &[(60, 2.614e-02, 3.440e-07)]);
     check("deep_pool_density_problems", 64, &[(30, 6.912e-03, 5.795e-07), (60, 5.103e-03, 2.577e-07)]);
     check("deep_pool_density_problems", 128, &[(30, 6.632e-03, 3.220e-07), (60, 6.508e-03, 2.830e-07)]);
+}
+
+/// A spread of surface distances: water cells by an air neighbour sit 0.01h
+/// to 0.9h under the surface, air cells 0.05h to 0.95h above it, so θ runs
+/// the whole clamp from 0 to −25. Deeper cells sit 1.5h from it.
+fn surface_phi(water: &[bool], n: usize, h: f32) -> Vec<f32> {
+    let spread = |c: usize| ((c as u64).wrapping_mul(2_654_435_761) >> 8) as f32 % 1000.0 / 1000.0;
+    (0..n * n * n)
+        .map(|c| {
+            let at = [c % n, (c / n) % n, c / (n * n)];
+            let stride = [1, n, n * n];
+            let by_other = (0..3).any(|a| {
+                [at[a].checked_sub(1), Some(at[a] + 1).filter(|&q| q < n)]
+                    .into_iter()
+                    .flatten()
+                    .any(|q| water[c + q * stride[a] - at[a] * stride[a]] != water[c])
+            });
+            match (water[c], by_other) {
+                (true, true) => -h * (0.01 + 0.89 * spread(c)),
+                (false, true) => h * (0.05 + 0.9 * spread(c)),
+                (true, false) => -1.5 * h,
+                (false, false) => 1.5 * h,
+            }
+        })
+        .collect()
+}
+
+/// The free surface's ghost rows on the finest level, coarse levels plain,
+/// against the CPU's ghost residual: 8 iterations within 2× of what 16
+/// reach or the f32 floor, every Dam Break frame at 64 and the odd side 37.
+/// The ghost answer misses the plain equation, so the rows took.
+#[test]
+fn pressure_module_solves_the_ghost_rows() {
+    let (n, problems) = load_fixture(DAM_BREAK);
+    let mut failures = Vec::new();
+    for m in [64, 37] {
+        let h = (BOX_METRES / m as f64) as f32;
+        for problem in &problems {
+            let problem = resample(problem, n, m);
+            let phi = surface_phi(&problem.water, m, h);
+            let mut rig = Rig::new(m).with_phi(&phi);
+            let ghost = |rig: &Rig| ghost_residual(rig.pressure(), &problem.water, &problem.f, Some(&phi), m, f64::from(h));
+            rig.run(&problem, 16, false);
+            let floor = ghost(&rig).max(F32_FLOOR);
+            rig.run(&problem, 3, false);
+            let at3 = ghost(&rig);
+            rig.run(&problem, 8, false);
+            let at8 = ghost(&rig);
+            let plain = rig.residual_of(&problem);
+            println!(
+                "ghost rows {m}³ frame {:3}: 3 iterations {at3:.3e}, 8 iterations {at8:.3e} (floor {floor:.3e}); plain residual of the ghost answer {plain:.3e}",
+                problem.frame
+            );
+            if at8.is_nan() || at8 > 2.0 * floor || at8 > at3 {
+                failures.push(format!("{m}³ frame {}: 8 iterations {at8:.3e}, 3 {at3:.3e}, floor {floor:.3e}", problem.frame));
+            }
+            if plain < 10.0 * at8 {
+                failures.push(format!("{m}³ frame {}: the plain residual {plain:.3e} is as small as the ghost one", problem.frame));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 /// The solve encodes exactly the passes `passes` counts, every one labelled

@@ -82,12 +82,24 @@ pub(crate) fn lattice_refusal(lattice: [u32; 3]) -> Option<String> {
 
 /// The water a solve runs on: the cell lattice, water per cell (> 0.5), the
 /// padded face grid of open fractions (node.solid_faces' layout, box walls
-/// 0), and the cell size in metres.
+/// 0), the cell size in metres, and the particles' signed distance per cell
+/// for the free surface's ghost rows (docs/GPU_FLIP_PRESSURE_SOLVE.md
+/// section 2 (the equation)). With no φ the rows are the plain ones, as the
+/// density solve runs; the coarse levels always are.
 pub(crate) struct Water<'a> {
     pub lattice: [u32; 3],
     pub cell_size: f32,
     pub water: &'a GpuBuffer,
     pub faces: &'a GpuBuffer,
+    pub phi: Option<&'a GpuBuffer>,
+}
+
+impl<'a> Water<'a> {
+    /// The φ binding and flag a finest-level pass takes. A pass with no φ
+    /// binds the water array in its slot and never reads it.
+    fn ghost(&self) -> (u32, &'a GpuBuffer) {
+        self.phi.map_or((0, self.water), |phi| (1, phi))
+    }
 }
 
 #[repr(C)]
@@ -103,7 +115,7 @@ struct Params {
     mode: u32,
     cell_size: f32,
     slot: u32,
-    _pad0: u32,
+    ghost: u32,
     _pad1: u32,
 }
 
@@ -230,8 +242,8 @@ fn groups(threads: u64) -> [u32; 3] {
     [threads.div_ceil(u64::from(THREADS)) as u32, 1, 1]
 }
 
-/// One level's view for the V-cycle: the fine level reads the caller's water
-/// and faces and works in r and z.
+/// One level's view for the V-cycle: the fine level reads the caller's water,
+/// faces and φ and works in r and z; coarse levels run zero φ.
 struct View<'a> {
     lattice: [u32; 3],
     cell_size: f32,
@@ -239,6 +251,7 @@ struct View<'a> {
     faces: &'a GpuBuffer,
     rhs: &'a GpuBuffer,
     e: &'a GpuBuffer,
+    ghost: (u32, &'a GpuBuffer),
 }
 
 #[derive(Default)]
@@ -258,8 +271,9 @@ impl PressureSolver {
             return Err(reason);
         }
         let n = water.lattice;
-        if cells(n) * 4 > water.water.size || face_records(n) * FACE_BYTES > water.faces.size {
-            return Err(format!("a {n:?} lattice is larger than its water or face arrays"));
+        let phi = water.phi.map_or(u64::MAX, |phi| phi.size);
+        if cells(n) * 4 > water.water.size.min(phi) || face_records(n) * FACE_BYTES > water.faces.size {
+            return Err(format!("a {n:?} lattice is larger than its water, distance or face arrays"));
         }
         if !(water.cell_size.is_finite() && water.cell_size > 0.0) {
             return Err("the cell size must be positive".into());
@@ -323,6 +337,9 @@ impl PressureSolver {
         if self.prepared != Some((n, water.cell_size)) {
             return Err(format!("the solver was not prepared for a {n:?} lattice at this cell size"));
         }
+        if water.phi.is_some_and(|phi| cells(n) * 4 > phi.size) {
+            return Err(format!("a {n:?} lattice is larger than its distance array"));
+        }
         if !(1..=MAX_ITERATIONS).contains(&iterations) {
             return Err(format!("iterations must be 1 to {MAX_ITERATIONS}, not {iterations}"));
         }
@@ -350,7 +367,8 @@ impl PressureSolver {
                 lattice,
                 "gpu_flip.pressure.direction",
             );
-            let apply = Params { mode: 1, ..fine };
+            let (ghost, phi) = water.ghost();
+            let apply = Params { mode: 1, ghost, ..fine };
             enc.dispatch_compute(
                 &pipes.residual,
                 &[
@@ -360,6 +378,7 @@ impl PressureSolver {
                     buffer(3, &b.p),
                     buffer(4, &b.p),
                     buffer(5, &b.scratch),
+                    buffer(10, phi),
                 ],
                 lattice,
                 "gpu_flip.pressure.apply",
@@ -387,10 +406,26 @@ impl PressureSolver {
 fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>) {
     let view = |level: usize| -> View<'a> {
         match level {
-            0 => View { lattice: water.lattice, cell_size: water.cell_size, water: water.water, faces: water.faces, rhs: &b.r, e: &b.z },
+            0 => View {
+                lattice: water.lattice,
+                cell_size: water.cell_size,
+                water: water.water,
+                faces: water.faces,
+                rhs: &b.r,
+                e: &b.z,
+                ghost: water.ghost(),
+            },
             l => {
                 let c = &b.coarse[l - 1];
-                View { lattice: c.lattice, cell_size: c.cell_size, water: &c.water, faces: &c.faces, rhs: &c.rhs, e: &c.e }
+                View {
+                    lattice: c.lattice,
+                    cell_size: c.cell_size,
+                    water: &c.water,
+                    faces: &c.faces,
+                    rhs: &c.rhs,
+                    e: &c.e,
+                    ghost: (0, &c.water),
+                }
             }
         }
     };
@@ -406,7 +441,15 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
         let params = Params::at(v.lattice, v.cell_size).coarse(coarse.lattice);
         enc.dispatch_compute(
             &pipes.residual,
-            &[bytes(&params), buffer(1, v.water), buffer(2, v.faces), buffer(3, v.rhs), buffer(4, v.e), buffer(5, &b.scratch)],
+            &[
+                bytes(&Params { ghost: v.ghost.0, ..params }),
+                buffer(1, v.water),
+                buffer(2, v.faces),
+                buffer(3, v.rhs),
+                buffer(4, v.e),
+                buffer(5, &b.scratch),
+                buffer(10, v.ghost.1),
+            ],
             groups(cells(v.lattice)),
             "gpu_flip.pressure.residual",
         );
@@ -445,10 +488,10 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
 
 /// One red-black sweep of `color` at a level, from zero when `from_zero`.
 fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, from_zero: bool) {
-    let params = Params { color, mode: u32::from(from_zero), ..Params::at(v.lattice, v.cell_size) };
+    let params = Params { color, mode: u32::from(from_zero), ghost: v.ghost.0, ..Params::at(v.lattice, v.cell_size) };
     enc.dispatch_compute(
         &pipes.smooth,
-        &[bytes(&params), buffer(1, v.water), buffer(2, v.faces), buffer(3, v.rhs), buffer(5, v.e)],
+        &[bytes(&params), buffer(1, v.water), buffer(2, v.faces), buffer(3, v.rhs), buffer(5, v.e), buffer(10, v.ghost.1)],
         groups(cells(v.lattice)),
         "gpu_flip.pressure.smooth",
     );
