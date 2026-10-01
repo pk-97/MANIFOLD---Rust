@@ -181,8 +181,9 @@ fn dispatch_tail_census_is_stable() {
     // spawn_whitewater and whitewater_type, buffer atoms. Solids' body
     // coupling adds pressure_face_impulse, friction_face_impulse and
     // body_pressure_product, buffer atoms. The liquid block map adds
-    // liquid_blocks.
-    assert_eq!(total, 222, "standalone atom census drifted");
+    // liquid_blocks. Liquid mesh relaxation adds relax_surface_mesh, a buffer
+    // atom.
+    assert_eq!(total, 223, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

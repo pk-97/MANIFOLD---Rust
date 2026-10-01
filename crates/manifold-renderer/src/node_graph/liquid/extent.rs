@@ -573,6 +573,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.count_surface_triangles", check: count_surface_triangles },
     ExtentRule { type_id: "node.running_total", check: running_total },
     ExtentRule { type_id: "node.volume_surface_mesh", check: volume_surface_mesh },
+    ExtentRule { type_id: "node.relax_surface_mesh", check: relax_surface_mesh },
     ExtentRule { type_id: "node.render_scene", check: size_bounded },
     ExtentRule { type_id: "node.scene_object", check: size_bounded },
     ExtentRule { type_id: "node.physics_world", check: physics_world },
@@ -1036,6 +1037,18 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
     // The kernel places triangles up to Mesh Capacity, not the buffer.
     x.covers("vertices", u64::from(mesh_capacity(x.params())) * size_of::<MeshVertex>() as u64)
+}
+
+fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
+    if nodes.iter().any(|&n| n < 2.0) {
+        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
+    }
+    x.covers("levelset", nodes_total(nodes) * 4)?;
+    x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
+    // One thread per input slot; neighbours lie below the live total, inside it.
+    let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
+    x.covers("relaxed", vertices)
 }
 
 // ── GPU FLIP ─────────────────────────────────────────────────────────────────

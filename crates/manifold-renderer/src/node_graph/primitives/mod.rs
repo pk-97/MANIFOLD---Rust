@@ -408,6 +408,7 @@ mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
 pub(crate) mod volume_surface_mesh;
+mod relax_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
 mod transform_shake;
