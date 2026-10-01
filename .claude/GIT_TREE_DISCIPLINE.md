@@ -99,6 +99,16 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   exactly the failure mode: two landing spots is what produced the twins.
   "Last-known-good" is now a property of the gate (clippy + tests before any
   merge), not of linearity.
+- **More than one branch ready → land them as one batch.** Merge each onto
+  `origin/main` in queue order into one landing branch, run
+  `scripts/landing_gate.py` once on the result, and land it as one no-ff
+  merge whose message lists every branch and tip. If the gate goes red, find
+  the culprit by re-gating without each branch in turn, drop it with its name
+  and the failure in the report, and land the rest. A single ready branch
+  still lands alone. Why: the gate costs 30-60 minutes (GPU proofs alone
+  about 16), so four branches one at a time cost four gates, and back-to-back
+  gates on the shared GPU run flaky. Mechanism: `scripts/land_wave.py --batch`
+  (module docstring is the spec, tests in `scripts/test_land_wave.py`).
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → run `scripts/landing_gate.py --repo <worktree path>` (agents
   cannot cd, and a run on main's checkout refuses) → `git merge

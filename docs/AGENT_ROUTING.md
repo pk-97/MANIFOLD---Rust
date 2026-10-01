@@ -32,6 +32,7 @@ There is no dispatcher seat. The clerical loop (pop queue, run gates, park failu
 
 The happy path of a landing is mechanical: fetch, merge `origin/main` into the branch, `scripts/landing_gate.py --repo <worktree path>` (agents cannot cd, and HEAD on main's checkout is the base, so the gate refuses there), `git merge --no-ff` to main with a `Closes:` trailer, push, close the beads. Sonnet does that fine. What it can't be trusted with is judging whether a failure is simple, so it never judges:
 
+- **Several ready branches land as one batch**, not one gate each (the gate is 30-60 minutes): `scripts/land_wave.py --batch <branch>[@<tip>] ...` merges them in queue order, gates once, drops a red culprit by name, and lands one merge listing every branch and tip. A single ready branch still lands alone. Protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2 (Landing protocol).
 - It lands only a branch the lead has reviewed and named in the brief.
 - **Any non-zero exit, merge conflict, hook deny, or output it doesn't recognise → stop and report verbatim. No fix attempts, no retries with variations.** The lead takes it from there.
 - It never force-pushes, never `branch -f`, never edits code.
