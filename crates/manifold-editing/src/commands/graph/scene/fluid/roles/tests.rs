@@ -893,3 +893,68 @@ fn scene_physics_assign_role_accepts_gpu_domain() {
     let (_project, _effect, command) = run_command(graph, false);
     assert!(command.was_applied(), "rejected: {:?}", command.rejection_reason());
 }
+
+/// A GPU liquid keeps its domain inside a group (Live Matter). This wraps the
+/// nested fixture's domain one level deeper: domain group, Live Matter, domain.
+fn live_matter_group(id: u32, domain_id: u32) -> EffectGraphNode {
+    let mut live = node(id, "live_matter", GROUP_TYPE_ID, Some("Live Matter"));
+    live.group = Some(Box::new(GroupDef {
+        interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+        nodes: vec![node(
+            domain_id,
+            "nested_matter",
+            manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID,
+            Some("Matter"),
+        )],
+        wires: vec![],
+        tint: None,
+    }));
+    live
+}
+
+#[test]
+fn scene_physics_assign_role_reaches_gpu_domain_two_groups_deep() {
+    let mut graph = cube_graph(true);
+    let domain_group = graph.nodes.iter_mut().find(|node| node.id == 30).unwrap();
+    let body = domain_group.group.as_deref_mut().unwrap();
+    body.nodes.retain(|node| node.id != 31);
+    body.nodes.push(live_matter_group(33, 34));
+    let (mut project, effect) = project_with_graph(graph.clone());
+    let mut command = AssignSceneFluidRoleCommand::new(
+        GraphTarget::Effect(effect.clone()),
+        0,
+        0,
+        SceneNodeRef {
+            scope: vec![NodeId::new("domain_group"), NodeId::new("live_matter")],
+            node: NodeId::new("nested_matter"),
+        },
+        1,
+        vec![],
+        graph,
+    );
+    command.execute(&mut project);
+    assert!(command.was_applied(), "rejected: {:?}", command.rejection_reason());
+    let after = graph_of(&project, &effect);
+    let outer = after.nodes.iter().find(|node| node.id == 30).unwrap().group.as_deref().unwrap();
+    let live = outer.nodes.iter().find(|node| node.id == 33).unwrap().group.as_deref().unwrap();
+    assert!(live.interface.inputs.iter().any(|port| port.port_type == "FluidRole"));
+    assert!(live.wires.iter().any(|wire| wire.to_node == 34 && wire.to_port == "role_0"));
+    let flat = manifold_core::flatten::flatten_groups(after).expect("routed role flattens");
+    let domain = flat
+        .nodes
+        .iter()
+        .find(|node| node.type_id == manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID)
+        .unwrap();
+    assert!(flat.wires.iter().any(|wire| wire.to_node == domain.id && wire.to_port == "role_0"));
+}
+
+#[test]
+fn scene_physics_assign_role_refuses_object_holding_nested_gpu_domain() {
+    let mut graph = cube_graph(false);
+    let object = graph.nodes.iter_mut().find(|node| node.id == 10).unwrap();
+    object.group.as_deref_mut().unwrap().nodes.push(live_matter_group(16, 17));
+    assert_eq!(
+        scene_fluid_role_eligibility(&graph, 0, 0),
+        Err("Assign Fluid Role cannot target a group containing a liquid domain".to_string())
+    );
+}

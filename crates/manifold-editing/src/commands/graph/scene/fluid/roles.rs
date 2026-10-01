@@ -8,7 +8,7 @@ use manifold_core::effect_graph_def::{
     EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID,
     GROUP_TYPE_ID, GroupDef, InterfacePortDef, PresetMetadata, SerializedParamValue,
 };
-use manifold_core::liquid_domain::is_liquid_domain;
+use manifold_core::liquid_domain::{is_liquid_domain, liquid_domains_in};
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
@@ -410,8 +410,8 @@ fn discover_role_object(
         .group
         .as_deref()
         .ok_or_else(|| "Assign Fluid Role selected object group is malformed".to_string())?;
-    if group.nodes.iter().any(|node| is_liquid_domain(&node.type_id)) {
-        return Err("Assign Fluid Role cannot target a group containing a fluid surface".into());
+    if !liquid_domains_in(&group.nodes).is_empty() {
+        return Err("Assign Fluid Role cannot target a group containing a liquid domain".into());
     }
     if group
         .interface
