@@ -296,7 +296,7 @@ pub(super) fn advect(
     near: Option<&NearSolid>,
 ) -> (WhitewaterParticle, f32) {
     let mut out = particle;
-    if particle.position_lifetime[3] <= 0.0 || particle.kind > 2 || s.dt <= 0.0 {
+    if particle.kind > 2 || s.dt <= 0.0 {
         return (out, f32::INFINITY);
     }
     let h = grid.cell_size();
@@ -345,7 +345,7 @@ pub(super) fn advect(
 /// deciding value and its threshold, in cells.
 pub(super) fn retype(particle: WhitewaterParticle, f: &Fields<'_>, distance: &[f32], cells: &[u32], grid: &Box3) -> (WhitewaterParticle, f32) {
     let mut out = particle;
-    if particle.position_lifetime[3] <= 0.0 || particle.kind > 2 {
+    if particle.kind > 2 {
         return (out, f32::INFINITY);
     }
     let h = grid.cell_size();
@@ -421,11 +421,59 @@ impl Age {
 /// `node.age_whitewater` for one slot.
 pub(super) fn age(particle: WhitewaterParticle, s: Age) -> WhitewaterParticle {
     let mut out = particle;
-    if particle.position_lifetime[3] <= 0.0 || particle.kind > 2 {
+    if particle.kind > 2 {
         return out;
     }
     out.position_lifetime[3] -= [s.bubble, s.foam, s.spray][particle.kind as usize] * s.dt;
     out
+}
+
+/// `node.preserve_foam`'s settings, FLIP's defaults from [`Preserve::flip`]
+/// (off there; on here, since a proof needs it on).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Preserve {
+    pub dt: f32,
+    pub rate: f32,
+    pub min_density: f32,
+    pub max_density: f32,
+}
+
+impl Preserve {
+    pub fn flip() -> Self {
+        Self { dt: 1.0 / 60.0, rate: 0.75, min_density: 20.0, max_density: 45.0 }
+    }
+}
+
+/// FLIP's `_updateFoamPreservation` over a pool: foam, dead or alive, in each
+/// cell of side `h` from `origin`, then each foam particle's gain. A position
+/// outside the `cells` grid or not finite counts nowhere and gains nothing
+/// (FLIP indexes past its grid there; the tick removes every such particle).
+pub(super) fn preserve(pool: &[WhitewaterParticle], origin: [f32; 3], h: f32, cells: [u32; 3], s: Preserve) -> Vec<WhitewaterParticle> {
+    let cell = |p: &WhitewaterParticle| -> Option<usize> {
+        let g: [f32; 3] = std::array::from_fn(|a| ((p.position_lifetime[a] - origin[a]) / h).floor());
+        (0..3)
+            .all(|a| g[a].is_finite() && g[a] >= 0.0 && g[a] < cells[a] as f32)
+            .then(|| g[0] as usize + cells[0] as usize * (g[1] as usize + cells[1] as usize * g[2] as usize))
+    };
+    let mut density = vec![0u32; (cells[0] * cells[1] * cells[2]) as usize];
+    for p in pool.iter().filter(|p| p.kind == 1) {
+        if let Some(c) = cell(p) {
+            density[c] += 1;
+        }
+    }
+    let inv = 1.0 / (s.max_density - s.min_density).max(1e-6);
+    pool.iter()
+        .map(|p| {
+            let mut out = *p;
+            if p.kind == 1
+                && let Some(c) = cell(p)
+            {
+                let d = ((density[c] as f32 - s.min_density) * inv).clamp(0.0, 1.0);
+                out.position_lifetime[3] += s.rate * d * s.dt;
+            }
+            out
+        })
+        .collect()
 }
 
 /// Fixtures shared by the CPU proof here and the GPU proofs.
@@ -433,7 +481,7 @@ pub(super) mod fixture {
     use super::super::whitewater_cpu::Rng;
     use super::*;
     use crate::node_graph::liquid::grid::face_len;
-    use crate::node_graph::whitewater::WHITEWATER_ID_LIMIT;
+    use crate::node_graph::whitewater::{WHITEWATER_EMPTY, WHITEWATER_ID_LIMIT};
 
     /// Large enough that near-solid cells clear of the walls and the ball
     /// exist, so the early-out has somewhere to fire.
@@ -478,13 +526,14 @@ pub(super) mod fixture {
         (0..slots)
             .map(|_| {
                 let p: [f32; 3] = std::array::from_fn(|a| ORIGIN[a] + g.size[a] * rng.unit());
-                let lifetime = if rng.unit() < 0.1 { 0.0 } else { 0.5 + rng.unit() };
+                let empty = rng.unit() < 0.1;
+                let lifetime = 0.5 + rng.unit();
                 let d: [f32; 3] = std::array::from_fn(|_| 2.0 * rng.unit() - 1.0);
                 let velocity = scale(d, speed * rng.unit() / length(d).max(1e-3));
                 WhitewaterParticle {
                     position_lifetime: [p[0], p[1], p[2], lifetime],
                     velocity,
-                    kind: (rng.unit() * 3.0) as u32 % 3,
+                    kind: if empty { WHITEWATER_EMPTY } else { (rng.unit() * 3.0) as u32 % 3 },
                     id: (rng.unit() * WHITEWATER_ID_LIMIT as f32) as u32 % WHITEWATER_ID_LIMIT,
                     ..Default::default()
                 }
@@ -518,7 +567,7 @@ mod tests {
             let (with, _) = advect(particle, &f, &g, settings, Some(&near));
             let (without, _) = advect(particle, &f, &g, settings, None);
             assert_eq!(bytemuck::bytes_of(&with), bytemuck::bytes_of(&without), "{particle:?}");
-            if particle.position_lifetime[3] <= 0.0 {
+            if particle.kind > 2 {
                 continue;
             }
             let h = g.cell_size();

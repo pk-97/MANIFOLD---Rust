@@ -608,6 +608,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.advect_whitewater", check: advect_whitewater },
     ExtentRule { type_id: "node.retype_whitewater", check: retype_whitewater },
     ExtentRule { type_id: "node.age_whitewater", check: age_whitewater },
+    ExtentRule { type_id: "node.preserve_foam", check: preserve_foam },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
@@ -1443,6 +1444,13 @@ fn retype_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 /// The age writes a record per pool slot.
 fn age_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The preservation searches its sort's bins and writes a record per pool
+/// slot; the bins index the order and binned pool, bounded by their lengths.
+fn preserve_foam(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    searched(x)?;
     x.covers("out", x.bytes("pool").unwrap_or(0))
 }
 

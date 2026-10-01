@@ -25,6 +25,7 @@ use crate::node_graph::fluid_particles::{
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, ChannelElementType, std430_channel};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::whitewater::WHITEWATER_EMPTY;
 
 const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
 const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "clear_tail", "scatter", "stabilise"];
@@ -33,6 +34,12 @@ const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "
 const LIVE_BY_RADIUS: u32 = 0;
 /// Live when the id word is non-zero and the position finite.
 const LIVE_BY_ID: u32 = 1;
+/// Live when the kind word holds a whitewater type (below
+/// [`WHITEWATER_EMPTY`]) and the position is finite: dead particles count until
+/// the tick's removal, as in FLIP.
+const LIVE_BY_KIND: u32 = 2;
+// The shader writes the empty kind as 3u.
+const _: () = assert!(WHITEWATER_EMPTY == 3);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -69,6 +76,11 @@ fn record_read(layout: &ArrayType) -> Option<RecordRead> {
             live_word: offset / 4 + 3,
             live_rule: LIVE_BY_RADIUS,
         });
+    }
+    if let (Some((position, ChannelElementType::Vec4F)), Some((kind, ChannelElementType::U32))) =
+        (std430_channel(layout.specs, well_known::POSITION_LIFETIME), std430_channel(layout.specs, well_known::KIND))
+    {
+        return Some(RecordRead { stride_words, position_word: position / 4, live_word: kind / 4, live_rule: LIVE_BY_KIND });
     }
     match (std430_channel(layout.specs, well_known::POSITION), std430_channel(layout.specs, well_known::ID)) {
         (Some((position, ChannelElementType::Vec3F)), Some((id, ChannelElementType::U32))) => Some(RecordRead {
@@ -157,7 +169,7 @@ pub(crate) fn read_searched_bins(
 crate::primitive! {
     name: SortParticlesIntoCells,
     type_id: "node.sort_particles_into_cells",
-    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total), each bin's start and count, and the bin grid's size per axis. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. cell_ranges holds exactly one range per bin, sized every frame from the same bin count. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points.",
+    purpose: "Sort liquid particles into a grid of spatial bins covering a box, so neighbour searches read only nearby bins. Outputs the particles in bin order (inactive records past the live total), each bin's start and count, and the bin grid's size per axis. Within a bin, particles keep their input order, so every output is the same on every run. `order` gives each sorted slot's input index (0xffffffff past the live total), for consumers that keep their own per-particle arrays in input order. Either `sorted` or `order` may be left unwired. With `enabled` 0 it does nothing and every output keeps its contents. Bins are cell_size metres; bin (i, j, k) spans min + (i, j, k)·cell_size from the box's minimum corner, max(1, ceil(size / cell_size)) bins per axis. cell_ranges holds exactly one range per bin, sized every frame from the same bin count. Particles may be liquid particle records (live when the radius is positive) or any record with a position and an id (live when the id is non-zero and the position finite), such as matter points, or whitewater particles (live when the kind is a type, not empty, and the position finite; dead ones count).",
     inputs: {
         particles: Channels[permissive] required,
         count: ScalarF32 optional,
@@ -328,7 +340,7 @@ impl Primitive for SortParticlesIntoCells {
             return;
         };
         let Some(read) = record_read(&layout) else {
-            refuse(ctx, "Sort Particles Into Cells: particles need a position_radius channel, or position and id channels".into());
+            refuse(ctx, "Sort Particles Into Cells: particles need a position_radius channel, position and id channels, or position_lifetime and kind channels".into());
             return;
         };
         if ctx.outputs.array("sorted").is_some() && layout.specs != FLUID_PARTICLE_SPECS {

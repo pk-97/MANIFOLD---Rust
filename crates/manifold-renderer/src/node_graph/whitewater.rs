@@ -73,14 +73,16 @@ impl KnownItem for KnownValue {
 
 /// One slot of the GPU whitewater pool (`docs/GPU_WHITEWATER_DESIGN.md`
 /// section 3.9): a spawn record plus the id FLIP keeps per particle. A slot
-/// with lifetime ≤ 0 holds no particle.
+/// of kind [`WHITEWATER_EMPTY`] holds no particle; one with lifetime ≤ 0 holds
+/// a dead particle, still counted and retyped until the tick's removal, as
+/// in FLIP.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WhitewaterParticle {
     /// Scene metres, and seconds left.
     pub position_lifetime: [f32; 4],
     pub velocity: [f32; 3],
-    /// Bubble 0, foam 1, spray 2.
+    /// Bubble 0, foam 1, spray 2, empty [`WHITEWATER_EMPTY`].
     pub kind: u32,
     /// FLIP's per-particle id, 0 to [`WHITEWATER_ID_LIMIT`] − 1.
     pub id: u32,
@@ -90,6 +92,9 @@ pub struct WhitewaterParticle {
 }
 
 const _: () = assert!(std::mem::size_of::<WhitewaterParticle>() == 48);
+
+/// The kind of a pool slot that holds no particle.
+pub const WHITEWATER_EMPTY: u32 = 3;
 
 /// FLIP's `_diffuseParticleIDLimit`: ids cycle through this many values.
 pub const WHITEWATER_ID_LIMIT: u32 = 256;

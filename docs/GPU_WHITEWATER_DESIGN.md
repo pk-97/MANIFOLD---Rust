@@ -93,7 +93,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D8 — Capacity is FLIP's budget, never an error.** Spawn slots = the lifecycle capacity C (default 100,000, FLIP's). Past C, slot j takes emission index ⌊j · total / C⌋, a uniform subset; loads are trimmed to C − live the same way. Both counts are reported as `thinned`.
 
-**D9 — Dropped:** turbulence and inside emitters (inert at 175), dust, the obstacle influence grid (uniform 1), the spray emission speed factor (1 is a no-op), the emitter generation coin (rate 1), foam preservation (off in FLIP's defaults). The emitter gap is tracked as a child of BUG-imy3 (GPU whitewater, solver-agnostic): BUG-imy3.1, so a side-by-side that misses bubbles or foam has a named cause.
+**D9 — Dropped:** turbulence and inside emitters (inert at 175), dust, the obstacle influence grid (uniform 1), the spray emission speed factor (1 is a no-op), the emitter generation coin (rate 1); foam preservation was dropped here and is ported by D14, off by default as in FLIP. The emitter gap is tracked as a child of BUG-imy3 (GPU whitewater, solver-agnostic): BUG-imy3.1, so a side-by-side that misses bubbles or foam has a named cause.
 
 **D10 — Randomness:** stateless hashes of (index, seed, epoch) on the GPU; the lifecycle's own RNG seeded with the epoch (`setRandomSeed`). There is no bit-exact oracle; the FLIP oracles are statistical over seeds (BUG-imy3 notes).
 
@@ -281,6 +281,8 @@ Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit,
 - **Stable compaction keeps the oldest.** Removal is a keep flag, a running total and a scatter that preserves pool order. The engine's final `resize(max)` keeps the oldest; so does a compaction that truncates at capacity.
 - **Recycling is compaction plus append.** Spawns append after the survivors. Spawns past capacity are not written; the node counts them on a named output (`pool_full`) and reports a full pool by name. Never a silent drop.
 - **`_nearSolidGrid` is dropped.** It only skips the collision march where no solid is near; the march over the solid field gives the same position without it. A proof shows identical advected positions with and without the early-out on the Dam Break pool.
+- **An empty slot is kind 3; a dead particle is not empty.** The engine retypes, ages and counts a particle killed this tick until removal, so the atoms skip only kind 3 and the sort bins dead particles. Removal writes kind 3.
+- **Foam density is the sort's bin.** The sort runs over the pool with the whitewater grid as its box and the cell as its bin, so a bin is FLIP's cell. `node.preserve_foam` recomputes the bin, and because fast-math rounding at a bin face can land one bin off, it confirms its own index among that bin's members (else the 26 around it), so it always counts the bin the sort used. A foam position outside the grid clamps to an edge bin, which FLIP leaves undefined; every such particle is removed the same tick.
 - **Thinning.** D8's uniform thinning belonged to the CPU handoff and leaves with it; capacity is the pool's, handled by the rules above.
 
 **Inside emission (BUG-imy3.1) is deferred** (section 7 (Deferred)): it emits nothing on the Dam Break at the engine's defaults. When it revives, a turbulence-field atom ports `F/turbulencefield.cpp` (cell-centre MAC velocity, liquid cells where the field < 0, radius √(3·(2h)²), the engine's asymmetric neighbour window i−2 … i+1, trilinear at p − h/2 with out-of-range corners 0). Inside particles (not surface per :1571) emit at `turbulence_rate · Ie · It`, It clamped to [min, max] turbulence and normalised (:1748).
@@ -431,7 +433,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 5. Snapshot ring, fenced reads, whole-array copies; live never waits (D6).
 6. Output in the surface design's P8 shape (D7).
 7. Capacity thins and reports (D8).
-8. Turbulence, dust, influence, speed factor, generation coin and foam preservation dropped (D9).
+8. Turbulence, dust, influence, speed factor and generation coin dropped (D9); foam preservation ported, off by default as in FLIP (D14).
 9. Statistical oracles against FLIP's own code through its public API (D10).
 10. The lifecycle on its own thread, slots loaned by value, no lock (D11).
 11. Time, epoch and gravity from the domain (D12).

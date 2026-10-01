@@ -34,7 +34,7 @@ struct AgeUniforms {
 crate::primitive! {
     name: AgeWhitewater,
     type_id: "node.age_whitewater",
-    purpose: "Shortens each live whitewater particle's lifetime by its type's modifier times the tick, as FLIP does: by default spray ages twice as fast as foam and bubbles a third as fast. Slots with lifetime 0 or less pass whole.",
+    purpose: "Shortens each live whitewater particle's lifetime by its type's modifier times the tick, as FLIP does: by default spray ages twice as fast as foam and bubbles a third as fast. Empty slots (kind 3) pass whole.",
     inputs: {
         pool: Array(WhitewaterParticle) required,
         dt: ScalarF32 optional,

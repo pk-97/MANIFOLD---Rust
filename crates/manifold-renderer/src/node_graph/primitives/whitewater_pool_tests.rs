@@ -5,14 +5,18 @@
 
 use super::advect_whitewater::AdvectWhitewater;
 use super::age_whitewater::AgeWhitewater;
+use super::preserve_foam::PreserveFoam;
+use super::sort_particles_into_cells::SortParticlesIntoCells;
 use super::retype_whitewater::RetypeWhitewater;
 use super::liquid_surface_tests::{Harness, params, read};
 use super::whitewater_cpu::Rng;
 use super::whitewater_grid_tests::run;
 use super::whitewater_pool_cpu::fixture::{FACE_CELLS, NODES, faces, grid, pool, tank};
-use super::whitewater_pool_cpu::{self as cpu, Advect, Age, DEAD, Fields};
+use super::whitewater_pool_cpu::{self as cpu, Advect, Age, DEAD, Fields, Preserve};
+use crate::node_graph::bindings::Slot;
+use crate::node_graph::fluid_particles::{CellRange, FluidParticle, bin_counts};
 use crate::node_graph::effect_node::ParamValues;
-use crate::node_graph::whitewater::WhitewaterParticle;
+use crate::node_graph::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const SLOTS: usize = 4000;
 
@@ -113,7 +117,7 @@ fn advect_whitewater_matches_cpu() {
         let near = got.position_lifetime[..3].iter().zip(&want.position_lifetime[..3]).all(|(&a, &b)| close(a, b));
         let moving = got.velocity.iter().zip(&want.velocity).all(|(&a, &b)| velocity_close(a, b));
         assert!(near && moving, "slot {i}: GPU {got:?} CPU {want:?} from {particle:?}");
-        if particle.position_lifetime[3] > 0.0 {
+        if particle.kind < 3 {
             checked += 1;
             kinds[particle.kind as usize] += 1;
             killed += usize::from(want.position_lifetime[3] == DEAD);
@@ -310,7 +314,7 @@ fn retype_whitewater_matches_cpu() {
         }
         assert_eq!((got.kind, got.id, got.position_lifetime), (want.kind, want.id, want.position_lifetime), "slot {i}: GPU {got:?} CPU {want:?}");
         assert!(got.velocity.iter().zip(&want.velocity).all(|(&a, &b)| velocity_close(a, b)), "slot {i}: GPU {got:?} CPU {want:?}");
-        if particle.position_lifetime[3] > 0.0 {
+        if particle.kind < 3 {
             moves[particle.kind as usize][want.kind as usize] += 1;
             picked += usize::from(particle.kind == 0 && want.kind != 0);
             if particle.kind == 1 && want.kind == 1 {
@@ -433,4 +437,236 @@ fn whitewater_tick_fused_matches_unfused() {
     }
     let changed = advected.iter().zip(&retyped).filter(|(a, b)| a.kind != b.kind).count();
     assert!(changed > SLOTS / 20, "{changed} retyped");
+}
+
+/// Foam crowded into 70 cells, cell k holding k foam particles (a quarter of
+/// them dead, which FLIP still counts), plus bubbles, spray, empty slots and
+/// foam with no finite position, shuffled. Every position sits clear of its
+/// cell's faces, so the sort's bin and FLIP's cell agree.
+fn crowded(rng: &mut Rng) -> Vec<WhitewaterParticle> {
+    let g = grid();
+    let h = g.cell_size();
+    let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
+    let mut pool = Vec::new();
+    let add = |pool: &mut Vec<WhitewaterParticle>, rng: &mut Rng, cell: [u32; 3], kind: u32, lifetime: f32| {
+        let p: [f32; 3] = std::array::from_fn(|a| origin[a] + (cell[a] as f32 + 0.02 + 0.96 * rng.unit()) * h);
+        pool.push(WhitewaterParticle { position_lifetime: [p[0], p[1], p[2], lifetime], kind, id: pool.len() as u32 % 256, ..Default::default() });
+    };
+    for k in 0..70u32 {
+        let cell: [u32; 3] = std::array::from_fn(|a| (rng.unit() * g.cells[a] as f32) as u32 % g.cells[a]);
+        for n in 0..k {
+            let lifetime = if n % 4 == 3 { -0.01 } else { 0.2 + rng.unit() };
+            add(&mut pool, rng, cell, 1, lifetime);
+        }
+        for kind in [0, 0, 0, 2, 2, WHITEWATER_EMPTY] {
+            add(&mut pool, rng, cell, kind, 0.5);
+        }
+    }
+    for _ in 0..5 {
+        add(&mut pool, rng, [1, 1, 1], 1, 0.5);
+        pool.last_mut().expect("added").position_lifetime[1] = f32::NAN;
+    }
+    for i in (1..pool.len()).rev() {
+        let j = (rng.unit() * (i + 1) as f32) as usize % (i + 1);
+        pool.swap(i, j);
+    }
+    pool
+}
+
+fn preserve_values(s: Preserve, enabled: bool) -> Vec<(&'static str, f32)> {
+    let g = grid();
+    let bins = bin_counts(g.size, g.cell_size());
+    vec![
+        ("enabled", if enabled { 1.0 } else { 0.0 }),
+        ("dt", s.dt),
+        ("rate", s.rate),
+        ("min_density", s.min_density),
+        ("max_density", s.max_density),
+        ("center_x", g.center[0]),
+        ("center_y", g.center[1]),
+        ("center_z", g.center[2]),
+        ("size_x", g.size[0]),
+        ("size_y", g.size[1]),
+        ("size_z", g.size[2]),
+        ("cell_size", g.cell_size()),
+        ("bins_x", bins[0] as f32),
+        ("bins_y", bins[1] as f32),
+        ("bins_z", bins[2] as f32),
+    ]
+}
+
+/// The pool's bins from the sort over the whitewater grid: (pool, ranges, order) slots.
+fn sort_pool(harness: &mut Harness, pool: &[WhitewaterParticle]) -> (Slot, Slot, Slot) {
+    let input = harness.array(pool, pool.len());
+    let (ranges, _) = harness.array::<CellRange>(&[], 1);
+    let (order, _) = harness.array::<u32>(&[], pool.len());
+    let values = preserve_values(Preserve::flip(), true);
+    let (_, errors) = harness.run(
+        &mut SortParticlesIntoCells::new(),
+        &[("particles", input.0)],
+        &[("cell_ranges", ranges), ("order", order)],
+        &params(&values[5..12]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    (input.0, ranges, order)
+}
+
+/// Whitewater particles sort in place: ranges and order are byte-identical to
+/// sorting liquid particle records at the same positions, live exactly when
+/// the slot holds a particle (dead ones too) at a finite position.
+#[test]
+fn sort_bins_whitewater_particles_dead_and_alive() {
+    let mut harness = Harness::new();
+    let pool = crowded(&mut Rng(0x5047_0001));
+    let liquid: Vec<FluidParticle> = pool
+        .iter()
+        .map(|p| {
+            let live = p.kind < 3 && p.position_lifetime[..3].iter().all(|v| v.is_finite());
+            let [x, y, z, _] = p.position_lifetime;
+            FluidParticle { position_radius: [x, y, z, if live { 0.02 } else { 0.0 }], velocity: [0.0; 3], id: 1 }
+        })
+        .collect();
+    let bins = |harness: &mut Harness, sorted: (Slot, Slot, Slot)| {
+        let (ranges, order) = (harness.buffer(sorted.1), harness.buffer(sorted.2));
+        (read::<u8>(&ranges, ranges.size as usize), read::<u8>(&order, order.size as usize))
+    };
+    let whitewater = {
+        let slots = sort_pool(&mut harness, &pool);
+        bins(&mut harness, slots)
+    };
+    let input = harness.array(&liquid, liquid.len());
+    let (ranges, _) = harness.array::<CellRange>(&[], 1);
+    let (order, _) = harness.array::<u32>(&[], liquid.len());
+    let values = preserve_values(Preserve::flip(), true);
+    let (_, errors) = harness.run(
+        &mut SortParticlesIntoCells::new(),
+        &[("particles", input.0)],
+        &[("cell_ranges", ranges), ("order", order)],
+        &params(&values[5..12]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let expected = bins(&mut harness, (input.0, ranges, order));
+    let live: u32 = bytemuck::cast_slice::<u8, CellRange>(&expected.0).iter().map(|r| r.count).sum();
+    let dead = pool.iter().filter(|p| p.kind < 3 && p.position_lifetime[3] <= 0.0).count();
+    assert!(dead > 100 && (live as usize) < pool.len() && live > 2000, "live {live}, dead {dead}");
+    assert_eq!(whitewater, expected, "whitewater bins and order exactly as the equivalent liquid particles");
+}
+
+fn preserve_run(harness: &mut Harness, pool: &[WhitewaterParticle], values: &[(&'static str, f32)]) -> Vec<WhitewaterParticle> {
+    let (input, ranges, order) = sort_pool(harness, pool);
+    run(
+        harness,
+        &mut PreserveFoam::new(),
+        &[("pool", input), ("binned", input), ("cell_ranges", ranges), ("order", order)],
+        pool.len(),
+        &params(values),
+    )
+}
+
+/// The sort then the preservation, against FLIP's own statement: every foam
+/// particle, dead or alive, gains by its cell's foam count, saturating
+/// above the max density and nothing below the min; off, nothing changes.
+#[test]
+fn preserve_foam_matches_flip() {
+    let mut harness = Harness::new();
+    let pool = crowded(&mut Rng(0x9e5e_0001));
+    let s = Preserve { dt: 1.0 / 50.0, rate: 0.9, min_density: 15.0, max_density: 50.0 };
+    let got = preserve_run(&mut harness, &pool, &preserve_values(s, true));
+    let g = grid();
+    let origin: [f32; 3] = std::array::from_fn(|a| g.center[a] - 0.5 * g.size[a]);
+    let want = cpu::preserve(&pool, origin, g.cell_size(), g.cells, s);
+    let (mut partial, mut full, mut none, mut revived) = (0, 0, 0, 0);
+    for (i, ((got, want), before)) in got.iter().zip(&want).zip(&pool).enumerate() {
+        let (mut a, mut b) = (*got, *want);
+        assert!(close(a.position_lifetime[3], b.position_lifetime[3]) || a.position_lifetime[3].is_nan() && b.position_lifetime[3].is_nan(), "slot {i}: GPU {got:?} CPU {want:?}");
+        a.position_lifetime[3] = 0.0;
+        b.position_lifetime[3] = 0.0;
+        assert_eq!(bytemuck::bytes_of(&a), bytemuck::bytes_of(&b), "slot {i}: GPU {got:?} CPU {want:?}");
+        if before.kind == 1 {
+            let gain = want.position_lifetime[3] - before.position_lifetime[3];
+            full += usize::from((gain - s.rate * s.dt).abs() < 1e-6);
+            none += usize::from(gain == 0.0);
+            partial += usize::from(gain > 1e-6 && gain < s.rate * s.dt - 1e-6);
+            revived += usize::from(before.position_lifetime[3] <= 0.0 && want.position_lifetime[3] > 0.0);
+        }
+    }
+    println!("{partial} partial gains, {full} saturated, {none} none, {revived} dead foam revived");
+    assert!(partial > 300 && full > 300 && none > 60 && revived > 50, "{partial} {full} {none} {revived}");
+
+    let off = preserve_run(&mut harness, &pool, &preserve_values(s, false));
+    assert_eq!(bytemuck::cast_slice::<_, u8>(&off), bytemuck::cast_slice::<_, u8>(&pool), "off, the pool passes whole");
+}
+
+/// The preservation folded by the codegen alone in its region, bit for bit
+/// the standalone kernel.
+#[test]
+fn preserve_foam_fused_matches_unfused() {
+    use crate::node_graph::effect_node::NodeInstanceId;
+    use crate::node_graph::freeze::codegen::{ENTRY, FusionRegion, InputSource, RegionNode, generate_fused};
+    use crate::node_graph::primitive::PrimitiveSpec;
+    use manifold_gpu::GpuBinding;
+
+    let mut harness = Harness::new();
+    let pool = crowded(&mut Rng(0x9e5e_0002));
+    let values = preserve_values(Preserve::flip(), true);
+    let unfused = preserve_run(&mut harness, &pool, &values);
+    let region = FusionRegion {
+        nodes: vec![RegionNode {
+            node_id: NodeInstanceId(0),
+            fusion_kind: <PreserveFoam as PrimitiveSpec>::FUSION_KIND,
+            body: <PreserveFoam as PrimitiveSpec>::WGSL_BODY.expect("body"),
+            params: <PreserveFoam as PrimitiveSpec>::PARAMS,
+            inputs: (0..4).map(InputSource::External).collect(),
+            input_access: <PreserveFoam as PrimitiveSpec>::INPUT_ACCESS.to_vec(),
+            node_inputs: <PreserveFoam as PrimitiveSpec>::INPUTS,
+            node_outputs: <PreserveFoam as PrimitiveSpec>::OUTPUTS,
+            node_includes: <PreserveFoam as PrimitiveSpec>::WGSL_INCLUDES,
+            derived_uniforms: <PreserveFoam as PrimitiveSpec>::DERIVED_UNIFORMS,
+            type_id: <PreserveFoam as PrimitiveSpec>::TYPE_ID.to_string(),
+            derived_camera_ext: None,
+            output_storage: "rgba16float",
+            stencil_fetch: false,
+            quantize_f16: false,
+        }],
+        num_external_inputs: 4,
+        outputs: vec![(NodeInstanceId(0), "out".to_string())],
+        in_place_alias: None,
+        sampler_address_mode: "clamp",
+        dispatch_count_field: None,
+        virtual_chains: Vec::new(),
+        sampled_externals: Vec::new(),
+        camera_externals: 0,
+        output_capacity: None,
+    };
+    let fused = generate_fused(&region).expect("the preservation fuses");
+    assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
+    let mut words: Vec<u32> = fused
+        .param_order
+        .iter()
+        .map(|&(member, name)| {
+            let v = values.iter().find(|(n, _)| *n == name).map(|(_, v)| *v).unwrap_or_else(|| panic!("unexpected fused param {name} on {member:?}"));
+            if name.starts_with("bins_") { (v as i32) as u32 } else { v.to_bits() }
+        })
+        .collect();
+    words.push(pool.len() as u32);
+    while !words.len().is_multiple_of(4) {
+        words.push(0);
+    }
+    let (input, ranges, order) = sort_pool(&mut harness, &pool);
+    let externals = [harness.buffer(input), harness.buffer(input), harness.buffer(ranges), harness.buffer(order)];
+    let dst = harness.array::<WhitewaterParticle>(&[], pool.len());
+    let pipeline = harness.device.create_compute_pipeline(&fused.wgsl, ENTRY, "preserve-foam-fused");
+    let mut enc = harness.device.create_encoder("preserve-foam-fused");
+    let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&words) }];
+    for (i, buffer) in externals.iter().enumerate() {
+        bindings.push(GpuBinding::Buffer { binding: i as u32 + 1, buffer, offset: 0 });
+    }
+    bindings.push(GpuBinding::Buffer { binding: externals.len() as u32 + 1, buffer: &dst.1, offset: 0 });
+    enc.dispatch_compute(&pipeline, &bindings, [(pool.len() as u32).div_ceil(256), 1, 1], "preserve-foam-fused");
+    enc.commit_and_wait_completed();
+    let fused_out: Vec<WhitewaterParticle> = read(&dst.1, pool.len());
+    for j in 0..pool.len() {
+        assert_eq!(bytemuck::bytes_of(&fused_out[j]), bytemuck::bytes_of(&unfused[j]), "slot {j}: fused {:?} standalone {:?}", fused_out[j], unfused[j]);
+    }
+    assert!(unfused.iter().zip(&pool).filter(|(a, b)| a != b).count() > 300, "the preservation changed the pool");
 }

@@ -45,7 +45,7 @@ const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
 crate::primitive! {
     name: RetypeWhitewater,
     type_id: "node.retype_whitewater",
-    purpose: "Retypes each live whitewater particle after it moves, by FLIP's rule: spray outside FLIP's boundary box, 1.625 cells inside the whitewater grid; else foam within one cell of the liquid surface (the distance read trilinearly at cell centres), bubble deeper, spray higher; foam that would turn bubble stays foam until it is a further cell deep; foam or spray whose cell has no air cell among its 26 neighbours becomes bubble. A bubble that turns foam or spray takes the liquid velocity at its position. Slots with lifetime 0 or less pass whole.",
+    purpose: "Retypes each live whitewater particle after it moves, by FLIP's rule: spray outside FLIP's boundary box, 1.625 cells inside the whitewater grid; else foam within one cell of the liquid surface (the distance read trilinearly at cell centres), bubble deeper, spray higher; foam that would turn bubble stays foam until it is a further cell deep; foam or spray whose cell has no air cell among its 26 neighbours becomes bubble. A bubble that turns foam or spray takes the liquid velocity at its position. Empty slots (kind 3) pass whole.",
     inputs: {
         pool: Array(WhitewaterParticle) required,
         distance: Array(f32) required,

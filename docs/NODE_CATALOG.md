@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 375 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 376 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,7 +293,7 @@ _Generated from the node registry. Do not hand-edit. 375 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (68)
+### Particles 3D (69)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -343,6 +343,7 @@ _Generated from the node registry. Do not hand-edit. 375 nodes registered, group
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Particles To Faces | `node.particles_to_faces` | Filter | Spreads the liquid particles' motion onto a grid so the solver can make it incompressible. |
+| Preserve Foam | `node.preserve_foam` | Filter | Keeps foam alive longer where lots of it has gathered, so thick foam lingers. |
 | Pressure Residual | `node.pressure_residual` | Filter | Measures how far the water's pressure is from balancing its flow, cell by cell. |
 | Smooth Pressure | `node.pressure_smooth` | Filter | Evens out the water's pressure one checkerboard color at a time. |
 | Prolong Lattice | `node.prolong_lattice` | Filter | Grows a grid of values to double size, blending neighbours, and adds it on. |

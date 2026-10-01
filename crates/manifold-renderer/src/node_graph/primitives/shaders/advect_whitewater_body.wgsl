@@ -14,7 +14,7 @@
 // the grid), the solid its node lattice read trilinearly (a node past the
 // lattice reads 0). FLIP's near-solid early-out is dropped
 // (GPU_WHITEWATER_DESIGN.md section 3.9); its range check stays. Slots with
-// lifetime <= 0 or an unknown type pass whole.
+// kind 3 and up are empty and pass whole.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
@@ -156,7 +156,7 @@ fn body(
     spray_friction: f32,
 ) -> Element {
     var out = e_pool;
-    if !(e_pool.position_lifetime.w > 0.0) || e_pool.kind > 2u || !(dt > 0.0) {
+    if e_pool.kind > 2u || !(dt > 0.0) {
         return out;
     }
     let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));

@@ -56,7 +56,7 @@ const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
 crate::primitive! {
     name: AdvectWhitewater,
     type_id: "node.advect_whitewater",
-    purpose: "Moves each live whitewater particle one FLIP tick by its type: spray falls under gravity with per-id drag and bounces off solids (restitution on the normal part, friction on the tangent part); bubbles rise against gravity and drag toward the liquid velocity; foam rides the liquid velocity. The liquid velocity is FLIP's MAC trilinear of the face grid at the old position. Every type then marches its path in half-cell steps and stops a quarter cell clear of the solid or inside FLIP's boundary box, 1.625 cells in from the whitewater grid. A particle that ends up moving faster than 1.1 times its new speed, or whose travel is not finite, dies (lifetime -1e6). Slots with lifetime 0 or less pass whole.",
+    purpose: "Moves each live whitewater particle one FLIP tick by its type: spray falls under gravity with per-id drag and bounces off solids (restitution on the normal part, friction on the tangent part); bubbles rise against gravity and drag toward the liquid velocity; foam rides the liquid velocity. The liquid velocity is FLIP's MAC trilinear of the face grid at the old position. Every type then marches its path in half-cell steps and stops a quarter cell clear of the solid or inside FLIP's boundary box, 1.625 cells in from the whitewater grid. A particle that ends up moving faster than 1.1 times its new speed, or whose travel is not finite, dies (lifetime -1e6). Empty slots (kind 3) pass whole.",
     inputs: {
         pool: Array(WhitewaterParticle) required,
         face_u: Array(f32) required,
