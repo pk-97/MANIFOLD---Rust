@@ -1,12 +1,12 @@
 //! Add-a-fluid scene command.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GroupDef, GroupInterface,
-    InterfacePortDef, PresetMetadata, SerializedParamValue,
+    EffectGraphDef, EffectGraphNode, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    PresetMetadata, SerializedParamValue,
 };
 use manifold_core::project::Project;
 use manifold_core::scene_exposure::{SceneParamMetadata, stamp_scene_node_exposures_into};
@@ -20,17 +20,17 @@ use super::super::{
 };
 use super::{collect_all_handles, max_node_id_over, restore_scene_owner_graph};
 
-/// Add Fluid authors FLIP until the default liquid template lands
-/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P9 (Add Fluid authors the default
-/// liquid template)).
-const FLUID_TYPE_ID: &str = manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 const ROLE_SOURCE_TYPE_ID: &str = "node.fluid_role_source";
 const TRANSFORM_TYPE_ID: &str = "node.transform_3d";
 const MATERIAL_TYPE_ID: &str = "node.pbr_material";
 const SCENE_OBJECT_TYPE_ID: &str = "node.scene_object";
 const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
+const ID_SPACE_EXHAUSTED: &str = "Add Fluid document id space is exhausted";
 
+mod template;
 mod world_controls;
+
+pub use template::{ExposureSet, LiquidTemplate, TemplateExposure, flip_scene_fluid_template};
 
 type GraphSnapshot = EffectGraphDef;
 
@@ -49,6 +49,7 @@ pub struct AddSceneFluidCommand {
     world_metadata: Vec<SceneParamMetadata>,
     material_metadata: Vec<SceneParamMetadata>,
     object_metadata: Vec<SceneParamMetadata>,
+    template: LiquidTemplate,
     catalog_default: EffectGraphDef,
     prev: Option<GraphSnapshot>,
     after: Option<GraphSnapshot>,
@@ -60,6 +61,7 @@ pub struct AddSceneFluidCommand {
 }
 
 impl AddSceneFluidCommand {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         target: GraphTarget,
         render_scene_node_id: u32,
@@ -67,6 +69,7 @@ impl AddSceneFluidCommand {
         source_metadata: Vec<SceneParamMetadata>,
         material_metadata: Vec<SceneParamMetadata>,
         object_metadata: Vec<SceneParamMetadata>,
+        template: LiquidTemplate,
         catalog_default: EffectGraphDef,
     ) -> Self {
         Self {
@@ -78,6 +81,7 @@ impl AddSceneFluidCommand {
             world_metadata: Vec::new(),
             material_metadata,
             object_metadata,
+            template,
             catalog_default,
             prev: None,
             after: None,
@@ -179,6 +183,34 @@ impl AddSceneFluidCommand {
     }
 }
 
+/// Gives every node under `node`'s group body a fresh document id. Document
+/// ids are unique across nesting, so a template's local ids cannot be kept.
+fn renumber_nested(
+    node: &mut EffectGraphNode,
+    fresh_id: &mut dyn FnMut() -> Option<u32>,
+) -> Result<(), &'static str> {
+    let Some(body) = node.group.as_deref_mut() else {
+        return Ok(());
+    };
+    let mut renamed = HashMap::new();
+    for inner in &mut body.nodes {
+        let id = fresh_id().ok_or(ID_SPACE_EXHAUSTED)?;
+        renamed.insert(inner.id, id);
+        inner.id = id;
+        inner.node_id = NodeId::new(manifold_core::short_id());
+        renumber_nested(inner, fresh_id)?;
+    }
+    for wire in &mut body.wires {
+        let (Some(from), Some(to)) = (renamed.get(&wire.from_node), renamed.get(&wire.to_node))
+        else {
+            continue;
+        };
+        wire.from_node = *from;
+        wire.to_node = *to;
+    }
+    Ok(())
+}
+
 impl Command for AddSceneFluidCommand {
     fn graph_admission_targets(&self, targets: &mut Vec<GraphTarget>) {
         targets.push(self.target.clone());
@@ -227,9 +259,15 @@ impl Command for AddSceneFluidCommand {
         };
 
         let render_id = self.render_scene_node_id;
-        let fluid_metadata = self.fluid_metadata();
-        let source_metadata = self.source_metadata();
-        let domain_metadata = self.domain_metadata();
+        let template = &self.template;
+        let metadata_for = |set: ExposureSet| match set {
+            ExposureSet::Fluid => self.fluid_metadata(),
+            ExposureSet::Domain => self.domain_metadata(),
+            ExposureSet::SourceTransform => self.source_metadata(),
+            ExposureSet::Role => self.role_metadata.clone(),
+            ExposureSet::Material => self.material_metadata.clone(),
+            ExposureSet::Object => self.object_metadata.clone(),
+        };
         let mut candidate = baseline.clone();
         let result = (|def: &mut EffectGraphDef| {
             let Some(render) = def.nodes.iter().find(|node| node.id == render_id) else {
@@ -259,30 +297,35 @@ impl Command for AddSceneFluidCommand {
                 next_id = id.checked_add(1);
                 Some(id)
             };
-            let Some(fluid_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
+            let mut group_id = 0;
+            let mut body_nodes = template.nodes.clone();
+            let mut renamed = HashMap::new();
+            for (index, node) in body_nodes.iter_mut().enumerate() {
+                if index == template.group_id_slot {
+                    group_id = fresh_id().ok_or(ID_SPACE_EXHAUSTED)?;
+                }
+                let id = fresh_id().ok_or(ID_SPACE_EXHAUSTED)?;
+                renamed.insert(node.id, id);
+                node.id = id;
+                renumber_nested(node, &mut fresh_id)?;
+            }
+            if template.group_id_slot >= body_nodes.len() {
+                group_id = fresh_id().ok_or(ID_SPACE_EXHAUSTED)?;
+            }
+            let lookup = |local: u32| {
+                renamed.get(&local).copied().ok_or("Add Fluid template is malformed")
             };
-            let Some(source_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
-            let Some(material_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
-            let Some(object_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
-            let Some(output_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
-            let Some(group_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
-            let Some(role_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
-            let Some(domain_id) = fresh_id() else {
-                return Err("Add Fluid document id space is exhausted");
-            };
+            lookup(template.output_node)?;
+            let mut body_wires = Vec::with_capacity(template.wires.len());
+            for wire in &template.wires {
+                body_wires.push(scene_build_wire(
+                    lookup(wire.from_node)?,
+                    &wire.from_port,
+                    lookup(wire.to_node)?,
+                    &wire.to_port,
+                ));
+            }
+            let world_target = template.world_control_target.map(&lookup).transpose()?;
 
             let mut existing_node_ids = Vec::new();
             collect_node_ids(&def.nodes, &mut existing_node_ids);
@@ -303,135 +346,33 @@ impl Command for AddSceneFluidCommand {
             collect_all_handles(&def.nodes, &mut handles);
             let fluid_handle = next_fluid_handle(&mut handles);
             let group_handle = dedup_handle(&format!("{fluid_handle} Graph"), &mut handles);
-            let fluid_node_handle =
-                dedup_handle(&format!("{fluid_handle} Simulation"), &mut handles);
-            let source_handle = dedup_handle(&format!("{fluid_handle} Source"), &mut handles);
-            let role_handle = dedup_handle(&format!("{fluid_handle} Source Role"), &mut handles);
-            let domain_handle = dedup_handle(&format!("{fluid_handle} Domain"), &mut handles);
-            let material_handle = dedup_handle(&format!("{fluid_handle} Material"), &mut handles);
-            let object_handle = fluid_handle.clone();
+            for node in &mut body_nodes {
+                node.handle = match node.handle.take() {
+                    Some(suffix) if suffix.is_empty() => Some(fluid_handle.clone()),
+                    Some(suffix) => {
+                        Some(dedup_handle(&format!("{fluid_handle} {suffix}"), &mut handles))
+                    }
+                    None => None,
+                };
+                node.node_id = stable_id(node.node_id.as_str(), node.id);
+            }
 
-            let mut fluid_params = BTreeMap::new();
-            fluid_params.insert("domain_size".into(), float(4.0));
-            fluid_params.insert("fill_height".into(), float(0.4));
-            fluid_params.insert("resolution".into(), int(16));
-            fluid_params.insert("whitewater".into(), float(0.0));
-            fluid_params.insert("gravity".into(), float(-9.81));
-            fluid_params.insert("emission".into(), float(0.0));
-            fluid_params.insert("inflow_speed".into(), float(1.0));
-            fluid_params.insert("speed".into(), float(1.0));
-            fluid_params.insert("surface_subdivisions".into(), int(0));
-
-            let mut source_params = BTreeMap::new();
-            source_params.insert("pos_x".into(), float(0.0));
-            source_params.insert("pos_y".into(), float(2.8));
-            source_params.insert("pos_z".into(), float(0.0));
-            source_params.insert("rot_x".into(), float(0.0));
-            source_params.insert("rot_y".into(), float(0.0));
-            source_params.insert("rot_z".into(), float(0.0));
-            source_params.insert("scale_x".into(), float(0.7));
-            source_params.insert("scale_y".into(), float(0.5));
-            source_params.insert("scale_z".into(), float(0.7));
-
-            let mut domain_params = BTreeMap::new();
-            domain_params.insert("pos_x".into(), float(0.0));
-            domain_params.insert("pos_y".into(), float(2.0));
-            domain_params.insert("pos_z".into(), float(0.0));
-            domain_params.insert("rot_x".into(), float(0.0));
-            domain_params.insert("rot_y".into(), float(0.0));
-            domain_params.insert("rot_z".into(), float(0.0));
-            domain_params.insert("scale_x".into(), float(4.0));
-            domain_params.insert("scale_y".into(), float(4.0));
-            domain_params.insert("scale_z".into(), float(4.0));
-
-            let mut material_params = BTreeMap::new();
-            material_params.insert("color_r".into(), float(0.8));
-            material_params.insert("color_g".into(), float(0.95));
-            material_params.insert("color_b".into(), float(1.0));
-            material_params.insert("roughness".into(), float(0.08));
-            material_params.insert("transmission".into(), float(1.0));
-            material_params.insert("ior".into(), float(1.333));
-            material_params.insert("volume_geometry".into(), float(1.0));
-            material_params.insert("volume_attenuation_color_r".into(), float(0.6));
-            material_params.insert("volume_attenuation_color_g".into(), float(0.85));
-            material_params.insert("volume_attenuation_color_b".into(), float(0.95));
-            material_params.insert("volume_attenuation_distance".into(), float(2.0));
-
-            let mut fluid = scene_build_node(
-                fluid_id,
-                FLUID_TYPE_ID,
-                Some(fluid_node_handle),
-                fluid_params,
-            );
-            fluid.node_id = stable_id("fluid_surface", fluid_id);
-            let fluid_node_id = fluid.node_id.clone();
-            let fluid_params = fluid.params.clone();
-
-            let mut source = scene_build_node(
-                source_id,
-                TRANSFORM_TYPE_ID,
-                Some(source_handle),
-                source_params,
-            );
-            source.node_id = stable_id("fluid_source", source_id);
-            let source_node_id = source.node_id.clone();
-            let source_params = source.params.clone();
-
-            let mut role_params = BTreeMap::new();
-            role_params.insert("role".into(), SerializedParamValue::Enum { value: 1 });
-            role_params.insert("enabled".into(), SerializedParamValue::Bool { value: true });
-            role_params.insert("geometry".into(), SerializedParamValue::Enum { value: 0 });
-            role_params.insert("shape".into(), SerializedParamValue::Enum { value: 1 });
-            role_params.insert("radius".into(), float(3.0_f32.sqrt() / 2.0));
-            role_params.insert("velocity_x".into(), float(0.0));
-            role_params.insert("velocity_y".into(), float(-1.0));
-            role_params.insert("velocity_z".into(), float(0.0));
-            role_params.insert("inherit_motion".into(), float(0.0));
-            role_params.insert("friction".into(), float(0.0));
-            role_params.insert("collider_parts".into(), int(32));
-
-            let mut role = scene_build_node(
-                role_id,
-                ROLE_SOURCE_TYPE_ID,
-                Some(role_handle),
-                role_params,
-            );
-            role.node_id = stable_id("fluid_role_source", role_id);
-            let role_node_id = role.node_id.clone();
-            let role_params = role.params.clone();
-
-            let mut domain = scene_build_node(
-                domain_id,
-                TRANSFORM_TYPE_ID,
-                Some(domain_handle),
-                domain_params,
-            );
-            domain.node_id = stable_id("fluid_domain", domain_id);
-            let domain_node_id = domain.node_id.clone();
-            let domain_params = domain.params.clone();
-
-            let mut material = scene_build_node(
-                material_id,
-                MATERIAL_TYPE_ID,
-                Some(material_handle),
-                material_params,
-            );
-            material.node_id = stable_id("fluid_material", material_id);
-            let material_node_id = material.node_id.clone();
-            let material_params = material.params.clone();
-
-            let mut object = scene_build_node(
-                object_id,
-                SCENE_OBJECT_TYPE_ID,
-                Some(object_handle),
-                BTreeMap::new(),
-            );
-            object.node_id = stable_id("fluid_object", object_id);
-            let object_node_id = object.node_id.clone();
-
-            let mut output =
-                scene_build_node(output_id, GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
-            output.node_id = stable_id("fluid_output", output_id);
+            let mut exposed = Vec::with_capacity(template.exposures.len());
+            for exposure in &template.exposures {
+                let id = lookup(exposure.node)?;
+                let node = body_nodes
+                    .iter()
+                    .find(|node| node.id == id)
+                    .ok_or("Add Fluid template is malformed")?;
+                exposed.push((
+                    id,
+                    node.node_id.clone(),
+                    node.type_id.clone(),
+                    node.params.clone(),
+                    exposure.set,
+                    exposure.section,
+                ));
+            }
 
             let mut group =
                 scene_build_node(group_id, GROUP_TYPE_ID, Some(group_handle), BTreeMap::new());
@@ -445,15 +386,8 @@ impl Command for AddSceneFluidCommand {
                     }],
                     params: Vec::new(),
                 },
-                nodes: vec![fluid, source, role, domain, material, object, output],
-                wires: vec![
-                    scene_build_wire(source_id, "transform", role_id, "transform"),
-                    scene_build_wire(domain_id, "transform", fluid_id, "domain"),
-                    scene_build_wire(role_id, "role", fluid_id, "role_0"),
-                    scene_build_wire(fluid_id, "vertices", object_id, "vertices"),
-                    scene_build_wire(material_id, "out", object_id, "material"),
-                    scene_build_wire(object_id, "object", output_id, "object"),
-                ],
+                nodes: body_nodes,
+                wires: body_wires,
                 tint: None,
             }));
 
@@ -472,67 +406,25 @@ impl Command for AddSceneFluidCommand {
                 .insert("objects".into(), float(new_count as f32));
 
             let meta = def.preset_metadata.get_or_insert_with(empty_scene_metadata);
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                fluid_id,
-                &fluid_node_id,
-                FLUID_TYPE_ID,
-                &format!("{fluid_handle} - Simulation"),
-                &fluid_metadata,
-                &fluid_params,
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                domain_id,
-                &domain_node_id,
-                TRANSFORM_TYPE_ID,
-                &format!("{fluid_handle} - Domain"),
-                &domain_metadata,
-                &domain_params,
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                source_id,
-                &source_node_id,
-                TRANSFORM_TYPE_ID,
-                &format!("{fluid_handle} - Source Transform"),
-                &source_metadata,
-                &source_params,
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                role_id,
-                &role_node_id,
-                ROLE_SOURCE_TYPE_ID,
-                &format!("{fluid_handle} - Source"),
-                &self.role_metadata,
-                &role_params,
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                material_id,
-                &material_node_id,
-                MATERIAL_TYPE_ID,
-                &format!("{fluid_handle} - Material"),
-                &self.material_metadata,
-                &material_params,
-            );
-            stamp_scene_node_exposures_into(
-                &mut meta.params,
-                &mut meta.bindings,
-                object_id,
-                &object_node_id,
-                SCENE_OBJECT_TYPE_ID,
-                &fluid_handle,
-                &self.object_metadata,
-                &BTreeMap::new(),
-            );
-            world_controls::share_world_controls(def, group_id, fluid_id, &self.world_metadata)?;
+            for (id, node_id, type_id, params, set, section) in &exposed {
+                let label = match section {
+                    Some(section) => format!("{fluid_handle} - {section}"),
+                    None => fluid_handle.clone(),
+                };
+                stamp_scene_node_exposures_into(
+                    &mut meta.params,
+                    &mut meta.bindings,
+                    *id,
+                    node_id,
+                    type_id,
+                    &label,
+                    &metadata_for(*set),
+                    params,
+                );
+            }
+            if let Some(target) = world_target {
+                world_controls::share_world_controls(def, group_id, target, &self.world_metadata)?;
+            }
             Ok(())
         })(&mut candidate);
 

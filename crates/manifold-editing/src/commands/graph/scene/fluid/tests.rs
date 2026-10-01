@@ -106,6 +106,7 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
             scene_param_meta("volume_attenuation_distance", "Attenuation"),
         ],
         vec![scene_param_meta("cast_shadows", "Shadows")],
+        flip_scene_fluid_template(),
         catalog_default,
     )
     .with_role_metadata(vec![
@@ -495,4 +496,83 @@ fn scene_physics_add_fluid_eighth_id_exhaustion_is_atomic() {
     cmd.execute(&mut project);
     assert!(!cmd.was_applied());
     assert_eq!(serde_json::to_value(&project).unwrap(), serde_json::to_value(before).unwrap());
+}
+
+fn gpu_template() -> LiquidTemplate {
+    use manifold_core::effect_graph_def::{
+        GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface,
+    };
+    let mut live = node(1, "live_matter", GROUP_TYPE_ID);
+    live.handle = Some("Live Matter".into());
+    live.group = Some(Box::new(GroupDef {
+        interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+        nodes: vec![node(1, "matter_domain", manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID)],
+        wires: vec![],
+        tint: None,
+    }));
+    let mut surface = node(2, "liquid_surface", GROUP_TYPE_ID);
+    surface.handle = Some("Liquid Surface".into());
+    surface.group = Some(Box::new(GroupDef {
+        interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
+        nodes: vec![node(1, "surface_mesh", "node.value"), node(2, "surface_out", "node.value")],
+        wires: vec![wire(1, "out", 2, "in")],
+        tint: None,
+    }));
+    let mut object = node(3, "fluid_object", "node.scene_object");
+    object.handle = Some(String::new());
+    let mut output = node(4, "fluid_output", GROUP_OUTPUT_TYPE_ID);
+    output.handle = None;
+    LiquidTemplate {
+        nodes: vec![live, surface, object, output],
+        wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],
+        output_node: 4,
+        group_id_slot: 0,
+        exposures: vec![TemplateExposure { node: 3, set: ExposureSet::Object, section: None }],
+        world_control_target: None,
+    }
+}
+
+fn add_undo_redo_reload(template: LiquidTemplate, domain_type: &str) {
+    let def = render_scene_graph(1, false);
+    let (mut project, target) = project_with_graph(def.clone());
+    let mut cmd = command(target.clone(), def.clone());
+    cmd.template = template;
+    cmd.execute(&mut project);
+    assert!(cmd.was_applied(), "{:?}", cmd.rejection_reason());
+    let added = graph(&project, &target).clone();
+    let group = added.nodes.iter().find(|node| node.handle.as_deref() == Some("Fluid 1 Graph")).unwrap();
+    fn holds(nodes: &[EffectGraphNode], type_id: &str) -> bool {
+        nodes.iter().any(|node| {
+            node.type_id == type_id || node.group.as_deref().is_some_and(|g| holds(&g.nodes, type_id))
+        })
+    }
+    assert!(holds(&group.group.as_deref().unwrap().nodes, domain_type));
+    let mut ids = Vec::new();
+    fn collect(nodes: &[EffectGraphNode], ids: &mut Vec<u32>) {
+        for node in nodes {
+            ids.push(node.id);
+            if let Some(group) = node.group.as_deref() {
+                collect(&group.nodes, ids);
+            }
+        }
+    }
+    collect(&added.nodes, &mut ids);
+    let unique: std::collections::HashSet<_> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "document ids must stay unique across nesting");
+
+    cmd.undo(&mut project);
+    assert_eq!(graph(&project, &target), &def);
+    cmd.execute(&mut project);
+    assert!(cmd.was_applied(), "{:?}", cmd.rejection_reason());
+    assert_eq!(graph(&project, &target), &added);
+
+    let reloaded: manifold_core::project::Project =
+        serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+    assert_eq!(graph(&reloaded, &target), &added);
+}
+
+#[test]
+fn scene_physics_add_fluid_template_undo_reload() {
+    add_undo_redo_reload(flip_scene_fluid_template(), FLIP_DOMAIN_TYPE_ID);
+    add_undo_redo_reload(gpu_template(), manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
 }
