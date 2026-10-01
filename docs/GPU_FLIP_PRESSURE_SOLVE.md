@@ -31,6 +31,43 @@ The step's time rules:
 - **The CFL guard.** `TOP_SPEED` = 20 m/s is the fastest water a step is built for. `travel_cells` is how far that moves in one step, rounded up (3 at 64³, 6 at 128³, two steps). Each RK3 stage moves at most that far; faster water keeps its speed and moves only that far that step. `new` is extended ceil(¾ · travel) + 1 layers (`band_layers`: 4 at 64³, 6 at 128³), because the stages sample up to ¾ of the travel from where the particle started, and a sample reads faces one cell further. With two layers, 128³ spray left the band and slowed in mid-air.
 - **PIC share per second.** `flip` is the FLIP share kept per 1/60 s (0.95, as the engine runs it at one step a frame). A step keeps flip^(60 · dt), so the PIC damping per second does not change with the step count.
 
+## 1.1 Stage map — proposed 2026-10-01, under review
+
+Peter, 2026-10-01: GPU FLIP is a specialised solver, so it is built from stage nodes, not atoms (DECOMPOSING_GENERATORS.md section 1.2 (Specialised solvers are stage nodes)). Users play the sim through params (forces, emitters, solids, look) and never rewire its internals, so the graph shows only what a user plugs something into, and kernels fuse freely inside a stage. The atom graph costs the show now: in the frozen 64³ smoke (2026-10-01) the coarsest level, 64 one-dispatch sweeps of a 4³ lattice per V-cycle, takes 7.5 ms of a 24.2 ms GPU frame, and CPU encode runs at 14 ms p50.
+
+Three stages. The preset goes from 490 nodes to about 46; the look (camera, lights, materials, objects, copies, environment, tone map) is untouched.
+
+| Stage | Folds in | Inputs | Outputs |
+|---|---|---|---|
+| `node.gpu_flip_solve` | `liquid_state` and its tick region, `liquid_stats`, and per step: `sort_particles_into_cells`, `cells_with_particles`, `particles_to_faces`, `extend_faces` (all 14), `face_gravity`, `face_divergence`, the three `conjugate_gradient` regions with `dot_products`, `divide_by_value`, `combine_rows`, the multigrid (`pressure_smooth` ×288, `pressure_residual`, `restrict_lattice`, `prolong_lattice`, `coarsen_water`, `zero_lattice`), `subtract_pressure`, `density_source`, `faces_to_particles`; after the tick, `face_sample_component` ×3. 404 nodes. | from `gpu_flip_domain`: lattice, ticks, epoch, gravity, the force and impulse lattices with their metadata; from `liquid_fill`: particles and count; from `liquid_solid_distance`: solid (owed by the solids phase, section 8) | particles, count, stats, times, `face_u/v/w` |
+| `node.liquid_surface` | the `liquid_surface` group: `transform_components`, `math` ×3, `value`, `sort_particles_into_cells`, `shape_particle_blobs`, `particle_volume`, `smooth_lattice` ×3, `count_surface_triangles`, `running_total`, `volume_surface_mesh`, `clamp_liquid_to_solids`. 15 nodes plus group plumbing. | the frame's particles, count, solid, grid bounds and grid nodes | mesh, level set |
+| `node.gpu_whitewater` | the whitewater group: `surface_crossings`, `nearest_crossing` ×3, `crossing_distance`, `liquid_cells`, `lattice_curvature`, `extend_lattice` ×3, `jitter_particles`, `sample_faces_at_particles`, `energy_potential`, `wavecrest_potential`, `emission_count`, `running_total`, `spawn_whitewater`, `whitewater_type`, `transform_components`, `math` ×2, and `whitewater_lifecycle` (replaced); from `feat/gpu-flip-whitewater` L1–L3 `advect_whitewater`, `retype_whitewater`, `age_whitewater`, `preserve_foam`, and the L4 work in progress `keep_whitewater`, `compact_whitewater`, `live_whitewater_spawns`, `append_whitewater`. 22 nodes. | the frame's particles, count, solid, `face_u/v/w` with their face cells and valid layers, grid bounds and grid nodes (the whitewater lattice, required); the surface's level set; ticks, epoch, gravity | foam, bubble and spray particles with live counts; `pool_full` |
+
+Seam nodes stay as they are: `gpu_flip_domain` (params and forces), `liquid_fill` (the emitter), `liquid_solid_distance` (solids, shared with MPM), `liquid_frame` (the contract every consumer reads). Folding state and stats into the solve retires the tick region for GPU FLIP, which frees the region depth the level loop would have needed; if review keeps `liquid_state`, the map is the same with state and stats outside the solve.
+
+**What crosses between stages.** Particles and count, the three face arrays, the solid distance lattice, and the level set, all through `liquid_frame` except the level set (surface to whitewater). The water-cell map, the sort's cell ranges, the face lattices and every pressure vector stay inside the solve; nothing downstream reads them. The whitewater grid is its own lattice (GPU_WHITEWATER_DESIGN.md D2 (one whitewater grid)), named by the frame's grid nodes.
+
+**Inside the solve.** Per step: bin, particles to faces with the wall rule and forces, divergence, the multigrid-preconditioned conjugate gradient, project and extend, the density solve on the tick's last step, faces to particles. The level count comes from the lattice: halve each side, rounding up, until the coarsest is 8³ or smaller, so any Resolution runs with no rebuild and the multiple-of-16 refusal goes. The coarsest level is smoothed in one workgroup (BUG-zi2d (coarsest smoothing in one dispatch) becomes this internal kernel). Conjugate gradient updates fuse with their dot products, and residual with restriction. The fixed iteration counts and the Auto rule (section 4) are unchanged.
+
+**The whitewater stage settles three things the atom chain could not:**
+
+1. **The pool's first frame.** The stage owns its pool, an id counter and a full-pool count as internal state. On creation and on every epoch change one pass writes every slot empty (kind 3) and zeroes both counters, so a zeroed buffer is never read as a pool. The header slot goes; the pool holds particles only.
+2. **The spawn count.** The scan inside the stage writes its total to an internal counter, and append reads that, at any buffer size. Today the count is the scan's last entry, which is right only when the buffers are exactly at capacity.
+3. **The lattice.** The whitewater lattice is a required input, and the stage refuses by name without it ("GPU Whitewater: needs the whitewater grid's nodes from the liquid frame"). `keep_whitewater` and `preserve_foam` skip the per-cell cap when the sort has no lattice; that silent fallback does not survive into the stage.
+
+Pause holds the pool (ticks 0 runs no pass) and a new epoch clears it, GPU_WHITEWATER_DESIGN.md I5 and I6 (pause holds, epoch clears). That doc's section 3.9 (GPU lifecycle) rule that every per-particle step is a codegen atom is superseded by this map when the whitewater branch resumes.
+
+**Tested at the boundary.**
+
+- Solve: first built from today's kernels in today's order, and equal bit for bit to the atom graph's particles after 300 ticks of the Dam Break. Then each fusion and the level rule are proved against that build, the pressure solve against `scripts/mgpcg_reference.py` on the committed fixtures (section 4), and the engine rows of section 6 hold.
+- Surface: the mesh equals the group's, bit for bit, in every preset that uses the group.
+- Whitewater: GPU_WHITEWATER_DESIGN.md O1 and O2 (fields and emitter against FLIP) and L5 (parity with the vendored lifecycle).
+- Per-atom proofs and conformance rows for folded atoms retire as each stage lands.
+
+**Shared, so they stay catalog atoms.** `running_total` (a prefix sum), `sort_particles_into_cells` (spatial binning), `smooth_lattice`, `math`, `value`, `transform_components`, `particles_to_copies`, `tone_map` and every render node. The stages call their kernels as code. None of the solve's atoms is used outside GPU FLIP: SWASH is GPU FLIP's former name, `feat/swash-on-contract` is merged and `WaterDamBreakSwash.json` is gone, and MPM's `matter_*` nodes are already stage-shaped and share only the surface and the seam. Atoms used only inside a stage leave the registry when it ships; the `conjugate_gradient` region kind goes with them unless something else uses it by then.
+
+**`liquid_surface` is shared by four presets**: the CPU FLIP Dam Break (`WaterDamBreakGpu.json`), the three Matter presets, and this one. It replaces the group in all of them at once, or not at all.
+
 ## 2. The equation
 
 On the water cells W of an n_x × n_y × n_z lattice with cell size h:

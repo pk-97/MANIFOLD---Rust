@@ -55,6 +55,22 @@ What's *not* part of that tax is extending adjacent primitives for port-shadow â
 
 Subsequent decompositions in the same family are far cheaper. Tesseract / Duocylinder will inherit the entire 3D wireframe pipeline from WireframeZoo; they'll likely be JSON-only changes plus one or two 4D primitive additions. Don't budget the second decomposition like the first.
 
+## 1.2 Specialised solvers are stage nodes
+
+Peter, 2026-10-01. The atom rule in section 1.1 exists so a user can swap a part they would plausibly rewire: Bloom's blur, AutoGain's envelope source. A numerical method's internals don't qualify. Nobody swaps a multigrid smoother or reroutes a particle-to-grid transfer; people play a simulation through its params (forces, emitters, solids, look). Built as atoms, a solver costs the show: hundreds of nodes, a dispatch and a fusion boundary per step, and region machinery to express loops that are plain Rust.
+
+So a specialised solver, a physical method with a reference implementation to reproduce (fluids, cloth, rigid bodies), is built from stage nodes:
+
+- A stage is a step the user thinks in. The graph shows only the ports a user would plug something into; everything else stays inside.
+- A stage runs as many GPU passes as it needs, fuses kernels freely across its own steps, and owns its buffers and state, reset on epoch like any feedback.
+- A stage is tested against the reference at its boundary, plus any internal checkpoint the reference exposes (a pressure solve against its f64 reference). Per-kernel atom proofs, and the freeze codegen path for barrier-free atoms, apply to graph atoms, not to a stage's internal passes.
+- A kernel a stage shares with general use (a prefix sum, spatial binning) stays a catalog atom; the stage calls its code, not its node.
+- Every other rule holds: GPU through `manifold-gpu`, no per-frame allocation, named refusals, no fallback modes.
+
+An effect or generator does not qualify, however complex; it stays a graph of atoms under section 1.1. The test is two questions: does it reproduce a reference method, and would any user rewire inside it? A solver answers yes, then no.
+
+The worked example is GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage map). MPM's `matter_*` nodes already have this shape.
+
 ## 2. The mental model
 
 A generator is a sub-graph from `system.generator_input` to `final_output`.
