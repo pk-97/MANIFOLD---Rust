@@ -265,15 +265,9 @@ impl Show {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(ScalarProbe::new()));
-        let view = frozen.then(|| crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)).flatten();
-        let (def, retarget) = match view {
+        let (def, retarget) = match frozen.then(|| super::gpu_flip_preset::fused_as_rendered(&def, &registry)).flatten() {
             Some(view) => ((*view.def).clone(), view.node_retarget.clone()),
-            None => {
-                // With no region to fuse the app renders the def as authored.
-                let regions = crate::node_graph::fusion_report(&def, &registry).regions;
-                assert!(!frozen || regions.is_empty(), "the scene has regions but does not fuse");
-                (def, Default::default())
-            }
+            None => (def, Default::default()),
         };
         let device = crate::test_device();
         let runtime = PresetRuntime::from_def_with_device(def, &registry, device.arc(), size.0, size.1, GpuTextureFormat::Rgba16Float, None)
