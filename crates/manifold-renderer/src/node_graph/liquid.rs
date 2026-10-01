@@ -7,6 +7,7 @@
 
 pub mod blocks;
 pub mod bodies;
+pub mod body_buffers;
 pub mod clock;
 #[cfg(any(test, feature = "gpu-proofs"))]
 #[doc(hidden)]

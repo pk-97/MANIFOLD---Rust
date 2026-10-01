@@ -26,8 +26,8 @@ use crate::node_graph::transform::Transform;
 pub(crate) const BOX_METRES: f64 = 4.0;
 
 /// Water steps per 60 Hz liquid tick (D8): copies of the step inside the tick
-/// region, the density solve on the last. A builder constant: whether a
-/// coupled body moves per step or per tick is the solids work's to settle (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)).
+/// region, the density solve on the last. A collider moves per step: each
+/// step places it where its tick's row has it at the step's end.
 pub(crate) const STEPS_PER_TICK: usize = 2;
 
 /// The main solve's iterations: the step's Auto.
@@ -55,11 +55,22 @@ impl PressureShape {
     }
 }
 
-/// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`) with its
-/// obstacle unwired: a 4 m tank over the floor, a 0.16 m pool, and the
-/// `initial_column` block, seeded by the engine's half-cell site rule.
+/// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`): a 4 m tank
+/// over the floor, a 0.16 m pool, and the `initial_column` block, seeded by
+/// the engine's half-cell site rule.
 pub(crate) const DAM_FILL_HEIGHT: f64 = 0.16;
 pub(crate) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
+
+/// The Dam Break's box obstacle, the transform of `WaterDamBreak.json`'s
+/// `obstacle_transform`: a unit cube scaled to 0.6 × 1.16 × 0.85 m standing
+/// on the floor in the column's path. Position, then scale.
+pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
+
+/// Fluid role Collider and the role source's built-in cube, whose circumradius
+/// 0.866 makes it a unit cube before the transform.
+const COLLIDER_ROLE: usize = 3;
+const CUBE_SHAPE: usize = 1;
+const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 
 /// A liquid in the 4 m tank: a pool `fill_height` deep plus one box, both
 /// in metres.
@@ -99,6 +110,9 @@ pub(crate) struct WaterScene {
     /// (ghost fluid). Off wires zero distances: air at zero pressure on its
     /// cell centres, the race's comparison.
     pub ghost_fluid: bool,
+    /// The Dam Break's box as a Collider role (`obstacle_transform` into
+    /// `obstacle_collider` into the domain's `role_0`).
+    pub obstacle: bool,
 }
 
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
@@ -121,7 +135,7 @@ pub(crate) const REST_PER_CELL: f64 = super::gpu_flip_step::REST_PER_CELL as f64
 pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
 
 impl WaterScene {
-    /// The engine's Dam Break, obstacle unwired.
+    /// The engine's Dam Break without its obstacle.
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
@@ -136,7 +150,14 @@ impl WaterScene {
             surface_scale: 2,
             faces: false,
             ghost_fluid: true,
+            obstacle: false,
         }
+    }
+
+    /// The scene with the Dam Break's box obstacle.
+    #[cfg(test)]
+    pub fn with_obstacle(self) -> Self {
+        Self { obstacle: true, ..self }
     }
 
     /// A pool 1 m deep and nothing else (I5).
@@ -341,6 +362,28 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         );
         b.wire((column, "transform"), domain, "initial_volume");
     }
+    if scene.obstacle {
+        let [pos, scale] = DAM_OBSTACLE;
+        let transform = b.node(
+            "obstacle_transform",
+            "node.transform_3d",
+            json!({
+                "pos_x": float(pos[0]), "pos_y": float(pos[1]), "pos_z": float(pos[2]),
+                "scale_x": float(scale[0]), "scale_y": float(scale[1]), "scale_z": float(scale[2]),
+            }),
+        );
+        let collider = b.node(
+            "obstacle_collider",
+            "node.fluid_role_source",
+            json!({
+                "role": {"type": "Enum", "value": COLLIDER_ROLE},
+                "shape": {"type": "Enum", "value": CUBE_SHAPE},
+                "radius": float(UNIT_CUBE_RADIUS),
+            }),
+        );
+        b.wire((transform, "transform"), collider, "transform");
+        b.wire((collider, "role"), domain, "role_0");
+    }
     // The params hold the domain's own sites, so the planned storage is the
     // fill's; the wires carry any change.
     let sites = geometry.setup.box_sites;
@@ -364,6 +407,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     );
     b.wires(domain, fill, &FILL_WIRES);
     b.wires(domain, fill, &LATTICE_WIRES);
+    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch"]);
     let count = (fill, "count");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
@@ -730,7 +774,13 @@ pub(super) mod tests {
             WaterScene { density_once: false, ..WaterScene::dam_break(64) }.with_surface(),
             WaterScene { steps: 1, spread_rate: SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) }.with_surface(),
         ];
-        for scene in all.chain(probes) {
+        // The obstacle, bare and meshed, and in the still pool the kinematic
+        // proof moves it through.
+        let obstacle = LATTICES.into_iter().flat_map(|n| {
+            let dam = WaterScene::dam_break(n).with_obstacle();
+            [dam, dam.with_surface(), WaterScene::still_pool(n).with_obstacle()]
+        });
+        for scene in all.chain(probes).chain(obstacle) {
             let n = scene.pressure.n;
             let def = water_def(scene);
             let (graph, plan) = built(&def);

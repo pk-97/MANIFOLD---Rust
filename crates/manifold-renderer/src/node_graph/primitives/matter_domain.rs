@@ -14,13 +14,14 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{FrameClock, GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::body_buffers::LiquidBodyBuffers;
 use crate::node_graph::liquid::clock::LiquidClock;
 use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
@@ -171,32 +172,6 @@ pub(crate) fn matter_geometry(
         seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
     };
     Ok(MatterGeometry { layout, setup })
-}
-
-const UPLOAD_SHADER: &str = include_str!("shaders/matter_domain_upload.wgsl");
-/// 16-byte groups one inline upload carries (setBytes stays under 4 KB).
-const UPLOAD_GROUPS: usize = 254;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct UploadParams {
-    start: u32,
-    count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    words: [[u32; 4]; 254],
-}
-
-const _: () = assert!(std::mem::size_of::<UploadParams>() < 4096);
-
-/// The provided body, shape and atlas storage. Shapes and the atlas are
-/// rebuilt into fresh buffers (never in flight); body rows are uploaded in
-/// encoder order each frame.
-pub struct BodyBuffers {
-    bodies: GpuBuffer,
-    shapes: GpuBuffer,
-    atlas: GpuBuffer,
-    version: u64,
 }
 
 crate::primitive! {
@@ -357,8 +332,7 @@ crate::primitive! {
         published: Option<[f32; OUTPUTS.len()]> = None,
         bodies: LiquidBodies = LiquidBodies::default(),
         role_pending: bool = false,
-        body_buffers: Option<BodyBuffers> = None,
-        upload: Option<GpuComputePipeline> = None,
+        body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
         body_rows: f32 = 0.0,
         rows_fresh: bool = false,
         coupled: Coupling = Coupling::default(),
@@ -486,13 +460,7 @@ impl Primitive for MatterDomain {
             "impulses" => return self.fields.impulses_buffer(),
             _ => {}
         }
-        let buffers = self.body_buffers.as_ref()?;
-        match port {
-            "bodies" => Some(&buffers.bodies),
-            "shapes" => Some(&buffers.shapes),
-            "atlas" => Some(&buffers.atlas),
-            _ => None,
-        }
+        self.body_buffers.output(port)
     }
 
     fn array_output_capacity(
@@ -674,9 +642,8 @@ impl Primitive for MatterDomain {
 }
 
 impl MatterDomain {
-    /// Keep the provided body, shape and atlas buffers current: rebuilt
-    /// shapes and atlas go into fresh buffers, this frame's body rows are
-    /// written in encoder order.
+    /// Keep the reaction and the provided body, shape and atlas buffers
+    /// current.
     fn upload_bodies(&mut self, ctx: &mut EffectNodeContext<'_, '_>, rows_fresh: bool, ticks: bool) {
         let Some(gpu) = ctx.gpu.as_deref_mut() else { return };
         // Sized for every body a liquid holds, so a pending reaction never
@@ -693,54 +660,7 @@ impl MatterDomain {
         if ticks && self.coupled.owner.is_some() {
             gpu.native_enc.clear_buffer(reaction);
         }
-        let row_bytes = std::mem::size_of_val(self.bodies.last_rows());
-        let needs_bodies = self
-            .body_buffers
-            .as_ref()
-            .is_none_or(|buffers| buffers.bodies.size < row_bytes as u64);
-        let version = self.bodies.version;
-        if self.body_buffers.as_ref().is_none_or(|buffers| buffers.version != version) || needs_bodies {
-            let fresh = |bytes: &[u8], least: usize| {
-                let buffer = gpu.device.create_buffer_shared(bytes.len().max(least) as u64);
-                // SAFETY: new shared buffer, not yet visible to the GPU.
-                unsafe { buffer.write(0, bytes) };
-                buffer
-            };
-            let bodies = match self.body_buffers.take() {
-                Some(buffers) if !needs_bodies => buffers.bodies,
-                _ => gpu.device.create_buffer_shared(row_bytes.max(std::mem::size_of::<LiquidBody>()) as u64),
-            };
-            self.body_buffers = Some(BodyBuffers {
-                bodies,
-                shapes: fresh(bytemuck::cast_slice(self.bodies.shapes()), std::mem::size_of::<LiquidShape>()),
-                atlas: fresh(bytemuck::cast_slice(self.bodies.atlas()), 4),
-                version,
-            });
-        }
-        if !rows_fresh || row_bytes == 0 {
-            return;
-        }
-        let pipeline = self
-            .upload
-            .get_or_insert_with(|| gpu.device.create_compute_pipeline(UPLOAD_SHADER, "cs_main", "node.matter_domain.bodies"));
-        let target = &self.body_buffers.as_ref().expect("allocated above").bodies;
-        let groups: &[[u32; 4]] = bytemuck::cast_slice(self.bodies.last_rows());
-        for (chunk_index, chunk) in groups.chunks(UPLOAD_GROUPS).enumerate() {
-            let mut params: UploadParams = bytemuck::Zeroable::zeroed();
-            let UploadParams { start, count, words, .. } = &mut params;
-            *start = (chunk_index * UPLOAD_GROUPS) as u32;
-            *count = chunk.len() as u32;
-            words[..chunk.len()].copy_from_slice(chunk);
-            gpu.native_enc.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                    GpuBinding::Buffer { binding: 1, buffer: target, offset: 0 },
-                ],
-                [(chunk.len() as u32).div_ceil(64), 1, 1],
-                "node.matter_domain.bodies",
-            );
-        }
+        self.body_buffers.upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies");
     }
 
     /// This frame's outputs, or None while a collider's distance lattice is
@@ -963,7 +883,7 @@ impl MatterDomain {
             decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
         })?;
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
-        let bodies = &self.body_buffers.as_ref().ok_or("Matter coupling: the body rows are missing")?.bodies;
+        let bodies = self.body_buffers.bodies().ok_or("Matter coupling: the body rows are missing")?;
         let bytes: &[u8] = bytemuck::cast_slice(rows);
         if offset + bytes.len() as u64 > bodies.size {
             return Err("Matter coupling: the body rows outgrew their buffer".into());

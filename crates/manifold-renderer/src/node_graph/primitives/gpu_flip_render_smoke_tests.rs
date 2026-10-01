@@ -83,7 +83,8 @@ fn stage(name: &str, label: &str) -> &'static str {
             "step.distance" | "step.classify" => "particle distance + classify",
             "step.particles_to_faces" => "particle→face",
             "step.forces" => "forces",
-            "step.solid_distance" | "step.open_fractions" | "step.solid_velocity" | "step.constrain" | "step.constrain_old" => "solids",
+            "step.solid_distance" | "step.open_fractions" | "step.solid_velocity" | "step.phi_into_solids"
+            | "step.water_into_solids" | "step.constrain" | "step.constrain_old" => "solids",
             p if p.starts_with("step.extend_") => "extrapolation",
             "step.divergence" => "divergence",
             "pressure.coarsen_water" | "pressure.coarsen_faces" | "pressure.coarse_inverse" => "solve levels (coarse water and faces)",

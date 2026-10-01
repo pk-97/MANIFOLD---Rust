@@ -1,4 +1,4 @@
-// node.matter_domain's body-row upload: CPU words carried inline in the
+// A liquid domain's body-row upload: CPU words carried inline in the
 // uniform, written into the provided bodies buffer in encoder order, so a row
 // a previous frame's substeps may still read is never overwritten early. An
 // IO endpoint of a CPU bridge (ADDING_PRIMITIVES.md exclusion 3).

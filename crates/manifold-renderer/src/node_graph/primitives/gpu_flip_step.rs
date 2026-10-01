@@ -130,6 +130,8 @@ struct Pipelines {
     gravity: GpuComputePipeline,
     open: GpuComputePipeline,
     solid_velocity: GpuComputePipeline,
+    phi_into_solids: GpuComputePipeline,
+    water_into_solids: GpuComputePipeline,
     divergence: GpuComputePipeline,
     distance: GpuComputePipeline,
     subtract: GpuComputePipeline,
@@ -153,6 +155,8 @@ impl Pipelines {
             gravity: pipe("face_gravity"),
             open: pipe("open_fractions"),
             solid_velocity: pipe("solid_face_velocity"),
+            phi_into_solids: pipe("phi_into_solids"),
+            water_into_solids: pipe("water_into_solids"),
             divergence: pipe("divergence"),
             distance: pipe("particle_distance"),
             subtract: pipe("subtract_pressure"),
@@ -361,7 +365,9 @@ impl StepState {
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
 
-        if step.ghost {
+        // The solids read the particles' φ even with the ghost rows off.
+        let solids = p.body_count > 0;
+        if step.ghost || solids {
             enc.dispatch_compute(
                 &pipes.distance,
                 &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
@@ -391,6 +397,10 @@ impl StepState {
             "gpu_flip.step.forces",
         );
         let corners = cells.map(|n| n + 1);
+        // The box walls are in the solid with the bodies, as the engine's
+        // inverted domain object is: a body flush with a wall then seals
+        // against it, where the body's own lattice distance alone would leave
+        // a sub-cell open channel between them.
         encode_solid_distance(
             &mut self.solid,
             device,
@@ -399,7 +409,8 @@ impl StepState {
                 min: p.box_min,
                 cell_size: p.cell_size,
                 nodes: corners,
-                closed_faces: 0,
+                closed_faces: 63,
+                wall_inset: 0,
                 body_count: p.body_count,
                 rows: p.rows,
                 tick_seconds: p.tick_seconds,
@@ -429,6 +440,20 @@ impl StepState {
             face_groups,
             "gpu_flip.step.solid_velocity",
         );
+        if solids {
+            enc.dispatch_compute(
+                &pipes.phi_into_solids,
+                &[uniform(&base), buffer(9, &l.corners), buffer(5, &l.phi)],
+                cells_groups,
+                "gpu_flip.step.phi_into_solids",
+            );
+            enc.dispatch_compute(
+                &pipes.water_into_solids,
+                &[uniform(&base), buffer(9, &l.corners), buffer(7, &l.phi), buffer(5, &l.water)],
+                cells_groups,
+                "gpu_flip.step.water_into_solids",
+            );
+        }
         enc.dispatch_compute(
             &pipes.divergence,
             &[
@@ -504,6 +529,7 @@ impl StepState {
             &[
                 uniform(&base),
                 buffer(2, sorted),
+                buffer(9, &l.corners),
                 buffer(3, out_faces),
                 buffer(17, &l.a),
                 buffer(18, advect),
@@ -519,7 +545,7 @@ impl StepState {
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share. Outputs the moved particles and the step's face grid, valid at least 2 layers around the water.",
+    purpose: "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). Outputs the moved particles and the step's face grid, valid at least 2 layers around the water.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -679,7 +705,10 @@ impl Primitive for GpuFlipStep {
             (Some(bodies), Some(shapes), Some(atlas)) => {
                 let held = (bodies.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
                 let shapes_len = (shapes.size / size_of::<LiquidShape>() as u64).min(u64::from(u32::MAX)) as u32;
-                (bodies, shapes, atlas, body_count, rows.min(held), shapes_len)
+                // Rows are tick major: this tick's are the last of the prefix
+                // the solid passes read.
+                let through_tick = (tick_index - field.first_tick + 1).max(1).saturating_mul(body_count);
+                (bodies, shapes, atlas, body_count, rows.min(held).min(through_tick), shapes_len)
             }
             _ => (&zeros, &zeros, &zeros, 0, 0, 0),
         };
@@ -758,6 +787,8 @@ mod tests {
             "face_gravity",
             "open_fractions",
             "solid_face_velocity",
+            "phi_into_solids",
+            "water_into_solids",
             "divergence",
             "particle_distance",
             "subtract_pressure",
