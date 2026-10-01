@@ -137,7 +137,7 @@ pub(crate) const REST_PER_CELL: f64 = super::gpu_flip_step::REST_PER_CELL as f64
 pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
 
 impl WaterScene {
-    /// The engine's Dam Break without its obstacle.
+    /// The engine's Dam Break, its box obstacle standing in the column's path.
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
@@ -153,8 +153,15 @@ impl WaterScene {
             surface_scale: 2,
             faces: false,
             ghost_fluid: true,
-            obstacle: false,
+            obstacle: true,
         }
+    }
+
+    /// The Dam Break the FLIP engine races: no obstacle, as `race_probe` and
+    /// the race clips run the engine.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub fn race_dam_break(n: usize) -> Self {
+        Self { obstacle: false, ..Self::dam_break(n) }
     }
 
     /// The scene with the Dam Break's box obstacle.
@@ -512,7 +519,39 @@ fn built_by_water_def(node_id: &str) -> bool {
         step.len() > 1 && step.starts_with('s') && step[1..].bytes().all(|b| b.is_ascii_digit())
     });
     step || FACE_NODES.contains(&node_id)
-        || matches!(node_id, "domain" | "initial_column" | "fill" | "state" | "stats" | "solid" | "frame" | "surface")
+        || OBSTACLE_RENDER.contains(&node_id)
+        || matches!(
+            node_id,
+            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | "stats" | "solid" | "frame" | "surface"
+        )
+}
+
+/// The obstacle's render nodes, which `render_def` adds when the scene has
+/// the box: its mesh, its material and the object the render scene draws.
+const OBSTACLE_RENDER: [&str; 3] = ["obstacle_mesh", "obstacle_material", "obstacle_object"];
+
+/// The render scene's object slot the box takes.
+const OBSTACLE_SLOT: &str = "object_1";
+
+/// The box as the audience sees it: a unit cube on the collider's own
+/// transform, in `WaterDamBreak.json`'s copper.
+fn add_obstacle_render(def: &mut Value, transform: u64, scene: u64) {
+    let next = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    let [mesh, material, object] = [next, next + 1, next + 2];
+    let material_params = json!({
+        "color_r": float(0.52), "color_g": float(0.23), "color_b": float(0.073),
+        "metallic": float(0.94), "roughness": float(0.19), "ambient": float(0.0),
+    });
+    let nodes = def["nodes"].as_array_mut().expect("nodes");
+    nodes.push(json!({"id": mesh, "nodeId": "obstacle_mesh", "typeId": "node.cube_mesh", "handle": "Obstacle Mesh", "params": {}}));
+    nodes.push(json!({"id": material, "nodeId": "obstacle_material", "typeId": "node.pbr_material", "handle": "Obstacle Material", "params": material_params}));
+    nodes.push(json!({"id": object, "nodeId": "obstacle_object", "typeId": "node.scene_object", "handle": "Obstacle", "params": {}}));
+    let wire = |from: u64, from_port: &str, to: u64, to_port: &str| json!({"fromNode": from, "fromPort": from_port, "toNode": to, "toPort": to_port});
+    let wires = def["wires"].as_array_mut().expect("wires");
+    wires.push(wire(mesh, "vertices", object, "vertices"));
+    wires.push(wire(material, "out", object, "material"));
+    wires.push(wire(transform, "transform", object, "transform"));
+    wires.push(wire(object, "object", scene, OBSTACLE_SLOT));
 }
 
 /// Surface Detail adds this to its value to give the surface nodes' scale.
@@ -552,7 +591,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
         .filter(|n| built_by_water_def(&name_of(n)))
         .map(|n| (n["id"].as_u64().expect("preset id"), name_of(n)))
         .collect();
-    for wire in preset["wires"].as_array().expect("preset wires") {
+    'wires: for wire in preset["wires"].as_array().expect("preset wires") {
         if ends(wire).iter().all(|id| !render_ids.contains(id)) {
             continue;
         }
@@ -563,10 +602,19 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
                 id + shift
             } else {
                 let name = &water_name.iter().find(|(water, _)| *water == id).expect("a preset node").1;
+                // The obstacle's render wires are the builder's own, below.
+                if OBSTACLE_RENDER.contains(&name.as_str()) {
+                    continue 'wires;
+                }
                 id_of(&def, name)
             });
         }
         def["wires"].as_array_mut().expect("wires").push(wire);
+    }
+    if scene.obstacle {
+        let transform = id_of(&def, "obstacle_transform");
+        let scene_node = id_of(&def, "scene");
+        add_obstacle_render(&mut def, transform, scene_node);
     }
     for key in ["name", "description"] {
         def[key] = preset[key].clone();
