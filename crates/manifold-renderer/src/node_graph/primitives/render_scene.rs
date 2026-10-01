@@ -1897,6 +1897,9 @@ struct FramePrelude<'ctx> {
     objects: usize,
     cam: crate::node_graph::camera::Camera,
     envmap_wired: Option<&'ctx manifold_gpu::GpuTexture>,
+    /// A pending envmap renders as absent (black image lighting); only a
+    /// material that cannot draw without one abandons the frame.
+    envmap_pending: bool,
     atmosphere: crate::node_graph::atmosphere::Atmosphere,
     render_mode: crate::node_graph::render_mode::RenderMode,
     light_data: Vec<[f32; 4]>,
@@ -1986,7 +1989,7 @@ impl RenderScene {
         single_object: Option<SceneObject>,
     ) -> Option<(Vec<ObjectDraw<'ctx>>, bool)> {
         let FramePrelude {
-            objects, cam, envmap_wired, atmosphere, render_mode, view_proj, prev_view_proj,
+            objects, cam, envmap_wired, envmap_pending, atmosphere, render_mode, view_proj, prev_view_proj,
             jitter_ndc, prev_jitter_ndc, light_count, velocity_wired,
             ao_mask_wired, denoise_aux_ready, rt_enabled, ..
         } = pre;
@@ -2016,13 +2019,11 @@ impl RenderScene {
             // legacy per-port lookups got.
             let object_port = &self.object_port_names[n];
             let object_slot_id = port_index.get(object_port.as_ref()).copied();
+            // A late object drops out of this frame; the rest of the scene
+            // still renders, so one streaming mesh never stalls the show.
             if object_slot_id.is_some_and(|slot| !ctx.inputs.slot_content_ready(slot)) {
-                ctx.mark_outputs_pending();
-                let status = if self.rt_accel.is_some() {
-                    FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
-                } else { FrameRenderStatus::PendingGeometry };
-                ctx.gpu_encoder().merge_frame_status(status);
-                return None;
+                self.report_incomplete_frame(ctx);
+                continue;
             }
             let Some(object) = single_object.or_else(|| object_slot_id.and_then(|s| ctx.inputs.object_slot(s))) else {
                 // Unwired `object_n` (no `node.scene_object` feeding this
@@ -2040,17 +2041,10 @@ impl RenderScene {
                 continue;
             }
             let mesh_slot = object.mesh;
-            // Incomplete sources invalidate the whole frame; candidate warmup owns retry.
+            // Never draw or trace unlanded bytes: the object drops out.
             if mesh_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
-                // §5.4 (P5): the skip stays (never draw/trace unlanded
-                // bytes), but the frame is no longer silently complete —
-                // warmup keeps pumping and export rejects it.
-                ctx.mark_outputs_pending();
-                let status = if self.rt_accel.is_some() {
-                    FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
-                } else { FrameRenderStatus::PendingGeometry };
-                ctx.gpu_encoder().merge_frame_status(status);
-                return None;
+                self.report_incomplete_frame(ctx);
+                continue;
             }
             let Some(vertices) = mesh_slot.and_then(|s| ctx.inputs.array_slot(s)) else {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
@@ -2079,13 +2073,8 @@ impl RenderScene {
             };
             let weights_slot = object.weights;
             if weights_slot.is_some_and(|s| !ctx.inputs.slot_content_ready(s)) {
-                // §5.4 (P5): same pending contract as the mesh slot above.
-                ctx.mark_outputs_pending();
-                let status = if self.rt_accel.is_some() {
-                    FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
-                } else { FrameRenderStatus::PendingGeometry };
-                ctx.gpu_encoder().merge_frame_status(status);
-                return None;
+                self.report_incomplete_frame(ctx);
+                continue;
             }
             let weights = weights_slot.and_then(|s| ctx.inputs.array_slot(s));
             if weights_slot.is_some() && weights.is_none() {
@@ -2143,6 +2132,10 @@ impl RenderScene {
                 crate::node_graph::render_mode::RENDER_MODE_POINTS => wireframe_material(&render_mode),
                 _ => material,
             };
+            if material.requires_envmap() && *envmap_pending {
+                self.report_incomplete_frame(ctx);
+                continue;
+            }
             if material.requires_envmap() && envmap_wired.is_none() {
                 ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
                 ctx.error(format!(
@@ -5814,7 +5807,8 @@ impl RenderScene {
             .inputs
             .camera("camera")
             .unwrap_or_else(Camera::default_perspective);
-        let envmap_wired = ctx.inputs.texture_2d("envmap");
+        let envmap_pending = ctx.inputs.port_pending("envmap");
+        let envmap_wired = ctx.inputs.texture_2d("envmap").filter(|_| !envmap_pending);
         // Scene-wide atmosphere (P3). Unwired = Atmosphere::default() = fog
         // density 0 = no fog (the shader's exp fog collapses to identity), so
         // an unwired atmosphere is byte-identical to no atmosphere.
@@ -6068,8 +6062,11 @@ impl RenderScene {
         // the gated detector's time-jump.
         let topology_changed = self.mesh_topology_history.update(
             ctx.rebuild_epoch,
+            // A pending object is absent this frame, so its drop and its
+            // return both reset temporal history.
             self.object_port_names.iter().take(objects).map(|port| {
                 port_index.get(port.as_ref()).copied()
+                    .filter(|&slot| ctx.inputs.slot_content_ready(slot))
                     .and_then(|slot| ctx.inputs.object_slot(slot))
                     .map(|object| (
                         object.mesh,
@@ -6235,6 +6232,7 @@ impl RenderScene {
                 objects,
                 cam,
                 envmap_wired,
+                envmap_pending,
                 atmosphere,
                 render_mode,
                 light_data,
@@ -9045,6 +9043,12 @@ impl EffectNode for RenderScene {
         }
     }
 
+    // Reports a pending frame to warmup and export, and renders a pending
+    // envmap as absent.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
+    }
+
     fn evaluate<'ctx, 'gpu>(&mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>) {
         self.render_objects(ctx, None);
     }
@@ -9106,6 +9110,27 @@ impl RenderScene {
         self.rt_materials_scratch = materials;
     }
 
+    /// Draw nothing this frame and say so: the outputs are pending, warmup
+    /// keeps pumping, and export rejects the frame. A device-less run has no
+    /// frame to report on.
+    fn abandon_pending_frame(&self, ctx: &mut EffectNodeContext<'_, '_>) {
+        ctx.mark_outputs_pending();
+        self.report_incomplete_frame(ctx);
+    }
+
+    /// The frame renders without a late object, but is not complete:
+    /// warmup keeps pumping and export rejects it. The outputs stay live.
+    fn report_incomplete_frame(&self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let status = if self.rt_accel.is_some() {
+            FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry)
+        } else {
+            FrameRenderStatus::PendingGeometry
+        };
+        if let Some(gpu) = ctx.gpu.as_deref_mut() {
+            gpu.merge_frame_status(status);
+        }
+    }
+
     fn render_objects_frame<'ctx, 'gpu>(
         &mut self, ctx: &mut EffectNodeContext<'ctx, 'gpu>, single_object: Option<SceneObject>,
         rt_objects: &mut Vec<manifold_gpu::raytrace::RtObjectGeometry<'ctx>>,
@@ -9115,6 +9140,16 @@ impl RenderScene {
         // the destructure below copies the Copy fields out of the shared
         // prelude and borrows the three read-only Vecs, so later pass calls
         // can keep taking `&pre` (every borrow here is shared).
+        // A pending envmap renders as absent and a pending object drops out
+        // of the frame; any other pending input abandons the frame before
+        // it touches camera or temporal history.
+        let object_ports = &self.object_port_names;
+        if ctx.inputs.any_pending_except(|port| {
+            port == "envmap" || object_ports.iter().any(|object| object.as_ref() == port)
+        }) {
+            self.abandon_pending_frame(ctx);
+            return;
+        }
         let port_index = ctx.inputs.build_index();
         let Some((mut pre, state, (mut shaft_light_data, mut shaft_light_count))) =
             self.frame_preliminaries(ctx, &port_index)
@@ -9122,7 +9157,7 @@ impl RenderScene {
             return;
         };
         let FramePrelude {
-            probe_t0: _probe_t0, objects: _, cam: _, envmap_wired: _, atmosphere: _,
+            probe_t0: _probe_t0, objects: _, cam: _, envmap_wired: _, envmap_pending: _, atmosphere: _,
             render_mode: _, light_data: _, light_count: _, casters: _,
             caster_table: _,
             native_width, native_height, width, height, aspect: _, temporal_upscale,

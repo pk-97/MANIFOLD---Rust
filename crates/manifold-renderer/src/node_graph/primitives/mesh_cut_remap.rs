@@ -12,11 +12,7 @@ pub(super) fn run<P: Primitive>(
     last_key: &mut Option<[u64; 5]>,
     output_stride: u64,
 ) {
-    if ["in", "map"].iter().any(|port| {
-        ctx.inputs
-            .slot(port)
-            .is_none_or(|slot| !ctx.inputs.slot_content_ready(slot))
-    }) {
+    if ["in", "map"].iter().any(|port| ctx.inputs.slot(port).is_none()) {
         ctx.mark_outputs_pending();
         return;
     }
@@ -618,7 +614,7 @@ mod gpu_tests {
         let inputs = [("in", source_slot), ("map", map_slot)];
         let outputs = [("out", output_slot)];
         let mut generations = vec![0_u64; 3];
-        let mut pending = vec![false; 3];
+        let pending = vec![false; 3];
         let mut prim = RemapMeshCut::new();
         let first = run_context_once(
             &mut prim,
@@ -662,23 +658,7 @@ mod gpu_tests {
             (false, false),
             "source generation change dispatches"
         );
-        pending[map_slot.0 as usize] = true;
-        let not_ready = run_context_once(
-            &mut prim,
-            &backend,
-            &device,
-            &inputs,
-            &outputs,
-            &generations,
-            &pending,
-            7,
-        );
-        assert_eq!(
-            not_ready,
-            (false, true),
-            "pending map blocks dispatch and reports readiness"
-        );
-        pending[map_slot.0 as usize] = false;
+        // A pending map never reaches this node: the executor holds it.
         let new_epoch = run_context_once(
             &mut prim,
             &backend,

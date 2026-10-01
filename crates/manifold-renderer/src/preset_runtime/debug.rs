@@ -31,6 +31,7 @@ impl PresetRuntime {
         let PresetIo::Transform {
             source_slot,
             output_slot,
+            ..
         } = self.io
         else {
             return None;

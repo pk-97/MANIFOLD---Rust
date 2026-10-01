@@ -299,7 +299,25 @@ impl Primitive for FluidRoleSource {
         self.source_pending || self.pending_geometry.is_some()
     }
 
+    // Drops its prepared geometry while a wired mesh source reloads, and
+    // historical samples publish against the last prepared source.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // Wired mesh sources and their part transforms are handled below.
+        let wired_source_port = |port: &str| {
+            MESH_PORTS.contains(&port)
+                || PART_PORTS
+                    .iter()
+                    .position(|part| *part == port)
+                    .is_some_and(|index| ctx.inputs.slot(MESH_PORTS[index]).is_some())
+        };
+        if ctx.inputs.any_pending_except(wired_source_port) {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let Some(transform) = ctx.inputs.transform("transform") else {
             return self.fail(ctx, "Fluid Role Source needs a transform".into());
         };

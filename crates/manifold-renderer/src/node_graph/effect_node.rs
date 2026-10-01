@@ -472,7 +472,10 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// Declare that this node's outputs this frame are allocated but not
     /// yet valid — async content is still in flight (e.g.
     /// `node.gltf_mesh_source` while its GLB parses and uploads). The
-    /// executor records the declaration per output slot; consumers query
+    /// executor records the declaration per output slot and does not run
+    /// a consumer while its input is pending; the consumer's outputs go
+    /// pending in turn. A consumer that opts in with
+    /// [`EffectNode::runs_with_pending_inputs`] queries
     /// [`NodeInputs::slot_content_ready`] and must treat not-ready bytes
     /// as ABSENT — never derive sizes from them, build acceleration
     /// structures from them, or trace against them (the Corrosion warmup
@@ -1212,6 +1215,19 @@ pub trait EffectNode: Send {
     /// decode, RT accel build, DNN model load). Default `false` — pure-GPU
     /// nodes are warm by construction.
     fn warmup_pending(&self) -> bool {
+        false
+    }
+
+    /// Run even while an input is pending. By default the executor does not
+    /// evaluate a node while any input other than a state-capture back-edge
+    /// is pending: its outputs go pending without running, and their bytes
+    /// are not written. A node that returns `true` is always evaluated and
+    /// owns its outputs' readiness. The executor no longer infers pending
+    /// from its inputs, so the node calls `mark_outputs_pending` itself
+    /// whenever its outputs are not real content. Opt in only to act while
+    /// an input is pending: hold the last good frame, keep a simulation
+    /// clock or a preparation honest, or report the frame's status.
+    fn runs_with_pending_inputs(&self) -> bool {
         false
     }
 

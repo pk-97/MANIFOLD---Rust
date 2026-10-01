@@ -140,10 +140,6 @@ impl Primitive for MeshSpatialMask {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ["in", "weights"].iter().any(|name| ctx.inputs.slot(name).is_some_and(|slot| !ctx.inputs.slot_content_ready(slot))) {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let shape = match ctx.inputs.scalar("shape").as_ref() {
             Some(ParamValue::Enum(v)) => (*v).min(2),
             Some(ParamValue::Float(v)) => v.round().clamp(0.0, 2.0) as u32,

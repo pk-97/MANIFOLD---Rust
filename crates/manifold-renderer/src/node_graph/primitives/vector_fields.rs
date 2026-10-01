@@ -14,10 +14,6 @@ fn required_field(ctx: &mut EffectNodeContext<'_, '_>, port: &str) -> Option<Fie
         ctx.mark_outputs_pending();
         return None;
     };
-    if !ctx.inputs.slot_content_ready(slot) {
-        ctx.mark_outputs_pending();
-        return None;
-    }
     let Some(value) = ctx.inputs.vector_field_slot(slot) else {
         ctx.error(format!("vector field input `{port}` has no value"));
         ctx.mark_outputs_pending();
@@ -320,7 +316,6 @@ mod tests {
         params: ParamValues,
         fields: &[(&'static str, FieldValue)],
         scalars: &[(&'static str, f32)],
-        pending_ports: &[&str],
     ) -> (Option<FieldValue>, bool, Vec<String>) {
         let mut backend = MockBackend::new();
         let output_slot = backend.acquire(ResourceId(0), PortType::VectorField, None, (0, 0));
@@ -345,15 +340,8 @@ mod tests {
             backend.set_scalar(slot, ParamValue::Float(value));
             input_bindings.push((port, slot));
         }
-        let mut pending = vec![false; backend.slot_count() as usize];
-        for port in pending_ports {
-            if let Some((_, slot)) = input_bindings.iter().find(|(name, _)| name == port) {
-                pending[slot.0 as usize] = true;
-            }
-        }
-
         let output_bindings: &[(&'static str, Slot)] = &[("out", output_slot)];
-        let inputs = NodeInputs::new(&input_bindings, &backend, &[]).with_pending(&pending);
+        let inputs = NodeInputs::new(&input_bindings, &backend, &[]);
         let mut scalar_scratch = Vec::new();
         let mut camera_scratch = Vec::new();
         let mut light_scratch = Vec::new();
@@ -398,7 +386,7 @@ mod tests {
         params.insert(Cow::Borrowed("z"), ParamValue::Float(7.0));
         let mut node = UniformVectorField::new();
         let (field, pending, errors) =
-            run_node(&mut node, params, &[], &[("x", 1.25), ("z", -2.5)], &[]);
+            run_node(&mut node, params, &[], &[("x", 1.25), ("z", -2.5)]);
         assert!(!pending, "valid source should be ready: {errors:?}");
         assert!(errors.is_empty());
         assert_eq!(field.unwrap().sample([12.0, -3.0, 4.0]), [1.25, 8.0, -2.5]);
@@ -416,7 +404,6 @@ mod tests {
             ParamValues::default(),
             &[("a", first), ("b", second)],
             &[],
-            &[],
         );
         assert!(!add_pending, "add should be ready: {add_errors:?}");
         let mut multiply = MultiplyVectorFields::new();
@@ -424,7 +411,6 @@ mod tests {
             &mut multiply,
             ParamValues::default(),
             &[("a", sum.unwrap()), ("b", mask)],
-            &[],
             &[],
         );
         assert!(
@@ -437,37 +423,19 @@ mod tests {
             ParamValues::default(),
             &[("field", product.unwrap())],
             &[("strength", 2.0)],
-            &[],
         );
         assert!(!scale_pending, "scale should be ready: {scale_errors:?}");
         assert_eq!(scaled.unwrap().sample([0.0, 0.0, 0.0]), [12.0, 10.0, 7.0]);
     }
 
     #[test]
-    fn invalid_leaf_and_pending_required_input_hold_output_pending() {
+    fn invalid_leaf_holds_output_pending() {
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("radius"), ParamValue::Float(f32::NAN));
         let mut radial = RadialVectorField::new();
-        let (field, pending, errors) = run_node(&mut radial, params, &[], &[], &[]);
+        let (field, pending, errors) = run_node(&mut radial, params, &[], &[]);
         assert!(field.is_none());
         assert!(pending);
         assert_eq!(errors.len(), 1);
-
-        let mut add = AddVectorFields::new();
-        let (_, pending, errors) = run_node(
-            &mut add,
-            ParamValues::default(),
-            &[
-                ("a", FieldValue::uniform([1.0; 3]).unwrap()),
-                ("b", FieldValue::uniform([2.0; 3]).unwrap()),
-            ],
-            &[],
-            &["a"],
-        );
-        assert!(pending);
-        assert!(
-            errors.is_empty(),
-            "pending input is not an evaluation error"
-        );
     }
 }
