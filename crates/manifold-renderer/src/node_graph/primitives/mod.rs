@@ -318,6 +318,10 @@ pub(crate) mod test_camera_pointwise_fixture;
 // codegen tests run without a device.
 #[cfg(test)]
 pub(crate) mod test_multi_output_atomic_fixture;
+// BUG-u8io (fft-water-fusion-param-capacity) region-compiler fixture, kept out
+// of the global registry the same way.
+#[cfg(test)]
+pub(crate) mod test_face_lattice_fixture;
 mod twist_mesh;
 mod trigger_ease_to;
 mod trigger_gate;
@@ -331,14 +335,11 @@ pub(crate) mod particle_volume;
 mod smooth_lattice;
 pub(crate) mod dot_products;
 mod divide_by_value;
+pub(crate) mod gpu_flip_bodies;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
-pub(crate) mod pressure_face_impulse;
-pub(crate) mod face_impulse_to_bodies;
-pub(crate) mod body_pressure_product;
-pub(crate) mod friction_face_impulse;
 pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
 pub(crate) mod liquid_stats;

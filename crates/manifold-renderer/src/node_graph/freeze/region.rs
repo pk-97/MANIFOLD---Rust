@@ -4220,35 +4220,28 @@ mod tests {
         );
         // Declared honestly (FromInput), the same shape fuses: the refusal
         // above is the probe's, not a gate the chain trips anyway.
-        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a body product into the divide fuses");
+        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a solid clamp into the divide fuses");
     }
 
-    /// The same chain with an honest producer: node.body_pressure_product (its
-    /// output follows its coincident base, declared FromInput) into the divide.
+    /// The same chain with an honest producer: node.clamp_liquid_to_solids (its
+    /// output follows its coincident level set, declared FromInput) into the
+    /// divide.
     fn honest_chain() -> EffectGraphDef {
-        let lattice = |n: f64| serde_json::json!({"type": "Float", "value": n});
         serde_json::from_value(serde_json::json!({
             "version": 3,
             "nodes": [
-                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
-                {"id": 1, "nodeId": "base", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
-                {"id": 2, "nodeId": "product", "typeId": "node.body_pressure_product", "params": {"nodes_x": lattice(8.0), "nodes_y": lattice(8.0), "nodes_z": lattice(8.0)}},
+                {"id": 0, "nodeId": "solid", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 64}}},
+                {"id": 1, "nodeId": "levelset", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
+                {"id": 2, "nodeId": "clamp", "typeId": "node.clamp_liquid_to_solids"},
                 {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
                 {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
                 {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
-                {"id": 6, "nodeId": "output", "typeId": "system.final_output"},
-                {"id": 7, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 729}}},
-                {"id": 8, "nodeId": "sums", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 64}}},
-                {"id": 9, "nodeId": "bodies", "typeId": "test.body_source", "params": {"max_capacity": {"type": "Int", "value": 4}}}
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
             ],
             "wires": [
-                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "base"},
-                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "water"},
-                {"fromNode": 7, "fromPort": "out", "toNode": 2, "toPort": "solid_faces"},
-                {"fromNode": 7, "fromPort": "out", "toNode": 2, "toPort": "solid_velocity"},
-                {"fromNode": 8, "fromPort": "out", "toNode": 2, "toPort": "sums"},
-                {"fromNode": 9, "fromPort": "out", "toNode": 2, "toPort": "bodies"},
-                {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "levelset"},
+                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "solid"},
+                {"fromNode": 2, "fromPort": "clamped", "toNode": 4, "toPort": "values"},
                 {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
                 {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
                 {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"}
@@ -4279,50 +4272,47 @@ mod tests {
     /// (`ParamProduct`) fuses with what reads it, and the region counts its
     /// lattice from the fused uniforms, clamped by every lattice that does
     /// not provably bound it and by every array it pre-reads at `[idx]`. A
-    /// graph whose clamp would bite at its configured params refuses. The
-    /// pressure's face impulse feeds the friction impulse's faces.
+    /// graph whose clamp would bite at its configured params refuses. One
+    /// face lattice feeds the next one's faces.
     #[test]
     fn lattice_sized_region_counts_and_clamps_its_lattice() {
-        let def = |impulse_x: f64| -> EffectGraphDef {
+        use crate::node_graph::primitives::test_face_lattice_fixture::{TYPE_ID, TestFaceLattice};
+        let def = |first_x: f64| -> EffectGraphDef {
             serde_json::from_value(serde_json::json!({
                 "version": 3,
                 "nodes": [
-                    {"id": 0, "nodeId": "pressure", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
                     {"id": 1, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                    {"id": 2, "nodeId": "impulse", "typeId": "node.pressure_face_impulse", "params": lattice_params([impulse_x, 8.0, 8.0])},
-                    {"id": 3, "nodeId": "friction", "typeId": "node.friction_face_impulse", "params": lattice_params([8.0; 3])},
+                    {"id": 2, "nodeId": "first", "typeId": TYPE_ID, "params": lattice_params([first_x, 8.0, 8.0])},
+                    {"id": 3, "nodeId": "second", "typeId": TYPE_ID, "params": lattice_params([8.0; 3])},
                     {"id": 4, "nodeId": "sink", "typeId": "test.face_sink"},
                     {"id": 5, "nodeId": "output", "typeId": "system.final_output"},
                     {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
                 ],
                 "wires": [
-                    {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "pressure"},
+                    {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "faces"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "water"},
-                    {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "solid_faces"},
-                    {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "solid_velocity"},
                     {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "faces"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "water"},
-                    {"fromNode": 6, "fromPort": "out", "toNode": 3, "toPort": "solid_faces"},
-                    {"fromNode": 6, "fromPort": "out", "toNode": 3, "toPort": "solid_velocity"},
                     {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
                     {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
                 ]
             }))
-            .expect("face impulse fixture")
+            .expect("face lattice fixture")
         };
         let mut registry = registry();
         crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+        registry.register(TYPE_ID, || Box::new(TestFaceLattice));
         let regions = partition_regions(&def(8.0), &registry);
-        assert_eq!(regions.len(), 1, "the pressure impulse and the friction impulse fuse");
+        assert_eq!(regions.len(), 1, "the two face lattices fuse");
         let region = &regions[0];
         assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
         let open = region.externals.iter().position(|e| e.from_node == 6).expect("the open faces are an external");
         assert_eq!(
             region.output_capacity,
             Some(CapacityExpr::Min(vec![face_lattice_product(1), face_lattice_product(0), CapacityExpr::Slot(open)])),
-            "the friction's lattice, clamped by the impulse's lattice and the faces it pre-reads"
+            "the second lattice, clamped by the first lattice and the faces it pre-reads"
         );
-        assert!(partition_regions(&def(6.0), &registry).is_empty(), "an impulse lattice smaller than the friction's refuses");
+        assert!(partition_regions(&def(6.0), &registry).is_empty(), "a first lattice smaller than the second refuses");
     }
 
 }

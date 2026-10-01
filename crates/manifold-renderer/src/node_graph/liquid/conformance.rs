@@ -11,8 +11,9 @@ use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, G
 use crate::node_graph::bundled_presets::bundled_preset_def;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::liquid::grid::{face_coords, face_len};
+use crate::node_graph::liquid::WATER_DENSITY;
 use crate::node_graph::liquid::lattice::PADDING_NODES;
-use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, STATS_WORDS, WATER_DENSITY};
+use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, STATS_WORDS};
 use crate::node_graph::primitives::face_grid_scenes::matter_dam_break_faces;
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
@@ -234,16 +235,6 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
 const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
      docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
 
-/// GPU FLIP's body-coupling atoms that gather instead of scattering
-/// (docs/GPU_FLIP_PRESSURE_SOLVE.md). The step's and the pressure solve's
-/// hand shaders and face_impulse_to_bodies have no codegen body; their own
-/// tests check them.
-const GPU_FLIP_ATOMIC_FREE: [&str; 3] = [
-    "node.pressure_face_impulse",
-    "node.body_pressure_product",
-    "node.friction_face_impulse",
-];
-
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     LiquidSolverRow {
         type_id: MATTER_DOMAIN_TYPE_ID,
@@ -380,7 +371,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         fixture: gpu_flip_fixture,
         gpu: true,
         coupled: false,
-        atomic_free: &GPU_FLIP_ATOMIC_FREE,
+        atomic_free: &[],
         refusals: &[
             RefusalCase {
                 what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",

@@ -13,6 +13,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
+use super::gpu_flip_bodies::{Bodies, BodyPasses};
 use crate::node_graph::fluid_particles::FaceSample;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
@@ -338,6 +339,22 @@ impl PressureSolver {
         pressure: &GpuBuffer,
         iterations: u32,
     ) -> Result<(), String> {
+        self.solve_coupled(enc, water, rhs, pressure, iterations, None)
+    }
+
+    /// [`Self::solve`] with dynamic bodies inside the operator: every
+    /// iteration's s = L p gains the bodies' ρh·G M⁻¹ Gᵀ p
+    /// (`scripts/mgpcg_reference.py` `body_solve`). The V-cycle sees the water
+    /// alone.
+    pub(crate) fn solve_coupled(
+        &mut self,
+        enc: &mut GpuEncoder,
+        water: &Water<'_>,
+        rhs: &GpuBuffer,
+        pressure: &GpuBuffer,
+        iterations: u32,
+        bodies: Option<(&BodyPasses, &Bodies<'_>)>,
+    ) -> Result<(), String> {
         let n = water.lattice;
         if self.prepared != Some((n, water.cell_size)) {
             return Err(format!("the solver was not prepared for a {n:?} lattice at this cell size"));
@@ -388,6 +405,9 @@ impl PressureSolver {
                 lattice,
                 "gpu_flip.pressure.apply",
             );
+            if let Some((passes, bodies)) = bodies {
+                passes.apply(enc, bodies, &b.p, &b.scratch)?;
+            }
             dot(enc, pipes, b, n, &b.p, &b.scratch, 2 * k + 1);
             enc.dispatch_compute(
                 &pipes.update,

@@ -26,7 +26,7 @@ use manifold_core::{Beats, Seconds};
 use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
 use crate::node_graph::physics::MAX_COPIES;
 use crate::node_graph::fluid_particles::{
-    CellRange, FaceSample, FluidBlob, FluidParticle, MAX_BINS, bin_counts, bin_total, searched_bins,
+    CellRange, FluidBlob, FluidParticle, MAX_BINS, bin_counts, bin_total, searched_bins,
 };
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::fusion_kind_str;
@@ -37,7 +37,7 @@ use crate::node_graph::liquid::clock::MAX_LIVE_TICKS;
 use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
 use crate::node_graph::liquid::frame_ring::RING;
 use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
-use crate::node_graph::liquid::lattice::{LiquidLattice, cell_count, cell_lattice, face_count};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{
     ACCUM_WORDS_PER_NODE, MatterGridNode, MatterPoint, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes,
     lattice_blocks, lattice_nodes,
@@ -45,7 +45,7 @@ use crate::node_graph::matter::{
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
-use crate::node_graph::primitives::face_impulse_to_bodies::BODY_SUM_FLOATS;
+use crate::node_graph::primitives::gpu_flip_bodies::{HELD_BYTES as BODY_PASS_BYTES, REACTION_FLOATS};
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
@@ -561,10 +561,6 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.gpu_flip_step", check: gpu_flip_step },
     ExtentRule { type_id: "node.dot_products", check: dot_products },
     ExtentRule { type_id: "node.divide_by_value", check: divide_by_value },
-    ExtentRule { type_id: "node.pressure_face_impulse", check: pressure_face_impulse },
-    ExtentRule { type_id: "node.friction_face_impulse", check: friction_face_impulse },
-    ExtentRule { type_id: "node.body_pressure_product", check: body_pressure_product },
-    ExtentRule { type_id: "node.face_impulse_to_bodies", check: face_impulse_to_bodies },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
     ExtentRule { type_id: "node.particle_volume", check: particle_volume },
@@ -1045,7 +1041,6 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 // asks that no array is the smaller one, so no work is ever cut.
 
 const PARTICLE: u64 = size_of::<FluidParticle>() as u64;
-const FACE: u64 = size_of::<FaceSample>() as u64;
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let geometry = gpu_flip_geometry(
@@ -1193,13 +1188,14 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     field_reads(x)?;
     let rows = body_rows(x)?;
     x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;
+    // A wired reaction holds every body's row; the body passes' sums come
+    // with it.
+    if x.bytes("reaction").is_some() {
+        x.covers("reaction", rows * REACTION_FLOATS as u64 * 4)?;
+        x.hold(BODY_PASS_BYTES);
+    }
     // It moves min(particles, out) records: every one.
     x.covers("out", slots * PARTICLE)
-}
-
-/// A GPU FLIP atom's cell lattice, as its run() reads it.
-fn gpu_flip_cells(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
-    cell_lattice(x.params()).ok_or_else(|| x.uncovered("every lattice length must be 1 to 1024".into()))
 }
 
 /// A whole-number param, as the vector atoms round it.
@@ -1226,66 +1222,13 @@ fn divide_by_value(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.bytes("values").unwrap_or(0))
 }
 
-/// The body rows a coupling atom may read, a whole count.
+/// The body rows the step may read, a whole count.
 fn body_rows(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
     let rows = x.scalar("rows", 0.0);
     if !(rows >= 0.0 && rows.fract() == 0.0) {
         return Err(Verdict::Refused(format!("{rows} body rows is not a whole count")));
     }
     Ok(rows as u64)
-}
-
-/// Bytes of node.face_impulse_to_bodies' sums for `rows` bodies.
-fn body_sums(rows: u64) -> u64 {
-    rows * u64::from(BODY_SUM_FLOATS) * 4
-}
-
-/// Pressure and water per cell, three face grids per face.
-fn pressure_face_impulse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = gpu_flip_cells(x)?;
-    for port in ["pressure", "water"] {
-        x.covers(port, cell_count(nodes) * 4)?;
-    }
-    for port in ["solid_faces", "solid_velocity", "out"] {
-        x.covers(port, face_count(nodes) * FACE)?;
-    }
-    Ok(())
-}
-
-/// Water per cell, four face grids per face.
-fn friction_face_impulse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = gpu_flip_cells(x)?;
-    x.covers("water", cell_count(nodes) * 4)?;
-    for port in ["faces", "solid_faces", "solid_velocity", "out"] {
-        x.covers(port, face_count(nodes) * FACE)?;
-    }
-    Ok(())
-}
-
-/// Three lattices per cell, two face grids, and every body's row and sums.
-fn body_pressure_product(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = gpu_flip_cells(x)?;
-    for port in ["base", "water", "out"] {
-        x.covers(port, cell_count(nodes) * 4)?;
-    }
-    for port in ["solid_faces", "solid_velocity"] {
-        x.covers(port, face_count(nodes) * FACE)?;
-    }
-    let rows = body_rows(x)?;
-    x.covers("bodies", rows * size_of::<LiquidBody>() as u64)?;
-    x.covers("sums", body_sums(rows))
-}
-
-/// A face grid in, every body's row, and the sums of every body the
-/// finalize pass writes.
-fn face_impulse_to_bodies(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let nodes = gpu_flip_cells(x)?;
-    x.covers("impulses", face_count(nodes) * FACE)?;
-    let rows = body_rows(x)?;
-    x.covers("bodies", rows * size_of::<LiquidBody>() as u64)?;
-    x.covers("out", body_sums(u64::from(MAX_FLUID_ROLES as u32)))?;
-    x.covers_if_bound("base", body_sums(rows))?;
-    x.covers_if_bound("reaction", body_sums(rows))
 }
 
 // ── Whitewater ──────────────────────────────────────────────────────────────

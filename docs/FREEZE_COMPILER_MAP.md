@@ -168,7 +168,7 @@ counts from the fused uniforms,
 marker carries the same `prod(par(…),…)` expression, which `node.wgsl_compute`
 evaluates over its own params. `ParamProduct { params, plus }` with `plus` > 0
 adds it to every factor (`(Nu + x)`, marker `add(n,x)`): a face grid, one more
-face than cells per axis (pressure_face_impulse, friction_face_impulse). Such a region runs the capacity block even
+face than cells per axis (no shipped atom today; the region tests use the test-only `test.face_lattice`). Such a region runs the capacity block even
 with no gather, and its count is the output's lattice clamped by every member
 lattice and coincident array external that does not provably bound it; a
 clamp that would bite at the configured params refuses the region. The
@@ -354,8 +354,7 @@ contract is tiered — this is written down nowhere else:
    or subtracts from an upstream member's value lets the compiler fold that
    add into the producer's trailing `fma(x, y, a * b)`, which it cannot do
    when the value was loaded from memory. Use upstream values only as
-   multiplicands (`fma(k, u, -(k * v))`, not `k * (u - v)`;
-   `node.friction_face_impulse` after `node.pressure_face_impulse`).
+   multiplicands (`fma(k, u, -(k * v))`, not `k * (u - v)`).
    Proofs: digitalplants / fluidsim / fluidsim3d `*_renders_like_unfused`.
 4. **Out-of-loop texture regions: ≈1 ulp, NOT bit-exact, and cannot be.**
    Body-level FMA/inlining differs across kernel contexts; the 2026-06-10

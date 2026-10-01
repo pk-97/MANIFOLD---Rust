@@ -222,9 +222,9 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "face_impulse_to_bodies.rs",
-        rust_struct: "SumParams",
-        shader: "shaders/face_impulse_to_bodies.wgsl",
+        source: "gpu_flip_bodies.rs",
+        rust_struct: "Params",
+        shader: "shaders/gpu_flip_bodies.wgsl",
         shader_struct: "Params",
         aliases: &[],
     },
