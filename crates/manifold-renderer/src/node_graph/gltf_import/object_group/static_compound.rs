@@ -172,7 +172,9 @@ pub(in super::super) fn build_static_compound_group(
         .iter_mut()
         .find(|node| node.type_id == "node.scene_object")
     {
-        scene_object.handle = Some(materials[0].name.clone().unwrap_or_else(|| "Submesh 1".into()));
+        scene_object.handle = Some(
+            material_group_base(materials[0].name.as_deref()).unwrap_or_else(|| "Submesh 1".into()),
+        );
     }
 
     for (i, mut part) in parts.into_iter().enumerate() {
@@ -325,6 +327,7 @@ pub(in super::super) fn build_static_compound_group(
     primary.card_bindings.extend(shared_visible_bindings);
     primary.group_node.handle = Some(compound_name);
     let primary_body = primary.group_node.group.as_mut().expect("group body");
+    dedupe_part_names(primary_body);
     primary_body.interface.outputs = outputs;
     let boundary_ids: std::collections::HashSet<u32> =
         boundary_pairs.iter().map(|(_, output_id)| *output_id).collect();
@@ -335,4 +338,28 @@ pub(in super::super) fn build_static_compound_group(
     }
     primary.wires_to_render = render_wires;
     primary
+}
+
+/// Every part shares the compound's one body, so a part's material-derived
+/// `node.scene_object` handle must be unique against every sibling's
+/// deterministic handles (`mat_{k}`, `output_{i}`, `part_transform_{k}`, …)
+/// and every other part's name. `unique_group_name` only checks a part
+/// against its own `k`, which was enough when each part had its own group.
+fn dedupe_part_names(body: &mut GroupDef) {
+    let mut taken: std::collections::HashSet<String> = body
+        .nodes
+        .iter()
+        .filter(|node| node.type_id != "node.scene_object")
+        .filter_map(|node| node.handle.clone())
+        .collect();
+    for node in body.nodes.iter_mut().filter(|node| node.type_id == "node.scene_object") {
+        let Some(base) = node.handle.clone() else { continue };
+        let mut name = base.clone();
+        let mut n = 1;
+        while !taken.insert(name.clone()) {
+            name = format!("{base} {n}");
+            n += 1;
+        }
+        node.handle = Some(name);
+    }
 }

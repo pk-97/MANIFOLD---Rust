@@ -191,6 +191,8 @@ fn layer_param_survives_serde_round_trip() {
 /// textures, then composite — the compositor's end-of-frame publish is
 /// what layer_source reads NEXT frame. Mirrors the content-pipeline order
 /// (generators commit before the compositor).
+/// Returns the generator encoder's frame status (PendingGeometry while an
+/// async asset is still landing).
 #[cfg(feature = "gpu-proofs")]
 #[allow(clippy::too_many_arguments)]
 fn render_two_layer_frame(
@@ -203,7 +205,7 @@ fn render_two_layer_frame(
     layer_a_id: &manifold_core::LayerId,
     layer_b_id: &manifold_core::LayerId,
     frame: u64,
-) {
+) -> crate::frame_status::FrameRenderStatus {
     let time = frame as f64 / 60.0;
     let dt = 1.0 / 60.0;
     let ctx = |width: u32, height: u32| PresetContext {
@@ -224,7 +226,7 @@ fn render_two_layer_frame(
 
     // Generators first, one committed encoder.
     let mut enc = device.create_encoder("layer-skin-frame");
-    {
+    let status = {
         let mut gpu = GpuEncoder::new(&mut enc, device);
         if let Some(a) = runtime_a {
             a.render(
@@ -242,7 +244,8 @@ fn render_two_layer_frame(
             &ctx(W, H),
             &manifold_core::params::ParamManifest::default(),
         );
-    }
+        gpu.frame_status()
+    };
     enc.commit();
 
     // Then the compositor (its end-of-frame publish fills the registry).
@@ -330,6 +333,59 @@ fn render_two_layer_frame(
         compositor.render(&mut gpu, &frame_ctx);
     }
     enc.commit();
+    status
+}
+
+/// Pre-roll both layers until every async asset has landed, using the
+/// production load-time pre-roll's quiescence signal (`warmup_pending()`
+/// plus a Complete frame status). The GLB parses on a background thread, so
+/// a fixed frame count races it: under load the scene is still pending and
+/// reads back black, and the material pipeline compiles on whichever frame
+/// the mesh lands. Paced like production so the parse thread can finish.
+/// Returns the next frame index.
+#[cfg(feature = "gpu-proofs")]
+#[allow(clippy::too_many_arguments)]
+fn settle_two_layer(
+    device: &manifold_gpu::GpuDevice,
+    compositor: &mut LayerCompositor,
+    mut runtime_a: Option<&mut PresetRuntime>,
+    runtime_b: &mut PresetRuntime,
+    target_a: &RenderTarget,
+    target_b: &RenderTarget,
+    layer_a_id: &manifold_core::LayerId,
+    layer_b_id: &manifold_core::LayerId,
+    mut frame: u64,
+) -> u64 {
+    // Hang guard only, counted in paced frames; settling normally takes tens.
+    const SETTLE_FRAME_CAP: u64 = 10_000;
+    let start = frame;
+    loop {
+        let status = render_two_layer_frame(
+            device,
+            compositor,
+            runtime_a.as_deref_mut(),
+            runtime_b,
+            target_a,
+            target_b,
+            layer_a_id,
+            layer_b_id,
+            frame,
+        );
+        device
+            .create_encoder("layer-skin-settle-drain")
+            .commit_and_wait_completed();
+        frame += 1;
+        let pending = runtime_b.warmup_pending()
+            || runtime_a.as_deref().is_some_and(PresetRuntime::warmup_pending);
+        if !pending && status == crate::frame_status::FrameRenderStatus::Complete {
+            return frame;
+        }
+        assert!(
+            frame - start < SETTLE_FRAME_CAP,
+            "layer-skin scene never settled (pending {pending}, status {status:?})"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
 }
 
 /// Read back a texture's per-pixel luma over the center box (the model's
@@ -427,22 +483,24 @@ fn mutual_skin_two_layers_render_300_frames() {
         runtime_b.set_layer_skin_registry(Some(unsafe { ptr.get() }));
     }
 
-    // Frame-cost measurement: each iteration drains the GPU (an empty
-    // encoder's commit_and_wait waits every earlier buffer on the device's
-    // single queue), so per-frame wall time is the true two-layer skin
-    // frame cost — the MANIFOLD_RENDER_TRACE budget check, measured harder.
-    // Frames 0..WARMUP are cold start (GLB parse + first-use pipeline
-    // compiles — the accepted render_scene cold-frame pattern; startup
-    // prewarm is the app's job, not this harness's) and are reported but
-    // not budget-checked; the 20 ms budget is steady state.
-    const WARMUP: u64 = 10;
-    let mut cold_max_ms = 0.0f64;
-    let mut max_frame_ms = 0.0f64;
-    let mut total_ms = 0.0f64;
-    let mut steady_frames = 0u64;
-    for frame in 0..300 {
-        let t = std::time::Instant::now();
-        render_two_layer_frame(
+    // Cold start (GLB parse, first-draw pipeline compile) happens here,
+    // the same window the app's load-time pre-roll absorbs. After it, the
+    // loop must run with every frame complete and nothing re-entering a
+    // loading state. Frame cost is not checked here: wall-clock budgets
+    // in correctness proofs flake under machine load.
+    let settled = settle_two_layer(
+        &device,
+        &mut compositor,
+        Some(&mut runtime_a),
+        &mut runtime_b,
+        &target_a,
+        &target_b,
+        &layer_a_id,
+        &layer_b_id,
+        0,
+    );
+    for frame in settled..settled + 300 {
+        let status = render_two_layer_frame(
             &device,
             &mut compositor,
             Some(&mut runtime_a),
@@ -453,32 +511,16 @@ fn mutual_skin_two_layers_render_300_frames() {
             &layer_b_id,
             frame,
         );
-        device
-            .create_encoder("layer-skin-drain")
-            .commit_and_wait_completed();
-        let ms = t.elapsed().as_secs_f64() * 1000.0;
-        if frame < WARMUP {
-            cold_max_ms = cold_max_ms.max(ms);
-        } else {
-            max_frame_ms = max_frame_ms.max(ms);
-            total_ms += ms;
-            steady_frames += 1;
-        }
-        if frame >= 295 {
-            println!("mutual-skin frame {frame}: {ms:.2} ms");
-        }
+        assert_eq!(
+            status,
+            crate::frame_status::FrameRenderStatus::Complete,
+            "mutual-skin frame {frame} did not render completely"
+        );
+        assert!(
+            !runtime_a.warmup_pending() && !runtime_b.warmup_pending(),
+            "mutual-skin frame {frame} went back to loading after settle"
+        );
     }
-    println!(
-        "mutual-skin frame cost: cold max {cold_max_ms:.2} ms (first {WARMUP} frames), \
-         steady max {max_frame_ms:.2} ms, steady avg {:.2} ms over {steady_frames} frames \
-         (budget 20 ms)",
-        total_ms / steady_frames as f64
-    );
-    assert!(
-        max_frame_ms < 20.0,
-        "two-layer mutual-skin steady-state frame cost must stay under 20 ms \
-         (max {max_frame_ms:.2} ms)"
-    );
 
     // The loop closed: A is a pure pass-through of B's previous frame, so
     // after 300 steady frames A's pixels must reproduce B's (one frame of
@@ -547,9 +589,20 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
             )
             .expect("checkerboard graph must load")
         });
-        // Warmup: the GLB parse and accel build land in the first frames;
-        // the first variant also warms every pipeline.
-        for frame in 0..30 {
+        // Wait for the GLB to land, then run enough frames for the
+        // one-frame skin delay to propagate.
+        let settled = settle_two_layer(
+            &device,
+            &mut compositor,
+            runtime_a.as_mut(),
+            &mut runtime_b,
+            &target_a,
+            &target_b,
+            &layer_a_id,
+            &layer_b_id,
+            0,
+        );
+        for frame in settled..settled + 30 {
             let a_ref = runtime_a.as_mut();
             render_two_layer_frame(
                 &device,

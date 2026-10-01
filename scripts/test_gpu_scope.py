@@ -168,6 +168,24 @@ class ScopeTests(unittest.TestCase):
         self.assertTrue(run["lib"])
         self.assertEqual(run["targets"], ["gpu_proofs"])
 
+    def test_preset_runtime_test_file_maps_to_its_declared_module(self):
+        repo = self._repo_with(R + "preset_runtime/mod.rs")
+        (repo / R / "preset_runtime/mod.rs").write_text(
+            '#[cfg(test)]\n#[path = "tests/layer_skin.rs"]\nmod layer_skin_tests;\n')
+        p = plan([R + "preset_runtime/tests/layer_skin.rs"], repo=repo)
+        self.assertTrue(p.active)
+        self.assertIn("preset_runtime::layer_skin_tests::", p.filters)
+        self.assertTrue(p.runs()[0]["lib"])
+
+    def test_undeclared_preset_runtime_test_file_falls_back_to_the_module(self):
+        p = plan([R + "preset_runtime/tests/unknown.rs"])
+        self.assertIn("preset_runtime::", p.filters)
+
+    def test_layer_skin_source_selects_its_lib_proofs(self):
+        p = plan([R + "layer_skin.rs"])
+        self.assertTrue(p.active)
+        self.assertTrue({"layer_skin::", "preset_runtime::layer_skin_tests::"} <= p.filters)
+
     def _repo_with(self, rel):
         d = tempfile.mkdtemp()
         self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))

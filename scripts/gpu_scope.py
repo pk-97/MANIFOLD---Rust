@@ -152,6 +152,16 @@ GLTF_PATHS = (
 
 DOC_SUFFIXES = (".md", ".txt")
 
+# Renderer files outside node_graph/ whose lib tests include GPU proofs.
+# preset_runtime/ drives every graph; layer_skin.rs's end-to-end proofs live
+# in preset_runtime's tests, so its row names both modules.
+PRESET_RUNTIME_DIR = RENDERER_SRC + "preset_runtime/"
+LIB_PROOF_ROWS = {
+    RENDERER_SRC + "layer_skin.rs": ["layer_skin::", "preset_runtime::layer_skin_tests::"],
+}
+
+PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
+
 
 def is_gpu_path(path):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
@@ -160,6 +170,8 @@ def is_gpu_path(path):
     if path.startswith("crates/manifold-gpu/") or path.startswith(RENDERER_SRC + "node_graph/"):
         return True
     if "shaders/" in path or "gpu_encoder" in path:
+        return True
+    if path.startswith(PRESET_RUNTIME_DIR) or path in LIB_PROOF_ROWS:
         return True
     return "tests/gpu_proofs/" in path or is_gltf_path(path)
 
@@ -235,6 +247,29 @@ def module_filters(path):
     return ["::".join(m) + "::" for m in mods if m]
 
 
+def path_attr_filters(path, repo):
+    """Filters for a `<dir>/tests/<file>.rs` pulled in by `#[path] mod x;` in `<dir>/mod.rs`.
+
+    The test module is named by that declaration, not by the file path, so the
+    path-derived filter would select nothing. Unresolvable preset_runtime test
+    files fall back to the whole preset_runtime module rather than to nothing.
+    """
+    parts = path[len(RENDERER_SRC):].split("/")
+    if len(parts) < 3 or parts[-2] != "tests":
+        return None
+    dirs = parts[:-2]
+    try:
+        text = (Path(repo) / RENDERER_SRC / "/".join(dirs) / "mod.rs").read_text()
+    except OSError:
+        text = ""
+    for file_name, module in PATH_ATTR_MOD.findall(text):
+        if file_name == parts[-1]:
+            return ["::".join(dirs + [module]) + "::"]
+    if path.startswith(PRESET_RUNTIME_DIR):
+        return ["preset_runtime::"]
+    return None
+
+
 def default_shader_users(repo, wgsl_path, depth=3):
     """Rust files that (transitively through other .wgsl) include `wgsl_path`."""
     found, frontier, seen = set(), [wgsl_path], {wgsl_path}
@@ -288,8 +323,11 @@ def plan_for_paths(paths, repo, shader_users=None):
             rel = path[len(PROOFS_DIR):].split("/")
             plan.filters.add(rel[0][:-3] + "::" if len(rel) == 1 else rel[0] + "::")
             continue
+        if path in LIB_PROOF_ROWS:
+            plan.filters.update(LIB_PROOF_ROWS[path])
+            continue
         if path.startswith(RENDERER_SRC) and path.endswith(".rs"):
-            plan.filters.update(module_filters(path))
+            plan.filters.update(path_attr_filters(path, repo) or module_filters(path))
             continue
         if is_gltf_path(path):
             continue

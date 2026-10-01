@@ -23,6 +23,7 @@ mod scene_modifier_legacy;
 
 mod alpha_contract;
 mod fluid_pause;
+mod node_error_status;
 mod bug237_light_camera_commit_render_proof;
 mod camera_conformance;
 mod cinematic_scene_tail;
