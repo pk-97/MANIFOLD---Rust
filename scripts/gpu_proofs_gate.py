@@ -17,7 +17,9 @@ set. A touched GPU path with no mapping fails loudly; there is no silent
 run-everything fallback. `--all` runs the whole suite (nightly trunk_health).
 Explicit `--test NAME` / `--filter` / `--skip` bypass scoping for a hand-picked
 run. `--budget SECONDS` fails a run whose budgeted tests exceed it and names the
-slowest tests. The chosen mode and why are always printed.
+slowest tests. Scoped runs skip tests measured over
+gpu_scope.SLOW_THRESHOLD_S (scripts/gpu_test_times.json); `--record-times PATH` writes
+fresh measurements. The chosen mode and why are always printed.
 
 Exit 0 iff the underlying cargo run exited 0.
 
@@ -26,6 +28,7 @@ and the landing docs point at that instead.
 """
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -190,6 +193,35 @@ def write_timings_md(path: Path, timings: list, n: int = 25) -> None:
     path.write_text("\n".join(rows) + "\n")
 
 
+def write_times_json(path: Path, timings: list) -> str:
+    """Write measured per-test seconds; return a diff against the committed file."""
+    old = gpu_scope.load_times()
+    new = {n: round(secs, 1) for n, secs, _b, _bud in timings}
+    sha = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(
+        {"measured_at": time.strftime("%Y-%m-%d"), "sha": sha,
+         "tests": dict(sorted(new.items(), key=lambda kv: -kv[1]))}, indent=2) + "\n")
+    thr = gpu_scope.SLOW_THRESHOLD_S
+    lines = [f"GPU test times written to {path} (threshold {thr}s)"]
+    for n in sorted(set(old) | set(new)):
+        o, c = old.get(n), new.get(n)
+        if c is None and o > thr:
+            lines.append(f"  gone: {n} (was {o:.0f}s)")
+        elif o is None and c > thr:
+            lines.append(f"  new SLOW: {n} {c:.0f}s")
+        elif o is not None and c is not None:
+            if (o > thr) != (c > thr):
+                lines.append(f"  {'now SLOW' if c > thr else 'now fast'}: {n} {o:.0f}s -> {c:.0f}s")
+            elif c > thr and abs(c - o) > 0.25 * o:
+                lines.append(f"  moved: {n} {o:.0f}s -> {c:.0f}s")
+    if len(lines) == 1:
+        lines.append("  no threshold crossings vs the committed file")
+    lines.append("To adopt: review, then commit this file as scripts/gpu_test_times.json on a branch.")
+    return "\n".join(lines)
+
+
 def print_summary(
     output: str,
     exit_code: int,
@@ -238,7 +270,11 @@ def print_summary(
     print()
     if exit_code == 0 and over_budget:
         print(f"GPU-PROOFS GATE: FAIL (over time budget: {spent:.0f}s > {budget:.0f}s; "
-              "fix or split the slowest tests listed above, do not raise the budget)")
+              "to fix: if these tests are slow on purpose, record times with "
+              "`scripts/gpu_proofs_gate.py --all --record-times /tmp/t.json` and commit it as "
+              "scripts/gpu_test_times.json (tests over "
+              f"{gpu_scope.SLOW_THRESHOLD_S}s are skipped at landing); otherwise shorten the "
+              "slowest tests listed above. Do not raise the budget)")
         return 3
     if exit_code == 0:
         print("GPU-PROOFS GATE: PASS")
@@ -317,6 +353,9 @@ def main() -> int:
                         f"{gpu_scope.LANDING_BUDGET_S})")
     parser.add_argument("--timings-md", type=Path, default=None,
                         help="write the 25 slowest tests as markdown to this path")
+    parser.add_argument("--record-times", type=Path, default=None, metavar="PATH",
+                        help="write measured per-test seconds as JSON to PATH and print the diff "
+                        "vs scripts/gpu_test_times.json (use with --all; never writes the repo file)")
     args = parser.parse_args()
 
     manifest_path = args.manifest_path or default_manifest_path()
@@ -365,6 +404,8 @@ def main() -> int:
     output = "".join(outputs)
     if args.timings_md:
         write_timings_md(args.timings_md, all_timings)
+    if args.record_times:
+        print(write_times_json(args.record_times, all_timings))
     return print_summary(output, exit_code, all_timings, args.budget)
 
 

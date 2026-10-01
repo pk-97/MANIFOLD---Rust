@@ -183,15 +183,48 @@ class GpuProofsGateTests(unittest.TestCase):
         self.assertTrue(calls[0]["full"])
         self.assertIn("GPU-PROOFS MODE: all", text)
 
-    def test_all_keeps_nightly_only_tests_and_scoped_skips_them(self):
+    def test_all_keeps_slow_tests_and_scoped_skips_them(self):
+        import json, tempfile
         import gpu_scope
-        code, calls, _ = self.run_main(["--all"])
-        self.assertEqual(calls[0]["skips"], [])
-        self.assertTrue(calls[0]["full"])
-        code, calls, _ = self.run_main(
-            [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/matter_fill.rs"])
-        for t in gpu_scope.NIGHTLY_ONLY:
-            self.assertIn(t, calls[0]["skips"])
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        (d / "t.json").write_text(json.dumps({"tests": {"m::slow": 90.0, "m::fast": 5.0}}))
+        with patch.object(gpu_scope, "TIMES_PATH", d / "t.json"):
+            code, calls, _ = self.run_main(["--all"])
+            self.assertEqual(calls[0]["skips"], [])
+            self.assertTrue(calls[0]["full"])
+            code, calls, _ = self.run_main(["--filter", "m::slow"])
+            self.assertEqual(calls[0]["skips"], [])
+            code, calls, _ = self.run_main(
+                [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/matter_fill.rs"])
+            self.assertIn("m::slow", calls[0]["skips"])
+            self.assertNotIn("m::fast", calls[0]["skips"])
+
+    def test_record_times_writes_json_and_prints_diff_without_touching_repo_file(self):
+        import json, tempfile
+        import gpu_scope
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        committed = d / "committed.json"
+        committed.write_text(json.dumps({"tests": {"m::was_slow": 90.0}}))
+        before = committed.read_text()
+        out = d / "out.json"
+        with patch.object(gpu_scope, "TIMES_PATH", committed):
+            text = gate.write_times_json(out, [("m::was_slow", 10.0, "b", True),
+                                               ("m::new_slow", 70.0, "b", True)])
+        data = json.loads(out.read_text())
+        self.assertEqual(data["tests"], {"m::new_slow": 70.0, "m::was_slow": 10.0})
+        self.assertIn("now fast: m::was_slow", text)
+        self.assertIn("new SLOW: m::new_slow", text)
+        self.assertEqual(committed.read_text(), before)
+
+    def test_over_budget_message_says_how_to_fix(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.print_summary("", 0, [("slow", 400.0, "b", True)], 300)
+        self.assertEqual(code, 3)
+        self.assertIn("--record-times", out.getvalue())
+        self.assertIn("shorten", out.getvalue())
 
     def test_explicit_filter_bypasses_scoping(self):
         code, calls, text = self.run_main(["--filter", "water_"], repo_changed=["docs/X.md"])

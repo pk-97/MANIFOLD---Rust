@@ -8,6 +8,8 @@ scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).
+- Scoped runs skip every test whose measured time (scripts/gpu_test_times.json)
+  is over SLOW_THRESHOLD_S; there is no hand-kept list.
 - glb_conformance (the ~16-minute glTF sample sweep) runs only when glTF import
   paths are touched, and is exempt from the time budget.
 - manifold-gpu core, shared WGSL and the proof harness map to BROAD, a bounded
@@ -19,6 +21,7 @@ Filters are libtest substring filters applied to the renderer lib binary
 Obsolete when: the GPU test suite is fast enough to run whole at every landing.
 """
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -55,15 +58,28 @@ RUNTIME_FILTERS = [
 # manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs.
 BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights"]
 
-# Too slow for the landing budget (583 s together, measured); scoped runs skip
-# them, --all and explicit --test/--filter still run them. Retires when
-# landing-sized variants exist (bead: Landing-sized versions of the three slow
-# matter acceptance tests).
-NIGHTLY_ONLY = [
-    "matter_bodies::matter_collider_penetration_bounded",
-    "matter_look::matter_look_splash_retention",
-    "matter_look::matter_look_volume_drift",
-]
+# Tests measured slower than this are skipped by scoped runs (nightly --all runs
+# them). The measurements live in scripts/gpu_test_times.json, written by
+# `gpu_proofs_gate.py --all --record-times PATH` (nightly trunk_health does this
+# into /tmp; a human commits the refresh). A test missing from the file runs.
+SLOW_THRESHOLD_S = 60
+TIMES_PATH = Path(__file__).resolve().parent / "gpu_test_times.json"
+
+
+def load_times(path=None):
+    """{test name: seconds} from the measured-times file; {} if absent."""
+    path = Path(path or TIMES_PATH)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text()).get("tests", {})
+
+
+def slow_tests(times=None):
+    """[(name, seconds)] measured over SLOW_THRESHOLD_S, slowest first."""
+    times = load_times() if times is None else times
+    return sorted(((n, s) for n, s in times.items() if s > SLOW_THRESHOLD_S),
+                  key=lambda t: -t[1])
+
 
 # A shader included by more primitives than this is "shared WGSL" -> BROAD.
 SHARED_WGSL_USERS = 12
@@ -159,7 +175,7 @@ class Plan:
 
     def final_skips(self):
         # A skip that would hide a filter we deliberately selected is dropped.
-        skips = set(self.skips) | set(NIGHTLY_ONLY)
+        skips = set(self.skips) | {n for n, _ in slow_tests()}
         return sorted(s for s in skips if not any(s in f for f in self.filters))
 
     def runs(self):
@@ -178,7 +194,8 @@ class Plan:
         lines.append(f"  filters: {', '.join(self.final_filters())}")
         if self.final_skips():
             lines.append(f"  skips: {', '.join(self.final_skips())}")
-        lines.append("  skipped, run nightly only: " + ", ".join(NIGHTLY_ONLY))
+        for name, secs in slow_tests():
+            lines.append(f"  {name}: skipped, run nightly only (measured {secs:.0f}s)")
         if self.broad:
             lines.append("  broad set (runtime + lighting) because: " +
                          "; ".join(f"{p} ({why})" for p, why in self.broad))
