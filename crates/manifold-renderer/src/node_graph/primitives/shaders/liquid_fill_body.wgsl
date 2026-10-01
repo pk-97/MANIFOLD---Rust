@@ -6,7 +6,9 @@
 // [box_x0, x1) × [max(box_y0, pool), y1) × [box_z0, z1). Each particle is
 // jittered by up to jitter / 4 cells each way by a hash of (seed, slot) and
 // starts at rest; the radius is that of a sphere of an eighth of a cell;
-// id = slot + 1. Slots past the fill are unused (all zero).
+// id = slot + 1. Slots past the fill are unused (all zero). The lattice
+// params are the padded lattice (liquid::lattice, 3 nodes of padding a side):
+// the authored box starts 3 cells in and has nodes − 7 cells per axis.
 
 fn liquid_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
@@ -39,7 +41,7 @@ fn body(
     seed: i32,
 ) -> Element {
     var out = Element(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
-    let n = 2u * vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    let n = 2u * vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z) - vec3<f32>(7.0), vec3<f32>(0.0)));
     let pool = min(u32(max(pool_sites, 0)), n.y);
     let x0 = min(u32(max(box_x0, 0)), n.x);
     let x1 = min(u32(max(box_x1, 0)), n.x);
@@ -64,7 +66,7 @@ fn body(
     let key = idx * 3u + u32(seed) * 2654435761u;
     let unit = vec3<f32>(liquid_fill_unit(key), liquid_fill_unit(key + 1u), liquid_fill_unit(key + 2u));
     let local = vec3<f32>(0.25) + 0.5 * vec3<f32>(s) + 0.5 * jitter * (unit - vec3<f32>(0.5));
-    let lo = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
+    let lo = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + vec3<f32>(3.0 * cell_size);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell.
     let radius = 0.31017 * cell_size;
     out.position_radius = vec4<f32>(lo + local * cell_size, radius);

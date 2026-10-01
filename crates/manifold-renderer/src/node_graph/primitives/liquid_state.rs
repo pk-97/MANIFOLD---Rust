@@ -5,13 +5,16 @@
 //! tick (read back one frame late through a fenced ring) halts the liquid
 //! with a node error until the domain's epoch changes (Reset). The last
 //! tick's face grid escapes beside the particles into storage this node owns,
-//! sized from the body's own faces, so it holds while the transport is paused.
+//! sized from the lattice wires before the region runs, so it is whole from
+//! the first frame and holds while the transport is paused.
 
 use manifold_gpu::GpuBuffer;
 
+use super::gpu_flip_step::face_bytes;
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
@@ -56,6 +59,9 @@ crate::primitive! {
         count: ScalarF32 optional,
         ticks: ScalarF32 optional,
         epoch: ScalarF32 optional,
+        nodes_x: ScalarF32 optional,
+        nodes_y: ScalarF32 optional,
+        nodes_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -67,7 +73,7 @@ crate::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in; the last step's projected, extended faces close into faces_in. out and stats escape to node.liquid_frame; faces to three node.face_sample_component that feed the frame's face grid.",
+    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in; the last step's projected, extended faces close into faces_in, and the domain's nodes_x/y/z size the held faces (required with faces_in). out and stats escape to node.liquid_frame; faces to three node.face_sample_component that feed the frame's face grid.",
     examples: [],
     picker: { label: "Liquid State", category: Atom },
     summary: "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -164,29 +170,39 @@ impl Primitive for LiquidState {
         let seed = ctx.inputs.array("seed");
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
-        let faces_in = ctx.inputs.array("faces_in").filter(|_| ctx.outputs.array("faces").is_some());
         let mut refused = None;
+        // The face grid's bytes, from the lattice this frame's ticks run on:
+        // faces_in still holds the last frame's (or no) body here.
+        let face_grid = if ctx.inputs.slot("faces_in").is_none() {
+            None
+        } else if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| ctx.inputs.slot(port).is_none()) {
+            refused = Some("Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".to_string());
+            None
+        } else {
+            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| face_bytes(lattice.cells()))
+        }
+        .filter(|_| ctx.outputs.array("faces").is_some());
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
         let zero_stats = self.zero_stats.get_or_insert_with(|| gpu.device.create_buffer(stats_bytes));
 
-        // The faces are the body's size, held across frames; unwired, none.
+        // The faces are the lattice's face grid, held across frames; unwired
+        // or refused, none.
         let mut fresh_faces = false;
-        match faces_in {
+        match face_grid {
             None => self.faces = None,
-            Some(faces_in) if self.faces.as_ref().is_none_or(|f| f.size != faces_in.size) => {
+            Some(bytes) if self.faces.as_ref().is_none_or(|f| f.size != bytes) => {
                 let device = gpu.device;
                 self.faces = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
                     device.modifier_memory_snapshot(),
-                    faces_in.size,
+                    bytes,
                 )
                 .map_err(|error| error.to_string())
-                .and_then(|()| device.try_create_buffer_shared(faces_in.size))
+                .and_then(|()| device.try_create_buffer_shared(bytes))
                 .map_err(|error| {
                     refused = Some(format!(
-                        "Liquid State: the face grid needs {} bytes the device cannot give: {error}. Lower Resolution.",
-                        faces_in.size
+                        "Liquid State: the face grid needs {bytes} bytes the device cannot give: {error}. Lower Resolution."
                     ));
                 })
                 .ok();
@@ -256,8 +272,14 @@ impl Primitive for LiquidState {
         }
         // Only the frame's last tick reaches the faces.
         if let (Some(candidate), Some(faces)) = (ctx.inputs.array("faces_in"), self.faces.as_ref()) {
-            let size = candidate.size.min(faces.size);
-            ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, faces, size);
+            if candidate.size == faces.size {
+                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, faces, faces.size);
+            } else {
+                ctx.error(format!(
+                    "Liquid State: the tick's faces hold {} bytes; the lattice's face grid is {}",
+                    candidate.size, faces.size
+                ));
+            }
         }
         self.ticks_done += u64::from(self.pending);
         let Some(stats) = ctx.outputs.array("stats") else { return };

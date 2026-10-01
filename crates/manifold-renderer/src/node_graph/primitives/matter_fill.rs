@@ -145,7 +145,9 @@ impl Primitive for MatterFill {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Fill") else {
+            return;
+        };
         let int = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let pool = int("pool_cells", 3.0);
         let column = [

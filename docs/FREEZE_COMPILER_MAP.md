@@ -162,26 +162,25 @@ analytic_echo_instances' 8x echo stride — BUG-orm4 (scene-mirror-blocked-outpu
 the fresh `dst` is sized to the
 same expression via the `// @fused_output_capacity:` marker on the kernel.
 A lattice atom declaring `ParamProduct { params }` (its output is the
-product of Float lattice params, whatever its inputs hold: zero_lattice,
-cells_with_particles, face_divergence) counts from the fused uniforms,
+product of Float lattice params, whatever its inputs hold: spawn_whitewater)
+counts from the fused uniforms,
 `u32(max(round(params.n<member>_<param>), 0.0))` per factor, and the
 marker carries the same `prod(par(…),…)` expression, which `node.wgsl_compute`
-evaluates over its own params. Such a region runs the capacity block even
+evaluates over its own params. `ParamProduct { params, plus }` with `plus` > 0
+adds it to every factor (`(Nu + x)`, marker `add(n,x)`): a face grid, one more
+face than cells per axis (pressure_face_impulse, friction_face_impulse). Such a region runs the capacity block even
 with no gather, and its count is the output's lattice clamped by every member
 lattice and coincident array external that does not provably bound it; a
 clamp that would bite at the configured params refuses the region. The
 probe hands a `ParamProduct` member its configured params.
 BUG-u8io (fft-water-fusion-param-capacity), pinned by
-`lattice_sized_region_counts_its_lattice` and
-`lattice_sized_region_clamps_by_its_members_and_coincident_reads`; GPU FLIP's
-solve and step gather everywhere, so nothing in them fuses in the shipped
-graph (`gpu_flip_solve_and_step_do_not_fuse`), and its lattice pairs are
-proved fused against unfused bit for bit in `gpu_flip_atom_tests.rs`. Not
-covered: a face-grid atom whose one axis is n + 1 (node.face_sample_component).
+`lattice_sized_region_counts_and_clamps_its_lattice`. GPU FLIP's step is one
+hand-written node (`node.gpu_flip_step`), so none of it fuses. Not covered: a
+face-grid atom whose one axis is n + 1 (node.face_sample_component).
 An atom whose output follows one input declares `FromInput`, never
 `MinInputs`: `MinInputs` counts every required input, gathered ones included,
 so a gathered input shorter than the followed one shrinks the fused count
-(node.prolong_lattice's coarse input; node.divide_by_value's divisor was
+(node.divide_by_value's divisor was
 BUG-sk62 (divide_by_value fused region shrinks to its one-element divisor)).
 Undeclared/non-expressible capacities (conditional, max-selector, one-input
 selector) refuse the region — fail closed to unfused. The probe runs twice,
@@ -189,8 +188,7 @@ ascending and descending synthetics per slot, so a selector cannot pass as
 `MinInputs` by holding the smallest one: BUG-2efy (capacity probe admits an output that follows slot 0),
 pinned by `output_following_one_input_is_refused_under_min_inputs`. The
 probe still misses an output that follows an input in a middle slot while
-another slot is ignored (prolong_lattice before it declared `FromInput`);
-that gap is on BUG-2efy (capacity probe admits an output that follows slot 0). And a
+another slot is ignored; that gap is on BUG-2efy (capacity probe admits an output that follows slot 0). And a
 gathered slot can never be an in-place alias (read-write race within one
 dispatch); the same refusal covers a widened region writing in place over a
 shorter loop buffer. **Derived uniforms, ANY declared
@@ -258,12 +256,12 @@ gathered producer stays an external the body samples); same element space
 (convexity — Watercolor's out-through-a-blur-and-back shape). State-capture
 wires are excluded from the forward graph, matching the planner, or legal
 feedback loops would read as cycles. Both endpoints must also sit in the same
-innermost substep region, or both outside every region (`substep_sides`, from
-the plan compiler's own nest, `substeps::nest_regions`), so no kernel crosses
-an outer or an inner border; stencil absorption obeys the same borders. A
-kernel spanning one would repeat outside work per iteration or leak a body
-intermediate. A nest the compiler refuses gives every node its own side, so
-nothing fuses.
+substep region, or both outside every region (`substep_sides`, from the plan
+compiler's own `substeps::region_body`), so no kernel crosses a region border
+(`substeps_freeze_never_fuses_across_border`); stencil absorption obeys the
+same borders. A kernel spanning one would repeat outside work per iteration
+or leak a body intermediate. A boundary inside another region's body, which
+the plan compiler refuses, gives every node its own side, so nothing fuses.
 
 **Region gates (`build_region`):** members topo-sort (cycle ⇒ refuse);
 required/gather/buffer inputs must be wired (optional coincident unwired is OK
@@ -352,8 +350,12 @@ contract is tiered — this is written down nowhere else:
 3. **Fused buffer regions: bit-exact** (f32 element registers, same math),
    provided the body writes every multiply-add as an explicit `fma()`: under
    fast math the compiler contracts a bare `a * b + c` differently in the
-   standalone and the fused kernel (one ulp on `node.face_gravity` before it
-   did).
+   standalone and the fused kernel. Across members the same holds one level up: a consumer that adds to
+   or subtracts from an upstream member's value lets the compiler fold that
+   add into the producer's trailing `fma(x, y, a * b)`, which it cannot do
+   when the value was loaded from memory. Use upstream values only as
+   multiplicands (`fma(k, u, -(k * v))`, not `k * (u - v)`;
+   `node.friction_face_impulse` after `node.pressure_face_impulse`).
    Proofs: digitalplants / fluidsim / fluidsim3d `*_renders_like_unfused`.
 4. **Out-of-loop texture regions: ≈1 ulp, NOT bit-exact, and cannot be.**
    Body-level FMA/inlining differs across kernel contexts; the 2026-06-10
@@ -478,19 +480,12 @@ invariant a fused def must respect:
     the same step evaluator the frame pass uses, capturing after each
     iteration. Fused body kernels run per iteration and read that iteration's
     scalars; they never contain a node from outside the body (section 4).
-    Regions nest at most two deep (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D10):
-    an outer body holds whole inner regions, and the executor runs an inner
-    region its own count times on every outer iteration through the same
-    driver, each level writing its own scalars from its own scratch. A fused
-    kernel lies in one innermost region (`nested_region_fusion_stays_inside`).
+    Regions do not nest: a boundary inside another region's body is a compile
+    error (`substeps_region_nested_boundary_rejected`).
     A boundary may opt in to host syncs by naming a clock port; offline only,
     the executor may then commit, wait and run the clock owner's host step
-    between two iterations. Only an outer region may name a clock (an inner
-    one is a compile error), so syncs fall only between outer iterations. A
-    region that has not opted in never commits or waits mid-region, so a
-    fused body can rely on one uninterrupted encode. The fused-def caches key
-    on the def's content and the nest is a function of the def, so the keys
-    already cover nesting (`nested_region_freeze_key_includes_nesting`).
+    between two iterations. A region that has not opted in never commits or
+    waits mid-region, so a fused body can rely on one uninterrupted encode.
 
 ## 10. Test surface & how to debug
 

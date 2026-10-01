@@ -182,8 +182,7 @@ pub struct ExecutionPlan {
     /// so the executor's per-frame commit does no name lookups.
     mesh_rules: Vec<Option<CompiledMeshOutputRule>>,
     /// Substep repeat regions (`docs/GPU_MPM_SOLVER_DESIGN.md` D7), one per
-    /// top-level boundary node; nested regions sit in their outer region's
-    /// `inner`. Empty for every graph without one.
+    /// boundary node. Empty for every graph without one.
     substep_regions: Vec<crate::node_graph::substeps::SubstepRegion>,
 }
 
@@ -320,8 +319,8 @@ impl ExecutionPlan {
         &self.coupled_scenes
     }
 
-    /// Top-level substep repeat regions derived at compile time, each with its
-    /// nested regions in `inner`; empty for graphs without a substep boundary.
+    /// Substep repeat regions derived at compile time; empty for graphs
+    /// without a substep boundary.
     pub fn substep_regions(&self) -> &[crate::node_graph::substeps::SubstepRegion] {
         &self.substep_regions
     }
@@ -415,14 +414,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     let has_root = graph.nodes().any(|inst| graph.is_liveness_root(inst.id));
     let active_order = active_execution_order(graph, &full_order, has_root);
     // Substep regions contract to one vertex each, like coupled scenes, so
-    // every region's steps are one contiguous block (boundary first). An
-    // outer block already holds its inner regions as contiguous runs.
+    // every region's steps are one contiguous block (boundary first).
     let region_nodes = crate::node_graph::substeps::derive_regions(graph, &active_order)?;
-    let region_blocks: Vec<Vec<NodeInstanceId>> = region_nodes
-        .iter()
-        .filter(|r| r.parent.is_none())
-        .map(|r| r.nodes.clone())
-        .collect();
+    let region_blocks: Vec<Vec<NodeInstanceId>> = region_nodes.iter().map(|r| r.nodes.clone()).collect();
     let (order, coupled_scenes) =
         contracted_execution_order(graph, &active_order, &region_blocks)?;
 
@@ -1092,20 +1086,14 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
 
     // Region resources: every remaining wire whose last reader is a region
     // step. Held for the whole repeat by the executor's region path and
-    // released when the region ends — never through `free_after`. An outer
-    // region's steps include its inner regions', so it holds what they read
-    // across every outer iteration; an inner region holds nothing itself.
-    let region_steps = |region: &crate::node_graph::substeps::RegionNodes| -> Vec<usize> {
-        let steps: Vec<usize> = region.nodes.iter().map(|n| step_of[n]).collect();
+    // released when the region ends — never through `free_after`.
+    let mut substep_regions = Vec::with_capacity(region_nodes.len());
+    for region in &region_nodes {
+        let step_indices: Vec<usize> = region.nodes.iter().map(|n| step_of[n]).collect();
         debug_assert!(
-            steps.windows(2).all(|w| w[1] == w[0] + 1),
+            step_indices.windows(2).all(|w| w[1] == w[0] + 1),
             "region steps are contiguous by contraction"
         );
-        steps
-    };
-    let mut substep_regions = Vec::with_capacity(region_nodes.len());
-    for region in region_nodes.iter().filter(|r| r.parent.is_none()) {
-        let step_indices = region_steps(region);
         let mut held_resources: Vec<ResourceId> = last_reader
             .iter()
             .filter(|(_, reader)| step_indices.contains(reader))
@@ -1115,24 +1103,11 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         for res in &held_resources {
             last_reader.remove(res);
         }
-        let mut inner: Vec<crate::node_graph::substeps::SubstepRegion> = region_nodes
-            .iter()
-            .filter(|r| r.parent == Some(region.boundary))
-            .map(|r| crate::node_graph::substeps::SubstepRegion {
-                boundary: r.boundary,
-                steps: region_steps(r),
-                held_resources: Vec::new(),
-                clock: r.clock,
-                inner: Vec::new(),
-            })
-            .collect();
-        inner.sort_by_key(|r| r.steps[0]);
         substep_regions.push(crate::node_graph::substeps::SubstepRegion {
             boundary: region.boundary,
             steps: step_indices,
             held_resources,
             clock: region.clock,
-            inner,
         });
     }
 

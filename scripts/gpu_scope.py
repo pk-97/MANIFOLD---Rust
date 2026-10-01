@@ -107,6 +107,18 @@ EXPLICIT_ROWS = [
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
      (["matter_", "substeps_"], [])),
+    # GPU FLIP water (GPU_FLIP_PRESSURE_SOLVE.md): the step's proofs are scene
+    # proofs in other files (still pool, free fall, whitewater, resize), so a
+    # module filter alone would miss them.
+    ((RENDERER_SRC + "node_graph/liquid/",
+      RENDERER_SRC + "node_graph/primitives/gpu_flip_",
+      RENDERER_SRC + "node_graph/primitives/liquid_state",
+      RENDERER_SRC + "node_graph/primitives/liquid_fill",
+      RENDERER_SRC + "node_graph/primitives/face_sample_component",
+      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_",
+      RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
+      RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
+     (["gpu_flip_", "face_grid_tests::"], [])),
     # Graph runtime.
     ((RENDERER_SRC + "node_graph/execution",
       RENDERER_SRC + "node_graph/resource_allocation",

@@ -6,11 +6,11 @@
 //! `gpu_flip_scenes_cover_every_dispatch` proves every array these graphs
 //! allocate before any of them runs here.
 
-use super::gpu_flip_preset::WaterScene;
+use super::gpu_flip_preset::{PRESSURE_ITERATIONS, WaterScene};
 use super::gpu_flip_scene_tests::{Run, divergence, particle_stats};
 use super::gpu_flip_still::write_still;
 use super::gpu_flip_volume::VolumeDrift;
-use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
+use crate::node_graph::fluid_particles::FluidParticle;
 
 /// How the live particles move: mean, 99th-percentile and top speed (m/s),
 /// and the highest particle (m above the floor).
@@ -307,6 +307,80 @@ pub(crate) fn packing(positions: impl Iterator<Item = [f32; 4]>, origin: [f64; 3
     Packing { crowded: share(crowded), hollow: share(hollow) }
 }
 
+/// How far the water has broken apart in one frame: the live particles
+/// binned into cells of edge `h`, and the occupied cells joined across faces
+/// into bodies. A sheet that holds together stays one body; one that tears
+/// leaves drops.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Breakup {
+    /// The share of live particles outside the largest body.
+    pub detached: f64,
+    /// How many bodies.
+    pub pieces: usize,
+}
+
+/// [`Breakup`] for `positions` binned into `cells` of edge `h` from `origin`.
+pub(crate) fn breakup(positions: impl Iterator<Item = [f32; 4]>, origin: [f64; 3], cells: [usize; 3], h: f64) -> Breakup {
+    let mut per_cell = vec![0u32; cells.iter().product()];
+    let index = |c: [usize; 3]| c[0] + cells[0] * (c[1] + cells[1] * c[2]);
+    let mut live = 0usize;
+    for p in positions {
+        let c: [usize; 3] = std::array::from_fn(|a| (((f64::from(p[a]) - origin[a]) / h).max(0.0) as usize).min(cells[a] - 1));
+        per_cell[index(c)] += 1;
+        live += 1;
+    }
+    let mut seen = vec![false; per_cell.len()];
+    let (mut pieces, mut largest, mut stack) = (0usize, 0usize, Vec::new());
+    for start in 0..per_cell.len() {
+        if per_cell[start] == 0 || seen[start] {
+            continue;
+        }
+        pieces += 1;
+        let mut held = 0usize;
+        seen[start] = true;
+        stack.push(start);
+        while let Some(c) = stack.pop() {
+            held += per_cell[c] as usize;
+            let p = [c % cells[0], (c / cells[0]) % cells[1], c / (cells[0] * cells[1])];
+            for a in 0..3 {
+                for side in [-1i64, 1] {
+                    let q = p[a] as i64 + side;
+                    if q < 0 || q >= cells[a] as i64 {
+                        continue;
+                    }
+                    let mut r = p;
+                    r[a] = q as usize;
+                    let next = index(r);
+                    if per_cell[next] > 0 && !seen[next] {
+                        seen[next] = true;
+                        stack.push(next);
+                    }
+                }
+            }
+        }
+        largest = largest.max(held);
+    }
+    Breakup { detached: (live - largest) as f64 / live.max(1) as f64, pieces }
+}
+
+/// Sheet breakup over a run: the peak detached share and piece count with
+/// their frames, and their means over the splash, frames 30–150.
+pub(crate) fn report_breakup(label: &str, frames: &[Breakup]) {
+    let peak = |f: fn(&Breakup) -> f64| {
+        frames.iter().enumerate().map(|(i, b)| (f(b), i)).fold((0.0, 0), |m, v| if v.0 > m.0 { v } else { m })
+    };
+    let splash = &frames[30.min(frames.len())..151.min(frames.len())];
+    let mean = |f: fn(&Breakup) -> f64| splash.iter().map(f).sum::<f64>() / splash.len().max(1) as f64;
+    let (detached, at) = peak(|b| b.detached);
+    let (pieces, pieces_at) = peak(|b| b.pieces as f64);
+    println!(
+        "{label}: breakup detached peak {:.2}% at frame {at}, mean {:.2}% over frames 30–150; pieces peak {pieces:.0} at frame {pieces_at}, mean {:.0}",
+        100.0 * detached,
+        100.0 * mean(|b| b.detached),
+        mean(|b| b.pieces as f64)
+    );
+}
+
 /// What one Dam Break run measured.
 struct Record {
     gpu: Vec<f64>,
@@ -370,7 +444,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new(), feel: Vec::new() };
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut blocks_max, mut water_max) = (0.0_f64, 0.0_f64);
-    let (mut raw, mut oracle, mut packed) = (Vec::new(), None, Vec::new());
+    let (mut raw, mut oracle, mut packed, mut broken) = (Vec::new(), None, Vec::new(), Vec::new());
     for frame in 0..frames {
         let (g, c) = run.frame();
         record.gpu.push(g);
@@ -400,6 +474,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         record.feel.push(feel(particles.iter().map(|p| (p.position_radius, p.velocity)), min[1], guard));
         let pack = gpu_flip_packing(&particles, min, n, h);
         packed.push(pack);
+        let live = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| p.position_radius);
+        broken.push(breakup(live, min, [n; 3], h));
         let sheet = frame % 5 == 4 && frame < 90;
         if frame % 15 == 14 || sheet {
             let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| (p.position_radius, p.velocity)).collect();
@@ -427,6 +503,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     }
     report_packing(&run.particles(), min, n, h);
     report_water(label, &packed);
+    report_breakup(label, &broken);
     println!("{label}: GPU {:.2} ms median, CPU encode {:.2} ms median", median(&record.gpu), median(&record.cpu));
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));
     println!("{label}: water at most {:.1}% of cells, {:.1}% of 8³ blocks", 100.0 * water_max, 100.0 * blocks_max);
@@ -548,6 +625,43 @@ fn gpu_flip_wall_feel_64() {
     }
 }
 
+/// The free surface on the meshed Dam Break, air at zero pressure on its
+/// cell centres against the ghost-fluid surface, at `n`: sheet breakup,
+/// volume and the race rows. The engine's breakup is `gpu_flip_engine_splash_64`
+/// and `gpu_flip_engine_race_refined`.
+fn ghost_fluid_race(n: usize) {
+    // The ghost rows stiffen the surface cells the plain coarse levels never
+    // see, so the ghost runs also show how far the shipped count leaves them.
+    for (ghost, iterations) in [(false, PRESSURE_ITERATIONS), (true, PRESSURE_ITERATIONS), (true, 16)] {
+        let scene = WaterScene { ghost_fluid: ghost, ..WaterScene::dam_break(n).with_surface() }.with_iterations(iterations);
+        let label = format!("SURFACE {} {iterations} it {n}³", if ghost { "ghost" } else { "plain" });
+        dam_break(scene, &label, 300);
+    }
+}
+
+#[test]
+fn gpu_flip_ghost_fluid_64() {
+    ghost_fluid_race(64);
+}
+
+#[test]
+fn gpu_flip_ghost_fluid_refined() {
+    ghost_fluid_race(128);
+}
+
+/// The particle-to-face kernel on the meshed Dam Break as shipped: sheet
+/// breakup and the race rows, read against the ghost rows of
+/// `gpu_flip_ghost_fluid_64` and `_refined` and the engine's.
+#[test]
+fn gpu_flip_transfer_kernel_64() {
+    dam_break(WaterScene::dam_break(64).with_surface(), "TRANSFER 64³", 300);
+}
+
+#[test]
+fn gpu_flip_transfer_kernel_refined() {
+    dam_break(WaterScene::dam_break(128).with_surface(), "TRANSFER 128³", 300);
+}
+
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
 #[test]
 fn gpu_flip_dam_break_settles() {
@@ -566,138 +680,5 @@ fn gpu_flip_density_sweep() {
     for (share, iterations) in [(5.0 / 6.0, 3), (1.0, 3), (1.5, 3), (5.0 / 6.0, 8), (1.0, 8)] {
         let scene = WaterScene { spread_rate: share * per_second, density_iterations: iterations, ..base };
         dam_break(scene, &format!("SWEEP share {share:.2} iterations {iterations}"), 300);
-    }
-}
-
-/// Where a water cell sits: beside air inside the box, touching a box wall,
-/// or neither.
-const PLACES: [&str; 3] = ["surface", "wall", "interior"];
-
-/// The projection's leftover divergence over one place's water cells.
-#[derive(Clone, Copy, Default)]
-struct Leftover {
-    cells: usize,
-    squares: f64,
-    max: f64,
-    /// Cells past 1/s.
-    past_one: usize,
-}
-
-/// [`Leftover`] per place over a face grid's water cells, and the worst
-/// cell: |divergence| (1/s), its place and its cell.
-fn leftover_by_place(faces: &[FaceSample], water: &[f32], n: usize, h: f64) -> ([Leftover; 3], (f64, usize, [usize; 3])) {
-    let m = n + 1;
-    let pad = |i: usize, j: usize, k: usize| i + m * (j + m * k);
-    let wet = |i: usize, j: usize, k: usize| water[i + n * (j + n * k)] > 0.5;
-    let mut places = [Leftover::default(); 3];
-    let mut worst = (0.0, 0, [0; 3]);
-    for k in 0..n {
-        for j in 0..n {
-            for i in 0..n {
-                if !wet(i, j, k) {
-                    continue;
-                }
-                let at = |p: usize, a: usize| f64::from(faces[p].velocity[a]);
-                let d = (at(pad(i + 1, j, k), 0) - at(pad(i, j, k), 0) + at(pad(i, j + 1, k), 1) - at(pad(i, j, k), 1)
-                    + at(pad(i, j, k + 1), 2)
-                    - at(pad(i, j, k), 2))
-                    / h;
-                let c = [i, j, k];
-                let on_wall = c.iter().any(|&v| v == 0 || v == n - 1);
-                let beside_air = (0..3).any(|a| {
-                    [-1i64, 1].iter().any(|&s| {
-                        let v = c[a] as i64 + s;
-                        if v < 0 || v >= n as i64 {
-                            return false;
-                        }
-                        let mut o = c;
-                        o[a] = v as usize;
-                        !wet(o[0], o[1], o[2])
-                    })
-                });
-                let place = if beside_air { 0 } else if on_wall { 1 } else { 2 };
-                let p = &mut places[place];
-                p.cells += 1;
-                p.squares += d * d;
-                p.max = p.max.max(d.abs());
-                p.past_one += usize::from(d.abs() > 1.0);
-                if d.abs() > worst.0 {
-                    worst = (d.abs(), place, c);
-                }
-            }
-        }
-    }
-    (places, worst)
-}
-
-/// The Dam Break step alone for `frames` frames: the pressure solve's
-/// leftover divergence against its right-hand side (the divergence of the
-/// forced faces over the water cells; the density solve is a separate solve
-/// whose result only moves particles), where the leftover sits, and how it
-/// follows the water's size.
-fn leftover_run(scene: WaterScene, label: &str, frames: usize) {
-    let mut run = Run::new(scene);
-    let (n, h) = (run.n(), scene.pressure.cell_size());
-    let mut totals = [Leftover::default(); 3];
-    let (mut rms, mut relative, mut by_size) = (Vec::new(), Vec::new(), Vec::new());
-    let mut worst_cell = (0.0, 0, [0; 3], 0usize, 0u32);
-    for frame in 0..frames {
-        run.frame();
-        for step in 0..scene.steps {
-            let water = run.water(step);
-            let wet = run.water_cells(step);
-            let (places, cell) = leftover_by_place(&run.faces(step), &water, n, h);
-            let (rhs, _) = divergence(&run.forced(step), &water, n, h);
-            let cells: usize = places.iter().map(|p| p.cells).sum();
-            let r = (places.iter().map(|p| p.squares).sum::<f64>() / cells.max(1) as f64).sqrt();
-            rms.push(r);
-            relative.push(r / rhs.max(1e-30));
-            by_size.push((wet, r));
-            for (t, p) in totals.iter_mut().zip(places) {
-                t.cells += p.cells;
-                t.squares += p.squares;
-                t.max = t.max.max(p.max);
-                t.past_one += p.past_one;
-            }
-            if cell.0 > worst_cell.0 {
-                worst_cell = (cell.0, cell.1, cell.2, frame, wet);
-            }
-            if frame % 30 == 29 && step == 0 {
-                let line: Vec<String> = PLACES
-                    .iter()
-                    .zip(places)
-                    .map(|(name, p)| format!("{name} {:.1e}/{:.1e}", (p.squares / p.cells.max(1) as f64).sqrt(), p.max))
-                    .collect();
-                println!("{label} frame {frame:3}: water cells {wet}, rms {r:.2e} ({:.1e} of the rhs {rhs:.2e}); rms/max {}", r / rhs.max(1e-30), line.join(", "));
-            }
-        }
-    }
-    let all: usize = totals.iter().map(|p| p.cells).sum();
-    for (name, p) in PLACES.iter().zip(totals) {
-        println!(
-            "{label} {name}: {:.1}% of water cells, rms {:.2e}, max {:.2e} /s, {:.3}% of them past 1/s",
-            100.0 * p.cells as f64 / all.max(1) as f64,
-            (p.squares / p.cells.max(1) as f64).sqrt(),
-            p.max,
-            100.0 * p.past_one as f64 / p.cells.max(1) as f64
-        );
-    }
-    println!("{label}: rms median {:.2e} worst {:.2e}; relative to the rhs median {:.2e} worst {:.2e}", median(&rms), worst(&rms), median(&relative), worst(&relative));
-    let (max, place, cell, frame, wet) = worst_cell;
-    println!("{label}: worst cell {max:.2e} /s, {} cell {cell:?}, frame {frame}, water cells {wet}", PLACES[place]);
-    by_size.sort_by_key(|c| c.0);
-    let quarter = by_size.len() / 4;
-    for (q, chunk) in by_size.chunks(quarter.max(1)).take(4).enumerate() {
-        let r: Vec<f64> = chunk.iter().map(|c| c.1).collect();
-        println!("{label}: water quarter {q} ({}..{} cells): rms median {:.2e}", chunk[0].0, chunk[chunk.len() - 1].0, median(&r));
-    }
-}
-
-/// The 128³ pressure solve's leftover divergence against its iteration
-/// count: 4, 8 and 12 over the 300-frame Dam Break, the step alone.
-#[test]
-fn gpu_flip_refined_leftover_iterations() {
-    for iterations in [4, 8, 12] {
-        leftover_run(WaterScene::dam_break(128).with_iterations(iterations), &format!("LEFTOVER {iterations} 128³"), 300);
     }
 }

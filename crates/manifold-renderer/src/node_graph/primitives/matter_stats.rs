@@ -121,7 +121,9 @@ impl Primitive for MatterStats {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Stats") else {
+            return;
+        };
         let run_now = ctx.scalar_or_param("tick_end", 1.0) > 0.5;
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as u32;

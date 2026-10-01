@@ -41,10 +41,9 @@ pub enum Fixture {
 /// size, and 32 keeps the check cheap.
 pub const FACE_GRID_RESOLUTION: u32 = 32;
 
-/// GPU FLIP's `face_valid_layers` in the face grid scene: its
-/// `WaterScene::band_layers` at [`FACE_GRID_RESOLUTION`], held to the
-/// builder by `gpu_flip_band_follows_the_cfl_guard`.
-pub const FACE_GRID_GPU_FLIP_LAYERS: u32 = 3;
+/// GPU FLIP's `face_valid_layers` in the face grid scene: the step's
+/// `FACE_VALID_LAYERS`, held to it by `gpu_flip_band_follows_the_cfl_guard`.
+pub const FACE_GRID_GPU_FLIP_LAYERS: u32 = 2;
 
 /// One conformance check (section 4 (Invariants & enforcement)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -235,24 +234,14 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
 const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
      docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
 
-/// GPU FLIP's step atoms that gather instead of scattering, the pressure
-/// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
-/// coarse inverse has no codegen body; its own test checks it.
-const GPU_FLIP_ATOMIC_FREE: [&str; 14] = [
-    "node.cells_with_particles",
-    "node.particles_to_faces",
-    "node.face_gravity",
-    "node.extend_faces",
-    "node.face_divergence",
-    "node.subtract_pressure",
-    "node.density_source",
-    "node.faces_to_particles",
-    "node.coarsen_water",
-    "node.pressure_smooth",
-    "node.pressure_residual",
-    "node.restrict_lattice",
-    "node.prolong_lattice",
-    "node.zero_lattice",
+/// GPU FLIP's body-coupling atoms that gather instead of scattering
+/// (docs/GPU_FLIP_PRESSURE_SOLVE.md). The step's and the pressure solve's
+/// hand shaders and face_impulse_to_bodies have no codegen body; their own
+/// tests check them.
+const GPU_FLIP_ATOMIC_FREE: [&str; 3] = [
+    "node.pressure_face_impulse",
+    "node.body_pressure_product",
+    "node.friction_face_impulse",
 ];
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
@@ -394,22 +383,10 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         atomic_free: &GPU_FLIP_ATOMIC_FREE,
         refusals: &[
             RefusalCase {
-                what: "Resolution 63 on Dam Break GPU FLIP: an odd side the multigrid levels cannot halve",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 63 }),
-                names: &["resolution"],
-            },
-            RefusalCase {
                 what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
                 fixture: Fixture::DamBreak,
                 edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 256 }),
                 names: &["resolution", "fill_height"],
-            },
-            RefusalCase {
-                what: "Resolution 32 on Dam Break GPU FLIP, whose solver is built for 64",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_type_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 32 }),
-                names: &["resolution", "domain_size"],
             },
             RefusalCase {
                 what: "Initial Fill Height at the top of Dam Break GPU FLIP's domain",
