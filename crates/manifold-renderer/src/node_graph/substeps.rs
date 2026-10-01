@@ -1001,6 +1001,25 @@ pub mod test_nodes {
                 params: Vec::new(),
             })
         });
+        registry.register("test.face_source", || {
+            Box::new(ArraySource::new(
+                "test.face_source",
+                ArrayType::of_known::<crate::node_graph::fluid_particles::FaceSample>(),
+            ))
+        });
+        registry.register("test.face_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.face_sink"),
+                inputs: vec![port(
+                    "values",
+                    PortType::Array(ArrayType::of_known::<crate::node_graph::fluid_particles::FaceSample>()),
+                    PortKind::Input,
+                    true,
+                )],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
         registry.register("test.liquid_sink", || {
             Box::new(ParticleSink {
                 type_id: EffectNodeType::new("test.liquid_sink"),

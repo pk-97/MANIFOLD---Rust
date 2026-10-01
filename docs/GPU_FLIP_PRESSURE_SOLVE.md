@@ -18,7 +18,7 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 1. Sort particles into cells (`node.sort_particles_into_cells`, bins = grid cells).
 2. Water cells: a cell is water if it holds a particle (`node.cells_with_particles`); walls are the box faces.
 3. Particles to faces by gather, no atomics (`node.particles_to_faces`): each face reads the particles in its neighbouring cells. A box wall face keeps only the velocity leaving the wall (section 2, walls). Extend two layers into air (`node.extend_faces`) and keep the copy for FLIP (`old`).
-4. Gravity, then the wall rule again on the wall faces (`node.face_gravity`).
+4. Gravity plus the scene's forces, then the wall rule again on the wall faces (`node.face_gravity`). The forces and impulses come from the domain's coarse lattices (LIQUID_SOLVER_SEAM_DESIGN.md P8 (Forces and impulses for GPU liquids)), read at each face's centre; an impulse lands once, on the first step of its tick.
 5. Divergence per water cell → f (`node.face_divergence`).
 6. The pressure solve, section 3.
 7. Subtract the pressure gradient on faces touching water (`node.subtract_pressure`); wall faces keep their velocity. Extend `band_layers` layers (`new`): far enough that every RK3 stage of step 9 samples valid faces.

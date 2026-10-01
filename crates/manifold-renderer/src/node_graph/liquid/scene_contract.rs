@@ -3,7 +3,7 @@
 //! when `LIQUID_SCENE_OWED` names the phase that closes it; the list only
 //! shrinks, so an owed item that is already met fails too.
 
-use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
+use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
 use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
@@ -34,10 +34,7 @@ const SCENE_ITEMS: [SceneItem; 6] = [
 ];
 
 /// (domain type id, missing item, the phase that closes it).
-const LIQUID_SCENE_OWED: &[(&str, SceneItem, &str)] = &[
-    (GPU_FLIP_DOMAIN_TYPE_ID, SceneItem::AccelerationField, "BUG-70l4 (wire GPU FLIP to liquid fields)"),
-    (GPU_FLIP_DOMAIN_TYPE_ID, SceneItem::FluidImpulses, "BUG-70l4 (wire GPU FLIP to liquid fields)"),
-];
+const LIQUID_SCENE_OWED: &[(&str, SceneItem, &str)] = &[];
 
 fn has_input(node: &dyn EffectNode, name: &str, ty: PortType) -> bool {
     node.inputs().iter().any(|port| port.kind == PortKind::Input && port.name == name && port.ty == ty)

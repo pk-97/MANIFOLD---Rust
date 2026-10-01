@@ -24,6 +24,7 @@ use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp, InputHistory, Timestamped, input_span};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
+use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::liquid::clock::{ClockFrame, MAX_LIVE_TICKS};
 use crate::node_graph::liquid::coupling::LiquidRigidOwner;
@@ -136,6 +137,50 @@ impl FieldFrame {
             ("force_lattices", self.force_lattices as f32),
             ("impulse_tick", self.impulse_tick.map_or(-1.0, |tick| tick as f32)),
         ]
+    }
+}
+
+/// The field scalars and lattices an atom binds: wired lattices too small
+/// for the wired field are refused by name; unwired ones read nothing.
+pub(crate) struct FieldBinding<'a> {
+    pub nodes: [i32; 3],
+    pub spacing: f32,
+    pub force_lattices: i32,
+    pub impulse_tick: i32,
+    pub first_tick: i32,
+    pub forces: Option<&'a GpuBuffer>,
+    pub impulses: Option<&'a GpuBuffer>,
+}
+
+impl<'a> FieldBinding<'a> {
+    pub(crate) fn read(
+        ctx: &EffectNodeContext<'_, '_>,
+        forces: Option<&'a GpuBuffer>,
+        impulses: Option<&'a GpuBuffer>,
+        atom: &str,
+    ) -> Result<Self, String> {
+        let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"]
+            .map(|name| ctx.scalar_or_param(name, 2.0).round().max(2.0) as i32);
+        let spacing = ctx.scalar_or_param("field_spacing", 0.25);
+        let force_lattices =
+            if forces.is_some() { ctx.scalar_or_param("force_lattices", 0.0).round().max(0.0) as i32 } else { 0 };
+        let impulse_tick = if impulses.is_some() { ctx.scalar_or_param("impulse_tick", -1.0).round().max(-1.0) as i32 } else { -1 };
+        let first_tick = ctx.scalar_or_param("first_tick", 0.0).round().max(0.0) as i32;
+        let lattice_bytes = nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
+        for (name, buffer, lattices) in
+            [("forces", forces, force_lattices.max(0) as u64), ("impulses", impulses, u64::from(impulse_tick >= 0))]
+        {
+            if lattices > 0 && buffer.is_some_and(|buffer| buffer.size < lattices * lattice_bytes) {
+                return Err(format!(
+                    "{atom}: the {name} buffer holds fewer than {lattices} lattice(s) of {} × {} × {} field nodes; wire the liquid domain's {name} and field scalars",
+                    nodes[0], nodes[1], nodes[2]
+                ));
+            }
+        }
+        if (force_lattices > 0 || impulse_tick >= 0) && !(spacing.is_finite() && spacing > 0.0) {
+            return Err(format!("{atom}: field_spacing must be positive"));
+        }
+        Ok(Self { nodes, spacing, force_lattices, impulse_tick, first_tick, forces, impulses })
     }
 }
 

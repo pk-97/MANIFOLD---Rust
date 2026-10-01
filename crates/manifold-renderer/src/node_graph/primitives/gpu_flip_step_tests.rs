@@ -14,6 +14,7 @@ use super::particles_to_faces::ParticlesToFaces;
 use super::subtract_pressure::SubtractPressure;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
+use crate::node_graph::liquid::fields::FieldLattice;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::KnownItem;
 use crate::node_graph::primitive::Primitive;
@@ -305,6 +306,74 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
             };
             close(face.velocity[a], velocity, 1.0, &format!("velocity {p:?}/{a}"));
             close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
+        }
+    }
+}
+
+/// The scene's forces read the tick's lattice at each face's centre; the
+/// impulses land on step 0 of the impulse tick only.
+#[test]
+fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
+    let mut harness = Harness::new();
+    let faces = random_faces(0x5ce7, false);
+    let field = FieldLattice::covering(MIN, H, padded().map(|n| n as u32));
+    let nodes = field.nodes();
+    let mut rng = Stream::new(0xf0c3);
+    let mut lattice_values = |count: usize| -> Vec<[f32; 4]> {
+        (0..count).map(|_| [rng.signed(4.0), rng.signed(4.0), rng.signed(4.0), 0.0]).collect()
+    };
+    // Two force lattices from tick 10; the step runs tick 11, so it reads the second.
+    let forces = lattice_values(2 * field.node_count());
+    let impulses = lattice_values(field.node_count());
+    let flat = |values: &[[f32; 4]]| values.iter().flatten().copied().collect::<Vec<f32>>();
+    let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
+    for step in [0u32, 1] {
+        let inputs = [
+            ("faces", harness.array(&faces, face_len()).0),
+            ("forces", harness.array(&flat(&forces), forces.len() * 4).0),
+            ("impulses", harness.array(&flat(&impulses), impulses.len() * 4).0),
+        ];
+        let params = lattice(&[
+            ("gravity_x", g[0]),
+            ("gravity_y", g[1]),
+            ("gravity_z", g[2]),
+            ("step_dt", dt),
+            ("tick_index", 11.0),
+            ("substep_in_tick", step as f32),
+            ("field_nodes_x", nodes[0] as f32),
+            ("field_nodes_y", nodes[1] as f32),
+            ("field_nodes_z", nodes[2] as f32),
+            ("field_spacing", field.spacing()),
+            ("force_lattices", 2.0),
+            ("first_tick", 10.0),
+            ("impulse_tick", 11.0),
+        ]);
+        let got: Vec<FaceSample> = run_into(&mut harness, &mut FaceGravity::new(), &inputs, face_len(), &params);
+        for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
+            let p = pad_coords(i);
+            for a in 0..3 {
+                if !face_exists(p, a) {
+                    close(face.velocity[a], 0.0, 1.0, &format!("velocity {p:?}/{a}"));
+                    continue;
+                }
+                let x: [f32; 3] = std::array::from_fn(|d| {
+                    MIN[d] + H * if d == a { p[d] as f32 } else { p[d] as f32 + 0.5 }
+                });
+                let force = field.sample(&forces[field.node_count()..], x)[a];
+                let impulse = if step == 0 { field.sample(&impulses, x)[a] } else { 0.0 };
+                let pushed = f64::from(before.velocity[a])
+                    + (f64::from(g[a]) + f64::from(force)) * f64::from(dt)
+                    + f64::from(impulse);
+                let velocity = if p[a] == 0 {
+                    pushed.max(0.0)
+                } else if p[a] == N[a] {
+                    pushed.min(0.0)
+                } else {
+                    pushed
+                };
+                close(face.velocity[a], velocity, 1.0, &format!("step {step} velocity {p:?}/{a}"));
+                close(face.weight[a], f64::from(before.weight[a]), 1.0, &format!("weight {p:?}/{a}"));
+            }
         }
     }
 }

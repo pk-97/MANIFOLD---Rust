@@ -267,6 +267,22 @@
       "id": 9,
       "nodeId": "s0.gravity",
       "params": {
+        "cell_size": {
+          "type": "Float",
+          "value": 0.0625
+        },
+        "lattice_min_x": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "lattice_min_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "lattice_min_z": {
+          "type": "Float",
+          "value": -2.0
+        },
         "nodes_x": {
           "type": "Float",
           "value": 64.0
@@ -282,6 +298,10 @@
         "step_dt": {
           "type": "Float",
           "value": 0.008333333767950535
+        },
+        "substep_in_tick": {
+          "type": "Int",
+          "value": 0
         }
       },
       "typeId": "node.face_gravity"
@@ -2039,6 +2059,22 @@
       "id": 85,
       "nodeId": "s1.gravity",
       "params": {
+        "cell_size": {
+          "type": "Float",
+          "value": 0.0625
+        },
+        "lattice_min_x": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "lattice_min_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "lattice_min_z": {
+          "type": "Float",
+          "value": -2.0
+        },
         "nodes_x": {
           "type": "Float",
           "value": 64.0
@@ -2054,6 +2090,10 @@
         "step_dt": {
           "type": "Float",
           "value": 0.008333333767950535
+        },
+        "substep_in_tick": {
+          "type": "Int",
+          "value": 1
         }
       },
       "typeId": "node.face_gravity"
@@ -8642,6 +8682,66 @@
       "toPort": "gravity_z"
     },
     {
+      "fromNode": 0,
+      "fromPort": "forces",
+      "toNode": 9,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulses",
+      "toNode": 9,
+      "toPort": "impulses"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_x",
+      "toNode": 9,
+      "toPort": "field_nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_y",
+      "toNode": 9,
+      "toPort": "field_nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_z",
+      "toNode": 9,
+      "toPort": "field_nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_spacing",
+      "toNode": 9,
+      "toPort": "field_spacing"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "force_lattices",
+      "toNode": 9,
+      "toPort": "force_lattices"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "first_tick",
+      "toNode": 9,
+      "toPort": "first_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulse_tick",
+      "toNode": 9,
+      "toPort": "impulse_tick"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "tick_index",
+      "toNode": 9,
+      "toPort": "tick_index"
+    },
+    {
       "fromNode": 9,
       "fromPort": "out",
       "toNode": 10,
@@ -9750,6 +9850,66 @@
       "fromPort": "gravity_z",
       "toNode": 85,
       "toPort": "gravity_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "forces",
+      "toNode": 85,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulses",
+      "toNode": 85,
+      "toPort": "impulses"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_x",
+      "toNode": 85,
+      "toPort": "field_nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_y",
+      "toNode": 85,
+      "toPort": "field_nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_z",
+      "toNode": 85,
+      "toPort": "field_nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_spacing",
+      "toNode": 85,
+      "toPort": "field_spacing"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "force_lattices",
+      "toNode": 85,
+      "toPort": "force_lattices"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "first_tick",
+      "toNode": 85,
+      "toPort": "first_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulse_tick",
+      "toNode": 85,
+      "toPort": "impulse_tick"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "tick_index",
+      "toNode": 85,
+      "toPort": "tick_index"
     },
     {
       "fromNode": 85,

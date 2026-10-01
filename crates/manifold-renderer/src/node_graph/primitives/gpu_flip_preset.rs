@@ -417,6 +417,12 @@ const LATTICE_WIRES: [&str; 7] = ["lattice_min_x", "lattice_min_y", "lattice_min
 /// The fill's sites, as the domain publishes them.
 const FILL_WIRES: [&str; 7] = ["pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1"];
 
+/// The scene's forces and impulses, as the domain publishes them.
+const FIELD_WIRES: [&str; 9] = [
+    "forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices",
+    "first_tick", "impulse_tick",
+];
+
 /// A scene as a running liquid on the seam. The domain seeds the fill and
 /// runs the clock; the state's region runs one tick per due tick: `steps`
 /// water steps from `state.out`, then the tick's stats, closing into
@@ -485,7 +491,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     for k in 0..scene.steps {
         b.prefix = format!("s{k}.");
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        (particles, faces) = water_step(&mut b, scene, particles, count, domain, density);
+        (particles, faces) = water_step(&mut b, scene, particles, count, (domain, state, k), density);
     }
     b.prefix.clear();
     let stats = b.node("stats", "node.liquid_stats", json!({}));
@@ -696,18 +702,20 @@ fn lattice_box(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
 }
 
 /// One water step (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)):
-/// sort, the water lattice, particles to faces, the domain's gravity, the
-/// pressure solve, the projection, the density solve when `density`, faces
-/// back to particles.
+/// sort, the water lattice, particles to faces, the domain's gravity, forces
+/// and impulses, the pressure solve, the projection, the density solve when
+/// `density`, faces back to particles. `tick` is the domain, the tick
+/// boundary and the step's index in the tick.
 /// Returns the moved particles and the step's projected, extended faces.
 fn water_step(
     b: &mut Builder,
     scene: WaterScene,
     particles: Port,
     count: Port,
-    domain: usize,
+    tick: (usize, usize, usize),
     density: bool,
 ) -> (Port, Port) {
+    let (domain, state, step) = tick;
     let s = scene.pressure;
     let n = [s.n; 3];
     let h = s.cell_size();
@@ -736,11 +744,17 @@ fn water_step(
     b.wire((sort, "sorted"), gather, "sorted");
     b.wire((sort, "cell_ranges"), gather, "cell_ranges");
     let old = extend(b, "old", (gather, "out"), n, EXTENDED_LAYERS);
-    let forced = b.node("gravity", "node.face_gravity", Builder::lattice(n, &[("step_dt", float(dt))]));
+    let forced = b.node(
+        "gravity",
+        "node.face_gravity",
+        lattice_box(&scene, &[("step_dt", float(dt)), ("substep_in_tick", int(step))]),
+    );
     b.wire(old, forced, "faces");
     b.wire((domain, "gravity_x"), forced, "gravity_x");
     b.wire((domain, "gravity"), forced, "gravity_y");
     b.wire((domain, "gravity_z"), forced, "gravity_z");
+    b.wires(domain, forced, &FIELD_WIRES);
+    b.wire((state, "tick_index"), forced, "tick_index");
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
