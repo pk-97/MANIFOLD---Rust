@@ -45,7 +45,7 @@ const PROFILE_EVERY: usize = 25;
 const STILLS: [usize; 4] = [90, 240, 600, 900];
 
 /// Stages in the order the table prints them.
-const STAGES: [&str; 25] = [
+const STAGES: [&str; 24] = [
     "fill + particle state",
     "particle sort",
     "particle distance + water mask",
@@ -60,7 +60,6 @@ const STAGES: [&str; 25] = [
     "solve coarsest level",
     "solve vectors (CG)",
     "pressure gradient",
-    "density source + spread",
     "face→particle + advect",
     "step, other (CPU encode)",
     "surface sort",
@@ -93,7 +92,6 @@ fn stage(name: &str, label: &str) -> &'static str {
             "pressure.coarse_solve" => "solve coarsest level",
             p if p.starts_with("pressure.") => "solve vectors (CG)",
             "step.project" => "pressure gradient",
-            "step.density_source" | "step.spread" => "density source + spread",
             "step.move" => "face→particle + advect",
             _ => "step, other (CPU encode)",
         };
@@ -1202,15 +1200,13 @@ fn gpu_flip_render_smoke_64_frozen() {
     run(scene, "frozen", false);
 }
 
-/// The step's cadence levers at 64³, for the stage table: the density solve
-/// every step against once a frame (shipped), and one water step a frame.
+/// The step cadence at 64³, for the stage table: two water steps a frame
+/// (shipped) against one.
 #[test]
 fn gpu_flip_render_smoke_64_cadence() {
     let base = WaterScene::dam_break(64);
-    run(WaterScene { density_once: false, ..base }, "density_every_step", false);
-    run(base, "density_once", false);
-    let one_step = WaterScene { steps: 1, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0, ..base };
-    run(one_step, "one_step", false);
+    run(base, "two_steps", false);
+    run(base.with_steps(1), "one_step", false);
 }
 
 /// A mixed-radix lattice (96 = 2⁵·3), between the powers of two.

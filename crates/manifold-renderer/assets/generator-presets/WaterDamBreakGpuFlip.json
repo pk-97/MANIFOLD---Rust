@@ -136,10 +136,6 @@
           "type": "Float",
           "value": 0.0625
         },
-        "density_iterations": {
-          "type": "Int",
-          "value": 0
-        },
         "flip": {
           "type": "Float",
           "value": 0.949999988079071
@@ -175,10 +171,6 @@
         "nodes_z": {
           "type": "Int",
           "value": 71
-        },
-        "spread_rate": {
-          "type": "Float",
-          "value": 0.0
         },
         "step_in_tick": {
           "type": "Int",
@@ -203,10 +195,6 @@
           "type": "Float",
           "value": 0.0625
         },
-        "density_iterations": {
-          "type": "Int",
-          "value": 0
-        },
         "flip": {
           "type": "Float",
           "value": 0.949999988079071
@@ -242,10 +230,6 @@
         "nodes_z": {
           "type": "Int",
           "value": 71
-        },
-        "spread_rate": {
-          "type": "Float",
-          "value": 120.0
         },
         "step_in_tick": {
           "type": "Int",

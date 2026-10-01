@@ -14648,26 +14648,6 @@
           "type": "int"
         },
         {
-          "default": "0",
-          "label": "Density Iterations (0 = Auto)",
-          "name": "density_iterations",
-          "range": [
-            "0",
-            "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "120",
-          "label": "Spread Rate",
-          "name": "spread_rate",
-          "range": [
-            "0",
-            "10000"
-          ],
-          "type": "float"
-        },
-        {
           "default": "20",
           "label": "Top Speed",
           "name": "top_speed",
@@ -14688,7 +14668,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves the water forward one step: gravity, solids, incompressibility and the particles' motion.",

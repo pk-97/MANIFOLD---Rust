@@ -204,6 +204,12 @@ impl Run {
     /// makes an exact touch water). Bodies are not counted.
     pub(super) fn water(&self, step: usize) -> Vec<f32> {
         let started = if step == 0 { self.entering.clone() } else { self.moved(step - 1) };
+        self.water_of(&started)
+    }
+
+    /// The water cells, 1 or 0, of `particles`: φ < 0 as the step builds it.
+    pub(super) fn water_of(&self, particles: &[FluidParticle]) -> Vec<f32> {
+        let started = particles;
         let (n, h, min) = (self.n(), self.scene.pressure.cell_size(), self.scene.min());
         let radius = 0.866_025_4 * h;
         let mut water = vec![0.0; n.pow(3)];
@@ -550,11 +556,9 @@ fn gpu_flip_dam_break_flows_around_the_obstacle() {
 }
 
 /// A pool at rest round a static box resting on the tank floor stays at
-/// rest: no particle is lost, the level holds, and the only motion is the
-/// waterline creeping up the box's sides, which dies out. The creep comes
-/// from the engine's own liquid extension into solids (cells inside a solid
-/// within half a cell of the water count as water), so it is bounded rather
-/// than zero: about 0.1 m/s at its peak and 1.6 cm/s after 2 s at 64³.
+/// rest: no particle is lost, the level holds and nothing moves faster
+/// than 1 mm/s. The density solve made a waterline creep here (0.1 m/s at
+/// its peak); without it the pool is still to rounding.
 #[test]
 fn gpu_flip_still_pool_rests_round_a_static_obstacle() {
     let scene = WaterScene::still_pool(64).with_obstacle();
@@ -575,8 +579,7 @@ fn gpu_flip_still_pool_rests_round_a_static_obstacle() {
             peak = peak.max(fastest);
         }
     }
-    assert!(peak < 0.2, "the pool round the box reached {peak} m/s");
-    assert!(fastest < 0.025 && fastest < peak / 3.0, "fastest particle {fastest} m/s after 2 s, peak {peak} m/s: the creep is not dying out");
+    assert!(peak < 1e-3, "the pool round the box reached {peak} m/s, last {fastest} m/s");
 }
 
 /// A box driven through a still pool at 1 m/s pushes the water ahead of it:

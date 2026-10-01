@@ -330,23 +330,11 @@ impl PressureSolver {
 
     /// Solve L p = `rhs` on the prepared water by `iterations` conjugate
     /// gradient iterations from zero, one V-cycle each; p into `pressure`.
-    /// `water` must be what [`Self::prepare`] last saw.
+    /// `water` must be what [`Self::prepare`] last saw. With `bodies`, the
+    /// dynamic bodies sit inside the operator: every iteration's s = L p gains
+    /// their ρh·G M⁻¹ Gᵀ p (`scripts/mgpcg_reference.py` `body_solve`). The
+    /// V-cycle sees the water alone.
     pub(crate) fn solve(
-        &mut self,
-        enc: &mut GpuEncoder,
-        water: &Water<'_>,
-        rhs: &GpuBuffer,
-        pressure: &GpuBuffer,
-        iterations: u32,
-    ) -> Result<(), String> {
-        self.solve_coupled(enc, water, rhs, pressure, iterations, None)
-    }
-
-    /// [`Self::solve`] with dynamic bodies inside the operator: every
-    /// iteration's s = L p gains the bodies' ρh·G M⁻¹ Gᵀ p
-    /// (`scripts/mgpcg_reference.py` `body_solve`). The V-cycle sees the water
-    /// alone.
-    pub(crate) fn solve_coupled(
         &mut self,
         enc: &mut GpuEncoder,
         water: &Water<'_>,

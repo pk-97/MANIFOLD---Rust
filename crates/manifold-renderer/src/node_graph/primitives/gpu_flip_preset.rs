@@ -2,7 +2,7 @@
 //! graphs built for any lattice. `water_def` is a running liquid on the
 //! liquid seam (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.gpu_flip_domain's clock runs
 //! node.liquid_state's tick region, whose body is one 60 Hz tick of
-//! [`STEPS_PER_TICK`] water steps, the density solve on the last, then
+//! [`STEPS_PER_TICK`] water steps, then
 //! node.liquid_stats; node.liquid_frame publishes each tick to the liquid
 //! surface. `render_def` puts it in the render of the shipped
 //! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64. Every node
@@ -15,7 +15,7 @@ use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
-use super::gpu_flip_step::{AUTO_DENSITY_ITERATIONS, AUTO_PRESSURE_ITERATIONS, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS};
+use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -26,15 +26,12 @@ use crate::node_graph::transform::Transform;
 pub(crate) const BOX_METRES: f64 = 4.0;
 
 /// Water steps per 60 Hz liquid tick (D8): copies of the step inside the tick
-/// region, the density solve on the last. A collider moves per step: each
+/// region. A collider moves per step: each
 /// step places it where its tick's row has it at the step's end.
 pub(crate) const STEPS_PER_TICK: usize = 2;
 
 /// The main solve's iterations: the step's Auto.
 pub(crate) const PRESSURE_ITERATIONS: usize = AUTO_PRESSURE_ITERATIONS as usize;
-
-/// The density solve's iterations: the step's Auto.
-pub(crate) const DENSITY_ITERATIONS: usize = AUTO_DENSITY_ITERATIONS as usize;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PressureShape {
@@ -88,18 +85,6 @@ pub(crate) struct WaterScene {
     pub column: [[f64; 2]; 3],
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
-    /// How fast crowded cells spread (1/s): the step's Spread Rate. 0
-    /// leaves the density solve out.
-    pub spread_rate: f64,
-    /// Iterations of the density solve. It moves particles and is never kept
-    /// as velocity, so its leftover error shows as a slightly uneven spread,
-    /// not as motion.
-    pub density_iterations: usize,
-    /// Run the density solve on the tick's last step only. The spread rate
-    /// stays per step, so that one solve removes the same share. On in the
-    /// shipped cadence: at 64³ it holds the water measures within 1.5 points
-    /// of a solve every step (`gpu_flip_cadence_64`) and saves one solve.
-    pub density_once: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
     /// volume and mesh): the shipped Surface Detail 0 is 2, which fits the
     /// frame budget at 64 (BUG-mjhx, surface scale at GPU FLIP 64).
@@ -127,14 +112,7 @@ pub(crate) const TOP_SPEED: f64 = DEFAULT_TOP_SPEED as f64;
 
 /// Particles per cell the fill seeds: one per half-cell site.
 #[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) const REST_PER_CELL: f64 = super::gpu_flip_step::REST_PER_CELL as f64;
-
-/// The share of a cell's crowding one density solve removes: spread_rate ×
-/// step dt. Crowding goes as (1 − share) per solve, so 1 removes it in one.
-/// It holds at 64³ and 128³ because the step's density source counts only
-/// half-full neighbours as water and its particle move caps the spread at half a
-/// cell (`gpu_flip_refined_density_causes`).
-pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
+pub(crate) const REST_PER_CELL: f64 = 8.0;
 
 impl WaterScene {
     /// The engine's Dam Break without its obstacle.
@@ -147,9 +125,6 @@ impl WaterScene {
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
-            spread_rate: SPREAD_PER_STEP * 60.0 * STEPS_PER_TICK as f64,
-            density_iterations: DENSITY_ITERATIONS,
-            density_once: true,
             surface_scale: 2,
             faces: false,
             ghost_fluid: true,
@@ -223,10 +198,10 @@ impl WaterScene {
         Self { pressure: PressureShape { iterations, ..self.pressure }, ..self }
     }
 
-    /// `steps` water steps a frame, each density solve's share kept.
+    /// `steps` water steps a frame.
     #[cfg(test)]
     pub fn with_steps(self, steps: usize) -> Self {
-        Self { steps, spread_rate: SPREAD_PER_STEP * 60.0 * steps as f64, ..self }
+        Self { steps, ..self }
     }
 
     #[cfg(test)]
@@ -434,8 +409,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut faces = particles;
     let mut reaction = (domain, "reaction");
     for k in 0..scene.steps {
-        let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
-        let step = water_step(&mut b, scene, (domain, state), k, density);
+        let step = water_step(&mut b, scene, (domain, state), k);
         b.wire(particles, step, "particles");
         b.wire(count, step, "count");
         b.wire(reaction, step, "reaction");
@@ -665,8 +639,8 @@ fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
 /// Water step `k` of the tick (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1
 /// (the step)): one node.gpu_flip_step on the domain's lattice, gravity,
 /// fields and bodies, and the state's tick index. The caller wires its
-/// particles and count. The density solve runs when `density`.
-fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize, density: bool) -> usize {
+/// particles and count.
+fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize) -> usize {
     let (domain, state) = tick;
     let iterations = |n: usize, auto: u32| int(if n == auto as usize { 0 } else { n });
     let step = b.node(
@@ -679,8 +653,6 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize
                 ("step_in_tick", int(k)),
                 ("flip", float(scene.flip)),
                 ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
-                ("density_iterations", iterations(scene.density_iterations, AUTO_DENSITY_ITERATIONS)),
-                ("spread_rate", float(if density { scene.spread_rate } else { 0.0 })),
                 ("top_speed", float(TOP_SPEED)),
                 ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
             ],
@@ -797,16 +769,12 @@ pub(super) mod tests {
         // The splash probes' scenes: four steps a tick is four copies of the
         // step.
         let refined = WaterScene::dam_break(128).with_surface();
-        let bare = |n| WaterScene { spread_rate: 0.0, ..WaterScene::dam_break(n) };
         let step = WaterScene::dam_break(128);
         let probes = [
             refined.with_iterations(12),
             WaterScene { steps: 4, ..refined },
-            bare(64),
-            bare(128).with_surface(),
             step.with_iterations(4),
-            WaterScene { density_once: false, ..WaterScene::dam_break(64) }.with_surface(),
-            WaterScene { steps: 1, spread_rate: SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) }.with_surface(),
+            WaterScene::dam_break(64).with_steps(1).with_surface(),
         ];
         // The obstacle, bare and meshed, and in the still pool the kinematic
         // proof moves it through.
@@ -905,11 +873,8 @@ pub(super) mod tests {
         let scenes = [WaterScene::dam_break, WaterScene::still_pool];
         let coarser = LATTICES.into_iter().flat_map(|n| [1, 2].map(|scale| WaterScene::dam_break(n).with_surface_scale(scale)));
         let detail = (SURFACE_DETAIL_OFFSET..=SURFACE_DETAIL_OFFSET + 2).map(|scale| WaterScene::dam_break(64).with_surface_scale(scale));
-        // The cadence probes: the density solve every step, one step a tick.
-        let cadence = [
-            WaterScene { density_once: false, ..WaterScene::dam_break(64) },
-            WaterScene { steps: 1, spread_rate: SPREAD_PER_STEP * 60.0, ..WaterScene::dam_break(64) },
-        ];
+        // The cadence probe: one step a tick.
+        let cadence = [WaterScene::dam_break(64).with_steps(1)];
         // The published face grid, at every lattice.
         let faces = LATTICES.into_iter().map(|n| WaterScene::dam_break(n).with_faces());
         let registry = PrimitiveRegistry::with_builtin();

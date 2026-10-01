@@ -46,10 +46,6 @@ struct Params {
     flip: f32,
     // The farthest one RK3 stage moves, in cells.
     max_travel: f32,
-    // Particles a full cell holds.
-    rest: f32,
-    // The density source's rate (1/s).
-    rate: f32,
     // The largest |box_min| component, for the solid faces' tolerance.
     box_offset: f32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
@@ -58,6 +54,8 @@ struct Params {
     particles: u32,
     // Records `shapes` holds.
     shapes_len: u32,
+    // The struct's 128 bytes, the Rust twin's `pad`.
+    pad: vec2<u32>,
 };
 
 struct CellRange {
@@ -114,7 +112,6 @@ struct LiquidShape {
 @group(0) @binding(15) var<storage, read> shapes: array<LiquidShape>;
 @group(0) @binding(16) var<storage, read> atlas: array<u32>;
 @group(0) @binding(17) var<storage, read> old: array<FaceSample>;
-@group(0) @binding(18) var<storage, read> advect: array<FaceSample>;
 @group(0) @binding(19) var<storage, read_write> particles_out: array<FluidParticle>;
 @group(0) @binding(20) var<storage, read_write> faces_rw: array<FaceSample>;
 // 8 floats per body: the linear and angular impulse the water has put on it
@@ -908,44 +905,9 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_rw[idx] = out;
 }
 
-// One thread per cell, the ranges to `cell_out`: a cell holding particles
-// has crowding e = count / rest − 1. Inside the water (every neighbour in
-// the lattice holds at least half of rest) its source is rate · e; at the
-// surface, rate · max(e, 0), since fewer particles there only mean a
-// part-full cell. Out is −source; an empty cell gives 0.
-@compute @workgroup_size(256)
-fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    if ranges[idx].count == 0u {
-        cell_out[idx] = 0.0;
-        return;
-    }
-    let n = lattice();
-    let p = unflatten(idx, n);
-    var inside = true;
-    for (var a = 0; a < 3; a = a + 1) {
-        for (var side = -1; side <= 1; side = side + 2) {
-            var q = p;
-            q[a] = p[a] + side;
-            if q[a] >= 0 && q[a] < n[a] && 2.0 * f32(ranges[flatten(q, n)].count) < u.rest {
-                inside = false;
-            }
-        }
-    }
-    let crowding = f32(ranges[idx].count) / u.rest - 1.0;
-    cell_out[idx] = -u.rate * select(max(crowding, 0.0), crowding, inside);
-}
-
 // A moved particle stays 0.2 cells inside each box wall, as the engine keeps
 // its particles off its solids (`_solidBufferWidth`).
 const WALL_MARGIN: f32 = 0.2;
-
-// A density correction longer than half a cell carries a particle past the
-// cell it was spreading from and crowds the next one.
-const MAX_SPREAD: f32 = 0.5;
 
 // The CFL guard: one RK3 stage moves at most max_travel cells. A non-finite
 // v stays non-finite.
@@ -960,15 +922,12 @@ fn finite(v: vec3<f32>) -> bool {
     return all(bits != vec3<u32>(0x7f800000u));
 }
 
-// grid: 0 the new faces, 1 `old`, 2 `advect`.
+// grid: 0 the new faces, 1 `old`.
 fn face_record(index: u32, grid: u32) -> FaceSample {
     if grid == 0u {
         return faces_in[index];
     }
-    if grid == 1u {
-        return old[index];
-    }
-    return advect[index];
+    return old[index];
 }
 
 // Trilinear per component over the faces with weight > 0, renormalised by
@@ -1098,8 +1057,7 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
 // One thread per particle slot, `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
-// and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the spread
-// step_dt · (advect(q) − new(q)) capped at MAX_SPREAD cells, kept
+// and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), kept
 // WALL_MARGIN cells inside each wall. With bodies, the move is kept out of
 // the solids (resolve_solid), and a particle still inside one, where a
 // moving solid swept over it, is removed: radius 0
@@ -1126,11 +1084,8 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let k1 = guard(after, per_cell);
     let k2 = guard(sample(q0 + 0.5 * per_cell * k1, n, 0u), per_cell);
     let k3 = guard(sample(q0 + 0.75 * per_cell * k2, n, 0u), per_cell);
-    let spread = per_cell * (sample(q0, n, 2u) - after);
-    let spread_cells = length(spread);
-    let capped = select(spread, spread * (MAX_SPREAD / spread_cells), spread_cells > MAX_SPREAD);
     let edge = vec3<f32>(WALL_MARGIN);
-    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + capped;
+    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0;
     var q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
     var radius = particle.position_radius.w;
     if u.body_count > 0 && finite(q1) {

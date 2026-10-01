@@ -185,7 +185,7 @@ impl Rig {
         let n = self.n as u32;
         let lattice = Water { lattice: [n; 3], cell_size: self.cell_size() as f32, water: &self.water, faces: &self.faces, phi: self.phi.as_ref() };
         self.solver.prepare(&self.device, &mut enc, &lattice).expect("prepares");
-        self.solver.solve(&mut enc, &lattice, &self.rhs, &self.pressure, iterations).expect("solves");
+        self.solver.solve(&mut enc, &lattice, &self.rhs, &self.pressure, iterations, None).expect("solves");
         enc.commit_and_wait_profiled(&self.device)
     }
 
