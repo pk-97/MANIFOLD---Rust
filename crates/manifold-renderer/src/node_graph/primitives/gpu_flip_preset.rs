@@ -118,6 +118,10 @@ pub(crate) struct WaterScene {
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
     /// The tick always hands its last step's faces to the state.
     pub faces: bool,
+    /// Place the free surface where the particles' distance crosses zero
+    /// (ghost fluid). Off wires zero distances: air at zero pressure on its
+    /// cell centres, the race's comparison.
+    pub ghost_fluid: bool,
 }
 
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
@@ -158,6 +162,7 @@ impl WaterScene {
             density_once: true,
             surface_scale: 2,
             faces: false,
+            ghost_fluid: true,
         }
     }
 
@@ -403,7 +408,8 @@ pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     let water = b.node("water", "test.value_source", json!({"max_capacity": capacity(cells)}));
     let f = b.node("f", "test.value_source", json!({"max_capacity": capacity(cells)}));
     let levels = levels(&mut b, s, (water, "out"));
-    let pressure = solve(&mut b, s, &levels, (f, "out"));
+    let flat = levels.zeros[0];
+    let pressure = solve(&mut b, s, &levels, flat, (f, "out"));
     let sink = b.node("sink", "test.value_sink", json!({}));
     b.wire(pressure, sink, "values");
     let output = b.node("output", "system.final_output", json!({}));
@@ -744,9 +750,18 @@ fn water_step(
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
+    // The free surface: the pressure solve's finest level and the projection
+    // put it where the particles' distance crosses zero (ghost fluid).
+    let distance = scene.ghost_fluid.then(|| {
+        let distance = b.node("distance", "node.particle_distance", lattice_box(&scene, &[]));
+        b.wire((sort, "sorted"), distance, "sorted");
+        b.wire((sort, "cell_ranges"), distance, "cell_ranges");
+        distance
+    });
     let levels = levels(b, s, water);
-    let p = solve(b, s, &levels, (divergence, "out"));
-    let projected = subtract(b, "project", (forced, "out"), p, water, s);
+    let surface = distance.map_or(levels.zeros[0], |distance| (distance, "out"));
+    let p = solve(b, s, &levels, surface, (divergence, "out"));
+    let projected = subtract(b, "project", (forced, "out"), p, water, surface, s);
     let new = extend(b, "new", projected, n, scene.band_layers());
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
@@ -759,8 +774,11 @@ fn water_step(
             Builder::lattice(n, &[("rest", float(REST_PER_CELL)), ("rate", float(scene.spread_rate))]),
         );
         b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
-        let q = solve(b, PressureShape { iterations: scene.density_iterations, ..s }, &levels, (crowding, "out"));
-        let spread = subtract(b, "project", projected, q, water, s);
+        // The engine has no density solve; ours keeps air at zero pressure
+        // at the air cells' centres (a zero phi).
+        let flat = levels.zeros[0];
+        let q = solve(b, PressureShape { iterations: scene.density_iterations, ..s }, &levels, flat, (crowding, "out"));
+        let spread = subtract(b, "project", projected, q, water, flat, s);
         let advect = extend(b, "advect", spread, n, EXTENDED_LAYERS);
         b.prefix = outer;
         advect
@@ -782,13 +800,15 @@ fn water_step(
     ((moved, "out"), new)
 }
 
-/// `faces` minus the gradient of `pressure` on the water's faces.
-fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Port, s: PressureShape) -> Port {
+/// `faces` minus the gradient of `pressure` on the water's faces, the free
+/// surface where `phi` crosses zero, as the solve that made `pressure` read it.
+fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Port, phi: Port, s: PressureShape) -> Port {
     let n = [s.n; 3];
     let id = b.node(name, "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(s.cell_size()))]));
     b.wire(faces, id, "faces");
     b.wire(pressure, id, "pressure");
     b.wire(water, id, "water");
+    b.wire(phi, id, "phi");
     (id, "out")
 }
 
@@ -835,8 +855,10 @@ fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
     Levels { water: water_levels, zeros, inverse: (inverse, "out") }
 }
 
-/// One V-cycle for L e = rhs at `level`, from zero; returns e.
-fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs: Port) -> Port {
+/// One V-cycle for L e = rhs at `level`, from zero; returns e. The finest
+/// level reads the free surface from `surface`; coarser levels keep air at
+/// zero pressure at their cells' centres.
+fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, surface: Port, level: usize, rhs: Port) -> Port {
     let sides = s.levels();
     let side = sides[level];
     let h = s.cell_size() * (1u64 << level) as f64;
@@ -857,11 +879,13 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
         return (id, "out");
     }
     let mut e = levels.zeros[level];
+    let phi = if level == 0 { surface } else { levels.zeros[level] };
     let sweep = |b: &mut Builder, name: String, e: Port, color: usize| -> Port {
         let id = b.node(&name, "node.pressure_smooth", lattice(&[("cell_size", float(h)), ("color", int(color))]));
         b.wire(water, id, "water");
         b.wire(rhs, id, "rhs");
         b.wire(e, id, "value");
+        b.wire(phi, id, "phi");
         (id, "out")
     };
     for round in 0..SMOOTH_SWEEPS {
@@ -873,10 +897,11 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
     b.wire(water, residual, "water");
     b.wire(rhs, residual, "rhs");
     b.wire(e, residual, "value");
+    b.wire(phi, residual, "phi");
     let restrict = b.node(&format!("mg{level}_restrict"), "node.restrict_lattice", Builder::lattice([sides[level + 1]; 3], &[]));
     b.wire((residual, "out"), restrict, "fine");
     b.wire(levels.water[level + 1], restrict, "water");
-    let coarse = v_cycle(b, s, levels, level + 1, (restrict, "out"));
+    let coarse = v_cycle(b, s, levels, surface, level + 1, (restrict, "out"));
     let prolong = b.node(&format!("mg{level}_prolong"), "node.prolong_lattice", lattice(&[]));
     b.wire(e, prolong, "value");
     b.wire(coarse, prolong, "coarse");
@@ -893,14 +918,15 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
 /// One multigrid-preconditioned conjugate gradient solve of L p = f on the
 /// water; returns the pressure. The loop body, per iteration: z = V-cycle(r),
 /// β = r·z / (last r·z), p = z + β p, s = −L p, α = r·z / (p·s),
-/// x = x − α p, r = r − α s.
-fn solve(b: &mut Builder, s: PressureShape, levels: &Levels, f: Port) -> Port {
+/// x = x − α p, r = r − α s. The free surface sits where `surface` crosses
+/// zero (a zero lattice puts it at the air cells' centres).
+fn solve(b: &mut Builder, s: PressureShape, levels: &Levels, surface: Port, f: Port) -> Port {
     let cells = s.cells();
     let h = s.cell_size();
     let cg = b.node("cg", "node.conjugate_gradient", json!({"iterations": int(s.iterations)}));
     b.wire(f, cg, "rhs");
     let r = (cg, "residual");
-    let z = v_cycle(b, s, levels, 0, r);
+    let z = v_cycle(b, s, levels, surface, 0, r);
     let rz = b.dot("rz", r, z, cells);
     let beta = b.divide("beta", rz, (cg, "rz"));
     let p = b.axpy("direction", z, (cg, "direction"), beta, 1.0, cells);
@@ -908,6 +934,7 @@ fn solve(b: &mut Builder, s: PressureShape, levels: &Levels, f: Port) -> Port {
     b.wire(levels.water[0], sp, "water");
     b.wire(levels.zeros[0], sp, "rhs");
     b.wire(p, sp, "value");
+    b.wire(surface, sp, "phi");
     let sp = (sp, "out");
     let ps = b.dot("p_dot_s", p, sp, cells);
     let alpha = b.divide("alpha", rz, ps);

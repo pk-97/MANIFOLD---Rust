@@ -347,6 +347,7 @@ mod liquid_frame;
 pub(crate) mod gpu_flip_domain;
 pub(crate) mod cells_with_particles;
 pub(crate) mod particles_to_faces;
+mod particle_distance;
 mod face_gravity;
 mod face_divergence;
 mod density_source;

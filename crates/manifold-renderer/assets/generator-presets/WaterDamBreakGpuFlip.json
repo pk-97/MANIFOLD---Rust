@@ -311,6 +311,41 @@
     },
     {
       "id": 11,
+      "nodeId": "s0.distance",
+      "params": {
+        "cell_size": {
+          "type": "Float",
+          "value": 0.0625
+        },
+        "lattice_min_x": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "lattice_min_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "lattice_min_z": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "nodes_x": {
+          "type": "Float",
+          "value": 64.0
+        },
+        "nodes_y": {
+          "type": "Float",
+          "value": 64.0
+        },
+        "nodes_z": {
+          "type": "Float",
+          "value": 64.0
+        }
+      },
+      "typeId": "node.particle_distance"
+    },
+    {
+      "id": 12,
       "nodeId": "s0.zero_0",
       "params": {
         "nodes_x": {
@@ -329,7 +364,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 12,
+      "id": 13,
       "nodeId": "s0.water_1",
       "params": {
         "nodes_x": {
@@ -348,7 +383,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 13,
+      "id": 14,
       "nodeId": "s0.zero_1",
       "params": {
         "nodes_x": {
@@ -367,7 +402,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 14,
+      "id": 15,
       "nodeId": "s0.water_2",
       "params": {
         "nodes_x": {
@@ -386,7 +421,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 15,
+      "id": 16,
       "nodeId": "s0.zero_2",
       "params": {
         "nodes_x": {
@@ -405,7 +440,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 16,
+      "id": 17,
       "nodeId": "s0.water_3",
       "params": {
         "nodes_x": {
@@ -424,7 +459,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 17,
+      "id": 18,
       "nodeId": "s0.zero_3",
       "params": {
         "nodes_x": {
@@ -443,7 +478,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 18,
+      "id": 19,
       "nodeId": "s0.water_4",
       "params": {
         "nodes_x": {
@@ -462,7 +497,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 19,
+      "id": 20,
       "nodeId": "s0.coarse_inverse",
       "params": {
         "nodes_x": {
@@ -481,7 +516,7 @@
       "typeId": "node.coarse_inverse"
     },
     {
-      "id": 20,
+      "id": 21,
       "nodeId": "s0.cg",
       "params": {
         "iterations": {
@@ -492,7 +527,7 @@
       "typeId": "node.conjugate_gradient"
     },
     {
-      "id": 21,
+      "id": 22,
       "nodeId": "s0.mg0_pre0_0",
       "params": {
         "cell_size": {
@@ -519,7 +554,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 22,
+      "id": 23,
       "nodeId": "s0.mg0_pre0_1",
       "params": {
         "cell_size": {
@@ -546,7 +581,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 23,
+      "id": 24,
       "nodeId": "s0.mg0_pre1_0",
       "params": {
         "cell_size": {
@@ -573,7 +608,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 24,
+      "id": 25,
       "nodeId": "s0.mg0_pre1_1",
       "params": {
         "cell_size": {
@@ -600,7 +635,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 25,
+      "id": 26,
       "nodeId": "s0.mg0_residual",
       "params": {
         "cell_size": {
@@ -623,7 +658,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 26,
+      "id": 27,
       "nodeId": "s0.mg0_restrict",
       "params": {
         "nodes_x": {
@@ -642,7 +677,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 27,
+      "id": 28,
       "nodeId": "s0.mg1_pre0_0",
       "params": {
         "cell_size": {
@@ -669,7 +704,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 28,
+      "id": 29,
       "nodeId": "s0.mg1_pre0_1",
       "params": {
         "cell_size": {
@@ -696,7 +731,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 29,
+      "id": 30,
       "nodeId": "s0.mg1_pre1_0",
       "params": {
         "cell_size": {
@@ -723,7 +758,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 30,
+      "id": 31,
       "nodeId": "s0.mg1_pre1_1",
       "params": {
         "cell_size": {
@@ -750,7 +785,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 31,
+      "id": 32,
       "nodeId": "s0.mg1_residual",
       "params": {
         "cell_size": {
@@ -773,7 +808,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 32,
+      "id": 33,
       "nodeId": "s0.mg1_restrict",
       "params": {
         "nodes_x": {
@@ -792,7 +827,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 33,
+      "id": 34,
       "nodeId": "s0.mg2_pre0_0",
       "params": {
         "cell_size": {
@@ -819,7 +854,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 34,
+      "id": 35,
       "nodeId": "s0.mg2_pre0_1",
       "params": {
         "cell_size": {
@@ -846,7 +881,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 35,
+      "id": 36,
       "nodeId": "s0.mg2_pre1_0",
       "params": {
         "cell_size": {
@@ -873,7 +908,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 36,
+      "id": 37,
       "nodeId": "s0.mg2_pre1_1",
       "params": {
         "cell_size": {
@@ -900,7 +935,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 37,
+      "id": 38,
       "nodeId": "s0.mg2_residual",
       "params": {
         "cell_size": {
@@ -923,7 +958,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 38,
+      "id": 39,
       "nodeId": "s0.mg2_restrict",
       "params": {
         "nodes_x": {
@@ -942,7 +977,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 39,
+      "id": 40,
       "nodeId": "s0.mg3_pre0_0",
       "params": {
         "cell_size": {
@@ -969,7 +1004,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 40,
+      "id": 41,
       "nodeId": "s0.mg3_pre0_1",
       "params": {
         "cell_size": {
@@ -996,7 +1031,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 41,
+      "id": 42,
       "nodeId": "s0.mg3_pre1_0",
       "params": {
         "cell_size": {
@@ -1023,7 +1058,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 42,
+      "id": 43,
       "nodeId": "s0.mg3_pre1_1",
       "params": {
         "cell_size": {
@@ -1050,7 +1085,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 43,
+      "id": 44,
       "nodeId": "s0.mg3_residual",
       "params": {
         "cell_size": {
@@ -1073,7 +1108,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 44,
+      "id": 45,
       "nodeId": "s0.mg3_restrict",
       "params": {
         "nodes_x": {
@@ -1092,7 +1127,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 45,
+      "id": 46,
       "nodeId": "s0.mg4_solve",
       "params": {
         "base_scale": {
@@ -1115,7 +1150,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 46,
+      "id": 47,
       "nodeId": "s0.mg3_prolong",
       "params": {
         "nodes_x": {
@@ -1134,7 +1169,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 47,
+      "id": 48,
       "nodeId": "s0.mg3_post0_1",
       "params": {
         "cell_size": {
@@ -1161,7 +1196,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 48,
+      "id": 49,
       "nodeId": "s0.mg3_post0_0",
       "params": {
         "cell_size": {
@@ -1188,7 +1223,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 49,
+      "id": 50,
       "nodeId": "s0.mg3_post1_1",
       "params": {
         "cell_size": {
@@ -1215,7 +1250,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 50,
+      "id": 51,
       "nodeId": "s0.mg3_post1_0",
       "params": {
         "cell_size": {
@@ -1242,7 +1277,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 51,
+      "id": 52,
       "nodeId": "s0.mg2_prolong",
       "params": {
         "nodes_x": {
@@ -1261,7 +1296,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 52,
+      "id": 53,
       "nodeId": "s0.mg2_post0_1",
       "params": {
         "cell_size": {
@@ -1288,7 +1323,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 53,
+      "id": 54,
       "nodeId": "s0.mg2_post0_0",
       "params": {
         "cell_size": {
@@ -1315,7 +1350,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 54,
+      "id": 55,
       "nodeId": "s0.mg2_post1_1",
       "params": {
         "cell_size": {
@@ -1342,7 +1377,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 55,
+      "id": 56,
       "nodeId": "s0.mg2_post1_0",
       "params": {
         "cell_size": {
@@ -1369,7 +1404,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 56,
+      "id": 57,
       "nodeId": "s0.mg1_prolong",
       "params": {
         "nodes_x": {
@@ -1388,7 +1423,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 57,
+      "id": 58,
       "nodeId": "s0.mg1_post0_1",
       "params": {
         "cell_size": {
@@ -1415,7 +1450,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 58,
+      "id": 59,
       "nodeId": "s0.mg1_post0_0",
       "params": {
         "cell_size": {
@@ -1442,7 +1477,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 59,
+      "id": 60,
       "nodeId": "s0.mg1_post1_1",
       "params": {
         "cell_size": {
@@ -1469,7 +1504,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 60,
+      "id": 61,
       "nodeId": "s0.mg1_post1_0",
       "params": {
         "cell_size": {
@@ -1496,7 +1531,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 61,
+      "id": 62,
       "nodeId": "s0.mg0_prolong",
       "params": {
         "nodes_x": {
@@ -1515,7 +1550,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 62,
+      "id": 63,
       "nodeId": "s0.mg0_post0_1",
       "params": {
         "cell_size": {
@@ -1542,7 +1577,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 63,
+      "id": 64,
       "nodeId": "s0.mg0_post0_0",
       "params": {
         "cell_size": {
@@ -1569,7 +1604,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 64,
+      "id": 65,
       "nodeId": "s0.mg0_post1_1",
       "params": {
         "cell_size": {
@@ -1596,7 +1631,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 65,
+      "id": 66,
       "nodeId": "s0.mg0_post1_0",
       "params": {
         "cell_size": {
@@ -1623,7 +1658,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 66,
+      "id": 67,
       "nodeId": "s0.rz",
       "params": {
         "max_rows": {
@@ -1642,12 +1677,12 @@
       "typeId": "node.dot_products"
     },
     {
-      "id": 67,
+      "id": 68,
       "nodeId": "s0.beta",
       "typeId": "node.divide_by_value"
     },
     {
-      "id": 68,
+      "id": 69,
       "nodeId": "s0.direction",
       "params": {
         "base_scale": {
@@ -1670,7 +1705,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 69,
+      "id": 70,
       "nodeId": "s0.minus_lp",
       "params": {
         "cell_size": {
@@ -1693,7 +1728,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 70,
+      "id": 71,
       "nodeId": "s0.p_dot_s",
       "params": {
         "max_rows": {
@@ -1712,12 +1747,12 @@
       "typeId": "node.dot_products"
     },
     {
-      "id": 71,
+      "id": 72,
       "nodeId": "s0.alpha",
       "typeId": "node.divide_by_value"
     },
     {
-      "id": 72,
+      "id": 73,
       "nodeId": "s0.solution",
       "params": {
         "base_scale": {
@@ -1740,7 +1775,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 73,
+      "id": 74,
       "nodeId": "s0.residual",
       "params": {
         "base_scale": {
@@ -1763,7 +1798,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 74,
+      "id": 75,
       "nodeId": "s0.project",
       "params": {
         "cell_size": {
@@ -1786,7 +1821,7 @@
       "typeId": "node.subtract_pressure"
     },
     {
-      "id": 75,
+      "id": 76,
       "nodeId": "s0.new_extend_1",
       "params": {
         "nodes_x": {
@@ -1805,7 +1840,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 76,
+      "id": 77,
       "nodeId": "s0.new_extend_2",
       "params": {
         "nodes_x": {
@@ -1824,7 +1859,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 77,
+      "id": 78,
       "nodeId": "s0.new_extend_3",
       "params": {
         "nodes_x": {
@@ -1843,7 +1878,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 78,
+      "id": 79,
       "nodeId": "s0.new_extend_4",
       "params": {
         "nodes_x": {
@@ -1862,7 +1897,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 79,
+      "id": 80,
       "nodeId": "s0.move",
       "params": {
         "cell_size": {
@@ -1909,7 +1944,7 @@
       "typeId": "node.faces_to_particles"
     },
     {
-      "id": 80,
+      "id": 81,
       "nodeId": "s1.sort",
       "params": {
         "cell_size": {
@@ -1944,7 +1979,7 @@
       "typeId": "node.sort_particles_into_cells"
     },
     {
-      "id": 81,
+      "id": 82,
       "nodeId": "s1.water",
       "params": {
         "nodes_x": {
@@ -1963,7 +1998,7 @@
       "typeId": "node.cells_with_particles"
     },
     {
-      "id": 82,
+      "id": 83,
       "nodeId": "s1.faces",
       "params": {
         "cell_size": {
@@ -1998,7 +2033,7 @@
       "typeId": "node.particles_to_faces"
     },
     {
-      "id": 83,
+      "id": 84,
       "nodeId": "s1.old_extend_1",
       "params": {
         "nodes_x": {
@@ -2017,7 +2052,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 84,
+      "id": 85,
       "nodeId": "s1.old_extend_2",
       "params": {
         "nodes_x": {
@@ -2036,7 +2071,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 85,
+      "id": 86,
       "nodeId": "s1.gravity",
       "params": {
         "nodes_x": {
@@ -2059,7 +2094,7 @@
       "typeId": "node.face_gravity"
     },
     {
-      "id": 86,
+      "id": 87,
       "nodeId": "s1.divergence",
       "params": {
         "cell_size": {
@@ -2082,7 +2117,42 @@
       "typeId": "node.face_divergence"
     },
     {
-      "id": 87,
+      "id": 88,
+      "nodeId": "s1.distance",
+      "params": {
+        "cell_size": {
+          "type": "Float",
+          "value": 0.0625
+        },
+        "lattice_min_x": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "lattice_min_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "lattice_min_z": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "nodes_x": {
+          "type": "Float",
+          "value": 64.0
+        },
+        "nodes_y": {
+          "type": "Float",
+          "value": 64.0
+        },
+        "nodes_z": {
+          "type": "Float",
+          "value": 64.0
+        }
+      },
+      "typeId": "node.particle_distance"
+    },
+    {
+      "id": 89,
       "nodeId": "s1.zero_0",
       "params": {
         "nodes_x": {
@@ -2101,7 +2171,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 88,
+      "id": 90,
       "nodeId": "s1.water_1",
       "params": {
         "nodes_x": {
@@ -2120,7 +2190,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 89,
+      "id": 91,
       "nodeId": "s1.zero_1",
       "params": {
         "nodes_x": {
@@ -2139,7 +2209,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 90,
+      "id": 92,
       "nodeId": "s1.water_2",
       "params": {
         "nodes_x": {
@@ -2158,7 +2228,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 91,
+      "id": 93,
       "nodeId": "s1.zero_2",
       "params": {
         "nodes_x": {
@@ -2177,7 +2247,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 92,
+      "id": 94,
       "nodeId": "s1.water_3",
       "params": {
         "nodes_x": {
@@ -2196,7 +2266,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 93,
+      "id": 95,
       "nodeId": "s1.zero_3",
       "params": {
         "nodes_x": {
@@ -2215,7 +2285,7 @@
       "typeId": "node.zero_lattice"
     },
     {
-      "id": 94,
+      "id": 96,
       "nodeId": "s1.water_4",
       "params": {
         "nodes_x": {
@@ -2234,7 +2304,7 @@
       "typeId": "node.coarsen_water"
     },
     {
-      "id": 95,
+      "id": 97,
       "nodeId": "s1.coarse_inverse",
       "params": {
         "nodes_x": {
@@ -2253,7 +2323,7 @@
       "typeId": "node.coarse_inverse"
     },
     {
-      "id": 96,
+      "id": 98,
       "nodeId": "s1.cg",
       "params": {
         "iterations": {
@@ -2264,7 +2334,7 @@
       "typeId": "node.conjugate_gradient"
     },
     {
-      "id": 97,
+      "id": 99,
       "nodeId": "s1.mg0_pre0_0",
       "params": {
         "cell_size": {
@@ -2291,7 +2361,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 98,
+      "id": 100,
       "nodeId": "s1.mg0_pre0_1",
       "params": {
         "cell_size": {
@@ -2318,7 +2388,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 99,
+      "id": 101,
       "nodeId": "s1.mg0_pre1_0",
       "params": {
         "cell_size": {
@@ -2345,7 +2415,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 100,
+      "id": 102,
       "nodeId": "s1.mg0_pre1_1",
       "params": {
         "cell_size": {
@@ -2372,7 +2442,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 101,
+      "id": 103,
       "nodeId": "s1.mg0_residual",
       "params": {
         "cell_size": {
@@ -2395,7 +2465,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 102,
+      "id": 104,
       "nodeId": "s1.mg0_restrict",
       "params": {
         "nodes_x": {
@@ -2414,7 +2484,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 103,
+      "id": 105,
       "nodeId": "s1.mg1_pre0_0",
       "params": {
         "cell_size": {
@@ -2441,7 +2511,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 104,
+      "id": 106,
       "nodeId": "s1.mg1_pre0_1",
       "params": {
         "cell_size": {
@@ -2468,7 +2538,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 105,
+      "id": 107,
       "nodeId": "s1.mg1_pre1_0",
       "params": {
         "cell_size": {
@@ -2495,7 +2565,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 106,
+      "id": 108,
       "nodeId": "s1.mg1_pre1_1",
       "params": {
         "cell_size": {
@@ -2522,7 +2592,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 107,
+      "id": 109,
       "nodeId": "s1.mg1_residual",
       "params": {
         "cell_size": {
@@ -2545,7 +2615,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 108,
+      "id": 110,
       "nodeId": "s1.mg1_restrict",
       "params": {
         "nodes_x": {
@@ -2564,7 +2634,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 109,
+      "id": 111,
       "nodeId": "s1.mg2_pre0_0",
       "params": {
         "cell_size": {
@@ -2591,7 +2661,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 110,
+      "id": 112,
       "nodeId": "s1.mg2_pre0_1",
       "params": {
         "cell_size": {
@@ -2618,7 +2688,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 111,
+      "id": 113,
       "nodeId": "s1.mg2_pre1_0",
       "params": {
         "cell_size": {
@@ -2645,7 +2715,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 112,
+      "id": 114,
       "nodeId": "s1.mg2_pre1_1",
       "params": {
         "cell_size": {
@@ -2672,7 +2742,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 113,
+      "id": 115,
       "nodeId": "s1.mg2_residual",
       "params": {
         "cell_size": {
@@ -2695,7 +2765,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 114,
+      "id": 116,
       "nodeId": "s1.mg2_restrict",
       "params": {
         "nodes_x": {
@@ -2714,7 +2784,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 115,
+      "id": 117,
       "nodeId": "s1.mg3_pre0_0",
       "params": {
         "cell_size": {
@@ -2741,7 +2811,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 116,
+      "id": 118,
       "nodeId": "s1.mg3_pre0_1",
       "params": {
         "cell_size": {
@@ -2768,7 +2838,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 117,
+      "id": 119,
       "nodeId": "s1.mg3_pre1_0",
       "params": {
         "cell_size": {
@@ -2795,7 +2865,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 118,
+      "id": 120,
       "nodeId": "s1.mg3_pre1_1",
       "params": {
         "cell_size": {
@@ -2822,7 +2892,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 119,
+      "id": 121,
       "nodeId": "s1.mg3_residual",
       "params": {
         "cell_size": {
@@ -2845,7 +2915,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 120,
+      "id": 122,
       "nodeId": "s1.mg3_restrict",
       "params": {
         "nodes_x": {
@@ -2864,7 +2934,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 121,
+      "id": 123,
       "nodeId": "s1.mg4_solve",
       "params": {
         "base_scale": {
@@ -2887,7 +2957,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 122,
+      "id": 124,
       "nodeId": "s1.mg3_prolong",
       "params": {
         "nodes_x": {
@@ -2906,7 +2976,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 123,
+      "id": 125,
       "nodeId": "s1.mg3_post0_1",
       "params": {
         "cell_size": {
@@ -2933,7 +3003,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 124,
+      "id": 126,
       "nodeId": "s1.mg3_post0_0",
       "params": {
         "cell_size": {
@@ -2960,7 +3030,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 125,
+      "id": 127,
       "nodeId": "s1.mg3_post1_1",
       "params": {
         "cell_size": {
@@ -2987,7 +3057,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 126,
+      "id": 128,
       "nodeId": "s1.mg3_post1_0",
       "params": {
         "cell_size": {
@@ -3014,7 +3084,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 127,
+      "id": 129,
       "nodeId": "s1.mg2_prolong",
       "params": {
         "nodes_x": {
@@ -3033,7 +3103,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 128,
+      "id": 130,
       "nodeId": "s1.mg2_post0_1",
       "params": {
         "cell_size": {
@@ -3060,7 +3130,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 129,
+      "id": 131,
       "nodeId": "s1.mg2_post0_0",
       "params": {
         "cell_size": {
@@ -3087,7 +3157,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 130,
+      "id": 132,
       "nodeId": "s1.mg2_post1_1",
       "params": {
         "cell_size": {
@@ -3114,7 +3184,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 131,
+      "id": 133,
       "nodeId": "s1.mg2_post1_0",
       "params": {
         "cell_size": {
@@ -3141,7 +3211,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 132,
+      "id": 134,
       "nodeId": "s1.mg1_prolong",
       "params": {
         "nodes_x": {
@@ -3160,7 +3230,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 133,
+      "id": 135,
       "nodeId": "s1.mg1_post0_1",
       "params": {
         "cell_size": {
@@ -3187,7 +3257,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 134,
+      "id": 136,
       "nodeId": "s1.mg1_post0_0",
       "params": {
         "cell_size": {
@@ -3214,7 +3284,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 135,
+      "id": 137,
       "nodeId": "s1.mg1_post1_1",
       "params": {
         "cell_size": {
@@ -3241,7 +3311,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 136,
+      "id": 138,
       "nodeId": "s1.mg1_post1_0",
       "params": {
         "cell_size": {
@@ -3268,7 +3338,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 137,
+      "id": 139,
       "nodeId": "s1.mg0_prolong",
       "params": {
         "nodes_x": {
@@ -3287,7 +3357,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 138,
+      "id": 140,
       "nodeId": "s1.mg0_post0_1",
       "params": {
         "cell_size": {
@@ -3314,7 +3384,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 139,
+      "id": 141,
       "nodeId": "s1.mg0_post0_0",
       "params": {
         "cell_size": {
@@ -3341,7 +3411,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 140,
+      "id": 142,
       "nodeId": "s1.mg0_post1_1",
       "params": {
         "cell_size": {
@@ -3368,7 +3438,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 141,
+      "id": 143,
       "nodeId": "s1.mg0_post1_0",
       "params": {
         "cell_size": {
@@ -3395,7 +3465,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 142,
+      "id": 144,
       "nodeId": "s1.rz",
       "params": {
         "max_rows": {
@@ -3414,12 +3484,12 @@
       "typeId": "node.dot_products"
     },
     {
-      "id": 143,
+      "id": 145,
       "nodeId": "s1.beta",
       "typeId": "node.divide_by_value"
     },
     {
-      "id": 144,
+      "id": 146,
       "nodeId": "s1.direction",
       "params": {
         "base_scale": {
@@ -3442,7 +3512,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 145,
+      "id": 147,
       "nodeId": "s1.minus_lp",
       "params": {
         "cell_size": {
@@ -3465,7 +3535,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 146,
+      "id": 148,
       "nodeId": "s1.p_dot_s",
       "params": {
         "max_rows": {
@@ -3484,12 +3554,12 @@
       "typeId": "node.dot_products"
     },
     {
-      "id": 147,
+      "id": 149,
       "nodeId": "s1.alpha",
       "typeId": "node.divide_by_value"
     },
     {
-      "id": 148,
+      "id": 150,
       "nodeId": "s1.solution",
       "params": {
         "base_scale": {
@@ -3512,7 +3582,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 149,
+      "id": 151,
       "nodeId": "s1.residual",
       "params": {
         "base_scale": {
@@ -3535,7 +3605,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 150,
+      "id": 152,
       "nodeId": "s1.project",
       "params": {
         "cell_size": {
@@ -3558,7 +3628,7 @@
       "typeId": "node.subtract_pressure"
     },
     {
-      "id": 151,
+      "id": 153,
       "nodeId": "s1.new_extend_1",
       "params": {
         "nodes_x": {
@@ -3577,7 +3647,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 152,
+      "id": 154,
       "nodeId": "s1.new_extend_2",
       "params": {
         "nodes_x": {
@@ -3596,7 +3666,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 153,
+      "id": 155,
       "nodeId": "s1.new_extend_3",
       "params": {
         "nodes_x": {
@@ -3615,7 +3685,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 154,
+      "id": 156,
       "nodeId": "s1.new_extend_4",
       "params": {
         "nodes_x": {
@@ -3634,7 +3704,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 155,
+      "id": 157,
       "nodeId": "s1.density.source",
       "params": {
         "nodes_x": {
@@ -3661,7 +3731,7 @@
       "typeId": "node.density_source"
     },
     {
-      "id": 156,
+      "id": 158,
       "nodeId": "s1.density.cg",
       "params": {
         "iterations": {
@@ -3672,7 +3742,7 @@
       "typeId": "node.conjugate_gradient"
     },
     {
-      "id": 157,
+      "id": 159,
       "nodeId": "s1.density.mg0_pre0_0",
       "params": {
         "cell_size": {
@@ -3699,7 +3769,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 158,
+      "id": 160,
       "nodeId": "s1.density.mg0_pre0_1",
       "params": {
         "cell_size": {
@@ -3726,7 +3796,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 159,
+      "id": 161,
       "nodeId": "s1.density.mg0_pre1_0",
       "params": {
         "cell_size": {
@@ -3753,7 +3823,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 160,
+      "id": 162,
       "nodeId": "s1.density.mg0_pre1_1",
       "params": {
         "cell_size": {
@@ -3780,7 +3850,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 161,
+      "id": 163,
       "nodeId": "s1.density.mg0_residual",
       "params": {
         "cell_size": {
@@ -3803,7 +3873,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 162,
+      "id": 164,
       "nodeId": "s1.density.mg0_restrict",
       "params": {
         "nodes_x": {
@@ -3822,7 +3892,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 163,
+      "id": 165,
       "nodeId": "s1.density.mg1_pre0_0",
       "params": {
         "cell_size": {
@@ -3849,7 +3919,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 164,
+      "id": 166,
       "nodeId": "s1.density.mg1_pre0_1",
       "params": {
         "cell_size": {
@@ -3876,7 +3946,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 165,
+      "id": 167,
       "nodeId": "s1.density.mg1_pre1_0",
       "params": {
         "cell_size": {
@@ -3903,7 +3973,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 166,
+      "id": 168,
       "nodeId": "s1.density.mg1_pre1_1",
       "params": {
         "cell_size": {
@@ -3930,7 +4000,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 167,
+      "id": 169,
       "nodeId": "s1.density.mg1_residual",
       "params": {
         "cell_size": {
@@ -3953,7 +4023,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 168,
+      "id": 170,
       "nodeId": "s1.density.mg1_restrict",
       "params": {
         "nodes_x": {
@@ -3972,7 +4042,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 169,
+      "id": 171,
       "nodeId": "s1.density.mg2_pre0_0",
       "params": {
         "cell_size": {
@@ -3999,7 +4069,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 170,
+      "id": 172,
       "nodeId": "s1.density.mg2_pre0_1",
       "params": {
         "cell_size": {
@@ -4026,7 +4096,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 171,
+      "id": 173,
       "nodeId": "s1.density.mg2_pre1_0",
       "params": {
         "cell_size": {
@@ -4053,7 +4123,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 172,
+      "id": 174,
       "nodeId": "s1.density.mg2_pre1_1",
       "params": {
         "cell_size": {
@@ -4080,7 +4150,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 173,
+      "id": 175,
       "nodeId": "s1.density.mg2_residual",
       "params": {
         "cell_size": {
@@ -4103,7 +4173,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 174,
+      "id": 176,
       "nodeId": "s1.density.mg2_restrict",
       "params": {
         "nodes_x": {
@@ -4122,7 +4192,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 175,
+      "id": 177,
       "nodeId": "s1.density.mg3_pre0_0",
       "params": {
         "cell_size": {
@@ -4149,7 +4219,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 176,
+      "id": 178,
       "nodeId": "s1.density.mg3_pre0_1",
       "params": {
         "cell_size": {
@@ -4176,7 +4246,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 177,
+      "id": 179,
       "nodeId": "s1.density.mg3_pre1_0",
       "params": {
         "cell_size": {
@@ -4203,7 +4273,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 178,
+      "id": 180,
       "nodeId": "s1.density.mg3_pre1_1",
       "params": {
         "cell_size": {
@@ -4230,7 +4300,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 179,
+      "id": 181,
       "nodeId": "s1.density.mg3_residual",
       "params": {
         "cell_size": {
@@ -4253,7 +4323,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 180,
+      "id": 182,
       "nodeId": "s1.density.mg3_restrict",
       "params": {
         "nodes_x": {
@@ -4272,7 +4342,7 @@
       "typeId": "node.restrict_lattice"
     },
     {
-      "id": 181,
+      "id": 183,
       "nodeId": "s1.density.mg4_solve",
       "params": {
         "base_scale": {
@@ -4295,7 +4365,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 182,
+      "id": 184,
       "nodeId": "s1.density.mg3_prolong",
       "params": {
         "nodes_x": {
@@ -4314,7 +4384,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 183,
+      "id": 185,
       "nodeId": "s1.density.mg3_post0_1",
       "params": {
         "cell_size": {
@@ -4341,7 +4411,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 184,
+      "id": 186,
       "nodeId": "s1.density.mg3_post0_0",
       "params": {
         "cell_size": {
@@ -4368,7 +4438,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 185,
+      "id": 187,
       "nodeId": "s1.density.mg3_post1_1",
       "params": {
         "cell_size": {
@@ -4395,7 +4465,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 186,
+      "id": 188,
       "nodeId": "s1.density.mg3_post1_0",
       "params": {
         "cell_size": {
@@ -4422,7 +4492,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 187,
+      "id": 189,
       "nodeId": "s1.density.mg2_prolong",
       "params": {
         "nodes_x": {
@@ -4441,7 +4511,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 188,
+      "id": 190,
       "nodeId": "s1.density.mg2_post0_1",
       "params": {
         "cell_size": {
@@ -4468,7 +4538,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 189,
+      "id": 191,
       "nodeId": "s1.density.mg2_post0_0",
       "params": {
         "cell_size": {
@@ -4495,7 +4565,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 190,
+      "id": 192,
       "nodeId": "s1.density.mg2_post1_1",
       "params": {
         "cell_size": {
@@ -4522,7 +4592,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 191,
+      "id": 193,
       "nodeId": "s1.density.mg2_post1_0",
       "params": {
         "cell_size": {
@@ -4549,7 +4619,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 192,
+      "id": 194,
       "nodeId": "s1.density.mg1_prolong",
       "params": {
         "nodes_x": {
@@ -4568,7 +4638,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 193,
+      "id": 195,
       "nodeId": "s1.density.mg1_post0_1",
       "params": {
         "cell_size": {
@@ -4595,7 +4665,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 194,
+      "id": 196,
       "nodeId": "s1.density.mg1_post0_0",
       "params": {
         "cell_size": {
@@ -4622,7 +4692,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 195,
+      "id": 197,
       "nodeId": "s1.density.mg1_post1_1",
       "params": {
         "cell_size": {
@@ -4649,7 +4719,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 196,
+      "id": 198,
       "nodeId": "s1.density.mg1_post1_0",
       "params": {
         "cell_size": {
@@ -4676,7 +4746,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 197,
+      "id": 199,
       "nodeId": "s1.density.mg0_prolong",
       "params": {
         "nodes_x": {
@@ -4695,7 +4765,7 @@
       "typeId": "node.prolong_lattice"
     },
     {
-      "id": 198,
+      "id": 200,
       "nodeId": "s1.density.mg0_post0_1",
       "params": {
         "cell_size": {
@@ -4722,7 +4792,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 199,
+      "id": 201,
       "nodeId": "s1.density.mg0_post0_0",
       "params": {
         "cell_size": {
@@ -4749,7 +4819,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 200,
+      "id": 202,
       "nodeId": "s1.density.mg0_post1_1",
       "params": {
         "cell_size": {
@@ -4776,7 +4846,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 201,
+      "id": 203,
       "nodeId": "s1.density.mg0_post1_0",
       "params": {
         "cell_size": {
@@ -4803,7 +4873,7 @@
       "typeId": "node.pressure_smooth"
     },
     {
-      "id": 202,
+      "id": 204,
       "nodeId": "s1.density.rz",
       "params": {
         "max_rows": {
@@ -4822,12 +4892,12 @@
       "typeId": "node.dot_products"
     },
     {
-      "id": 203,
+      "id": 205,
       "nodeId": "s1.density.beta",
       "typeId": "node.divide_by_value"
     },
     {
-      "id": 204,
+      "id": 206,
       "nodeId": "s1.density.direction",
       "params": {
         "base_scale": {
@@ -4850,7 +4920,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 205,
+      "id": 207,
       "nodeId": "s1.density.minus_lp",
       "params": {
         "cell_size": {
@@ -4873,7 +4943,7 @@
       "typeId": "node.pressure_residual"
     },
     {
-      "id": 206,
+      "id": 208,
       "nodeId": "s1.density.p_dot_s",
       "params": {
         "max_rows": {
@@ -4892,12 +4962,12 @@
       "typeId": "node.dot_products"
     },
     {
-      "id": 207,
+      "id": 209,
       "nodeId": "s1.density.alpha",
       "typeId": "node.divide_by_value"
     },
     {
-      "id": 208,
+      "id": 210,
       "nodeId": "s1.density.solution",
       "params": {
         "base_scale": {
@@ -4920,7 +4990,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 209,
+      "id": 211,
       "nodeId": "s1.density.residual",
       "params": {
         "base_scale": {
@@ -4943,7 +5013,7 @@
       "typeId": "node.combine_rows"
     },
     {
-      "id": 210,
+      "id": 212,
       "nodeId": "s1.density.project",
       "params": {
         "cell_size": {
@@ -4966,7 +5036,7 @@
       "typeId": "node.subtract_pressure"
     },
     {
-      "id": 211,
+      "id": 213,
       "nodeId": "s1.density.advect_extend_1",
       "params": {
         "nodes_x": {
@@ -4985,7 +5055,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 212,
+      "id": 214,
       "nodeId": "s1.density.advect_extend_2",
       "params": {
         "nodes_x": {
@@ -5004,7 +5074,7 @@
       "typeId": "node.extend_faces"
     },
     {
-      "id": 213,
+      "id": 215,
       "nodeId": "s1.move",
       "params": {
         "cell_size": {
@@ -5051,17 +5121,17 @@
       "typeId": "node.faces_to_particles"
     },
     {
-      "id": 214,
+      "id": 216,
       "nodeId": "stats",
       "typeId": "node.liquid_stats"
     },
     {
-      "id": 215,
+      "id": 217,
       "nodeId": "solid",
       "typeId": "node.liquid_solid_distance"
     },
     {
-      "id": 216,
+      "id": 218,
       "nodeId": "frame",
       "params": {
         "face_valid_layers": {
@@ -5072,7 +5142,7 @@
       "typeId": "node.liquid_frame"
     },
     {
-      "id": 217,
+      "id": 219,
       "nodeId": "face_u",
       "params": {
         "axis": {
@@ -5095,7 +5165,7 @@
       "typeId": "node.face_sample_component"
     },
     {
-      "id": 218,
+      "id": 220,
       "nodeId": "face_v",
       "params": {
         "axis": {
@@ -5118,7 +5188,7 @@
       "typeId": "node.face_sample_component"
     },
     {
-      "id": 219,
+      "id": 221,
       "nodeId": "face_w",
       "params": {
         "axis": {
@@ -5991,7 +6061,7 @@
         ]
       },
       "handle": "Liquid Surface",
-      "id": 221,
+      "id": 223,
       "nodeId": "surface",
       "params": {
         "bin_cells": {
@@ -8654,76 +8724,76 @@
       "toPort": "water"
     },
     {
+      "fromNode": 4,
+      "fromPort": "sorted",
+      "toNode": 11,
+      "toPort": "sorted"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "cell_ranges",
+      "toNode": 11,
+      "toPort": "cell_ranges"
+    },
+    {
       "fromNode": 5,
       "fromPort": "out",
-      "toNode": 12,
+      "toNode": 13,
       "toPort": "fine"
     },
     {
-      "fromNode": 12,
+      "fromNode": 13,
       "fromPort": "out",
-      "toNode": 14,
+      "toNode": 15,
       "toPort": "fine"
     },
     {
-      "fromNode": 14,
+      "fromNode": 15,
       "fromPort": "out",
-      "toNode": 16,
+      "toNode": 17,
       "toPort": "fine"
     },
     {
-      "fromNode": 16,
-      "fromPort": "out",
-      "toNode": 18,
-      "toPort": "fine"
-    },
-    {
-      "fromNode": 18,
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 19,
+      "toPort": "fine"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "out",
+      "toNode": 20,
       "toPort": "water"
     },
     {
       "fromNode": 10,
       "fromPort": "out",
-      "toNode": 20,
+      "toNode": 21,
       "toPort": "rhs"
     },
     {
       "fromNode": 5,
       "fromPort": "out",
-      "toNode": 21,
+      "toNode": 22,
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
-      "toNode": 21,
+      "toNode": 22,
       "toPort": "rhs"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "value"
     },
     {
       "fromNode": 11,
       "fromPort": "out",
-      "toNode": 21,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 5,
-      "fromPort": "out",
       "toNode": 22,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 20,
-      "fromPort": "residual",
-      "toNode": 22,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 21,
-      "fromPort": "out",
-      "toNode": 22,
-      "toPort": "value"
+      "toPort": "phi"
     },
     {
       "fromNode": 5,
@@ -8732,7 +8802,7 @@
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 23,
       "toPort": "rhs"
@@ -8744,13 +8814,19 @@
       "toPort": "value"
     },
     {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "phi"
+    },
+    {
       "fromNode": 5,
       "fromPort": "out",
       "toNode": 24,
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 24,
       "toPort": "rhs"
@@ -8762,13 +8838,19 @@
       "toPort": "value"
     },
     {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 24,
+      "toPort": "phi"
+    },
+    {
       "fromNode": 5,
       "fromPort": "out",
       "toNode": 25,
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 25,
       "toPort": "rhs"
@@ -8780,61 +8862,79 @@
       "toPort": "value"
     },
     {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 26,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "residual",
+      "toNode": 26,
+      "toPort": "rhs"
+    },
+    {
       "fromNode": 25,
       "fromPort": "out",
       "toNode": 26,
-      "toPort": "fine"
+      "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 11,
       "fromPort": "out",
       "toNode": 26,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "out",
-      "toNode": 27,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
       "fromNode": 26,
       "fromPort": "out",
       "toNode": 27,
-      "toPort": "rhs"
+      "toPort": "fine"
     },
     {
       "fromNode": 13,
       "fromPort": "out",
       "toNode": 27,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "out",
-      "toNode": 28,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 28,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 27,
       "fromPort": "out",
       "toNode": 28,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 28,
       "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 28,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 29,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 27,
       "fromPort": "out",
       "toNode": 29,
       "toPort": "rhs"
@@ -8846,13 +8946,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 30,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 27,
       "fromPort": "out",
       "toNode": 30,
       "toPort": "rhs"
@@ -8864,13 +8970,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 31,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 27,
       "fromPort": "out",
       "toNode": 31,
       "toPort": "rhs"
@@ -8882,61 +8994,79 @@
       "toPort": "value"
     },
     {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 31,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 32,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "out",
+      "toNode": 32,
+      "toPort": "rhs"
+    },
+    {
       "fromNode": 31,
       "fromPort": "out",
       "toNode": 32,
-      "toPort": "fine"
+      "toPort": "value"
     },
     {
       "fromNode": 14,
       "fromPort": "out",
       "toNode": 32,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 14,
-      "fromPort": "out",
-      "toNode": 33,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
       "fromNode": 32,
       "fromPort": "out",
       "toNode": 33,
-      "toPort": "rhs"
+      "toPort": "fine"
     },
     {
       "fromNode": 15,
       "fromPort": "out",
       "toNode": 33,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 14,
-      "fromPort": "out",
-      "toNode": 34,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 34,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 33,
       "fromPort": "out",
       "toNode": 34,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 34,
       "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 34,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 35,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 33,
       "fromPort": "out",
       "toNode": 35,
       "toPort": "rhs"
@@ -8948,13 +9078,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 35,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 36,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 33,
       "fromPort": "out",
       "toNode": 36,
       "toPort": "rhs"
@@ -8966,13 +9102,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 36,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 37,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 33,
       "fromPort": "out",
       "toNode": 37,
       "toPort": "rhs"
@@ -8984,61 +9126,79 @@
       "toPort": "value"
     },
     {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 37,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 38,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 33,
+      "fromPort": "out",
+      "toNode": 38,
+      "toPort": "rhs"
+    },
+    {
       "fromNode": 37,
       "fromPort": "out",
       "toNode": 38,
-      "toPort": "fine"
+      "toPort": "value"
     },
     {
       "fromNode": 16,
       "fromPort": "out",
       "toNode": 38,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 16,
-      "fromPort": "out",
-      "toNode": 39,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
       "fromNode": 38,
       "fromPort": "out",
       "toNode": 39,
-      "toPort": "rhs"
+      "toPort": "fine"
     },
     {
       "fromNode": 17,
       "fromPort": "out",
       "toNode": 39,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 16,
-      "fromPort": "out",
-      "toNode": 40,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 40,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 39,
       "fromPort": "out",
       "toNode": 40,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 40,
       "toPort": "value"
     },
     {
-      "fromNode": 16,
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 40,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 41,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 39,
       "fromPort": "out",
       "toNode": 41,
       "toPort": "rhs"
@@ -9050,13 +9210,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 16,
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 41,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 42,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 39,
       "fromPort": "out",
       "toNode": 42,
       "toPort": "rhs"
@@ -9068,13 +9234,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 16,
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 42,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 43,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 39,
       "fromPort": "out",
       "toNode": 43,
       "toPort": "rhs"
@@ -9084,81 +9256,93 @@
       "fromPort": "out",
       "toNode": 43,
       "toPort": "value"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 43,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 44,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 39,
+      "fromPort": "out",
+      "toNode": 44,
+      "toPort": "rhs"
     },
     {
       "fromNode": 43,
       "fromPort": "out",
       "toNode": 44,
-      "toPort": "fine"
+      "toPort": "value"
     },
     {
       "fromNode": 18,
       "fromPort": "out",
       "toNode": 44,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
       "fromNode": 44,
       "fromPort": "out",
       "toNode": 45,
-      "toPort": "base"
+      "toPort": "fine"
     },
     {
       "fromNode": 19,
       "fromPort": "out",
       "toNode": 45,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 44,
-      "fromPort": "out",
-      "toNode": 45,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 42,
-      "fromPort": "out",
-      "toNode": 46,
-      "toPort": "value"
+      "toPort": "water"
     },
     {
       "fromNode": 45,
       "fromPort": "out",
       "toNode": 46,
-      "toPort": "coarse"
+      "toPort": "base"
     },
     {
-      "fromNode": 16,
+      "fromNode": 20,
       "fromPort": "out",
       "toNode": 46,
-      "toPort": "water"
+      "toPort": "matrix"
     },
     {
-      "fromNode": 16,
+      "fromNode": 45,
       "fromPort": "out",
-      "toNode": 47,
-      "toPort": "water"
+      "toNode": 46,
+      "toPort": "coef"
     },
     {
-      "fromNode": 38,
-      "fromPort": "out",
-      "toNode": 47,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 46,
+      "fromNode": 43,
       "fromPort": "out",
       "toNode": 47,
       "toPort": "value"
     },
     {
-      "fromNode": 16,
+      "fromNode": 46,
+      "fromPort": "out",
+      "toNode": 47,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 47,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 48,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 39,
       "fromPort": "out",
       "toNode": 48,
       "toPort": "rhs"
@@ -9170,13 +9354,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 16,
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 48,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 49,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 39,
       "fromPort": "out",
       "toNode": 49,
       "toPort": "rhs"
@@ -9188,13 +9378,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 16,
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 49,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 50,
       "toPort": "water"
     },
     {
-      "fromNode": 38,
+      "fromNode": 39,
       "fromPort": "out",
       "toNode": 50,
       "toPort": "rhs"
@@ -9206,49 +9402,61 @@
       "toPort": "value"
     },
     {
-      "fromNode": 36,
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 50,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 17,
       "fromPort": "out",
       "toNode": 51,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 39,
+      "fromPort": "out",
+      "toNode": 51,
+      "toPort": "rhs"
     },
     {
       "fromNode": 50,
       "fromPort": "out",
       "toNode": 51,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 18,
       "fromPort": "out",
       "toNode": 51,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 14,
-      "fromPort": "out",
-      "toNode": 52,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 32,
-      "fromPort": "out",
-      "toNode": 52,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 51,
+      "fromNode": 37,
       "fromPort": "out",
       "toNode": 52,
       "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 51,
+      "fromPort": "out",
+      "toNode": 52,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 52,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 53,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 33,
       "fromPort": "out",
       "toNode": 53,
       "toPort": "rhs"
@@ -9260,13 +9468,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 53,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 54,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 33,
       "fromPort": "out",
       "toNode": 54,
       "toPort": "rhs"
@@ -9278,13 +9492,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 14,
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 54,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 55,
       "toPort": "water"
     },
     {
-      "fromNode": 32,
+      "fromNode": 33,
       "fromPort": "out",
       "toNode": 55,
       "toPort": "rhs"
@@ -9296,49 +9516,61 @@
       "toPort": "value"
     },
     {
-      "fromNode": 30,
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 55,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 15,
       "fromPort": "out",
       "toNode": 56,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 33,
+      "fromPort": "out",
+      "toNode": 56,
+      "toPort": "rhs"
     },
     {
       "fromNode": 55,
       "fromPort": "out",
       "toNode": 56,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 16,
       "fromPort": "out",
       "toNode": 56,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 12,
-      "fromPort": "out",
-      "toNode": 57,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 26,
-      "fromPort": "out",
-      "toNode": 57,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 56,
+      "fromNode": 31,
       "fromPort": "out",
       "toNode": 57,
       "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 56,
+      "fromPort": "out",
+      "toNode": 57,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 57,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 58,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 27,
       "fromPort": "out",
       "toNode": 58,
       "toPort": "rhs"
@@ -9350,13 +9582,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 58,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 59,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 27,
       "fromPort": "out",
       "toNode": 59,
       "toPort": "rhs"
@@ -9368,13 +9606,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 12,
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 59,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 60,
       "toPort": "water"
     },
     {
-      "fromNode": 26,
+      "fromNode": 27,
       "fromPort": "out",
       "toNode": 60,
       "toPort": "rhs"
@@ -9386,40 +9630,52 @@
       "toPort": "value"
     },
     {
-      "fromNode": 24,
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 60,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 13,
       "fromPort": "out",
       "toNode": 61,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "out",
+      "toNode": 61,
+      "toPort": "rhs"
     },
     {
       "fromNode": 60,
       "fromPort": "out",
       "toNode": 61,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 5,
+      "fromNode": 14,
       "fromPort": "out",
       "toNode": 61,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 5,
+      "fromNode": 25,
       "fromPort": "out",
       "toNode": 62,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 20,
-      "fromPort": "residual",
-      "toNode": 62,
-      "toPort": "rhs"
+      "toPort": "value"
     },
     {
       "fromNode": 61,
       "fromPort": "out",
       "toNode": 62,
-      "toPort": "value"
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 62,
+      "toPort": "water"
     },
     {
       "fromNode": 5,
@@ -9428,7 +9684,7 @@
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 63,
       "toPort": "rhs"
@@ -9440,13 +9696,19 @@
       "toPort": "value"
     },
     {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 63,
+      "toPort": "phi"
+    },
+    {
       "fromNode": 5,
       "fromPort": "out",
       "toNode": 64,
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 64,
       "toPort": "rhs"
@@ -9458,13 +9720,19 @@
       "toPort": "value"
     },
     {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 64,
+      "toPort": "phi"
+    },
+    {
       "fromNode": 5,
       "fromPort": "out",
       "toNode": 65,
       "toPort": "water"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 65,
       "toPort": "rhs"
@@ -9476,110 +9744,128 @@
       "toPort": "value"
     },
     {
-      "fromNode": 20,
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 65,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 66,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 21,
       "fromPort": "residual",
       "toNode": 66,
-      "toPort": "matrix"
+      "toPort": "rhs"
     },
     {
       "fromNode": 65,
       "fromPort": "out",
       "toNode": 66,
-      "toPort": "vector"
+      "toPort": "value"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 66,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "residual",
+      "toNode": 67,
+      "toPort": "matrix"
     },
     {
       "fromNode": 66,
       "fromPort": "out",
       "toNode": 67,
-      "toPort": "values"
-    },
-    {
-      "fromNode": 20,
-      "fromPort": "rz",
-      "toNode": 67,
-      "toPort": "divisor"
-    },
-    {
-      "fromNode": 65,
-      "fromPort": "out",
-      "toNode": 68,
-      "toPort": "base"
-    },
-    {
-      "fromNode": 20,
-      "fromPort": "direction",
-      "toNode": 68,
-      "toPort": "matrix"
+      "toPort": "vector"
     },
     {
       "fromNode": 67,
       "fromPort": "out",
       "toNode": 68,
+      "toPort": "values"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "rz",
+      "toNode": 68,
+      "toPort": "divisor"
+    },
+    {
+      "fromNode": 66,
+      "fromPort": "out",
+      "toNode": 69,
+      "toPort": "base"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "direction",
+      "toNode": 69,
+      "toPort": "matrix"
+    },
+    {
+      "fromNode": 68,
+      "fromPort": "out",
+      "toNode": 69,
       "toPort": "coef"
     },
     {
       "fromNode": 5,
       "fromPort": "out",
-      "toNode": 69,
+      "toNode": 70,
       "toPort": "water"
     },
     {
-      "fromNode": 11,
-      "fromPort": "out",
-      "toNode": 69,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 68,
-      "fromPort": "out",
-      "toNode": 69,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 68,
+      "fromNode": 12,
       "fromPort": "out",
       "toNode": 70,
-      "toPort": "matrix"
+      "toPort": "rhs"
     },
     {
       "fromNode": 69,
       "fromPort": "out",
       "toNode": 70,
-      "toPort": "vector"
+      "toPort": "value"
     },
     {
-      "fromNode": 66,
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 70,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 69,
       "fromPort": "out",
       "toNode": 71,
-      "toPort": "values"
+      "toPort": "matrix"
     },
     {
       "fromNode": 70,
       "fromPort": "out",
       "toNode": 71,
-      "toPort": "divisor"
+      "toPort": "vector"
     },
     {
-      "fromNode": 20,
-      "fromPort": "solution",
-      "toNode": 72,
-      "toPort": "base"
-    },
-    {
-      "fromNode": 68,
+      "fromNode": 67,
       "fromPort": "out",
       "toNode": 72,
-      "toPort": "matrix"
+      "toPort": "values"
     },
     {
       "fromNode": 71,
       "fromPort": "out",
       "toNode": 72,
-      "toPort": "coef"
+      "toPort": "divisor"
     },
     {
-      "fromNode": 20,
-      "fromPort": "residual",
+      "fromNode": 21,
+      "fromPort": "solution",
       "toNode": 73,
       "toPort": "base"
     },
@@ -9590,58 +9876,76 @@
       "toPort": "matrix"
     },
     {
-      "fromNode": 71,
+      "fromNode": 72,
       "fromPort": "out",
       "toNode": 73,
       "toPort": "coef"
     },
     {
-      "fromNode": 73,
+      "fromNode": 21,
+      "fromPort": "residual",
+      "toNode": 74,
+      "toPort": "base"
+    },
+    {
+      "fromNode": 70,
       "fromPort": "out",
-      "toNode": 20,
-      "toPort": "residual_in"
+      "toNode": 74,
+      "toPort": "matrix"
     },
     {
       "fromNode": 72,
       "fromPort": "out",
-      "toNode": 20,
+      "toNode": 74,
+      "toPort": "coef"
+    },
+    {
+      "fromNode": 74,
+      "fromPort": "out",
+      "toNode": 21,
+      "toPort": "residual_in"
+    },
+    {
+      "fromNode": 73,
+      "fromPort": "out",
+      "toNode": 21,
       "toPort": "solution_in"
     },
     {
-      "fromNode": 68,
+      "fromNode": 69,
       "fromPort": "out",
-      "toNode": 20,
+      "toNode": 21,
       "toPort": "direction_in"
     },
     {
-      "fromNode": 66,
+      "fromNode": 67,
       "fromPort": "out",
-      "toNode": 20,
+      "toNode": 21,
       "toPort": "rz_in"
     },
     {
       "fromNode": 9,
       "fromPort": "out",
-      "toNode": 74,
+      "toNode": 75,
       "toPort": "faces"
     },
     {
-      "fromNode": 20,
+      "fromNode": 21,
       "fromPort": "solution",
-      "toNode": 74,
+      "toNode": 75,
       "toPort": "pressure"
     },
     {
       "fromNode": 5,
       "fromPort": "out",
-      "toNode": 74,
+      "toNode": 75,
       "toPort": "water"
     },
     {
-      "fromNode": 74,
+      "fromNode": 11,
       "fromPort": "out",
       "toNode": 75,
-      "toPort": "faces"
+      "toPort": "phi"
     },
     {
       "fromNode": 75,
@@ -9662,64 +9966,64 @@
       "toPort": "faces"
     },
     {
-      "fromNode": 4,
-      "fromPort": "sorted",
-      "toNode": 79,
-      "toPort": "particles"
-    },
-    {
       "fromNode": 78,
       "fromPort": "out",
       "toNode": 79,
       "toPort": "faces"
     },
     {
-      "fromNode": 8,
-      "fromPort": "out",
-      "toNode": 79,
-      "toPort": "old"
-    },
-    {
-      "fromNode": 78,
-      "fromPort": "out",
-      "toNode": 79,
-      "toPort": "advect"
+      "fromNode": 4,
+      "fromPort": "sorted",
+      "toNode": 80,
+      "toPort": "particles"
     },
     {
       "fromNode": 79,
       "fromPort": "out",
       "toNode": 80,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 80,
+      "toPort": "old"
+    },
+    {
+      "fromNode": 79,
+      "fromPort": "out",
+      "toNode": 80,
+      "toPort": "advect"
+    },
+    {
+      "fromNode": 80,
+      "fromPort": "out",
+      "toNode": 81,
       "toPort": "particles"
     },
     {
       "fromNode": 2,
       "fromPort": "count",
-      "toNode": 80,
+      "toNode": 81,
       "toPort": "count"
     },
     {
-      "fromNode": 80,
+      "fromNode": 81,
       "fromPort": "cell_ranges",
-      "toNode": 81,
+      "toNode": 82,
       "toPort": "cell_ranges"
     },
     {
-      "fromNode": 80,
+      "fromNode": 81,
       "fromPort": "sorted",
-      "toNode": 82,
+      "toNode": 83,
       "toPort": "sorted"
     },
     {
-      "fromNode": 80,
+      "fromNode": 81,
       "fromPort": "cell_ranges",
-      "toNode": 82,
-      "toPort": "cell_ranges"
-    },
-    {
-      "fromNode": 82,
-      "fromPort": "out",
       "toNode": 83,
-      "toPort": "faces"
+      "toPort": "cell_ranges"
     },
     {
       "fromNode": 83,
@@ -9734,43 +10038,55 @@
       "toPort": "faces"
     },
     {
-      "fromNode": 0,
-      "fromPort": "gravity_x",
-      "toNode": 85,
-      "toPort": "gravity_x"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "gravity",
-      "toNode": 85,
-      "toPort": "gravity_y"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "gravity_z",
-      "toNode": 85,
-      "toPort": "gravity_z"
-    },
-    {
       "fromNode": 85,
       "fromPort": "out",
       "toNode": 86,
       "toPort": "faces"
     },
     {
-      "fromNode": 81,
-      "fromPort": "out",
+      "fromNode": 0,
+      "fromPort": "gravity_x",
       "toNode": 86,
+      "toPort": "gravity_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity",
+      "toNode": 86,
+      "toPort": "gravity_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_z",
+      "toNode": 86,
+      "toPort": "gravity_z"
+    },
+    {
+      "fromNode": 86,
+      "fromPort": "out",
+      "toNode": 87,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 87,
       "toPort": "water"
     },
     {
       "fromNode": 81,
-      "fromPort": "out",
+      "fromPort": "sorted",
       "toNode": 88,
-      "toPort": "fine"
+      "toPort": "sorted"
     },
     {
-      "fromNode": 88,
+      "fromNode": 81,
+      "fromPort": "cell_ranges",
+      "toNode": 88,
+      "toPort": "cell_ranges"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 90,
       "toPort": "fine"
@@ -9790,77 +10106,53 @@
     {
       "fromNode": 94,
       "fromPort": "out",
-      "toNode": 95,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 86,
-      "fromPort": "out",
       "toNode": 96,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 81,
-      "fromPort": "out",
-      "toNode": 97,
-      "toPort": "water"
+      "toPort": "fine"
     },
     {
       "fromNode": 96,
-      "fromPort": "residual",
+      "fromPort": "out",
       "toNode": 97,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 87,
       "fromPort": "out",
-      "toNode": 97,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 81,
-      "fromPort": "out",
-      "toNode": 98,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 96,
-      "fromPort": "residual",
       "toNode": 98,
       "toPort": "rhs"
     },
     {
-      "fromNode": 97,
-      "fromPort": "out",
-      "toNode": 98,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 81,
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 99,
       "toPort": "water"
-    },
-    {
-      "fromNode": 96,
-      "fromPort": "residual",
-      "toNode": 99,
-      "toPort": "rhs"
     },
     {
       "fromNode": 98,
+      "fromPort": "residual",
+      "toNode": 99,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 89,
       "fromPort": "out",
       "toNode": 99,
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 99,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 100,
       "toPort": "water"
     },
     {
-      "fromNode": 96,
+      "fromNode": 98,
       "fromPort": "residual",
       "toNode": 100,
       "toPort": "rhs"
@@ -9872,13 +10164,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 100,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 101,
       "toPort": "water"
     },
     {
-      "fromNode": 96,
+      "fromNode": 98,
       "fromPort": "residual",
       "toNode": 101,
       "toPort": "rhs"
@@ -9890,31 +10188,49 @@
       "toPort": "value"
     },
     {
-      "fromNode": 101,
+      "fromNode": 88,
       "fromPort": "out",
-      "toNode": 102,
-      "toPort": "fine"
+      "toNode": 101,
+      "toPort": "phi"
     },
     {
-      "fromNode": 88,
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 102,
       "toPort": "water"
     },
     {
+      "fromNode": 98,
+      "fromPort": "residual",
+      "toNode": 102,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 101,
+      "fromPort": "out",
+      "toNode": 102,
+      "toPort": "value"
+    },
+    {
       "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 102,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 103,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
-      "fromPort": "out",
+      "fromNode": 98,
+      "fromPort": "residual",
       "toNode": 103,
       "toPort": "rhs"
     },
     {
-      "fromNode": 89,
+      "fromNode": 102,
       "fromPort": "out",
       "toNode": 103,
       "toPort": "value"
@@ -9922,47 +10238,53 @@
     {
       "fromNode": 88,
       "fromPort": "out",
-      "toNode": 104,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 102,
-      "fromPort": "out",
-      "toNode": 104,
-      "toPort": "rhs"
+      "toNode": 103,
+      "toPort": "phi"
     },
     {
       "fromNode": 103,
       "fromPort": "out",
       "toNode": 104,
-      "toPort": "value"
+      "toPort": "fine"
     },
     {
-      "fromNode": 88,
+      "fromNode": 90,
       "fromPort": "out",
-      "toNode": 105,
+      "toNode": 104,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 105,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 104,
       "fromPort": "out",
       "toNode": 105,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 105,
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 105,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 106,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
+      "fromNode": 104,
       "fromPort": "out",
       "toNode": 106,
       "toPort": "rhs"
@@ -9974,13 +10296,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 106,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 107,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
+      "fromNode": 104,
       "fromPort": "out",
       "toNode": 107,
       "toPort": "rhs"
@@ -9992,79 +10320,103 @@
       "toPort": "value"
     },
     {
-      "fromNode": 107,
+      "fromNode": 91,
       "fromPort": "out",
-      "toNode": 108,
-      "toPort": "fine"
+      "toNode": 107,
+      "toPort": "phi"
     },
     {
       "fromNode": 90,
       "fromPort": "out",
       "toNode": 108,
       "toPort": "water"
+    },
+    {
+      "fromNode": 104,
+      "fromPort": "out",
+      "toNode": 108,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 107,
+      "fromPort": "out",
+      "toNode": 108,
+      "toPort": "value"
+    },
+    {
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 108,
+      "toPort": "phi"
     },
     {
       "fromNode": 90,
       "fromPort": "out",
       "toNode": 109,
       "toPort": "water"
+    },
+    {
+      "fromNode": 104,
+      "fromPort": "out",
+      "toNode": 109,
+      "toPort": "rhs"
     },
     {
       "fromNode": 108,
       "fromPort": "out",
       "toNode": 109,
-      "toPort": "rhs"
+      "toPort": "value"
     },
     {
       "fromNode": 91,
       "fromPort": "out",
       "toNode": 109,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 90,
-      "fromPort": "out",
-      "toNode": 110,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 108,
-      "fromPort": "out",
-      "toNode": 110,
-      "toPort": "rhs"
+      "toPort": "phi"
     },
     {
       "fromNode": 109,
       "fromPort": "out",
       "toNode": 110,
-      "toPort": "value"
+      "toPort": "fine"
     },
     {
-      "fromNode": 90,
+      "fromNode": 92,
       "fromPort": "out",
-      "toNode": 111,
+      "toNode": 110,
       "toPort": "water"
     },
     {
-      "fromNode": 108,
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 111,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 110,
       "fromPort": "out",
       "toNode": 111,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 111,
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 111,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 112,
       "toPort": "water"
     },
     {
-      "fromNode": 108,
+      "fromNode": 110,
       "fromPort": "out",
       "toNode": 112,
       "toPort": "rhs"
@@ -10076,13 +10428,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 112,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 113,
       "toPort": "water"
     },
     {
-      "fromNode": 108,
+      "fromNode": 110,
       "fromPort": "out",
       "toNode": 113,
       "toPort": "rhs"
@@ -10094,79 +10452,103 @@
       "toPort": "value"
     },
     {
-      "fromNode": 113,
+      "fromNode": 93,
       "fromPort": "out",
-      "toNode": 114,
-      "toPort": "fine"
+      "toNode": 113,
+      "toPort": "phi"
     },
     {
       "fromNode": 92,
       "fromPort": "out",
       "toNode": 114,
       "toPort": "water"
+    },
+    {
+      "fromNode": 110,
+      "fromPort": "out",
+      "toNode": 114,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 113,
+      "fromPort": "out",
+      "toNode": 114,
+      "toPort": "value"
+    },
+    {
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 114,
+      "toPort": "phi"
     },
     {
       "fromNode": 92,
       "fromPort": "out",
       "toNode": 115,
       "toPort": "water"
+    },
+    {
+      "fromNode": 110,
+      "fromPort": "out",
+      "toNode": 115,
+      "toPort": "rhs"
     },
     {
       "fromNode": 114,
       "fromPort": "out",
       "toNode": 115,
-      "toPort": "rhs"
+      "toPort": "value"
     },
     {
       "fromNode": 93,
       "fromPort": "out",
       "toNode": 115,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 92,
-      "fromPort": "out",
-      "toNode": 116,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 114,
-      "fromPort": "out",
-      "toNode": 116,
-      "toPort": "rhs"
+      "toPort": "phi"
     },
     {
       "fromNode": 115,
       "fromPort": "out",
       "toNode": 116,
-      "toPort": "value"
+      "toPort": "fine"
     },
     {
-      "fromNode": 92,
+      "fromNode": 94,
       "fromPort": "out",
-      "toNode": 117,
+      "toNode": 116,
       "toPort": "water"
     },
     {
-      "fromNode": 114,
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 117,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 116,
       "fromPort": "out",
       "toNode": 117,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 117,
       "toPort": "value"
     },
     {
-      "fromNode": 92,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 117,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 118,
       "toPort": "water"
     },
     {
-      "fromNode": 114,
+      "fromNode": 116,
       "fromPort": "out",
       "toNode": 118,
       "toPort": "rhs"
@@ -10178,13 +10560,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 92,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 118,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 119,
       "toPort": "water"
     },
     {
-      "fromNode": 114,
+      "fromNode": 116,
       "fromPort": "out",
       "toNode": 119,
       "toPort": "rhs"
@@ -10196,10 +10584,10 @@
       "toPort": "value"
     },
     {
-      "fromNode": 119,
+      "fromNode": 95,
       "fromPort": "out",
-      "toNode": 120,
-      "toPort": "fine"
+      "toNode": 119,
+      "toPort": "phi"
     },
     {
       "fromNode": 94,
@@ -10208,85 +10596,103 @@
       "toPort": "water"
     },
     {
+      "fromNode": 116,
+      "fromPort": "out",
+      "toNode": 120,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 119,
+      "fromPort": "out",
+      "toNode": 120,
+      "toPort": "value"
+    },
+    {
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 120,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
+      "fromPort": "out",
+      "toNode": 121,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 116,
+      "fromPort": "out",
+      "toNode": 121,
+      "toPort": "rhs"
+    },
+    {
       "fromNode": 120,
       "fromPort": "out",
       "toNode": 121,
-      "toPort": "base"
+      "toPort": "value"
     },
     {
       "fromNode": 95,
       "fromPort": "out",
       "toNode": 121,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 120,
-      "fromPort": "out",
-      "toNode": 121,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 118,
-      "fromPort": "out",
-      "toNode": 122,
-      "toPort": "value"
+      "toPort": "phi"
     },
     {
       "fromNode": 121,
       "fromPort": "out",
       "toNode": 122,
-      "toPort": "coarse"
+      "toPort": "fine"
     },
     {
-      "fromNode": 92,
+      "fromNode": 96,
       "fromPort": "out",
       "toNode": 122,
       "toPort": "water"
     },
     {
-      "fromNode": 92,
+      "fromNode": 122,
       "fromPort": "out",
       "toNode": 123,
-      "toPort": "water"
+      "toPort": "base"
     },
     {
-      "fromNode": 114,
+      "fromNode": 97,
       "fromPort": "out",
       "toNode": 123,
-      "toPort": "rhs"
+      "toPort": "matrix"
     },
     {
       "fromNode": 122,
       "fromPort": "out",
       "toNode": 123,
+      "toPort": "coef"
+    },
+    {
+      "fromNode": 120,
+      "fromPort": "out",
+      "toNode": 124,
       "toPort": "value"
-    },
-    {
-      "fromNode": 92,
-      "fromPort": "out",
-      "toNode": 124,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 114,
-      "fromPort": "out",
-      "toNode": 124,
-      "toPort": "rhs"
     },
     {
       "fromNode": 123,
       "fromPort": "out",
       "toNode": 124,
-      "toPort": "value"
+      "toPort": "coarse"
     },
     {
-      "fromNode": 92,
+      "fromNode": 94,
+      "fromPort": "out",
+      "toNode": 124,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 125,
       "toPort": "water"
     },
     {
-      "fromNode": 114,
+      "fromNode": 116,
       "fromPort": "out",
       "toNode": 125,
       "toPort": "rhs"
@@ -10298,13 +10704,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 92,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 125,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 126,
       "toPort": "water"
     },
     {
-      "fromNode": 114,
+      "fromNode": 116,
       "fromPort": "out",
       "toNode": 126,
       "toPort": "rhs"
@@ -10316,31 +10728,43 @@
       "toPort": "value"
     },
     {
-      "fromNode": 112,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 126,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 127,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 116,
+      "fromPort": "out",
+      "toNode": 127,
+      "toPort": "rhs"
     },
     {
       "fromNode": 126,
       "fromPort": "out",
       "toNode": 127,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 95,
       "fromPort": "out",
       "toNode": 127,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 90,
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 128,
       "toPort": "water"
     },
     {
-      "fromNode": 108,
+      "fromNode": 116,
       "fromPort": "out",
       "toNode": 128,
       "toPort": "rhs"
@@ -10352,31 +10776,37 @@
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 95,
       "fromPort": "out",
-      "toNode": 129,
-      "toPort": "water"
+      "toNode": 128,
+      "toPort": "phi"
     },
     {
-      "fromNode": 108,
-      "fromPort": "out",
-      "toNode": 129,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 128,
+      "fromNode": 114,
       "fromPort": "out",
       "toNode": 129,
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 128,
+      "fromPort": "out",
+      "toNode": 129,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 92,
+      "fromPort": "out",
+      "toNode": 129,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 130,
       "toPort": "water"
     },
     {
-      "fromNode": 108,
+      "fromNode": 110,
       "fromPort": "out",
       "toNode": 130,
       "toPort": "rhs"
@@ -10388,13 +10818,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 130,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 131,
       "toPort": "water"
     },
     {
-      "fromNode": 108,
+      "fromNode": 110,
       "fromPort": "out",
       "toNode": 131,
       "toPort": "rhs"
@@ -10406,31 +10842,43 @@
       "toPort": "value"
     },
     {
-      "fromNode": 106,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 131,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 132,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 110,
+      "fromPort": "out",
+      "toNode": 132,
+      "toPort": "rhs"
     },
     {
       "fromNode": 131,
       "fromPort": "out",
       "toNode": 132,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 93,
       "fromPort": "out",
       "toNode": 132,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 88,
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 133,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
+      "fromNode": 110,
       "fromPort": "out",
       "toNode": 133,
       "toPort": "rhs"
@@ -10442,31 +10890,37 @@
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 93,
       "fromPort": "out",
-      "toNode": 134,
-      "toPort": "water"
+      "toNode": 133,
+      "toPort": "phi"
     },
     {
-      "fromNode": 102,
-      "fromPort": "out",
-      "toNode": 134,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 133,
+      "fromNode": 108,
       "fromPort": "out",
       "toNode": 134,
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 133,
+      "fromPort": "out",
+      "toNode": 134,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 90,
+      "fromPort": "out",
+      "toNode": 134,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 135,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
+      "fromNode": 104,
       "fromPort": "out",
       "toNode": 135,
       "toPort": "rhs"
@@ -10478,13 +10932,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 135,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 136,
       "toPort": "water"
     },
     {
-      "fromNode": 102,
+      "fromNode": 104,
       "fromPort": "out",
       "toNode": 136,
       "toPort": "rhs"
@@ -10496,32 +10956,44 @@
       "toPort": "value"
     },
     {
-      "fromNode": 100,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 136,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 137,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 104,
+      "fromPort": "out",
+      "toNode": 137,
+      "toPort": "rhs"
     },
     {
       "fromNode": 136,
       "fromPort": "out",
       "toNode": 137,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 91,
       "fromPort": "out",
       "toNode": 137,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 81,
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 138,
       "toPort": "water"
     },
     {
-      "fromNode": 96,
-      "fromPort": "residual",
+      "fromNode": 104,
+      "fromPort": "out",
       "toNode": 138,
       "toPort": "rhs"
     },
@@ -10532,31 +11004,37 @@
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 91,
       "fromPort": "out",
-      "toNode": 139,
-      "toPort": "water"
+      "toNode": 138,
+      "toPort": "phi"
     },
     {
-      "fromNode": 96,
-      "fromPort": "residual",
-      "toNode": 139,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 138,
+      "fromNode": 102,
       "fromPort": "out",
       "toNode": 139,
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 138,
+      "fromPort": "out",
+      "toNode": 139,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 139,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 140,
       "toPort": "water"
     },
     {
-      "fromNode": 96,
+      "fromNode": 98,
       "fromPort": "residual",
       "toNode": 140,
       "toPort": "rhs"
@@ -10568,13 +11046,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 140,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 141,
       "toPort": "water"
     },
     {
-      "fromNode": 96,
+      "fromNode": 98,
       "fromPort": "residual",
       "toNode": 141,
       "toPort": "rhs"
@@ -10586,38 +11070,62 @@
       "toPort": "value"
     },
     {
-      "fromNode": 96,
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 141,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 142,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 98,
       "fromPort": "residual",
       "toNode": 142,
-      "toPort": "matrix"
+      "toPort": "rhs"
     },
     {
       "fromNode": 141,
       "fromPort": "out",
       "toNode": 142,
-      "toPort": "vector"
+      "toPort": "value"
+    },
+    {
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 142,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 143,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 98,
+      "fromPort": "residual",
+      "toNode": 143,
+      "toPort": "rhs"
     },
     {
       "fromNode": 142,
       "fromPort": "out",
       "toNode": 143,
-      "toPort": "values"
+      "toPort": "value"
     },
     {
-      "fromNode": 96,
-      "fromPort": "rz",
-      "toNode": 143,
-      "toPort": "divisor"
-    },
-    {
-      "fromNode": 141,
+      "fromNode": 88,
       "fromPort": "out",
-      "toNode": 144,
-      "toPort": "base"
+      "toNode": 143,
+      "toPort": "phi"
     },
     {
-      "fromNode": 96,
-      "fromPort": "direction",
+      "fromNode": 98,
+      "fromPort": "residual",
       "toNode": 144,
       "toPort": "matrix"
     },
@@ -10625,29 +11133,29 @@
       "fromNode": 143,
       "fromPort": "out",
       "toNode": 144,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 81,
-      "fromPort": "out",
-      "toNode": 145,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 87,
-      "fromPort": "out",
-      "toNode": 145,
-      "toPort": "rhs"
+      "toPort": "vector"
     },
     {
       "fromNode": 144,
       "fromPort": "out",
       "toNode": 145,
-      "toPort": "value"
+      "toPort": "values"
     },
     {
-      "fromNode": 144,
+      "fromNode": 98,
+      "fromPort": "rz",
+      "toNode": 145,
+      "toPort": "divisor"
+    },
+    {
+      "fromNode": 143,
       "fromPort": "out",
+      "toNode": 146,
+      "toPort": "base"
+    },
+    {
+      "fromNode": 98,
+      "fromPort": "direction",
       "toNode": 146,
       "toPort": "matrix"
     },
@@ -10655,109 +11163,139 @@
       "fromNode": 145,
       "fromPort": "out",
       "toNode": 146,
-      "toPort": "vector"
+      "toPort": "coef"
     },
     {
-      "fromNode": 142,
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 147,
-      "toPort": "values"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 147,
+      "toPort": "rhs"
     },
     {
       "fromNode": 146,
       "fromPort": "out",
       "toNode": 147,
-      "toPort": "divisor"
+      "toPort": "value"
     },
     {
-      "fromNode": 96,
-      "fromPort": "solution",
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 147,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 146,
+      "fromPort": "out",
       "toNode": 148,
-      "toPort": "base"
+      "toPort": "matrix"
+    },
+    {
+      "fromNode": 147,
+      "fromPort": "out",
+      "toNode": 148,
+      "toPort": "vector"
     },
     {
       "fromNode": 144,
       "fromPort": "out",
-      "toNode": 148,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 147,
-      "fromPort": "out",
-      "toNode": 148,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 96,
-      "fromPort": "residual",
       "toNode": 149,
-      "toPort": "base"
-    },
-    {
-      "fromNode": 145,
-      "fromPort": "out",
-      "toNode": 149,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 147,
-      "fromPort": "out",
-      "toNode": 149,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 149,
-      "fromPort": "out",
-      "toNode": 96,
-      "toPort": "residual_in"
+      "toPort": "values"
     },
     {
       "fromNode": 148,
       "fromPort": "out",
-      "toNode": 96,
-      "toPort": "solution_in"
+      "toNode": 149,
+      "toPort": "divisor"
     },
     {
-      "fromNode": 144,
-      "fromPort": "out",
-      "toNode": 96,
-      "toPort": "direction_in"
-    },
-    {
-      "fromNode": 142,
-      "fromPort": "out",
-      "toNode": 96,
-      "toPort": "rz_in"
-    },
-    {
-      "fromNode": 85,
-      "fromPort": "out",
-      "toNode": 150,
-      "toPort": "faces"
-    },
-    {
-      "fromNode": 96,
+      "fromNode": 98,
       "fromPort": "solution",
       "toNode": 150,
-      "toPort": "pressure"
+      "toPort": "base"
     },
     {
-      "fromNode": 81,
+      "fromNode": 146,
       "fromPort": "out",
       "toNode": 150,
-      "toPort": "water"
+      "toPort": "matrix"
     },
     {
-      "fromNode": 150,
+      "fromNode": 149,
+      "fromPort": "out",
+      "toNode": 150,
+      "toPort": "coef"
+    },
+    {
+      "fromNode": 98,
+      "fromPort": "residual",
+      "toNode": 151,
+      "toPort": "base"
+    },
+    {
+      "fromNode": 147,
       "fromPort": "out",
       "toNode": 151,
-      "toPort": "faces"
+      "toPort": "matrix"
+    },
+    {
+      "fromNode": 149,
+      "fromPort": "out",
+      "toNode": 151,
+      "toPort": "coef"
     },
     {
       "fromNode": 151,
       "fromPort": "out",
+      "toNode": 98,
+      "toPort": "residual_in"
+    },
+    {
+      "fromNode": 150,
+      "fromPort": "out",
+      "toNode": 98,
+      "toPort": "solution_in"
+    },
+    {
+      "fromNode": 146,
+      "fromPort": "out",
+      "toNode": 98,
+      "toPort": "direction_in"
+    },
+    {
+      "fromNode": 144,
+      "fromPort": "out",
+      "toNode": 98,
+      "toPort": "rz_in"
+    },
+    {
+      "fromNode": 86,
+      "fromPort": "out",
       "toNode": 152,
       "toPort": "faces"
+    },
+    {
+      "fromNode": 98,
+      "fromPort": "solution",
+      "toNode": 152,
+      "toPort": "pressure"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 152,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 88,
+      "fromPort": "out",
+      "toNode": 152,
+      "toPort": "phi"
     },
     {
       "fromNode": 152,
@@ -10772,79 +11310,61 @@
       "toPort": "faces"
     },
     {
-      "fromNode": 80,
-      "fromPort": "cell_ranges",
+      "fromNode": 154,
+      "fromPort": "out",
       "toNode": 155,
-      "toPort": "cell_ranges"
+      "toPort": "faces"
     },
     {
       "fromNode": 155,
       "fromPort": "out",
       "toNode": 156,
-      "toPort": "rhs"
+      "toPort": "faces"
     },
     {
       "fromNode": 81,
-      "fromPort": "out",
+      "fromPort": "cell_ranges",
       "toNode": 157,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 156,
-      "fromPort": "residual",
-      "toNode": 157,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 87,
-      "fromPort": "out",
-      "toNode": 157,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 81,
-      "fromPort": "out",
-      "toNode": 158,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 156,
-      "fromPort": "residual",
-      "toNode": 158,
-      "toPort": "rhs"
+      "toPort": "cell_ranges"
     },
     {
       "fromNode": 157,
       "fromPort": "out",
       "toNode": 158,
-      "toPort": "value"
+      "toPort": "rhs"
     },
     {
-      "fromNode": 81,
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 159,
       "toPort": "water"
     },
     {
-      "fromNode": 156,
+      "fromNode": 158,
       "fromPort": "residual",
       "toNode": 159,
       "toPort": "rhs"
     },
     {
-      "fromNode": 158,
+      "fromNode": 89,
       "fromPort": "out",
       "toNode": 159,
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 159,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 160,
       "toPort": "water"
     },
     {
-      "fromNode": 156,
+      "fromNode": 158,
       "fromPort": "residual",
       "toNode": 160,
       "toPort": "rhs"
@@ -10856,13 +11376,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 160,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 161,
       "toPort": "water"
     },
     {
-      "fromNode": 156,
+      "fromNode": 158,
       "fromPort": "residual",
       "toNode": 161,
       "toPort": "rhs"
@@ -10874,79 +11400,103 @@
       "toPort": "value"
     },
     {
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 161,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 162,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 158,
+      "fromPort": "residual",
+      "toNode": 162,
+      "toPort": "rhs"
+    },
+    {
       "fromNode": 161,
       "fromPort": "out",
       "toNode": 162,
-      "toPort": "fine"
+      "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 89,
       "fromPort": "out",
       "toNode": 162,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 88,
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 163,
       "toPort": "water"
+    },
+    {
+      "fromNode": 158,
+      "fromPort": "residual",
+      "toNode": 163,
+      "toPort": "rhs"
     },
     {
       "fromNode": 162,
       "fromPort": "out",
       "toNode": 163,
-      "toPort": "rhs"
+      "toPort": "value"
     },
     {
       "fromNode": 89,
       "fromPort": "out",
       "toNode": 163,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 88,
-      "fromPort": "out",
-      "toNode": 164,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 162,
-      "fromPort": "out",
-      "toNode": 164,
-      "toPort": "rhs"
+      "toPort": "phi"
     },
     {
       "fromNode": 163,
       "fromPort": "out",
       "toNode": 164,
-      "toPort": "value"
+      "toPort": "fine"
     },
     {
-      "fromNode": 88,
+      "fromNode": 90,
       "fromPort": "out",
-      "toNode": 165,
+      "toNode": 164,
       "toPort": "water"
     },
     {
-      "fromNode": 162,
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 165,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 164,
       "fromPort": "out",
       "toNode": 165,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 165,
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 165,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 166,
       "toPort": "water"
     },
     {
-      "fromNode": 162,
+      "fromNode": 164,
       "fromPort": "out",
       "toNode": 166,
       "toPort": "rhs"
@@ -10958,13 +11508,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 166,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 167,
       "toPort": "water"
     },
     {
-      "fromNode": 162,
+      "fromNode": 164,
       "fromPort": "out",
       "toNode": 167,
       "toPort": "rhs"
@@ -10976,79 +11532,103 @@
       "toPort": "value"
     },
     {
-      "fromNode": 167,
+      "fromNode": 91,
       "fromPort": "out",
-      "toNode": 168,
-      "toPort": "fine"
+      "toNode": 167,
+      "toPort": "phi"
     },
     {
       "fromNode": 90,
       "fromPort": "out",
       "toNode": 168,
       "toPort": "water"
+    },
+    {
+      "fromNode": 164,
+      "fromPort": "out",
+      "toNode": 168,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 167,
+      "fromPort": "out",
+      "toNode": 168,
+      "toPort": "value"
+    },
+    {
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 168,
+      "toPort": "phi"
     },
     {
       "fromNode": 90,
       "fromPort": "out",
       "toNode": 169,
       "toPort": "water"
+    },
+    {
+      "fromNode": 164,
+      "fromPort": "out",
+      "toNode": 169,
+      "toPort": "rhs"
     },
     {
       "fromNode": 168,
       "fromPort": "out",
       "toNode": 169,
-      "toPort": "rhs"
+      "toPort": "value"
     },
     {
       "fromNode": 91,
       "fromPort": "out",
       "toNode": 169,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 90,
-      "fromPort": "out",
-      "toNode": 170,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 168,
-      "fromPort": "out",
-      "toNode": 170,
-      "toPort": "rhs"
+      "toPort": "phi"
     },
     {
       "fromNode": 169,
       "fromPort": "out",
       "toNode": 170,
-      "toPort": "value"
+      "toPort": "fine"
     },
     {
-      "fromNode": 90,
+      "fromNode": 92,
       "fromPort": "out",
-      "toNode": 171,
+      "toNode": 170,
       "toPort": "water"
     },
     {
-      "fromNode": 168,
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 171,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 170,
       "fromPort": "out",
       "toNode": 171,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 171,
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 171,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 172,
       "toPort": "water"
     },
     {
-      "fromNode": 168,
+      "fromNode": 170,
       "fromPort": "out",
       "toNode": 172,
       "toPort": "rhs"
@@ -11060,13 +11640,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 172,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 173,
       "toPort": "water"
     },
     {
-      "fromNode": 168,
+      "fromNode": 170,
       "fromPort": "out",
       "toNode": 173,
       "toPort": "rhs"
@@ -11078,79 +11664,103 @@
       "toPort": "value"
     },
     {
-      "fromNode": 173,
+      "fromNode": 93,
       "fromPort": "out",
-      "toNode": 174,
-      "toPort": "fine"
+      "toNode": 173,
+      "toPort": "phi"
     },
     {
       "fromNode": 92,
       "fromPort": "out",
       "toNode": 174,
       "toPort": "water"
+    },
+    {
+      "fromNode": 170,
+      "fromPort": "out",
+      "toNode": 174,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 173,
+      "fromPort": "out",
+      "toNode": 174,
+      "toPort": "value"
+    },
+    {
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 174,
+      "toPort": "phi"
     },
     {
       "fromNode": 92,
       "fromPort": "out",
       "toNode": 175,
       "toPort": "water"
+    },
+    {
+      "fromNode": 170,
+      "fromPort": "out",
+      "toNode": 175,
+      "toPort": "rhs"
     },
     {
       "fromNode": 174,
       "fromPort": "out",
       "toNode": 175,
-      "toPort": "rhs"
+      "toPort": "value"
     },
     {
       "fromNode": 93,
       "fromPort": "out",
       "toNode": 175,
-      "toPort": "value"
-    },
-    {
-      "fromNode": 92,
-      "fromPort": "out",
-      "toNode": 176,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 174,
-      "fromPort": "out",
-      "toNode": 176,
-      "toPort": "rhs"
+      "toPort": "phi"
     },
     {
       "fromNode": 175,
       "fromPort": "out",
       "toNode": 176,
-      "toPort": "value"
+      "toPort": "fine"
     },
     {
-      "fromNode": 92,
+      "fromNode": 94,
       "fromPort": "out",
-      "toNode": 177,
+      "toNode": 176,
       "toPort": "water"
     },
     {
-      "fromNode": 174,
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 177,
-      "toPort": "rhs"
+      "toPort": "water"
     },
     {
       "fromNode": 176,
       "fromPort": "out",
       "toNode": 177,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 177,
       "toPort": "value"
     },
     {
-      "fromNode": 92,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 177,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 178,
       "toPort": "water"
     },
     {
-      "fromNode": 174,
+      "fromNode": 176,
       "fromPort": "out",
       "toNode": 178,
       "toPort": "rhs"
@@ -11162,13 +11772,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 92,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 178,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 179,
       "toPort": "water"
     },
     {
-      "fromNode": 174,
+      "fromNode": 176,
       "fromPort": "out",
       "toNode": 179,
       "toPort": "rhs"
@@ -11180,10 +11796,10 @@
       "toPort": "value"
     },
     {
-      "fromNode": 179,
+      "fromNode": 95,
       "fromPort": "out",
-      "toNode": 180,
-      "toPort": "fine"
+      "toNode": 179,
+      "toPort": "phi"
     },
     {
       "fromNode": 94,
@@ -11192,85 +11808,103 @@
       "toPort": "water"
     },
     {
+      "fromNode": 176,
+      "fromPort": "out",
+      "toNode": 180,
+      "toPort": "rhs"
+    },
+    {
+      "fromNode": 179,
+      "fromPort": "out",
+      "toNode": 180,
+      "toPort": "value"
+    },
+    {
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 180,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
+      "fromPort": "out",
+      "toNode": 181,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 176,
+      "fromPort": "out",
+      "toNode": 181,
+      "toPort": "rhs"
+    },
+    {
       "fromNode": 180,
       "fromPort": "out",
       "toNode": 181,
-      "toPort": "base"
+      "toPort": "value"
     },
     {
       "fromNode": 95,
       "fromPort": "out",
       "toNode": 181,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 180,
-      "fromPort": "out",
-      "toNode": 181,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 178,
-      "fromPort": "out",
-      "toNode": 182,
-      "toPort": "value"
+      "toPort": "phi"
     },
     {
       "fromNode": 181,
       "fromPort": "out",
       "toNode": 182,
-      "toPort": "coarse"
+      "toPort": "fine"
     },
     {
-      "fromNode": 92,
+      "fromNode": 96,
       "fromPort": "out",
       "toNode": 182,
       "toPort": "water"
     },
     {
-      "fromNode": 92,
+      "fromNode": 182,
       "fromPort": "out",
       "toNode": 183,
-      "toPort": "water"
+      "toPort": "base"
     },
     {
-      "fromNode": 174,
+      "fromNode": 97,
       "fromPort": "out",
       "toNode": 183,
-      "toPort": "rhs"
+      "toPort": "matrix"
     },
     {
       "fromNode": 182,
       "fromPort": "out",
       "toNode": 183,
+      "toPort": "coef"
+    },
+    {
+      "fromNode": 180,
+      "fromPort": "out",
+      "toNode": 184,
       "toPort": "value"
-    },
-    {
-      "fromNode": 92,
-      "fromPort": "out",
-      "toNode": 184,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 174,
-      "fromPort": "out",
-      "toNode": 184,
-      "toPort": "rhs"
     },
     {
       "fromNode": 183,
       "fromPort": "out",
       "toNode": 184,
-      "toPort": "value"
+      "toPort": "coarse"
     },
     {
-      "fromNode": 92,
+      "fromNode": 94,
+      "fromPort": "out",
+      "toNode": 184,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 185,
       "toPort": "water"
     },
     {
-      "fromNode": 174,
+      "fromNode": 176,
       "fromPort": "out",
       "toNode": 185,
       "toPort": "rhs"
@@ -11282,13 +11916,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 92,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 185,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 186,
       "toPort": "water"
     },
     {
-      "fromNode": 174,
+      "fromNode": 176,
       "fromPort": "out",
       "toNode": 186,
       "toPort": "rhs"
@@ -11300,31 +11940,43 @@
       "toPort": "value"
     },
     {
-      "fromNode": 172,
+      "fromNode": 95,
+      "fromPort": "out",
+      "toNode": 186,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 187,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 176,
+      "fromPort": "out",
+      "toNode": 187,
+      "toPort": "rhs"
     },
     {
       "fromNode": 186,
       "fromPort": "out",
       "toNode": 187,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 95,
       "fromPort": "out",
       "toNode": 187,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 90,
+      "fromNode": 94,
       "fromPort": "out",
       "toNode": 188,
       "toPort": "water"
     },
     {
-      "fromNode": 168,
+      "fromNode": 176,
       "fromPort": "out",
       "toNode": 188,
       "toPort": "rhs"
@@ -11336,31 +11988,37 @@
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 95,
       "fromPort": "out",
-      "toNode": 189,
-      "toPort": "water"
+      "toNode": 188,
+      "toPort": "phi"
     },
     {
-      "fromNode": 168,
-      "fromPort": "out",
-      "toNode": 189,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 188,
+      "fromNode": 174,
       "fromPort": "out",
       "toNode": 189,
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 188,
+      "fromPort": "out",
+      "toNode": 189,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 92,
+      "fromPort": "out",
+      "toNode": 189,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 190,
       "toPort": "water"
     },
     {
-      "fromNode": 168,
+      "fromNode": 170,
       "fromPort": "out",
       "toNode": 190,
       "toPort": "rhs"
@@ -11372,13 +12030,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 90,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 190,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 191,
       "toPort": "water"
     },
     {
-      "fromNode": 168,
+      "fromNode": 170,
       "fromPort": "out",
       "toNode": 191,
       "toPort": "rhs"
@@ -11390,31 +12054,43 @@
       "toPort": "value"
     },
     {
-      "fromNode": 166,
+      "fromNode": 93,
+      "fromPort": "out",
+      "toNode": 191,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 192,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 170,
+      "fromPort": "out",
+      "toNode": 192,
+      "toPort": "rhs"
     },
     {
       "fromNode": 191,
       "fromPort": "out",
       "toNode": 192,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 93,
       "fromPort": "out",
       "toNode": 192,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 88,
+      "fromNode": 92,
       "fromPort": "out",
       "toNode": 193,
       "toPort": "water"
     },
     {
-      "fromNode": 162,
+      "fromNode": 170,
       "fromPort": "out",
       "toNode": 193,
       "toPort": "rhs"
@@ -11426,31 +12102,37 @@
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 93,
       "fromPort": "out",
-      "toNode": 194,
-      "toPort": "water"
+      "toNode": 193,
+      "toPort": "phi"
     },
     {
-      "fromNode": 162,
-      "fromPort": "out",
-      "toNode": 194,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 193,
+      "fromNode": 168,
       "fromPort": "out",
       "toNode": 194,
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 193,
+      "fromPort": "out",
+      "toNode": 194,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 90,
+      "fromPort": "out",
+      "toNode": 194,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 195,
       "toPort": "water"
     },
     {
-      "fromNode": 162,
+      "fromNode": 164,
       "fromPort": "out",
       "toNode": 195,
       "toPort": "rhs"
@@ -11462,13 +12144,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 88,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 195,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 196,
       "toPort": "water"
     },
     {
-      "fromNode": 162,
+      "fromNode": 164,
       "fromPort": "out",
       "toNode": 196,
       "toPort": "rhs"
@@ -11480,32 +12168,44 @@
       "toPort": "value"
     },
     {
-      "fromNode": 160,
+      "fromNode": 91,
+      "fromPort": "out",
+      "toNode": 196,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 197,
-      "toPort": "value"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 164,
+      "fromPort": "out",
+      "toNode": 197,
+      "toPort": "rhs"
     },
     {
       "fromNode": 196,
       "fromPort": "out",
       "toNode": 197,
-      "toPort": "coarse"
+      "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 91,
       "fromPort": "out",
       "toNode": 197,
-      "toPort": "water"
+      "toPort": "phi"
     },
     {
-      "fromNode": 81,
+      "fromNode": 90,
       "fromPort": "out",
       "toNode": 198,
       "toPort": "water"
     },
     {
-      "fromNode": 156,
-      "fromPort": "residual",
+      "fromNode": 164,
+      "fromPort": "out",
       "toNode": 198,
       "toPort": "rhs"
     },
@@ -11516,31 +12216,37 @@
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 91,
       "fromPort": "out",
-      "toNode": 199,
-      "toPort": "water"
+      "toNode": 198,
+      "toPort": "phi"
     },
     {
-      "fromNode": 156,
-      "fromPort": "residual",
-      "toNode": 199,
-      "toPort": "rhs"
-    },
-    {
-      "fromNode": 198,
+      "fromNode": 162,
       "fromPort": "out",
       "toNode": 199,
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 198,
+      "fromPort": "out",
+      "toNode": 199,
+      "toPort": "coarse"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 199,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 200,
       "toPort": "water"
     },
     {
-      "fromNode": 156,
+      "fromNode": 158,
       "fromPort": "residual",
       "toNode": 200,
       "toPort": "rhs"
@@ -11552,13 +12258,19 @@
       "toPort": "value"
     },
     {
-      "fromNode": 81,
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 200,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 201,
       "toPort": "water"
     },
     {
-      "fromNode": 156,
+      "fromNode": 158,
       "fromPort": "residual",
       "toNode": 201,
       "toPort": "rhs"
@@ -11570,38 +12282,62 @@
       "toPort": "value"
     },
     {
-      "fromNode": 156,
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 201,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 202,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 158,
       "fromPort": "residual",
       "toNode": 202,
-      "toPort": "matrix"
+      "toPort": "rhs"
     },
     {
       "fromNode": 201,
       "fromPort": "out",
       "toNode": 202,
-      "toPort": "vector"
+      "toPort": "value"
+    },
+    {
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 202,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 203,
+      "toPort": "water"
+    },
+    {
+      "fromNode": 158,
+      "fromPort": "residual",
+      "toNode": 203,
+      "toPort": "rhs"
     },
     {
       "fromNode": 202,
       "fromPort": "out",
       "toNode": 203,
-      "toPort": "values"
+      "toPort": "value"
     },
     {
-      "fromNode": 156,
-      "fromPort": "rz",
-      "toNode": 203,
-      "toPort": "divisor"
-    },
-    {
-      "fromNode": 201,
+      "fromNode": 89,
       "fromPort": "out",
-      "toNode": 204,
-      "toPort": "base"
+      "toNode": 203,
+      "toPort": "phi"
     },
     {
-      "fromNode": 156,
-      "fromPort": "direction",
+      "fromNode": 158,
+      "fromPort": "residual",
       "toNode": 204,
       "toPort": "matrix"
     },
@@ -11609,29 +12345,29 @@
       "fromNode": 203,
       "fromPort": "out",
       "toNode": 204,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 81,
-      "fromPort": "out",
-      "toNode": 205,
-      "toPort": "water"
-    },
-    {
-      "fromNode": 87,
-      "fromPort": "out",
-      "toNode": 205,
-      "toPort": "rhs"
+      "toPort": "vector"
     },
     {
       "fromNode": 204,
       "fromPort": "out",
       "toNode": 205,
-      "toPort": "value"
+      "toPort": "values"
     },
     {
-      "fromNode": 204,
+      "fromNode": 158,
+      "fromPort": "rz",
+      "toNode": 205,
+      "toPort": "divisor"
+    },
+    {
+      "fromNode": 203,
       "fromPort": "out",
+      "toNode": 206,
+      "toPort": "base"
+    },
+    {
+      "fromNode": 158,
+      "fromPort": "direction",
       "toNode": 206,
       "toPort": "matrix"
     },
@@ -11639,172 +12375,214 @@
       "fromNode": 205,
       "fromPort": "out",
       "toNode": 206,
-      "toPort": "vector"
+      "toPort": "coef"
     },
     {
-      "fromNode": 202,
+      "fromNode": 82,
       "fromPort": "out",
       "toNode": 207,
-      "toPort": "values"
+      "toPort": "water"
+    },
+    {
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 207,
+      "toPort": "rhs"
     },
     {
       "fromNode": 206,
       "fromPort": "out",
       "toNode": 207,
-      "toPort": "divisor"
+      "toPort": "value"
     },
     {
-      "fromNode": 156,
-      "fromPort": "solution",
+      "fromNode": 89,
+      "fromPort": "out",
+      "toNode": 207,
+      "toPort": "phi"
+    },
+    {
+      "fromNode": 206,
+      "fromPort": "out",
       "toNode": 208,
-      "toPort": "base"
+      "toPort": "matrix"
+    },
+    {
+      "fromNode": 207,
+      "fromPort": "out",
+      "toNode": 208,
+      "toPort": "vector"
     },
     {
       "fromNode": 204,
       "fromPort": "out",
-      "toNode": 208,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 207,
-      "fromPort": "out",
-      "toNode": 208,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 156,
-      "fromPort": "residual",
       "toNode": 209,
-      "toPort": "base"
-    },
-    {
-      "fromNode": 205,
-      "fromPort": "out",
-      "toNode": 209,
-      "toPort": "matrix"
-    },
-    {
-      "fromNode": 207,
-      "fromPort": "out",
-      "toNode": 209,
-      "toPort": "coef"
-    },
-    {
-      "fromNode": 209,
-      "fromPort": "out",
-      "toNode": 156,
-      "toPort": "residual_in"
+      "toPort": "values"
     },
     {
       "fromNode": 208,
       "fromPort": "out",
-      "toNode": 156,
-      "toPort": "solution_in"
+      "toNode": 209,
+      "toPort": "divisor"
     },
     {
-      "fromNode": 204,
-      "fromPort": "out",
-      "toNode": 156,
-      "toPort": "direction_in"
-    },
-    {
-      "fromNode": 202,
-      "fromPort": "out",
-      "toNode": 156,
-      "toPort": "rz_in"
-    },
-    {
-      "fromNode": 150,
-      "fromPort": "out",
-      "toNode": 210,
-      "toPort": "faces"
-    },
-    {
-      "fromNode": 156,
+      "fromNode": 158,
       "fromPort": "solution",
       "toNode": 210,
-      "toPort": "pressure"
+      "toPort": "base"
     },
     {
-      "fromNode": 81,
+      "fromNode": 206,
       "fromPort": "out",
       "toNode": 210,
-      "toPort": "water"
+      "toPort": "matrix"
+    },
+    {
+      "fromNode": 209,
+      "fromPort": "out",
+      "toNode": 210,
+      "toPort": "coef"
+    },
+    {
+      "fromNode": 158,
+      "fromPort": "residual",
+      "toNode": 211,
+      "toPort": "base"
+    },
+    {
+      "fromNode": 207,
+      "fromPort": "out",
+      "toNode": 211,
+      "toPort": "matrix"
+    },
+    {
+      "fromNode": 209,
+      "fromPort": "out",
+      "toNode": 211,
+      "toPort": "coef"
+    },
+    {
+      "fromNode": 211,
+      "fromPort": "out",
+      "toNode": 158,
+      "toPort": "residual_in"
     },
     {
       "fromNode": 210,
       "fromPort": "out",
-      "toNode": 211,
-      "toPort": "faces"
+      "toNode": 158,
+      "toPort": "solution_in"
     },
     {
-      "fromNode": 211,
+      "fromNode": 206,
+      "fromPort": "out",
+      "toNode": 158,
+      "toPort": "direction_in"
+    },
+    {
+      "fromNode": 204,
+      "fromPort": "out",
+      "toNode": 158,
+      "toPort": "rz_in"
+    },
+    {
+      "fromNode": 152,
       "fromPort": "out",
       "toNode": 212,
       "toPort": "faces"
     },
     {
-      "fromNode": 80,
-      "fromPort": "sorted",
-      "toNode": 213,
-      "toPort": "particles"
+      "fromNode": 158,
+      "fromPort": "solution",
+      "toNode": 212,
+      "toPort": "pressure"
     },
     {
-      "fromNode": 154,
+      "fromNode": 82,
       "fromPort": "out",
-      "toNode": 213,
-      "toPort": "faces"
+      "toNode": 212,
+      "toPort": "water"
     },
     {
-      "fromNode": 84,
+      "fromNode": 89,
       "fromPort": "out",
-      "toNode": 213,
-      "toPort": "old"
+      "toNode": 212,
+      "toPort": "phi"
     },
     {
       "fromNode": 212,
       "fromPort": "out",
       "toNode": 213,
-      "toPort": "advect"
+      "toPort": "faces"
     },
     {
       "fromNode": 213,
       "fromPort": "out",
       "toNode": 214,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 81,
+      "fromPort": "sorted",
+      "toNode": 215,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 156,
+      "fromPort": "out",
+      "toNode": 215,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 85,
+      "fromPort": "out",
+      "toNode": 215,
+      "toPort": "old"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "out",
+      "toNode": 215,
+      "toPort": "advect"
+    },
+    {
+      "fromNode": 215,
+      "fromPort": "out",
+      "toNode": 216,
       "toPort": "particles"
     },
     {
       "fromNode": 3,
       "fromPort": "stats",
-      "toNode": 214,
+      "toNode": 216,
       "toPort": "stats"
     },
     {
       "fromNode": 2,
       "fromPort": "count",
-      "toNode": 214,
+      "toNode": 216,
       "toPort": "count"
     },
     {
       "fromNode": 0,
       "fromPort": "particle_mass",
-      "toNode": 214,
+      "toNode": 216,
       "toPort": "particle_mass"
     },
     {
-      "fromNode": 213,
+      "fromNode": 215,
       "fromPort": "out",
       "toNode": 3,
       "toPort": "in"
     },
     {
-      "fromNode": 214,
+      "fromNode": 216,
       "fromPort": "stats_out",
       "toNode": 3,
       "toPort": "stats_in"
     },
     {
-      "fromNode": 154,
+      "fromNode": 156,
       "fromPort": "out",
       "toNode": 3,
       "toPort": "faces_in"
@@ -11812,194 +12590,170 @@
     {
       "fromNode": 0,
       "fromPort": "bodies",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "bodies"
     },
     {
       "fromNode": 0,
       "fromPort": "shapes",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "shapes"
     },
     {
       "fromNode": 0,
       "fromPort": "atlas",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "atlas"
     },
     {
       "fromNode": 0,
       "fromPort": "closed_faces",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "closed_faces"
     },
     {
       "fromNode": 0,
       "fromPort": "body_count",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "body_count"
     },
     {
       "fromNode": 0,
       "fromPort": "lattice_min_x",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "lattice_min_x"
     },
     {
       "fromNode": 0,
       "fromPort": "lattice_min_y",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "lattice_min_y"
     },
     {
       "fromNode": 0,
       "fromPort": "lattice_min_z",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "lattice_min_z"
     },
     {
       "fromNode": 0,
       "fromPort": "cell_size",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "cell_size"
     },
     {
       "fromNode": 0,
       "fromPort": "nodes_x",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "nodes_x"
     },
     {
       "fromNode": 0,
       "fromPort": "nodes_y",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "nodes_y"
     },
     {
       "fromNode": 0,
       "fromPort": "nodes_z",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "nodes_z"
     },
     {
       "fromNode": 0,
       "fromPort": "body_rows",
-      "toNode": 215,
+      "toNode": 217,
       "toPort": "rows"
     },
     {
       "fromNode": 3,
       "fromPort": "out",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "particles"
     },
     {
       "fromNode": 3,
       "fromPort": "stats",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "stats"
     },
     {
-      "fromNode": 215,
+      "fromNode": 217,
       "fromPort": "solid",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "solid"
     },
     {
       "fromNode": 2,
       "fromPort": "count",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "count"
     },
     {
       "fromNode": 0,
       "fromPort": "lattice_min_x",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "lattice_min_x"
     },
     {
       "fromNode": 0,
       "fromPort": "lattice_min_y",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "lattice_min_y"
     },
     {
       "fromNode": 0,
       "fromPort": "lattice_min_z",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "lattice_min_z"
     },
     {
       "fromNode": 0,
       "fromPort": "cell_size",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "cell_size"
     },
     {
       "fromNode": 0,
       "fromPort": "nodes_x",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "nodes_x"
     },
     {
       "fromNode": 0,
       "fromPort": "nodes_y",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "nodes_y"
     },
     {
       "fromNode": 0,
       "fromPort": "nodes_z",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "nodes_z"
     },
     {
       "fromNode": 0,
       "fromPort": "closed_faces",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "closed_faces"
     },
     {
       "fromNode": 0,
       "fromPort": "simulation_time",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "simulation_time"
     },
     {
       "fromNode": 0,
       "fromPort": "display_time",
-      "toNode": 216,
+      "toNode": 218,
       "toPort": "display_time"
     },
     {
       "fromNode": 0,
       "fromPort": "epoch",
-      "toNode": 216,
-      "toPort": "epoch"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "faces",
-      "toNode": 217,
-      "toPort": "faces"
-    },
-    {
-      "fromNode": 217,
-      "fromPort": "out",
-      "toNode": 216,
-      "toPort": "face_u_in"
-    },
-    {
-      "fromNode": 3,
-      "fromPort": "faces",
       "toNode": 218,
-      "toPort": "faces"
-    },
-    {
-      "fromNode": 218,
-      "fromPort": "out",
-      "toNode": 216,
-      "toPort": "face_v_in"
+      "toPort": "epoch"
     },
     {
       "fromNode": 3,
@@ -12010,49 +12764,73 @@
     {
       "fromNode": 219,
       "fromPort": "out",
-      "toNode": 216,
+      "toNode": 218,
+      "toPort": "face_u_in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "faces",
+      "toNode": 220,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 220,
+      "fromPort": "out",
+      "toNode": 218,
+      "toPort": "face_v_in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "faces",
+      "toNode": 221,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 221,
+      "fromPort": "out",
+      "toNode": 218,
       "toPort": "face_w_in"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "particles_b",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "particles"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "count_b",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "count"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "solid_b",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "solid"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_bounds",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "bounds"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_nodes_x",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "nodes_x"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_nodes_y",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "nodes_y"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_nodes_z",
-      "toNode": 221,
+      "toNode": 223,
       "toPort": "nodes_z"
     },
     {
@@ -12218,115 +12996,115 @@
       "toPort": "envmap"
     },
     {
-      "fromNode": 221,
+      "fromNode": 223,
       "fromPort": "vertices",
       "toNode": 235,
       "toPort": "vertices"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "particles_b",
       "toNode": 268,
       "toPort": "particles"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "count_b",
       "toNode": 268,
       "toPort": "count"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "solid_b",
       "toNode": 268,
       "toPort": "solid"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_bounds",
       "toNode": 268,
       "toPort": "grid_bounds"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_nodes_x",
       "toNode": 268,
       "toPort": "grid_nodes_x"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_nodes_y",
       "toNode": 268,
       "toPort": "grid_nodes_y"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "grid_nodes_z",
       "toNode": 268,
       "toPort": "grid_nodes_z"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_u",
       "toNode": 268,
       "toPort": "face_u"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_v",
       "toNode": 268,
       "toPort": "face_v"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_w",
       "toNode": 268,
       "toPort": "face_w"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_cells_x",
       "toNode": 268,
       "toPort": "face_cells_x"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_cells_y",
       "toNode": 268,
       "toPort": "face_cells_y"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_cells_z",
       "toNode": 268,
       "toPort": "face_cells_z"
     },
     {
-      "fromNode": 216,
+      "fromNode": 218,
       "fromPort": "face_valid_layers",
       "toNode": 268,
       "toPort": "face_valid_layers"
     },
     {
-      "fromNode": 221,
+      "fromNode": 223,
       "fromPort": "level_set",
       "toNode": 268,
       "toPort": "level_set"
     },
     {
-      "fromNode": 221,
+      "fromNode": 223,
       "fromPort": "level_set_nodes_x",
       "toNode": 268,
       "toPort": "level_set_nodes_x"
     },
     {
-      "fromNode": 221,
+      "fromNode": 223,
       "fromPort": "level_set_nodes_y",
       "toNode": 268,
       "toPort": "level_set_nodes_y"
     },
     {
-      "fromNode": 221,
+      "fromNode": 223,
       "fromPort": "level_set_nodes_z",
       "toNode": 268,
       "toPort": "level_set_nodes_z"

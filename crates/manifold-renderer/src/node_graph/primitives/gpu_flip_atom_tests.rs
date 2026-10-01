@@ -171,6 +171,62 @@ fn cpu_residual(water: &[f32], rhs: &[f32], value: &[f32], n: [usize; 3], h: f64
         .collect()
 }
 
+/// Distances as the ghost rows can see them: water cells from −0.6h to 0.2h
+/// (some above the −0.005h the rows take at most), air cells from −0.3h to
+/// 2.9h (some below the 0 the rows take at least).
+pub(super) fn random_phi(water: &[f32], h: f64, seed: u64) -> Vec<f32> {
+    random_values(water.len(), seed)
+        .iter()
+        .zip(water)
+        .map(|(&u, &w)| {
+            let t = f64::from(u) + 0.5;
+            let cells = if w > 0.5 { -0.6 + 0.8 * t } else { -0.3 + 3.2 * t };
+            (cells * h) as f32
+        })
+        .collect()
+}
+
+/// An air neighbour's ghost ratio, clamp(φ_air / (φ_water + eps), ±25), φ_water
+/// taken at most −0.005h and φ_air at least 0: the engine's theta
+/// (pressuresolver.cpp).
+fn theta(air: f32, water: f32, h: f64, eps: f64) -> f64 {
+    (f64::from(air).max(0.0) / (f64::from(water).min(-0.005 * h) + eps)).clamp(-25.0, 25.0)
+}
+
+/// Water cell `c`'s diagonal in node.pressure_smooth's ghost-fluid rows: 1
+/// per neighbour inside the box, less θ per air neighbour, floored at 0.
+fn cpu_diag(c: usize, water: &[f32], phi: &[f32], n: [usize; 3], h: f64) -> f64 {
+    let diag: f64 =
+        neighbours(c, n).iter().map(|&q| if water[q] > 0.5 { 1.0 } else { 1.0 - theta(phi[q], phi[c], h, 1e-9) }).sum();
+    diag.max(0.0)
+}
+
+fn cpu_ghost_sweep(water: &[f32], rhs: &[f32], value: &[f64], phi: &[f32], n: [usize; 3], h: f64, color: usize) -> Vec<f64> {
+    (0..value.len())
+        .map(|c| {
+            let p = coords(c, n);
+            let diag = cpu_diag(c, water, phi, n, h);
+            if water[c] <= 0.5 || (p[0] + p[1] + p[2]) % 2 != color || diag == 0.0 {
+                return value[c];
+            }
+            let sum: f64 = neighbours(c, n).iter().filter(|&&q| water[q] > 0.5).map(|&q| value[q]).sum();
+            (sum - h * h * f64::from(rhs[c])) / diag
+        })
+        .collect()
+}
+
+fn cpu_ghost_residual(water: &[f32], rhs: &[f32], value: &[f32], phi: &[f32], n: [usize; 3], h: f64) -> Vec<f64> {
+    (0..value.len())
+        .map(|c| {
+            if water[c] <= 0.5 {
+                return 0.0;
+            }
+            let sum: f64 = neighbours(c, n).iter().filter(|&&q| water[q] > 0.5).map(|&q| f64::from(value[q])).sum();
+            f64::from(rhs[c]) - (sum - cpu_diag(c, water, phi, n, h) * f64::from(value[c])) / (h * h)
+        })
+        .collect()
+}
+
 /// Share fine cell `f` takes from coarse cell `c` along one axis.
 fn weight(f: usize, c: usize, coarse: usize) -> f64 {
     let parent = f / 2;
@@ -280,20 +336,38 @@ fn cpu_inverse(water: &[f32], n: [usize; 3]) -> (Vec<f64>, Vec<f64>, Vec<usize>)
 const FINE: [usize; 3] = [6, 4, 8];
 const COARSE: [usize; 3] = [3, 2, 4];
 
+fn run_sweep(water: &[f32], rhs: &[f32], value: &[f32], phi: &[f32], n: [usize; 3], h: f64, color: usize) -> Vec<f32> {
+    run_atom(
+        &mut PressureSmooth::new(),
+        &[("water", water), ("rhs", rhs), ("value", value), ("phi", phi)],
+        value.len(),
+        &lattice_params(n, &[("cell_size", h as f32), ("color", color as f32)]),
+    )
+}
+
+fn run_residual(water: &[f32], rhs: &[f32], value: &[f32], phi: &[f32], n: [usize; 3], h: f64) -> Vec<f32> {
+    run_atom(
+        &mut PressureResidual::new(),
+        &[("water", water), ("rhs", rhs), ("value", value), ("phi", phi)],
+        value.len(),
+        &lattice_params(n, &[("cell_size", h as f32)]),
+    )
+}
+
+/// Zero distances give the plain Dirichlet rows the coarse levels use, bit for
+/// bit in the sweep; real distances give the ghost-fluid rows.
 #[test]
 fn gpu_flip_smooth_sweeps_each_color() {
     let cells: usize = FINE.iter().product();
     let (water, rhs, value) = (random_water(cells, 0x5e1), random_values(cells, 0x5e2), random_values(cells, 0x5e3));
     let h = 0.3;
     let value64: Vec<f64> = value.iter().map(|&v| f64::from(v)).collect();
+    let (zeros, phi) = (vec![0.0; cells], random_phi(&water, h, 0x5e4));
     for color in [0, 1] {
-        let got = run_atom(
-            &mut PressureSmooth::new(),
-            &[("water", &water), ("rhs", &rhs), ("value", &value)],
-            cells,
-            &lattice_params(FINE, &[("cell_size", h as f32), ("color", color as f32)]),
-        );
-        assert_close(&got, &cpu_sweep(&water, &rhs, &value64, FINE, h, color), &format!("sweep color {color}"));
+        let plain = run_sweep(&water, &rhs, &value, &zeros, FINE, h, color);
+        assert_close(&plain, &cpu_sweep(&water, &rhs, &value64, FINE, h, color), &format!("plain sweep color {color}"));
+        let ghost = run_sweep(&water, &rhs, &value, &phi, FINE, h, color);
+        assert_close(&ghost, &cpu_ghost_sweep(&water, &rhs, &value64, &phi, FINE, h, color), &format!("ghost sweep color {color}"));
     }
 }
 
@@ -302,13 +376,39 @@ fn gpu_flip_residual_is_rhs_minus_the_masked_laplacian() {
     let cells: usize = FINE.iter().product();
     let (water, rhs, value) = (random_water(cells, 0x7e1), random_values(cells, 0x7e2), random_values(cells, 0x7e3));
     let h = 0.3;
-    let got = run_atom(
-        &mut PressureResidual::new(),
-        &[("water", &water), ("rhs", &rhs), ("value", &value)],
-        cells,
-        &lattice_params(FINE, &[("cell_size", h as f32)]),
-    );
-    assert_close(&got, &cpu_residual(&water, &rhs, &value, FINE, h), "residual");
+    let plain = run_residual(&water, &rhs, &value, &vec![0.0; cells], FINE, h);
+    assert_close(&plain, &cpu_residual(&water, &rhs, &value, FINE, h), "plain residual");
+    let phi = random_phi(&water, h, 0x7e4);
+    let ghost = run_residual(&water, &rhs, &value, &phi, FINE, h);
+    assert_close(&ghost, &cpu_ghost_residual(&water, &rhs, &value, &phi, FINE, h), "ghost residual");
+}
+
+/// A lone water cell whose air neighbours all read φ = −h, inside the liquid
+/// by the engine's level set: the air floor takes their φ at 0, so θ is 0
+/// and the row is the plain one (diagonal 6). Without the floor θ would be 2
+/// and the diagonal −6. A lone cell with no neighbours has diagonal 0: the
+/// sweep keeps its value and the residual is the rhs.
+#[test]
+fn gpu_flip_ghost_rows_floor_the_air_and_the_diagonal() {
+    let h = 0.3;
+    let n = [3, 3, 3];
+    let centre = cell([1, 1, 1], n);
+    let mut water = vec![0.0; 27];
+    water[centre] = 1.0;
+    let mut phi = vec![-h as f32; 27];
+    phi[centre] = (-0.5 * h) as f32;
+    let (rhs, value) = (random_values(27, 0xf10), random_values(27, 0xf11));
+    assert_eq!(cpu_diag(centre, &water, &phi, n, h), 6.0, "air inside the level set adds nothing");
+    let swept = run_sweep(&water, &rhs, &value, &phi, n, h, 1);
+    let want = -h * h * f64::from(rhs[centre]) / 6.0;
+    assert!((f64::from(swept[centre]) - want).abs() <= 1e-6, "the plain row: {} vs {want}", swept[centre]);
+    let (one, lone) = ([1, 1, 1], vec![1.0f32]);
+    let phi = vec![(-0.5 * h) as f32];
+    assert_eq!(cpu_diag(0, &lone, &phi, one, h), 0.0, "no neighbours, no diagonal");
+    let swept = run_sweep(&lone, &rhs[..1], &value[..1], &phi, one, h, 0);
+    assert_eq!(swept[0], value[0], "a zero diagonal keeps the value");
+    let residual = run_residual(&lone, &rhs[..1], &value[..1], &phi, one, h);
+    assert_eq!(residual[0], rhs[0], "a zero diagonal leaves the rhs");
 }
 
 #[test]
@@ -474,7 +574,13 @@ impl Chain {
     }
 
     fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
-        let id = self.node(name, "test.value_source", json!({"max_capacity": {"type": "Int", "value": values.len()}}));
+        let items = values.len();
+        self.typed_source(name, "test.value_source", values, items)
+    }
+
+    /// A source of `items` elements of any type, given as their raw words.
+    fn typed_source(&mut self, name: &'static str, type_id: &str, values: Vec<f32>, items: usize) -> usize {
+        let id = self.node(name, type_id, json!({"max_capacity": {"type": "Int", "value": items}}));
         self.sources.push((name, values));
         id
     }
@@ -576,23 +682,27 @@ fn gpu_flip_residual_into_sweep_fuses() {
     let h = 0.3;
     let (water, rhs, value, start) =
         (random_water(cells, 0xf1), random_values(cells, 0xf2), random_values(cells, 0xf3), random_values(cells, 0xf4));
+    let phi = random_phi(&water, h, 0xf5);
     let mut chain = Chain::new();
     let w = chain.source("water", water.clone());
     let r = chain.source("rhs", rhs.clone());
     let v = chain.source("value", value.clone());
     let s = chain.source("start", start.clone());
+    let d = chain.source("phi", phi.clone());
     let residual = chain.node("residual", "node.pressure_residual", lattice_json(FINE, &[("cell_size", h)]));
     chain.wire(w, "out", residual, "water");
     chain.wire(r, "out", residual, "rhs");
     chain.wire(v, "out", residual, "value");
+    chain.wire(d, "out", residual, "phi");
     let sweep = chain.node("sweep", "node.pressure_smooth", lattice_json(FINE, &[("cell_size", h), ("color", 1.0)]));
     chain.wire(w, "out", sweep, "water");
     chain.wire(residual, "out", sweep, "rhs");
     chain.wire(s, "out", sweep, "value");
+    chain.wire(d, "out", sweep, "phi");
     let got = chain.fused_matches_unfused(sweep, cells);
-    let mid: Vec<f32> = cpu_residual(&water, &rhs, &value, FINE, h).iter().map(|&v| v as f32).collect();
+    let mid: Vec<f32> = cpu_ghost_residual(&water, &rhs, &value, &phi, FINE, h).iter().map(|&v| v as f32).collect();
     let start64: Vec<f64> = start.iter().map(|&v| f64::from(v)).collect();
-    assert_close(&got, &cpu_sweep(&water, &mid, &start64, FINE, h, 1), "fused residual into sweep");
+    assert_close(&got, &cpu_ghost_sweep(&water, &mid, &start64, &phi, FINE, h, 1), "fused residual into sweep");
 }
 
 /// A residual fused into a divide by one GPU value: the fused count follows
@@ -608,16 +718,96 @@ fn gpu_flip_residual_into_divide_fuses() {
     let r = chain.source("rhs", rhs.clone());
     let v = chain.source("value", value.clone());
     let d = chain.source("divisor", vec![-2.5]);
+    let phi = random_phi(&water, h, 0xd4);
+    let p = chain.source("phi", phi.clone());
     let residual = chain.node("residual", "node.pressure_residual", lattice_json(FINE, &[("cell_size", h)]));
     chain.wire(w, "out", residual, "water");
     chain.wire(r, "out", residual, "rhs");
     chain.wire(v, "out", residual, "value");
+    chain.wire(p, "out", residual, "phi");
     let divide = chain.node("divide", "node.divide_by_value", json!({}));
     chain.wire(residual, "out", divide, "values");
     chain.wire(d, "out", divide, "divisor");
     let got = chain.fused_matches_unfused(divide, cells);
-    let want: Vec<f64> = cpu_residual(&water, &rhs, &value, FINE, h).iter().map(|&v| v / -2.5).collect();
+    let want: Vec<f64> = cpu_ghost_residual(&water, &rhs, &value, &phi, FINE, h).iter().map(|&v| v / -2.5).collect();
     assert_close(&got, &want, "fused residual into divide");
+}
+
+/// The particles' distance fused into a divide: the sort bins the particles
+/// on the lattice, the distance gathers its bins and the divide takes the
+/// distance coincident. Checked against the engine's scatter (each particle
+/// reaches the cells within 2r of it along each axis, r = √3·h/2), with 3h
+/// where no live particle is within one cell.
+#[test]
+fn gpu_flip_particle_distance_into_divide_fuses() {
+    use crate::node_graph::fluid_particles::FluidParticle;
+    let cells: usize = FINE.iter().product();
+    let h = 0.25_f64;
+    let min = [-0.4_f64, 0.2, 0.1];
+    let size: [f64; 3] = std::array::from_fn(|a| FINE[a] as f64 * h);
+    let jitter = random_values(3 * 60, 0xd15);
+    let particles: Vec<FluidParticle> = (0..60)
+        .map(|i| {
+            let position: [f32; 3] = std::array::from_fn(|a| (min[a] + (f64::from(jitter[3 * i + a]) + 0.5) * size[a]) as f32);
+            let radius = if i % 13 == 4 { 0.0 } else { 0.08 };
+            FluidParticle { position_radius: [position[0], position[1], position[2], radius], velocity: [0.0; 3], id: i as u32 + 1 }
+        })
+        .collect();
+    let mut chain = Chain::new();
+    let source = chain.typed_source("particles", "test.liquid_source", bytemuck::cast_slice(&particles).to_vec(), particles.len());
+    let sort = chain.node(
+        "sort",
+        "node.sort_particles_into_cells",
+        json!({
+            "center_x": {"type": "Float", "value": min[0] + 0.5 * size[0]},
+            "center_y": {"type": "Float", "value": min[1] + 0.5 * size[1]},
+            "center_z": {"type": "Float", "value": min[2] + 0.5 * size[2]},
+            "size_x": {"type": "Float", "value": size[0]},
+            "size_y": {"type": "Float", "value": size[1]},
+            "size_z": {"type": "Float", "value": size[2]},
+            "cell_size": {"type": "Float", "value": h},
+        }),
+    );
+    chain.wire(source, "out", sort, "particles");
+    let distance = chain.node(
+        "distance",
+        "node.particle_distance",
+        lattice_json(FINE, &[("cell_size", h), ("lattice_min_x", min[0]), ("lattice_min_y", min[1]), ("lattice_min_z", min[2])]),
+    );
+    chain.wire(sort, "sorted", distance, "sorted");
+    chain.wire(sort, "cell_ranges", distance, "cell_ranges");
+    let d = chain.source("divisor", vec![0.5]);
+    let divide = chain.node("divide", "node.divide_by_value", json!({}));
+    chain.wire(distance, "out", divide, "values");
+    chain.wire(d, "out", divide, "divisor");
+    let got = chain.fused_matches_unfused(divide, cells);
+    let r = 0.5 * 3f64.sqrt() * h;
+    let reaches = |q: f32, a: usize, p: usize| {
+        let q = f64::from(q) - min[a];
+        ((q - 2.0 * r) / h).floor() as i64 <= p as i64 && p as i64 <= ((q + 2.0 * r) / h).floor() as i64
+    };
+    let want: Vec<f64> = (0..cells)
+        .map(|c| {
+            let p = coords(c, FINE);
+            let centre: [f64; 3] = std::array::from_fn(|a| min[a] + (p[a] as f64 + 0.5) * h);
+            let mut phi = 3.0 * h;
+            let bin = |q: f32, a: usize| ((f64::from(q) - min[a]) / h).floor() as i64;
+            let live = || particles.iter().filter(|q| q.position_radius[3] > 0.0);
+            let near = live().any(|q| (0..3).all(|a| (bin(q.position_radius[a], a) - p[a] as i64).abs() <= 1));
+            for q in live().filter(|_| near) {
+                if (0..3).all(|a| reaches(q.position_radius[a], a, p[a])) {
+                    let d = (0..3).map(|a| (centre[a] - f64::from(q.position_radius[a])).powi(2)).sum::<f64>().sqrt();
+                    phi = phi.min(d - r);
+                }
+            }
+            if phi.abs() < 0.005 * h {
+                phi = if phi > 0.0 { 0.005 * h } else { -0.005 * h };
+            }
+            phi / 0.5
+        })
+        .collect();
+    assert!(want.iter().any(|&v| v < 0.0) && want.iter().any(|&v| v > 0.0), "the draw has water and air");
+    assert_close(&got, &want, "fused distance into divide");
 }
 
 /// The coarse water fused into the restriction's mask.
@@ -652,10 +842,12 @@ fn gpu_flip_sweep_into_prolong_stays_unfused() {
     let w = chain.source("water", random_water(fine_cells, 0xb2));
     let r = chain.source("rhs", random_values(fine_cells, 0xb3));
     let s = chain.source("start", random_values(fine_cells, 0xb4));
+    let p = chain.source("phi", vec![0.0; fine_cells]);
     let sweep = chain.node("sweep", "node.pressure_smooth", lattice_json(FINE, &[("cell_size", 0.3), ("color", 0.0)]));
     chain.wire(w, "out", sweep, "water");
     chain.wire(r, "out", sweep, "rhs");
     chain.wire(s, "out", sweep, "value");
+    chain.wire(p, "out", sweep, "phi");
     let prolong = chain.node("prolong", "node.prolong_lattice", lattice_json(FINE, &[]));
     chain.wire(sweep, "out", prolong, "value");
     chain.wire(c, "out", prolong, "coarse");

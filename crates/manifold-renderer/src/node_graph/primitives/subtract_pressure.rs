@@ -2,6 +2,18 @@
 //! section 1 (the step)): faces touching water lose the pressure gradient, which
 //! leaves the water's velocity without divergence. A per-element gather on
 //! the codegen path.
+//!
+//! Ported from FLIP Fluids pressuresolver.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md
+//!
+//! The one-water-side face is the engine's `_applyPressureToVelocityFieldThread`:
+//! the air side's pressure is clamp(φ_air / (φ_water + ε), −25, 25) ·
+//! p_water. Deviations: water is the cells holding particles, so φ_water is
+//! taken at most −0.005h and φ_air at least 0, as the solve took them; ε is the matrix's 1e-9, not
+//! the engine's 1e-6, since against a water φ of −0.005h a 1e-6 changes θ by
+//! 0.3% and the projection then leaves that much of the surface pressure as
+//! divergence; no solid face weights,
+//! density or surface tension; the engine's skip of the last inner face
+//! (index nodes − 1) is not ported, since our box walls are their own faces.
 
 use std::borrow::Cow;
 
@@ -33,11 +45,12 @@ struct SubtractUniforms {
 crate::primitive! {
     name: SubtractPressure,
     type_id: "node.subtract_pressure",
-    purpose: "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces keep u and are valid (the solve took them as given); an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
+    purpose: "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces keep u and are valid (the solve took them as given); an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid, where an air side's pressure is the ghost value clamp(max(phi_air, 0) / (min(phi_water, −0.005·cell_size) + 1e-9), −25, 25) · p_water (node.pressure_smooth's free surface; zero with phi all zero); a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid.",
     inputs: {
         faces: Array(FaceSample) required,
         pressure: Array(f32) required,
         water: Array(f32) required,
+        phi: Array(f32) required,
         cell_size: ScalarF32 optional,
     },
     outputs: {
@@ -50,7 +63,7 @@ crate::primitive! {
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "faces is node.face_gravity's output (the field node.face_divergence measured), pressure node.conjugate_gradient's solution, water node.cells_with_particles. Follow with node.extend_faces so particles near the surface read valid faces.",
+    composition_notes: "faces is node.face_gravity's output (the field node.face_divergence measured), pressure node.conjugate_gradient's solution, water node.cells_with_particles, phi the one the solve's finest level read (node.particle_distance, or node.zero_lattice for a solve without a free surface). Follow with node.extend_faces so particles near the surface read valid faces.",
     examples: [],
     picker: { label: "Subtract Pressure", category: Atom },
     summary: "Uses the pressure to push the liquid so it neither squashes nor stretches.",
@@ -59,7 +72,7 @@ crate::primitive! {
     aliases: ["projection", "pressure gradient", "make incompressible"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/subtract_pressure_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather],
 }
 
 impl Primitive for SubtractPressure {
@@ -79,16 +92,17 @@ impl Primitive for SubtractPressure {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(faces), Some(pressure), Some(water), Some(out)) = (
+        let (Some(faces), Some(pressure), Some(water), Some(phi), Some(out)) = (
             ctx.inputs.array("faces"),
             ctx.inputs.array("pressure"),
             ctx.inputs.array("water"),
+            ctx.inputs.array("phi"),
             ctx.outputs.array("out"),
         ) else {
             return;
         };
         let count = face_count(nodes);
-        if count * 32 > faces.size.min(out.size) || cell_count(nodes) * 4 > pressure.size.min(water.size) {
+        if count * 32 > faces.size.min(out.size) || cell_count(nodes) * 4 > pressure.size.min(water.size).min(phi.size) {
             ctx.error(format!("Subtract Pressure: a {nodes:?} lattice is larger than its arrays"));
             return;
         }
@@ -110,7 +124,8 @@ impl Primitive for SubtractPressure {
                 GpuBinding::Buffer { binding: 1, buffer: faces, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: pressure, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: water, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: phi, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
             ],
             [(count as u32).div_ceil(256), 1, 1],
             "node.subtract_pressure",
