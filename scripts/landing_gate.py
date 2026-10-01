@@ -8,6 +8,7 @@ transcript and timings. Exit 0 iff all required checks pass.
 """
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import os
@@ -196,6 +197,11 @@ def print_result(label, status, duration=None, tail=None):
 
 
 def main():
+    with contextlib.ExitStack() as stack:
+        return _main(stack)
+
+
+def _main(stack):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", default=Path.cwd(),
                         help="worktree of the branch being landed (default: cwd)")
@@ -339,6 +345,14 @@ def main():
     if status == "FAIL" and not args.keep_going:
         return finish(repo, base_sha, results)
 
+    # Nextest tests call GpuDevice::new_queued; each would queue behind every
+    # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
+    # here through gpu-proofs: child test processes inherit an ancestor's hold,
+    # so the landing waits once (visibly, on stdout) then runs straight through.
+    if gate_packages or (touches_gpu and not args.skip_gpu):
+        print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
+        stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
+
     # f. tests (if packages touched)
     if gate_packages:
         pkg_args = []
@@ -373,10 +387,8 @@ def main():
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
             cmd = ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base,
                    "--budget", str(gpu_scope.LANDING_BUDGET_S)]
-            # Queue here, not inside the subprocess, so waiting behind another
-            # GPU run does not eat this leg's 2h timeout or its duration.
-            with gpu_queue.hold("landing_gate gpu-proofs"):
-                exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
+            # The GPU hold was taken before the tests leg and is still held.
+            exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
