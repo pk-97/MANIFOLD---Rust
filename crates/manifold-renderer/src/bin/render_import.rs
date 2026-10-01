@@ -541,7 +541,7 @@ fn main() {
     // Clone def before it's moved to PresetRuntime; needed for animation mode.
     let def_clone = def.clone();
 
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("render-import"));
     let registry = PrimitiveRegistry::with_builtin();
     let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
     let mut runtime = match PresetRuntime::from_def_with_device(

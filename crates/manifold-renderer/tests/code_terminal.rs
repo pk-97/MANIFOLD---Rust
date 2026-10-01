@@ -807,7 +807,7 @@ mod gpu {
             return;
         };
         let dir = std::path::PathBuf::from(dir);
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("code_terminal"));
         let def = preset();
         for clip in 1..=3 {
             let (input, _) = fixture(&device);
@@ -918,7 +918,7 @@ mod gpu {
 
     #[test]
     fn code_terminal_never_lights_pixels_outside_glyphs() {
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("code_terminal"));
         let def = preset();
         let (input, _) = fixture(&device);
         let mut coverage_def = def.clone();
@@ -967,7 +967,7 @@ mod gpu {
 
     #[test]
     fn code_terminal_whole_glyph() {
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("code_terminal"));
         let def = preset();
         let source = diagonal_edge_source();
         let controls = Controls {
@@ -1135,7 +1135,7 @@ mod gpu {
 
     #[test]
     fn code_terminal_bounded_acceptance_and_fusion_proof() {
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("code_terminal"));
         let def = preset();
         let (input, source_raw) = fixture(&device);
         let mut unfused = Harness::new(std::sync::Arc::clone(&device), &def, &input, false);

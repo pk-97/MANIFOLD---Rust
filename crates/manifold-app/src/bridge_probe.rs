@@ -136,8 +136,8 @@ pub fn run(args: &[String]) -> ! {
         if fenced { "fenced" } else { "legacy" }
     );
 
-    let writer_dev = Arc::new(manifold_gpu::GpuDevice::new());
-    let reader_dev = Arc::new(manifold_gpu::GpuDevice::new());
+    let writer_dev = Arc::new(manifold_gpu::GpuDevice::new_queued("bridge-probe"));
+    let reader_dev = Arc::new(manifold_gpu::GpuDevice::new_queued("bridge-probe"));
     let bridge = Arc::new(SharedTextureBridge::new(W, H));
 
     if args.iter().any(|a| a == "--selftest") {

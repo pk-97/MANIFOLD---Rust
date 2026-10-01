@@ -882,3 +882,14 @@ fn scene_physics_assign_role_rejects_nonshared_compound_pose_atomically() {
     assert!(!command.was_applied());
     assert_eq!(graph_of(&project, &effect), &original);
 }
+
+/// Role assignment recognizes a domain by `is_liquid_domain`, so a GPU
+/// template's simulation node takes a role with no per-solver code.
+#[test]
+fn scene_physics_assign_role_accepts_gpu_domain() {
+    let mut graph = cube_graph(false);
+    graph.nodes.iter_mut().find(|node| node.id == 20).unwrap().type_id =
+        manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID.into();
+    let (_project, _effect, command) = run_command(graph, false);
+    assert!(command.was_applied(), "rejected: {:?}", command.rejection_reason());
+}
