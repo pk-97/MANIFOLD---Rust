@@ -136,6 +136,16 @@ fn gpu_flip_dam_break_export_matches_across_frame_rates() {
     assert_eq!(differing, 0, "the frame at {AT} s differs between 60 and 30 fps");
 }
 
+/// The Dam Break as a project for the content-thread trace gate:
+/// `MANIFOLD_RENDER_TRACE=1 cargo xtask perf-soak <dir>/gpu_flip_dam_break.manifold --seconds 60`
+/// plays it with its whitewater, and no content frame may pass 20 ms.
+#[test]
+fn gpu_flip_dam_break_soak_project() {
+    let path = out_dir().join("gpu_flip_dam_break.manifold");
+    manifold_io::saver::save_project_v1(&project(), &path).expect("save the soak project");
+    println!("GPU FLIP soak project → {}", path.display());
+}
+
 #[test]
 fn gpu_flip_dam_break_paused_live_frames_hold() {
     let dir = out_dir();
