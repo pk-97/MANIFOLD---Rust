@@ -19,9 +19,9 @@ class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
               "clippy", "flow-gate", "tests", "gpu-proofs"]
 
-    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head"):
+    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None):
         called, commands = [], []
-        paths = ["crates/manifold-gpu/src/metal/device.rs"]
+        paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
         labels = {
             "fake-tool-test.py": "tooling", "design_status_check.py": "design-status",
             "gen_docs_index.py": "docs-index", "ignored-test-guard.py": "ignored-tests",
@@ -91,11 +91,23 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(timings["checks"][-1]["label"], "docs-index")
 
     def test_success_runs_all_required_checks_with_explicit_gpu_binary(self):
-        code, called, timings, commands, *_ = self.exercise()
+        code, called, timings, commands, _, output, _ = self.exercise()
         self.assertEqual(code, 0)
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 0)
-        self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--test", "gpu_proofs"], commands)
+        self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main",
+                       "--budget", "300"], commands)
+        self.assertTrue(all("--all" not in c and "--full-suite" not in c for c in commands))
+        self.assertIn("[gpu-proofs] mode: scoped", output)
+        self.assertIn("manifold-gpu core", output)
+
+    def test_unmapped_gpu_path_fails_gate_naming_path(self):
+        code, called, _, _, _, output, _ = self.exercise(
+            paths=["crates/manifold-renderer/src/node_graph/orphan.bin"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("gpu-proofs", called)
+        self.assertIn("node_graph/orphan.bin", output)
+        self.assertIn("Add a mapping rule", output)
 
     def test_named_red_collection_does_not_skip_remaining_checks(self):
         code, called, timings, *_ = self.exercise("docs-index", extra=["--keep-going"])
@@ -143,7 +155,7 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(trunk_health.subprocess, "run",
                                             return_value=subprocess.CompletedProcess([], 0, "", "")))
             self.assertEqual(trunk_health.main(), 0)
-        self.assertIn("would run: python3 scripts/gpu_proofs_gate.py --full-suite", output.getvalue())
+        self.assertIn("would run: python3 scripts/gpu_proofs_gate.py --all", output.getvalue())
 
 
 class DeliveryTests(unittest.TestCase):
