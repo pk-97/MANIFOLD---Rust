@@ -527,3 +527,45 @@ fn whitewater_grid_chain_fuses_only_the_distance_pair() {
         assert!(!node.fused, "{} stands alone: {node:?}", name(node.node_id));
     }
 }
+
+/// node.whitewater_step at 64, from the node's own sizing: every placement
+/// rule refuses by name, a missing lattice included, never skipping the
+/// per-cell cap's grid; and what it holds at FLIP's default capacity over
+/// the res-64 particle slots.
+#[test]
+fn whitewater_step_extents_at_64() {
+    use super::whitewater_step::{DEFAULT_CAPACITY, MAX_CAPACITY, StepShape};
+    use crate::node_graph::fluid_particles::{MAX_BINS, bin_total};
+    let lattice = lattice_at_64();
+    let nodes = lattice.nodes();
+    let level = refined_nodes(nodes.map(|n| n as f32), 3);
+    let bounds = Some(lattice.bounds());
+    let step = StepShape::new(nodes, level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY).expect("placed");
+    assert_eq!(step.cells, [70; 3]);
+    assert_eq!(step.cell_count(), 343_000);
+    assert_eq!(step.bins, [70; 3], "one sort bin a cell");
+    assert!(bin_total(step.bins) <= MAX_BINS);
+    assert_eq!(step.population_bytes(), 3_200_000);
+    assert_eq!(step.pool_bytes(), 4_800_000);
+    assert_eq!(step.slot_scan_values(), 300_000);
+    assert_eq!([0, 1, 2].map(|a| step.face_bytes(a)), [266_240 * 4; 3]);
+    assert_eq!(step.level_bytes(), cell_total(level) * 4);
+    assert_eq!(step.solid_bytes(), 357_911 * 4);
+    let held = step.held_bytes(u64::from(PARTICLE_SLOTS));
+    println!("whitewater_step holds {held} bytes at 64 over {PARTICLE_SLOTS} particle slots");
+    assert!(held < 256 << 20, "{held} bytes");
+
+    let refusals = [
+        (StepShape::new([0; 3], level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY), "solid lattice is missing"),
+        (StepShape::new(nodes, level, [64; 3], 1.0, None, DEFAULT_CAPACITY), "grid_bounds is not wired"),
+        (StepShape::new(nodes, [212; 3], [64; 3], 1.0, bounds, DEFAULT_CAPACITY), "is not a whole refinement"),
+        (StepShape::new(nodes, level, [63, 64, 64], 1.0, bounds, DEFAULT_CAPACITY), "does not sit centred"),
+        (StepShape::new(nodes, level, [64; 3], 0.0, bounds, DEFAULT_CAPACITY), "whitewater needs at least 1"),
+        (StepShape::new(nodes, level, [64; 3], 1.0, bounds, 0), "capacity 0 is outside"),
+        (StepShape::new(nodes, level, [64; 3], 1.0, bounds, MAX_CAPACITY + 1), "is outside 1 to"),
+    ];
+    for (i, (result, phrase)) in refusals.into_iter().enumerate() {
+        let refusal = result.expect_err("refused");
+        assert!(refusal.contains(phrase), "refusal {i}: {refusal}");
+    }
+}
