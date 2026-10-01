@@ -32,7 +32,9 @@ are gated once, not N times:
      re-gate. The first rebuild that goes green names the culprit; it is
      dropped with the gate's failure tail in the report and the rest land.
      If no single removal turns it green, nothing lands (several culprits
-     or a base failure) and the script exits non-zero.
+     or a base failure) and the script exits non-zero. A gate that dies on a
+     Python traceback (initial or in a rebuild) stops the search and says
+     "gate crashed" / "culprit search crashed"; it never blames the branches.
   4. Land with the same commit-tree merge as single mode: tree of the
      landing tip, parents origin/main and the landing tip, message listing
      every landed branch and tip (and every dropped one with its reason),
@@ -77,8 +79,13 @@ def build_landing(origin_main, specs, landing):
 
 
 def run_gate(gate):
+    """(ok, output tail, crashed). `crashed` means the gate died on an uncaught
+    Python exception instead of reporting a failed check; a rebuild that crashes
+    says nothing about which branch is at fault."""
     r = subprocess.run(gate, text=True, capture_output=True)
-    return r.returncode == 0, (r.stdout + r.stderr).strip()[-600:]
+    out = (r.stdout + r.stderr).strip()
+    crashed = r.returncode != 0 and "Traceback (most recent call last)" in out
+    return r.returncode == 0, out[-600:], crashed
 
 
 def batch_message(included, dropped, message):
@@ -100,7 +107,9 @@ def land_batch(specs, gate, message=None):
     included, dropped = build_landing(origin_main, specs, landing)
     if not included:
         sys.exit(f"nothing to land: every branch was dropped\n{dropped}")
-    ok, tail = run_gate(gate)
+    ok, tail, crashed = run_gate(gate)
+    if crashed:
+        sys.exit(f"gate crashed; nothing landed\n{tail}")
     if not ok:
         culprit = None
         for name, tip in list(included):
@@ -108,7 +117,9 @@ def land_batch(specs, gate, message=None):
             if not rest:
                 continue
             inc2, drop2 = build_landing(origin_main, rest, landing)
-            ok2, _ = run_gate(gate)
+            ok2, tail2, crashed2 = run_gate(gate)
+            if crashed2:
+                sys.exit(f"culprit search crashed (gate died rebuilding without {name}); nothing landed\n{tail2}")
             if ok2 and not drop2:
                 culprit, included = (name, tip, "gate red: " + tail), inc2
                 break

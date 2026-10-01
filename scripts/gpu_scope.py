@@ -227,7 +227,7 @@ def default_shader_users(repo, wgsl_path, depth=3):
     """Rust files that (transitively through other .wgsl) include `wgsl_path`."""
     found, frontier, seen = set(), [wgsl_path], {wgsl_path}
     for _ in range(depth):
-        nxt = []
+        nxt = set()
         for current in frontier:
             out = subprocess.run(
                 ["rg", "-l", "-F", Path(current).name, "--glob", "*.rs", "--glob", "*.wgsl",
