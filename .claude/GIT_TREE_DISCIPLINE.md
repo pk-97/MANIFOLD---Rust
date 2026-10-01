@@ -214,7 +214,9 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    2026-07-17; worst case ~270 GB fully warm) — all-busy is a loud `POOL
    FULL` error to surface to Peter, never to work around. A slot's
    `target/` past 25 GB is wiped at acquire. Idle = clean status + HEAD
-   is-ancestor of origin/main + lease absent or stale (8 h). The wipe is
+   is-ancestor of origin/main + no lease. A lease holds its slot until
+   `release`, whatever the git state; it never expires (an agent between
+   tool calls looks clean and landed). The wipe is
    `scripts/storage_budget.py`'s file manifest: Cargo-named rlibs, objects,
    fingerprints, incremental state and hashed native executables
    (`deps/<target>-<16 hex>`, the bulk of a warm slot at ~55 MB per test
