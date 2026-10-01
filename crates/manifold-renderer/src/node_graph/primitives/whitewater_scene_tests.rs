@@ -307,9 +307,7 @@ impl Show {
             paused: false,
             cards: ParamManifest::default(),
         };
-        // The whole-graph dump, as the GPU FLIP smoke runs read arrays: a
-        // node-scoped dump set holds nothing on this generator (BUG-bqwx).
-        show.runtime.set_dump_all(!held.is_empty());
+        show.hold(held);
         show
     }
 
@@ -412,9 +410,11 @@ impl Show {
         found[0].to_string()
     }
 
-    /// Hold every array the next frames write, for `dumped`.
-    pub(super) fn set_dump_all(&mut self, on: bool) {
-        self.runtime.set_dump_all(on);
+    /// Hold the arrays the named nodes write on the next frames, for
+    /// `dumped`; an empty list stops.
+    pub(super) fn hold(&mut self, names: &[String]) {
+        let held: Vec<manifold_core::NodeId> = names.iter().map(|name| manifold_core::NodeId::from(name.as_str())).collect();
+        self.runtime.set_dump_arrays(None, &held);
     }
 
     /// The first `len` records the named held node wrote on `port` this frame.

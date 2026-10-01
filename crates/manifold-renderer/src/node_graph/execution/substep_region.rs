@@ -60,7 +60,7 @@ impl Executor {
         self.substep_scalar_values.resize(ports.iteration_scalars.len(), 0.0);
 
         // The body replays its recorded dispatches (docs/ENCODE_REPLAY_DESIGN.md D1).
-        let replay = self.encode_replay && !self.dump_all;
+        let replay = self.encode_replay && !self.dumps_arrays();
         if replay && let Some(gpu) = gpu.as_deref_mut() {
             let cache = std::mem::take(self.replay_caches.entry(region.boundary).or_default());
             gpu.native_enc.begin_replay(gpu.device, cache);

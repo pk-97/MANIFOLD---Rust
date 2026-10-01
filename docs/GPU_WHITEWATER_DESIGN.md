@@ -1,9 +1,9 @@
 # GPU Whitewater — spray, foam and bubbles for any GPU liquid, from FLIP's own lifecycle
 
-<!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
+<!-- index: Spray, foam and bubbles for GPU FLIP water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; `node.whitewater_step` advances the lifecycle on the GPU. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · reopened by D14 (GPU lifecycle); P1–P6 emitter built, O1 and O2 green · GPU lifecycle built as `node.whitewater_step` (section 3.9 (GPU lifecycle)), L5 parity holds (section 5 (Phasing), L5) · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
-**Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
+**Status:** BUILT · 2026-10-02 · Opus 5.5 · GPU emitter (P1–P6) and `node.whitewater_step` lifecycle (L1–L6) ship in the GPU FLIP Dam Break preset; O1, O2 and L5 parity green · owed: the calls in section 8 (Calls only Peter makes) — side-by-side verdict, shipping the preset past its trace gate, emission tuning.
+**Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
@@ -457,6 +457,6 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 ## 8. Calls only Peter makes
 
-1. The side-by-side verdict (P6). Judge with it the live trail: since the lifecycle moved to its own thread (D11), whitewater trails the water by two or three frames live, one more than before, and one offline. If foam visibly lags a fast front, the fix is presenting whitewater at display time (section 7), not moving the lifecycle back.
-2. Shipping the SWASH Dam Break preset with whitewater, which follows the SWASH P4 call. The `MANIFOLD_RENDER_TRACE=1` gate runs then.
+1. The side-by-side verdict (P6), against the FLIP engine's own whitewater.
+2. Shipping the GPU FLIP Dam Break preset with whitewater past its `MANIFOLD_RENDER_TRACE=1` gate.
 3. Emission tuning (wavecrest rate, curvature window) if the look differs from FLIP's; FLIP's defaults until then.
