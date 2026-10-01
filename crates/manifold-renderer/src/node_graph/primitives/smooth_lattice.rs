@@ -80,6 +80,10 @@ impl Primitive for SmoothLattice {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if ctx.inputs.any_pending() {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let passes = ctx.scalar_or_param("passes", 2.0).round().clamp(0.0, 3.0);
         let axis = match ctx.params.get("axis") {

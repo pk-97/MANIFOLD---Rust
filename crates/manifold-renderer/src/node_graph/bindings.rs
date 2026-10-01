@@ -406,6 +406,18 @@ impl<'a> NodeInputs<'a> {
         !self.pending.get(slot.0 as usize).copied().unwrap_or(false)
     }
 
+    /// True when the named port is wired and its producer declared it
+    /// pending. Unwired ports are never pending.
+    pub fn port_pending(&self, port: &str) -> bool {
+        self.slot(port).is_some_and(|slot| !self.slot_content_ready(slot))
+    }
+
+    /// True when any wired input is pending. A node with no partial result
+    /// to offer declares its own outputs pending and does no work.
+    pub fn any_pending(&self) -> bool {
+        self.bindings.iter().any(|&(_, slot)| !self.slot_content_ready(slot))
+    }
+
     /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name
     /// scan, unlike [`Self::object`]. `render_scene`'s draw-assembly loop
     /// resolves `object_k` through its per-frame `build_index()` map
