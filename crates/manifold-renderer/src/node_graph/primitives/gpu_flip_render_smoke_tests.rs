@@ -781,15 +781,18 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         // Paused transport that keeps rendering: no time, no frame count.
         let before = smoke.particles();
         let image = smoke.readback();
+        // Every paused render, not just the last, must match the played
+        // frame: a change that later holds still is still a pause that moved.
+        let mut changed = 0;
         for _ in 0..3 {
             smoke.frame(0.0, false);
+            let paused_image = smoke.readback();
+            changed = changed.max(image.chunks_exact(4).zip(paused_image.chunks_exact(4)).filter(|(a, b)| a != b).count());
         }
         let paused = smoke.particles();
-        let paused_image = smoke.readback();
-        let changed = image.chunks_exact(4).zip(paused_image.chunks_exact(4)).filter(|(a, b)| a != b).count();
         let moved = max_diff(&before, &paused);
         println!(
-            "SMOKE {tag} transport: 3 paused renders moved particles by up to {moved:.3e} m and changed {changed} of {} pixels",
+            "SMOKE {tag} transport: 3 paused renders moved particles by up to {moved:.3e} m and changed up to {changed} of {} pixels",
             WIDTH * HEIGHT
         );
         if moved > 0.0 || changed > 0 {
