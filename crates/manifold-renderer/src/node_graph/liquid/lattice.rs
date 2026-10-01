@@ -4,12 +4,16 @@
 //! wires such a lattice produced, so a solver built on it cannot hand the
 //! surface bare, unpadded bounds.
 
-use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::FluidDomainLayout;
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
 pub const PADDING_NODES: u32 = 3;
+
+/// Most nodes per axis a lattice wire may carry, as every lattice atom.
+pub const MAX_LATTICE_NODES: u32 = 1024;
 
 /// Node (i, j, k) at `min + (i, j, k) · cell_size`. The fields are private:
 /// [`Self::from_layout`] is the only public way to make one.
@@ -37,26 +41,40 @@ impl LiquidLattice {
     /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
     /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
     /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
-    /// at resolution 64, matching each atom's param defaults.
-    pub(crate) fn from_wires(ctx: &EffectNodeContext<'_, '_>) -> Self {
+    /// at resolution 64, matching each atom's param defaults. Wires no padded
+    /// layout could have produced (a refused domain publishes zeros) are
+    /// reported as `node`'s error and give `None`.
+    pub(crate) fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
         Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
+            .map_err(|refusal| ctx.error(format!("{node}: {refusal}")))
+            .ok()
     }
 
     /// [`Self::from_wires`] over any `scalar_or_param` reader: the extent
-    /// checker reads the same wires without a frame.
-    pub(crate) fn from_scalars(read: impl Fn(&str, f32) -> f32) -> Self {
-        let nodes = |name: &str| read(name, 71.0).round().max(1.0) as u32;
-        let nodes = [nodes("nodes_x"), nodes("nodes_y"), nodes("nodes_z")];
-        Self {
-            min: [
-                read("lattice_min_x", -2.1875),
-                read("lattice_min_y", -0.1875),
-                read("lattice_min_z", -2.1875),
-            ],
-            nodes,
-            cell_size: read("cell_size", 0.0625),
-            cells: nodes.map(|n| n.saturating_sub(1 + 2 * PADDING_NODES)),
+    /// checker reads the same wires without a frame. Node counts must be
+    /// whole and hold at least one cell inside the padding; the cell size
+    /// positive; the corner finite.
+    pub(crate) fn from_scalars(read: impl Fn(&str, f32) -> f32) -> Result<Self, String> {
+        let least = 2 + 2 * PADDING_NODES;
+        let nodes = |name: &str| {
+            let value = read(name, 71.0);
+            if value.fract() == 0.0 && (least as f32..=MAX_LATTICE_NODES as f32).contains(&value) {
+                Ok(value as u32)
+            } else {
+                Err(format!("lattice wire {name} is {value}; it must be a whole node count from {least} to {MAX_LATTICE_NODES}"))
+            }
+        };
+        let nodes = [nodes("nodes_x")?, nodes("nodes_y")?, nodes("nodes_z")?];
+        let cell_size = read("cell_size", 0.0625);
+        if !(cell_size.is_finite() && cell_size > 0.0) {
+            return Err(format!("lattice wire cell_size is {cell_size}; it must be positive"));
         }
+        let corner = |name: &str, default: f32| {
+            let value = read(name, default);
+            value.is_finite().then_some(value).ok_or_else(|| format!("lattice wire {name} is {value}; it must be finite"))
+        };
+        let min = [corner("lattice_min_x", -2.1875)?, corner("lattice_min_y", -0.1875)?, corner("lattice_min_z", -2.1875)?];
+        Ok(Self { min, nodes, cell_size, cells: nodes.map(|n| n - (1 + 2 * PADDING_NODES)) })
     }
 
     pub fn min(&self) -> [f32; 3] {
@@ -65,6 +83,11 @@ impl LiquidLattice {
 
     pub fn nodes(&self) -> [u32; 3] {
         self.nodes
+    }
+
+    /// Minimum corner of the authored box: the first cell inside the padding.
+    pub fn box_min(&self) -> [f32; 3] {
+        self.min.map(|v| v + PADDING_NODES as f32 * self.cell_size)
     }
 
     pub fn cell_size(&self) -> f32 {
@@ -128,6 +151,34 @@ impl LiquidLattice {
     }
 }
 
+/// The params a lattice atom reads its cells per axis from.
+pub(crate) const LATTICE_PARAMS: [&str; 3] = ["nodes_x", "nodes_y", "nodes_z"];
+
+/// A lattice atom's cells per axis, 1 to [`MAX_LATTICE_NODES`] each (64 when
+/// unset), or `None`.
+pub(crate) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
+    let nodes = LATTICE_PARAMS.map(|name| match params.get(name) {
+        Some(ParamValue::Float(n)) => n.round() as i64,
+        _ => 64,
+    });
+    nodes.iter().all(|n| (1..=i64::from(MAX_LATTICE_NODES)).contains(n)).then(|| nodes.map(|n| n as u32))
+}
+
+/// Cells in a lattice, as u64 so a bad size cannot wrap.
+pub(crate) fn cell_count(nodes: [u32; 3]) -> u64 {
+    nodes.iter().map(|&n| u64::from(n)).product()
+}
+
+/// Records of a lattice's face grid: one more than the cells per axis.
+pub(crate) fn face_count(nodes: [u32; 3]) -> u64 {
+    nodes.iter().map(|&n| u64::from(n) + 1).product()
+}
+
+/// Face-grid length for a lattice param set, for `array_output_capacity`.
+pub(crate) fn face_capacity(params: &ParamValues) -> Option<u32> {
+    cell_lattice(params).and_then(|nodes| u32::try_from(face_count(nodes)).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +191,27 @@ mod tests {
         assert_eq!(lattice.cell_size(), 0.0625);
         assert_eq!(lattice.min(), [-2.1875, -0.1875, -2.1875]);
         assert_eq!(lattice.bounds().scale, [4.375; 3]);
+    }
+
+    /// A refused domain publishes zeroed wires; the reader names the wire
+    /// instead of clamping to a one-node lattice.
+    #[test]
+    fn liquid_lattice_wires_refuse_by_name() {
+        let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 32).unwrap();
+        let lattice = LiquidLattice::from_layout(&layout);
+        let wires = |name: &str| match name {
+            "nodes_x" | "nodes_y" | "nodes_z" => lattice.nodes()[0] as f32,
+            "cell_size" => lattice.cell_size(),
+            _ => lattice.min()[0],
+        };
+        let read = LiquidLattice::from_scalars(|name, _| wires(name)).unwrap();
+        assert_eq!((read.nodes(), read.cells()), (lattice.nodes(), lattice.cells()));
+        let zeroed = LiquidLattice::from_scalars(|name, default| if name == "nodes_y" { 0.0 } else { default });
+        assert!(zeroed.unwrap_err().contains("nodes_y is 0"));
+        for (wire, value) in [("nodes_x", 7.0), ("nodes_x", 71.5), ("nodes_z", f32::NAN), ("cell_size", 0.0), ("lattice_min_y", f32::INFINITY)] {
+            let refused = LiquidLattice::from_scalars(|name, default| if name == wire { value } else { default });
+            assert!(refused.unwrap_err().contains(wire), "{wire} = {value}");
+        }
     }
 
     #[test]

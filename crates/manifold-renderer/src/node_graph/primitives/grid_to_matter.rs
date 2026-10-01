@@ -137,7 +137,9 @@ impl Primitive for GridToMatter {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Grid to Matter") else {
+            return;
+        };
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let cohesion = ctx.scalar_or_param("cohesion", 0.0).clamp(0.0, 1.0);

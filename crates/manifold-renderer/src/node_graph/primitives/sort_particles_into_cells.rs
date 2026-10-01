@@ -14,7 +14,7 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::prefix_scan::PrefixScan;
 use crate::node_graph::channel_names::well_known;
@@ -53,11 +53,172 @@ struct SortParams {
 
 /// Where the sort reads a record's position and liveness, in 4-byte words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RecordRead {
+pub(crate) struct RecordRead {
     stride_words: u32,
     position_word: u32,
     live_word: u32,
     live_rule: u32,
+}
+
+/// A liquid particle record: `position_radius` first, live when the radius is positive.
+pub(crate) const LIQUID_PARTICLE_READ: RecordRead = RecordRead {
+    stride_words: (std::mem::size_of::<FluidParticle>() / 4) as u32,
+    position_word: 0,
+    live_word: 3,
+    live_rule: LIVE_BY_RADIUS,
+};
+
+/// Dispatch labels for a sort's six passes, so the profiler names its caller.
+pub(crate) struct SortLabels {
+    pub clear: &'static str,
+    pub count: &'static str,
+    pub ranges: &'static str,
+    pub tail: &'static str,
+    pub scatter: &'static str,
+    pub stabilise: &'static str,
+}
+
+const NODE_LABELS: SortLabels = SortLabels {
+    clear: "node.sort_particles_into_cells.clear",
+    count: "node.sort_particles_into_cells.count",
+    ranges: "node.sort_particles_into_cells.ranges",
+    tail: "node.sort_particles_into_cells.tail",
+    scatter: "node.sort_particles_into_cells.scatter",
+    stabilise: "node.sort_particles_into_cells.stabilise",
+};
+
+/// One sort: the records, the bin grid, and the per-slot outputs to write.
+pub(crate) struct SortJob<'a> {
+    pub particles: &'a GpuBuffer,
+    pub read: RecordRead,
+    /// Records the particles buffer holds.
+    pub capacity: u32,
+    /// Live records to sort, at most every slot of every output.
+    pub count: u32,
+    pub bin_min: [f32; 3],
+    pub inv_cell: f32,
+    pub bins: [u32; 3],
+    /// Liquid particle records only; `None` leaves it unwritten.
+    pub sorted: Option<&'a GpuBuffer>,
+    pub order: Option<&'a GpuBuffer>,
+}
+
+/// The counting sort itself, shared by `node.sort_particles_into_cells` and
+/// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
+/// Owns the cell ranges and its scratch.
+#[derive(Default)]
+pub(crate) struct ParticleSorter {
+    pipelines: Vec<GpuComputePipeline>,
+    scan: PrefixScan,
+    rank: Option<GpuBuffer>,
+    slot_input: Option<GpuBuffer>,
+    ranges: Option<GpuBuffer>,
+}
+
+impl ParticleSorter {
+    /// Create the pipelines. Call before any early return (compile contract).
+    pub(crate) fn prepare(&mut self, device: &GpuDevice) {
+        if self.pipelines.is_empty() {
+            for entry in ENTRIES {
+                self.pipelines.push(device.create_compute_pipeline(SHADER, entry, "node.sort_particles_into_cells"));
+            }
+        }
+        self.scan.prepare(device);
+    }
+
+    /// One range per bin of `bins`, at `range_storage_bytes(bins)` or more.
+    pub(crate) fn ranges(&self) -> Option<&GpuBuffer> {
+        self.ranges.as_ref()
+    }
+
+    /// Size the cell ranges for `bins` before anything reads them.
+    pub(crate) fn reserve_ranges(&mut self, device: &GpuDevice, bins: [u32; 3]) -> Result<(), String> {
+        let range_bytes = range_storage_bytes(bins);
+        if self.ranges.as_ref().is_some_and(|ranges| ranges.size >= range_bytes) {
+            return Ok(());
+        }
+        let buffer = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(),
+            range_bytes,
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|()| device.try_create_buffer_shared(range_bytes))?;
+        // Nothing reads a range the passes did not write as anything but empty.
+        buffer.zero_fill();
+        self.ranges = Some(buffer);
+        Ok(())
+    }
+
+    /// Encode the six passes. `prepare` and `reserve_ranges(job.bins)` first.
+    /// Fails before any dispatch when the scan storage cannot be had.
+    pub(crate) fn encode(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut GpuEncoder,
+        job: &SortJob<'_>,
+        labels: &SortLabels,
+    ) -> Result<(), String> {
+        let bin_total = bin_total(job.bins) as u32;
+        let cell_counts = self.scan.buffer(device, bin_total as usize)?.clone();
+        let particle_size = std::mem::size_of::<FluidParticle>() as u64;
+        let sorted_capacity = [job.sorted.map(|b| b.size / particle_size), job.order.map(|b| b.size / 4)]
+            .into_iter()
+            .flatten()
+            .fold(u64::from(job.capacity), u64::min) as u32;
+        let count = job.count.min(sorted_capacity);
+        let rank_bytes = u64::from(job.capacity.max(1)) * 4;
+        if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
+            self.rank = Some(device.create_buffer(rank_bytes));
+        }
+        if self.slot_input.as_ref().is_none_or(|slots| slots.size < rank_bytes) {
+            self.slot_input = Some(device.create_buffer(rank_bytes));
+        }
+        let ranges = self.ranges.as_ref().ok_or("the cell ranges were not reserved")?;
+        let rank = self.rank.as_ref().expect("rank scratch allocated");
+        let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
+        let read = job.read;
+        let uniforms = SortParams {
+            bin_min: job.bin_min,
+            inv_cell: job.inv_cell,
+            bins: job.bins,
+            count,
+            bin_total,
+            sorted_capacity,
+            write_order: u32::from(job.order.is_some()),
+            write_sorted: u32::from(job.sorted.is_some()),
+            stride_words: read.stride_words,
+            position_word: read.position_word,
+            live_word: read.live_word,
+            live_rule: read.live_rule,
+        };
+        let bindings = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+            GpuBinding::Buffer { binding: 1, buffer: job.particles, offset: 0 },
+            // Unwritten outputs (write flag 0) bind rank to keep the layout.
+            GpuBinding::Buffer { binding: 2, buffer: job.sorted.unwrap_or(rank), offset: 0 },
+            GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
+            GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
+            GpuBinding::Buffer { binding: 6, buffer: job.order.unwrap_or(rank), offset: 0 },
+            GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
+        ];
+        let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
+        let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
+            unreachable!("six sort pipelines");
+        };
+        encoder.dispatch_compute(clear, &bindings, groups(bin_total), labels.clear);
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(count_pass, &bindings, groups(count), labels.count);
+        encoder.compute_memory_barrier_buffers();
+        self.scan.encode(encoder, bin_total as usize);
+        encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), labels.ranges);
+        encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), labels.tail);
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(scatter, &bindings, groups(count), labels.scatter);
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(stabilise, &bindings, groups(bin_total), labels.stabilise);
+        Ok(())
+    }
 }
 
 fn record_read(layout: &ArrayType) -> Option<RecordRead> {
@@ -192,11 +353,7 @@ crate::primitive! {
     aliases: ["bin particles", "spatial hash", "counting sort", "neighbour grid"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
-        pipelines: Vec<GpuComputePipeline> = Vec::new(),
-        scan: PrefixScan = PrefixScan::default(),
-        rank: Option<GpuBuffer> = None,
-        slot_input: Option<GpuBuffer> = None,
-        ranges: Option<GpuBuffer> = None,
+        sorter: ParticleSorter = ParticleSorter::default(),
     },
 }
 
@@ -212,7 +369,7 @@ impl Primitive for SortParticlesIntoCells {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "cell_ranges").then_some(self.ranges.as_ref()).flatten()
+        (port == "cell_ranges").then_some(self.sorter.ranges()).flatten()
     }
 
     fn array_output_capacity(
@@ -239,19 +396,7 @@ impl Primitive for SortParticlesIntoCells {
         let center = ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
-        {
-            let gpu = ctx.gpu_encoder();
-            if self.pipelines.is_empty() {
-                for entry in ENTRIES {
-                    self.pipelines.push(gpu.device.create_compute_pipeline(
-                        SHADER,
-                        entry,
-                        "node.sort_particles_into_cells",
-                    ));
-                }
-            }
-            self.scan.prepare(gpu.device);
-        }
+        self.sorter.prepare(ctx.gpu_encoder().device);
         if ctx.scalar_or_param("enabled", 1.0) <= 0.5 {
             return;
         }
@@ -285,33 +430,18 @@ impl Primitive for SortParticlesIntoCells {
             ));
             return;
         }
-        // The ranges are sized from the same bin count every pass below
-        // dispatches over, before any of them is encoded.
-        let range_bytes = range_storage_bytes(bins);
-        if self.ranges.as_ref().is_none_or(|ranges| ranges.size < range_bytes) {
-            let device = ctx.gpu_encoder().device;
-            let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
-                device.modifier_memory_snapshot(),
-                range_bytes,
-            )
-            .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer_shared(range_bytes));
-            match created {
-                Ok(buffer) => {
-                    // Nothing reads a range this frame's passes did not write
-                    // as anything but empty.
-                    buffer.zero_fill();
-                    self.ranges = Some(buffer);
-                }
-                Err(error) => {
-                    publish(ctx, [0; 3]);
-                    ctx.error(format!(
-                        "Sort Particles Into Cells: a {}×{}×{} bin grid needs {range_bytes} bytes of cell ranges the device cannot give: {error}. Raise the cell size.",
-                        bins[0], bins[1], bins[2]
-                    ));
-                    return;
-                }
-            }
+        // The ranges are sized from the same bin count every pass dispatches
+        // over, before any of them is encoded.
+        if let Err(error) = self.sorter.reserve_ranges(ctx.gpu_encoder().device, bins) {
+            publish(ctx, [0; 3]);
+            ctx.error(format!(
+                "Sort Particles Into Cells: a {}×{}×{} bin grid needs {} bytes of cell ranges the device cannot give: {error}. Raise the cell size.",
+                bins[0],
+                bins[1],
+                bins[2],
+                range_storage_bytes(bins)
+            ));
+            return;
         }
         // The bins go out only once every pass below will run, so a searcher
         // never reads ranges this frame left unwritten.
@@ -335,77 +465,27 @@ impl Primitive for SortParticlesIntoCells {
             refuse(ctx, "Sort Particles Into Cells: sorted holds liquid particle records; leave it unwired and use order for these points".into());
             return;
         }
-        let bin_total = bin_total as u32;
-        let cell_counts = match self.scan.buffer(ctx.gpu_encoder().device, bin_total as usize) {
-            Ok(buffer) => buffer.clone(),
-            Err(error) => {
-                refuse(ctx, format!("Sort Particles Into Cells: {error}"));
-                return;
-            }
-        };
-        publish(ctx, bins);
-        let ranges = self.ranges.as_ref().expect("ranges allocated above");
-        // Either per-slot output may be unwired; the slots are those every wired one holds.
+        // Either per-slot output may be unwired; the sorter writes the slots every wired one holds.
+        let capacity = (particles.size / u64::from(layout.item_size)) as u32;
+        let count = requested.map_or(capacity, |count| (count.max(0.0) as u32).min(capacity));
         let sorted = ctx.outputs.array("sorted");
         let order = ctx.outputs.array("order");
-        let particle_size = std::mem::size_of::<FluidParticle>() as u64;
-        let capacity = (particles.size / u64::from(layout.item_size)) as u32;
-        let sorted_capacity = [sorted.map(|b| b.size / particle_size), order.map(|b| b.size / 4)]
-            .into_iter()
-            .flatten()
-            .fold(u64::from(capacity), u64::min) as u32;
-        let count = requested.map_or(capacity, |count| (count.max(0.0) as u32).min(capacity)).min(sorted_capacity);
-        let gpu = ctx.gpu_encoder();
-        let rank_bytes = u64::from(capacity.max(1)) * 4;
-        if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
-            self.rank = Some(gpu.device.create_buffer(rank_bytes));
-        }
-        if self.slot_input.as_ref().is_none_or(|slots| slots.size < rank_bytes) {
-            self.slot_input = Some(gpu.device.create_buffer(rank_bytes));
-        }
-        let rank = self.rank.as_ref().expect("rank scratch allocated");
-        let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
-        let uniforms = SortParams {
+        let job = SortJob {
+            particles,
+            read,
+            capacity,
+            count,
             bin_min: std::array::from_fn(|axis| center[axis] - 0.5 * size[axis]),
             inv_cell: 1.0 / cell_size,
             bins,
-            count,
-            bin_total,
-            sorted_capacity,
-            write_order: u32::from(order.is_some()),
-            write_sorted: u32::from(sorted.is_some()),
-            stride_words: read.stride_words,
-            position_word: read.position_word,
-            live_word: read.live_word,
-            live_rule: read.live_rule,
+            sorted,
+            order,
         };
-        let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-            // Unwired outputs are never written (their write flag is 0); rank keeps
-            // the layout bound.
-            GpuBinding::Buffer { binding: 2, buffer: sorted.unwrap_or(rank), offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: ranges, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: &cell_counts, offset: 0 },
-            GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
-            GpuBinding::Buffer { binding: 6, buffer: order.unwrap_or(rank), offset: 0 },
-            GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
-        ];
-        let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
-        let encoder = &mut *gpu.native_enc;
-        let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
-            unreachable!("six sort pipelines");
-        };
-        encoder.dispatch_compute(clear, &bindings, groups(bin_total), "node.sort_particles_into_cells.clear");
-        encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(count_pass, &bindings, groups(count), "node.sort_particles_into_cells.count");
-        encoder.compute_memory_barrier_buffers();
-        self.scan.encode(encoder, bin_total as usize);
-        encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), "node.sort_particles_into_cells.ranges");
-        encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), "node.sort_particles_into_cells.tail");
-        encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(scatter, &bindings, groups(count), "node.sort_particles_into_cells.scatter");
-        encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(stabilise, &bindings, groups(bin_total), "node.sort_particles_into_cells.stabilise");
+        let gpu = ctx.gpu_encoder();
+        let encoded = self.sorter.encode(gpu.device, gpu.native_enc, &job, &NODE_LABELS);
+        match encoded {
+            Ok(()) => publish(ctx, bins),
+            Err(error) => refuse(ctx, format!("Sort Particles Into Cells: {error}")),
+        }
     }
 }

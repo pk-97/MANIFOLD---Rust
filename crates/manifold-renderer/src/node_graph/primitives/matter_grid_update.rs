@@ -134,7 +134,9 @@ impl Primitive for MatterGridUpdate {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Grid Update") else {
+            return;
+        };
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let gravity = [
             ctx.scalar_or_param("gravity_x", 0.0),

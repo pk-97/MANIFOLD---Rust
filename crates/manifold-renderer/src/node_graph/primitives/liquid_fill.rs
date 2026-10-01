@@ -10,12 +10,12 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
-use super::cells_with_particles::cell_lattice;
 use super::sort_particles_into_cells::{float_param, int_param};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
+use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -69,9 +69,9 @@ fn planned_particles(params: &ParamValues) -> u32 {
         Some(ParamValue::Float(v)) => *v,
         _ => default,
     };
-    let Some(nodes) = cell_lattice(params) else { return 1 };
+    let Ok(lattice) = LiquidLattice::from_scalars(read) else { return 1 };
     let (pool, sites) = fill_of(read);
-    filled_sites(nodes, pool, sites).clamp(1, u64::from(EXACT_F32_COUNT)) as u32
+    filled_sites(lattice.cells(), pool, sites).clamp(1, u64::from(EXACT_F32_COUNT)) as u32
 }
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -103,8 +103,11 @@ struct FillUniforms {
 crate::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site (site j at (1/4 + j/2) cells along each axis, 2·nodes sites per axis): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. The storage holds exactly the particles placed, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. The storage holds exactly the particles placed, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
+        lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         pool_sites: ScalarF32 optional,
         box_x0: ScalarF32 optional, box_x1: ScalarF32 optional,
         box_y0: ScalarF32 optional, box_y1: ScalarF32 optional,
@@ -115,13 +118,13 @@ crate::primitive! {
         count: ScalarF32,
     },
     params: [
-        float_param!("lattice_min_x", "Lattice Min X", -2.0, -1.0e4, 1.0e4),
-        float_param!("lattice_min_y", "Lattice Min Y", 0.0, -1.0e4, 1.0e4),
-        float_param!("lattice_min_z", "Lattice Min Z", -2.0, -1.0e4, 1.0e4),
+        float_param!("lattice_min_x", "Lattice Min X", -2.1875, -1.0e4, 1.0e4),
+        float_param!("lattice_min_y", "Lattice Min Y", -0.1875, -1.0e4, 1.0e4),
+        float_param!("lattice_min_z", "Lattice Min Z", -2.1875, -1.0e4, 1.0e4),
         float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
-        float_param!("nodes_x", "Cells X", 64.0, 1.0, 1024.0),
-        float_param!("nodes_y", "Cells Y", 64.0, 1.0, 1024.0),
-        float_param!("nodes_z", "Cells Z", 64.0, 1.0, 1024.0),
+        float_param!("nodes_x", "Nodes X", 71.0, 8.0, 1024.0),
+        float_param!("nodes_y", "Nodes Y", 71.0, 8.0, 1024.0),
+        float_param!("nodes_z", "Nodes Z", 71.0, 8.0, 1024.0),
         int_param!("pool_sites", "Pool Height (half cells)", 5.0, 0.0, 2048.0),
         int_param!("box_x0", "Box Min X (half cell)", 0.0, 0.0, 2048.0),
         int_param!("box_x1", "Box Max X (half cell)", 0.0, 0.0, 2048.0),
@@ -133,7 +136,7 @@ crate::primitive! {
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites come from the liquid's domain; the lattice must be the one the GPU FLIP water step uses.",
+    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites and the padded lattice come from the liquid's domain, so a Resolution change refills at the new size.",
     examples: [],
     picker: { label: "Liquid Fill", category: Atom },
     summary: "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -163,19 +166,13 @@ impl Primitive for LiquidFill {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let Some(nodes) = cell_lattice(ctx.params) else {
-            ctx.error("Liquid Fill: every lattice length must be 1 to 1024".to_string());
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Fill") else {
             return;
         };
-        let float = |name: &str, default: f32| ctx.scalar_or_param(name, default);
+        let nodes = lattice.cells();
+        let (min, cell_size) = (lattice.min(), lattice.cell_size());
         let int = |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
-        let min = [float("lattice_min_x", -2.0), float("lattice_min_y", 0.0), float("lattice_min_z", -2.0)];
-        let cell_size = float("cell_size", 0.0625);
-        let jitter = float("jitter", 0.0);
-        if !(cell_size.is_finite() && cell_size > 0.0) || min.iter().any(|v| !v.is_finite()) {
-            ctx.error("Liquid Fill: the lattice box must be finite with a positive cell".to_string());
-            return;
-        }
+        let jitter = ctx.scalar_or_param("jitter", 0.0);
         if !(0.0..=1.0).contains(&jitter) {
             ctx.error("Liquid Fill: jitter must be 0 to 1".to_string());
             return;
@@ -223,9 +220,9 @@ impl Primitive for LiquidFill {
             lattice_min_y: min[1],
             lattice_min_z: min[2],
             cell_size,
-            nodes_x: nodes[0] as f32,
-            nodes_y: nodes[1] as f32,
-            nodes_z: nodes[2] as f32,
+            nodes_x: lattice.nodes()[0] as f32,
+            nodes_y: lattice.nodes()[1] as f32,
+            nodes_z: lattice.nodes()[2] as f32,
             pool_sites: clamp(pool),
             box_x0: clamp(sites[0][0]),
             box_x1: clamp(sites[0][1]),

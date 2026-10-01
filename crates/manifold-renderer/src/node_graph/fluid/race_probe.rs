@@ -15,8 +15,8 @@ use manifold_fluids::{CaptureError, ParticleRecord, SurfaceOptions, SurfaceVerte
 use super::native::seeded_world;
 use super::{FluidSettings, Transform};
 use crate::node_graph::primitives::gpu_flip_race_tests::{
-    Motion, Packing, Splash, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash, report_motion, report_water,
-    splash,
+    Breakup, Motion, Packing, Splash, breakup, motion, packing, print_height, print_lid_layer, print_side_sheet, print_splash,
+    report_breakup, report_motion, report_water, splash,
 };
 use crate::node_graph::primitives::gpu_flip_still::write_still;
 use crate::node_graph::primitives::gpu_flip_volume::{VolumeDrift, volume_and_area};
@@ -61,7 +61,7 @@ fn engine_motion(
     domain: super::FluidDomainLayout,
     records: &mut Vec<ParticleRecord>,
     solid: &mut Vec<f32>,
-) -> (Motion, Packing, Splash, usize) {
+) -> (Motion, Packing, Splash, Breakup, usize) {
     let offset = domain.to_scene([0.0; 3]);
     let info = loop {
         match world.capture_particle_frame(offset, records, solid) {
@@ -78,7 +78,10 @@ fn engine_motion(
     let pack = packing(live.iter().map(|p| p.position_radius), origin, cells, domain.cell_size);
     let floor = f64::from(domain.min[1]);
     let thrown = splash(live.iter().map(|p| p.position_radius), floor);
-    (motion(live.iter().map(|p| (p.position_radius, p.velocity)), floor), pack, thrown, live.len())
+    // Breakup on the tank's own lattice, as GPU FLIP measures it.
+    let broken =
+        breakup(live.iter().map(|p| p.position_radius), domain.min.map(f64::from), domain.cells.map(|n| n as usize), domain.cell_size);
+    (motion(live.iter().map(|p| (p.position_radius, p.velocity)), floor), pack, thrown, broken, live.len())
 }
 
 /// The engine's own cells in scene coordinates: its native grid, 1.5 cells
@@ -107,16 +110,17 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
     let (mut wall, mut reported, mut substeps, mut drift, mut raw) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut oracle = None;
     let mut particles = 0;
-    let (mut records, mut solid, mut motions, mut packed) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut records, mut solid, mut motions, mut packed, mut breaks) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for frame in 0..frames {
         let start = Instant::now();
         let stats = world.step(Seconds(1.0 / 60.0)).expect("engine step");
         wall.push(start.elapsed().as_secs_f64() * 1000.0);
         reported.push(stats.simulation_ms);
         substeps.push(f64::from(stats.substeps));
-        let (m, pack, thrown, count) = engine_motion(&mut world, domain, &mut records, &mut solid);
+        let (m, pack, thrown, broken, count) = engine_motion(&mut world, domain, &mut records, &mut solid);
         motions.push(m);
         packed.push(pack);
+        breaks.push(broken);
         let sheet = frame % 5 == 4 && frame < 90;
         if frame % 15 == 14 || sheet {
             let label = format!("ENGINE {resolution}³");
@@ -169,6 +173,7 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
         }
     }
     report_water(&format!("ENGINE {resolution}³"), &packed);
+    report_breakup(&format!("ENGINE {resolution}³"), &breaks);
     report_motion(&format!("ENGINE {resolution}³"), &motions);
     // Short lines: the tool output around these probes cuts long ones.
     println!("ENGINE {resolution}³ settings: Detail 1, particle scale 2.2, smoothing 0.35 × 2, substeps 1–6 at CFL 5, whitewater {whitewater}");

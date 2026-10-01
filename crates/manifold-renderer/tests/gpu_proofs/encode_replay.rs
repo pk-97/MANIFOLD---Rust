@@ -18,7 +18,7 @@ use manifold_renderer::preset_runtime::PresetRuntime;
 
 use crate::harness;
 use crate::substeps::{
-    N, forces, nested_copy_chains_def, nested_def, node_of, registry, resource, seed_particles,
+    N, copy_chains_def, def, forces, node_of, registry, resource, seed_particles,
 };
 
 const FRAMES: u32 = 30;
@@ -152,12 +152,12 @@ fn assert_same(what: &str, off: &[Vec<u8>], on: &[Vec<u8>]) {
     }
 }
 
-/// Replay on against off, byte for byte, over a nest with a boundary copy
-/// inside the outer body, and the same nest with copy chains before, inside
-/// and after it; each with and without the editor's atlas dump.
+/// Replay on against off, byte for byte, over a substep region, and the same
+/// region with copy chains before, inside and after it; each with and
+/// without the editor's atlas dump.
 #[test]
 fn encode_replay_parity() {
-    for (name, def) in [("nest", nested_def as fn() -> EffectGraphDef), ("copy chains", nested_copy_chains_def)] {
+    for (name, def) in [("region", def as fn() -> EffectGraphDef), ("copy chains", copy_chains_def)] {
         for dump in [Dump::None, Dump::Every] {
             let what = format!("{name}, dump {dump:?}");
             let off = run_graph(def(), false, dump, false, FRAMES, |_, _| {});
@@ -233,15 +233,15 @@ fn warm_dam_break() {
     });
 }
 
-/// A changed iteration count and grid on the nest, and a changed speed and
+/// A changed iteration count and grid on the region, and a changed speed and
 /// resolution (grid, array capacity and storage) on the Dam Break, re-record
 /// and still match replay off.
 #[test]
 fn encode_replay_survives_changes() {
-    let nest_change = |frame: u32, graph: &mut Graph| {
+    let region_change = |frame: u32, graph: &mut Graph| {
         if frame == 10 {
-            let outer = node_of(graph, "test.particle_boundary");
-            graph.set_param(outer, "iterations", ParamValue::Float(5.0)).expect("iterations");
+            let boundary = node_of(graph, "test.particle_boundary");
+            graph.set_param(boundary, "iterations", ParamValue::Float(5.0)).expect("iterations");
         }
         if frame == 20 {
             let movers: Vec<_> = graph
@@ -254,14 +254,14 @@ fn encode_replay_survives_changes() {
             }
         }
     };
-    let off = run_graph(nested_def(), false, Dump::None, false, FRAMES, nest_change);
-    let on = run_graph(nested_def(), true, Dump::None, false, FRAMES, nest_change);
+    let off = run_graph(def(), false, Dump::None, false, FRAMES, region_change);
+    let on = run_graph(def(), true, Dump::None, false, FRAMES, region_change);
     let recorded = |frame: usize| on.stats_by_frame[frame].recorded;
-    eprintln!("encode replay changes, nest: recorded {} → {} → {}", recorded(9), recorded(19), recorded(29));
+    eprintln!("encode replay changes, region: recorded {} → {} → {}", recorded(9), recorded(19), recorded(29));
     assert!(recorded(10) > recorded(9), "more iterations recorded nothing new");
     assert!(recorded(20) > recorded(19), "a new grid recorded nothing new");
-    assert_eq!(recorded(29), recorded(21), "the changed nest kept re-recording");
-    assert_same("nest with changes", &off.frames, &on.frames);
+    assert_eq!(recorded(29), recorded(21), "the changed region kept re-recording");
+    assert_same("region with changes", &off.frames, &on.frames);
 
     let dam_change = |frame: u32, manifest: &mut ParamManifest| {
         let mut set = |id: &str, value: f32| manifest.get_mut(id).expect("Dam Break param").value = value;
@@ -285,12 +285,12 @@ fn encode_replay_survives_changes() {
 /// Replay stays off under per-dispatch GPU profiling and the Cmd+D dump.
 #[test]
 fn replay_off_under_profiling_and_dump() {
-    let profiled = run_graph(nested_def(), true, Dump::None, true, 3, |_, _| {});
+    let profiled = run_graph(def(), true, Dump::None, true, 3, |_, _| {});
     assert_eq!(profiled.stats.replayed + profiled.stats.recorded + profiled.stats.executes, 0, "{:?}", profiled.stats);
     assert!(profiled.stats.direct > 0, "the profiled span saw no dispatches");
-    let dumped = run_graph(nested_def(), true, Dump::All, false, 3, |_, _| {});
+    let dumped = run_graph(def(), true, Dump::All, false, 3, |_, _| {});
     assert_eq!(dumped.stats, GpuReplayStats::default(), "a span opened under the Cmd+D dump");
-    let direct = run_graph(nested_def(), false, Dump::All, false, 3, |_, _| {});
+    let direct = run_graph(def(), false, Dump::All, false, 3, |_, _| {});
     assert_same("Cmd+D dump", &direct.frames, &dumped.frames);
 }
 
