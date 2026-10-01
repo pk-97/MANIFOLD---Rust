@@ -170,11 +170,11 @@ fn fluid_particle_ring_exhaustion_never_blocks() {
 
     // The frame that read the slots retires; stepping resumes.
     signal(&device, &event);
-    frame(&mut runtime, &device, 8, false);
+    frame(&mut runtime, &device, 9, false);
     assert!(runtime.busy);
-    frame(&mut runtime, &device, 8, true);
-    assert_eq!(runtime.completed_tick, 8);
-    assert_eq!(runtime.particles.newest_tick(), Some(8));
+    frame(&mut runtime, &device, 10, true);
+    assert_eq!(runtime.completed_tick, 10);
+    assert_eq!(runtime.particles.newest_tick(), Some(10));
 }
 
 #[test]
