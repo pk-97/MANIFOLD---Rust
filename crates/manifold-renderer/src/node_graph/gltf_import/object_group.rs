@@ -314,7 +314,7 @@ pub(super) fn build_object_group(
             let pose_id = fresh_id();
             let joint_count = rmn.slot_nodes.len() as u32;
             let (clip_durations_rows, duration_s) =
-                rigid_multi_node_clip_durations(&rmn.slot_nodes, node_anims_by_clip);
+                rigid_multi_node_clip_durations(node_anims_by_clip);
             let mut pose_node =
                 plain_node(pose_id, &pose_node_id, "node.gltf_skeleton_pose", &pose_node_id);
             pose_node.params.insert("joint_count".to_string(), int(joint_count as i32));
