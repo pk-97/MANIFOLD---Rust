@@ -31,6 +31,7 @@ use crate::node_graph::fluid_particles::{
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
+use crate::node_graph::liquid::blocks::block_total;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::MAX_LIVE_TICKS;
 use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
@@ -595,6 +596,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.switch_texture", check: texture_only },
     ExtentRule { type_id: "node.tone_map", check: texture_only },
     ExtentRule { type_id: "node.surface_crossings", check: surface_crossings },
+    ExtentRule { type_id: "node.liquid_blocks", check: liquid_blocks },
     ExtentRule { type_id: "node.nearest_crossing", check: nearest_crossing },
     ExtentRule { type_id: "node.crossing_distance", check: crossing_distance },
     ExtentRule { type_id: "node.liquid_cells", check: liquid_cells },
@@ -1375,6 +1377,19 @@ fn surface_crossings(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| whole(x, name, 211.0));
     refinement(nodes, levels).map_err(Verdict::Refused)?;
     x.covers("out", cell_total(cells) * SURFACE_CROSSING_BYTES)?;
+    x.covers_if_bound("blocks", block_total(cells) * 4)?;
+    x.covers("solid", cell_total(nodes) * 4)?;
+    x.covers("level_set", cell_total(levels) * 4)
+}
+
+/// One thread per block; it gathers every cell of `water`, the closed
+/// footprint of the solid lattice and of the level set.
+fn liquid_blocks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| whole(x, name, 211.0));
+    refinement(nodes, levels).map_err(Verdict::Refused)?;
+    x.covers("out", block_total(cells) * 4)?;
+    x.covers("water", cell_total(cells) * 4)?;
     x.covers("solid", cell_total(nodes) * 4)?;
     x.covers("level_set", cell_total(levels) * 4)
 }
