@@ -131,6 +131,12 @@ name which one when you claim an exemption:
    the CPU. Either way the texture/scalar must materialize regardless.
 4. **Draw-call rasterization** — exempt. The `render_*` family are render passes, not
    compute.
+6. **Specialised-solver stage internals** — exempt. A stage node under
+   DECOMPOSING_GENERATORS.md section 1.2 (Specialised solvers are stage nodes)
+   runs hand-written passes that fuse freely inside it. The stage is proven
+   against its reference at the boundary; its internal passes need no
+   per-atom proofs and no codegen path. The stage node itself is not an atom,
+   so this exemption never covers a catalog atom.
 5. **BLOCKED is not exempt.** An atom that PASSES the test but has an input the codegen
    cannot yet express is *blocked on a tracked codegen gap* — the mandate still
    applies, and the debt lives in the compiler, not the atom. Past case (closed): the
