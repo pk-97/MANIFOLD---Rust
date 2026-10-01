@@ -269,6 +269,22 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 - Retuning FLIP's constants toward a look.
 - A whitewater renderer or screen-space foam.
 
+### 3.9 GPU lifecycle (D14)
+
+Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit, advance by type (:2250–:2398), retype (:2033), age and preserve foam (:2101, :2123), remove (:2761). Dust and the force-field grid stay dropped (D9); gravity is the domain's (D12). Every per-particle step is a barrier-free atom on the codegen path with a CPU line-for-line reference, gpu_tests against it, and a fused-vs-unfused proof.
+
+**The pool.** One fixed-capacity `Array(WhitewaterParticle)` (position, velocity, lifetime, type, id) carried frame to frame by an array feedback. Order in the pool is age order: survivors first in their old order, then this frame's spawns in emission order.
+
+**GPU mapping rules** (each is the engine's result, computed in parallel; a mapping that cannot reproduce the result is named, never approximated):
+
+- **Per-cell cap by ordered rank.** The engine keeps the first `_maxDiffuseParticlesPerCell` (5000) particles of a cell in pool order. On the GPU a particle's rank in its cell comes from a sort stable by pool index; atomics are forbidden here because their order is not the engine's.
+- **Stable compaction keeps the oldest.** Removal is a keep flag, a running total and a scatter that preserves pool order. The engine's final `resize(max)` keeps the oldest; so does a compaction that truncates at capacity.
+- **Recycling is compaction plus append.** Spawns append after the survivors. Spawns past capacity are not written; the node counts them on a named output (`pool_full`) and reports a full pool by name. Never a silent drop.
+- **`_nearSolidGrid` is dropped.** It only skips the collision march where no solid is near; the march over the solid field gives the same position without it. A proof shows identical advected positions with and without the early-out on the Dam Break pool.
+- **Thinning.** D8's uniform thinning belonged to the CPU handoff and leaves with it; capacity is the pool's, handled by the rules above.
+
+**Inside emission (BUG-imy3.1).** A turbulence-field atom ports `F/turbulencefield.cpp` (cell-centre MAC velocity, liquid cells where the field < 0, radius √(3·(2h)²), the engine's asymmetric neighbour window i−2 … i+1, trilinear at p − h/2 with out-of-range corners 0). Inside particles (not surface per :1571) emit at `turbulence_rate · Ie · It`, It clamped to [min, max] turbulence and normalised (:1748). It measured inert at the engine's defaults on the Dam Break; it ships at the engine's defaults.
+
 ## 4. Invariants & enforcement
 
 | # | Invariant | Enforcement |
@@ -378,6 +394,37 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
   The 42–55 ms FLIP whitewater cost does not reproduce here: the engine's whole step reads over 200 ms under this load and on minus off is lost in it (p50 +5 ms). Verdict: the GPU side misses 2 ms on the cleaner run, mostly `surface_crossings` walking 144 edges in every cell (BUG-imy3.6, under BUG-imy3 (GPU whitewater, solver-agnostic)); `lifecycle_ms` sat at 3 ms at p50 on every run, so the lifecycle moved to its own thread (D11). Live at 64, frames 31–180, same machine: the content thread went from p50 2.98 / p95 3.34 ms to 0.027 / 0.035; the lifecycle's thread takes 3.08 / 3.76. Offline counts, emitted, thinned and dropped ticks are identical to the content-thread version over 120 frames. `surface_crossings` then skips cells whose footprint has no sign change and walks the rest on sign bits, testing solids only on straddling edges: 1.455 to 0.849 ms p50 at 320×180, whitewater total p50 3.07 to 1.99, output unchanged (the atom's CPU proof, O1, O2, and identical builder counts). What is left is reading the refined level set, about 0.7 ms; the p95 against 2 ms needs a quiet rerun (BUG-imy3.6, under BUG-imy3 (GPU whitewater, solver-agnostic)).
 
 Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase above or in section 7.
+
+
+### L1 — Pool record and advection by type (D14)
+
+- **Entry state:** D14 committed; `F/diffuseparticlesimulation.cpp:2250`–`:2600` re-read.
+- **Deliverables:** `WhitewaterParticle`; an advect atom (spray with collision restitution 0.2 and friction 0, bubble buoyancy and drag, foam at advection strength, the 1.1× speed kill, the collision march and resolve); CPU reference; gpu_tests; fused proof; the `_nearSolidGrid` proof.
+- **Gate:** `scripts/gpu_proofs_gate.py` green; clippy clean.
+
+### L2 — Retype and lifetimes
+
+- **Deliverables:** pool retype (old type, the 1-cell foam-to-bubble buffer, bubble to foam or spray takes vmac) and lifetime decay per type; CPU reference, gpu_tests, fused proofs.
+
+### L3 — Foam preservation
+
+- **Deliverables:** per-cell foam count from the stable sort; `lifetime += rate · clamp((n − min)/(max − min), 0, 1) · dt`, off by default, 0.75, 20, 45; proofs.
+
+### L4 — Removal, compaction, append
+
+- **Deliverables:** keep flags (lifetime, limit behaviour, inside solid, open-boundary width, per-cell cap by rank); stable compaction; spawn append; the named `pool_full` count; proofs.
+
+### L5 — Wire and parity
+
+- **Deliverables:** CPU extent proof for the pool; the GPU lifecycle in the GPU FLIP Dam Break at 64 only; a side-by-side 150-frame per-type count against the vendored lifecycle, read-only.
+
+### L6 — Retire the CPU lifecycle path
+
+- **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays.
+
+### L7 — Inside emission (BUG-imy3.1)
+
+- **Deliverables:** turbulence-field atom; inside emitters in `emission_count` and the spawn path; O2 extended to inside emission; proofs.
 
 ## 6. Decided — do not reopen
 
