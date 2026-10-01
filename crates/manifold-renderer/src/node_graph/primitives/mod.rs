@@ -373,14 +373,12 @@ mod retype_whitewater;
 mod age_whitewater;
 mod preserve_foam;
 mod keep_whitewater;
-mod compact_whitewater;
-mod live_whitewater_spawns;
-mod append_whitewater;
 #[cfg(test)]
 mod whitewater_pool_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_pool_tests;
 pub(crate) mod whitewater_lifecycle;
+pub(crate) mod whitewater_step;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_handoff_tests;
 #[cfg(test)]

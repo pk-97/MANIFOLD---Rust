@@ -48,7 +48,7 @@ const _: () = assert!(std::mem::size_of::<KeepUniforms>() == 64);
 crate::primitive! {
     name: KeepWhitewater,
     type_id: "node.keep_whitewater",
-    purpose: "Which whitewater pool slots survive the tick, FLIP's removal with every side colliding: 1 to keep, 0 to remove. A slot goes when it is empty or the pool's header (kind 3), its lifetime is at or below 0, its position is not finite, it lies outside FLIP's boundary box (1.625 cells in from the whitewater grid) or inside the solid, or its cell already holds Max Per Cell kept particles earlier in the pool. One u32 per slot.",
+    purpose: "Which whitewater pool slots survive the tick, FLIP's removal with every side colliding: 1 to keep, 0 to remove. A slot goes when it is empty (kind 3), its lifetime is at or below 0, its position is not finite, it lies outside FLIP's boundary box (1.625 cells in from the whitewater grid) or inside the solid, or its cell already holds Max Per Cell kept particles earlier in the pool. One u32 per slot.",
     inputs: {
         pool: Array(WhitewaterParticle) required,
         binned: Array(WhitewaterParticle) required,

@@ -2,7 +2,7 @@
 // binned, cell_ranges, order and solid. FLIP's _removeDiffuseParticles
 // (diffuseparticlesimulation.cpp:2761) with every side colliding and every
 // boundary closed: 1 for a slot the tick keeps, 0 for one it removes. A
-// slot goes when it is empty (kind 3, the header too), its lifetime is at
+// slot goes when it is empty (kind 3), its lifetime is at
 // or below 0, its position is not finite, it lies outside FLIP's boundary
 // box (1.625 cells and 0.5e-6 m in from the grid, lower faces inside) or
 // inside the solid (the node lattice read trilinearly is below 0), or its

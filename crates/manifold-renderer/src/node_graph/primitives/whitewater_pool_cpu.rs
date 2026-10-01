@@ -6,6 +6,11 @@
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
+// The GPU proofs (`whitewater_pool_tests`, `whitewater_step_tests`, feature
+// gpu-proofs) call every item here; a default test build compiles only the
+// near-solid proof.
+#![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
+
 use super::whitewater_particle_cpu::{Box3, face_index};
 use crate::node_graph::whitewater::{WHITEWATER_EMPTY, WHITEWATER_ID_LIMIT, WhitewaterParticle};
 use manifold_fluids::WhitewaterSpawn;
@@ -480,7 +485,7 @@ pub(super) fn preserve(pool: &[WhitewaterParticle], origin: [f32; 3], h: f32, ce
 /// FLIP's `_removeDiffuseParticles` with every side colliding and every
 /// boundary closed, as the lifecycle runs it: 1 for each slot the tick
 /// keeps, and per slot the smallest gap between a deciding value and its
-/// threshold, metres. A slot goes when it is empty or the header, its
+/// threshold, metres. A slot goes when it is empty, its
 /// lifetime is at or below 0, its position is not finite, it sits outside
 /// the boundary box or inside the solid, or its cell already holds `cap`
 /// kept particles earlier in the pool.
@@ -525,44 +530,54 @@ pub(super) fn empty_slot() -> WhitewaterParticle {
     WhitewaterParticle { kind: WHITEWATER_EMPTY, ..Default::default() }
 }
 
-/// `node.compact_whitewater`: the kept slots in pool order, then empty slots,
-/// the header last and whole.
-pub(super) fn compact(pool: &[WhitewaterParticle], flags: &[u32]) -> Vec<WhitewaterParticle> {
-    let (header, slots) = pool.split_last().expect("a pool holds its header");
-    let mut out: Vec<WhitewaterParticle> = slots.iter().zip(flags).filter(|(_, f)| **f == 1).map(|(p, _)| *p).collect();
-    out.resize(slots.len(), empty_slot());
-    out.push(*header);
+/// What `node.whitewater_step` keeps across ticks beside the pool, as its
+/// `state` buffer holds it. pool_full, emitted and thinned count since the
+/// pool was seeded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct PoolState {
+    pub live: u32,
+    pub next_id: u32,
+    pub pool_full: u32,
+    pub emitted: u32,
+    pub thinned: u32,
+}
+
+/// The step's compaction: the kept slots in pool order, then empty slots.
+pub(super) fn compact(pool: &[WhitewaterParticle], flags: &[u32], state: &mut PoolState) -> Vec<WhitewaterParticle> {
+    let mut out: Vec<WhitewaterParticle> = pool.iter().zip(flags).filter(|(_, f)| **f == 1).map(|(p, _)| *p).collect();
+    state.live = out.len() as u32;
+    out.resize(pool.len(), empty_slot());
     out
 }
 
-/// `node.live_whitewater_spawns`: 1 for a spawn slot holding a particle.
+/// 1 for a spawn slot holding a particle.
 pub(super) fn live_spawn(spawn: &WhitewaterSpawn) -> u32 {
     u32::from(spawn.position_lifetime[3] > 0.0)
 }
 
-/// `node.append_whitewater`: the frame's live spawns, in order, into the
-/// empty slots after a compacted pool's particles, each taking the header's
-/// next id. Spawns past the pool's room are dropped, and the header records
-/// how many in `pad0`.
-pub(super) fn append(pool: &[WhitewaterParticle], spawns: &[WhitewaterSpawn]) -> Vec<WhitewaterParticle> {
-    let capacity = pool.len() - 1;
-    let start = pool.iter().position(|p| p.kind == WHITEWATER_EMPTY).expect("a pool holds its header");
+/// FLIP's load, as the step's append runs it: the frame's live spawns, in
+/// order, into the empty slots after the live ones, each taking the next
+/// id. Spawns past the pool's room count as pool full; `emissions` past the
+/// spawn slots count as thinned.
+pub(super) fn append(pool: &mut [WhitewaterParticle], spawns: &[WhitewaterSpawn], emissions: u32, state: &mut PoolState) {
+    let capacity = pool.len() as u32;
     let live: Vec<&WhitewaterSpawn> = spawns.iter().filter(|s| live_spawn(s) == 1).collect();
-    let placed = live.len().min(capacity - start.min(capacity));
-    let mut out = pool.to_vec();
-    let header = out[capacity];
-    for (k, spawn) in live.iter().take(placed).enumerate() {
-        out[start + k] = WhitewaterParticle {
+    let spawned = live.len() as u32;
+    let placed = spawned.min(capacity - state.live.min(capacity));
+    for (k, spawn) in live.iter().take(placed as usize).enumerate() {
+        pool[(state.live + k as u32) as usize] = WhitewaterParticle {
             position_lifetime: spawn.position_lifetime,
             velocity: spawn.velocity,
             kind: spawn.kind,
-            id: (header.id + k as u32) % WHITEWATER_ID_LIMIT,
+            id: (state.next_id + k as u32) % WHITEWATER_ID_LIMIT,
             ..Default::default()
         };
     }
-    out[capacity].id = (header.id + placed as u32) % WHITEWATER_ID_LIMIT;
-    out[capacity].pad0 = (start + live.len()).saturating_sub(capacity) as u32;
-    out
+    state.live += placed;
+    state.next_id = (state.next_id + placed) % WHITEWATER_ID_LIMIT;
+    state.pool_full += spawned - placed;
+    state.emitted += spawned;
+    state.thinned += emissions - emissions.min(spawns.len() as u32);
 }
 
 /// Fixtures shared by the CPU proof here and the GPU proofs.

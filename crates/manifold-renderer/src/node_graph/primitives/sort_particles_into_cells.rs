@@ -67,6 +67,12 @@ pub(crate) struct RecordRead {
     live_rule: u32,
 }
 
+/// How the sort reads a whitewater pool slot.
+pub(crate) fn whitewater_record_read() -> RecordRead {
+    record_read(&ArrayType::of_known::<crate::node_graph::whitewater::WhitewaterParticle>())
+        .expect("a whitewater slot carries a position and a kind")
+}
+
 fn record_read(layout: &ArrayType) -> Option<RecordRead> {
     let stride_words = layout.item_size / 4;
     if let Some((offset, ChannelElementType::Vec4F)) = std430_channel(layout.specs, well_known::POSITION_RADIUS) {

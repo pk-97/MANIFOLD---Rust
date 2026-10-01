@@ -59,6 +59,7 @@ use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use crate::node_graph::primitives::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
+use crate::node_graph::primitives::whitewater_step::{DEFAULT_CAPACITY as STEP_CAPACITY, MAX_CAPACITY as STEP_MAX_CAPACITY, StepShape};
 use crate::node_graph::transform::Transform;
 use crate::node_graph::whitewater::{
     KnownValue, SURFACE_CROSSING_BYTES, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces,
@@ -610,10 +611,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.age_whitewater", check: age_whitewater },
     ExtentRule { type_id: "node.preserve_foam", check: preserve_foam },
     ExtentRule { type_id: "node.keep_whitewater", check: keep_whitewater },
-    ExtentRule { type_id: "node.compact_whitewater", check: compact_whitewater },
-    ExtentRule { type_id: "node.live_whitewater_spawns", check: live_whitewater_spawns },
-    ExtentRule { type_id: "node.append_whitewater", check: append_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
+    ExtentRule { type_id: "node.whitewater_step", check: whitewater_step },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
 
@@ -1476,26 +1475,6 @@ fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.items("pool").unwrap_or(0) * 4)
 }
 
-/// The compaction writes a record per pool slot; kept and scan are read up
-/// to their own lengths.
-fn compact_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    x.covers("out", x.bytes("pool").unwrap_or(0))
-}
-
-/// One flag per spawn slot.
-fn live_whitewater_spawns(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    x.covers("out", x.items("spawns").unwrap_or(0) * 4)
-}
-
-/// The append writes a record per pool slot and reads the compacted pool
-/// whole, and one running total per spawn slot.
-fn append_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let pool = x.bytes("pool").unwrap_or(0);
-    x.covers("compacted", pool)?;
-    x.covers("live_scan", x.items("spawns").unwrap_or(0) * 4)?;
-    x.covers("out", pool)
-}
-
 /// The lifecycle's snapshot copies read the whole face grid, level and
 /// solid; it provides each population at Capacity and holds its rings.
 fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1517,6 +1496,35 @@ fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.covers(port, shape.face_bytes(axis))?;
     }
     x.covers("level", shape.level_bytes())?;
+    x.covers("solid", shape.solid_bytes())
+}
+
+/// The step's own shape, as its run builds it: every placement rule a
+/// refusal by name, each input covering what the grid reads, each
+/// population provided at Capacity, and everything else held.
+fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let capacity = x.param("capacity", STEP_CAPACITY as f32).round();
+    if !(1.0..=STEP_MAX_CAPACITY as f32).contains(&capacity) {
+        return Err(Verdict::Refused(format!("capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
+    }
+    let triple = |x: &AtomExtent<'_>, names: [&str; 3]| names.map(|name| whole(x, name, 0.0));
+    let shape = StepShape::new(
+        triple(x, ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
+        triple(x, ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"]),
+        triple(x, ["face_cells_x", "face_cells_y", "face_cells_z"]),
+        x.scalar("face_valid_layers", 0.0),
+        x.transform("grid_bounds"),
+        capacity as u32,
+    )
+    .map_err(Verdict::Refused)?;
+    for port in ["foam_particles", "bubble_particles", "spray_particles"] {
+        x.provide(port, shape.population_bytes());
+    }
+    x.hold(shape.held_bytes(x.items("particles").unwrap_or(0)));
+    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
+        x.covers(port, shape.face_bytes(axis))?;
+    }
+    x.covers("level_set", shape.level_bytes())?;
     x.covers("solid", shape.solid_bytes())
 }
 
