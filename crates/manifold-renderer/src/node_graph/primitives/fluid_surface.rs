@@ -352,6 +352,12 @@ impl Primitive for FluidSurface {
         };
         Some((value.clamp(3.0, 3145728.0) as u32 / 3) * 3)
     }
+    // While an input is pending the simulation clock holds instead of
+    // jumping when the input lands.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.domain_failure = false;
         self.role_pending = false;
@@ -370,21 +376,20 @@ impl Primitive for FluidSurface {
         } else {
             None
         };
+        self.role_pending |= ctx.inputs.any_pending();
         let mut roles = std::array::from_fn::<_, MAX_FLUID_ROLES, _>(|_| None);
         for (index, port) in ROLE_PORTS.iter().enumerate() {
-            if let Some(slot) = ctx.inputs.slot(port) {
+            if ctx.inputs.slot(port).is_some() {
                 roles[index] = ctx.inputs.fluid_role(port);
-                self.role_pending |= !ctx.inputs.slot_content_ready(slot) || roles[index].is_none();
+                self.role_pending |= roles[index].is_none();
             }
         }
-        if let Some(slot) = ctx.inputs.slot("domain") {
-            self.role_pending |=
-                !ctx.inputs.slot_content_ready(slot) || ctx.inputs.transform("domain").is_none();
+        if ctx.inputs.slot("domain").is_some() {
+            self.role_pending |= ctx.inputs.transform("domain").is_none();
         }
         let acceleration_field = ctx.inputs.vector_field("acceleration_field");
-        if let Some(slot) = ctx.inputs.slot("acceleration_field") {
-            self.role_pending |=
-                !ctx.inputs.slot_content_ready(slot) || acceleration_field.is_none();
+        if ctx.inputs.slot("acceleration_field").is_some() {
+            self.role_pending |= acceleration_field.is_none();
         }
         if self.role_pending {
             self.runtime.hold_pending(ctx.time.seconds);

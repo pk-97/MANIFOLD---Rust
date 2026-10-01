@@ -396,6 +396,14 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
+    /// Mirror of
+    /// [`EffectNode::runs_with_pending_inputs`](crate::node_graph::effect_node::EffectNode::runs_with_pending_inputs).
+    /// Default `false`: a pending input makes this node's outputs pending
+    /// without running it.
+    fn runs_with_pending_inputs(&self) -> bool {
+        false
+    }
+
     /// Current accepted setup state for native fluid-domain bounds.
     fn fluid_domain_snapshot(
         &self,
@@ -857,6 +865,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn warmup_pending(&self) -> bool {
         Primitive::warmup_pending(self)
+    }
+    fn runs_with_pending_inputs(&self) -> bool {
+        Primitive::runs_with_pending_inputs(self)
     }
     fn fluid_domain_snapshot(
         &self,

@@ -214,7 +214,17 @@ impl Primitive for RigidBodyNode {
         self.source_pending || self.pending_collider.is_some()
     }
 
+    // A disabled body ignores its pending source, and an enabled one drops
+    // its collider while the source reloads.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if ctx.inputs.any_pending_except(|port| port == "source") {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let Some(transform) = ctx.inputs.transform("transform") else {
             ctx.error("Rigid Body needs a starting transform");
             return;

@@ -111,10 +111,6 @@ impl Primitive for LiquidStats {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending() {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let requested = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let particle_mass = ctx.scalar_or_param("particle_mass", 0.030_517_578);
         let particles = ctx.inputs.array("particles");

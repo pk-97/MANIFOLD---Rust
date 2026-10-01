@@ -92,6 +92,7 @@ impl PresetRuntime {
                     PresetIo::Transform {
                         source_slot: source.map(|source| candidate.slot_for(source).expect("prepared source")),
                         output_slot: candidate.slot_for(output).expect("prepared output"),
+                        output_resource: output,
                     }
                 }
             }

@@ -412,10 +412,18 @@ impl<'a> NodeInputs<'a> {
         self.slot(port).is_some_and(|slot| !self.slot_content_ready(slot))
     }
 
-    /// True when any wired input is pending. A node with no partial result
-    /// to offer declares its own outputs pending and does no work.
+    /// True when any wired input is pending. Only a node that runs with
+    /// pending inputs ever sees one; the executor holds every other node.
     pub fn any_pending(&self) -> bool {
-        self.bindings.iter().any(|&(_, slot)| !self.slot_content_ready(slot))
+        self.any_pending_except(|_| false)
+    }
+
+    /// True when any wired input the node does not handle itself is
+    /// pending; `handled` names the ports it reads while they are pending.
+    pub fn any_pending_except(&self, handled: impl Fn(&str) -> bool) -> bool {
+        self.bindings
+            .iter()
+            .any(|&(port, slot)| !self.slot_content_ready(slot) && !handled(port))
     }
 
     /// [`SceneObject`] bound to an already-resolved [`Slot`] — no name

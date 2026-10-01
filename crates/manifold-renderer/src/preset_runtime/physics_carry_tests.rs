@@ -14,6 +14,10 @@ impl EffectNode for PoseObserver {
     fn is_liveness_root(&self) -> bool {
         true
     }
+    // Observes readiness, so it must run while the pose is pending.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
+    }
     fn type_id(&self) -> &EffectNodeType {
         &self.0
     }

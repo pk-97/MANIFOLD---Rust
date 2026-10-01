@@ -415,10 +415,6 @@ impl Primitive for SortParticlesIntoCells {
         let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         self.sorter.prepare(ctx.gpu_encoder().device);
-        if ctx.inputs.any_pending() {
-            ctx.mark_outputs_pending();
-            return;
-        }
         if ctx.scalar_or_param("enabled", 1.0) <= 0.5 {
             return;
         }
@@ -430,13 +426,6 @@ impl Primitive for SortParticlesIntoCells {
         let invalid_box = !(cell_size.is_finite() && cell_size > 0.0)
             || center.iter().chain(&size).any(|v| !v.is_finite())
             || size.iter().any(|v| *v <= 0.0);
-        // A producer without a frame yet publishes no particles and no lattice
-        // (its derived cell size is not positive); there is nothing to sort,
-        // and no bin grid for a search.
-        if invalid_box && requested == Some(0.0) {
-            publish(ctx, [0; 3]);
-            return;
-        }
         if invalid_box || requested.is_some_and(|count| !count.is_finite()) {
             publish(ctx, [0; 3]);
             ctx.error("Sort Particles Into Cells: box and cell size must be finite and positive");

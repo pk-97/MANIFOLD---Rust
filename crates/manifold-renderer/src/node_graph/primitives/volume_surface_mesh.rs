@@ -216,10 +216,6 @@ impl Primitive for VolumeSurfaceMesh {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending() {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let total = ctx.scalar_or_param("total", 0.0);
         let held = self.mesh.as_ref().map_or(0, |mesh| emit_slots(mesh.size));
         // The GPU emptied last frame's mesh if this total overflowed; say so,
