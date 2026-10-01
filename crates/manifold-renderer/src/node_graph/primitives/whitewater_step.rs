@@ -337,7 +337,8 @@ impl Report {
 }
 
 /// A codegen atom's uniform: its params in order, each overridden by name or
-/// at its default, then the dispatch count, padded to 16 bytes.
+/// at its default, its derived uniforms, then the dispatch count, padded to
+/// 16 bytes.
 struct Uniform {
     words: [u32; 32],
     len: usize,
@@ -363,8 +364,21 @@ fn pack<P: Primitive>(values: &[(&str, f32)], count: u32) -> Uniform {
             _ => value.to_bits(),
         };
     }
-    words[params.len()] = count;
-    Uniform { words, len: (params.len() + 1).next_multiple_of(4) }
+    // Derived uniforms sit between the params and the count, as the codegen
+    // lays them out; one not named in `values` is 0, its unwired value.
+    let mut at = params.len();
+    for derived in P::DERIVED_UNIFORMS {
+        let (name, ty) = derived.split_once(':').unwrap_or((derived, "f32"));
+        let value = values.iter().find(|(n, _)| *n == name).map_or(0.0, |&(_, v)| v);
+        words[at] = match ty {
+            "u32" => value.round().max(0.0) as u32,
+            "f32" => value.to_bits(),
+            other => panic!("{}: the step packs scalar derived uniforms only, not {name}:{other}", P::TYPE_ID),
+        };
+        at += 1;
+    }
+    words[at] = count;
+    Uniform { words, len: (at + 1).next_multiple_of(4) }
 }
 
 /// Dispatch `pipeline` over `count` threads, the uniform at 0 and `buffers`
@@ -794,7 +808,8 @@ impl Step {
             enc,
             get(&p.crossings),
             &[nodes[0], nodes[1], nodes[2], ("level_nodes_x", lx), ("level_nodes_y", ly), ("level_nodes_z", lz)],
-            &[inputs.level_set, inputs.solid, &f.crossings[0]],
+            // No block map: blocks_len stays 0 and the solid stands in for it.
+            &[inputs.level_set, inputs.solid, inputs.solid, &f.crossings[0]],
             cells,
             label("crossings"),
         );

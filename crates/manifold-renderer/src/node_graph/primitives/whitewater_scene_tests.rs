@@ -435,11 +435,11 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         show.frame(false);
         let faces = face_bytes([n; 3]);
         assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
-        let mut last = [0.0; 8];
+        let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();
         for _ in 0..90 {
             gpu_ms.push(show.frame(false).gpu_ms);
-            last = show.probes(LIFECYCLE_REPORTS);
+            last = show.probes(STEP_REPORTS);
         }
         let [count] = show.probes(["count"]);
         println!("Resolution {n}: {count} particles, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
