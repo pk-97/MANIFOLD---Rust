@@ -132,10 +132,7 @@ pub(super) fn unique_group_name(
     handle_k: usize,
     used: &mut std::collections::HashSet<String>,
 ) -> String {
-    let base = material_name
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.replace('/', " "))
+    let base = material_group_base(material_name)
         .unwrap_or_else(|| format!("Object {}", name_seed + 1));
     let mut name = base.clone();
     let mut n = name_seed + 1;
@@ -145,6 +142,16 @@ pub(super) fn unique_group_name(
     }
     used.insert(name.clone());
     name
+}
+
+/// A material name as a handle base: trimmed, `None` when blank, with `/`
+/// swapped for a space because the flattener uses `/` as its namespace
+/// separator.
+pub(super) fn material_group_base(material_name: Option<&str>) -> Option<String> {
+    material_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('/', " "))
 }
 
 /// A distinct RGBA header tint for object `index`, spread around the hue wheel by
