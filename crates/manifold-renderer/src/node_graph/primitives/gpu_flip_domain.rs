@@ -14,7 +14,6 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBuffer;
 use manifold_physics::FieldValue;
 
-use super::coarse_inverse::multigrid_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -35,6 +34,24 @@ const REST_DENSITY: f64 = 1000.0;
 
 /// Every wall of the tank is closed.
 const CLOSED_FACES: u32 = 63;
+
+/// The pressure solve's V-cycle depth at every lattice: a fixed count, so the
+/// graph's shape never depends on Resolution. Each level halves every side,
+/// so a side must divide by 2^(levels − 1).
+pub(crate) const MULTIGRID_LEVELS: usize = 5;
+
+/// What every lattice side must be a multiple of: 16 for five levels.
+pub(crate) const SIDE_MULTIPLE: u32 = 1 << (MULTIGRID_LEVELS - 1);
+
+/// Why a lattice can't be solved: a side that does not halve evenly down
+/// every level.
+pub(crate) fn multigrid_refusal(cells: [u32; 3]) -> Option<String> {
+    cells.iter().any(|&n| n == 0 || n % SIDE_MULTIPLE != 0).then(|| {
+        format!(
+            "a {cells:?} cell lattice does not halve evenly through the pressure solve's {MULTIGRID_LEVELS} levels; every side must be a multiple of {SIDE_MULTIPLE}"
+        )
+    })
+}
 
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -130,7 +147,7 @@ pub(crate) fn gpu_flip_geometry(
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
     if let Some(reason) = multigrid_refusal(layout.cells) {
-        return Err(format!("GPU FLIP: {reason}. Change Resolution."));
+        return Err(format!("GPU FLIP: {reason}. Set Resolution to a multiple of {SIDE_MULTIPLE}."));
     }
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let particles = filled_sites(layout.cells, pool_sites, box_sites);
@@ -552,6 +569,19 @@ mod tests {
         params
     }
 
+    /// A side that does not halve evenly through every level is refused.
+    #[test]
+    fn gpu_flip_lattice_must_halve_through_every_level() {
+        assert_eq!(SIDE_MULTIPLE, 16);
+        for side in [16u32, 32, 48, 64, 80, 96, 128, 256] {
+            assert!(multigrid_refusal([side; 3]).is_none(), "{side}");
+        }
+        for side in [0u32, 8, 24, 40, 63, 72, 100] {
+            assert!(multigrid_refusal([side; 3]).is_some(), "{side}");
+        }
+        assert!(multigrid_refusal([64, 64, 40]).is_some());
+    }
+
     fn geometry(resolution: f32, fill: f32, volume: Option<Transform>) -> Result<GpuFlipGeometry, String> {
         let read = |name: &str, default: f32| match name {
             "resolution" => resolution,
@@ -577,7 +607,10 @@ mod tests {
     #[test]
     fn gpu_flip_domain_refuses_by_name() {
         let refused = |result: Result<GpuFlipGeometry, String>| result.expect_err("refused");
-        assert!(refused(geometry(63.0, 0.16, None)).contains("Resolution"));
+        for resolution in [63.0, 72.0, 100.0] {
+            let reason = refused(geometry(resolution, 0.16, None));
+            assert!(reason.contains("Resolution") && reason.contains("multiple of 16"), "{resolution}: {reason}");
+        }
         assert!(refused(geometry(64.0, 4.0, None)).contains("Initial Fill Height"));
         let turned = Transform { pos: [0.0, 1.0, 0.0], scale: [1.0; 3], rot_euler: [0.0, 0.3, 0.0], ..Transform::default() };
         assert!(refused(geometry(64.0, 0.16, Some(turned))).contains("initial volume"));

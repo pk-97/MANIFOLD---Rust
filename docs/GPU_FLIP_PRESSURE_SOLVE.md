@@ -40,7 +40,7 @@ On the water cells W of an n_x × n_y × n_z lattice with cell size h:
 
 **Walls.** The box walls sit exactly on the outermost faces. A wall lets water leave and never enter: on a wall face, only the velocity component pointing into the box is kept, and the solve takes that velocity as given (the wall's flux, Neumann). Water pulled off the lid falls away with no suction, and water driven into the floor stops. The same rule writes the wall faces of `old` (in `node.particles_to_faces`, before extension), of the forced field (`node.face_gravity`) and so of `new` and `advect`, which inherit them. The FLIP change on a wall face is then the step's own change. Before this, `old` kept the particles' raw velocity on wall faces while `new` held them at 0, so new − old there was −v. That cancelled the velocity of water leaving the lid on every step, so more steps stuck more.
 
-Air at zero pressure is the first-order free surface. A water body that touches no air (a closed box full of water) makes L singular. It is tolerated, not refused: the density source's right-hand side need not sum to zero there, so no exact solution exists; the conjugate gradient removes the part it can and leaves the rest as residual, and the coarsest level pins one cell of each such body at zero instead of dividing by zero (section 3).
+Air at zero pressure is the first-order free surface. A water body that touches no air (a closed box full of water) makes L singular. It is tolerated, not refused: the density source's right-hand side need not sum to zero there, so no exact solution exists; the conjugate gradient removes the part it can and leaves the rest as residual. No step divides by a zero: a sweep divides by a cell's in-box neighbour count, never zero.
 
 ## 3. The solve
 
@@ -48,10 +48,10 @@ Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iterati
 
 V(r) is one V-cycle for L e = r, from e = 0:
 
-- Levels halve while every side is even and one side is over 4 (`coarse_inverse::multigrid_levels`): 64³ ends at 4³, 96³ at 3³. A coarse cell is water only if all eight children are water (`node.coarsen_water`); a coarse cell with an air child is air.
+- Five levels at every lattice (`gpu_flip_domain::MULTIGRID_LEVELS`), each halving every side, so the graph's shape does not depend on Resolution: 32³ ends at 2³, 64³ at 4³, 128³ at 8³. A coarse cell is water only if all eight children are water (`node.coarsen_water`); a coarse cell with an air child is air.
 - Pre-smooth: 2 rounds of red-black Gauss-Seidel (red then black, `node.pressure_smooth`), from a zero lattice (`node.zero_lattice`).
 - Residual r − Le (`node.pressure_residual`), full-weighting restriction to the next level (`node.restrict_lattice`, the transpose of prolongation, masked to coarse water).
-- Recurse. The coarsest level, at most 64 cells, is solved exactly: `node.coarse_inverse` builds A⁻¹ (L = −A/h²) once per water lattice, outside the loop, by symmetric elimination in one workgroup, and each V-cycle applies it with `node.combine_rows` (e = −h² A⁻¹ r). The inverse is exactly symmetric, so the V-cycle stays a symmetric preconditioner. A water body with no air pins one cell at zero. Sweeps were not enough: on a deep pool (the coarsest level water but for its top row) 8 sweeps each way left a 1e-1 coarse residual and 512 were needed for 1e-9, while a 512-cell inverse does not fit one workgroup, so the levels go one halving deeper instead.
+- Recurse. The coarsest level is smoothed, not solved exactly: 16 rounds red then black, then 16 black then red (`COARSE_SWEEPS`), from zero. The sequence reads the same both ways, so the V-cycle stays a symmetric preconditioner. The count is what the deep pool needs: with five levels its 128³ coarsest is 8³, water but for its top row, and fewer rounds cost it one more conjugate gradient iteration. The coarse residual stays far from exact (8 rounds each way left 1e-1 there); the conjugate gradient absorbs it, and the iterations to 1e-5 match an exact coarse solve at 32³, 64³ and 128³ (LIQUID_SOLVER_SEAM_DESIGN.md P7b (GPU FLIP's Resolution knob) has the counts). `node.coarse_inverse`, the exact solve, stays in the catalog; it holds at most 64 cells, which a fixed depth passes at 128³.
 - Prolong-add the correction, trilinear (3/4 and 1/4 per axis, clamped at the box) (`node.prolong_lattice`), masked to water.
 - Post-smooth: 2 rounds, black then red, so the cycle is symmetric and the preconditioner is too.
 
@@ -64,7 +64,7 @@ The counts are build params with an Auto rule: the smallest count at which the f
 - `PRESSURE_ITERATIONS` = 8: the reference needed at most 7 at 64³ and 5 at 128³ on the Dam Break, 6 and 5 on the deep pool.
 - `DENSITY_ITERATIONS` = 3: the reference needed 2 at 64³ and 1 at 128³ on the splash solves, 2 and 1 on the deep drop.
 
-Re-run 2026-10-01 for the exact coarsest solve on the Dam Break problems and the deep pool; the splash dumps were not kept, and the Dam Break counts did not move.
+Re-run 2026-10-01 for the fixed five levels with a smoothed coarsest level (`--depth 5 --coarse-sweeps 16`) on the Dam Break problems and the deep pool; the splash dumps were not kept, and no count moved.
 
 The count changes only with this rule re-run, on the same fixtures, with the new count in this section.
 
@@ -72,12 +72,11 @@ The count changes only with this rule re-run, on the same fixtures, with the new
 
 Every limit is a named refusal at build; nothing is clamped silently.
 
-- A lattice whose coarsest level is over 64 cells: "every side must halve evenly down to 4 or less", naming the odd sides that stopped the halving (`multigrid_refusal`, surfaced by `node.gpu_flip_domain` as "GPU FLIP: … Change Resolution."). An odd side stops the halving where it stands, so 15 and 63 are refused, and so is 80 (it halves to 5³, 125 cells). 16, 24, 32, 48, 64, 96 and 128 run.
-- `node.coarse_inverse` refuses a lattice past 64 cells by name at build and at run; its index walk is `coarse_inverse_indices_stay_in_bounds`.
+- A lattice side that is not a multiple of 16 does not halve evenly through five levels: refused by `node.gpu_flip_domain` as "GPU FLIP: … every side must be a multiple of 16. Set Resolution to a multiple of 16." (`multigrid_refusal`). 16, 32, 48, 64, 80, 96 and 128 run; 24, 63 and 72 are refused.
 - `node.prolong_lattice` on an odd side is refused by the extent check, and its kernel writes nothing there.
 - More particles than a count carries exactly (2²⁴): refused by name; Resolution 256 is refused by it.
-- The solver's lattice is baked into its atoms until seam P7b (wired lattice) lands: another Resolution or Domain Size is refused by name.
-- Every array covers every dispatch before the GPU sees it: `LIQUID_EXTENT_RULES` in `node_graph/liquid/extent.rs` holds a rule for every solve atom, walked at 16, 24, 32, 48, 64, 96 and 128 (`gpu_flip_*_cover_every_dispatch`), the pressure graph also at 256.
+- The solver's lattice is baked into its atoms until seam P7b (GPU FLIP's Resolution knob) wires it: another Resolution or Domain Size is refused by name.
+- Every array covers every dispatch before the GPU sees it: `LIQUID_EXTENT_RULES` in `node_graph/liquid/extent.rs` holds a rule for every solve atom, walked at 16, 32, 48, 64, 96 and 128 (`gpu_flip_*_cover_every_dispatch`), the pressure graph also at 256.
 
 ## 6. Measures
 
@@ -87,19 +86,21 @@ Solve alone, GPU ms per main solve at the shipped 8 iterations against the FFT s
 
 | Lattice | GPU FLIP | FFT | GPU FLIP median residual |
 |---|---|---|---|
-| 64³ | 3.1 | 9.4 | 6.8e-6 |
-| 128³ | 13.8 | 51.5 | 1.1e-5 |
+| 64³ | 3.7 | 9.4 | 6.8e-6 |
+| 128³ | 14.8 | 51.5 | 1.1e-5 |
 
-Stage split of the solve (`gpu_flip_solve_stage_split`, `_refined`):
+Stage split of the solve (`gpu_flip_solve_stage_split`, `_refined`), five levels with the coarsest smoothed:
 
 | Stage | 64³ ms (share) | 128³ ms (share) |
 |---|---|---|
-| smoothing | 1.41 (47%) | 7.54 (54%) |
-| residual | 0.13 (4%) | 0.80 (6%) |
-| restriction and prolongation | 0.30 (10%) | 1.62 (12%) |
-| coarsest level (apply the inverse) | 0.19 (6%) | 0.12 (1%) |
-| CG vectors (dots, divides, axpys) | 0.81 (27%) | 3.64 (26%) |
-| setup (coarse water, the inverse, zeros) | 0.14 (5%) | 0.26 (2%) |
+| smoothing | 0.85 (23%) | 6.13 (41%) |
+| residual | 0.10 (3%) | 0.74 (5%) |
+| restriction and prolongation | 0.25 (7%) | 1.30 (9%) |
+| coarsest level (16 sweep pairs each way) | 1.79 (49%) | 2.66 (18%) |
+| CG vectors (dots, divides, axpys) | 0.66 (18%) | 3.91 (26%) |
+| setup (coarse water, zeros) | 0.02 (0%) | 0.08 (1%) |
+
+The coarsest level is 512 dispatches per solve on a 4³ or 8³ lattice, so its cost is dispatch overhead, about 3.5 µs each. The exact coarse solve's stage was 0.19 ms at 64³; per 64³ tick (two main solves and a 3-iteration density solve) the smoothed coarsest level costs about 3.8 ms more. BUG-zi2d (coarsest smoothing in one dispatch) owes it back. The iteration trend below predates the fixed depth.
 
 Iteration trend, median residual and GPU ms per solve (`gpu_flip_iteration_trend`, `_refined`):
 
@@ -170,7 +171,7 @@ Different on purpose:
 | I6 | Every buffer covers every dispatch before the GPU sees it | `LIQUID_EXTENT_RULES`; `gpu_flip_*_cover_every_dispatch`; `liquid_presets_all_extent_checked` walks `WaterDamBreakGpuFlip.json` |
 | I7 | The density correction never becomes velocity | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` |
 | I8 | No atomics in the step or the solve | the liquid conformance row's atomic-free list (`liquid/conformance.rs`); `coarse_inverse_uses_no_atomics` for the hand shader |
-| I10 | The coarsest level is solved exactly and symmetrically | `gpu_flip_coarse_inverse_matches_cpu`: bitwise symmetric, A·M the identity on unpinned water, a deep pool and an all-water box among the cases |
+| I10 | Five levels at every lattice, the coarsest smoothed symmetrically | `gpu_flip_solve_shape_does_not_depend_on_the_lattice`; `gpu_flip_pressure_region_is_one_iteration` names every coarsest sweep; I4's 3-iteration pins hold the GPU to the reference's sweep order |
 | I11 | A box wall lets water leave and never enter, by one rule in `old`, the forced field and so `new` and `advect` | `gpu_flip_particles_to_faces_matches_the_tent_sum`, `gpu_flip_face_gravity_adds_gravity_and_holds_the_walls`, `gpu_flip_subtract_pressure_projects_faces_touching_water` (walls held and kept both drawn) |
 | I12 | No RK3 stage moves past the CFL guard, and `new` is extended far enough for it | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` (stages within and past the guard); `gpu_flip_band_follows_the_cfl_guard` |
 | I9 | The domain meets the liquid contract | the liquid conformance suite (`liquid_conformance_covers_every_domain`, `tests/gpu_proofs/liquid_conformance.rs`) |
@@ -183,7 +184,7 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 
 - **Amended by** LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve) and D12 (solids through the shared distance lattice): body mass goes inside the pressure solve; solids come from the shared distance lattice; an analytic box clip is rejected. Where this section and the seam doc disagree, the seam doc wins.
 - **Why it is simpler now:** the FLIP Fluids engine's operator is a weighted Laplacian, each face carrying its open fraction w_f in [0, 1] (`pressuresolver.cpp` `_solidBoundaryWeights`). Multigrid takes weights directly: L gains w_f per face, the smoother and residual read the weights, and restriction averages them. The FFT solve needed a face collar to reach the same operator.
-- **Deliverables:** face weights and solid face velocities from the distance lattice (codegen); the weighted L in `pressure_smooth`, `pressure_residual`, `coarse_inverse` and the coarse weights in a restriction atom; the body rows of D7 in the reference script first; the pressure impulse and torque per body as a barriered reduction, no atomics; `StepCoupling` / `SubstepExchange` through `manifold-physics`, no `matter_*` import.
+- **Deliverables:** face weights and solid face velocities from the distance lattice (codegen); the weighted L in `pressure_smooth` and `pressure_residual` and the coarse weights in a restriction atom; the body rows of D7 in the reference script first; the pressure impulse and torque per body as a barriered reduction, no atomics; `StepCoupling` / `SubstepExchange` through `manifold-physics`, no `matter_*` import.
 - **Gate:** the reference exact against a direct weighted solve to 1e-10; iterations to the empty tank's residual up at most 25% with the box. Hydrostatic lift of a fixed submerged box within 2% of ρgV; a half-density Box3D box settles at its analytic draft within one cell, and within one cell of the engine's. The race rows on the Dam Break as shipped, obstacle included, at 64³ and 128³. Body force against iteration count: the net force and torque at 4, 6, 8, 12 and 16 iterations on a submerged and a floating box; the smallest count within 1% of converged with no visible jitter sets the count when bodies are present.
 - **Open, settled by measurement:** whether a body's pose updates every step or once per tick (`STEPS_PER_TICK` stays a builder constant so either fits).
 - **Kill check:** iterations to the empty tank's residual up more than 50% with the box → stop and report the numbers.

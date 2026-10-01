@@ -226,13 +226,13 @@ const PINNED_64: [(u32, f64, f64, f64); 7] = [
 
 /// The same problems refined to 128³.
 const PINNED_128: [(u32, f64, f64, f64); 7] = [
-    (0, 8.780e-03, 2.374e-07, 1.68e-03),
-    (15, 2.614e-02, 3.853e-06, 2.16e-03),
-    (30, 3.620e-02, 5.937e-06, 4.60e-03),
-    (45, 2.719e-02, 3.435e-06, 1.34e-02),
-    (60, 2.351e-02, 3.072e-06, 3.31e-02),
-    (90, 1.338e-02, 2.408e-06, 4.49e-02),
-    (120, 1.475e-02, 3.619e-06, 2.27e-02),
+    (0, 8.370e-03, 2.293e-07, 1.68e-03),
+    (15, 2.544e-02, 3.689e-06, 2.16e-03),
+    (30, 3.528e-02, 5.280e-06, 4.60e-03),
+    (45, 2.702e-02, 3.320e-06, 1.34e-02),
+    (60, 2.361e-02, 3.171e-06, 3.31e-02),
+    (90, 1.208e-02, 2.266e-06, 4.49e-02),
+    (120, 1.467e-02, 3.586e-06, 2.27e-02),
 ];
 
 /// The residual f32 arithmetic holds on these problems: past it the f64
@@ -304,10 +304,10 @@ fn gpu_flip_solve_matches_reference_refined() {
 /// (the Auto rule).
 #[test]
 fn gpu_flip_solve_matches_reference_deep_pool() {
-    let main_64 = [(60, 1.188e-02, 5.352e-08, 0.0)];
-    let main_128 = [(60, 2.614e-02, 3.440e-07, 0.0)];
-    let density_64 = [(30, 6.912e-03, 5.795e-07, 0.0), (60, 5.103e-03, 2.577e-07, 0.0)];
-    let density_128 = [(30, 6.632e-03, 3.220e-07, 0.0), (60, 6.508e-03, 2.830e-07, 0.0)];
+    let main_64 = [(60, 1.107e-02, 4.697e-08, 0.0)];
+    let main_128 = [(60, 5.539e-02, 6.268e-07, 0.0)];
+    let density_64 = [(30, 6.768e-03, 5.656e-07, 0.0), (60, 4.954e-03, 2.730e-07, 0.0)];
+    let density_128 = [(30, 1.278e-02, 6.078e-07, 0.0), (60, 1.161e-02, 7.959e-07, 0.0)];
     check_against_reference("deep_pool_pressure_problems", 1, &main_64, false);
     check_against_reference("deep_pool_pressure_problems", 2, &main_128, false);
     check_against_reference("deep_pool_density_problems", 1, &density_64, false);
@@ -317,10 +317,10 @@ fn gpu_flip_solve_matches_reference_deep_pool() {
 /// Which stage of the solve a node belongs to.
 fn stage_of(name: &str) -> &'static str {
     match name {
+        _ if name.contains("_coarse_") => "coarse",
         _ if name.contains("_pre") || name.contains("_post") => "smooth",
         _ if name.ends_with("_residual") => "residual",
         _ if name.ends_with("_restrict") || name.ends_with("_prolong") => "transfer",
-        _ if name.ends_with("_solve") => "coarse",
         "cg" | "rz" | "beta" | "direction" | "minus_lp" | "p_dot_s" | "alpha" | "solution" | "residual" => "vectors",
         _ => "setup",
     }
