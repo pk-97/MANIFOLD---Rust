@@ -286,6 +286,19 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 - `pub use` aliases for renamed items.
 - A reaction in grid units, or torque taken about the box centre instead of the centre of mass.
 
+### 3.10 Block occupancy map (BUG-1z1p (shared block occupancy map))
+
+One small map per tick says, for each block of cells, whether it may hold liquid, surface or solid. Consumers use it to skip empty blocks. It is solver-neutral: it is built from the published particle frame and the level set the Liquid Surface group already makes, so any solver whose frame feeds that group gets it for free.
+
+- **Block size: 4 cells per side** (`LIQUID_BLOCK_CELLS` in `R/liquid/blocks.rs`). A 4³ block is 64 cells, one threadgroup's worth for a later solver tile. At 64³ cells the map is 16³ = 4096 words, 16 KB. 8 per side skips too little at a thin surface; 2 makes the map as costly to build as the scans it saves. Edge blocks are partial (ceil division).
+- **Lattice:** the domain's cells, which is the solid lattice's nodes minus one per axis (the whitewater grid). Block `b` covers cells `4b .. 4b+3`, clipped to the lattice. The level set refines each cell by a whole factor `s`.
+- **Layout:** one u32 per block, index `bx + BX·(by + BY·bz)`. Bit 0 LIQUID: some cell in the block is liquid under the solver's own rule (a particle in the cell, `node.cells_with_particles`). Bit 1 SURFACE: the level set has a node `< 0` and a node `>= 0` in the block's closed footprint (refined nodes `4bs` to `min(4(b+1)s, L-1)` per axis). Bit 2 SOLID: some solid-lattice node `< 0` in the block's closed footprint. Bits 3–31 are zero.
+- **Meaning:** a set bit means "may hold", a clear bit guarantees absence. A consumer that ignores the map, or is given none, computes the same thing; the map only lets it skip work whose result it already knows.
+- **Which tick:** the published frame's tick, the state the solver hands the next tick.
+- **Writer:** one atom, `node.liquid_blocks`, in the Liquid Surface group, after the group's sort and level set. It refuses by name when the sort's bins are not the domain's cells or the refinement is not whole. Nothing else writes the map.
+- **Consumers:** whitewater's `node.surface_crossings` takes it as an optional `blocks` input and skips the footprint scan in blocks without SURFACE, giving bit-identical output. Unwired, it scans every cell. A map shorter than the block lattice is a refusal, never a silent full scan.
+- **Solver tile skipping (later, P12):** a per-tick map can gate a step's per-cell work only after it is dilated by `ceil(steps × max cell travel per step / 4)` blocks, since liquid moves during the tick. The graph cannot feed the map back into the tick region without a state capture, so the solver builds its own map inside the region from its `water` lattice with the same atom shape and the same block size. Pressure sweeps skip blocks with no LIQUID after dilation by one block (the solve's stencil reach). The mesher reads the clamped level set, which differs from the exported one only near solids, so it may skip only blocks with neither SURFACE nor SOLID; that is verified against `node.clamp_liquid_to_solids` before it ships.
+
 ## 4. Invariants & enforcement
 
 | # | Invariant | Check |
@@ -305,6 +318,7 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 | I13 | Live frames never wait on the GPU | `liquid_live_frames_never_wait` (a test-build wait counter on the frame clock stays 0 over 120 live frames) |
 | I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-renderer/src/node_graph/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
 | I15 | Fusion never crosses a region border, nested or not | `nested_region_fusion_stays_inside` (freeze tests) |
+| I17 | The block map never changes a consumer's output | `surface_crossings_block_skip_is_bit_identical` (gpu proof, map on vs off) |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |
 
 Rows I4–I8, I11, I13 and I16 run for every row of `LIQUID_SOLVERS` unless the row names an exemption.
@@ -465,6 +479,14 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Demo:** L2: a face-speed slice of SWASH and MPM Dam Break at the same tick, side by side.
 - **Forbidden:** a consumer that switches on solver; node velocities as the contract; per-solver distance outputs; publishing every tick.
 - **Test scope:** focused renderer; GPU proofs.
+
+### P11 — Block occupancy map and its first consumer (BUG-1z1p (shared block occupancy map))
+
+`R/liquid/blocks.rs` (constants, WGSL include), `node.liquid_blocks` on the codegen path with a CPU-reference value proof and a fused-vs-unfused proof, an extent rule, and `node.surface_crossings` reading the map. Gate: I17, and a measured surface_crossings time with the map, net of the producer's cost.
+
+### P12 — Solver tile skipping (entry: P11 shipped and the dilation bound measured)
+
+The GPU FLIP step builds its in-region map from `water` per section 3.10 (block occupancy map) and gates face and pressure work on dilated LIQUID. Gate: a dam break with skipping on matches skipping off bit for bit over 300 ticks.
 
 ## 6. Decided — do not reopen
 
