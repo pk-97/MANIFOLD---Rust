@@ -3,6 +3,8 @@
 //! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7). Each threshold test also
 //! reports how close the value came to its threshold, so a proof can allow
 //! the GPU to fall the other way on a hair's-breadth decision.
+//!
+//! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 // The GPU proofs (`whitewater_particle_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extent proof's face index.
@@ -29,11 +31,11 @@ impl Box3 {
         std::array::from_fn(|a| (p[a] - (self.center[a] - 0.5 * self.size[a])) * self.cells[a] as f32 / self.size[a])
     }
 
-    fn in_grid(&self, c: [i32; 3]) -> bool {
+    pub(super) fn in_grid(&self, c: [i32; 3]) -> bool {
         (0..3).all(|a| c[a] >= 0 && c[a] < self.cells[a] as i32)
     }
 
-    fn index(&self, c: [i32; 3]) -> usize {
+    pub(super) fn index(&self, c: [i32; 3]) -> usize {
         let [nx, ny, _] = self.cells.map(|n| n as usize);
         c[0] as usize + nx * (c[1] as usize + ny * c[2] as usize)
     }

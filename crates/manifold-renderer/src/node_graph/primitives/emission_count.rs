@@ -2,6 +2,8 @@
 //! particle emits this frame, FLIP's count per tick times the frame's ticks
 //! (`docs/GPU_WHITEWATER_DESIGN.md` D5, section 3.3). A per-element atom on
 //! the codegen path.
+//!
+//! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 use std::borrow::Cow;
 

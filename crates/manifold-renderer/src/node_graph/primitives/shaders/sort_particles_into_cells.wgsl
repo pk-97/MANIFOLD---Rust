@@ -11,7 +11,9 @@
 // Records are read as words: `stride_words` per record, the position at
 // `position_word`. With live_rule 0 a record is live when the word at
 // `live_word` is a positive float (a liquid particle's radius); with live_rule 1
-// when it is a non-zero id and the position is finite (a matter point).
+// when it is a non-zero id and the position is finite (a matter point). With
+// live_rule 2 when it is a whitewater kind below 3 (3 is an empty slot) and the
+// position is finite.
 // `sorted` is only bound for liquid particle records, so it copies whole
 // records word for word.
 
@@ -61,6 +63,9 @@ fn is_live(i: u32) -> bool {
     let word = particles[i * params.stride_words + params.live_word];
     if params.live_rule == 0u {
         return bitcast<f32>(word) > 0.0;
+    }
+    if params.live_rule == 2u {
+        return word < 3u && finite3(position_of(i));
     }
     return word != 0u && finite3(position_of(i));
 }

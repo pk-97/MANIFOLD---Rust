@@ -13,6 +13,8 @@
 // Dropped and unused slots write lifetime 0. Kind is left 0 for
 // node.whitewater_type. Xr, Xt, Xh and the variance draw hash (j, seed,
 // epoch) on their own streams.
+//
+// Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 const SW_TICK: f32 = 1.0 / 60.0;
 // FLIP's emitter radius over the cell size: 8 marker radii, a marker being
