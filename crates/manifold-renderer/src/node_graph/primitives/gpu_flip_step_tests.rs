@@ -7,7 +7,7 @@ use super::density_source::DensitySource;
 use super::extend_faces::ExtendFaces;
 use super::face_divergence::FaceDivergence;
 use super::face_gravity::FaceGravity;
-use super::faces_to_particles::{FacesToParticles, WALL_MARGIN_CELLS};
+use super::faces_to_particles::{FacesToParticles, MAX_SPREAD_CELLS, WALL_MARGIN_CELLS};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
 use super::particles_to_faces::ParticlesToFaces;
@@ -199,6 +199,7 @@ fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
     let got: Vec<f32> =
         run_into(&mut harness, &mut DensitySource::new(), &inputs, cell_len(), &lattice(&[("rest", rest), ("rate", rate)]));
     // Walls count as full: a neighbour past the lattice never makes a surface.
+    // A neighbour under half full does: a stray particle is not water.
     let full = |p: [usize; 3], a: usize, side: i64| {
         let q = p[a] as i64 + side;
         if q < 0 || q >= N[a] as i64 {
@@ -206,7 +207,7 @@ fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
         }
         let mut r = p;
         r[a] = q as usize;
-        ranges[cell_index(r)].count > 0
+        2.0 * ranges[cell_index(r)].count as f32 >= rest
     };
     // Cells seen per (inside, crowded) kind.
     let mut kinds = [[0usize; 2]; 2];
@@ -461,6 +462,8 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let got: Vec<FluidParticle> =
         run_into(&mut harness, &mut FacesToParticles::new(), &inputs, particles.len(), &lattice(&[("step_dt", dt), ("flip", flip)]));
     let per_cell = f64::from(dt) / f64::from(H);
+    // Particles whose spread is within the cap, and past it.
+    let mut spreads = [0usize; 2];
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
         if p.position_radius[3] <= 0.0 {
             assert_eq!(g, p, "unused slot {i} passes through");
@@ -475,13 +478,17 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
             continue;
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
-        let k1 = cpu_sample(q0, &advect);
-        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &advect);
-        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &advect);
         let after = cpu_sample(q0, &faces);
+        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * after[a]), &faces);
+        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces);
+        let pushed = cpu_sample(q0, &advect);
+        let spread: [f64; 3] = std::array::from_fn(|a| per_cell * (pushed[a] - after[a]));
+        let length = spread.iter().map(|s| s * s).sum::<f64>().sqrt();
+        let scale = if length > MAX_SPREAD_CELLS { MAX_SPREAD_CELLS / length } else { 1.0 };
+        spreads[usize::from(scale < 1.0)] += 1;
         let before = cpu_sample(q0, &old);
         for a in 0..3 {
-            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
+            let q1 = (q0[a] + per_cell * (2.0 * after[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0 + scale * spread[a])
                 .clamp(WALL_MARGIN_CELLS, N[a] as f64 - WALL_MARGIN_CELLS);
             let position = f64::from(MIN[a]) + q1 * f64::from(H);
             let velocity =
@@ -491,6 +498,7 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         }
         assert_eq!((g.position_radius[3], g.id), (p.position_radius[3], p.id), "particle {i} keeps radius and id");
     }
+    assert!(spreads.iter().all(|&k| k > 10), "the draw covers spreads within and past the cap: {spreads:?}");
 }
 
 fn cpu_fill_hash(x: u32) -> u32 {

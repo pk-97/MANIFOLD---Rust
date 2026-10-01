@@ -42,7 +42,7 @@ crate::primitive! {
         float_param!("nodes_z", "Coarse Cells Z", 32.0, 1.0, 512.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The multigrid V-cycle's way down: node.pressure_residual on the fine level → restrict_lattice with water = node.coarsen_water's coarse water → the coarse level's smoothing or node.coarse_pressure_solve.",
+    composition_notes: "The multigrid V-cycle's way down: node.pressure_residual on the fine level → restrict_lattice with water = node.coarsen_water's coarse water → the coarse level's smoothing, or on the coarsest level node.combine_rows with node.coarse_inverse.",
     examples: [],
     picker: { label: "Restrict Lattice", category: Atom },
     summary: "Shrinks a grid of values to half size, averaging each neighbourhood.",

@@ -7,14 +7,15 @@ step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the
 masked Poisson equation L p = f on water cells, p = 0 on air, box walls
 closed. One V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before
 and 2 after, trilinear transfers, a coarse cell is air if any child is air,
-halving while a side is even and over 8, then a fixed-sweep coarse solve.
+halving while every side is even and one is over 4, then the coarsest level
+solved exactly by its inverse (node.coarse_inverse's sweep and pinning).
 
 Usage: scripts/mgpcg_reference.py crates/manifold-renderer/tests/fixtures/dambreak_pressure_problems.bin.zst
-           [--refine 2] [--iterations 4,6,8] [--coarse-sweeps 16]
+           [--refine 2] [--iterations 4,6,8]
        scripts/mgpcg_reference.py --frames DUMP.bin [...]
-The second form reads solves dumped from a running Dam Break (per record:
-u32 frame, step, kind, n; then water, f and the old solver's pressure as n³
-f32 each) and compares against the dumped pressure's residual.
+The second form reads solves dumped from a running scene (per record:
+u32 frame, step, kind, n; then water, f and another solver's pressure as n³
+f32 each, or zeros) and compares against that pressure's residual.
 """
 import argparse
 import struct
@@ -116,27 +117,54 @@ def apply_axes(mats, x):
     return x
 
 
+def coarse_inverse(water):
+    """A⁻¹ for L = −A / h² by the kernel's symmetric sweep: a pivot under
+    1e-4 of its diagonal pins its cell (row and column cleared)."""
+    count = neighbour_sum(np.ones(water.shape)).ravel()
+    w = water.ravel()
+    cells = w.size
+    a = np.zeros((cells, cells))
+    flat = np.arange(cells).reshape(water.shape)
+    for ax in range(3):
+        lo = np.take(flat, range(water.shape[ax] - 1), axis=ax).ravel()
+        hi = np.take(flat, range(1, water.shape[ax]), axis=ax).ravel()
+        both = w[lo] & w[hi]
+        a[lo[both], hi[both]] = -1.0
+        a[hi[both], lo[both]] = -1.0
+    a[np.diag_indices(cells)] = np.where(w, count, 0.0)
+    m = a.copy()
+    for k in range(cells):
+        d = m[k, k]
+        if not d > 1e-4 * count[k]:
+            m[k, :] = 0.0
+            m[:, k] = 0.0
+            continue
+        col = m[:, k].copy()
+        row = m[k, :].copy()
+        m -= np.outer(col, row) / d
+        m[k, :] = row / d
+        m[:, k] = col / d
+        m[k, k] = -1.0 / d
+    return -m
+
+
 class Multigrid:
-    def __init__(self, water, h, coarse_sweeps):
+    def __init__(self, water, h):
         self.levels = [Level(water, h)]
         self.P = []
-        self.coarse_sweeps = coarse_sweeps
-        while max(water.shape) > 8 and all(n % 2 == 0 for n in water.shape):
+        while max(water.shape) > 4 and all(n % 2 == 0 for n in water.shape):
             nz, ny, nx = water.shape
             water = water.reshape(nz // 2, 2, ny // 2, 2, nx // 2, 2).all(axis=(1, 3, 5))
             h *= 2
             self.P.append([prolong_1d(n) for n in water.shape])
             self.levels.append(Level(water, h))
+        self.inverse = coarse_inverse(self.levels[-1].water)
 
     def vcycle(self, l, r):
         lv = self.levels[l]
         e = np.zeros_like(r)
         if l == len(self.levels) - 1:
-            for order in ((0, 1), (1, 0)):
-                for _ in range(self.coarse_sweeps):
-                    for color in order:
-                        e = lv.sweep(e, r, color)
-            return e
+            return (-lv.h**2 * self.inverse @ r.ravel()).reshape(r.shape)
         for _ in range(NU):
             for color in (0, 1):
                 e = lv.sweep(e, r, color)
@@ -153,9 +181,9 @@ def true_residual(p, water, f, h):
     return np.linalg.norm(lv.laplacian(p) - f * water) / np.linalg.norm(f * water)
 
 
-def solve(water, f, h, iterations, coarse_sweeps):
+def solve(water, f, h, iterations):
     """Residual after each iteration, as the graph's fixed-count loop runs."""
-    mg = Multigrid(water, h, coarse_sweeps)
+    mg = Multigrid(water, h)
     lv = mg.levels[0]
     x = np.zeros_like(f)
     r = f * lv.w
@@ -183,7 +211,6 @@ def main():
     ap.add_argument("--frames")
     ap.add_argument("--refine", type=int, default=1)
     ap.add_argument("--iterations", default="4,6,8")
-    ap.add_argument("--coarse-sweeps", type=int, default=16)
     args = ap.parse_args()
     counts = [int(k) for k in args.iterations.split(",")]
     probs = frames(args.frames) if args.frames else load(args.fixture)
@@ -191,7 +218,7 @@ def main():
         if args.refine > 1:
             water, f = refine(water, f, args.refine)
         h = L / water.shape[0]
-        res, levels = solve(water, f, h, max(counts), args.coarse_sweeps)
+        res, levels = solve(water, f, h, max(counts))
         line = ", ".join(f"{k}: {res[k - 1]:.3e}" for k in counts)
         old_line = "" if old is None else f"; old solver {true_residual(old, water, f, h):.3e}"
         print(f"{water.shape[0]}^3 {name}: {levels} levels; residual after {line}{old_line}", flush=True)

@@ -52,8 +52,10 @@ impl Run {
         // Every array read after a frame keeps its own storage.
         let mut read = vec![(node_named(&graph, "state"), "out")];
         for k in 0..scene.steps {
-            for name in ["water", "gravity", "project"] {
-                read.push((node_named(&graph, &format!("s{k}.{name}")), "out"));
+            for name in ["water", "gravity", "project", "divergence", "density.source"] {
+                if let Some(node) = graph.nodes().find(|n| n.node_id.as_str() == format!("s{k}.{name}")) {
+                    read.push((node.id, "out"));
+                }
             }
         }
         if scene.surface {
@@ -95,6 +97,45 @@ impl Run {
     /// The particles' own volume: `REST_PER_CELL` fill a cell.
     pub(super) fn particle_volume(&self) -> f64 {
         self.scene.particles() as f64 * self.scene.pressure.cell_size().powi(3) / REST_PER_CELL
+    }
+
+    /// One frame with a GPU timestamp per dispatch: milliseconds per node
+    /// type, largest first, and the frame's total.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn profiled_frame(&mut self) -> (Vec<(String, f64)>, f64) {
+        let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
+        let mut enc = self.device.create_encoder("gpu-flip-scene-profile");
+        enc.enable_dispatch_profiling(sampler, &self.device);
+        self.exec.set_profiling(true);
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, &self.device);
+            let time = FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(self.frames as f64 / 60.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: self.frames,
+            };
+            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.frames += 1;
+        }
+        self.exec.set_profiling(false);
+        let profile = enc.commit_and_wait_profiled(&self.device);
+        let type_of: Vec<String> = self
+            .plan
+            .steps()
+            .iter()
+            .map(|s| self.graph.nodes().find(|n| n.id == s.node).map_or(String::new(), |n| n.node.type_id().as_str().to_string()))
+            .collect();
+        let mut by_type: Vec<(String, f64)> = Vec::new();
+        for span in &profile.spans {
+            let ty = span.tag.rsplit_once(":s").and_then(|(_, i)| i.parse::<usize>().ok()).and_then(|i| type_of.get(i)).map_or("unattributed", |t| t.as_str());
+            match by_type.iter_mut().find(|(t, _)| t == ty) {
+                Some(row) => row.1 += span.millis,
+                None => by_type.push((ty.to_string(), span.millis)),
+            }
+        }
+        by_type.sort_by(|a, b| b.1.total_cmp(&a.1));
+        (by_type, profile.total_ms)
     }
 
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
@@ -311,6 +352,78 @@ fn gpu_flip_still_pool() {
     }
     let end = *fastest.last().expect("sampled");
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
+}
+
+/// Where a Dam Break frame's GPU time goes at 64³, by node type, after 60
+/// frames.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_frame_by_node_type() {
+    let mut run = Run::new(WaterScene::dam_break(64));
+    for _ in 0..60 {
+        run.frame();
+    }
+    let plain: Vec<f64> = (0..5).map(|_| run.frame().0).collect();
+    let (by_type, total) = run.profiled_frame();
+    println!("GPU FLIP frame by type: {total:.2} ms profiled, plain {plain:?}");
+    for (ty, ms) in by_type.iter().take(15) {
+        println!("GPU FLIP frame by type:   {ty:32} {ms:7.2} ms");
+    }
+}
+
+/// The Auto rule's deep-water problems (docs/GPU_FLIP_PRESSURE_SOLVE.md
+/// section 4 (the Auto rule)), the last step's solve: the deep still pool's
+/// main solve (water, divergence) at frame 60 into
+/// `tests/fixtures/deep_pool_pressure_problems.bin.zst` (a still pool's solve
+/// is the same every frame), and the deep drop's
+/// density solve (water, source) at frames 30 and 60 into
+/// `deep_pool_density_problems.bin.zst` (a still pool's source is zero), in
+/// the Dam Break fixture's format (`gpu_flip_solve_tests::load_problems`).
+/// Writes only with `UPDATE_GPU_FLIP_POOL_FIXTURES` set.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_write_deep_pool_fixtures() {
+    if std::env::var("UPDATE_GPU_FLIP_POOL_FIXTURES").is_err() {
+        return;
+    }
+    let solves = |scene: WaterScene, node: &str, frames: &[u32]| {
+        let mut run = Run::new(scene);
+        let (n, last) = (run.n(), scene.steps - 1);
+        let mut problems = Vec::new();
+        for frame in 1..=*frames.last().expect("a frame") {
+            run.frame();
+            if frames.contains(&frame) {
+                problems.push((frame, run.water(last), run.read::<f32>(&format!("s{last}.{node}"), "out", n.pow(3))));
+            }
+        }
+        problems
+    };
+    let main = solves(WaterScene::deep_pool(64), "divergence", &[60]);
+    let density = solves(WaterScene::deep_drop(64), "density.source", &[30, 60]);
+    let n = 64usize;
+    let encode = |problems: &[(u32, Vec<f32>, Vec<f32>)]| -> Vec<u8> {
+        let mut raw = b"SWFX".to_vec();
+        for word in [1, n as u32, n as u32, n as u32, problems.len() as u32] {
+            raw.extend_from_slice(&word.to_le_bytes());
+        }
+        for (frame, water, f) in problems {
+            let wet: Vec<usize> = (0..water.len()).filter(|&c| water[c] > 0.5).collect();
+            raw.extend_from_slice(&frame.to_le_bytes());
+            raw.extend_from_slice(&(wet.len() as u32).to_le_bytes());
+            let mut bits = vec![0u8; water.len() / 8];
+            for &c in &wet {
+                bits[c / 8] |= 1 << (c % 8);
+            }
+            raw.extend_from_slice(&bits);
+            for &c in &wet {
+                raw.extend_from_slice(&f[c].to_le_bytes());
+            }
+        }
+        zstd::encode_all(raw.as_slice(), 19).expect("fixture compresses")
+    };
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    std::fs::write(format!("{dir}/deep_pool_pressure_problems.bin.zst"), encode(&main)).expect("main fixture writes");
+    std::fs::write(format!("{dir}/deep_pool_density_problems.bin.zst"), encode(&density)).expect("density fixture writes");
 }
 
 /// The volume oracle on water that must not change: a resting pool's meshed

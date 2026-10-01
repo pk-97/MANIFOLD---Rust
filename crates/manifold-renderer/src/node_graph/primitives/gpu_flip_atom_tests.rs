@@ -9,7 +9,7 @@ use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use serde_json::json;
 
-use super::coarse_pressure_solve::CoarsePressureSolve;
+use super::coarse_inverse::CoarseInverse;
 use super::coarsen_water::CoarsenWater;
 use super::combine_rows::CombineRows;
 use super::divide_by_value::DivideByValue;
@@ -233,16 +233,46 @@ fn cpu_coarsen(fine: &[f32], n: [usize; 3]) -> Vec<f64> {
         .collect()
 }
 
-fn cpu_coarse_solve(water: &[f32], rhs: &[f32], n: [usize; 3], h: f64, sweeps: usize) -> Vec<f64> {
-    let mut value = vec![0.0; water.len()];
-    for order in [[0, 1], [1, 0]] {
-        for _ in 0..sweeps {
-            for color in order {
-                value = cpu_sweep(water, rhs, &value, n, h, color);
-            }
+/// The masked Poisson matrix A (L = −A / h²) and its inverse by the
+/// kernel's symmetric sweep, in f64: a pivot under 1e-4 of its diagonal pins
+/// its cell. Returns (A, A⁻¹, pinned cells).
+fn cpu_inverse(water: &[f32], n: [usize; 3]) -> (Vec<f64>, Vec<f64>, Vec<usize>) {
+    let cells = water.len();
+    let mut a = vec![0.0; cells * cells];
+    for i in (0..cells).filter(|&i| water[i] > 0.5) {
+        let around = neighbours(i, n);
+        a[i * cells + i] = around.len() as f64;
+        for j in around.into_iter().filter(|&j| water[j] > 0.5) {
+            a[i * cells + j] = -1.0;
         }
     }
-    value
+    let mut m = a.clone();
+    let mut pinned = Vec::new();
+    for k in 0..cells {
+        let d = m[k * cells + k];
+        if d.is_nan() || d <= 1e-4 * neighbours(k, n).len() as f64 {
+            if water[k] > 0.5 {
+                pinned.push(k);
+            }
+            for e in 0..cells {
+                m[k * cells + e] = 0.0;
+                m[e * cells + k] = 0.0;
+            }
+            continue;
+        }
+        let before = m.clone();
+        for i in (0..cells).filter(|&i| i != k) {
+            for j in (0..cells).filter(|&j| j != k) {
+                m[i * cells + j] = before[i * cells + j] - before[i * cells + k] * before[k * cells + j] / d;
+            }
+        }
+        for e in (0..cells).filter(|&e| e != k) {
+            m[k * cells + e] = before[k * cells + e] / d;
+            m[e * cells + k] = before[e * cells + k] / d;
+        }
+        m[k * cells + k] = -1.0 / d;
+    }
+    (a, m.iter().map(|v| -v).collect(), pinned)
 }
 
 // ── Atom value proofs ──────────────────────────────────────────────────────
@@ -320,23 +350,48 @@ fn gpu_flip_zero_lattice_is_zero() {
     assert!(got.iter().all(|&v| v == 0.0));
 }
 
-/// A small lattice and one at the workgroup's full 4,096 cells.
+/// The coarsest level's inverse against the f64 sweep: random water, a deep
+/// pool (air only in the top row, the slowest to converge by sweeps), an odd
+/// lattice, and a box all water, where one cell is pinned. The GPU result is
+/// exactly symmetric, matches f64 to f32 precision, and is the inverse:
+/// A·M is the identity on the unpinned water and zero elsewhere.
 #[test]
-fn gpu_flip_coarse_solve_matches_cpu_sweeps() {
-    for (n, seed) in [([5, 4, 6], 0xc5), ([16, 16, 16], 0xc6)] {
+fn gpu_flip_coarse_inverse_matches_cpu() {
+    let n4 = [4, 4, 4];
+    let deep: Vec<f32> = (0..64).map(|c| f32::from(u8::from(coords(c, n4)[1] < 3))).collect();
+    let cases: [(&str, [usize; 3], Vec<f32>); 4] = [
+        ("random 4³", n4, random_water(64, 0xc5)),
+        ("deep pool 4³", n4, deep),
+        ("random 5×4×3", [5, 4, 3], random_water(60, 0xc6)),
+        ("all water 4³", n4, vec![1.0; 64]),
+    ];
+    for (name, n, water) in cases {
         let cells: usize = n.iter().product();
-        let (water, rhs) = (random_water(cells, seed), random_values(cells, seed + 1));
-        let (h, sweeps) = (0.5, 8);
-        let got = run_atom(
-            &mut CoarsePressureSolve::new(),
-            &[("water", &water), ("rhs", &rhs)],
-            cells,
-            &lattice_params(n, &[("cell_size", h as f32), ("sweeps", sweeps as f32)]),
-        );
-        let want = cpu_coarse_solve(&water, &rhs, n, h, sweeps);
+        let got = run_atom(&mut CoarseInverse::new(), &[("water", &water)], cells * cells, &lattice_params(n, &[]));
+        let (a, want, pinned) = cpu_inverse(&water, n);
+        let all_water = water.iter().all(|&w| w > 0.5);
+        assert_eq!(pinned.len(), usize::from(all_water), "{name}: pinned {pinned:?}");
+        for i in 0..cells {
+            for j in 0..cells {
+                assert_eq!(got[i * cells + j].to_bits(), got[j * cells + i].to_bits(), "{name}: not symmetric at {i}, {j}");
+            }
+        }
         let scale = want.iter().fold(1.0_f64, |m, v| m.max(v.abs()));
-        let worst = got.iter().zip(&want).map(|(a, e)| (f64::from(*a) - e).abs()).fold(0.0, f64::max);
-        assert!(worst <= 1e-4 * scale, "{n:?}: worst {worst:.3e} of {scale:.3e}");
+        let worst = got.iter().zip(&want).map(|(g, w)| (f64::from(*g) - w).abs()).fold(0.0, f64::max);
+        assert!(worst <= 1e-4 * scale, "{name}: worst {worst:.3e} of {scale:.3e}");
+        let solved = |i: usize| water[i] > 0.5 && !pinned.contains(&i);
+        for i in 0..cells {
+            for j in 0..cells {
+                if !solved(j) {
+                    assert_eq!(got[i * cells + j], 0.0, "{name}: column {j} is air or pinned");
+                }
+                if solved(i) {
+                    let product: f64 = (0..cells).map(|k| a[i * cells + k] * f64::from(got[k * cells + j])).sum();
+                    let expected = f64::from(u8::from(i == j));
+                    assert!((product - expected).abs() <= 1e-3, "{name}: (A·M)[{i}][{j}] = {product:.3e}");
+                }
+            }
+        }
     }
 }
 

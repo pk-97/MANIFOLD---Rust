@@ -46,7 +46,7 @@ crate::primitive! {
         float_param!("base_scale", "Base Scale", 1.0, -1e6, 1e6),
     ],
     depth_rule: Terminal,
-    composition_notes: "The conjugate gradient's vector updates (node.conjugate_gradient): x − α p is base = x, matrix = p, coef = α from node.divide_by_value, rows 1, scale −1. With node.dot_products and several rows it is Gram–Schmidt: w − V h is base = w, matrix = the basis, coef = the dots, scale −1.",
+    composition_notes: "The conjugate gradient's vector updates (node.conjugate_gradient): x − α p is base = x, matrix = p, coef = α from node.divide_by_value, rows 1, scale −1. A symmetric matrix times a vector: the multigrid's coarsest solve is matrix = node.coarse_inverse, coef = the rhs, rows = row_length = the cell count, base_scale 0. With node.dot_products and several rows it is Gram–Schmidt: w − V h is base = w, matrix = the basis, coef = the dots, scale −1.",
     examples: [],
     picker: { label: "Combine Rows", category: Atom },
     summary: "Adds weighted rows of a table onto a list of numbers.",

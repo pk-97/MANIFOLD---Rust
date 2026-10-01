@@ -11,7 +11,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBuffer;
 
-use super::coarse_pressure_solve::multigrid_refusal;
+use super::coarse_inverse::multigrid_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};

@@ -14,7 +14,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
-use super::coarse_pressure_solve::multigrid_levels;
+use super::coarse_inverse::multigrid_levels;
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 use crate::node_graph::effect_node::ParamValues;
@@ -49,10 +49,6 @@ pub(crate) const DENSITY_ITERATIONS: usize = 3;
 
 /// Red-black sweeps before and after each coarse correction.
 const SMOOTH_SWEEPS: usize = 2;
-
-/// Sweeps each way of the coarsest level's solve. Its few dozen water cells
-/// settle in far fewer; 4 and 64 give the same iterations to 1e-3.
-const COARSE_SWEEPS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PressureShape {
@@ -133,16 +129,11 @@ pub(crate) const EXTENDED_LAYERS: usize = 2;
 pub(crate) const REST_PER_CELL: f64 = 8.0;
 
 /// The share of a cell's crowding one density solve removes: spread_rate ×
-/// step dt. Linear theory says crowding goes as (1 − share) per solve, so 1
-/// removes it in one solve; particles are discrete, so an overshoot crowds
-/// the next cell. The move a solve makes grows with the water's depth in
-/// cells, so a converged solve overshoots first at the finest lattice: at
-/// share 1, 128³ Dam Break held 48% of its particles past rest at frame 119
-/// against 9% at 0.5, and more iterations did not help
-/// (`gpu_flip_refined_density_causes`). 0.5 holds the water at 64³ and 128³
-/// (`gpu_flip_half_share_race`, docs/GPU_FLIP_PRESSURE_SOLVE.md section 6
-/// (measures)).
-pub(crate) const SPREAD_PER_STEP: f64 = 0.5;
+/// step dt. Crowding goes as (1 − share) per solve, so 1 removes it in one.
+/// It holds at 64³ and 128³ because node.density_source counts only half-full
+/// neighbours as water and node.faces_to_particles caps the move at half a
+/// cell (`gpu_flip_refined_density_causes`).
+pub(crate) const SPREAD_PER_STEP: f64 = 1.0;
 
 impl WaterScene {
     /// The engine's Dam Break, obstacle unwired.
@@ -165,6 +156,20 @@ impl WaterScene {
     /// A pool 1 m deep and nothing else (I5).
     pub fn still_pool(n: usize) -> Self {
         Self { fill_height: 1.0, column: [[0.0; 2]; 3], ..Self::dam_break(n) }
+    }
+
+    /// A pool 3 m deep in the 4 m tank: the coarsest multigrid level is
+    /// water but for its top row, the hardest case for the coarse solve.
+    #[cfg(test)]
+    pub fn deep_pool(n: usize) -> Self {
+        Self { fill_height: 3.0, ..Self::still_pool(n) }
+    }
+
+    /// The deep pool with a 1 m × 0.5 m × 1 m block dropped in from 0.2 m
+    /// above: a still pool's density source is zero, this one crowds.
+    #[cfg(test)]
+    pub fn deep_drop(n: usize) -> Self {
+        Self { column: [[-0.5, 0.5], [3.2, 3.7], [-0.5, 0.5]], ..Self::deep_pool(n) }
     }
 
     /// A 1 m block of water high in the tank, clear of every wall.
@@ -761,30 +766,35 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3]) -> Port {
 }
 
 /// What every solve on one water lattice shares: the water at each V-cycle
-/// level, finest first, and a zero lattice per level for the sweeps to start
-/// from.
+/// level, finest first, a zero lattice per level for the sweeps to start
+/// from, and the coarsest level's inverse.
 struct Levels {
     water: Vec<Port>,
     zeros: Vec<Port>,
+    inverse: Port,
 }
 
 fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
     let sides = s.levels();
-    let mut levels = Levels { water: vec![water], zeros: Vec::new() };
+    let mut water_levels = vec![water];
+    let mut zeros = Vec::new();
     for (level, &side) in sides.iter().enumerate() {
         if level > 0 {
             let coarse = b.node(&format!("water_{level}"), "node.coarsen_water", Builder::lattice([side; 3], &[]));
-            b.wire(levels.water[level - 1], coarse, "fine");
-            levels.water.push((coarse, "out"));
+            b.wire(water_levels[level - 1], coarse, "fine");
+            water_levels.push((coarse, "out"));
         }
-        // The coarsest level is solved from zero inside its one dispatch; the
-        // finest also gives the zero rhs of −L p.
+        // The coarsest level is solved exactly by its inverse; the finest
+        // also gives the zero rhs of −L p.
         if level == 0 || level + 1 < sides.len() {
             let zero = b.node(&format!("zero_{level}"), "node.zero_lattice", Builder::lattice([side; 3], &[]));
-            levels.zeros.push((zero, "out"));
+            zeros.push((zero, "out"));
         }
     }
-    levels
+    let coarsest = *sides.last().expect("a level");
+    let inverse = b.node("coarse_inverse", "node.coarse_inverse", Builder::lattice([coarsest; 3], &[]));
+    b.wire(*water_levels.last().expect("a level"), inverse, "water");
+    Levels { water: water_levels, zeros, inverse: (inverse, "out") }
 }
 
 /// One V-cycle for L e = rhs at `level`, from zero; returns e.
@@ -795,13 +805,17 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
     let lattice = |extra: &[(&str, Value)]| Builder::lattice([side; 3], extra);
     let water = levels.water[level];
     if level + 1 == sides.len() {
+        // L = −A / h², so e = −h² · A⁻¹ · rhs; A⁻¹ is symmetric, so its rows
+        // weighted by rhs are the product.
+        let cells = side * side * side;
         let id = b.node(
             &format!("mg{level}_solve"),
-            "node.coarse_pressure_solve",
-            lattice(&[("cell_size", float(h)), ("sweeps", int(COARSE_SWEEPS))]),
+            "node.combine_rows",
+            json!({"row_length": int(cells), "rows": int(cells), "scale": float(-h * h), "base_scale": float(0.0)}),
         );
-        b.wire(water, id, "water");
-        b.wire(rhs, id, "rhs");
+        b.wire(rhs, id, "base");
+        b.wire(levels.inverse, id, "matrix");
+        b.wire(rhs, id, "coef");
         return (id, "out");
     }
     let mut e = levels.zeros[level];
@@ -942,7 +956,7 @@ pub(super) mod tests {
     /// holds the pool and column only with a lower fill: the Dam Break there
     /// places more particles than a count carries, and the domain refuses it
     /// by name (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
-    const LATTICES: [usize; 7] = [16, 32, 48, 64, 80, 96, 128];
+    const LATTICES: [usize; 7] = [16, 24, 32, 48, 64, 96, 128];
 
     /// Every lattice at every iteration count of the iteration trend.
     #[test]
@@ -958,17 +972,16 @@ pub(super) mod tests {
         }
     }
 
-    /// The V-cycle's levels: halved while a side is even and over 8, so the
-    /// coarsest fits the one-workgroup solve at every lattice a scene uses.
+    /// The V-cycle's levels: halved while every side is even and one is over
+    /// 4, so the coarsest fits the exact solve at every lattice a scene uses.
     #[test]
-    fn gpu_flip_levels_halve_to_one_workgroup() {
+    fn gpu_flip_levels_halve_to_the_exact_solve() {
         let sides = |n| PressureShape::at(n).levels();
-        assert_eq!(sides(64), vec![64, 32, 16, 8]);
-        assert_eq!(sides(80), vec![80, 40, 20, 10, 5]);
-        assert_eq!(sides(96), vec![96, 48, 24, 12, 6]);
+        assert_eq!(sides(64), vec![64, 32, 16, 8, 4]);
+        assert_eq!(sides(96), vec![96, 48, 24, 12, 6, 3]);
         for n in LATTICES.into_iter().chain([256]) {
             let coarsest = *sides(n).last().expect("a level");
-            assert!((coarsest.pow(3) as u64) <= super::super::coarse_pressure_solve::MAX_COARSE_CELLS, "{n}³ ends at {coarsest}³");
+            assert!((coarsest.pow(3) as u64) <= super::super::coarse_inverse::MAX_COARSE_CELLS, "{n}³ ends at {coarsest}³");
         }
     }
 
@@ -977,7 +990,7 @@ pub(super) mod tests {
     /// the frame and the surface.
     #[test]
     fn gpu_flip_scenes_cover_every_dispatch() {
-        let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::free_fall];
+        let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::deep_pool, WaterScene::deep_drop, WaterScene::free_fall];
         let all = LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
         // The splash probes' scenes: four steps a tick is four copies of the
         // step.
@@ -1049,18 +1062,18 @@ pub(super) mod tests {
         }
     }
 
-    /// A lattice whose coarsest level is past one workgroup is refused once,
-    /// at build, naming the coarse solve, never frame by frame: an odd side
-    /// can't halve. The domain refuses the same Resolution by name first (the
-    /// GPU FLIP conformance row).
+    /// A lattice whose coarsest level is past the exact solve is refused once,
+    /// at build, naming the coarse inverse, never frame by frame: an odd side
+    /// can't halve, and 80 halves only to 5³. The domain refuses the same
+    /// Resolution by name first (the GPU FLIP conformance row).
     #[test]
     fn gpu_flip_refuses_an_illegal_lattice_at_build() {
-        for n in [63, 81, 97] {
+        for n in [15, 63, 80, 81, 97] {
             let graph = pressure_def(PressureShape::at(n)).into_graph(&registry(), &Default::default()).expect("pressure def builds");
             match compile(&graph) {
                 Err(GraphError::IllegalParams { node, reason }) => {
                     let kind = graph.get_node(node).expect("refused node exists").node.type_id().as_str().to_string();
-                    assert!(kind == "node.coarse_pressure_solve" && reason.contains("one workgroup"), "{n}³ refused by {kind}: {reason}");
+                    assert!(kind == "node.coarse_inverse" && reason.contains("one workgroup"), "{n}³ refused by {kind}: {reason}");
                 }
                 other => panic!("{n}³ must be refused at build, got {:?}", other.map(|_| "a plan")),
             }
@@ -1134,7 +1147,8 @@ pub(super) mod tests {
     /// The conjugate gradient region holds exactly one iteration: one V-cycle
     /// (two sweep pairs down, the residual, the restriction, the coarse
     /// solve, the prolongation, two sweep pairs up) and the vector updates.
-    /// The coarse water and the zero lattices are outside it.
+    /// The coarse water, the zero lattices and the coarse inverse are
+    /// outside it.
     #[test]
     fn gpu_flip_pressure_region_is_one_iteration() {
         let (graph, plan) = built(&pressure_def(PressureShape::at(64)));
@@ -1144,7 +1158,7 @@ pub(super) mod tests {
         body.sort();
         let vectors = ["cg", "rz", "beta", "direction", "minus_lp", "p_dot_s", "alpha", "solution", "residual"];
         let mut want: Vec<String> = vectors.iter().map(|s| (*s).to_string()).collect();
-        for level in 0..3 {
+        for level in 0..4 {
             for round in 0..SMOOTH_SWEEPS {
                 for color in [0, 1] {
                     want.push(format!("mg{level}_pre{round}_{color}"));
@@ -1155,9 +1169,10 @@ pub(super) mod tests {
                 want.push(format!("mg{level}_{stage}"));
             }
         }
-        want.push("mg3_solve".to_string());
+        want.push("mg4_solve".to_string());
         want.sort();
         assert_eq!(body, want);
+        assert!(!body.contains(&"coarse_inverse".to_string()), "the inverse is built once per water lattice");
     }
 
     /// Each fused region of `def` as its members' node ids, `a + b`.

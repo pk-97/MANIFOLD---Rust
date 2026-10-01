@@ -535,11 +535,11 @@ const NON_STANDALONE: &[&str] = &[
     "node.detect_regions",
     "node.track_regions",
     // The pressure solve's hand shaders, barriered (their DotParams and
-    // CoarseParams are reflected in uniform_layout_extended): the two-pass
-    // reduction and the one-workgroup coarsest level. And the conjugate
-    // gradient loop boundary, which only issues blits.
+    // InverseParams are reflected in uniform_layout_extended): the two-pass
+    // reduction and the coarsest level's one-workgroup inverse. And the
+    // conjugate gradient loop boundary, which only issues blits.
     "node.dot_products",
-    "node.coarse_pressure_solve",
+    "node.coarse_inverse",
     "node.conjugate_gradient",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the

@@ -1,9 +1,9 @@
 //! `node.faces_to_particles` — the face grid back to the particles and one
 //! RK3 move (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)): PIC/FLIP
-//! blended velocity from the projected field, advection through `advect`
-//! (the projected field, or it with the density solve's correction), then
-//! kept `WALL_MARGIN_CELLS` inside the box. A per-element gather on the
-//! codegen path.
+//! blended velocity from the projected field, an RK3 move through it plus
+//! the density solve's correction (`advect` − `faces`) capped at
+//! `MAX_SPREAD_CELLS`, then kept `WALL_MARGIN_CELLS` inside the box. A
+//! per-element gather on the codegen path.
 
 use std::borrow::Cow;
 
@@ -29,6 +29,13 @@ use crate::node_graph::primitive::Primitive;
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) const WALL_MARGIN_CELLS: f64 = 0.2;
 
+/// The longest density correction one step moves a particle, in cells.
+/// Longer, it carries a particle past the cell it was spreading from and
+/// crowds the next. The kernel's `FACES_TO_PARTICLES_MAX_SPREAD`, read by the
+/// CPU reference the same way as [`WALL_MARGIN_CELLS`].
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) const MAX_SPREAD_CELLS: f64 = 0.5;
+
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -50,7 +57,7 @@ struct AdvectUniforms {
 crate::primitive! {
     name: FacesToParticles,
     type_id: "node.faces_to_particles",
-    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
+    purpose: "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `faces` for step_dt, plus step_dt · (advect(x) − faces(x)) capped at half a cell, and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
     inputs: {
         particles: Array(FluidParticle) required,
         faces: Array(FaceSample) required,
@@ -76,7 +83,7 @@ crate::primitive! {
         float_param!("flip", "FLIP Blend", 0.95, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The last atom of a GPU FLIP water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is what the particles move through: `faces` itself, or `faces` with the density solve's correction subtracted and extended, so the correction moves particles and never becomes their speed. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
+    composition_notes: "The last atom of a GPU FLIP water step. particles is the sort's sorted output (the order node.particles_to_faces read), faces the projected grid after node.extend_faces, old node.particles_to_faces' output extended the same way (before gravity: the FLIP change includes gravity and pressure). advect is `faces` itself, or `faces` with the density solve's correction subtracted and extended; the difference moves particles, at most half a cell a step, and never becomes their speed. flip 1 keeps detail and noise, 0 is smooth and viscous; 0.95 is the usual blend.",
     examples: [],
     picker: { label: "Faces To Particles", category: Atom },
     summary: "Hands the grid's corrected motion back to the liquid particles and moves them one step.",

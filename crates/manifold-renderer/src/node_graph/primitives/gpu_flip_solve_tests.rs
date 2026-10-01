@@ -1,8 +1,8 @@
 //! The GPU FLIP pressure solve end to end on the seven saved Dam Break
-//! problems (docs/GPU_FLIP_PRESSURE_SOLVE.md): the true residual of the
-//! masked Poisson equation per problem against the f64 reference
-//! (`scripts/mgpcg_reference.py --coarse-sweeps 8`, numpy in f64), the
-//! iteration trend, and where one solve's GPU time goes.
+//! problems and the deep pool's (docs/GPU_FLIP_PRESSURE_SOLVE.md): the true
+//! residual of the masked Poisson equation per problem against the f64
+//! reference (`scripts/mgpcg_reference.py`, numpy in f64), the iteration
+//! trend, and where one solve's GPU time goes.
 
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
@@ -22,12 +22,17 @@ struct Problem {
     f: Vec<f32>,
 }
 
-/// The fixture: "SWFX", version 1, nx, ny, nz, count; then per problem the
-/// frame, the water count, n³/8 bytes of water bits (LSB first, cell
-/// x + nx·(y + ny·z)) and f32 f per water cell in cell order.
+/// The Dam Break fixture.
 fn load_problems() -> (usize, Vec<Problem>) {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dambreak_pressure_problems.bin.zst");
-    let raw = zstd::decode_all(std::fs::File::open(path).expect("fixture opens")).expect("fixture decodes");
+    load_fixture("dambreak_pressure_problems")
+}
+
+/// A fixture under tests/fixtures: "SWFX", version 1, nx, ny, nz, count;
+/// then per problem the frame, the water count, n³/8 bytes of water bits (LSB
+/// first, cell x + nx·(y + ny·z)) and f32 f per water cell in cell order.
+fn load_fixture(name: &str) -> (usize, Vec<Problem>) {
+    let path = format!("{}/tests/fixtures/{name}.bin.zst", env!("CARGO_MANIFEST_DIR"));
+    let raw = zstd::decode_all(std::fs::File::open(&path).expect("fixture opens")).expect("fixture decodes");
     let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().expect("four bytes"));
     assert_eq!(&raw[..4], b"SWFX");
     assert_eq!(word(4), 1, "fixture version");
@@ -210,52 +215,60 @@ impl Solver {
 /// iterations, after 8), and the retired FFT solve's pinned f64 residual at
 /// its shipped 24 passes.
 const PINNED_64: [(u32, f64, f64, f64); 7] = [
-    (0, 1.325e-02, 5.885e-07, 8.1700e-05),
-    (15, 2.100e-02, 3.249e-06, 5.4525e-05),
-    (30, 5.145e-02, 8.009e-06, 1.3805e-04),
-    (45, 2.583e-02, 7.732e-06, 1.1544e-03),
-    (60, 2.099e-02, 7.111e-06, 4.5739e-03),
-    (90, 1.112e-02, 3.351e-06, 8.2168e-03),
-    (120, 1.241e-02, 5.829e-06, 5.1982e-03),
+    (0, 1.339e-02, 5.914e-07, 8.1700e-05),
+    (15, 2.168e-02, 3.360e-06, 5.4525e-05),
+    (30, 5.072e-02, 7.789e-06, 1.3805e-04),
+    (45, 2.588e-02, 7.831e-06, 1.1544e-03),
+    (60, 2.061e-02, 7.406e-06, 4.5739e-03),
+    (90, 1.206e-02, 3.585e-06, 8.2168e-03),
+    (120, 1.246e-02, 5.902e-06, 5.1982e-03),
 ];
 
 /// The same problems refined to 128³.
 const PINNED_128: [(u32, f64, f64, f64); 7] = [
-    (0, 8.370e-03, 2.293e-07, 1.68e-03),
-    (15, 2.544e-02, 3.689e-06, 2.16e-03),
-    (30, 3.528e-02, 5.281e-06, 4.60e-03),
-    (45, 2.702e-02, 3.320e-06, 1.34e-02),
-    (60, 2.361e-02, 3.171e-06, 3.31e-02),
-    (90, 1.209e-02, 2.266e-06, 4.49e-02),
-    (120, 1.467e-02, 3.586e-06, 2.27e-02),
+    (0, 8.780e-03, 2.374e-07, 1.68e-03),
+    (15, 2.614e-02, 3.853e-06, 2.16e-03),
+    (30, 3.620e-02, 5.937e-06, 4.60e-03),
+    (45, 2.719e-02, 3.435e-06, 1.34e-02),
+    (60, 2.351e-02, 3.072e-06, 3.31e-02),
+    (90, 1.338e-02, 2.408e-06, 4.49e-02),
+    (120, 1.475e-02, 3.619e-06, 2.27e-02),
 ];
 
 /// The residual f32 arithmetic holds on these problems: past it the f64
 /// reference keeps falling and the GPU cannot follow.
 const F32_FLOOR: f64 = 3e-5;
 
-/// Solve every problem at `refine_by`× the fixture. At 3 iterations the GPU
-/// runs the reference's algorithm step for step, so its residual is within
-/// 10% of the f64 one. At the shipped 8 it is within 2× the reference or
-/// under the f32 floor, and never worse than the retired FFT solve.
-fn check_against_reference(refine_by: usize, pinned: &[(u32, f64, f64, f64)]) {
-    let (n, problems) = load_problems();
+/// Solve every problem of `fixture` at `refine_by`× its lattice. At 3
+/// iterations the GPU runs the reference's algorithm step for step, so its
+/// residual is within 10% of the f64 one. At the shipped 8 it is within 2×
+/// the reference, or of what f32 reaches at all: the larger of F32_FLOOR and
+/// the residual after 16 iterations. Deep water raises that floor, since
+/// hydrostatic pressure grows with depth while the right-hand side does not.
+/// With `fft`, the last pinned column is the retired FFT solve's residual and
+/// 8 iterations must beat it.
+fn check_against_reference(fixture: &str, refine_by: usize, pinned: &[(u32, f64, f64, f64)], fft: bool) {
+    let (n, problems) = load_fixture(fixture);
+    assert_eq!(problems.len(), pinned.len(), "{fixture}: one pin per problem");
     let mut three = Solver::new(PressureShape { iterations: 3, ..PressureShape::at(n * refine_by) });
     let mut shipped = Solver::new(PressureShape::at(n * refine_by));
+    let mut converged = Solver::new(PressureShape { iterations: 16, ..PressureShape::at(n * refine_by) });
     assert_eq!(shipped.shape.iterations, 8);
     let mut failures = Vec::new();
-    for (problem, &(frame, at3, at8, fft)) in problems.iter().zip(pinned) {
+    for (problem, &(frame, at3, at8, target)) in problems.iter().zip(pinned) {
         assert_eq!(problem.frame, frame);
         let problem = refine(problem, n, refine_by);
         three.run(&problem.water, &problem.f);
         let got3 = three.residual_of(&problem.water, &problem.f);
+        converged.run(&problem.water, &problem.f);
+        let floor = converged.residual_of(&problem.water, &problem.f).max(F32_FLOOR);
         shipped.run(&problem.water, &problem.f);
         let got8 = shipped.residual_of(&problem.water, &problem.f);
         let mut times: Vec<f64> = (0..5).map(|_| shipped.run(&problem.water, &problem.f)).collect();
         times.sort_by(f64::total_cmp);
         let again = shipped.residual_of(&problem.water, &problem.f);
         println!(
-            "GPU FLIP {}³ frame {frame:3}: 3 iterations {got3:.3e} (f64 {at3:.3e}, {:.3}×); 8 iterations {got8:.3e} (f64 {at8:.3e}; FFT {fft:.3e}), {:.2} ms GPU per solve (median of 5)",
+            "GPU FLIP {fixture} {}³ frame {frame:3}: 3 iterations {got3:.3e} (f64 {at3:.3e}, {:.3}×); 8 iterations {got8:.3e} (f64 {at8:.3e}, f32 floor {floor:.3e}), {:.2} ms GPU per solve (median of 5)",
             shipped.shape.n,
             got3 / at3,
             times[2]
@@ -264,8 +277,11 @@ fn check_against_reference(refine_by: usize, pinned: &[(u32, f64, f64, f64)]) {
         if !(got3 / at3 - 1.0).abs().lt(&0.1) {
             failures.push(format!("frame {frame}: 3 iterations {got3:.3e} against {at3:.3e}"));
         }
-        if got8.is_nan() || got8 > (2.0 * at8).max(F32_FLOOR) || got8 > fft {
-            failures.push(format!("frame {frame}: 8 iterations {got8:.3e} against {at8:.3e} (FFT {fft:.3e})"));
+        if got8.is_nan() || got8 > 2.0 * at8.max(floor) {
+            failures.push(format!("frame {frame}: 8 iterations {got8:.3e} against {at8:.3e} (floor {floor:.3e})"));
+        }
+        if fft && (got8.is_nan() || got8 > target) {
+            failures.push(format!("frame {frame}: 8 iterations {got8:.3e} worse than the FFT solve's {target:.3e}"));
         }
     }
     assert!(failures.is_empty(), "{failures:?}");
@@ -273,12 +289,29 @@ fn check_against_reference(refine_by: usize, pinned: &[(u32, f64, f64, f64)]) {
 
 #[test]
 fn gpu_flip_solve_matches_reference() {
-    check_against_reference(1, &PINNED_64);
+    check_against_reference("dambreak_pressure_problems", 1, &PINNED_64, true);
 }
 
 #[test]
 fn gpu_flip_solve_matches_reference_refined() {
-    check_against_reference(2, &PINNED_128);
+    check_against_reference("dambreak_pressure_problems", 2, &PINNED_128, true);
+}
+
+/// The deep still pool's main solve and the deep drop's density solves
+/// (`gpu_flip_write_deep_pool_fixtures`): the coarsest level is water but for
+/// its top row. The f64 reference per problem: (frame, after 3, after 8, —).
+/// Their Auto-rule counts are in docs/GPU_FLIP_PRESSURE_SOLVE.md section 4
+/// (the Auto rule).
+#[test]
+fn gpu_flip_solve_matches_reference_deep_pool() {
+    let main_64 = [(60, 1.188e-02, 5.352e-08, 0.0)];
+    let main_128 = [(60, 2.614e-02, 3.440e-07, 0.0)];
+    let density_64 = [(30, 6.912e-03, 5.795e-07, 0.0), (60, 5.103e-03, 2.577e-07, 0.0)];
+    let density_128 = [(30, 6.632e-03, 3.220e-07, 0.0), (60, 6.508e-03, 2.830e-07, 0.0)];
+    check_against_reference("deep_pool_pressure_problems", 1, &main_64, false);
+    check_against_reference("deep_pool_pressure_problems", 2, &main_128, false);
+    check_against_reference("deep_pool_density_problems", 1, &density_64, false);
+    check_against_reference("deep_pool_density_problems", 2, &density_128, false);
 }
 
 /// Which stage of the solve a node belongs to.

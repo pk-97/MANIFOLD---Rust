@@ -201,9 +201,9 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "coarse_pressure_solve.rs",
-        rust_struct: "CoarseParams",
-        shader: "shaders/coarse_pressure_solve.wgsl",
+        source: "coarse_inverse.rs",
+        rust_struct: "InverseParams",
+        shader: "shaders/coarse_inverse.wgsl",
         shader_struct: "Params",
         aliases: &[],
     },

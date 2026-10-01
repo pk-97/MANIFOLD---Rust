@@ -37,7 +37,7 @@ struct DensityUniforms {
 crate::primitive! {
     name: DensitySource,
     type_id: "node.density_source",
-    purpose: "The crowding target of a density solve that evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = −rate · e inside the water (all six neighbours hold particles or lie past the lattice) and −rate · max(e, 0) at its surface; empty cells are 0. Solved as a pressure right-hand side, the field it gives expands crowded cells and, inside the water, closes sparse ones at that rate (1/s).",
+    purpose: "The crowding target of a density solve that evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = −rate · e inside the water (all six neighbours hold at least rest / 2 or lie past the lattice) and −rate · max(e, 0) at its surface; empty cells are 0. Solved as a pressure right-hand side, the field it gives expands crowded cells and, inside the water, closes sparse ones at that rate (1/s).",
     inputs: {
         cell_ranges: Array(CellRange) required,
     },

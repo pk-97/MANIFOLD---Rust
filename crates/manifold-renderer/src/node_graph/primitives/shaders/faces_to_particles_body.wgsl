@@ -4,8 +4,10 @@
 // component over the faces with weight > 0, renormalised by their weights
 // (0 when none). Its new velocity blends FLIP and PIC:
 // flip · (v + new(q) − old(q)) + (1 − flip) · new(q). It then moves by RK3
-// through `advect` (stages at ½ and ¾ of step_dt, weights 2/9, 3/9, 4/9) and
-// is kept FACES_TO_PARTICLES_WALL_MARGIN cells inside each wall. Radius and id are
+// through `faces` (stages at ½ and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus
+// the spread step_dt · (advect(q) − faces(q)), at most
+// FACES_TO_PARTICLES_MAX_SPREAD cells long, and is kept
+// FACES_TO_PARTICLES_WALL_MARGIN cells inside each wall. Radius and id are
 // kept; unused slots pass through. A non-finite move or velocity is written
 // as it is, never clamped or zeroed: the tick's node.liquid_stats must see it
 // to halt the liquid (LIQUID_SOLVER_SEAM_DESIGN.md D4 amendment 2). Every
@@ -22,6 +24,11 @@
 // FLIP Fluids engine keeps particles the same 0.2 cells off its solids
 // (`_solidBufferWidth`). Mirrored by `faces_to_particles::WALL_MARGIN_CELLS`.
 const FACES_TO_PARTICLES_WALL_MARGIN: f32 = 0.2;
+
+// `advect` is `faces` plus a density solve's correction. A correction
+// longer than half a cell carries a particle past the cell it was spreading
+// from and crowds the next one. Mirrored by `faces_to_particles::MAX_SPREAD_CELLS`.
+const FACES_TO_PARTICLES_MAX_SPREAD: f32 = 0.5;
 
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
 fn faces_to_particles_finite(v: vec3<f32>) -> bool {
@@ -94,13 +101,15 @@ fn body(
     let lo = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let per_cell = step_dt / cell_size;
     let q0 = (e_particles.position_radius.xyz - lo) / cell_size;
-    let k1 = faces_to_particles_sample(q0, n, 2u);
-    let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * k1, n, 2u);
-    let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 2u);
-    let edge = vec3<f32>(FACES_TO_PARTICLES_WALL_MARGIN);
-    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0;
-    let q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), faces_to_particles_finite(reached));
     let after = faces_to_particles_sample(q0, n, 0u);
+    let k2 = faces_to_particles_sample(q0 + 0.5 * per_cell * after, n, 0u);
+    let k3 = faces_to_particles_sample(q0 + 0.75 * per_cell * k2, n, 0u);
+    let spread = per_cell * (faces_to_particles_sample(q0, n, 2u) - after);
+    let spread_cells = length(spread);
+    let capped = select(spread, spread * (FACES_TO_PARTICLES_MAX_SPREAD / spread_cells), spread_cells > FACES_TO_PARTICLES_MAX_SPREAD);
+    let edge = vec3<f32>(FACES_TO_PARTICLES_WALL_MARGIN);
+    let reached = q0 + per_cell * (2.0 * after + 3.0 * k2 + 4.0 * k3) / 9.0 + capped;
+    let q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), faces_to_particles_finite(reached));
     let before = faces_to_particles_sample(q0, n, 1u);
     let velocity = flip * (e_particles.velocity + after - before) + (1.0 - flip) * after;
     out.position_radius = vec4<f32>(lo + q1 * cell_size, e_particles.position_radius.w);

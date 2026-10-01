@@ -315,6 +315,39 @@ struct Record {
     volume: Vec<f64>,
     /// Per frame, how the particles move.
     motion: Vec<Motion>,
+    /// Per frame, the [`Feel`] measures.
+    feel: Vec<Feel>,
+}
+
+/// How the Dam Break wave meets the walls in one frame, as the parity audit
+/// measured both solvers (floor at `floor`, the far wall at x = 2, the lid
+/// 4 m up): the highest particle within 25 cm of the far wall (the run-up),
+/// and how many particles sit within 10 cm of the lid.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Feel {
+    pub runup: f64,
+    pub at_lid: usize,
+}
+
+pub(crate) fn feel(particles: impl Iterator<Item = [f32; 4]>, floor: f64) -> Feel {
+    let mut out = Feel::default();
+    for p in particles.filter(|p| p[3] > 0.0) {
+        let height = f64::from(p[1]) - floor;
+        if p[0] > 1.75 {
+            out.runup = out.runup.max(height);
+        }
+        out.at_lid += usize::from(height > 3.9);
+    }
+    out
+}
+
+/// Run-up at frames 59, 74 and 89, lid contact (particle-frames at the lid
+/// over frames 50–130) and the last frame any particle is at the lid.
+pub(crate) fn report_feel(label: &str, feel: &[Feel]) {
+    let runup: Vec<String> = [59, 74, 89].iter().filter_map(|&f| feel.get(f)).map(|f| format!("{:.2}", f.runup)).collect();
+    let contact: usize = feel.iter().take(131).skip(50).map(|f| f.at_lid).sum();
+    let last = feel.iter().rposition(|f| f.at_lid > 0);
+    println!("{label}: run-up at frames 59/74/89 {} m, lid contact {contact}, last frame at the lid {last:?}", runup.join(" / "));
 }
 
 /// The Dam Break for `frames` frames: per-frame GPU and CPU encode ms, what
@@ -326,7 +359,7 @@ struct Record {
 fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let mut run = Run::new(scene);
     let (n, h, min) = (run.n(), scene.pressure.cell_size(), scene.min());
-    let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new() };
+    let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new(), feel: Vec::new() };
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut blocks_max, mut water_max) = (0.0_f64, 0.0_f64);
     let (mut raw, mut oracle, mut packed) = (Vec::new(), None, Vec::new());
@@ -355,6 +388,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         }
         let particles = run.particles();
         record.motion.push(particle_motion(&particles, min));
+        record.feel.push(feel(particles.iter().map(|p| p.position_radius), min[1]));
         let pack = gpu_flip_packing(&particles, min, n, h);
         packed.push(pack);
         let sheet = frame % 5 == 4 && frame < 90;
@@ -388,6 +422,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     println!("{label}: left undone rms median {:.2e} worst {:.2e}; max median {:.2e} worst {:.2e} /s", median(&rms), worst(&rms), median(&max), worst(&max));
     println!("{label}: water at most {:.1}% of cells, {:.1}% of 8³ blocks", 100.0 * water_max, 100.0 * blocks_max);
     report_motion(label, &record.motion);
+    report_feel(label, &record.feel);
     let top = record.motion.iter().map(|m| m.fastest).fold(0.0, f64::max);
     println!("{label}: the top speed crosses {:.2} cells a step, {} steps a frame", top * scene.step_dt() / h, scene.steps);
     if let Some(oracle) = oracle {
@@ -444,20 +479,16 @@ fn gpu_flip_refined_splash_causes() {
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
 }
 
-/// The 128³ crowding against the density solve's strength, two steps a
-/// frame: share 1 and 0.5 at the shipped iterations, and share 1 at 1, 5 and
-/// 8 iterations. Measured 2026-10-01 at frame 119, particles past rest:
-/// share 1 48%, 0.5 9%; share 1 at 1, 5 and 8 iterations 61%, 48% and 48%.
+/// The crowding against the density solve's strength, share 1 and 0.5 at
+/// 64³ and 128³, two steps a frame, 300 frames.
 #[test]
 fn gpu_flip_refined_density_causes() {
-    let refined = WaterScene::dam_break(128);
-    let per_second = 1.0 / refined.step_dt();
-    for share in [1.0, 0.5] {
-        dam_break(WaterScene { spread_rate: share * per_second, ..refined }, &format!("DENSITY share {share} 128³"), 120);
-    }
-    for iterations in [1, 5, 8] {
-        let scene = WaterScene { spread_rate: per_second, density_iterations: iterations, ..refined };
-        dam_break(scene, &format!("DENSITY share 1, {iterations} iterations 128³"), 120);
+    for n in [64, 128] {
+        let scene = WaterScene::dam_break(n);
+        let per_second = 1.0 / scene.step_dt();
+        for share in [1.0, 0.5] {
+            dam_break(WaterScene { spread_rate: share * per_second, ..scene }, &format!("DENSITY share {share} {n}³"), 300);
+        }
     }
 }
 
@@ -483,6 +514,22 @@ fn gpu_flip_cadence_64() {
     dam_break(base, "CADENCE density once 64³", 300);
     let one_step = WaterScene { steps: 1, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0, ..base };
     dam_break(one_step, "CADENCE one step 64³", 300);
+}
+
+/// The walls against the step count: the meshed 64³ Dam Break at two water
+/// steps a frame and at one, with the run-up, lid contact and volume drift
+/// lines, and each run's volume per frame in /tmp/flip_parity. The engine's
+/// side is the parity audit's `/tmp/flip_feel/engine.csv`.
+#[test]
+fn gpu_flip_wall_feel_64() {
+    std::fs::create_dir_all("/tmp/flip_parity").expect("out dir");
+    for steps in [2, 1] {
+        let label = format!("WALLS {steps} steps 64³");
+        let scene = WaterScene { steps, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0 * steps as f64, ..WaterScene::dam_break(64) };
+        let record = dam_break(scene.with_surface(), &label, 300);
+        let rows: Vec<String> = record.volume.iter().enumerate().map(|(f, v)| format!("{f},{v:.5}")).collect();
+        std::fs::write(format!("/tmp/flip_parity/gpu_volume_steps_{steps}.csv"), format!("frame,volume_drift\n{}\n", rows.join("\n"))).expect("csv");
+    }
 }
 
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.

@@ -337,7 +337,7 @@ pub(crate) mod pressure_residual;
 pub(crate) mod restrict_lattice;
 pub(crate) mod prolong_lattice;
 pub(crate) mod coarsen_water;
-pub(crate) mod coarse_pressure_solve;
+pub(crate) mod coarse_inverse;
 pub(crate) mod conjugate_gradient;
 pub(crate) mod zero_lattice;
 pub(crate) mod liquid_fill;

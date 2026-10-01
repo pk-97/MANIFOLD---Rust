@@ -42,7 +42,7 @@ use crate::node_graph::matter::{
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::cells_with_particles::{cell_count, cell_lattice};
-use crate::node_graph::primitives::coarse_pressure_solve::coarse_refusal;
+use crate::node_graph::primitives::coarse_inverse::coarse_refusal;
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
@@ -572,7 +572,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.pressure_residual", check: pressure_sweep },
     ExtentRule { type_id: "node.restrict_lattice", check: restrict_lattice },
     ExtentRule { type_id: "node.prolong_lattice", check: prolong_lattice },
-    ExtentRule { type_id: "node.coarse_pressure_solve", check: coarse_pressure_solve },
+    ExtentRule { type_id: "node.coarse_inverse", check: coarse_inverse },
     ExtentRule { type_id: "node.conjugate_gradient", check: conjugate_gradient },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
@@ -1267,17 +1267,15 @@ fn prolong_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     Ok(())
 }
 
-/// Its workgroup array holds MAX_COARSE_CELLS; the atom refuses a larger
-/// lattice, and so does this walk.
-fn coarse_pressure_solve(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+/// The kernel indexes cells² entries of `out` (`coarse_inverse_indices_stay_in_bounds`);
+/// the atom refuses a lattice past MAX_COARSE_CELLS, and so does this walk.
+fn coarse_inverse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if let Some(reason) = coarse_refusal(x.params()) {
         return Err(x.uncovered(reason));
     }
     let cells = cell_count(gpu_flip_cells(x)?);
-    for port in ["water", "rhs", "out"] {
-        x.covers(port, cells * 4)?;
-    }
-    Ok(())
+    x.covers("water", cells * 4)?;
+    x.covers("out", cells * cells * 4)
 }
 
 /// Every carried vector is rhs long; late_capture copies a whole state from
