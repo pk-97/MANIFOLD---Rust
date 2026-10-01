@@ -207,11 +207,25 @@ impl Default for GpuDevice {
 }
 
 impl GpuDevice {
+    /// [`GpuDevice::new`] after taking the machine-wide GPU queue
+    /// ([`crate::queue`]) for the rest of the process. For tests, headless
+    /// renders, examples and dev bins; `label` names the caller to waiters.
+    pub fn new_queued(label: &str) -> Self {
+        crate::queue::acquire_for_process(label);
+        Self::new()
+    }
+
     /// Create from the system default Metal device.
     /// Uses a dedicated command queue for content-thread work.
+    ///
+    /// Never touches the machine-wide GPU queue: this crate ships inside the
+    /// live app and the analyzer plugin, which must not wait on or write to a
+    /// dev-machine lock. Test, headless and example paths call
+    /// [`GpuDevice::new_queued`] instead (audited by `tests/queued_device_audit.rs`).
     pub fn new() -> Self {
-        // One GPU-using process on the machine at a time (crate::queue).
-        crate::queue::acquire_for_process();
+        // This crate's own unit tests are dev-only by construction.
+        #[cfg(test)]
+        crate::queue::acquire_for_process("manifold-gpu unit tests");
         static NEXT_RESOURCE_SCOPE: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let resource_scope_id = NEXT_RESOURCE_SCOPE

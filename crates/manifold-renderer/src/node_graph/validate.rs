@@ -666,7 +666,7 @@ mod tests {
     fn every_bundled_preset_validates_clean() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("validate tests"));
 
         let mut total = 0usize;
         let mut failures: Vec<(std::path::PathBuf, ValidationReport)> = Vec::new();
@@ -723,7 +723,7 @@ mod tests {
     fn bundled_preset_card_warning_counts() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = PrimitiveRegistry::with_builtin();
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("validate tests"));
 
         for (subdir, kind) in ASSET_SUBDIRS {
             let dir = manifest_dir.join(subdir);

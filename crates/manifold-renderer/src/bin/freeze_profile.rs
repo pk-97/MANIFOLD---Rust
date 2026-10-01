@@ -102,7 +102,7 @@ fn resource_for_output(
 
 fn main() {
     let registry = PrimitiveRegistry::with_builtin();
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("freeze-profile"));
 
     // `attribute [names…]` → per-node GPU/CPU attribution via counter
     // sampling (fast path, skips the sweeps).

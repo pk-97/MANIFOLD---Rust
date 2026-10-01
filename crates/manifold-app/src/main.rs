@@ -227,9 +227,6 @@ fn main() {
             std::process::exit(2);
         }
     }
-    // The GUI is the show: it never takes or waits for the machine-wide GPU
-    // queue that every headless run above and every test queues behind.
-    manifold_gpu::queue::exempt_live_process();
     // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN section 5.2) ---
     // The crash-recovery relaunch path: `manifold --resume <path>` skips
     // everything that isn't pixels. Parsed here (no other CLI arg parsing

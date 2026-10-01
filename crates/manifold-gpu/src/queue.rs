@@ -2,14 +2,16 @@
 //! and worktree.
 //!
 //! Concurrent GPU processes give flaky black renders and AGX firmware faults,
-//! so the first [`GpuDevice::new`](crate::GpuDevice::new) in a process takes an
-//! flock on `~/.cache/manifold/gpu.lock` (override the directory with
-//! `MANIFOLD_GPU_QUEUE_DIR`) and keeps it until the process exits. The kernel
-//! drops it if the process dies. Every test, headless render, example and bin
-//! that makes a device queues here without knowing about it.
+//! so the first [`GpuDevice::new_queued`](crate::GpuDevice::new_queued) in a
+//! process takes an flock on `~/.cache/manifold/gpu.lock` (override the
+//! directory with `MANIFOLD_GPU_QUEUE_DIR`) and keeps it until the process
+//! exits. The kernel drops it if the process dies.
 //!
-//! The live app is the one exemption ([`exempt_live_process`]): it must never
-//! wait behind a test run, and a test run must never wait behind a show.
+//! Opt-in only. `GpuDevice::new` never touches the queue: this crate ships in
+//! the live app and the analyzer plugin, which must not wait behind a test run
+//! or write a cache directory on a customer's machine. Every test, headless
+//! render, example and dev bin calls `new_queued`; the workspace audit in
+//! `tests/queued_device_audit.rs` fails if one calls `new` instead.
 //!
 //! `scripts/gpu_queue.py` speaks the same protocol (same lock file, same
 //! `gpu.holder` record) and holds the lock across a whole multi-process run.
@@ -24,30 +26,20 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const POLL: Duration = Duration::from_millis(250);
 const REPORT_EVERY: Duration = Duration::from_secs(30);
 
-static LIVE_PROCESS: AtomicBool = AtomicBool::new(false);
 static PROCESS_LOCK: OnceLock<Held> = OnceLock::new();
 
-/// The live app calls this before it creates its first device. It then never
-/// takes or waits for the queue.
-pub fn exempt_live_process() {
-    LIVE_PROCESS.store(true, Ordering::SeqCst);
-}
-
-/// Take the queue for the rest of this process. Idempotent; blocks while
-/// another process holds the GPU. Called by `GpuDevice::new`.
-pub fn acquire_for_process() {
-    if LIVE_PROCESS.load(Ordering::SeqCst) {
-        return;
-    }
+/// Take the queue for the rest of this process. Idempotent (the first
+/// caller's `label` is the one waiters see); blocks while another process
+/// holds the GPU. Called by `GpuDevice::new_queued`.
+pub fn acquire_for_process(label: &str) {
     PROCESS_LOCK.get_or_init(|| {
         let dir = queue_dir();
-        acquire_in(&dir, &process_label(), POLL, REPORT_EVERY, &mut std::io::stderr())
+        acquire_in(&dir, &process_label(label), POLL, REPORT_EVERY, &mut std::io::stderr())
             .unwrap_or_else(|e| {
                 panic!(
                     "GPU queue: cannot take {}: {e}. Set MANIFOLD_GPU_QUEUE_DIR to a writable directory.",
@@ -153,13 +145,13 @@ fn acquire_with(
     Ok(Held::Owned { _file: file, holder_path })
 }
 
-fn process_label() -> String {
+fn process_label(label: &str) -> String {
     let args: Vec<String> = std::env::args().collect();
     let exe = args
         .first()
         .map(|a| a.rsplit('/').next().unwrap_or(a).to_string())
         .unwrap_or_default();
-    format!("{exe} {}", args[1.min(args.len())..].join(" "))
+    format!("{label} ({exe} {})", args[1.min(args.len())..].join(" "))
 }
 
 fn one_line(s: &str, max: usize) -> String {
@@ -254,7 +246,7 @@ fn ancestor_pids() -> Vec<u32> {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gpu-queue-{tag}-{}", std::process::id()));

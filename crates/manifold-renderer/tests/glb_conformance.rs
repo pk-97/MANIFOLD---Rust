@@ -257,7 +257,7 @@ fn render_asset(path: &Path, overrides: &[(&str, f32)], non_black_floor: f64) ->
     }
     let manifest = ParamManifest::from_params(params);
 
-    let device = Arc::new(GpuDevice::new());
+    let device = Arc::new(GpuDevice::new_queued("glb_conformance"));
     let registry = PrimitiveRegistry::with_builtin();
     let format = GpuTextureFormat::Rgba16Float;
     let mut runtime = PresetRuntime::from_def_with_device(

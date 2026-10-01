@@ -96,10 +96,10 @@ pub(crate) fn test_device() -> TestDevice {
     // Acquire the serialization lock first, then hand back the shared device.
     let _lock = GPU_TEST_LOCK.lock();
     // BUG-290: GPU_TEST_LOCK is invisible across processes. The machine-wide
-    // GPU queue (manifold_gpu::queue) is taken by `GpuDevice::new()` below,
-    // for the process lifetime; waiting there IS the fix, not a hang.
+    // GPU queue (manifold_gpu::queue) is taken by `new_queued` below, for the
+    // process lifetime; waiting there IS the fix, not a hang.
     let device = SHARED
-        .get_or_init(|| Arc::new(manifold_gpu::GpuDevice::new()))
+        .get_or_init(|| Arc::new(manifold_gpu::GpuDevice::new_queued("renderer tests")))
         .clone();
     TestDevice { device, _lock }
 }
