@@ -77,7 +77,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 ## 2. Decisions
 
-**D1 — The split is at the emitter.** GPU atoms find emitters and write spawn records; the vendored `DiffuseParticleSimulation`, emission disabled, advances them. Peter's words above. Rejected: a GPU lifecycle, because it discards FLIP's tuned behaviour and is the port Peter declined. Rejected: FLIP's CPU emitter fed GPU fields, because the scan is the cost.
+**D1 — Superseded by D14 for the lifecycle. The split is at the emitter.** GPU atoms find emitters and write spawn records; the vendored `DiffuseParticleSimulation`, emission disabled, advances them. Peter's words above. Rejected: a GPU lifecycle, because it discards FLIP's tuned behaviour and is the port Peter declined. Rejected: FLIP's CPU emitter fed GPU fields, because the scan is the cost.
 
 **D2 — One whitewater grid: the frame's solid lattice cells.** At res n that is n+6 cells a side from m − 3h (70³ at 64), whose nodes are the solid lattice exactly. The level set, the solid and the faces all sit on it at integer offsets. FLIP's boundary box, where the type rule turns everything outside it to spray, sits 1.625 cells inside the grid (3 cells smaller than the domain, then grown by a quarter cell), so on this grid it lies 1.375 cells outside the tank walls. Rejected: the seam's face grid (n cells at m), because the box would turn whitewater within 10 cm of every wall to spray at 64. Rejected: FLIP's own grid (n+3 cells at m − 1.5h), because it sits half a cell off every GPU lattice. **Consequence, stated honestly:** FLIP's box sits 0.125 cells inside the walls, so FLIP sprays an 8 mm strip along each wall at 64 that ours types by depth.
 
@@ -102,6 +102,8 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 **D12 — Ticks, epoch and gravity come from the domain.** Every GPU liquid domain exposes `ticks` and `epoch` (the `LiquidClock` frame) and its gravity; the whitewater never infers time from the particle frame. A changed epoch clears the population; T = 0 holds everything.
 
 **D13 — The chain is one node group, "Whitewater", and SWASH is its host.** SWASH is the water solver; the MPM water presets are test scenes. P1–P4 prove on the Rust SWASH scene builders (`swash_preset.rs`); from P5 the group lives in the SWASH Dam Break preset JSON, which is also P6's SWASH side, and is copied into other scenes like the Liquid Surface group. Scenes wire ports, never atoms. MPM still publishes the face grid (P1), because any producer of the seam gets whitewater.
+
+**D14 — The lifecycle moves to the GPU, superseding D1.** Peter, 2026-10-01: "Unless there is a need for this to be CPU and gives us benefits we should move it to GPU so we can handle larger particles and get it all working faster and unified in memory." Advection by type, collisions, lifetimes, foam preservation and the particle pool become GPU atoms, ported line by line from `diffuseparticlesimulation.cpp` with every deviation named; the vendored CPU lifecycle stays the read-only parity oracle. Every ported file carries a FLIP Fluids credit header (MIT, see THIRD_PARTY_NOTICES.md). D6, D8 and D11 are reopened by this and are rewritten as the port lands.
 
 ## 3. Design body
 
@@ -255,7 +257,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 
 ### 3.8 Wrong turns, forbidden by name
 
-- A GPU lifecycle: advection, collisions or lifetimes in WGSL.
+- A GPU lifecycle designed from scratch beside FLIP's code (D14 ports it line by line instead).
 - Any edit under `flip_engine/`: `Array3d` aliasing, a `friend`, a jitter setter, `#define private public`.
 - The CPU reading a graph array in place, or `wait` on the live path.
 - A liquid field rebuilt from particles, or a solver publishing one.
@@ -379,7 +381,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 ## 6. Decided — do not reopen
 
-1. GPU emitter, vendored FLIP lifecycle (D1; Peter, 2026-09-30).
+1. GPU emitter and GPU lifecycle, ported from FLIP's code and credited (D14, superseding D1; Peter, 2026-10-01).
 2. The whitewater grid is the solid lattice's cells (D2).
 3. The field is the surface group's level set, re-distanced to the tangent plane at the nearest crossing (D3, D4; seam D5).
 4. Emission per tick, from the last tick, normalised to 8 particles per cell (D5).
