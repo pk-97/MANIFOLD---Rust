@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Scope selection: given these touched paths, these filters are chosen."""
 
+import json
 import unittest
+from unittest import mock
 from pathlib import Path
 import tempfile
 
@@ -75,24 +77,50 @@ class ScopeTests(unittest.TestCase):
     def test_rt_row_keeps_particletext_skip_and_union_with_freeze(self):
         p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", R + "node_graph/freeze/x.rs"])
         self.assertTrue({"rt_", "freeze::"} <= p.filters)
-        self.assertEqual(sorted(set(p.final_skips()) - set(g.NIGHTLY_ONLY)), ["particletext"])
+        self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), ["particletext"])
         self.assertEqual(p.broad, [])
 
     def test_skip_dropped_when_it_would_hide_a_selected_filter(self):
         p = plan(["crates/manifold-gpu/src/metal/raytrace.rs", P + "particletext.rs"])
-        self.assertEqual(sorted(set(p.final_skips()) - set(g.NIGHTLY_ONLY)), [])
+        self.assertEqual(sorted(set(p.final_skips()) - {n for n, _ in g.slow_tests()}), [])
 
     def test_matter_row(self):
         p = plan([P + "matter_fill.rs"])
         self.assertTrue({"matter_", "substeps_"} <= p.filters)
 
-    def test_matter_path_skips_nightly_only_tests(self):
+    def with_times(self, times):
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        f = Path(d) / "t.json"
+        f.write_text(json.dumps({"tests": times}))
+        patcher = mock.patch.object(g, "TIMES_PATH", f)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_over_threshold_measured_test_is_skipped_and_reported(self):
+        self.with_times({"a::slow": 61.0, "a::fast": 59.0, "a::exact": 60.0})
         p = plan([P + "matter_fill.rs"])
-        self.assertEqual(len(g.NIGHTLY_ONLY), 3)
-        for t in g.NIGHTLY_ONLY:
-            self.assertIn(t, p.final_skips())
-        self.assertIn("run nightly only", p.describe())
+        self.assertIn("a::slow", p.final_skips())
+        self.assertNotIn("a::fast", p.final_skips())
+        self.assertNotIn("a::exact", p.final_skips())
+        self.assertIn("a::slow: skipped, run nightly only (measured 61s)", p.describe())
         self.assertEqual(p.runs()[0]["skips"], p.final_skips())
+
+    def test_test_missing_from_times_file_runs(self):
+        self.with_times({"a::slow": 500.0})
+        self.assertNotIn("brand::new_test", plan([P + "matter_fill.rs"]).final_skips())
+
+    def test_missing_times_file_skips_nothing(self):
+        with mock.patch.object(g, "TIMES_PATH", Path("/nonexistent/t.json")):
+            self.assertEqual(g.slow_tests(), [])
+
+    def test_hand_list_is_gone(self):
+        self.assertFalse(hasattr(g, "NIGHTLY_ONLY"))
+
+    def test_committed_times_file_seeds_the_known_slow_tests(self):
+        names = {n for n, _ in g.slow_tests()}
+        self.assertIn("matter_bodies::matter_fill_skips_colliders", names)
+        self.assertIn("matter_look::matter_momentum_conserved_free_blob", names)
 
     def test_proof_file_maps_to_its_own_module(self):
         p = plan([g.PROOFS_DIR + "render_scene_fog.rs"])
