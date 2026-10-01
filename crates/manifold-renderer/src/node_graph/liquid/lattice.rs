@@ -4,9 +4,8 @@
 //! wires such a lattice produced, so a solver built on it cannot hand the
 //! surface bare, unpadded bounds.
 
-use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::FluidDomainLayout;
-use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
@@ -14,6 +13,9 @@ pub const PADDING_NODES: u32 = 3;
 
 /// Most nodes per axis a lattice wire may carry, as every lattice atom.
 pub const MAX_LATTICE_NODES: u32 = 1024;
+
+/// The scalar wires a lattice travels on.
+const WIRES: [&str; 7] = ["lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z"];
 
 /// Node (i, j, k) at `min + (i, j, k) · cell_size`. The fields are private:
 /// [`Self::from_layout`] is the only public way to make one.
@@ -41,10 +43,16 @@ impl LiquidLattice {
     /// The lattice a domain published on its scalar wires (`lattice_min_x/y/z`,
     /// `cell_size`, `nodes_x/y/z`; generated uniforms pack scalars only, so
     /// the lattice travels that way). Defaults are the 4 m Dam Break lattice
-    /// at resolution 64, matching each atom's param defaults. Wires no padded
-    /// layout could have produced (a refused domain publishes zeros) are
-    /// reported as `node`'s error and give `None`.
+    /// at resolution 64, matching each atom's param defaults. A domain that
+    /// has not ticked yet declares its wires pending: there is no lattice, so
+    /// the reader's outputs are pending too and nothing is an error. Wires no
+    /// padded layout could have produced are reported as `node`'s error and
+    /// give `None`.
     pub(crate) fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
+        if WIRES.iter().any(|wire| ctx.inputs.port_pending(wire)) {
+            ctx.mark_outputs_pending();
+            return None;
+        }
         Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
             .map_err(|refusal| ctx.error(format!("{node}: {refusal}")))
             .ok()
@@ -151,34 +159,6 @@ impl LiquidLattice {
     }
 }
 
-/// The params a lattice atom reads its cells per axis from.
-pub(crate) const LATTICE_PARAMS: [&str; 3] = ["nodes_x", "nodes_y", "nodes_z"];
-
-/// A lattice atom's cells per axis, 1 to [`MAX_LATTICE_NODES`] each (64 when
-/// unset), or `None`.
-pub(crate) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
-    let nodes = LATTICE_PARAMS.map(|name| match params.get(name) {
-        Some(ParamValue::Float(n)) => n.round() as i64,
-        _ => 64,
-    });
-    nodes.iter().all(|n| (1..=i64::from(MAX_LATTICE_NODES)).contains(n)).then(|| nodes.map(|n| n as u32))
-}
-
-/// Cells in a lattice, as u64 so a bad size cannot wrap.
-pub(crate) fn cell_count(nodes: [u32; 3]) -> u64 {
-    nodes.iter().map(|&n| u64::from(n)).product()
-}
-
-/// Records of a lattice's face grid: one more than the cells per axis.
-pub(crate) fn face_count(nodes: [u32; 3]) -> u64 {
-    nodes.iter().map(|&n| u64::from(n) + 1).product()
-}
-
-/// Face-grid length for a lattice param set, for `array_output_capacity`.
-pub(crate) fn face_capacity(params: &ParamValues) -> Option<u32> {
-    cell_lattice(params).and_then(|nodes| u32::try_from(face_count(nodes)).ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +173,7 @@ mod tests {
         assert_eq!(lattice.bounds().scale, [4.375; 3]);
     }
 
-    /// A refused domain publishes zeroed wires; the reader names the wire
+    /// Wires no padded layout could have produced: the reader names the wire
     /// instead of clamping to a one-node lattice.
     #[test]
     fn liquid_lattice_wires_refuse_by_name() {

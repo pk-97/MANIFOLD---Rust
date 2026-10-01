@@ -2691,6 +2691,12 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "dynamic_bodies",
+      "toNode": 4,
+      "toPort": "dynamic_bodies"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "body_rows",
       "toNode": 4,
       "toPort": "rows"
@@ -2706,6 +2712,12 @@
       "fromPort": "count",
       "toNode": 4,
       "toPort": "count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "reaction",
+      "toNode": 4,
+      "toPort": "reaction"
     },
     {
       "fromNode": 0,
@@ -2853,6 +2865,12 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "dynamic_bodies",
+      "toNode": 5,
+      "toPort": "dynamic_bodies"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "body_rows",
       "toNode": 5,
       "toPort": "rows"
@@ -2868,6 +2886,12 @@
       "fromPort": "count",
       "toNode": 5,
       "toPort": "count"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "reaction_out",
+      "toNode": 5,
+      "toPort": "reaction"
     },
     {
       "fromNode": 5,

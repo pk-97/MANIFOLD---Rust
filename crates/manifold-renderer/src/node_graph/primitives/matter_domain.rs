@@ -523,7 +523,8 @@ impl Primitive for MatterDomain {
         // Every output is published every frame, so no consumer reads a slot
         // this node left unwritten. While a role is still being prepared, or
         // on an error, the liquid holds: the last good outputs repeat with
-        // zero ticks.
+        // zero ticks. Before the first good frame there is nothing to hold,
+        // so the outputs are declared pending.
         self.coupled.exchange = None;
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
@@ -547,6 +548,9 @@ impl Primitive for MatterDomain {
         };
         if fresh {
             self.published = Some(values);
+        }
+        if self.published.is_none() {
+            ctx.mark_outputs_pending();
         }
         for (name, value) in OUTPUTS.iter().zip(values) {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));

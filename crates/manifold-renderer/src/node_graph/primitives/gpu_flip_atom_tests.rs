@@ -39,12 +39,6 @@ pub(super) fn random_water(cells: usize, seed: u64) -> Vec<f32> {
     random_values(cells, seed).iter().map(|&v| f32::from(u8::from(v > -0.2))).collect()
 }
 
-pub(super) fn lattice_params(nodes: [usize; 3], extra: &[(&'static str, f32)]) -> ParamValues {
-    let mut all = vec![("nodes_x", nodes[0] as f32), ("nodes_y", nodes[1] as f32), ("nodes_z", nodes[2] as f32)];
-    all.extend_from_slice(extra);
-    params(&all)
-}
-
 /// One atom's `run()` with several array ports, into an open encoder.
 pub(super) fn step_ports<P: Primitive>(
     prim: &mut P,
@@ -157,14 +151,12 @@ fn gpu_flip_divide_by_value_matches_cpu_and_guards_zero() {
 pub(super) struct Chain {
     nodes: Vec<serde_json::Value>,
     wires: Vec<serde_json::Value>,
-    pub(super) sources: Vec<(&'static str, Vec<f32>)>,
-    /// The sink's type: test.value_sink, or test.face_sink for a face grid.
-    pub(super) sink: &'static str,
+    sources: Vec<(&'static str, Vec<f32>)>,
 }
 
 impl Chain {
     pub(super) fn new() -> Self {
-        Self { nodes: Vec::new(), wires: Vec::new(), sources: Vec::new(), sink: "test.value_sink" }
+        Self { nodes: Vec::new(), wires: Vec::new(), sources: Vec::new() }
     }
 
     pub(super) fn node(&mut self, name: &str, type_id: &str, params: serde_json::Value) -> usize {
@@ -174,20 +166,7 @@ impl Chain {
     }
 
     pub(super) fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
-        let len = values.len();
-        self.typed_source(name, "test.value_source", len, values)
-    }
-
-    /// A source of `items` records of `type_id`'s item, as raw f32 words.
-    pub(super) fn typed_source(&mut self, name: &'static str, type_id: &str, items: usize, values: Vec<f32>) -> usize {
-        let id = self.node(name, type_id, json!({"max_capacity": {"type": "Int", "value": items}}));
-        self.sources.push((name, values));
-        id
-    }
-
-    /// A face grid source: `values` is FACE_FLOATS floats per record.
-    pub(super) fn face_source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
-        let id = self.node(name, "test.face_source", json!({"max_capacity": {"type": "Int", "value": values.len() / FACE_FLOATS}}));
+        let id = self.node(name, "test.value_source", json!({"max_capacity": {"type": "Int", "value": values.len()}}));
         self.sources.push((name, values));
         id
     }
@@ -200,7 +179,7 @@ impl Chain {
         let mut nodes = self.nodes.clone();
         let mut wires = self.wires.clone();
         let sink = nodes.len();
-        nodes.push(json!({"id": sink, "typeId": self.sink, "nodeId": "sink", "params": {}}));
+        nodes.push(json!({"id": sink, "typeId": "test.value_sink", "nodeId": "sink", "params": {}}));
         nodes.push(json!({"id": sink + 1, "typeId": "system.final_output", "nodeId": "output", "params": {}}));
         wires.push(json!({"fromNode": into, "fromPort": "out", "toNode": sink, "toPort": "values"}));
         wires.push(json!({"fromNode": sink, "fromPort": "out", "toNode": sink + 1, "toPort": "in"}));
@@ -283,11 +262,21 @@ impl Chain {
     }
 }
 
-pub(super) fn lattice_json(nodes: [usize; 3], extra: &[(&str, f64)]) -> serde_json::Value {
-    let mut params = json!({});
-    let axes = [("nodes_x", nodes[0] as f64), ("nodes_y", nodes[1] as f64), ("nodes_z", nodes[2] as f64)];
-    for &(name, value) in axes.iter().chain(extra) {
-        params[name] = json!({"type": "Float", "value": value});
-    }
-    params
+/// Two divisions chained, the second reading the first coincident.
+#[test]
+fn gpu_flip_divides_fuse() {
+    let values = random_values(700, 0xd1f1);
+    let mut chain = Chain::new();
+    let x = chain.source("values", values.clone());
+    let quarter = chain.source("quarter", vec![0.25]);
+    let half = chain.source("half", vec![0.5]);
+    let first = chain.node("first", "node.divide_by_value", json!({}));
+    chain.wire(x, "out", first, "values");
+    chain.wire(quarter, "out", first, "divisor");
+    let second = chain.node("second", "node.divide_by_value", json!({}));
+    chain.wire(first, "out", second, "values");
+    chain.wire(half, "out", second, "divisor");
+    let got = chain.fused_matches_unfused(second, values.len());
+    let want: Vec<f64> = values.iter().map(|&v| f64::from(v) / 0.125).collect();
+    assert_close(&got, &want, "fused divides");
 }

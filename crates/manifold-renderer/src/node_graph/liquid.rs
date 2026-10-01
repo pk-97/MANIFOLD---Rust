@@ -29,6 +29,9 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 /// 2^24 a count can round up past the storage sized from the true count.
 pub const EXACT_F32_COUNT: u32 = 1 << 24;
 
+/// Rest density of water, kg/m³: every liquid solver's water weighs this.
+pub const WATER_DENSITY: f32 = 1000.0;
+
 /// A liquid domain's role inputs, in slot order (node.fluid_surface's names).
 pub const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",

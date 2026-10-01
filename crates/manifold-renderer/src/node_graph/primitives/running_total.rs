@@ -130,6 +130,10 @@ impl Primitive for RunningTotal {
                 self.extent_scratch = Some(gpu.device.create_buffer_shared(u64::from(EXTENT_WORDS) * 4));
             }
         }
+        if ctx.inputs.any_pending() {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let (Some(input), Some(out)) = (ctx.inputs.array("in"), ctx.outputs.array("out")) else {
             return;
         };

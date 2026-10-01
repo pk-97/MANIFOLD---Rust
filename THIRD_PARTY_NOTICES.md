@@ -16,8 +16,7 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `whitewater_cpu.rs`, `whitewater_particle_cpu.rs` (CPU references) — from the files above
 - `gpu_flip_step` (`shaders/gpu_flip_step.wgsl`; its CPU references in `gpu_flip_step_tests.rs`) — particles to faces from `velocityadvector.cpp`, the particle distance and its extension into solids from `particlelevelset.cpp`, the solid collision and removal of particles from `fluidsimulation.cpp`, the solid distance's gradient from `meshlevelset.cpp` and `interpolation.cpp`, the solid open fractions from `levelsetutils.cpp` and `meshlevelset.cpp`, the solids' face velocity and the constraint from `fluidsimulation.cpp`, divergence and the pressure subtraction from `pressuresolver.cpp`
 - `gpu_flip_pressure` (`shaders/gpu_flip_pressure.wgsl`) — the ghost-fluid free-surface rows from `pressuresolver.cpp`
-- `body_pressure_product`, `pressure_face_impulse` — from `pressuresolver.cpp` and `rigidboundaryvelocity.cpp`
-- `face_impulse_to_bodies` — from `rigidboundaryvelocity.cpp`
+- `gpu_flip_bodies` (`shaders/gpu_flip_bodies.wgsl`; its CPU references in `gpu_flip_body_tests.rs`) — the bodies' rows in the pressure solve and their captured impulse from `rigidpressurecoupling.h`, the pressure entries and the velocity change on the solid faces from `rigidboundaryvelocity.cpp`, the order of solve, impulse, velocity change and constraint from `rigidfluidcoupling.cpp`; the dynamic bodies' predicted velocity in `gpu_flip_step.wgsl` from `rigidfluidcoupling.cpp`
 - `liquid_fill` — seeding only where the solid distance is positive, from `fluidsimulation.cpp`
 
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.

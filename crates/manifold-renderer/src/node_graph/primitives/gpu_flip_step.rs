@@ -15,6 +15,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
+use super::gpu_flip_bodies::{BodyPasses, Bodies, REACTION_FLOATS, body_refusal};
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Water, lattice_refusal};
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
 use super::sort_particles_into_cells::{
@@ -24,6 +25,7 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+use crate::node_graph::liquid::WATER_DENSITY;
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::LiquidLattice;
@@ -224,9 +226,14 @@ pub(crate) struct StepState {
     sorted: Option<GpuBuffer>,
     /// The face grid output: exactly [`face_bytes`] of the current lattice.
     faces: Option<GpuBuffer>,
-    /// 128 zero bytes bound where an optional input is unwired.
+    /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
     zeros: Option<GpuBuffer>,
+    bodies: BodyPasses,
 }
+
+/// Zero bytes bound for an unwired input: the uniform-sized arrays, and an
+/// empty reaction for every body a liquid holds.
+const ZERO_BYTES: u64 = (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64;
 
 const SORT_LABELS: SortLabels = SortLabels {
     clear: "gpu_flip.step.sort.clear",
@@ -281,6 +288,11 @@ struct Step<'a> {
     bodies: &'a GpuBuffer,
     shapes: &'a GpuBuffer,
     atlas: &'a GpuBuffer,
+    /// What the water has pushed on each body so far this tick, read by the
+    /// solid velocity; added to when `dynamic`.
+    reaction: &'a GpuBuffer,
+    /// The bodies take part in the pressure solve and gather its reaction.
+    dynamic: bool,
     pressure_iterations: u32,
     density_iterations: u32,
     band: u32,
@@ -299,7 +311,7 @@ impl StepState {
     /// Size every array for `cells` and `slots` before anything is encoded.
     fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64) -> Result<(), String> {
         if self.zeros.is_none() {
-            let zeros = device.try_create_buffer_shared(128)?;
+            let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
             zeros.zero_fill();
             self.zeros = Some(zeros);
         }
@@ -436,6 +448,7 @@ impl StepState {
                 buffer(14, step.bodies),
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
+                buffer(21, step.reaction),
             ],
             face_groups,
             "gpu_flip.step.solid_velocity",
@@ -475,7 +488,26 @@ impl StepState {
             phi: step.ghost.then_some(&l.phi),
         };
         self.solver.prepare(device, enc, &water)?;
-        self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure_iterations)?;
+        // Dynamic bodies join the solve as the engine's mass-aware PCG
+        // (RigidFluidCoupling) has them; their tick rows start at `first`.
+        let coupled = Bodies {
+            lattice: cells,
+            lattice_min: p.box_min,
+            cell_size: p.cell_size,
+            density: WATER_DENSITY,
+            tick_seconds: p.tick_seconds,
+            first: (p.rows - p.body_count).max(0) as u32,
+            count: p.body_count.max(0) as u32,
+            water: &l.water,
+            open: &l.s,
+            solid: &l.v,
+            bodies: step.bodies,
+        };
+        if step.dynamic {
+            self.bodies.prepare(device)?;
+        }
+        let passes = step.dynamic.then_some((&self.bodies, &coupled));
+        self.solver.solve_coupled(enc, &water, &l.rhs, &l.pressure, step.pressure_iterations, passes)?;
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -494,6 +526,12 @@ impl StepState {
             );
         };
         subtract(enc, &ghost, phi, &l.f, "gpu_flip.step.project");
+        // The engine's finishPressure: the pressure's impulse goes to the
+        // bodies and their velocity change to the solid faces, then the
+        // constraint's friction is the bodies' too.
+        if step.dynamic {
+            self.bodies.react(enc, &coupled, &l.pressure, &l.f, step.reaction)?;
+        }
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
         // between two constrained fields.
@@ -545,7 +583,7 @@ impl StepState {
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). Outputs the moved particles and the step's face grid, valid at least 2 layers around the water.",
+    purpose: "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -566,10 +604,13 @@ crate::primitive! {
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
         rows: ScalarF32 optional,
+        reaction: Array(f32) optional,
+        dynamic_bodies: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
         faces: Array(FaceSample),
+        reaction_out: Array(f32),
     },
     params: [
         float_param!("lattice_min_x", "Lattice Min X", -2.1875, -1.0e4, 1.0e4),
@@ -602,7 +643,7 @@ crate::primitive! {
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside node.liquid_state's tick region, once per step: steps_per_tick nodes in a chain, each with its step_in_tick, the first taking the state's particles and every later one the previous step's out. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. Spread Rate 0 skips the density solve; run it on the last step of the tick only. The last step's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
+    composition_notes: "Inside node.liquid_state's tick region, once per step: steps_per_tick nodes in a chain, each with its step_in_tick, the first taking the state's particles and every later one the previous step's out. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and, on the first step, reaction, every later step taking the previous step's reaction_out; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. Spread Rate 0 skips the density solve; run it on the last step of the tick only. The last step's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
     examples: ["WaterDamBreakGpuFlip"],
     picker: { label: "GPU FLIP Step", category: Atom },
     summary: "Moves the water forward one step: gravity, solids, incompressibility and the particles' motion.",
@@ -636,8 +677,13 @@ impl Primitive for GpuFlipStep {
             "out" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
             "faces" => Some(1),
+            "reaction_out" => inputs.iter().find(|(name, _)| *name == "reaction").map(|&(_, n)| n),
             _ => None,
         }
+    }
+
+    fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
+        &[("reaction", "reaction_out")]
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -712,6 +758,13 @@ impl Primitive for GpuFlipStep {
             }
             _ => (&zeros, &zeros, &zeros, 0, 0, 0),
         };
+        let reaction_in = ctx.inputs.array("reaction");
+        let dynamic = body_count > 0 && ctx.scalar_or_param("dynamic_bodies", 0.0) > 0.0;
+        if dynamic && let Some(reason) = body_refusal(body_count as u32, reaction_in) {
+            ctx.error(format!("{NAME}: {reason}"));
+            return;
+        }
+        let reaction = reaction_in.unwrap_or(&zeros);
         let step = Step {
             params: StepParams {
                 n: cells,
@@ -747,6 +800,8 @@ impl Primitive for GpuFlipStep {
             bodies,
             shapes,
             atlas,
+            reaction,
+            dynamic,
             pressure_iterations,
             density_iterations,
             band: band_layers(travel).max(FACE_VALID_LAYERS),

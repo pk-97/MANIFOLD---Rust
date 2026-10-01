@@ -118,6 +118,10 @@ impl Primitive for ParticleVolume {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if ctx.inputs.any_pending() {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let scale = volume_scale(ctx.params);
         // A producer without a frame yet publishes no lattice: nothing to sum,
