@@ -974,12 +974,15 @@ pub(super) mod tests {
     /// `def` walked by the liquid extent rules, frozen as the app renders it
     /// when `frozen`.
     pub(in crate::node_graph::primitives) fn walk(def: &EffectGraphDef, frozen: bool) -> Result<ExtentReport, ExtentError> {
-        let (mut graph, plan) = if frozen {
-            let view = crate::node_graph::freeze::install::fuse_generator_view(def, &registry()).expect("the def fuses");
+        let view = frozen.then(|| crate::node_graph::freeze::install::fuse_generator_view(def, &registry())).flatten();
+        let (mut graph, plan) = if let Some(view) = view {
             let graph = (*view.def).clone().into_graph(&registry(), &view.mesh_rules).expect("the fused def builds");
             let plan = compile(&graph).expect("the fused def compiles");
             (graph, plan)
         } else {
+            // With no region to fuse the app renders the def as authored; a
+            // region it refused to fuse is a failure.
+            assert!(!frozen || crate::node_graph::fusion_report(def, &registry()).regions.is_empty(), "the def has regions but does not fuse");
             built(def)
         };
         check_graph(&mut graph, &plan, &rules(frozen))

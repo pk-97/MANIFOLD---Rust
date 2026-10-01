@@ -662,7 +662,7 @@ pub(crate) struct Step {
     current: usize,
     /// The pool stepped since an output last took it.
     owed: bool,
-    outputs: Outputs,
+    pub(super) outputs: Outputs,
 }
 
 impl Step {

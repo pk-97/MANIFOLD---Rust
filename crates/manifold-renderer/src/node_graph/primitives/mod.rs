@@ -379,6 +379,8 @@ mod whitewater_pool_cpu;
 mod whitewater_pool_tests;
 pub(crate) mod whitewater_lifecycle;
 pub(crate) mod whitewater_step;
+#[cfg(test)]
+mod whitewater_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_handoff_tests;
 #[cfg(test)]

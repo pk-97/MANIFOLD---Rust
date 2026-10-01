@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · reopened by D14 (GPU lifecycle); P1–P6 emitter built, O1 and O2 green · owed: D14's GPU lifecycle port with parity against the vendored lifecycle, `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · reopened by D14 (GPU lifecycle); P1–P6 emitter built, O1 and O2 green · GPU lifecycle built as `node.whitewater_step` (section 3.9 (GPU lifecycle)) · owed: L5's side-by-side count against the vendored lifecycle, `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -275,6 +275,8 @@ Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit,
 
 **The pool.** One fixed-capacity `Array(WhitewaterParticle)` (position, velocity, lifetime, type, id) carried frame to frame by an array feedback. Order in the pool is age order: survivors first in their old order, then this frame's spawns in emission order.
 
+**As built: one node, `node.whitewater_step`.** Emit and the whole lifecycle run inside one node with its own hand shader, replacing the GPU FLIP preset's whitewater group (the group and its 22 inner nodes). It owns the id counter and the `pool_full` count, both reseeded when the domain's epoch changes, so the first frame and a reseed frame report zeros. It reads the solver only through the seam ports and refuses by name when the lattice is missing. The shader uses no atomics: compaction and per-cell rank are ordered scans, so the pool order is the engine's. Proofs: `whitewater_step_matches_cpu_across_frames` (gpu-proofs) checks the report exactly and every particle of each population against a CPU reference over seven frames, including a reseed; `whitewater_step_reference_is_tie_free` holds the fixture away from decision ties; `whitewater_step_extents_at_64` is the CPU extent proof; the liquid conformance table checks the shader stays atomic-free. With the group gone the preset has no fusable region and renders unfused.
+
 **GPU mapping rules** (each is the engine's result, computed in parallel; a mapping that cannot reproduce the result is named, never approximated):
 
 - **Per-cell cap by ordered rank.** The engine keeps the first `_maxDiffuseParticlesPerCell` (5000) particles of a cell in pool order. On the GPU a particle's rank in its cell comes from a sort stable by pool index; atomics are forbidden here because their order is not the engine's.
@@ -422,7 +424,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 ### L6 — Retire the CPU lifecycle path
 
-- **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays.
+- **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays. The preset already runs `node.whitewater_step` alone; L5's side-by-side count is still owed before this phase is called done.
 
 ## 6. Decided — do not reopen
 
