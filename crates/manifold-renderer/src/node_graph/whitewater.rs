@@ -71,6 +71,45 @@ impl KnownItem for KnownValue {
     const SPECS: &'static [ChannelSpec] = KNOWN_VALUE_SPECS;
 }
 
+/// One slot of the GPU whitewater pool (`docs/GPU_WHITEWATER_DESIGN.md`
+/// section 3.9): a spawn record plus the id FLIP keeps per particle. A slot
+/// with lifetime ≤ 0 holds no particle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WhitewaterParticle {
+    /// Scene metres, and seconds left.
+    pub position_lifetime: [f32; 4],
+    pub velocity: [f32; 3],
+    /// Bubble 0, foam 1, spray 2.
+    pub kind: u32,
+    /// FLIP's per-particle id, 0 to [`WHITEWATER_ID_LIMIT`] − 1.
+    pub id: u32,
+    pub pad0: u32,
+    pub pad1: u32,
+    pub pad2: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<WhitewaterParticle>() == 48);
+
+/// FLIP's `_diffuseParticleIDLimit`: ids cycle through this many values.
+pub const WHITEWATER_ID_LIMIT: u32 = 256;
+
+/// Std430: position_lifetime Vec4F at 0, velocity Vec3F at 16, kind U32 at
+/// 28, id and padding at 32; stride 48.
+pub const WHITEWATER_PARTICLE_SPECS: &[ChannelSpec] = &[
+    ChannelSpec { name: well_known::POSITION_LIFETIME, ty: ChannelElementType::Vec4F },
+    ChannelSpec { name: well_known::VELOCITY, ty: ChannelElementType::Vec3F },
+    ChannelSpec { name: well_known::KIND, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::ID, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::PAD0, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::PAD1, ty: ChannelElementType::U32 },
+    ChannelSpec { name: well_known::PAD2, ty: ChannelElementType::U32 },
+];
+
+impl KnownItem for WhitewaterParticle {
+    const SPECS: &'static [ChannelSpec] = WHITEWATER_PARTICLE_SPECS;
+}
+
 /// The `step` of each node.nearest_crossing pass, in order. A first pass at
 /// 2 then two at 1 find the nearest stored crossing wherever three passes at
 /// 1 settle on a neighbour's (GPU_WHITEWATER_DESIGN.md D4).

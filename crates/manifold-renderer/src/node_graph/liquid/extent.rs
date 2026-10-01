@@ -605,6 +605,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.emission_count", check: emission_count },
     ExtentRule { type_id: "node.spawn_whitewater", check: spawn_whitewater },
     ExtentRule { type_id: "node.whitewater_type", check: whitewater_type },
+    ExtentRule { type_id: "node.advect_whitewater", check: advect_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
@@ -1417,6 +1418,15 @@ fn whitewater_type(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("distance", cells * 4)?;
     x.covers("cells", cells * 4)?;
     x.covers("out", x.bytes("spawns").unwrap_or(0))
+}
+
+/// The advect reads the face grid and the solid lattice whole, and writes a
+/// record per pool slot.
+fn advect_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    x.covers("solid", cell_total(nodes) * 4)?;
+    x.covers("out", x.bytes("pool").unwrap_or(0))
 }
 
 /// The lifecycle's snapshot copies read the whole face grid, level and
