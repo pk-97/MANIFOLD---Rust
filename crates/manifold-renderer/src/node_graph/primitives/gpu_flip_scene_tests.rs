@@ -453,6 +453,44 @@ fn gpu_flip_hydrostatic_column_rests() {
     }
 }
 
+/// Mechanical energy per unit particle mass summed over the live particles,
+/// KE + PE with the floor at `floor` (J/kg).
+pub(super) fn energy(particles: &[FluidParticle], floor: f64) -> f64 {
+    particles
+        .iter()
+        .filter(|p| p.position_radius[3] > 0.0)
+        .map(|p| {
+            let v2: f64 = p.velocity.iter().map(|&c| f64::from(c).powi(2)).sum();
+            0.5 * v2 + G * (f64::from(p.position_radius[1]) - floor)
+        })
+        .sum()
+}
+
+/// The Dam Break never gains energy: an inviscid solver with closed walls
+/// can only lose KE + PE (PIC blending, the projection, wall stops), so no
+/// frame may sit above the energy it started with past float noise
+/// (1e-4 of it). A high run-up that passes this is physics, not a source.
+#[test]
+fn gpu_flip_dam_break_energy_never_rises() {
+    for steps in [1, 2] {
+        let scene = WaterScene::dam_break(64).with_steps(steps);
+        let mut run = Run::new(scene);
+        let floor = scene.min()[1];
+        let e0 = energy(&run.particles(), floor);
+        let mut worst = f64::NEG_INFINITY;
+        for frame in 0..300 {
+            run.frame();
+            let e = energy(&run.particles(), floor) / e0;
+            worst = worst.max(e - 1.0);
+            if frame % 15 == 14 {
+                println!("GPU FLIP energy {steps} steps frame {frame:3}: E/E0 {e:.5}");
+            }
+        }
+        println!("GPU FLIP energy {steps} steps: most above E0 {:+.2e}", worst);
+        assert!(worst <= 1e-4, "{steps} steps: energy rose {worst:.2e} of E0 above its start");
+    }
+}
+
 /// The tank's first standing wave: 4 m long, 1 m deep, so wavelength 8 m and
 /// linear theory's period 2π/√(gk·tanh kd) = 2.795 s at k = π/4. The water's
 /// centre of mass in x swings with it (the step's third harmonic weighs 1/27
