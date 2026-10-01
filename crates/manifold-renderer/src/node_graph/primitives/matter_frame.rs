@@ -107,7 +107,9 @@ impl Primitive for MatterFrame {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Matter Frame") else {
+            return;
+        };
         let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as u32;
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));

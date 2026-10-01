@@ -102,7 +102,9 @@ impl Primitive for LiquidSolidDistance {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let lattice = LiquidLattice::from_wires(ctx);
+        let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Solid Distance") else {
+            return;
+        };
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;

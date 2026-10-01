@@ -214,8 +214,8 @@ impl AtomExtent<'_> {
     }
 
     /// The lattice the node reads from its wires, as `LiquidLattice::from_wires`.
-    pub fn lattice(&self) -> LiquidLattice {
-        LiquidLattice::from_scalars(|name, default| self.scalar(name, default))
+    pub fn lattice(&self) -> Result<LiquidLattice, Verdict> {
+        LiquidLattice::from_scalars(|name, default| self.scalar(name, default)).map_err(Verdict::Refused)
     }
 
     /// Three whole-number wires, as the surface atoms round them.
@@ -756,7 +756,7 @@ fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn matter_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     let cells = lattice.cells();
     let pool = whole(x, "pool_cells", 3.0).min(cells[1]);
     let column = [["column_x0", "column_x1"], ["column_y0", "column_y1"], ["column_z0", "column_z1"]]
@@ -804,7 +804,7 @@ fn matter_move_bodies(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     node_extent(x, &lattice)?;
     x.covers("accum", grid_accum_bytes(lattice.nodes()))?;
     if x.wired("order") && x.wired("ranges") {
@@ -821,7 +821,7 @@ fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn matter_grid_update(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     let nodes = node_extent(x, &lattice)?;
     x.covers("grid", grid_bytes(lattice.nodes()))?;
     x.covers("accum", nodes * 16)?;
@@ -829,21 +829,21 @@ fn matter_grid_update(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn matter_body_reaction(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     node_extent(x, &lattice)?;
     x.covers("grid", grid_bytes(lattice.nodes()))?;
     field_reads(x)
 }
 
 fn grid_to_matter(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     node_extent(x, &lattice)?;
     // Active points clamp to the points array.
     x.covers("grid", grid_bytes(lattice.nodes()))
 }
 
 fn matter_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     let nodes = node_extent(x, &lattice)?;
     x.covers("stats", u64::from(STATS_WORDS) * 4)?;
     x.covers("grid", nodes * size_of::<MatterGridNode>() as u64)?;
@@ -852,7 +852,7 @@ fn matter_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 fn liquid_solid_distance(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // One thread per lattice node over storage sized from the same lattice.
-    let solid = x.lattice().solid_bytes();
+    let solid = x.lattice()?.solid_bytes();
     x.provide("solid", solid);
     x.hold(solid);
     Ok(())
@@ -908,7 +908,7 @@ fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     provide_frame_faces(x, &lattice, MATTER_FACE_VALID_LAYERS as f32);
     let count = x.count("count", 0.0)?;
     x.covers("points", u64::from(count) * size_of::<MatterPoint>() as u64)?;
@@ -1155,7 +1155,7 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let lattice = x.lattice();
+    let lattice = x.lattice()?;
     let valid_layers = x.param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
     provide_frame_faces(x, &lattice, valid_layers);
     let count = x.count("count", 0.0)?;
