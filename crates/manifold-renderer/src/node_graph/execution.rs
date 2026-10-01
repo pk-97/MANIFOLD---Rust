@@ -2140,6 +2140,11 @@ impl Executor {
                         });
                     inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
                 };
+                // A held step neither aliases nor copies: passing a pending
+                // source through would publish bytes nobody wrote this frame
+                // (into the host's target, when this step is the terminal).
+                let held = self.readiness_input_pending(step, selected_input_resource);
+                let skip_alias = skip_alias.filter(|_| !held);
                 let mut performed_alias = false;
                 let mut copied_passthrough = false;
                 if let Some((in_port, out_port)) = skip_alias {
@@ -2326,9 +2331,7 @@ impl Executor {
 
                 // A pending readiness input makes the step pending without
                 // running: its output bytes are not written this frame.
-                let pending_skip = !performed_alias
-                    && !copied_passthrough
-                    && self.readiness_input_pending(step, selected_input_resource);
+                let pending_skip = held;
                 if pending_skip {
                     self.pending_skipped[idx] = true;
                     executed_pure_epoch = None;
@@ -6110,6 +6113,108 @@ mod alias_gpu_tests {
     fn skip_passthrough_evaluates_real_mismatches() {
         check_skip_passthrough(false, 2, GpuTextureFormat::Rgba16Float);
         check_skip_passthrough(false, 4, GpuTextureFormat::Rgba8Unorm);
+    }
+
+    /// Clears its output to 0.25 while ready; writes nothing while pending,
+    /// like an async source still loading.
+    struct GatedClearSource {
+        type_id: EffectNodeType,
+        pending: Arc<Mutex<bool>>,
+    }
+
+    impl EffectNode for GatedClearSource {
+        fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
+            crate::node_graph::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType { &self.type_id }
+        fn inputs(&self) -> &[NodeInput] { &[] }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: std::borrow::Cow::Borrowed("out"), ty: PortType::Texture2D,
+                kind: PortKind::Output, required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] { &[] }
+        fn output_format(&self, _: &str) -> Option<GpuTextureFormat> {
+            Some(GpuTextureFormat::Rgba16Float)
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            if *self.pending.lock().unwrap() {
+                ctx.mark_outputs_pending();
+                return;
+            }
+            let out = ctx.outputs.texture_2d("out").unwrap().clone();
+            ctx.gpu_encoder().clear_texture(&out, 0.25, 0.0, 0.0, 1.0);
+        }
+    }
+
+    fn first_red(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> f32 {
+        let buffer = device.create_buffer_shared(4 * 4 * 8);
+        let mut enc = device.create_encoder("held-terminal-readback");
+        enc.copy_texture_to_buffer(texture, &buffer, 4, 4, 32);
+        enc.commit_and_wait_completed();
+        let bits = unsafe { *buffer.mapped_ptr().unwrap().cast::<u16>() };
+        half::f16::from_bits(bits).to_f32()
+    }
+
+    /// A generator's terminal pass-through held by a pending source leaves
+    /// the host's target alone: it keeps the last frame it was given, never
+    /// the bytes another resource left in the source's slot.
+    #[test]
+    fn held_terminal_keeps_last_frame_in_host_target() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let device = crate::test_device();
+        let pending = Arc::new(Mutex::new(false));
+        let evals = Arc::new(AtomicUsize::new(0));
+        let mut graph = Graph::new();
+        let src = graph.add_node(Box::new(GatedClearSource {
+            type_id: EffectNodeType::new("test.gated_clear_source"),
+            pending: pending.clone(),
+        }));
+        let effect = graph.add_node(Box::new(BypassProbe {
+            source: false, evals: evals.clone(),
+            type_id: EffectNodeType::new("test.bypass_effect"),
+        }));
+        let out = graph.add_node(Box::new(crate::node_graph::FinalOutput::new()));
+        graph.connect((src, "out"), (effect, "in")).unwrap();
+        graph.connect((effect, "out"), (out, "in")).unwrap();
+        let plan = compile(&graph).unwrap();
+        let resource = |node| plan.steps().iter().find(|s| s.node == node).unwrap().outputs[0].1;
+        let (src_res, dst_res) = (resource(src), resource(effect));
+        let format = GpuTextureFormat::Rgba16Float;
+        let mut backend = MetalBackend::new(device.arc(), 4, 4, format);
+        let src_target = RenderTarget::new(&device, 4, 4, format, "held-src");
+        let src_texture = src_target.texture.clone();
+        backend.pre_bind_texture_2d(src_res, src_target);
+        backend.pre_bind_texture_2d(dst_res, RenderTarget::new(&device, 4, 4, format, "held-dst"));
+        let dst_slot = backend.slot_for(dst_res).unwrap();
+        let host = RenderTarget::new(&device, 4, 4, format, "held-host");
+        assert!(backend.replace_texture_2d(dst_slot, host.texture.clone()));
+        let mut exec = Executor::new(Box::new(backend));
+        let frame = |exec: &mut Executor, graph: &mut Graph| {
+            let mut enc = device.create_encoder("held-terminal");
+            let mut gpu = GpuEncoder::new(&mut enc, &device);
+            exec.execute_frame_with_gpu(graph, &plan, frame_time(), &mut gpu);
+            enc.commit_and_wait_completed();
+        };
+
+        frame(&mut exec, &mut graph);
+        assert_eq!(first_red(&device, &host.texture), 0.25);
+
+        *pending.lock().unwrap() = true;
+        let mut enc = device.create_encoder("other-tenant");
+        GpuEncoder::new(&mut enc, &device).clear_texture(&src_texture, 0.9, 0.0, 0.0, 1.0);
+        enc.commit_and_wait_completed();
+        frame(&mut exec, &mut graph);
+        assert_eq!(first_red(&device, &host.texture), 0.25, "the held terminal keeps the last frame");
+        assert!(exec.mesh_pending_of(dst_res), "the host can see the terminal is held");
+
+        *pending.lock().unwrap() = false;
+        frame(&mut exec, &mut graph);
+        assert!(!exec.mesh_pending_of(dst_res));
+        assert_eq!(first_red(&device, &host.texture), 0.25);
+        assert_eq!(evals.load(Ordering::Relaxed), 0, "a pass-through never evaluates");
     }
 
     fn frame_time() -> FrameTime {
