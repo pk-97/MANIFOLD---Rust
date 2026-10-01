@@ -2,7 +2,7 @@
 
 <!-- index: The contract FLIP, GPU MLS-MPM and SWASH meet to join scenes — particle frames, face-grid outputs, Box3D coupling, clock/pause/export, scene recognition, safety rails — and the phases that move MPM and SWASH behind it. -->
 
-**Status:** PROPOSED · 2026-10-01 · P7b, P8 and P9 shipped, P8 owes its L3 flow · P5 and P6 retired (regions no longer nest) · P7a unaudited · P10–P12 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
+**Status:** PROPOSED · 2026-10-01 · P7b, P8 and P9 shipped, P8 owes its L3 flow · P5 and P6 retired (regions no longer nest) · P7a unaudited · P11 built, unwired (a net loss alone) · P10, P12 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
 
 **Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs GPU FLIP's full step (GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
@@ -492,6 +492,17 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 ### P11 — Block occupancy map and its first consumer (BUG-1z1p (shared block occupancy map))
 
 `R/liquid/blocks.rs` (constants, WGSL include), `node.liquid_blocks` on the codegen path with a CPU-reference value proof and a fused-vs-unfused proof, an extent rule, and `node.surface_crossings` reading the map. Gate: I17, and a measured surface_crossings time with the map, net of the producer's cost.
+
+**Built, not wired.** I17 holds. CPU extents are proven at Resolution 64 and 128 (`liquid_block_extents_at_64_and_128`). `surface_crossings_block_skip_timing_on_dam_break` measured the shipped Dam Break at Surface Detail 0 (refinement 2), taking the level set, solid and particles at frames 30, 90 and 150 (GPU ms per dispatch):
+
+| Resolution | Blocks with surface | Map | Crossings, map off → on | Saved, net of the map |
+|---|---|---|---|---|
+| 64 (70³ cells, 18³ blocks) | 17–29% | 0.10 | 0.31–0.50 → 0.29–0.50 | −0.08 to −0.10 |
+| 128 (134³ cells, 34³ blocks) | 10–27% | 0.64–0.79 | 1.18–3.06 → 0.89–2.89 | −0.41 to −0.48 |
+
+With surface_crossings as its only consumer, the map costs more than it saves at both sizes. surface_crossings already skips footprints with no sign change, so the map only spares it the level-set reads. Building the map reads the same level set, one thread per block. The map pays only once it is shared, with the mesher and the step (P12 (solver tile skipping)). Wiring it also needs a graph producer of the cell `water` lattice. The step's `water` is internal, on the face grid's cells, and nothing in the graph publishes it.
+
+`surface_crossings` has no fused proof with the map: a gather-only region dispatches over its shortest gathered input, here the map (BUG-iiv4 (gather-only region count anchor)).
 
 ### P12 — Solver tile skipping (entry: P11 shipped and the dilation bound measured)
 
