@@ -426,6 +426,11 @@
               "name": "smoothing_passes",
               "targetHandle": "Smoothing Passes",
               "targetParam": "value"
+            },
+            {
+              "name": "mesh_relaxation",
+              "targetHandle": "Mesh Relaxation",
+              "targetParam": "value"
             }
           ]
         },
@@ -621,6 +626,30 @@
             "id": 16,
             "nodeId": "liquid_clamp_to_solids",
             "typeId": "node.clamp_liquid_to_solids"
+          },
+          {
+            "handle": "Mesh Relaxation",
+            "id": 17,
+            "nodeId": "liquid_mesh_relaxation",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.value"
+          },
+          {
+            "handle": "Relax 1",
+            "id": 18,
+            "nodeId": "liquid_relax_1",
+            "typeId": "node.relax_surface_mesh"
+          },
+          {
+            "handle": "Relax 2",
+            "id": 19,
+            "nodeId": "liquid_relax_2",
+            "typeId": "node.relax_surface_mesh"
           }
         ],
         "wires": [
@@ -933,8 +962,104 @@
           {
             "fromNode": 10,
             "fromPort": "vertices",
+            "toNode": 18,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "relaxed",
+            "toNode": 19,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "relaxed",
             "toNode": 11,
             "toPort": "vertices"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "clamped",
+            "toNode": 18,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "clamped",
+            "toNode": 19,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "scan"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "scan"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "extent",
+            "toNode": 18,
+            "toPort": "extent"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "extent",
+            "toNode": 19,
+            "toPort": "extent"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 18,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 18,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 18,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 19,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 19,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 19,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "strength"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "strength"
           },
           {
             "fromNode": 14,
@@ -1209,6 +1334,10 @@
         "bin_cells": {
           "type": "Float",
           "value": 1.0
+        },
+        "mesh_relaxation": {
+          "type": "Float",
+          "value": 0.0
         },
         "particle_scale": {
           "type": "Float",
@@ -2229,6 +2358,19 @@
         "convert": {
           "type": "Float"
         },
+        "defaultValue": 0.0,
+        "id": "mesh_relaxation",
+        "label": "Mesh Relaxation",
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_mesh_relaxation",
+          "param": "value"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
         "defaultValue": 0.004999999888241291,
         "id": "foam_radius",
         "label": "Foam Size",
@@ -2358,6 +2500,18 @@
         "max": 4.0,
         "min": 1.0,
         "name": "Surface Particle Scale",
+        "section": "Water Detail",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F2",
+        "id": "mesh_relaxation",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Mesh Relaxation",
         "section": "Water Detail",
         "wholeNumbers": false
       },
