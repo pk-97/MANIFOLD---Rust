@@ -4202,7 +4202,8 @@
       "aliases": [
         "coarse solve",
         "multigrid bottom",
-        "gauss seidel"
+        "direct solve",
+        "matrix inverse"
       ],
       "category": "Particles 3D",
       "examples": [
@@ -4214,29 +4215,19 @@
           "name": "water",
           "required": true,
           "type": "Array"
-        },
-        {
-          "name": "rhs",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "cell_size",
-          "required": false,
-          "type": "f32"
         }
       ],
-      "label": "Coarse Pressure Solve",
+      "label": "Coarse Inverse",
       "outputs": [
         {
-          "capacity": "follows:rhs",
+          "capacity": "param:nodes_x+nodes_y+nodes_z=4096",
           "name": "out",
           "type": "Array"
         }
       ],
       "params": [
         {
-          "default": "8",
+          "default": "4",
           "label": "Cells X",
           "name": "nodes_x",
           "range": [
@@ -4246,7 +4237,7 @@
           "type": "float"
         },
         {
-          "default": "8",
+          "default": "4",
           "label": "Cells Y",
           "name": "nodes_y",
           "range": [
@@ -4256,7 +4247,7 @@
           "type": "float"
         },
         {
-          "default": "8",
+          "default": "4",
           "label": "Cells Z",
           "name": "nodes_z",
           "range": [
@@ -4264,33 +4255,13 @@
             "1024"
           ],
           "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Cell Size",
-          "name": "cell_size",
-          "range": [
-            "0.0001",
-            "100"
-          ],
-          "type": "float"
-        },
-        {
-          "default": "8",
-          "label": "Sweeps",
-          "name": "sweeps",
-          "range": [
-            "1",
-            "256"
-          ],
-          "type": "int"
         }
       ],
-      "purpose": "Solve the masked Poisson equation L p = rhs on a small lattice (nodes_x/y/z cells, cell (i, j, k) at i + nx·(j + ny·k), at most 4,096 cells) in one workgroup: from zero, `sweeps` red-black Gauss-Seidel sweeps (color 0 then 1), then `sweeps` more (1 then 0). A water cell (water > 0.5) becomes (Σ of its water neighbours − cell_size² · rhs) / (its neighbours inside the box); air holds zero and the box walls are closed.",
+      "purpose": "The inverse of the masked Poisson matrix A on a small lattice (nodes_x/y/z cells, cell (i, j, k) at i + nx·(j + ny·k), at most 64 cells), as a cells × cells row-major array: A[c][c] counts c's neighbours inside the box and A[c][d] is −1 for a water neighbour d, on water cells (water > 0.5) only, so the masked Laplacian is −A / h². Built in one workgroup by symmetric elimination; the result is exactly symmetric. Air rows and columns are zero. A water body that touches no air is singular: one of its cells is pinned at zero.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Solves the water's pressure exactly on the smallest grid of the solver.",
-      "type_id": "node.coarse_pressure_solve"
+      "summary": "Works out the exact pressure answer on the solver's smallest grid.",
+      "type_id": "node.coarse_inverse"
     },
     {
       "aliases": [
@@ -6105,7 +6076,7 @@
           "type": "float"
         }
       ],
-      "purpose": "The crowding target of a density solve that evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = −rate · e inside the water (all six neighbours hold particles or lie past the lattice) and −rate · max(e, 0) at its surface; empty cells are 0. Solved as a pressure right-hand side, the field it gives expands crowded cells and, inside the water, closes sparse ones at that rate (1/s).",
+      "purpose": "The crowding target of a density solve that evens out particle packing: with count[c] the particles a sort put in cell c (cell_ranges, lattice order) and e = count[c] / rest − 1, out[c] = −rate · e inside the water (all six neighbours hold at least rest / 2 or lie past the lattice) and −rate · max(e, 0) at its surface; empty cells are 0. Solved as a pressure right-hand side, the field it gives expands crowded cells and, inside the water, closes sparse ones at that rate (1/s).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Pushes apart liquid particles that have bunched up, so the water keeps its volume.",
@@ -9396,7 +9367,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Add gravity to a face grid (node.particles_to_faces' layout) for one step: every face gains gravity × step_dt along its normal, except the box walls (the first and last face along each axis), whose velocity is set to 0. Weights pass through.",
+      "purpose": "Add gravity to a face grid (node.particles_to_faces' layout) for one step: every face gains gravity × step_dt along its normal; a box wall face (the first and last along each axis) then keeps only the part leaving the wall, so water may leave a wall and never enter it. Weights pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Pulls the liquid down for one step and stops it going through the tank walls.",
@@ -9543,6 +9514,11 @@
           "name": "flip",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "max_travel",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Faces To Particles",
@@ -9643,9 +9619,19 @@
             "1"
           ],
           "type": "float"
+        },
+        {
+          "default": "3",
+          "label": "Max Travel (cells)",
+          "name": "max_travel",
+          "range": [
+            "0.25",
+            "64"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `advect` for step_dt and is kept 0.2 cells inside each wall of the lattice box, where the wall's zero velocity still lets it leave. Radius and id are kept; unused slots pass through.",
+      "purpose": "Move liquid particles one step through face grids (node.particles_to_faces' layout). Each live particle (radius > 0) samples `faces` and `old` trilinearly per component over the faces with weight > 0; its velocity becomes flip · (v + faces(x) − old(x)) + (1 − flip) · faces(x). It then moves by third-order Runge–Kutta through `faces` for step_dt, each stage at most max_travel cells long (the velocity is not capped), plus step_dt · (advect(x) − faces(x)) capped at half a cell, and is kept 0.2 cells inside each wall of the lattice box. Radius and id are kept; unused slots pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands the grid's corrected motion back to the liquid particles and moves them one step.",
@@ -25359,7 +25345,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Transfer liquid particles to a face grid (velocity on cell faces). The lattice has nodes_x/y/z cells of cell_size from lattice_min; out has (nodes + 1)³ padded cells, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k) owning the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h and the z face at (i + ½, j + ½, k)·h. Each face's weight is the sum over live particles (radius > 0) of Π max(0, 1 − |Δ|/h), and its velocity the weighted mean of the particles' velocity along the face normal (0 with no weight). Faces past the lattice are zero.",
+      "purpose": "Transfer liquid particles to a face grid (velocity on cell faces). The lattice has nodes_x/y/z cells of cell_size from lattice_min; out has (nodes + 1)³ padded cells, padded cell (i, j, k) at i + (nx + 1)·(j + (ny + 1)·k) owning the x face at (i, j + ½, k + ½)·h, the y face at (i + ½, j, k + ½)·h and the z face at (i + ½, j + ½, k)·h. Each face's weight is the sum over live particles (radius > 0) of Π max(0, 1 − |Δ|/h), and its velocity the weighted mean of the particles' velocity along the face normal (0 with no weight). A box wall face (the first and last along its axis) keeps only the part of that velocity leaving the wall and has weight 1: the box walls let water leave and never enter. Faces past the lattice are zero.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Spreads the liquid particles' motion onto a grid so the solver can make it incompressible.",
@@ -39850,7 +39836,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces become 0 and valid; an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
+      "purpose": "Apply a pressure field to a face grid (node.particles_to_faces' layout). Box wall faces keep u and are valid (the solve took them as given); an inner face with water on either side becomes u − (p_upper − p_lower) / cell_size and valid; a face between two air cells keeps u and is marked invalid. The output weight is 1 for valid, 0 for invalid. pressure is 0 in air.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Uses the pressure to push the liquid so it neither squashes nor stretches.",

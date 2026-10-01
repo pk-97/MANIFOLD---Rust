@@ -300,7 +300,7 @@ _Generated from the node registry. Do not hand-edit. 372 nodes registered, group
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
 | Cells With Particles | `node.cells_with_particles` | Filter | Marks the grid cells that have liquid in them. |
 | Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
-| Coarse Pressure Solve | `node.coarse_pressure_solve` | Filter | Solves the water's pressure exactly on the smallest grid of the solver. |
+| Coarse Inverse | `node.coarse_inverse` | Filter | Works out the exact pressure answer on the solver's smallest grid. |
 | Coarsen Water | `node.coarsen_water` | Filter | Makes a half-size copy of which cells hold water, for the pressure solver's coarse levels. |
 | Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Density Source | `node.density_source` | Filter | Pushes apart liquid particles that have bunched up, so the water keeps its volume. |
