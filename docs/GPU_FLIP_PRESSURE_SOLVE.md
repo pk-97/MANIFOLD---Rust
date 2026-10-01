@@ -82,7 +82,7 @@ Deviations from the engine, each named:
 | ε 1e-6 in the velocity update, 1e-9 in the matrix | 1e-9 in both | against a water φ of −0.005h the 1e-6 shifts θ by 0.3%, and the projection leaves that much of the surface pressure as divergence |
 | ghost rows on every level | the finest level and its conjugate gradient only; coarse levels plain Dirichlet | coarse water is all-eight-children water, so a coarse surface has no φ; the V-cycle stays symmetric, only a weaker preconditioner at the surface |
 | no density solve | the density solve plain Dirichlet | it spreads crowding and is not velocity; no engine rule to port |
-| solids pushed below −h/2, surface tension, density ratio | none here | the solids' face weights scale every face term (section 8, solids); the rest are off in the scenes we race |
+| surface tension, density ratio | none here | off in the scenes we race |
 | skips the last inner face of each axis in the velocity update | every inner face | the skip is an engine boundary quirk; our wall faces are their own rule |
 
 On a seeded still pool (8 particles a cell at the half-cell sites) the top water cell reads φ = −0.433h and the empty cell above −0.037h, which the air floor takes as 0: the surface sits at that cell's centre, 0.5h above the seeded top, as in the plain rows; the engine, which counts that cell as liquid, puts it 0.54h above. The ghost rows move the surface only where the water is thin: sheets, drops and a surface cell with few particles.
@@ -266,7 +266,7 @@ Different on purpose:
 
 ### Solids in the water
 
-Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipped has one. The domain refuses Collider roles and a physics world by name, and the five coupled conformance checks are exempt in the GPU FLIP row (`GPU_FLIP_OWES_SOLIDS`). This phase lifts both.
+Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break has one. The domain takes Collider roles (static and moved by their transform); it still refuses a physics world by name, and the five coupled conformance checks are exempt in the GPU FLIP row (`GPU_FLIP_OWES_SOLIDS`). This phase lifts both.
 
 - **Amended by** LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve) and D12 (solids through the shared distance lattice): body mass goes inside the pressure solve; solids come from the shared distance lattice; an analytic box clip is rejected. Where this section and the seam doc disagree, the seam doc wins.
 - **Why it is simpler now:** the FLIP Fluids engine's operator is a weighted Laplacian, each face carrying its open fraction w_f in [0, 1] (`pressuresolver.cpp` `_solidBoundaryWeights`). Multigrid takes weights directly: L gains w_f per face, the smoother and residual read the weights, and restriction averages them. The FFT solve needed a face collar to reach the same operator.
@@ -286,6 +286,11 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
   - Friction f comes from the bodies only; the engine's domain-wall friction is not ported, because walls are their own rule here.
   - The density solve's subtract is not constrained again: it moves particles through `advect` and is never kept as velocity.
   - Fluid pockets sealed by a solid keep the solid's velocity. The engine zeroes it there (`_conditionSolidVelocityField`); porting it needs a GPU flood fill, tracked as BUG-zpoi (zero solid velocity into sealed fluid pockets).
+- **Collider roles, as built** (`liquid_fill`, the step's `phi_into_solids`, `water_into_solids` and `faces_to_particles`). Tested by `gpu_flip_dam_break_flows_around_the_obstacle`, `gpu_flip_still_pool_rests_round_a_static_obstacle` and `gpu_flip_moving_obstacle_pushes_the_pool`. The engine's rules, ported:
+  - The fill leaves a site inside a solid at the epoch's pose dead (radius 0), as seeding keeps only sites where the solid distance is positive.
+  - A particle's move is marched in 0.1-cell steps; at the first sample inside a solid it is pushed out along the distance's gradient to 0.2 cells outside, or kept at the last outside sample when the push lands inside or moves more than 5 cells (`_resolveCollision`). A particle a moving solid sweeps over is removed (`_removeMarkerParticles`).
+  - A cell within half a cell of the water whose solid centre distance is negative takes φ = −h/2 and counts as water (`ParticleLevelSet::postProcessSignedDistanceField`). It makes the waterline creep up a static box's sides: about 0.1 m/s at its peak, 1.6 cm/s after 2 s at 64³, level unchanged.
+  - The box walls are in the solid distance with the bodies, as the engine's inverted domain object is. Without them, a body flush with a wall leaves a sub-cell open channel between its lattice distance and the wall, and the still pool round a floor-resting box blew up by frame 23. Departure: our walls sit on the lattice edge, the engine's three cells in.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### Tracked in beads

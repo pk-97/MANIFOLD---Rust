@@ -17,8 +17,10 @@
 // Fassbaender; see THIRD_PARTY_NOTICES.md): velocityadvector.cpp (particles
 // to faces), particlelevelset.cpp (the particle distance),
 // levelsetutils.cpp and meshlevelset.cpp (the solid open fractions),
-// fluidsimulation.cpp (the solids' face velocity and the constraint) and
-// pressuresolver.cpp (divergence and the pressure subtraction).
+// fluidsimulation.cpp (the solids' face velocity, the constraint, and the
+// particles' solid collision and removal), interpolation.cpp (the solid
+// distance's gradient) and pressuresolver.cpp (divergence and the pressure
+// subtraction).
 
 struct Params {
     // Cells per axis.
@@ -660,6 +662,49 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[idx] = out;
 }
 
+// The solid distance at cell p's centre, the mean of its eight corners
+// (MeshLevelSet::getDistanceAtCellCenter).
+fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
+    var sum = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        sum = sum + solid[flatten(p + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1), m)];
+    }
+    return 0.125 * sum;
+}
+
+// A cell whose centre is inside a solid and within h/2 of the particles
+// (φ under h/2) is water in the solves, its φ −h/2
+// (ParticleLevelSet::postProcessSignedDistanceField). Without it a cut face
+// between water and the solid's empty inside is a free surface, and the
+// water beside a solid drains into it at every step.
+//
+// One thread per cell, in place on `cell_out`: the particles' φ.
+@compute @workgroup_size(256)
+fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    if cell_out[idx] < 0.5 * u.cell_size && solid_centre(unflatten(idx, n), n + vec3<i32>(1)) < 0.0 {
+        cell_out[idx] = -0.5 * u.cell_size;
+    }
+}
+
+// One thread per cell, in place on `cell_out`: the water cells, after
+// `phi_into_solids` wrote `phi`. The cells it moved become water.
+@compute @workgroup_size(256)
+fn water_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    if phi[idx] < 0.5 * u.cell_size && solid_centre(unflatten(idx, n), n + vec3<i32>(1)) < 0.0 {
+        cell_out[idx] = 1.0;
+    }
+}
+
 // Open fraction of face a at record f: 1 on a box wall (it holds only the
 // part leaving the wall), else the solid's.
 fn open_at(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
@@ -961,14 +1006,109 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
     return v;
 }
 
+// The march along a particle's move, in cells
+// (_markerParticleStepDistanceFactor).
+const SOLID_STEP: f32 = 0.1;
+// A particle pushed out of a solid lands this many cells outside it
+// (_solidBufferWidth).
+const SOLID_BUFFER: f32 = 0.2;
+// The farthest a push-out moves a particle, in cells (_CFLConditionNumber).
+const SOLID_PUSH: f32 = 5.0;
+// A bound on the solid distance's change per cell of travel: each axis of
+// the trilinear distance changes at most one cell per cell.
+const SOLID_SLOPE: f32 = 1.7320508;
+
+fn solid_corner(c: vec3<i32>, n: vec3<i32>) -> f32 {
+    return solid[flatten(clamp(c, vec3<i32>(0), n), n + vec3<i32>(1))];
+}
+
+// The solid distance in cells at q (cells from the box minimum), trilinear
+// over the corner lattice (MeshLevelSet::trilinearInterpolate).
+fn solid_at(q: vec3<f32>, n: vec3<i32>) -> f32 {
+    let base = clamp(vec3<i32>(floor(q)), vec3<i32>(0), max(n - vec3<i32>(1), vec3<i32>(0)));
+    let t = clamp(q - vec3<f32>(base), vec3<f32>(0.0), vec3<f32>(1.0));
+    var v = 0.0;
+    for (var corner = 0; corner < 8; corner = corner + 1) {
+        let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
+        let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
+        v = v + w3.x * w3.y * w3.z * solid_corner(base + bit, n);
+    }
+    return v / u.cell_size;
+}
+
+// The trilinear distance's gradient at q (Interpolation::
+// trilinearInterpolateGradient): each axis's edge differences, blended
+// bilinearly over the other two.
+fn solid_gradient(q: vec3<f32>, n: vec3<i32>) -> vec3<f32> {
+    let base = clamp(vec3<i32>(floor(q)), vec3<i32>(0), max(n - vec3<i32>(1), vec3<i32>(0)));
+    let t = clamp(q - vec3<f32>(base), vec3<f32>(0.0), vec3<f32>(1.0));
+    var g = vec3<f32>(0.0);
+    for (var a = 0; a < 3; a = a + 1) {
+        let axes = cross_axes(a);
+        var e = vec3<i32>(0);
+        e[a] = 1;
+        for (var k = 0; k < 4; k = k + 1) {
+            var c = base;
+            c[axes.x] = c[axes.x] + (k & 1);
+            c[axes.y] = c[axes.y] + ((k >> 1u) & 1);
+            let wx = select(1.0 - t[axes.x], t[axes.x], (k & 1) == 1);
+            let wy = select(1.0 - t[axes.y], t[axes.y], ((k >> 1u) & 1) == 1);
+            g[a] = g[a] + wx * wy * (solid_corner(c + e, n) - solid_corner(c, n));
+        }
+    }
+    return g;
+}
+
+// A move from q0 to q1 (cells, both inside [edge, n − edge]) kept out of the
+// solids (FluidSimulation::_resolveCollision): march in SOLID_STEP cells; at
+// the first sample inside a solid, push it out along the distance's gradient
+// to SOLID_BUFFER cells outside, kept inside the walls' margin, or back to
+// the last sample outside when the push lands inside, moves farther than
+// SOLID_PUSH or has no direction. A move that cannot reach a solid (both
+// ends farther than the move's length times the distance's steepest slope)
+// is kept as it is.
+fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) -> vec3<f32> {
+    let travel = length(q1 - q0);
+    if travel < 1e-6 || min(solid_at(q0, n), solid_at(q1, n)) > SOLID_SLOPE * travel + SOLID_STEP {
+        return q1;
+    }
+    let steps = i32(ceil(travel / SOLID_STEP));
+    let dir = (q1 - q0) / travel;
+    var last = q0;
+    for (var s = 0; s < steps; s = s + 1) {
+        let current = select(q0 + f32(s + 1) * SOLID_STEP * dir, q1, s == steps - 1);
+        let d = solid_at(current, n);
+        if d < 0.0 {
+            let g = solid_gradient(current, n);
+            if length(g) <= 1e-6 {
+                return last;
+            }
+            let pushed = current - (d - SOLID_BUFFER) * normalize(g);
+            if solid_at(pushed, n) < 0.0 || length(pushed - current) > SOLID_PUSH {
+                return last;
+            }
+            let kept = clamp(pushed, edge, vec3<f32>(n) - edge);
+            if any(kept != pushed) && (solid_at(kept, n) < 0.0 || length(kept - pushed) > SOLID_PUSH) {
+                return last;
+            }
+            return kept;
+        }
+        last = current;
+    }
+    return q1;
+}
+
 // One thread per particle slot, `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the spread
 // step_dt · (advect(q) − new(q)) capped at MAX_SPREAD cells, kept
-// WALL_MARGIN cells inside each wall. A non-finite move or velocity is
-// written as it is: the tick's stats must see it to halt the liquid. Radius
-// and id are kept; unused slots pass through.
+// WALL_MARGIN cells inside each wall. With bodies, the move is kept out of
+// the solids (resolve_solid), and a particle still inside one, where a
+// moving solid swept over it, is removed: radius 0
+// (FluidSimulation::_removeMarkerParticles). A non-finite move or velocity
+// is written as it is: the tick's stats must see it to halt the liquid.
+// Radius and id are kept otherwise; unused slots pass through.
 @compute @workgroup_size(256)
 fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -994,9 +1134,14 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let capped = select(spread, spread * (MAX_SPREAD / spread_cells), spread_cells > MAX_SPREAD);
     let edge = vec3<f32>(WALL_MARGIN);
     let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + capped;
-    let q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
+    var q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
+    var radius = particle.position_radius.w;
+    if u.body_count > 0 && finite(q1) {
+        q1 = resolve_solid(q0, q1, n, edge);
+        radius = select(radius, 0.0, solid_at(q1, n) < 0.0);
+    }
     let before = sample(q0, n, 1u);
-    out.position_radius = vec4<f32>(lo + q1 * u.cell_size, particle.position_radius.w);
+    out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);
     out.velocity = u.flip * (particle.velocity + after - before) + (1.0 - u.flip) * after;
     particles_out[idx] = out;
 }

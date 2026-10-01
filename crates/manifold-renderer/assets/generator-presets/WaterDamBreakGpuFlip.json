@@ -3806,6 +3806,36 @@
       "toPort": "nodes_z"
     },
     {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 2,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 2,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 2,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 2,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 2,
+      "toPort": "epoch"
+    },
+    {
       "fromNode": 2,
       "fromPort": "particles",
       "toNode": 3,

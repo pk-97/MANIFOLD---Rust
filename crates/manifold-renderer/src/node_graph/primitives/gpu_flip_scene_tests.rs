@@ -7,7 +7,7 @@
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 
-use super::gpu_flip_preset::{FACE_NODES, REST_PER_CELL, WaterScene, water_def};
+use super::gpu_flip_preset::{DAM_FILL_HEIGHT, DAM_OBSTACLE, FACE_NODES, REST_PER_CELL, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
 use crate::gpu_encoder::GpuEncoder;
@@ -371,6 +371,148 @@ fn gpu_flip_still_pool() {
     }
     let end = *fastest.last().expect("sampled");
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
+}
+
+/// How deep `p` sits inside the obstacle box at `pos` (m), negative outside.
+fn obstacle_depth(p: &FluidParticle, pos: [f64; 3]) -> f64 {
+    let scale = DAM_OBSTACLE[1];
+    (0..3).map(|a| 0.5 * scale[a] - (f64::from(p.position_radius[a]) - pos[a]).abs()).fold(f64::INFINITY, f64::min)
+}
+
+/// The deepest live particle inside the obstacle at `pos`, and the live count.
+fn deepest_in_obstacle(particles: &[FluidParticle], pos: [f64; 3]) -> (f64, usize) {
+    let live = particles.iter().filter(|p| p.position_radius[3] > 0.0);
+    live.fold((f64::NEG_INFINITY, 0), |(deepest, count), p| (deepest.max(obstacle_depth(p, pos)), count + 1))
+}
+
+/// The Dam Break's box as a Collider: the fill leaves the box's sites dead,
+/// the collapsing column flows round the box and over it, no live particle
+/// gets more than half a cell inside it, nothing outruns the column without
+/// the box by much, and the step removes under 0.5% of the water.
+#[test]
+fn gpu_flip_dam_break_flows_around_the_obstacle() {
+    let scene = WaterScene::dam_break(64).with_obstacle();
+    let h = scene.pressure.cell_size();
+    let mut run = Run::new(scene);
+    let pos = DAM_OBSTACLE[0];
+    let filled = run.particles();
+    let (deepest, live) = deepest_in_obstacle(&filled, pos);
+    let dead_inside = filled.iter().filter(|p| p.position_radius[3] == 0.0 && obstacle_depth(p, pos) > 0.0).count();
+    let missed = filled.iter().filter(|p| p.position_radius[3] > 0.0 && obstacle_depth(p, pos) > h).count();
+    println!("GPU FLIP obstacle fill: {live} live of {}, {dead_inside} dead inside the box, deepest live {:.3} cells", filled.len(), deepest / h);
+    assert!(dead_inside > 1000, "the fill left the box's sites alive");
+    assert_eq!(missed, 0, "a site a cell inside the box is alive");
+    let mut beside = 0;
+    for frame in 0..90 {
+        run.frame();
+        let particles = run.particles();
+        let stats = particle_stats(&particles);
+        let (deepest, _) = deepest_in_obstacle(&particles, pos);
+        // Water above the pool beside the box, in the box's x span.
+        let [lo, hi] = [pos[0] - 0.5 * DAM_OBSTACLE[1][0], pos[0] + 0.5 * DAM_OBSTACLE[1][0]];
+        let half_z = 0.5 * DAM_OBSTACLE[1][2];
+        beside = beside.max(
+            particles
+                .iter()
+                .filter(|p| p.position_radius[3] > 0.0)
+                .filter(|p| {
+                    let [x, y, z] = [0, 1, 2].map(|a| f64::from(p.position_radius[a]));
+                    (lo..hi).contains(&x) && (z - pos[2]).abs() > half_z && y > DAM_FILL_HEIGHT + 2.0 * h
+                })
+                .count(),
+        );
+        if frame % 10 == 9 {
+            println!(
+                "GPU FLIP obstacle frame {frame:3}: {} live, fastest {:.2} m/s, deepest in the box {:.3} cells, {beside} beside it",
+                stats.live,
+                stats.fastest,
+                deepest / h
+            );
+        }
+        assert_eq!(stats.bad, 0, "frame {frame}: a particle is not finite");
+        // The column without the box peaks near 13 m/s at 64³.
+        assert!(stats.fastest < 25.0, "frame {frame}: fastest particle {} m/s", stats.fastest);
+        assert!(deepest <= 0.5 * h, "frame {frame}: a live particle sits {:.3} cells inside the box", deepest / h);
+        assert!(stats.live as f64 >= 0.995 * live as f64, "frame {frame}: {} of {live} particles left", stats.live);
+    }
+    assert!(beside > 1000, "the wave never passed beside the box");
+}
+
+/// A pool at rest round a static box resting on the tank floor stays at
+/// rest: no particle is lost, the level holds, and the only motion is the
+/// waterline creeping up the box's sides, which dies out. The creep comes
+/// from the engine's own liquid extension into solids (cells inside a solid
+/// within half a cell of the water count as water), so it is bounded rather
+/// than zero: about 0.1 m/s at its peak and 1.6 cm/s after 2 s at 64³.
+#[test]
+fn gpu_flip_still_pool_rests_round_a_static_obstacle() {
+    let scene = WaterScene::still_pool(64).with_obstacle();
+    let mut run = Run::new(scene);
+    let (_, live) = deepest_in_obstacle(&run.particles(), DAM_OBSTACLE[0]);
+    // The level once the fill has settled.
+    let mut level = None;
+    let (mut peak, mut fastest) = (0.0_f64, 0.0);
+    for frame in 0..120 {
+        run.frame();
+        if frame % 20 == 19 {
+            let stats = particle_stats(&run.particles());
+            println!("GPU FLIP pool round a box frame {frame:3}: {} live, fastest {:.2e} m/s, mean height {:.5} m", stats.live, stats.fastest, stats.mean_height);
+            assert_eq!((stats.live, stats.bad), (live, 0), "frame {frame}: particles lost or not finite");
+            let level = *level.get_or_insert(stats.mean_height);
+            assert!((stats.mean_height - level).abs() < 1e-4, "frame {frame}: the level moved from {level} to {}", stats.mean_height);
+            fastest = stats.fastest;
+            peak = peak.max(fastest);
+        }
+    }
+    assert!(peak < 0.2, "the pool round the box reached {peak} m/s");
+    assert!(fastest < 0.025 && fastest < peak / 3.0, "fastest particle {fastest} m/s after 2 s, peak {peak} m/s: the creep is not dying out");
+}
+
+/// A box driven through a still pool at 1 m/s pushes the water ahead of it:
+/// the water in front moves with it, none gets more than a cell inside, and
+/// the step removes under 0.5% of the water.
+#[test]
+fn gpu_flip_moving_obstacle_pushes_the_pool() {
+    let scene = WaterScene::still_pool(64).with_obstacle();
+    let h = scene.pressure.cell_size();
+    let mut run = Run::new(scene);
+    let transform = node_named(&run.graph, "obstacle_transform");
+    let start = DAM_OBSTACLE[0];
+    let (_, live) = deepest_in_obstacle(&run.particles(), start);
+    let speed = 1.0;
+    let mut ahead_speed = 0.0;
+    for frame in 1..=30 {
+        let pos = [start[0] + speed * f64::from(frame) / 60.0, start[1], start[2]];
+        run.graph.set_param(transform, "pos_x", crate::node_graph::ParamValue::Float(pos[0] as f32)).expect("pos_x");
+        run.frame();
+        let particles = run.particles();
+        let stats = particle_stats(&particles);
+        let (deepest, _) = deepest_in_obstacle(&particles, pos);
+        let front = pos[0] + 0.5 * DAM_OBSTACLE[1][0];
+        let half = DAM_OBSTACLE[1].map(|s| 0.5 * s);
+        let ahead: Vec<f64> = particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .filter(|p| {
+                let [x, _, z] = [0, 1, 2].map(|a| f64::from(p.position_radius[a]));
+                (front..front + 2.0 * h).contains(&x) && (z - pos[2]).abs() < half[2] - h
+            })
+            .map(|p| f64::from(p.velocity[0]))
+            .collect();
+        ahead_speed = ahead.iter().sum::<f64>() / ahead.len().max(1) as f64;
+        if frame % 5 == 0 {
+            println!(
+                "GPU FLIP moving box frame {frame:2}: {} live, deepest {:.3} cells, {} ahead at {ahead_speed:.3} m/s",
+                stats.live,
+                deepest / h,
+                ahead.len()
+            );
+        }
+        assert_eq!(stats.bad, 0, "frame {frame}: a particle is not finite");
+        assert!(deepest <= h, "frame {frame}: a live particle sits {:.3} cells inside the box", deepest / h);
+        assert!(stats.live as f64 >= 0.995 * live as f64, "frame {frame}: {} of {live} particles left", stats.live);
+    }
+    assert!(ahead_speed > 0.5 * speed, "the water ahead moves at {ahead_speed} m/s against the box's {speed}");
 }
 
 /// Where a Dam Break frame's GPU time goes at 64³, by node type, after 60

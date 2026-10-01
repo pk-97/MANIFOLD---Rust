@@ -1,10 +1,11 @@
 //! `node.liquid_fill` — a liquid's starting particles: a pool on the floor
 //! plus one box, one particle per half-cell site, at rest
 //! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). The sites are the FLIP Fluids
-//! engine's seeding lattice, so both solvers start from the same water. A
-//! pure function of its params and wires, so it owns its storage, sized to
-//! exactly the particles it places, and fills it once per change. A source
-//! atom on the codegen path.
+//! engine's seeding lattice, so both solvers start from the same water; a
+//! site inside a collider is left dead (radius 0), as the engine seeds only
+//! where the solid distance is positive. A pure function of its params and
+//! wires, so it owns its storage, sized to exactly the sites it covers, and
+//! fills it once per change. A source atom on the codegen path.
 
 use std::borrow::Cow;
 
@@ -14,7 +15,9 @@ use super::sort_particles_into_cells::{float_param, int_param};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::FluidParticle;
+use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -94,16 +97,16 @@ struct FillUniforms {
     box_z1: i32,
     jitter: f32,
     seed: i32,
+    body_count: i32,
+    epoch: i32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. The storage holds exactly the particles placed, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds exactly the sites covered, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -112,6 +115,11 @@ crate::primitive! {
         box_x0: ScalarF32 optional, box_x1: ScalarF32 optional,
         box_y0: ScalarF32 optional, box_y1: ScalarF32 optional,
         box_z0: ScalarF32 optional, box_z1: ScalarF32 optional,
+        bodies: Array(LiquidBody) optional,
+        shapes: Array(LiquidShape) optional,
+        atlas: Array(u32) optional,
+        body_count: ScalarF32 optional,
+        epoch: ScalarF32 optional,
     },
     outputs: {
         particles: Array(FluidParticle),
@@ -134,9 +142,11 @@ crate::primitive! {
         int_param!("box_z1", "Box Max Z (half cell)", 0.0, 0.0, 2048.0),
         float_param!("jitter", "Jitter", 0.0, 0.0, 1.0),
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
+        int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        int_param!("epoch", "Epoch", 0.0, 0.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites and the padded lattice come from the liquid's domain, so a Resolution change refills at the new size.",
+    composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites, the padded lattice, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
     examples: [],
     picker: { label: "Liquid Fill", category: Atom },
     summary: "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -145,10 +155,11 @@ crate::primitive! {
     aliases: ["seed liquid", "initial water", "dam break fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/liquid_fill_body.wgsl"),
-    input_access: [],
+    input_access: [BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 16], usize)> = None,
+        filled: Option<([u32; 18], usize)> = None,
     },
 }
 
@@ -179,6 +190,9 @@ impl Primitive for LiquidFill {
         }
         let (pool, sites) = fill_of(|name, default| ctx.scalar_or_param(name, default));
         let seed = int("seed", 0.0);
+        let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
+        // With colliders the sites depend on their pose at the epoch's start.
+        let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
         let placed = filled_sites(nodes, pool, sites);
         if placed > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
@@ -202,14 +216,24 @@ impl Primitive for LiquidFill {
                 }
             }
         }
+        let colliders = (ctx.inputs.array("bodies"), ctx.inputs.array("shapes"), ctx.inputs.array("atlas"));
+        let gpu = ctx.gpu_encoder();
+        let buffer = self.buffer.as_ref().expect("fill storage prepared");
+        // Without all three collider arrays no body is read; the particle
+        // buffer fills their slots.
+        let (bodies, shapes, atlas, body_count) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas)) => {
+                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
+                (bodies, shapes, atlas, body_count.min(rows))
+            }
+            _ => (buffer, buffer, buffer, 0),
+        };
         let key = [
             min[0].to_bits(), min[1].to_bits(), min[2].to_bits(), cell_size.to_bits(),
             nodes[0], nodes[1], nodes[2], pool,
             sites[0][0], sites[0][1], sites[1][0], sites[1][1], sites[2][0], sites[2][1],
-            jitter.to_bits(), seed,
+            jitter.to_bits(), seed, body_count as u32, epoch,
         ];
-        let gpu = ctx.gpu_encoder();
-        let buffer = self.buffer.as_ref().expect("fill storage prepared");
         if self.filled == Some((key, buffer.identity_key())) {
             return;
         }
@@ -232,16 +256,19 @@ impl Primitive for LiquidFill {
             box_z1: clamp(sites[2][1]),
             jitter,
             seed: clamp(seed),
+            body_count,
+            epoch: clamp(epoch),
             dispatch_count: capacity,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: bodies, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: shapes, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: atlas, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer, offset: 0 },
             ],
             [capacity.div_ceil(256), 1, 1],
             "node.liquid_fill",

@@ -14213,7 +14213,7 @@
           "type": "trigger"
         }
       ],
-      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. The solver's lattice is baked into its preset: any other Resolution, Domain Size or domain box is refused by name, as are every role and pairing with a physics world.",
+      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Fill, Inflow and Outflow roles and pairing with a physics world are refused by name.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -14663,7 +14663,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share. Outputs the moved particles and the step's face grid, valid at least 2 layers around the water.",
+      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). Outputs the moved particles and the step's face grid, valid at least 2 layers around the water.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves the water forward one step: gravity, solids, incompressibility and the particles' motion.",
@@ -17772,6 +17772,31 @@
           "name": "box_z1",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "bodies",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "shapes",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "atlas",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "body_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "epoch",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Liquid Fill",
@@ -17946,9 +17971,29 @@
             "16777215"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Bodies",
+          "name": "body_count",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Epoch",
+          "name": "epoch",
+          "range": [
+            "0",
+            "16777215"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. The storage holds exactly the particles placed, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
+      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds exactly the sites covered, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -18249,6 +18294,11 @@
           "type": "f32"
         },
         {
+          "name": "wall_inset",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "body_count",
           "required": false,
           "type": "f32"
@@ -18354,6 +18404,16 @@
           "type": "int"
         },
         {
+          "default": "3",
+          "label": "Wall Inset (nodes)",
+          "name": "wall_inset",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
           "default": "0",
           "label": "Bodies",
           "name": "body_count",
@@ -18384,7 +18444,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
+      "purpose": "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall (Wall Inset nodes in from the lattice edge) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
