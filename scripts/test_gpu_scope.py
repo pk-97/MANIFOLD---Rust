@@ -41,6 +41,13 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("node_graph::primitives::invert::", p.filters)
         self.assertEqual(p.broad, [])
 
+    def test_shader_included_by_another_shader_reaches_the_rust_user(self):
+        # A touched .wgsl that another .wgsl includes walks the frontier (was a crash: list.add).
+        repo = self._repo_with("crates/x/a.wgsl")
+        (repo / "crates/x/b.wgsl").write_text("// uses a.wgsl\n")
+        (repo / "crates/x/c.rs").write_text('include_str!("b.wgsl");\n')
+        self.assertEqual(g.default_shader_users(repo, "crates/x/a.wgsl"), ["crates/x/c.rs"])
+
     def test_shader_with_no_user_is_unmapped_and_named(self):
         p = plan([P + "shaders/orphan.wgsl"], repo=self._repo_with(P + "shaders/orphan.wgsl"))
         self.assertEqual([x[0] for x in p.unmapped], [P + "shaders/orphan.wgsl"])

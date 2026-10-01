@@ -30,7 +30,9 @@ class BatchTests(unittest.TestCase):
         git("fetch", "-q", "origin", cwd=self.work)
         self.gate = f"{t}/gate.sh"
         with open(self.gate, "w") as f:
-            f.write("#!/bin/sh\n[ -f bad.txt ] && { echo 'bad.txt present'; exit 1; }\nexit 0\n")
+            f.write("#!/bin/sh\n[ -f bad.txt ] && { echo 'bad.txt present'; exit 1; }\n"
+                    "[ -f crash.txt ] && { echo 'Traceback (most recent call last):'; "
+                    "echo \"AttributeError: boom\"; exit 1; }\nexit 0\n")
         os.chmod(self.gate, 0o755)
         self.old = os.getcwd()
         os.chdir(self.work)
@@ -97,6 +99,16 @@ class BatchTests(unittest.TestCase):
         _, inc, dropped = self.land([("a", None), ("b", None)])
         self.assertEqual([n for n, _ in inc], ["a"])
         self.assertEqual(dropped[0][0], "b")
+
+    def test_crashed_culprit_rebuild_is_reported_as_a_crash(self):
+        self.branch("a", "bad.txt")
+        self.branch("b", "crash.txt")
+        before = git("rev-parse", "origin/main", cwd=self.work)
+        with self.assertRaises(SystemExit) as ctx:
+            self.land([("a", None), ("b", None)])
+        self.assertIn("culprit search crashed", str(ctx.exception))
+        self.assertNotIn("no single branch removal", str(ctx.exception))
+        self.assertEqual(git("ls-remote", self.origin, "main").split()[0], before)
 
     def test_unfixable_red_lands_nothing(self):
         self.branch("a", "bad.txt")
