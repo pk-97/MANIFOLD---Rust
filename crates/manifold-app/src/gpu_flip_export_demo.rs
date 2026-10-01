@@ -177,3 +177,68 @@ fn gpu_flip_dam_break_paused_live_frames_hold() {
         assert_eq!(changed, 0, "paused frame {} changed the picture", frame + 1);
     }
 }
+
+/// Export `frames` frames at 60 fps of the Dam Break at simulation resolution
+/// 32 into a small output, `runs` times on one content thread, and return
+/// the last frame's linear SDR output of each run.
+fn small_exports(runs: usize, frames: u32, dir: &Path, tag: &str) -> Vec<Vec<u8>> {
+    const W: u32 = 256;
+    const H: u32 = 144;
+    let mut project = project();
+    project.settings.output_width = W as i32;
+    project.settings.output_height = H as i32;
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut content = headless_content_thread(project, W, H);
+    let (state_tx, state_rx) = unbounded();
+    crate::scene_modifier_journey::set_generator_param(&mut content, &layer_id, "resolution", 32.0);
+    crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+    (0..runs)
+        .map(|run| {
+            let (cmd_tx, cmd_rx) = unbounded();
+            let cfg = ExportConfig {
+                output_path: dir.join(format!("determinism_{tag}_{run}.mp4")).to_string_lossy().into_owned(),
+                width: W,
+                height: H,
+                fps: 60.0,
+                hdr: false,
+                start_beat: 0.0,
+                end_beat: f64::from(frames) / 60.0 * BPM / 60.0,
+                audio_path: None,
+                audio_start_beat: 0.0,
+                audio_encoder_delay: 0.0,
+                split_at_markers: false,
+            };
+            let (observation_tx, observation_rx) = unbounded();
+            let _observer = crate::content_export::install_export_observer(observation_tx, None);
+            crate::content_export::capture_export_sdr_frame(frames - 1);
+            content.run_export(cfg, &cmd_rx, &state_tx);
+            drop(cmd_tx);
+            let finished = state_rx.try_iter().find_map(|state| state.export_finished).expect("the export finished");
+            assert!(finished.success, "{tag} run {run} failed: {}", finished.message);
+            let observed: Vec<_> = observation_rx.try_iter().collect();
+            assert_eq!(observed.len(), frames as usize, "{tag} run {run} frame count");
+            for frame in &observed {
+                assert_eq!(frame.status, FrameRenderStatus::Complete, "{tag} run {run} frame {} status", frame.frame_idx);
+            }
+            observed.last().and_then(|frame| frame.sdr_mapped_rgba16f.clone()).expect("the last frame was read back")
+        })
+        .collect()
+}
+
+/// Two exports of one project are the same pixels: two content threads, and a
+/// second export on the first thread (export start reseeds the water, so an
+/// earlier export or warm-up frames never leak into the next).
+#[test]
+fn gpu_flip_export_is_deterministic() {
+    let dir = out_dir();
+    let frames = 48;
+    let first = small_exports(2, frames, &dir, "a");
+    let other = small_exports(1, frames, &dir, "b");
+    let reference = &first[0];
+    assert!(reference.chunks_exact(8).any(|p| p != reference[..8].as_ref()), "the frame is uniform; nothing rendered");
+    for (name, frame) in [("re-export on the same thread", &first[1]), ("export on a second thread", &other[0])] {
+        let differing = reference.chunks_exact(8).zip(frame.chunks_exact(8)).filter(|(a, b)| a != b).count();
+        println!("GPU FLIP determinism: {name}: {differing} pixels differ at frame {frames}");
+        assert_eq!(differing, 0, "{name} differs from the first export");
+    }
+}
