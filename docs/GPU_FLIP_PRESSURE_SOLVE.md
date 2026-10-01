@@ -35,7 +35,7 @@ The step's time rules:
 
 Peter, 2026-10-01: GPU FLIP is a specialised solver (DECOMPOSING_GENERATORS.md section 1.2 (Specialised solvers are stage nodes)). Users play it through params (forces, emitters, solids, look) and never rewire its internals, so the graph shows only what a user plugs something into, and kernels fuse freely inside. The atom graph costs the show: in the frozen 64³ smoke (2026-10-01) the coarsest level, 64 one-dispatch sweeps of a 4³ lattice per V-cycle, takes 7.5 ms of a 24.2 ms GPU frame, and CPU encode runs at 14 ms p50.
 
-**The cut.** These stay as they are: `gpu_flip_domain` (params, clock, forces), `liquid_fill` (the emitter), `liquid_state` (the clock's region, pause and export determinism, clearing), `liquid_solid_distance` (solids), `liquid_stats`, `liquid_frame` (the contract every consumer reads), `face_sample_component`, and the Liquid Surface group. Everything else in the water step becomes one node, `node.gpu_flip_step`, in the tick region: sort → classify → particles to faces → extend → forces → divergence → pressure solve → subtract → constrain → extend → density solve → faces to particles and advect. Whitewater gets its own node, built separately (GPU_WHITEWATER_DESIGN.md). The preset goes from 490 nodes to about 90; the rest is the look and the surface group.
+**The cut.** These stay as they are: `gpu_flip_domain` (params, clock, forces), `liquid_fill` (the emitter), `liquid_state` (the clock's region, pause and export determinism, clearing), `liquid_solid_distance` (solids), `liquid_stats`, `liquid_frame` (the contract every consumer reads), `face_sample_component`, and the Liquid Surface group. Everything else in the water step becomes one node, `node.gpu_flip_step`, in the tick region: sort → classify → particles to faces → extend → forces → divergence → pressure solve → subtract → constrain → extend → density solve → faces to particles and advect. Whitewater gets its own node, `node.whitewater_step`, owned by the whitewater work (GPU_WHITEWATER_DESIGN.md). `liquid_state` and `liquid_stats` stay outside the step. The Liquid Surface group stays a group for now (BUG-twnl (Liquid Surface group as one node)). There is no standalone pressure node: the pressure solver is a `pub(crate)` module inside the step, below. The preset goes from 490 nodes to about 90; the rest is the look and the surface group.
 
 **`node.gpu_flip_step`.**
 
@@ -51,7 +51,7 @@ Peter, 2026-10-01: GPU FLIP is a specialised solver (DECOMPOSING_GENERATORS.md s
 
 **Tested at the boundary.** The existing solve, still-pool, free-fall and race proofs gate the node, plus the extent rule. Kernel bodies move from the atoms' `wgsl_body` fragments into the step's kernels; the CPU mirrors and fixtures stay. Then the folded atoms, their per-atom proofs and their conformance rows are deleted and the preset regenerated. `node.conjugate_gradient` goes with them, with any nested-region runtime support nothing else reaches; `matter_state`'s substep region and `liquid_state`'s tick region stay.
 
-**Whitewater's node** settles three things the atom chain could not:
+**`node.whitewater_step`** settles three things the atom chain could not:
 
 1. **The pool's first frame.** The node owns its pool, an id counter and a full-pool count. On creation and on every epoch change one pass writes every slot empty (kind 3) and zeroes both counters, so the header slot goes.
 2. **The spawn count.** The scan writes its total to an internal counter that append reads, at any buffer size, not the scan's last entry.
@@ -217,6 +217,18 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
 - **Open, settled by measurement:** whether a body's pose updates every step or once per tick (`STEPS_PER_TICK` stays a builder constant so either fits).
 - **Kill check:** iterations to the empty tank's residual up more than 50% with the box → stop and report the numbers.
 - **Demo:** L2 — the Dam Break as shipped, obstacle included, GPU FLIP beside the engine, 300 frames headless. **Performer gesture:** the wave breaks around the box, then a floating box rides the slosh.
+- **Face weights, as built** (`node.solid_faces`, `node.coarsen_solid_faces`, `feat/gpu-flip-solids`). Measured by `scripts/mgpcg_reference.py --box`: on the seven committed Dam Break problems with a submerged box, the reference matches a direct sparse solve to 3e-15, and the iterations to the empty tank's residual rise by at most one (+25% at 4, +17% at 6, +12% at 8). Where it departs from the engine:
+  - A coarse face's weight is the mean of the four fine faces it covers. The engine has no multigrid, so this is ours.
+  - A water cell with every face closed drops out: smooth and residual give 0 there, the coarse inverse pins it.
+  - Divergence counts the box walls whole (weight 1, wall velocity), so the wall rule of section 2 is unchanged. Only solid faces are fractional.
+  - A closed face (weight 0) keeps its velocity through the projection and stays valid for extension; `node.constrain_solid_faces` then sets it.
+  - The distance lattice is sampled at the step's pose, once per step.
+  - The freeze compiler's `ParamProduct` capacity gained `plus` (an `add(n, x)` term) so a face grid ((n + 1)³) fuses with its neighbours. `node.subtract_pressure` now declares it.
+- **Moving solids, as built** (`node.solid_face_velocity`, `node.constrain_solid_faces`). Divergence adds the engine's C·v_s term, (c − w)·v_s through each inner face with c the cell's open volume (`node.solid_faces` writes it in weight w, as `_getCellWeight` takes it). After the projection the step constrains both the projected and the saved faces, as the engine does: a closed face takes v_s, a cut face f·v_s + (1 − f)·u. Where it departs from the engine:
+  - v_s is the closest body's rigid velocity, v + ω × (x − c), at the face centre. The engine interpolates the nearest triangle's vertex velocities from its mesh level set. For rigid bodies the two agree at the surface.
+  - Friction f comes from the bodies only; the engine's domain-wall friction is not ported, because walls are their own rule here.
+  - The density solve's subtract is not constrained again: it moves particles through `advect` and is never kept as velocity.
+  - Fluid pockets sealed by a solid keep the solid's velocity. The engine zeroes it there (`_conditionSolidVelocityField`); porting it needs a GPU flood fill, tracked as BUG-zpoi (zero solid velocity into sealed fluid pockets).
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### Next, after landing: the surface and the transfer

@@ -338,6 +338,14 @@ pub(crate) mod restrict_lattice;
 pub(crate) mod prolong_lattice;
 pub(crate) mod coarsen_water;
 pub(crate) mod coarse_inverse;
+pub(crate) mod solid_faces;
+pub(crate) mod coarsen_solid_faces;
+pub(crate) mod solid_face_velocity;
+pub(crate) mod constrain_solid_faces;
+pub(crate) mod pressure_face_impulse;
+pub(crate) mod face_impulse_to_bodies;
+pub(crate) mod body_pressure_product;
+pub(crate) mod friction_face_impulse;
 pub(crate) mod conjugate_gradient;
 pub(crate) mod zero_lattice;
 pub(crate) mod liquid_fill;
@@ -395,6 +403,8 @@ mod face_grid_scene_tests;
 pub(crate) mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_body_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_solve_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

@@ -48,7 +48,9 @@ struct GravityUniforms {
     impulse_tick: i32,
     first_tick: i32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -172,7 +174,9 @@ impl Primitive for FaceGravity {
             impulse_tick: field.impulse_tick,
             first_tick: field.first_tick,
             dispatch_count: count as u32,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         // An unwired lattice is never read (force_lattices 0, impulse_tick −1).
         let gpu = ctx.gpu_encoder();

@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 372 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 380 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,15 +293,18 @@ _Generated from the node registry. Do not hand-edit. 372 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (65)
+### Particles 3D (73)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
+| Body Pressure Product | `node.body_pressure_product` | Filter | Lets floating objects give way to the water's pressure inside the pressure solve, so heavy and light objects float and sink correctly. |
 | Cells With Particles | `node.cells_with_particles` | Filter | Marks the grid cells that have liquid in them. |
 | Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
 | Coarse Inverse | `node.coarse_inverse` | Filter | Works out the exact pressure answer on the solver's smallest grid. |
+| Coarsen Solid Faces | `node.coarsen_solid_faces` | Filter | Makes a half-size copy of how open each grid face is, for the pressure solver's coarse levels. |
 | Coarsen Water | `node.coarsen_water` | Filter | Makes a half-size copy of which cells hold water, for the pressure solver's coarse levels. |
+| Constrain Solid Faces | `node.constrain_solid_faces` | Filter | Makes the water move with solid objects where it touches them. |
 | Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Density Source | `node.density_source` | Filter | Pushes apart liquid particles that have bunched up, so the water keeps its volume. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
@@ -312,9 +315,11 @@ _Generated from the node registry. Do not hand-edit. 372 nodes registered, group
 | Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
 | Face Divergence | `node.face_divergence` | Filter | Measures how much liquid each cell is trying to push out or suck in. |
 | Face Gravity | `node.face_gravity` | Filter | Pulls the liquid with gravity and the scene's forces for one step and stops it going through the tank walls. |
+| Face Impulse to Bodies | `node.face_impulse_to_bodies` | Map | Adds up how hard the water pushes on each floating object, and how that changes the object's motion. |
 | Face Grid Component | `node.face_sample_component` | Filter | Hands one direction of the water's velocity grid to effects that follow the water. |
 | Faces To Particles | `node.faces_to_particles` | Filter | Hands the grid's corrected motion back to the liquid particles and moves them one step. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
+| Friction Face Impulse | `node.friction_face_impulse` | Filter | Works out how much the water drags on floating objects where they slide past it. |
 | GPU FLIP Domain | `node.gpu_flip_domain` | Source | Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Jitter Particles | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
@@ -341,6 +346,7 @@ _Generated from the node registry. Do not hand-edit. 372 nodes registered, group
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Particles To Faces | `node.particles_to_faces` | Filter | Spreads the liquid particles' motion onto a grid so the solver can make it incompressible. |
+| Pressure Face Impulse | `node.pressure_face_impulse` | Filter | Works out how hard the water's pressure pushes on floating objects through each face of the grid. |
 | Pressure Residual | `node.pressure_residual` | Filter | Measures how far the water's pressure is from balancing its flow, cell by cell. |
 | Smooth Pressure | `node.pressure_smooth` | Filter | Evens out the water's pressure one checkerboard color at a time. |
 | Prolong Lattice | `node.prolong_lattice` | Filter | Grows a grid of values to double size, blending neighbours, and adds it on. |
@@ -351,6 +357,8 @@ _Generated from the node registry. Do not hand-edit. 372 nodes registered, group
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
 | Shape Particle Blobs | `node.shape_particle_blobs` | Map | Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads. |
 | Smooth Lattice | `node.smooth_lattice` | Filter | Softens a liquid's density field so its surface comes out smooth instead of lumpy. |
+| Solid Face Velocity | `node.solid_face_velocity` | Filter | Works out how fast solid objects move where they touch the water's grid, so a moving box pushes the water. |
+| Solid Faces | `node.solid_faces` | Filter | Works out how much of each grid face is blocked by solid objects, so water flows around them. |
 | Sort Particles Into Cells | `node.sort_particles_into_cells` | Filter | Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly. |
 | Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
 | Spawn Whitewater | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |

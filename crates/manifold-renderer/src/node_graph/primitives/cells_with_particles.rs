@@ -73,7 +73,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/cells_with_particles_body.wgsl"),
     input_access: [Coincident],
-    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS },
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 0 },
 }
 
 impl Primitive for CellsWithParticles {

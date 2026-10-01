@@ -409,7 +409,8 @@ pub(super) fn pressure_def(s: PressureShape) -> EffectGraphDef {
     let cells = s.cells();
     let water = b.node("water", "test.value_source", json!({"max_capacity": capacity(cells)}));
     let f = b.node("f", "test.value_source", json!({"max_capacity": capacity(cells)}));
-    let levels = levels(&mut b, s, (water, "out"));
+    let faces = b.node("solid_faces", "test.face_source", json!({"max_capacity": capacity((s.n + 1).pow(3))}));
+    let levels = levels(&mut b, s, (water, "out"), (faces, "out"));
     let pressure = solve(&mut b, s, &levels, (f, "out"));
     let sink = b.node("sink", "test.value_sink", json!({}));
     b.wire(pressure, sink, "values");
@@ -762,12 +763,20 @@ fn water_step(
     b.wire((domain, "gravity_z"), forced, "gravity_z");
     b.wires(domain, forced, &FIELD_WIRES);
     b.wire((state, "tick_index"), forced, "tick_index");
+    let (solid, solid_velocity) = solid_faces(b, scene, domain, (step + 1) as f64 * dt);
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
-    let levels = levels(b, s, water);
+    b.wire(solid, divergence, "solid_faces");
+    b.wire(solid_velocity, divergence, "solid_velocity");
+    let levels = levels(b, s, water, solid);
     let p = solve(b, s, &levels, (divergence, "out"));
-    let projected = subtract(b, "project", (forced, "out"), p, water, s);
+    let projected = subtract(b, "project", (forced, "out"), p, &levels, s);
+    // The engine constrains its velocity and its saved velocity to the
+    // solids after the pressure solve, so FLIP's change is measured between
+    // two constrained fields.
+    let projected = constrain(b, "constrain", projected, solid, solid_velocity, n);
+    let old = constrain(b, "old_constrain", old, solid, solid_velocity, n);
     let new = extend(b, "new", projected, n, scene.band_layers());
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
@@ -781,7 +790,7 @@ fn water_step(
         );
         b.wire((sort, "cell_ranges"), crowding, "cell_ranges");
         let q = solve(b, PressureShape { iterations: scene.density_iterations, ..s }, &levels, (crowding, "out"));
-        let spread = subtract(b, "project", projected, q, water, s);
+        let spread = subtract(b, "project", projected, q, &levels, s);
         let advect = extend(b, "advect", spread, n, EXTENDED_LAYERS);
         b.prefix = outer;
         advect
@@ -804,13 +813,78 @@ fn water_step(
 }
 
 /// `faces` minus the gradient of `pressure` on the water's faces.
-fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, water: Port, s: PressureShape) -> Port {
+fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, levels: &Levels, s: PressureShape) -> Port {
     let n = [s.n; 3];
     let id = b.node(name, "node.subtract_pressure", Builder::lattice(n, &[("cell_size", float(s.cell_size()))]));
     b.wire(faces, id, "faces");
     b.wire(pressure, id, "pressure");
-    b.wire(water, id, "water");
+    b.wire(levels.water[0], id, "water");
+    b.wire(levels.faces[0], id, "solid_faces");
     (id, "out")
+}
+
+/// The step's face open fractions: the domain's bodies as a solid distance on
+/// the box's corner lattice, posed `seconds` into the tick, then each face's
+/// open fraction. The box walls are the faces' own, so the lattice has none.
+/// `faces` with the solids' velocity on the faces they close or cut.
+fn constrain(b: &mut Builder, name: &str, faces: Port, solid: Port, solid_velocity: Port, n: [usize; 3]) -> Port {
+    let id = b.node(name, "node.constrain_solid_faces", Builder::lattice(n, &[]));
+    b.wire(faces, id, "faces");
+    b.wire(solid, id, "solid_faces");
+    b.wire(solid_velocity, id, "solid_velocity");
+    (id, "out")
+}
+
+/// The solids' open fraction per face, and their velocity and friction there.
+fn solid_faces(b: &mut Builder, scene: WaterScene, domain: usize, seconds: f64) -> (Port, Port) {
+    let s = scene.pressure;
+    let min = scene.min();
+    let corners = s.n + 1;
+    let distance = b.node(
+        "solid",
+        "node.liquid_solid_distance",
+        json!({
+            "lattice_min_x": float(min[0]),
+            "lattice_min_y": float(min[1]),
+            "lattice_min_z": float(min[2]),
+            "cell_size": float(s.cell_size()),
+            "nodes_x": int(corners),
+            "nodes_y": int(corners),
+            "nodes_z": int(corners),
+            "closed_faces": int(0),
+            "tick_seconds": float(seconds),
+        }),
+    );
+    b.wires(domain, distance, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wire((domain, "body_rows"), distance, "rows");
+    let reach = min.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let open = b.node(
+        "solid_faces",
+        "node.solid_faces",
+        Builder::lattice([s.n; 3], &[("cell_size", float(s.cell_size())), ("box_offset", float(reach))]),
+    );
+    b.wire((distance, "solid"), open, "solid");
+    let velocity = b.node(
+        "solid_velocity",
+        "node.solid_face_velocity",
+        json!({
+            "lattice_min_x": float(min[0]),
+            "lattice_min_y": float(min[1]),
+            "lattice_min_z": float(min[2]),
+            "cell_size": float(s.cell_size()),
+            "nodes_x": int(s.n),
+            "nodes_y": int(s.n),
+            "nodes_z": int(s.n),
+            "tick_seconds": float(seconds),
+        }),
+    );
+    b.wire((open, "out"), velocity, "solid_faces");
+    b.wires(domain, velocity, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wire((domain, "body_rows"), velocity, "rows");
+    // No push from the liquid yet this tick: one 16-float row per possible body.
+    let changes = b.node("body_changes", "node.zero_lattice", Builder::lattice([16, 8, 8], &[]));
+    b.wire((changes, "out"), velocity, "changes");
+    ((open, "out"), (velocity, "out"))
 }
 
 /// `layers` layers of face extension into the air around the water.
@@ -829,22 +903,27 @@ fn extend(b: &mut Builder, name: &str, faces: Port, n: [usize; 3], layers: usize
 /// from (the finest's is also the zero rhs of −L p).
 struct Levels {
     water: Vec<Port>,
+    faces: Vec<Port>,
     zeros: Vec<Port>,
 }
 
-fn levels(b: &mut Builder, s: PressureShape, water: Port) -> Levels {
+fn levels(b: &mut Builder, s: PressureShape, water: Port, faces: Port) -> Levels {
     let mut water_levels = vec![water];
+    let mut face_levels = vec![faces];
     let mut zeros = Vec::new();
     for (level, side) in s.levels().into_iter().enumerate() {
         if level > 0 {
             let coarse = b.node(&format!("water_{level}"), "node.coarsen_water", Builder::lattice([side; 3], &[]));
             b.wire(water_levels[level - 1], coarse, "fine");
             water_levels.push((coarse, "out"));
+            let open = b.node(&format!("solid_faces_{level}"), "node.coarsen_solid_faces", Builder::lattice([side; 3], &[]));
+            b.wire(face_levels[level - 1], open, "fine");
+            face_levels.push((open, "out"));
         }
         let zero = b.node(&format!("zero_{level}"), "node.zero_lattice", Builder::lattice([side; 3], &[]));
         zeros.push((zero, "out"));
     }
-    Levels { water: water_levels, zeros }
+    Levels { water: water_levels, faces: face_levels, zeros }
 }
 
 /// One V-cycle for L e = rhs at `level`, from zero; returns e. The coarsest
@@ -856,12 +935,14 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
     let h = s.cell_size() * (1u64 << level) as f64;
     let lattice = |extra: &[(&str, Value)]| Builder::lattice([side; 3], extra);
     let water = levels.water[level];
+    let faces = levels.faces[level];
     let mut e = levels.zeros[level];
     let sweep = |b: &mut Builder, name: String, e: Port, color: usize| -> Port {
         let id = b.node(&name, "node.pressure_smooth", lattice(&[("cell_size", float(h)), ("color", int(color))]));
         b.wire(water, id, "water");
         b.wire(rhs, id, "rhs");
         b.wire(e, id, "value");
+        b.wire(faces, id, "solid_faces");
         (id, "out")
     };
     if level + 1 == sides.len() {
@@ -886,6 +967,7 @@ fn v_cycle(b: &mut Builder, s: PressureShape, levels: &Levels, level: usize, rhs
     b.wire(water, residual, "water");
     b.wire(rhs, residual, "rhs");
     b.wire(e, residual, "value");
+    b.wire(faces, residual, "solid_faces");
     let restrict = b.node(&format!("mg{level}_restrict"), "node.restrict_lattice", Builder::lattice([sides[level + 1]; 3], &[]));
     b.wire((residual, "out"), restrict, "fine");
     b.wire(levels.water[level + 1], restrict, "water");
@@ -921,6 +1003,7 @@ fn solve(b: &mut Builder, s: PressureShape, levels: &Levels, f: Port) -> Port {
     b.wire(levels.water[0], sp, "water");
     b.wire(levels.zeros[0], sp, "rhs");
     b.wire(p, sp, "value");
+    b.wire(levels.faces[0], sp, "solid_faces");
     let sp = (sp, "out");
     let ps = b.dot("p_dot_s", p, sp, cells);
     let alpha = b.divide("alpha", rz, ps);
@@ -968,7 +1051,7 @@ pub(super) mod tests {
     /// output capacity probe)); the walk sizes what they read and write.
     fn rules(frozen: bool) -> Vec<ExtentRule> {
         let mut rules = LIQUID_EXTENT_RULES.to_vec();
-        for type_id in ["test.value_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
+        for type_id in ["test.value_source", "test.face_source", "test.value_sink", "test.liquid_sink", "test.mesh_sink"] {
             rules.push(ExtentRule { type_id, check: harness_node });
         }
         if frozen {
@@ -1252,15 +1335,16 @@ pub(super) mod tests {
         }
     }
 
-    /// Neither the solve nor the water step fuses: every lattice a sweep
-    /// writes is gathered by the next (its neighbours) or fans out to
-    /// several readers, and a buffer region has one output. The whole step
-    /// runs unfrozen, so no fused-vs-unfrozen solve proof exists to run;
-    /// each atom's own fused kernel is proven in `gpu_flip_atom_tests`.
+    /// The solve does not fuse: every lattice a sweep writes is gathered by
+    /// the next (its neighbours) or fans out to several readers, and a
+    /// buffer region has one output. The water step fuses one pair, the
+    /// projection into the solids' constraint, whose fused kernel
+    /// `gpu_flip_atom_tests::gpu_flip_projection_into_constraint_fuses`
+    /// proves against the unfused one.
     #[test]
     fn gpu_flip_solve_and_step_do_not_fuse() {
         assert_eq!(fused_regions(&pressure_def(PressureShape::at(64))), Vec::<String>::new());
-        assert_eq!(fused_regions(&water_def(WaterScene::dam_break(64))), Vec::<String>::new());
+        assert_eq!(fused_regions(&water_def(WaterScene::dam_break(64))), vec!["s0.project + s0.constrain".to_string()]);
     }
 
     /// Nodes by id and wires sorted, so a hand edit's order does not count.

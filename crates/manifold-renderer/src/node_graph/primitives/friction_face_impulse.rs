@@ -1,0 +1,130 @@
+//! `node.friction_face_impulse` — the solids' friction drag on the water,
+//! returned to the bodies face by face (docs/GPU_FLIP_PRESSURE_SOLVE.md
+//! section 8 (solids in the water)). A per-element atom on the codegen path;
+//! node.face_impulse_to_bodies sums it per body.
+
+use std::borrow::Cow;
+
+use manifold_gpu::GpuBinding;
+
+use super::cells_with_particles::{LATTICE_PARAMS, cell_count, cell_lattice};
+use super::particles_to_faces::{face_capacity, face_count};
+use super::sort_particles_into_cells::float_param;
+use super::standalone_pipeline::standalone_pipeline;
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::fluid_particles::FaceSample;
+use crate::node_graph::freeze::classify::FusedOutputCapacity;
+use crate::node_graph::liquid::bodies::SOLID_BODY_FACES;
+use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::primitive::Primitive;
+
+/// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct FrictionImpulseUniforms {
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    cell_size: f32,
+    density: f32,
+    dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+crate::primitive! {
+    name: FrictionFaceImpulse,
+    type_id: "node.friction_face_impulse",
+    purpose: "The impulse a body takes back from the water through friction, per face of a face grid (node.particles_to_faces' layout). On an inner face a body owns (solid_velocity's velocity w, node.solid_face_velocity's owner code) that is cut (open fraction o from solid_faces strictly between 0 and 1) and touches a water cell, the face's axis carries density·cell_size³·o·f·(u − v_s) in N·s: u the face velocity in faces, v_s and f the body's velocity and friction on the face from solid_velocity. That is what node.constrain_solid_faces takes from the water there. Every other face is zero; velocity w passes the owner code on.",
+    inputs: {
+        faces: Array(FaceSample) required,
+        water: Array(f32) required,
+        solid_faces: Array(FaceSample) required,
+        solid_velocity: Array(FaceSample) required,
+    },
+    outputs: {
+        out: Array(FaceSample),
+    },
+    params: [
+        float_param!("nodes_x", "Cells X", 64.0, 1.0, 1024.0),
+        float_param!("nodes_y", "Cells Y", 64.0, 1.0, 1024.0),
+        float_param!("nodes_z", "Cells Z", 64.0, 1.0, 1024.0),
+        float_param!("cell_size", "Cell Size", 0.0625, 1.0e-4, 100.0),
+        float_param!("density", "Liquid Density (kg/m³)", 1000.0, 1.0e-3, 1.0e6),
+    ],
+    depth_rule: Terminal,
+    composition_notes: "Once per GPU FLIP water step, on the projected faces node.constrain_solid_faces is about to constrain, with the same solid_faces and solid_velocity; then node.face_impulse_to_bodies adds it to the step's body sums.",
+    examples: [],
+    picker: { label: "Friction Face Impulse", category: Atom },
+    summary: "Works out how much the water drags on floating objects where they slide past it.",
+    category: Particles3D,
+    role: Filter,
+    aliases: ["friction", "drag", "body coupling", "two-way coupling"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/friction_face_impulse_body.wgsl"),
+    input_access: [Coincident, BufferGather, Coincident, Coincident],
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 1 },
+    wgsl_includes: [SOLID_BODY_FACES],
+}
+
+impl Primitive for FrictionFaceImpulse {
+    fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
+        (port == "out").then(|| face_capacity(params)).flatten()
+    }
+
+    fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let Some(nodes) = cell_lattice(ctx.params) else {
+            ctx.error("Friction Face Impulse: every lattice length must be 1 to 1024".to_string());
+            return;
+        };
+        let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
+        let density = ctx.scalar_or_param("density", 1000.0);
+        if !(cell_size.is_finite() && cell_size > 0.0 && density.is_finite() && density > 0.0) {
+            ctx.error("Friction Face Impulse: cell_size and density must be positive".to_string());
+            return;
+        }
+        let gpu = ctx.gpu_encoder();
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        let (Some(faces), Some(water), Some(solid_faces), Some(solid_velocity), Some(out)) = (
+            ctx.inputs.array("faces"),
+            ctx.inputs.array("water"),
+            ctx.inputs.array("solid_faces"),
+            ctx.inputs.array("solid_velocity"),
+            ctx.outputs.array("out"),
+        ) else {
+            return;
+        };
+        let count = face_count(nodes);
+        let record = size_of::<FaceSample>() as u64;
+        if cell_count(nodes) * 4 > water.size
+            || count * record > faces.size.min(solid_faces.size).min(solid_velocity.size).min(out.size)
+        {
+            ctx.error(format!("Friction Face Impulse: a {nodes:?} lattice is larger than its arrays"));
+            return;
+        }
+        let uniforms = FrictionImpulseUniforms {
+            nodes_x: nodes[0] as f32,
+            nodes_y: nodes[1] as f32,
+            nodes_z: nodes[2] as f32,
+            cell_size,
+            density,
+            dispatch_count: count as u32,
+            _pad0: 0,
+            _pad1: 0,
+        };
+        let gpu = ctx.gpu_encoder();
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
+                GpuBinding::Buffer { binding: 1, buffer: faces, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: water, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: solid_faces, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: solid_velocity, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
+            ],
+            [(count as u32).div_ceil(256), 1, 1],
+            "node.friction_face_impulse",
+        );
+    }
+}

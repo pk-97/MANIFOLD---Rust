@@ -166,7 +166,9 @@ product of Float lattice params, whatever its inputs hold: zero_lattice,
 cells_with_particles, face_divergence) counts from the fused uniforms,
 `u32(max(round(params.n<member>_<param>), 0.0))` per factor, and the
 marker carries the same `prod(par(…),…)` expression, which `node.wgsl_compute`
-evaluates over its own params. Such a region runs the capacity block even
+evaluates over its own params. `ParamProduct { params, plus }` with `plus` > 0
+adds it to every factor (`(Nu + x)`, marker `add(n,x)`): a face grid, one more
+face than cells per axis (solid_faces, coarsen_solid_faces, subtract_pressure). Such a region runs the capacity block even
 with no gather, and its count is the output's lattice clamped by every member
 lattice and coincident array external that does not provably bound it; a
 clamp that would bite at the configured params refuses the region. The

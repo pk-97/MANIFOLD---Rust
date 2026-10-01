@@ -8,10 +8,12 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::cells_with_particles::{cell_count, cell_lattice};
+use super::particles_to_faces::face_count;
 use super::sort_particles_into_cells::{float_param, int_param};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
+use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -32,11 +34,12 @@ struct SmoothUniforms {
 crate::primitive! {
     name: PressureSmooth,
     type_id: "node.pressure_smooth",
-    purpose: "One red-black Gauss-Seidel sweep of the masked Poisson equation L p = rhs on a lattice (nodes_x/y/z cells, cell (i, j, k) at i + nx·(j + ny·k)): each water cell (water > 0.5) of the swept color, (i + j + k) mod 2 = color, becomes (Σ of its water neighbours' value − cell_size² · rhs) / (its neighbours inside the box). Air neighbours hold zero pressure and the box walls are closed. Every other cell keeps its value.",
+    purpose: "One red-black Gauss-Seidel sweep of the weighted Poisson equation L p = rhs on a lattice (nodes_x/y/z cells, cell (i, j, k) at i + nx·(j + ny·k)), each face weighted by its open fraction w from solid_faces (node.solid_faces' face grid; box walls 0): each water cell (water > 0.5) of the swept color, (i + j + k) mod 2 = color, becomes (Σ w · its water neighbours' value − cell_size² · rhs) / (Σ w over its faces). Air neighbours hold zero pressure. A water cell with no open face is out of the system and becomes 0. Every other cell keeps its value.",
     inputs: {
         water: Array(f32) required,
         rhs: Array(f32) required,
         value: Array(f32) required,
+        solid_faces: Array(FaceSample) required,
         cell_size: ScalarF32 optional,
     },
     outputs: {
@@ -59,7 +62,7 @@ crate::primitive! {
     aliases: ["gauss seidel", "red black", "relax", "smoother", "multigrid smooth"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/pressure_smooth_body.wgsl"),
-    input_access: [BufferGather, Coincident, BufferGather],
+    input_access: [BufferGather, Coincident, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "rhs" },
 }
 
@@ -88,13 +91,19 @@ impl Primitive for PressureSmooth {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(water), Some(rhs), Some(value), Some(out)) =
-            (ctx.inputs.array("water"), ctx.inputs.array("rhs"), ctx.inputs.array("value"), ctx.outputs.array("out"))
-        else {
+        let (Some(water), Some(rhs), Some(value), Some(solid_faces), Some(out)) = (
+            ctx.inputs.array("water"),
+            ctx.inputs.array("rhs"),
+            ctx.inputs.array("value"),
+            ctx.inputs.array("solid_faces"),
+            ctx.outputs.array("out"),
+        ) else {
             return;
         };
         let cells = cell_count(nodes);
-        if cells * 4 > water.size.min(rhs.size).min(value.size).min(out.size) {
+        if cells * 4 > water.size.min(rhs.size).min(value.size).min(out.size)
+            || face_count(nodes) * size_of::<FaceSample>() as u64 > solid_faces.size
+        {
             ctx.error(format!("Smooth Pressure: a {nodes:?} lattice is larger than its arrays"));
             return;
         }
@@ -116,7 +125,8 @@ impl Primitive for PressureSmooth {
                 GpuBinding::Buffer { binding: 1, buffer: water, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: rhs, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: value, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: solid_faces, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
             ],
             [(cells as u32).div_ceil(256), 1, 1],
             "node.pressure_smooth",

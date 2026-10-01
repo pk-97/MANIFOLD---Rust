@@ -208,6 +208,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "face_impulse_to_bodies.rs",
+        rust_struct: "SumParams",
+        shader: "shaders/face_impulse_to_bodies.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "running_total.rs",
         rust_struct: "TotalParams",
         shader: "shaders/running_total.wgsl",

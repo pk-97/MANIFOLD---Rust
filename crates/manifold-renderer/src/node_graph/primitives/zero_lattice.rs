@@ -48,7 +48,7 @@ crate::primitive! {
     pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/zero_lattice_body.wgsl"),
-    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS },
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 0 },
 }
 
 impl Primitive for ZeroLattice {

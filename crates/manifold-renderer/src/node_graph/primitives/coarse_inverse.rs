@@ -12,8 +12,10 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
 use super::cells_with_particles::{cell_count, cell_lattice};
+use super::particles_to_faces::face_count;
 use super::sort_particles_into_cells::float_param;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
+use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -36,9 +38,10 @@ struct InverseParams {
 crate::primitive! {
     name: CoarseInverse,
     type_id: "node.coarse_inverse",
-    purpose: "The inverse of the masked Poisson matrix A on a small lattice (nodes_x/y/z cells, cell (i, j, k) at i + nx·(j + ny·k), at most 64 cells), as a cells × cells row-major array: A[c][c] counts c's neighbours inside the box and A[c][d] is −1 for a water neighbour d, on water cells (water > 0.5) only, so the masked Laplacian is −A / h². Built in one workgroup by symmetric elimination; the result is exactly symmetric. Air rows and columns are zero. A water body that touches no air is singular: one of its cells is pinned at zero.",
+    purpose: "The inverse of the masked Poisson matrix A on a small lattice (nodes_x/y/z cells, cell (i, j, k) at i + nx·(j + ny·k), at most 64 cells), as a cells × cells row-major array: A[c][c] is the sum of the open fractions w of c's faces and A[c][d] is −w for a water neighbour d across a face of open fraction w (solid_faces, node.solid_faces' face grid; box walls 0), on water cells (water > 0.5) only, so the weighted Laplacian is −A / h². Built in one workgroup by symmetric elimination; the result is exactly symmetric. Air rows and columns are zero. A water body that touches no air is singular: one of its cells is pinned at zero; so is a water cell with no open face.",
     inputs: {
         water: Array(f32) required,
+        solid_faces: Array(FaceSample) required,
     },
     outputs: {
         out: Array(f32),
@@ -49,7 +52,7 @@ crate::primitive! {
         float_param!("nodes_z", "Cells Z", 4.0, 1.0, 1024.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The bottom of the multigrid V-cycle, once per water lattice: water is the coarsest node.coarsen_water level. Apply it with node.combine_rows: base and coef the coarsest rhs (from node.restrict_lattice), matrix this output, rows and row_length the cell count, base_scale 0, scale −h² at that level's cell size. The result solves L e = rhs exactly.",
+    composition_notes: "The bottom of the multigrid V-cycle, once per water lattice: water is the coarsest node.coarsen_water level, solid_faces the coarsest node.coarsen_solid_faces level. Apply it with node.combine_rows: base and coef the coarsest rhs (from node.restrict_lattice), matrix this output, rows and row_length the cell count, base_scale 0, scale −h² at that level's cell size. The result solves L e = rhs exactly.",
     examples: [],
     picker: { label: "Coarse Inverse", category: Atom },
     summary: "Works out the exact pressure answer on the solver's smallest grid.",
@@ -95,11 +98,16 @@ impl Primitive for CoarseInverse {
                 self.inverse = Some(gpu.device.create_compute_pipeline(SHADER, "inverse_main", "node.coarse_inverse"));
             }
         }
-        let (Some(water), Some(out)) = (ctx.inputs.array("water"), ctx.outputs.array("out")) else {
+        let (Some(water), Some(solid_faces), Some(out)) =
+            (ctx.inputs.array("water"), ctx.inputs.array("solid_faces"), ctx.outputs.array("out"))
+        else {
             return;
         };
         let cells = cell_count(nodes);
-        if cells * 4 > water.size || cells * cells * 4 > out.size {
+        if cells * 4 > water.size
+            || cells * cells * 4 > out.size
+            || face_count(nodes) * size_of::<FaceSample>() as u64 > solid_faces.size
+        {
             ctx.error(format!("Coarse Inverse: a {nodes:?} lattice is larger than its arrays"));
             return;
         }
@@ -110,7 +118,8 @@ impl Primitive for CoarseInverse {
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
                 GpuBinding::Buffer { binding: 1, buffer: water, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: solid_faces, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: out, offset: 0 },
             ],
             [1, 1, 1],
             "node.coarse_inverse",

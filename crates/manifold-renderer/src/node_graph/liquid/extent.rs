@@ -46,6 +46,7 @@ use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::cells_with_particles::{cell_count, cell_lattice};
 use crate::node_graph::primitives::coarse_inverse::coarse_refusal;
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
+use crate::node_graph::primitives::face_impulse_to_bodies::BODY_SUM_FLOATS;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
@@ -575,6 +576,14 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.restrict_lattice", check: restrict_lattice },
     ExtentRule { type_id: "node.prolong_lattice", check: prolong_lattice },
     ExtentRule { type_id: "node.coarse_inverse", check: coarse_inverse },
+    ExtentRule { type_id: "node.solid_faces", check: solid_faces },
+    ExtentRule { type_id: "node.coarsen_solid_faces", check: coarsen_solid_faces },
+    ExtentRule { type_id: "node.solid_face_velocity", check: solid_face_velocity },
+    ExtentRule { type_id: "node.constrain_solid_faces", check: constrain_solid_faces },
+    ExtentRule { type_id: "node.pressure_face_impulse", check: pressure_face_impulse },
+    ExtentRule { type_id: "node.friction_face_impulse", check: friction_face_impulse },
+    ExtentRule { type_id: "node.body_pressure_product", check: body_pressure_product },
+    ExtentRule { type_id: "node.face_impulse_to_bodies", check: face_impulse_to_bodies },
     ExtentRule { type_id: "node.conjugate_gradient", check: conjugate_gradient },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
@@ -1204,6 +1213,8 @@ fn face_gravity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn face_divergence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = gpu_flip_cells(x)?;
     x.covers("faces", face_count(nodes) * FACE)?;
+    x.covers("solid_faces", face_count(nodes) * FACE)?;
+    x.covers("solid_velocity", face_count(nodes) * FACE)?;
     x.covers("water", cell_count(nodes) * 4)?;
     x.covers("out", cell_count(nodes) * 4)
 }
@@ -1213,6 +1224,7 @@ fn subtract_pressure(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_count(nodes) * FACE;
     x.covers("faces", faces)?;
     x.covers("out", faces)?;
+    x.covers("solid_faces", faces)?;
     x.covers("pressure", cell_count(nodes) * 4)?;
     x.covers("water", cell_count(nodes) * 4)
 }
@@ -1286,13 +1298,115 @@ fn coarsen_water(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", cells * 4)
 }
 
-/// One red-black sweep or one residual: every array on the lattice.
+/// One red-black sweep or one residual: every array on the lattice, and the
+/// face grid's open fractions.
 fn pressure_sweep(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = cell_count(gpu_flip_cells(x)?);
+    let nodes = gpu_flip_cells(x)?;
+    let cells = cell_count(nodes);
+    x.covers("solid_faces", face_count(nodes) * FACE)?;
     for port in ["water", "rhs", "value", "out"] {
         x.covers(port, cells * 4)?;
     }
     Ok(())
+}
+
+/// The open fractions on the box's corner lattice: one solid distance per
+/// face-grid cell.
+fn solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let faces = face_count(gpu_flip_cells(x)?);
+    x.covers("solid", faces * 4)?;
+    x.covers("out", faces * FACE)
+}
+
+/// The solids' face velocity: a face grid in and out, and every body row the
+/// kernel reads.
+fn solid_face_velocity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let faces = face_count(gpu_flip_cells(x)?) * FACE;
+    x.covers("solid_faces", faces)?;
+    x.covers("out", faces)?;
+    let rows = body_rows(x)?;
+    x.covers("bodies", rows * size_of::<LiquidBody>() as u64)?;
+    // A change row for every row that can be a body: a dynamic body past
+    // `changes` would lose the liquid's push without a word.
+    x.covers("changes", body_sums(rows))
+}
+
+/// The body rows a coupling atom may read, a whole count.
+fn body_rows(x: &AtomExtent<'_>) -> Result<u64, Verdict> {
+    let rows = x.scalar("rows", 0.0);
+    if !(rows >= 0.0 && rows.fract() == 0.0) {
+        return Err(Verdict::Refused(format!("{rows} body rows is not a whole count")));
+    }
+    Ok(rows as u64)
+}
+
+/// Bytes of node.face_impulse_to_bodies' sums for `rows` bodies.
+fn body_sums(rows: u64) -> u64 {
+    rows * u64::from(BODY_SUM_FLOATS) * 4
+}
+
+/// Pressure and water per cell, three face grids per face.
+fn pressure_face_impulse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = gpu_flip_cells(x)?;
+    for port in ["pressure", "water"] {
+        x.covers(port, cell_count(nodes) * 4)?;
+    }
+    for port in ["solid_faces", "solid_velocity", "out"] {
+        x.covers(port, face_count(nodes) * FACE)?;
+    }
+    Ok(())
+}
+
+/// Water per cell, four face grids per face.
+fn friction_face_impulse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = gpu_flip_cells(x)?;
+    x.covers("water", cell_count(nodes) * 4)?;
+    for port in ["faces", "solid_faces", "solid_velocity", "out"] {
+        x.covers(port, face_count(nodes) * FACE)?;
+    }
+    Ok(())
+}
+
+/// Three lattices per cell, two face grids, and every body's row and sums.
+fn body_pressure_product(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = gpu_flip_cells(x)?;
+    for port in ["base", "water", "out"] {
+        x.covers(port, cell_count(nodes) * 4)?;
+    }
+    for port in ["solid_faces", "solid_velocity"] {
+        x.covers(port, face_count(nodes) * FACE)?;
+    }
+    let rows = body_rows(x)?;
+    x.covers("bodies", rows * size_of::<LiquidBody>() as u64)?;
+    x.covers("sums", body_sums(rows))
+}
+
+/// A face grid in, every body's row, and the sums of every body the
+/// finalize pass writes.
+fn face_impulse_to_bodies(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = gpu_flip_cells(x)?;
+    x.covers("impulses", face_count(nodes) * FACE)?;
+    let rows = body_rows(x)?;
+    x.covers("bodies", rows * size_of::<LiquidBody>() as u64)?;
+    x.covers("out", body_sums(u64::from(MAX_FLUID_ROLES as u32)))?;
+    x.covers_if_bound("base", body_sums(rows))?;
+    x.covers_if_bound("reaction", body_sums(rows))
+}
+
+/// Three face grids in, one out.
+fn constrain_solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let faces = face_count(gpu_flip_cells(x)?) * FACE;
+    for port in ["faces", "solid_faces", "solid_velocity", "out"] {
+        x.covers(port, faces)?;
+    }
+    Ok(())
+}
+
+/// A coarse face grid from the face grid twice as long per axis.
+fn coarsen_solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = gpu_flip_cells(x)?;
+    x.covers("fine", face_count(nodes.map(|n| 2 * n)) * FACE)?;
+    x.covers("out", face_count(nodes) * FACE)
 }
 
 fn restrict_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1321,8 +1435,10 @@ fn coarse_inverse(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if let Some(reason) = coarse_refusal(x.params()) {
         return Err(x.uncovered(reason));
     }
-    let cells = cell_count(gpu_flip_cells(x)?);
+    let nodes = gpu_flip_cells(x)?;
+    let cells = cell_count(nodes);
     x.covers("water", cells * 4)?;
+    x.covers("solid_faces", face_count(nodes) * FACE)?;
     x.covers("out", cells * cells * 4)
 }
 

@@ -541,6 +541,9 @@ const NON_STANDALONE: &[&str] = &[
     "node.dot_products",
     "node.coarse_inverse",
     "node.conjugate_gradient",
+    // Solids' per-body impulse sums: the same barriered two-pass reduction as
+    // dot_products, its SumParams reflected in uniform_layout_extended.
+    "node.face_impulse_to_bodies",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.

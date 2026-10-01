@@ -15022,7 +15022,118 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:295 ===
+=== generator:WaterDamBreakGpuFlip node:504 ===
+struct Element {
+    face_velocity: vec4<f32>,
+    face_weight: vec4<f32>,
+}
+
+struct Params {
+    n0_nodes_x: f32,
+    n0_nodes_y: f32,
+    n0_nodes_z: f32,
+    n0_cell_size: f32,
+    n1_nodes_x: f32,
+    n1_nodes_y: f32,
+    n1_nodes_z: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+@group(0) @binding(2) var<storage, read> src_1: array<f32>;
+@group(0) @binding(3) var<storage, read> src_2: array<f32>;
+@group(0) @binding(4) var<storage, read> src_3: array<Element>;
+@group(0) @binding(5) var<storage, read> src_4: array<Element>;
+// @fused_output
+@group(0) @binding(6) var<storage, read_write> dst: array<Element>;
+// @fused_output_capacity: min(prod(add(1,par(n1_nodes_x)),add(1,par(n1_nodes_y)),add(1,par(n1_nodes_z))),prod(add(1,par(n0_nodes_x)),add(1,par(n0_nodes_y)),add(1,par(n0_nodes_z))),s0,s3,s4)
+
+fn n0_body(idx: u32, count: u32, e_faces: Element, e_solid_faces: Element, nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_size: f32) -> Element {
+    var out = Element(vec4<f32>(0.0), vec4<f32>(0.0));
+    let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    let m = n + vec3<i32>(1);
+    let cells = u32(n.x) * u32(n.y) * u32(n.z);
+    if idx >= u32(m.x) * u32(m.y) * u32(m.z) || cells > min(arrayLength(&src_1), arrayLength(&src_2)) {
+        return out;
+    }
+    let p = vec3<i32>(
+        i32(idx % u32(m.x)),
+        i32((idx / u32(m.x)) % u32(m.y)),
+        i32(idx / (u32(m.x) * u32(m.y))),
+    );
+    for (var a = 0; a < 3; a = a + 1) {
+        var other = p;
+        other[a] = 0;
+        if !all(other < n) {
+            continue;
+        }
+        if p[a] == 0 || p[a] == n[a] {
+            out.face_velocity[a] = e_faces.face_velocity[a];
+            out.face_weight[a] = 1.0;
+            continue;
+        }
+        var below = p;
+        below[a] = p[a] - 1;
+        let upper = u32(p.x + n.x * (p.y + n.y * p.z));
+        let lower = u32(below.x + n.x * (below.y + n.y * below.z));
+        out.face_velocity[a] = e_faces.face_velocity[a];
+        if !(e_solid_faces.face_weight[a] > 0.0) {
+            out.face_weight[a] = 1.0;
+        } else if src_2[upper] > 0.5 || src_2[lower] > 0.5 {
+            out.face_velocity[a] = e_faces.face_velocity[a] - (src_1[upper] - src_1[lower]) / cell_size;
+            out.face_weight[a] = 1.0;
+        }
+    }
+    return out;
+}
+
+fn n1_body(idx: u32, count: u32, e_faces: Element, e_solid_faces: Element, e_solid_velocity: Element, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Element {
+    var out = e_faces;
+    let n = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    let m = n + vec3<i32>(1);
+    if idx >= u32(m.x) * u32(m.y) * u32(m.z) {
+        return out;
+    }
+    let p = vec3<i32>(
+        i32(idx % u32(m.x)),
+        i32((idx / u32(m.x)) % u32(m.y)),
+        i32(idx / (u32(m.x) * u32(m.y))),
+    );
+    for (var a = 0; a < 3; a = a + 1) {
+        var other = p;
+        other[a] = 0;
+        if !all(other < n) || p[a] == 0 || p[a] == n[a] {
+            continue;
+        }
+        let w = e_solid_faces.face_weight[a];
+        let solid = e_solid_velocity.face_velocity[a];
+        if !(w > 0.0) {
+            out.face_velocity[a] = solid;
+        } else if w < 1.0 {
+            let f = e_solid_velocity.face_weight[a];
+            out.face_velocity[a] = f * solid + (1.0 - f) * e_faces.face_velocity[a];
+        }
+    }
+    return out;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = min(min(min(min(((1u + u32(max(round(params.n1_nodes_x), 0.0))) * (1u + u32(max(round(params.n1_nodes_y), 0.0))) * (1u + u32(max(round(params.n1_nodes_z), 0.0)))), ((1u + u32(max(round(params.n0_nodes_x), 0.0))) * (1u + u32(max(round(params.n0_nodes_y), 0.0))) * (1u + u32(max(round(params.n0_nodes_z), 0.0))))), arrayLength(&src_0)), arrayLength(&src_3)), arrayLength(&src_4));
+    if idx >= count {
+        return;
+    }
+    let e_0 = src_0[idx];
+    let e_3 = src_3[idx];
+    let e_4 = src_4[idx];
+    let r0 = n0_body(idx, count, e_0, e_3, params.n0_nodes_x, params.n0_nodes_y, params.n0_nodes_z, params.n0_cell_size);
+    let r1 = n1_body(idx, count, r0, e_3, e_4, params.n1_nodes_x, params.n1_nodes_y, params.n1_nodes_z);
+    dst[idx] = r1;
+}
+
+=== generator:WaterDamBreakGpuFlip node:505 ===
 struct Element {
     crossing: vec3<f32>,
     level: f32,
@@ -15201,7 +15312,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:296 ===
+=== generator:WaterDamBreakGpuFlip node:506 ===
 struct Element {
     position_radius: vec4<f32>,
     velocity: vec3<f32>,

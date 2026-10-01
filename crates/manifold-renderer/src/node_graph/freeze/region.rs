@@ -2033,7 +2033,7 @@ fn build_region(
 
             let declared = constructed.fused_output_capacity();
             let expr = match declared {
-                FusedOutputCapacity::ParamProduct { params } => {
+                FusedOutputCapacity::ParamProduct { params, plus } => {
                     let mut factors = Vec::with_capacity(params.len());
                     for name in params {
                         let param = constructed
@@ -2044,7 +2044,8 @@ fn build_region(
                         if param.ty != crate::node_graph::parameters::ParamType::Float {
                             return Err("ParamProduct names a param that is not a Float");
                         }
-                        factors.push(CapacityExpr::Param(format!("n{pos}_{name}")));
+                        let side = CapacityExpr::Param(format!("n{pos}_{name}"));
+                        factors.push(if plus == 0 { side } else { CapacityExpr::Add(plus, Box::new(side)) });
                     }
                     match factors.len() {
                         1 => factors.pop().expect("one factor"),
@@ -4237,9 +4238,11 @@ mod tests {
                 {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
                 {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
                 {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
-                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"},
+                {"id": 7, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 729}}}
             ],
             "wires": [
+                {"fromNode": 7, "fromPort": "out", "toNode": 2, "toPort": "solid_faces"},
                 {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "water"},
                 {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "rhs"},
                 {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "value"},
@@ -4313,9 +4316,13 @@ mod tests {
                     {"id": 2, "nodeId": "water", "typeId": "node.cells_with_particles", "params": lattice_params([water, 8.0, 8.0])},
                     {"id": 3, "nodeId": "divergence", "typeId": "node.face_divergence", "params": lattice_params([8.0; 3])},
                     {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
-                    {"id": 5, "nodeId": "output", "typeId": "system.final_output"}
+                    {"id": 5, "nodeId": "output", "typeId": "system.final_output"},
+                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 7, "nodeId": "moving", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
                 ],
                 "wires": [
+                    {"fromNode": 6, "fromPort": "out", "toNode": 3, "toPort": "solid_faces"},
+                    {"fromNode": 7, "fromPort": "out", "toNode": 3, "toPort": "solid_velocity"},
                     {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "cell_ranges"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "faces"},
                     {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},

@@ -114,7 +114,7 @@ crate::primitive! {
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/spawn_whitewater_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    output_capacity: FusedOutputCapacity::ParamProduct { params: &CAPACITY_PARAMS },
+    output_capacity: FusedOutputCapacity::ParamProduct { params: &CAPACITY_PARAMS, plus: 0 },
     wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES],
 }
 
