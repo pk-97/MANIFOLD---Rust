@@ -43,12 +43,13 @@ struct SolidFaceVelocityUniforms {
 crate::primitive! {
     name: SolidFaceVelocity,
     type_id: "node.solid_face_velocity",
-    purpose: "The solids' velocity and friction on a face grid (node.particles_to_faces' layout, nodes_x/y/z cells from lattice_min, cell_size apart). On an inner face a solid cuts (open fraction under 1 in solid_faces, node.solid_faces' face grid), velocity is the closest body's rigid velocity at the face centre along the face's axis, and weight is the friction of the closest body at each of the face's four corners, averaged (0 at a corner no body reaches), as FLIP Fluids takes its solid face velocity and friction. Every other face is zero. Bodies are posed after tick_seconds, as node.liquid_solid_distance poses them.",
+    purpose: "The solids' velocity and friction on a face grid (node.particles_to_faces' layout, nodes_x/y/z cells from lattice_min, cell_size apart). On an inner face a solid cuts (open fraction under 1 in solid_faces, node.solid_faces' face grid), velocity is the closest body's rigid velocity at the face centre along the face's axis, and weight is the friction of the closest body at each of the face's four corners, averaged (0 at a corner no body reaches), as FLIP Fluids takes its solid face velocity and friction. Every other face is zero. Bodies are posed after tick_seconds, as node.liquid_solid_distance poses them. A dynamic body (1/m above 0) moves at its predicted velocity: its velocity plus its acceleration times tick_seconds plus its velocity change so far this tick from changes (node.face_impulse_to_bodies' sums, 16 floats per body). Velocity w carries each face's owner, Σ over the axes a of (b + 1)·256^a, b the owning body from body 0 or −1 for none.",
     inputs: {
         solid_faces: Array(FaceSample) required,
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,
         atlas: Array(u32) required,
+        changes: Array(f32) required,
         body_count: ScalarF32 optional,
         rows: ScalarF32 optional,
     },
@@ -77,7 +78,7 @@ crate::primitive! {
     aliases: ["solid velocity", "obstacle velocity", "moving solid", "boundary velocity"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/solid_face_velocity_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::ParamProduct { params: &LATTICE_PARAMS, plus: 1 },
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
 }
@@ -107,11 +108,12 @@ impl Primitive for SolidFaceVelocity {
         }
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(solid_faces), Some(bodies), Some(shapes), Some(atlas), Some(out)) = (
+        let (Some(solid_faces), Some(bodies), Some(shapes), Some(atlas), Some(changes), Some(out)) = (
             ctx.inputs.array("solid_faces"),
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("changes"),
             ctx.outputs.array("out"),
         ) else {
             return;
@@ -149,7 +151,8 @@ impl Primitive for SolidFaceVelocity {
                 GpuBinding::Buffer { binding: 2, buffer: bodies, offset: 0 },
                 GpuBinding::Buffer { binding: 3, buffer: shapes, offset: 0 },
                 GpuBinding::Buffer { binding: 4, buffer: atlas, offset: 0 },
-                GpuBinding::Buffer { binding: 5, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 5, buffer: changes, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: out, offset: 0 },
             ],
             [(faces as u32).div_ceil(256), 1, 1],
             "node.solid_face_velocity",

@@ -370,6 +370,207 @@ def box_gate(name, water, f, h, counts, box):
           f"gap to direct {gap:.3e}", flush=True)
 
 
+RHO = 1000.0
+G = 9.81
+
+
+def box_cells(shape, box):
+    """Each cell's open volume for an axis-aligned box: 1 minus the product
+    of its overlaps along the three axes. node.solid_faces takes the engine's
+    corner-distance volumeFraction instead; the two agree on whole cells."""
+    c, half = np.array(box[:3]), np.array(box[3:])
+    n = shape[0]
+    edges = np.arange(n + 1) / n
+    over = [np.clip(np.minimum(edges[1:], c[a] + half[a]) - np.maximum(edges[:-1], c[a] - half[a]), 0, None) * n
+            for a in range(3)]
+    return 1.0 - over[2][:, None, None] * over[1][None, :, None] * over[0][None, None, :]
+
+
+def body_basis(shape, box):
+    """J's columns per numpy-axis face: d v_s / d(V, ω) at the face centre,
+    as RigidBoundaryVelocityMap's capture writes derivative (axis x:
+    1, 0, 0, 0, rz, −ry). Shape (3, faces..., 6), in metres for ω."""
+    n = shape[0]
+    h = L / n
+    com = np.array(box[:3]) * L
+    out = []
+    for ax in range(3):
+        sh = [n, n, n]
+        sh[ax] += 1
+        zz, yy, xx = np.meshgrid(*[(np.arange(m) + (0.0 if a == ax else 0.5)) * h for a, m in enumerate(sh)], indexing="ij")
+        r = np.stack([xx, yy, zz], -1) - com
+        rx, ry, rz = r[..., 0], r[..., 1], r[..., 2]
+        b = np.zeros(sh + [6])
+        world = 2 - ax  # numpy axis 0 is z
+        b[..., world] = 1.0
+        if world == 0:
+            b[..., 4], b[..., 5] = rz, -ry
+        elif world == 1:
+            b[..., 3], b[..., 5] = -rz, rx
+        else:
+            b[..., 3], b[..., 4] = ry, -rx
+        out.append(b)
+    return out
+
+
+def body_columns(water, faces, cell_open, basis):
+    """G per cell, (cells..., 6): Σ over its inner faces of the outward sign ×
+    (c − w) × the face's basis, d(h · divergence)/d(V, ω) as node.face_divergence
+    takes the C·v_s term. FLIP Fluids' forcePerPressure is −h²·(this)."""
+    g = np.zeros(water.shape + (6,))
+    for ax, w in enumerate(faces):
+        n = water.shape[ax]
+        inner = np.ones_like(w)
+        inner[tuple(slice(None) if a != ax else [0, -1] for a in range(3))] = 0.0
+        coef = basis[ax] * inner[..., None]
+        lo_w, hi_w = side(w, ax, True), side(w, ax, False)
+        lo_b, hi_b = along(coef, ax, slice(None, -1)), along(coef, ax, slice(1, None))
+        g += (cell_open - hi_w)[..., None] * hi_b - (cell_open - lo_w)[..., None] * lo_b
+    return g * water[..., None]
+
+
+class Body:
+    """One dynamic box: inverse mass, world inverse inertia, its G."""
+    def __init__(self, shape, box, ratio, water, faces, cell_open):
+        half = np.array(box[3:]) * L
+        mass = ratio * RHO * 8 * np.prod(half)
+        self.inv_mass = 0.0 if ratio <= 0 else 1.0 / mass
+        inertia = mass / 3.0 * np.array([half[1]**2 + half[2]**2, half[0]**2 + half[2]**2, half[0]**2 + half[1]**2])
+        self.inv_inertia = np.zeros((3, 3)) if ratio <= 0 else np.diag(1.0 / inertia)
+        self.basis = body_basis(shape, box)
+        self.g = body_columns(water, faces, cell_open, self.basis)
+
+    def response(self, impulse):
+        return np.concatenate([self.inv_mass * impulse[:3], self.inv_inertia @ impulse[3:]])
+
+    def impulse(self, p, h):
+        """ρ h² Gᵀ p: the pressure's linear and angular impulse on the body."""
+        return RHO * h * h * np.tensordot(p, self.g, axes=3)
+
+    def product(self, p, h):
+        """ρ h G M⁻¹ Gᵀ p, the body's share of −L p."""
+        return np.tensordot(self.g, self.response(self.impulse(p, h)), axes=1) / h
+
+
+def body_divergence(u, w, cell_open, vs, water, h):
+    """node.face_divergence with the C·v_s term."""
+    d = np.zeros(water.shape)
+    for ax in range(3):
+        inner = np.ones_like(w[ax])
+        inner[tuple(slice(None) if a != ax else [0, -1] for a in range(3))] = 0.0
+        flux = w[ax] * u[ax]
+        solid = inner * vs[ax]
+        d += side(flux, ax, False) - side(flux, ax, True)
+        d += (cell_open - side(w[ax], ax, False)) * side(solid, ax, False) - (cell_open - side(w[ax], ax, True)) * side(solid, ax, True)
+    return d / h * water
+
+
+def body_solve(lv, mg, body, f, h, iterations):
+    """The graph's PCG with s = −L p + the body term; the V-cycle sees the
+    fluid block only."""
+    x = np.zeros_like(f)
+    r = f * lv.w
+    p = np.zeros_like(f)
+    rz_old = 0.0
+    for _ in range(iterations):
+        z = mg.vcycle(0, r)
+        rz = np.sum(r * z)
+        beta = rz / rz_old if abs(rz_old) >= 1e-30 else 0.0
+        p = z + beta * p
+        s = lv.residual(0.0, p) + body.product(p, h) * lv.w
+        ps = np.sum(p * s)
+        alpha = rz / ps if abs(ps) >= 1e-30 else 0.0
+        x = x - alpha * p
+        r = r - alpha * s
+        rz_old = rz
+    return x
+
+
+def body_direct(lv, body, f, h):
+    """(L − ρh G M⁻¹ Gᵀ) x = f on the water: a sparse factor of the fluid
+    block and Woodbury for the body's rank six."""
+    keep = np.flatnonzero(lv.water.ravel())
+    rows, cols, vals, _ = matrix(lv.water, lv.faces)
+    a = (scipy.sparse.csr_matrix((vals, (rows, cols)), shape=(lv.water.size,) * 2)[keep][:, keep] / h**2).tocsc()
+    gk = body.g.reshape(-1, 6)[keep]
+    m_inv = np.zeros((6, 6))
+    m_inv[:3, :3] = body.inv_mass * np.eye(3)
+    m_inv[3:, 3:] = body.inv_inertia
+    lu = scipy.sparse.linalg.splu(a)
+    b = -f.ravel()[keep]
+    y = lu.solve(b)
+    u = RHO * h * gk @ m_inv
+    ag = lu.solve(gk)
+    # (A + U Gᵀ)⁻¹ b = y − A⁻¹U (I + Gᵀ A⁻¹ U)⁻¹ Gᵀ y, U = ρh G M⁻¹.
+    au = lu.solve(u)
+    x = np.zeros(lv.water.size)
+    x[keep] = y - au @ np.linalg.solve(np.eye(6) + gk.T @ au, gk.T @ y)
+    return x.reshape(lv.water.shape)
+
+
+def body_gate(n, box, fill, ratios, counts):
+    """docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water), D7's
+    body rows: a still pool to `fill` with a box, one step of gravity. Per
+    density ratio (0 = prescribed): the divergence after the projection and
+    the body's velocity change, the lift against ρ g V, and the impulse
+    against the CG iteration count."""
+    shape = (n, n, n)
+    h = L / n
+    dt = 1.0 / 120.0
+    water = np.zeros(shape, bool)
+    water[:, : int(round(fill * n)), :] = True
+    faces = box_faces(shape, box)
+    cell_open = box_cells(shape, box)
+    lv = Level(water, h, faces)
+    water = lv.water
+    mg = Multigrid(water, h, faces)
+    u = []
+    for ax in range(3):
+        sh = list(shape)
+        sh[ax] += 1
+        v = np.zeros(sh)
+        if ax == 1:
+            v[:, 1:-1, :] = -G * dt
+        u.append(v)
+    zero = [np.zeros_like(v) for v in u]
+    volume = 8 * np.prod(np.array(box[3:]) * L)
+    for ratio in ratios:
+        body = Body(shape, box, ratio, water, faces, cell_open)
+        # A dynamic body enters the step with its predicted velocity, gravity
+        # included (LiquidBody.accel_shape); a prescribed one holds still.
+        v0 = np.array([0.0, 0.0 if ratio <= 0 else -G * dt, 0.0, 0.0, 0.0, 0.0])
+        start = [np.tensordot(b, v0, axes=1) for b in body.basis]
+        f = body_divergence(u, faces, cell_open, start, water, h)
+        x = body_direct(lv, body, f, h)
+        dv = body.response(body.impulse(x, h))
+        vs = [np.tensordot(b, v0 + dv, axes=1) for b in body.basis]
+        proj = []
+        for ax in range(3):
+            pad = [(0, 0)] * 3
+            pad[ax] = (1, 1)
+            px = np.pad(x * water, pad)
+            grad = (along(px, ax, slice(1, None)) - along(px, ax, slice(None, -1))) / h
+            both = np.pad(water.astype(float), pad)
+            wet = (along(both, ax, slice(1, None)) + along(both, ax, slice(None, -1))) > 0
+            inner = np.ones_like(u[ax])
+            inner[tuple(slice(None) if a != ax else [0, -1] for a in range(3))] = 0.0
+            proj.append(u[ax] - grad * (faces[ax] > 0) * wet * inner)
+        after = body_divergence(proj, faces, cell_open, vs, water, h)
+        lift = body.impulse(x, h)[1] / dt
+        line = [f"{n}^3 ratio {ratio:g}: divergence after {np.abs(after).max() * h:.2e} m/s "
+                f"(before {np.abs(f).max() * h:.2e})",
+                f"lift {lift:.1f} N against ρgV {RHO * G * volume:.1f} N ({100 * (lift / (RHO * G * volume) - 1):+.2f}%)",
+                f"body dv_y {dv[1]:+.4f} m/s"]
+        ref = body.impulse(x, h)
+        parts = []
+        for k in counts:
+            xk = body_solve(lv, mg, body, f, h, k)
+            ik = body.impulse(xk, h)
+            parts.append(f"{k}: {100 * np.linalg.norm(ik - ref) / np.linalg.norm(ref):.2f}%")
+        line.append("impulse error at " + ", ".join(parts))
+        print("; ".join(line), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("fixture", nargs="?")
@@ -377,8 +578,14 @@ def main():
     ap.add_argument("--refine", type=int, default=1)
     ap.add_argument("--iterations", default="4,6,8")
     ap.add_argument("--box")
+    ap.add_argument("--body", help="n,cx,cy,cz,hx,hy,hz,fill: a still pool and a box")
+    ap.add_argument("--ratios", default="0,0.1,1,10")
     args = ap.parse_args()
     counts = [int(k) for k in args.iterations.split(",")]
+    if args.body:
+        v = [float(t) for t in args.body.split(",")]
+        body_gate(int(v[0]), v[1:7], v[7], [float(r) for r in args.ratios.split(",")], counts)
+        return
     probs = frames(args.frames) if args.frames else load(args.fixture)
     for name, water, f, old in probs:
         if args.refine > 1:

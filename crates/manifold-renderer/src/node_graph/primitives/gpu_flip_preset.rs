@@ -861,6 +861,9 @@ fn solid_faces(b: &mut Builder, scene: WaterScene, domain: usize, seconds: f64) 
     b.wire((open, "out"), velocity, "solid_faces");
     b.wires(domain, velocity, &["bodies", "shapes", "atlas", "body_count"]);
     b.wire((domain, "body_rows"), velocity, "rows");
+    // No push from the liquid yet this tick: one 16-float row per possible body.
+    let changes = b.node("body_changes", "node.zero_lattice", Builder::lattice([16, 8, 8], &[]));
+    b.wire((changes, "out"), velocity, "changes");
     ((open, "out"), (velocity, "out"))
 }
 

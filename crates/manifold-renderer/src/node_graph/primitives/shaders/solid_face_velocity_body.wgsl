@@ -8,11 +8,16 @@
 // averaged (FluidSimulation::_getFaceFrictionU/V/W), 0 at a corner no body's
 // lattice holds. Every other face is zero. Bodies are posed after
 // tick_seconds as node.liquid_solid_distance poses them, so velocity and
-// open fraction see the same solid.
+// open fraction see the same solid. A dynamic body (1/m > 0) moves at its
+// tick-start velocity, plus its predicted external acceleration over
+// tick_seconds, plus its row of `changes` (node.face_impulse_to_bodies' sums:
+// the liquid's push so far this tick). Velocity w names each face's body
+// (solid_body_faces.wgsl).
 //
-// ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` are
-// gathered; `solid_faces` is read coincident. A row past `bodies` or a shape
-// past `shapes` is never read (the extent walk proves the rows fit).
+// ABI: `bodies` (LiquidBody), `shapes` (LiquidShape), `atlas` and `changes`
+// are gathered; `solid_faces` is read coincident. A row past `bodies` or a
+// shape past `shapes` is never read (the extent walk proves the rows fit); a
+// body past `changes` takes no change.
 
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
@@ -35,7 +40,7 @@ fn solid_face_velocity_closest(x: vec3<f32>, body_count: i32, rows: i32, tick_se
         if shape_index < 0 || u32(shape_index) >= arrayLength(&buf_shapes) {
             continue;
         }
-        let position = bd.position_inv_mass.xyz + bd.linear_velocity.xyz * tick_seconds;
+        let position = fma(bd.linear_velocity.xyz, vec3<f32>(tick_seconds), bd.position_inv_mass.xyz);
         let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
@@ -81,19 +86,33 @@ fn body(
     let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let bodies = i32(body_count);
     let row_count = i32(rows);
+    let first = max(row_count - bodies, 0);
+    var code = 0u;
     for (var a = 0; a < 3; a = a + 1) {
         var other = p;
         other[a] = 0;
         if !all(other < n) || p[a] == 0 || p[a] == n[a] || !(e_solid_faces.face_weight[a] < 1.0) {
             continue;
         }
-        var centre = lattice_min + (vec3<f32>(p) + vec3<f32>(0.5)) * cell_size;
-        centre[a] = lattice_min[a] + f32(p[a]) * cell_size;
+        var centre = fma(vec3<f32>(p) + vec3<f32>(0.5), vec3<f32>(cell_size), lattice_min);
+        centre[a] = fma(f32(p[a]), cell_size, lattice_min[a]);
         let row = solid_face_velocity_closest(centre, bodies, row_count, tick_seconds);
         if row >= 0 {
             let bd = buf_bodies[u32(row)];
-            let position = bd.position_inv_mass.xyz + bd.linear_velocity.xyz * tick_seconds;
-            out.face_velocity[a] = liquid_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, position, centre)[a];
+            let position = fma(bd.linear_velocity.xyz, vec3<f32>(tick_seconds), bd.position_inv_mass.xyz);
+            var linear = bd.linear_velocity.xyz;
+            var angular = bd.angular_velocity.xyz;
+            let b = u32(row - first);
+            if bd.position_inv_mass.w > 0.0 {
+                linear = fma(bd.accel_shape.xyz, vec3<f32>(tick_seconds), linear);
+                angular = fma(vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w), vec3<f32>(tick_seconds), angular);
+                if 16u * (b + 1u) <= arrayLength(&buf_changes) {
+                    linear = linear + vec3<f32>(buf_changes[16u * b + 8u], buf_changes[16u * b + 9u], buf_changes[16u * b + 10u]);
+                    angular = angular + vec3<f32>(buf_changes[16u * b + 12u], buf_changes[16u * b + 13u], buf_changes[16u * b + 14u]);
+                }
+            }
+            out.face_velocity[a] = liquid_body_velocity(linear, angular, position, centre)[a];
+            code = code + (b + 1u) * (1u << (8u * u32(a)));
         }
         // The engine's corners: U (j, k), V (k, i), W (j, i) offsets.
         var b = 1;
@@ -116,5 +135,6 @@ fn body(
         }
         out.face_weight[a] = 0.25 * friction;
     }
+    out.face_velocity.w = f32(code);
     return out;
 }

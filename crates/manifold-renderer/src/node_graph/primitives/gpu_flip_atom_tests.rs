@@ -44,18 +44,18 @@ pub(super) fn random_values(count: usize, seed: u64) -> Vec<f32> {
 }
 
 /// About seven cells in ten are water.
-fn random_water(cells: usize, seed: u64) -> Vec<f32> {
+pub(super) fn random_water(cells: usize, seed: u64) -> Vec<f32> {
     random_values(cells, seed).iter().map(|&v| f32::from(u8::from(v > -0.2))).collect()
 }
 
-fn lattice_params(nodes: [usize; 3], extra: &[(&'static str, f32)]) -> ParamValues {
+pub(super) fn lattice_params(nodes: [usize; 3], extra: &[(&'static str, f32)]) -> ParamValues {
     let mut all = vec![("nodes_x", nodes[0] as f32), ("nodes_y", nodes[1] as f32), ("nodes_z", nodes[2] as f32)];
     all.extend_from_slice(extra);
     params(&all)
 }
 
 /// One atom's `run()` with several array ports, into an open encoder.
-fn step_ports<P: Primitive>(
+pub(super) fn step_ports<P: Primitive>(
     prim: &mut P,
     gpu: &mut GpuEncoder<'_>,
     backend: &dyn Backend,
@@ -87,7 +87,7 @@ fn step_ports<P: Primitive>(
 }
 
 /// Run one atom on fresh arrays and read its output back.
-fn run_atom<P: Primitive>(prim: &mut P, inputs: &[(&'static str, &[f32])], output_len: usize, step_params: &ParamValues) -> Vec<f32> {
+pub(super) fn run_atom<P: Primitive>(prim: &mut P, inputs: &[(&'static str, &[f32])], output_len: usize, step_params: &ParamValues) -> Vec<f32> {
     let mut harness = Harness::new();
     let slots: Vec<(&'static str, (Slot, GpuBuffer))> =
         inputs.iter().map(|&(name, values)| (name, harness.array(values, values.len().max(1)))).collect();
@@ -105,7 +105,7 @@ fn run_atom<P: Primitive>(prim: &mut P, inputs: &[(&'static str, &[f32])], outpu
     read(&output.1, output_len)
 }
 
-fn assert_close(actual: &[f32], expected: &[f64], what: &str) {
+pub(super) fn assert_close(actual: &[f32], expected: &[f64], what: &str) {
     assert_eq!(actual.len(), expected.len(), "{what}: length");
     let scale = expected.iter().fold(1.0_f64, |m, v| m.max(v.abs()));
     for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
@@ -143,9 +143,9 @@ fn neighbours(c: usize, n: [usize; 3]) -> Vec<(usize, usize, isize)> {
 }
 
 /// Floats per face-grid record: velocity, then open fractions.
-const FACE_FLOATS: usize = 8;
+pub(super) const FACE_FLOATS: usize = 8;
 
-fn face_grid_len(n: [usize; 3]) -> usize {
+pub(super) fn face_grid_len(n: [usize; 3]) -> usize {
     n.iter().map(|v| v + 1).product::<usize>() * FACE_FLOATS
 }
 
@@ -552,39 +552,39 @@ fn gpu_flip_divide_by_value_matches_cpu_and_guards_zero() {
 
 /// A small graph of test sources, atoms and one sink, run once fused and
 /// once unfused; each run's sink input is read back.
-struct Chain {
+pub(super) struct Chain {
     nodes: Vec<serde_json::Value>,
     wires: Vec<serde_json::Value>,
-    sources: Vec<(&'static str, Vec<f32>)>,
+    pub(super) sources: Vec<(&'static str, Vec<f32>)>,
     /// The sink's type: test.value_sink, or test.face_sink for a face grid.
-    sink: &'static str,
+    pub(super) sink: &'static str,
 }
 
 impl Chain {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self { nodes: Vec::new(), wires: Vec::new(), sources: Vec::new(), sink: "test.value_sink" }
     }
 
-    fn node(&mut self, name: &str, type_id: &str, params: serde_json::Value) -> usize {
+    pub(super) fn node(&mut self, name: &str, type_id: &str, params: serde_json::Value) -> usize {
         let id = self.nodes.len();
         self.nodes.push(json!({"id": id, "typeId": type_id, "nodeId": name, "params": params}));
         id
     }
 
-    fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
+    pub(super) fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
         let id = self.node(name, "test.value_source", json!({"max_capacity": {"type": "Int", "value": values.len()}}));
         self.sources.push((name, values));
         id
     }
 
     /// A face grid source: `values` is FACE_FLOATS floats per record.
-    fn face_source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
+    pub(super) fn face_source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
         let id = self.node(name, "test.face_source", json!({"max_capacity": {"type": "Int", "value": values.len() / FACE_FLOATS}}));
         self.sources.push((name, values));
         id
     }
 
-    fn wire(&mut self, from: usize, from_port: &str, to: usize, to_port: &str) {
+    pub(super) fn wire(&mut self, from: usize, from_port: &str, to: usize, to_port: &str) {
         self.wires.push(json!({"fromNode": from, "fromPort": from_port, "toNode": to, "toPort": to_port}));
     }
 
@@ -645,7 +645,7 @@ impl Chain {
 
     /// Fused and unfused give the same values bit for bit, and the fused graph
     /// ran one fused kernel.
-    fn fused_matches_unfused(&self, into: usize, len: usize) -> Vec<f32> {
+    pub(super) fn fused_matches_unfused(&self, into: usize, len: usize) -> Vec<f32> {
         let def = self.def(into);
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
@@ -658,13 +658,14 @@ impl Chain {
         let (unfused, none) = self.run(&def, len);
         let (fused, regions) = self.run(&fused_def, len);
         assert_eq!((none, regions), (0, 1), "one fused region");
-        let differ = unfused.iter().zip(&fused).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
-        assert_eq!(differ, 0, "fused differs from unfused in {differ} of {len}");
+        let differ: Vec<(usize, f32, f32)> =
+            unfused.iter().zip(&fused).enumerate().filter(|(_, (a, b))| a.to_bits() != b.to_bits()).map(|(i, (a, b))| (i, *a, *b)).collect();
+        assert!(differ.is_empty(), "fused differs from unfused in {} of {len}: {:?}", differ.len(), &differ[..differ.len().min(8)]);
         fused
     }
 }
 
-fn lattice_json(nodes: [usize; 3], extra: &[(&str, f64)]) -> serde_json::Value {
+pub(super) fn lattice_json(nodes: [usize; 3], extra: &[(&str, f64)]) -> serde_json::Value {
     let mut params = json!({});
     let axes = [("nodes_x", nodes[0] as f64), ("nodes_y", nodes[1] as f64), ("nodes_z", nodes[2] as f64)];
     for &(name, value) in axes.iter().chain(extra) {
@@ -1131,6 +1132,9 @@ struct Solids {
     shapes: Vec<LiquidShape>,
     atlas: Vec<u32>,
     distances: Vec<f32>,
+    /// node.face_impulse_to_bodies' sums, 16 per body: the second body's
+    /// dv and dω are set.
+    changes: Vec<f32>,
 }
 
 fn solids() -> Solids {
@@ -1169,7 +1173,17 @@ fn solids() -> Solids {
         body([0.33, 0.61, 0.03], [-0.5, 0.1, 0.1, 0.9], [0.8, 0.0, -0.2], 1.0),
         body([0.0, 0.5, 0.0], [3.0, 3.0, 3.0, 0.7], [0.0; 3], -1.0),
     ];
-    Solids { bodies, shapes, atlas, distances }
+    // The second body is dynamic: it moves at its predicted velocity plus its change.
+    let mut bodies = bodies;
+    bodies[1].position_inv_mass[3] = 0.5;
+    bodies[1].accel_shape = [0.4, -9.8, 0.2, 1.0];
+    bodies[1].inv_inertia_x = [0.3, 0.0, 0.0, 1.1];
+    bodies[1].inv_inertia_y = [0.0, 0.3, 0.0, -0.6];
+    bodies[1].inv_inertia_z = [0.0, 0.0, 0.3, 0.4];
+    let mut changes = vec![0.0; 16 * bodies.len()];
+    changes[16 + 8..16 + 11].copy_from_slice(&[0.05, 0.31, -0.07]);
+    changes[16 + 12..16 + 15].copy_from_slice(&[-0.2, 0.15, 0.09]);
+    Solids { bodies, shapes, atlas, distances, changes }
 }
 
 fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
@@ -1227,6 +1241,24 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
     (best.map(|(row, _)| row), margin.min(gap))
 }
 
+/// The velocity and spin a face sees on body `row`: as uploaded when
+/// prescribed; predicted over `SOLID_TICK` plus its change when dynamic.
+fn moving_velocity(solids: &Solids, row: usize) -> ([f64; 3], [f64; 3]) {
+    let body = &solids.bodies[row];
+    let mut v: [f64; 3] = std::array::from_fn(|a| f64::from(body.linear_velocity[a]));
+    let mut w: [f64; 3] = std::array::from_fn(|a| f64::from(body.angular_velocity[a]));
+    if body.position_inv_mass[3] > 0.0 {
+        let t = f64::from(SOLID_TICK);
+        let spin = [body.inv_inertia_x[3], body.inv_inertia_y[3], body.inv_inertia_z[3]];
+        let c = &solids.changes[16 * row..16 * row + 16];
+        for a in 0..3 {
+            v[a] += f64::from(body.accel_shape[a]) * t + f64::from(c[8 + a]);
+            w[a] += f64::from(spin[a]) * t + f64::from(c[12 + a]);
+        }
+    }
+    (v, w)
+}
+
 /// node.solid_face_velocity in f64: the closest body's rigid velocity at
 /// each cut inner face's centre, and the mean friction at its four corners.
 /// Also the smallest margin any query had (see `closest`).
@@ -1252,9 +1284,10 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids) -> (Vec<f64>, f64, usi
                 let body = &solids.bodies[row];
                 let (position, _) = body_pose_at(body, SOLID_TICK);
                 let r: [f64; 3] = std::array::from_fn(|b| centre[b] - f64::from(position[b]));
-                let w = body.angular_velocity.map(f64::from);
+                let (v, w) = moving_velocity(solids, row);
                 let spin = [w[1] * r[2] - w[2] * r[1], w[2] * r[0] - w[0] * r[2], w[0] * r[1] - w[1] * r[0]];
-                out[i * FACE_FLOATS + a] = f64::from(body.linear_velocity[a]) + spin[a];
+                out[i * FACE_FLOATS + a] = v[a] + spin[a];
+                out[i * FACE_FLOATS + 3] += ((row + 1) << (8 * a)) as f64;
                 moved += 1;
             }
             let (b, c) = match a {
@@ -1303,7 +1336,7 @@ fn gpu_flip_solid_face_velocity_matches_cpu() {
     let atlas: &[f32] = bytemuck::cast_slice(&solids.atlas);
     let got = run_atom(
         &mut super::solid_face_velocity::SolidFaceVelocity::new(),
-        &[("solid_faces", &open), ("bodies", bodies), ("shapes", shapes), ("atlas", atlas)],
+        &[("solid_faces", &open), ("bodies", bodies), ("shapes", shapes), ("atlas", atlas), ("changes", &solids.changes)],
         face_grid_len(SOLID_N),
         &lattice_params(SOLID_N, &solid_velocity_params(&solids)),
     );
@@ -1383,6 +1416,7 @@ fn gpu_flip_solid_velocity_into_constraint_fuses() {
     let bodies = typed(&mut chain, "bodies", "test.body_source", solids.bodies.len(), bytemuck::cast_slice(&solids.bodies));
     let shapes = typed(&mut chain, "shapes", "test.shape_source", solids.shapes.len(), bytemuck::cast_slice(&solids.shapes));
     let atlas = typed(&mut chain, "atlas", "test.word_source", solids.atlas.len(), bytemuck::cast_slice(&solids.atlas));
+    let changes = chain.source("changes", solids.changes.clone());
     let open = chain.node("open", "node.solid_faces", lattice_json(n, &[("cell_size", f64::from(SOLID_H)), ("box_offset", offset)]));
     chain.wire(s, "out", open, "solid");
     let extra: Vec<(&str, f64)> = solid_velocity_params(&solids).into_iter().map(|(k, v)| (k, f64::from(v))).collect();
@@ -1391,6 +1425,7 @@ fn gpu_flip_solid_velocity_into_constraint_fuses() {
     chain.wire(bodies, "out", velocity, "bodies");
     chain.wire(shapes, "out", velocity, "shapes");
     chain.wire(atlas, "out", velocity, "atlas");
+    chain.wire(changes, "out", velocity, "changes");
     let constrain = chain.node("constrain", "node.constrain_solid_faces", lattice_json(n, &[]));
     chain.wire(f, "out", constrain, "faces");
     chain.wire(open, "out", constrain, "solid_faces");
