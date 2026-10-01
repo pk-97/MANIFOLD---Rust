@@ -447,7 +447,7 @@ mod fractional_fps_timebase_tests {
         // Minimal real Metal texture the encoder's compute-copy kernel can
         // read from (uninitialized contents are irrelevant — only the
         // container's frame-rate metadata is under test).
-        let device = manifold_gpu::GpuDevice::new();
+        let device = manifold_gpu::GpuDevice::new_queued("media metal_encoder test");
         let texture = device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: 64,
             height: 64,

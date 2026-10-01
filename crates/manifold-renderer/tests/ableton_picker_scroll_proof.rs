@@ -79,7 +79,7 @@ fn build_fresh(dd: &mut AbletonPickerPopup) -> UITree {
 }
 
 fn render(tree: &UITree) -> (Vec<u8>, RenderTarget) {
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ableton_picker_scroll_proof");
     let mut ui = UIRenderer::new(&device, FORMAT);
     ui.begin_frame();
     ui.render_tree(tree, None);

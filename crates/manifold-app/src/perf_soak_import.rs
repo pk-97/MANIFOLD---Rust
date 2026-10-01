@@ -142,7 +142,7 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
         .unwrap_or_default();
     let manifest = ParamManifest::from_params(params);
 
-    let device = std::sync::Arc::new(GpuDevice::new());
+    let device = std::sync::Arc::new(GpuDevice::new_queued("perf_soak_import"));
     let registry = PrimitiveRegistry::with_builtin();
     let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
     let mut runtime = PresetRuntime::from_def_with_device(

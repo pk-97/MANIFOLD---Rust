@@ -290,7 +290,7 @@ struct Clocked {
 
 impl Clocked {
     fn new() -> Self {
-        let device = Arc::new(GpuDevice::new());
+        let device = Arc::new(GpuDevice::new_queued("gpu_proofs"));
         let event = device.create_event();
         let (sender, retired) = RetireQueue::new();
         device.set_retirement(RetireMark::new(event.second_handle(), sender));

@@ -194,7 +194,7 @@ fn rounded_mask_is_symmetric_for_atlas_sub_rect_cells() {
     let out_dir = std::env::var("CELL_OUT").unwrap_or_else(|_| "/tmp/cell-arc-v2".into());
     std::fs::create_dir_all(&out_dir).unwrap();
 
-    let device = GpuDevice::new();
+    let device = GpuDevice::new_queued("ui_cell_arc_repro");
     let atlas = device.create_texture(&GpuTextureDesc {
         width: ATLAS_W,
         height: ATLAS_H,
