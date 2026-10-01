@@ -678,7 +678,7 @@ pub(crate) struct Step {
 }
 
 impl Step {
-    /// One frame: publish what retired, start the pool over on a new shape
+    /// One frame: on ticks publish what retired, start the pool over on a new shape
     /// or epoch, emit and step on ticks, and write an output when the pool
     /// changed.
     pub(crate) fn advance(
@@ -715,7 +715,13 @@ impl Step {
             self.owed = false;
             self.current = 0;
         }
-        self.outputs.collect(fence, offline)?;
+        // Publication moves only with the clock. A held clock taking the
+        // pending slot would change the picture once on the first paused
+        // frame, and at slow speed the foam would step on frames the water
+        // holds.
+        if frame.ticks > 0 {
+            self.outputs.collect(fence, offline)?;
+        }
         self.outputs.mark_read(fence);
         let enc = &mut *gpu.native_enc;
         if reseed {

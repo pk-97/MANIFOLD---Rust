@@ -45,9 +45,9 @@ const LIVE: u32 = SLOTS as u32 - 100;
 const CAPACITY: u32 = 300;
 const SEED: f32 = 0.37;
 const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
-/// (ticks, epoch) per frame: emit and step, step three times, hold, hold, a new
-/// epoch, step twice, hold.
-const FRAMES: [(u32, u32); 7] = [(1, 0), (3, 0), (0, 0), (0, 0), (1, 1), (2, 1), (0, 1)];
+/// (ticks, epoch) per frame: emit and step, step three times, hold, hold
+/// (with a pool written but unpublished), step, a new epoch, step twice, hold.
+const FRAMES: [(u32, u32); 8] = [(1, 0), (3, 0), (0, 0), (0, 0), (1, 0), (1, 1), (2, 1), (0, 1)];
 /// The closest a CPU decision may sit to its threshold: cells for anything
 /// placed on the grid, else the quantity's own units.
 const TOL: f32 = 1e-5;
@@ -309,9 +309,9 @@ impl Model {
     }
 }
 
-/// What the node publishes after each of [`FRAMES`], offline: the snapshot
-/// of the last frame with ticks before it, zeros on the first frame and on
-/// a new epoch.
+/// What the node publishes after each of [`FRAMES`], offline: on a frame
+/// with ticks, the snapshot of the previous frame with ticks; ticks 0 hold
+/// what is shown; zeros on the first frame and on a new epoch.
 fn expected() -> (Vec<Snapshot>, Model) {
     let mut model = Model::new();
     let mut published = Snapshot::default();
@@ -325,10 +325,10 @@ fn expected() -> (Vec<Snapshot>, Model) {
             pending = None;
             epoch = Some(e);
         }
-        if let Some(snapshot) = pending.take() {
-            published = snapshot;
-        }
         if ticks > 0 {
+            if let Some(snapshot) = pending.take() {
+                published = snapshot;
+            }
             model.frame(ticks, e);
             pending = Some(model.snapshot());
         }
@@ -348,9 +348,10 @@ fn whitewater_step_reference_is_tie_free() {
     println!("closest decision {:?}, removed {}", model.margins.closest, model.removed);
     assert_eq!(model.margins.near, 0, "{} decisions within {TOL}; closest {:?}", model.margins.near, model.margins.closest);
     let last = |epoch: u32| frames.iter().zip(FRAMES).filter(|(_, (_, e))| *e == epoch).map(|(f, _)| f.report).next_back().expect("frame");
-    let first = frames[3].report;
-    assert!(frames[0].report == Report::default() && frames[4].report == Report::default(), "nothing published on frames 0 and 4");
-    assert_eq!(frames[2].report, frames[3].report, "ticks 0 holds");
+    let first = frames[4].report;
+    assert!(frames[0].report == Report::default() && frames[5].report == Report::default(), "nothing published on frames 0 and 5");
+    assert!(frames[1].report == frames[2].report && frames[2].report == frames[3].report, "ticks 0 hold what is shown");
+    assert_ne!(frames[3].report, frames[4].report, "the pool written before the hold is published on the next tick");
     assert!((0..3).all(|p| frames.iter().any(|f| f.report.counts[p] > 0)), "every population published at least once");
     assert!(first.pool_full > 0 && first.thinned > 0, "the pool filled and the emitters were thinned: {first:?}");
     assert!(model.removed > 0, "the tick removed particles");
