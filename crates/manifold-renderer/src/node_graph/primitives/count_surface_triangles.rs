@@ -66,6 +66,10 @@ impl Primitive for CountSurfaceTriangles {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if ctx.inputs.any_pending() {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

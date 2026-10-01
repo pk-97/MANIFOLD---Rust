@@ -105,6 +105,19 @@ class GpuProofsGateTests(unittest.TestCase):
             gate.record_timing(line, now, state, timings)
         self.assertEqual([(n, round(s, 1)) for n, s, _ in timings], [("a::one", 3.0), ("a::two", 10.5)])
 
+    def test_result_split_by_native_output_is_charged_to_its_own_test(self):
+        timings, state = [], {"t": None, "bin": ""}
+        feed = [
+            (0.0, "     Running tests/gpu_proofs/main.rs (target/debug/deps/gpu_proofs-ab)\n"),
+            (1.0, "test a::slow ... ------------\n"),
+            (2.0, "Fluid Engine Version 1.8.8\n"),
+            (200.0, "ok\n"),
+            (201.0, "test a::fast ... ok\n"),
+        ]
+        for now, line in feed:
+            gate.record_timing(line, now, state, timings)
+        self.assertEqual([(n, round(s, 1)) for n, s, _ in timings], [("a::slow", 200.0), ("a::fast", 1.0)])
+
     def test_timings_collected_during_run(self):
         process = FakeProcess()
         process.stdout = iter(["     Running a (b)\n", "test x ... ok\n"])

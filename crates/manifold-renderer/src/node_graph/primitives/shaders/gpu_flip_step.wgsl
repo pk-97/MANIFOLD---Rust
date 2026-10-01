@@ -117,6 +117,9 @@ struct LiquidShape {
 @group(0) @binding(18) var<storage, read> advect: array<FaceSample>;
 @group(0) @binding(19) var<storage, read_write> particles_out: array<FluidParticle>;
 @group(0) @binding(20) var<storage, read_write> faces_rw: array<FaceSample>;
+// 8 floats per body: the linear and angular impulse the water has put on it
+// so far this tick (gpu_flip_bodies.wgsl).
+@group(0) @binding(21) var<storage, read> reaction: array<f32>;
 
 fn lattice() -> vec3<i32> {
     return vec3<i32>(u.n);
@@ -610,11 +613,15 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // One thread per face record, `solid_faces` to `faces_out`. On an inner face
 // a solid cuts (open fraction under 1): velocity is the normal part of the
 // closest body's rigid velocity at the face centre, posed tick_seconds into
-// the tick as the solid distance poses it (a dynamic body adds its predicted
-// external acceleration over that time); weight is the closest body's
+// the tick as the solid distance poses it; weight is the closest body's
 // friction at the face's four corners, averaged
 // (FluidSimulation::_getFaceFrictionU/V/W), 0 at a corner no body's lattice
-// holds. Every other face is zero.
+// holds. Every other face is zero. A dynamic body (1/m > 0) moves at its
+// predicted velocity, as RigidFluidCoupling::beginSubstep predicts it: its
+// external acceleration over tick_seconds plus M⁻¹ times the reaction so
+// far this tick. Velocity w is the record's owner code
+// (gpu_flip_bodies.wgsl): each face's body, counted from this tick's first
+// row.
 @compute @workgroup_size(256)
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -628,6 +635,8 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let lattice_min = u.box_min;
     let h = u.cell_size;
+    let first = max(u.rows - u.body_count, 0);
+    var code = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] || !(open.face_weight[a] < 1.0) {
             continue;
@@ -637,14 +646,20 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         let row = closest_body(centre);
         if row >= 0 {
             let bd = bodies[u32(row)];
+            let body = row - first;
             let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
             var linear = bd.linear_velocity.xyz;
             var angular = bd.angular_velocity.xyz;
             if bd.position_inv_mass.w > 0.0 {
-                linear = fma(bd.accel_shape.xyz, vec3<f32>(u.tick_seconds), linear);
-                angular = fma(vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w), vec3<f32>(u.tick_seconds), angular);
+                let r = 8u * u32(body);
+                let push = vec3<f32>(reaction[r], reaction[r + 1u], reaction[r + 2u]);
+                let turn = vec3<f32>(reaction[r + 4u], reaction[r + 5u], reaction[r + 6u]);
+                linear = fma(bd.accel_shape.xyz, vec3<f32>(u.tick_seconds), linear) + bd.position_inv_mass.w * push;
+                angular = fma(vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w), vec3<f32>(u.tick_seconds), angular)
+                    + vec3<f32>(dot(bd.inv_inertia_x.xyz, turn), dot(bd.inv_inertia_y.xyz, turn), dot(bd.inv_inertia_z.xyz, turn));
             }
             out.face_velocity[a] = liquid_body_velocity(linear, angular, position, centre)[a];
+            code = code + f32(body + 1) * f32(1u << (8u * u32(a)));
         }
         let axes = cross_axes(a);
         var friction = 0.0;
@@ -659,6 +674,7 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         out.face_weight[a] = 0.25 * friction;
     }
+    out.face_velocity.w = code;
     faces_out[idx] = out;
 }
 

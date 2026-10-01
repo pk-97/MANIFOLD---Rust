@@ -1,31 +1,27 @@
-//! GPU value proofs for the atoms that put dynamic bodies inside the GPU
+//! GPU value proofs for the passes that put dynamic bodies inside the GPU
 //! FLIP pressure solve (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in
-//! the water)) against CPU f64 references, and the fused-vs-unfused proofs
-//! of the ones that fuse.
+//! the water)) against CPU f64 references: each body's impulse, the bodies'
+//! share of the operator, the velocity change on the solid faces and the
+//! reaction. The lattice holds enough face records for two partial groups
+//! per body, so the group order of the sum is exercised.
 
-use serde_json::json;
+use manifold_gpu::{GpuBuffer, GpuDevice};
 
-use super::body_pressure_product::BodyPressureProduct;
-use super::face_impulse_to_bodies::FaceImpulseToBodies;
-use super::friction_face_impulse::FrictionFaceImpulse;
-use super::gpu_flip_atom_tests::{
-    Chain, FACE_FLOATS, assert_close, face_grid_len, lattice_json, lattice_params, random_values, random_water, run_atom,
-    step_ports,
-};
-use super::liquid_surface_tests::{Harness, read};
-use super::pressure_face_impulse::PressureFaceImpulse;
-use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::backend::Backend;
+use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
+use super::gpu_flip_bodies::{BodyPasses, Bodies};
+use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
 
-const N: [usize; 3] = [5, 4, 3];
+const N: [usize; 3] = [17, 16, 15];
 const H: f32 = 0.25;
-const MIN: [f32; 3] = [-0.6, 0.0, -0.4];
+const MIN: [f32; 3] = [-2.1, -1.9, -1.8];
 const TICK: f32 = 0.05;
 const DENSITY: f32 = 1000.0;
 /// Rows 1 and 2 are the bodies (rows 3, body_count 2).
 const ROWS: usize = 3;
 const BODIES: usize = 2;
+const FIRST: usize = ROWS - BODIES;
+const SUM_FLOATS: usize = 16;
 
 fn m() -> [usize; 3] {
     N.map(|v| v + 1)
@@ -54,30 +50,30 @@ fn owner(code: f32, a: usize) -> Option<usize> {
 fn fixture(seed: u64) -> (Vec<f32>, Vec<f32>) {
     let records = m().iter().product::<usize>();
     let draw = random_values(records * 16, seed);
+    let mut open = vec![0.0; records * FACE_FLOATS];
     let mut solid = vec![0.0; records * FACE_FLOATS];
-    let mut velocity = vec![0.0; records * FACE_FLOATS];
     for i in 0..records {
         let p = coords(i, m());
         let r = |k: usize| draw[i * 16 + k] + 0.5;
-        solid[i * FACE_FLOATS + 7] = 0.3 + 0.7 * r(0);
+        open[i * FACE_FLOATS + 7] = 0.3 + 0.7 * r(0);
         let mut code = 0u32;
         for a in 0..3 {
             if !inner(p, a) {
                 continue;
             }
             let w = r(1 + a);
-            let open = if w < 0.2 { 0.0 } else if w < 0.45 { 1.0 } else { 0.05 + 0.9 * (w - 0.45) / 0.55 };
-            solid[i * FACE_FLOATS + 4 + a] = open;
-            velocity[i * FACE_FLOATS + a] = 2.0 * (r(4 + a) - 0.5);
-            velocity[i * FACE_FLOATS + 4 + a] = r(7 + a);
+            let fraction = if w < 0.2 { 0.0 } else if w < 0.45 { 1.0 } else { 0.05 + 0.9 * (w - 0.45) / 0.55 };
+            open[i * FACE_FLOATS + 4 + a] = fraction;
+            solid[i * FACE_FLOATS + a] = 2.0 * (r(4 + a) - 0.5);
+            solid[i * FACE_FLOATS + 4 + a] = r(7 + a);
             let pick = r(10 + a);
-            if open < 1.0 && pick > 0.33 {
+            if fraction < 1.0 && pick > 0.33 {
                 code += (u32::from(pick > 0.66) + 1) << (8 * a);
             }
         }
-        velocity[i * FACE_FLOATS + 3] = code as f32;
+        solid[i * FACE_FLOATS + 3] = code as f32;
     }
-    (solid, velocity)
+    (open, solid)
 }
 
 /// A junk row, then a dynamic turning body and a prescribed one.
@@ -101,8 +97,8 @@ fn bodies() -> Vec<LiquidBody> {
     rows
 }
 
-fn floats(rows: &[LiquidBody]) -> &[f32] {
-    bytemuck::cast_slice(rows)
+fn dynamic(row: &LiquidBody) -> bool {
+    row.position_inv_mass[3] > 0.0 && row.accel_shape[3] >= 0.0
 }
 
 /// The face centre of axis a's face on record p.
@@ -118,56 +114,44 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
-fn body_params() -> Vec<(&'static str, f32)> {
-    vec![
-        ("lattice_min_x", MIN[0]),
-        ("lattice_min_y", MIN[1]),
-        ("lattice_min_z", MIN[2]),
-        ("cell_size", H),
-        ("body_count", BODIES as f32),
-        ("rows", ROWS as f32),
-        ("tick_seconds", TICK),
-    ]
-}
-
 // ── CPU references ─────────────────────────────────────────────────────────
 
-fn cpu_pressure_impulse(pressure: &[f32], water: &[f32], solid: &[f32], velocity: &[f32]) -> Vec<f64> {
+/// The pressure's impulse through every owned inner face:
+/// ρh²·((c_lo − w)·x_lo − (c_hi − w)·x_hi), x counted in water cells only.
+fn cpu_pressure_impulse(x: &[f32], water: &[f32], open: &[f32], solid: &[f32]) -> Vec<f64> {
     let mut out = vec![0.0; face_grid_len(N)];
     let rho_h2 = f64::from(DENSITY) * f64::from(H) * f64::from(H);
-    let p_of = |q: [usize; 3]| {
+    let x_of = |q: [usize; 3]| {
         let c = at(q, N);
-        if water[c] > 0.5 { f64::from(pressure[c]) } else { 0.0 }
+        if water[c] > 0.5 { f64::from(x[c]) } else { 0.0 }
     };
     for i in 0..m().iter().product::<usize>() {
         let p = coords(i, m());
-        let code = velocity[i * FACE_FLOATS + 3];
-        out[i * FACE_FLOATS + 3] = f64::from(code);
         for a in 0..3 {
-            if !inner(p, a) || owner(code, a).is_none() {
+            if !inner(p, a) || owner(solid[i * FACE_FLOATS + 3], a).is_none() {
                 continue;
             }
             let mut lo = p;
             lo[a] -= 1;
-            let w = f64::from(solid[i * FACE_FLOATS + 4 + a]);
-            let c_hi = f64::from(solid[i * FACE_FLOATS + 7]);
-            let c_lo = f64::from(solid[at(lo, m()) * FACE_FLOATS + 7]);
-            out[i * FACE_FLOATS + a] = rho_h2 * ((c_lo - w) * p_of(lo) - (c_hi - w) * p_of(p));
+            let w = f64::from(open[i * FACE_FLOATS + 4 + a]);
+            let c_hi = f64::from(open[i * FACE_FLOATS + 7]);
+            let c_lo = f64::from(open[at(lo, m()) * FACE_FLOATS + 7]);
+            out[i * FACE_FLOATS + a] = rho_h2 * ((c_lo - w) * x_of(lo) - (c_hi - w) * x_of(p));
         }
     }
     out
 }
 
-fn cpu_friction(faces: &[f32], water: &[f32], solid: &[f32], velocity: &[f32]) -> Vec<f64> {
+/// The constraint's drag through every owned cut face beside water:
+/// ρh³·w·f·(u − v_s).
+fn cpu_friction(faces: &[f32], water: &[f32], open: &[f32], solid: &[f32]) -> Vec<f64> {
     let mut out = vec![0.0; face_grid_len(N)];
     let mass = f64::from(DENSITY) * f64::from(H).powi(3);
     for i in 0..m().iter().product::<usize>() {
         let p = coords(i, m());
-        let code = velocity[i * FACE_FLOATS + 3];
-        out[i * FACE_FLOATS + 3] = f64::from(code);
         for a in 0..3 {
-            let w = f64::from(solid[i * FACE_FLOATS + 4 + a]);
-            if !inner(p, a) || owner(code, a).is_none() || !(w > 0.0 && w < 1.0) {
+            let w = f64::from(open[i * FACE_FLOATS + 4 + a]);
+            if !inner(p, a) || owner(solid[i * FACE_FLOATS + 3], a).is_none() || !(w > 0.0 && w < 1.0) {
                 continue;
             }
             let mut lo = p;
@@ -175,67 +159,82 @@ fn cpu_friction(faces: &[f32], water: &[f32], solid: &[f32], velocity: &[f32]) -
             if !(water[at(lo, N)] > 0.5 || water[at(p, N)] > 0.5) {
                 continue;
             }
-            let f = f64::from(velocity[i * FACE_FLOATS + 4 + a]);
-            let slip = f64::from(faces[i * FACE_FLOATS + a]) - f64::from(velocity[i * FACE_FLOATS + a]);
+            let f = f64::from(solid[i * FACE_FLOATS + 4 + a]);
+            let slip = f64::from(faces[i * FACE_FLOATS + a]) - f64::from(solid[i * FACE_FLOATS + a]);
             out[i * FACE_FLOATS + a] = mass * w * f * slip;
         }
     }
     out
 }
 
-fn cpu_body_sums(impulses: &[f64], rows: &[LiquidBody], base: Option<&[f32]>) -> Vec<f64> {
-    let mut out = vec![0.0; 64 * 16];
-    let first = ROWS - BODIES;
+/// Each body's sums record from per-face impulses: linear and angular
+/// impulse, and M⁻¹ times them for a dynamic body; 0 for any other. Also the
+/// sum of |term| per float, the scale an f32 reduction's rounding grows with.
+fn cpu_body_sums(impulses: &[f64], solid: &[f32], rows: &[LiquidBody]) -> (Vec<f64>, Vec<f64>) {
+    let mut out = vec![0.0; BODIES * SUM_FLOATS];
+    let mut scale = vec![0.0; BODIES * SUM_FLOATS];
     for b in 0..BODIES {
-        let row = &rows[first + b];
+        let row = &rows[FIRST + b];
+        if !dynamic(row) {
+            continue;
+        }
         let c = posed(row);
         let (mut linear, mut angular) = ([0.0; 3], [0.0; 3]);
+        let s = &mut scale[SUM_FLOATS * b..SUM_FLOATS * (b + 1)];
         for i in 0..m().iter().product::<usize>() {
             let p = coords(i, m());
             for a in 0..3 {
-                if owner(impulses[i * FACE_FLOATS + 3] as f32, a) != Some(b) {
+                if owner(solid[i * FACE_FLOATS + 3], a) != Some(b) || !inner(p, a) {
                     continue;
                 }
-                let s = impulses[i * FACE_FLOATS + a];
+                let push = impulses[i * FACE_FLOATS + a];
                 let x = face_centre(p, a);
                 let mut axis = [0.0; 3];
                 axis[a] = 1.0;
-                linear[a] += s;
+                linear[a] += push;
+                s[a] += push.abs();
                 let turn = cross(std::array::from_fn(|k| x[k] - c[k]), axis);
                 for k in 0..3 {
-                    angular[k] += s * turn[k];
+                    angular[k] += push * turn[k];
+                    s[4 + k] += (push * turn[k]).abs();
                 }
             }
         }
-        if let Some(base) = base {
-            for k in 0..3 {
-                linear[k] += f64::from(base[16 * b + k]);
-                angular[k] += f64::from(base[16 * b + 4 + k]);
-            }
-        }
-        let s = &mut out[16 * b..16 * b + 16];
-        s[..3].copy_from_slice(&linear);
-        s[4..7].copy_from_slice(&angular);
-        if row.position_inv_mass[3] > 0.0 && row.accel_shape[3] >= 0.0 {
-            let inertia = [row.inv_inertia_x, row.inv_inertia_y, row.inv_inertia_z];
-            for k in 0..3 {
-                s[8 + k] = f64::from(row.position_inv_mass[3]) * linear[k];
-                s[12 + k] = (0..3).map(|j| f64::from(inertia[k][j]) * angular[j]).sum();
-            }
+        let record = &mut out[SUM_FLOATS * b..SUM_FLOATS * (b + 1)];
+        record[..3].copy_from_slice(&linear);
+        record[4..7].copy_from_slice(&angular);
+        let inertia = [row.inv_inertia_x, row.inv_inertia_y, row.inv_inertia_z];
+        for k in 0..3 {
+            record[8 + k] = f64::from(row.position_inv_mass[3]) * linear[k];
+            record[12 + k] = (0..3).map(|j| f64::from(inertia[k][j]) * angular[j]).sum();
+            s[8 + k] = f64::from(row.position_inv_mass[3]) * s[k];
+            s[12 + k] = (0..3).map(|j| f64::from(inertia[k][j]).abs() * s[4 + j]).sum();
         }
     }
-    out
+    (out, scale)
 }
 
-fn cpu_body_product(base: &[f32], water: &[f32], solid: &[f32], velocity: &[f32], sums: &[f32], rows: &[LiquidBody]) -> Vec<f64> {
-    let first = ROWS - BODIES;
+/// The face velocity along a that body b's velocity change gives at face a
+/// of record f.
+fn change_along(sums: &[f32], rows: &[LiquidBody], b: usize, f: [usize; 3], a: usize) -> f64 {
+    let centre = posed(&rows[FIRST + b]);
+    let x = face_centre(f, a);
+    let r: [f64; 3] = std::array::from_fn(|k| x[k] - centre[k]);
+    let dv: [f64; 3] = std::array::from_fn(|k| f64::from(sums[SUM_FLOATS * b + 8 + k]));
+    let dw: [f64; 3] = std::array::from_fn(|k| f64::from(sums[SUM_FLOATS * b + 12 + k]));
+    dv[a] + cross(dw, r)[a]
+}
+
+/// `base` plus (1/h)·Σ sign·(c − w)·(dv + dω × r)[a] over each water cell's
+/// owned inner faces.
+fn cpu_body_product(base: &[f32], water: &[f32], open: &[f32], solid: &[f32], sums: &[f32], rows: &[LiquidBody]) -> Vec<f64> {
     (0..N.iter().product::<usize>())
         .map(|c| {
             if water[c] <= 0.5 {
                 return f64::from(base[c]);
             }
             let p = coords(c, N);
-            let open = f64::from(solid[at(p, m()) * FACE_FLOATS + 7]);
+            let volume = f64::from(open[at(p, m()) * FACE_FLOATS + 7]);
             let mut total = 0.0;
             for a in 0..3 {
                 for side in 0..2 {
@@ -245,15 +244,10 @@ fn cpu_body_product(base: &[f32], water: &[f32], solid: &[f32], velocity: &[f32]
                         continue;
                     }
                     let i = at(f, m());
-                    let Some(b) = owner(velocity[i * FACE_FLOATS + 3], a) else { continue };
-                    let centre = posed(&rows[first + b]);
-                    let x = face_centre(f, a);
-                    let r: [f64; 3] = std::array::from_fn(|k| x[k] - centre[k]);
-                    let dv: [f64; 3] = std::array::from_fn(|k| f64::from(sums[16 * b + 8 + k]));
-                    let dw: [f64; 3] = std::array::from_fn(|k| f64::from(sums[16 * b + 12 + k]));
-                    let along = dv[a] + cross(dw, r)[a];
+                    let Some(b) = owner(solid[i * FACE_FLOATS + 3], a) else { continue };
                     let sign = if side == 1 { 1.0 } else { -1.0 };
-                    total += sign * (open - f64::from(solid[i * FACE_FLOATS + 4 + a])) * along;
+                    let w = f64::from(open[i * FACE_FLOATS + 4 + a]);
+                    total += sign * (volume - w) * change_along(sums, rows, b, f, a);
                 }
             }
             f64::from(base[c]) + total / f64::from(H)
@@ -261,187 +255,152 @@ fn cpu_body_product(base: &[f32], water: &[f32], solid: &[f32], velocity: &[f32]
         .collect()
 }
 
+/// The solid face velocity after every owned inner face gains its owner's
+/// velocity change.
+fn cpu_velocity_change(solid: &[f32], sums: &[f32], rows: &[LiquidBody]) -> Vec<f64> {
+    let mut out: Vec<f64> = solid.iter().map(|&v| f64::from(v)).collect();
+    for i in 0..m().iter().product::<usize>() {
+        let p = coords(i, m());
+        for a in 0..3 {
+            if let (true, Some(b)) = (inner(p, a), owner(solid[i * FACE_FLOATS + 3], a)) {
+                out[i * FACE_FLOATS + a] += change_along(sums, rows, b, p, a);
+            }
+        }
+    }
+    out
+}
+
 // ── Value proofs ───────────────────────────────────────────────────────────
 
-#[test]
-fn gpu_flip_pressure_face_impulse_matches_cpu() {
-    let cells = N.iter().product();
-    let (solid, velocity) = fixture(0xb0d1);
-    let (pressure, water) = (random_values(cells, 0xb0d2), random_water(cells, 0xb0d3));
-    let got = run_atom(
-        &mut PressureFaceImpulse::new(),
-        &[("pressure", &pressure), ("water", &water), ("solid_faces", &solid), ("solid_velocity", &velocity)],
-        face_grid_len(N),
-        &lattice_params(N, &[("cell_size", H), ("density", DENSITY)]),
-    );
-    let want = cpu_pressure_impulse(&pressure, &water, &solid, &velocity);
-    let pushed = want.chunks(FACE_FLOATS).filter(|r| r[..3].iter().any(|&s| s != 0.0)).count();
-    assert!(pushed > 10, "owned faces carry impulse: {pushed}");
-    assert_close(&got, &want, "pressure face impulse");
+fn shared<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
+    let buffer = device.create_buffer_shared((size_of_val(values) as u64).max(16));
+    buffer.zero_fill();
+    // SAFETY: shared buffer sized for `values`; no GPU work in flight.
+    unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+    buffer
 }
 
-#[test]
-fn gpu_flip_friction_face_impulse_matches_cpu() {
-    let cells = N.iter().product();
-    let (solid, velocity) = fixture(0xf1c1);
-    let faces = random_values(face_grid_len(N), 0xf1c2);
-    let water = random_water(cells, 0xf1c3);
-    let got = run_atom(
-        &mut FrictionFaceImpulse::new(),
-        &[("faces", &faces), ("water", &water), ("solid_faces", &solid), ("solid_velocity", &velocity)],
-        face_grid_len(N),
-        &lattice_params(N, &[("cell_size", H), ("density", DENSITY)]),
-    );
-    let want = cpu_friction(&faces, &water, &solid, &velocity);
-    let dragged = want.chunks(FACE_FLOATS).filter(|r| r[..3].iter().any(|&s| s != 0.0)).count();
-    assert!(dragged > 5, "cut owned faces by water drag: {dragged}");
-    assert_close(&got, &want, "friction face impulse");
-}
-
-/// The sums over every owned face, with and without a base, and the base
-/// sums landing in a bound reaction in place.
-#[test]
-fn gpu_flip_face_impulse_to_bodies_matches_cpu() {
-    let (_, velocity) = fixture(0x5a11);
-    let mut impulses = random_values(face_grid_len(N), 0x5a12);
-    for (record, owners) in impulses.chunks_mut(FACE_FLOATS).zip(velocity.chunks(FACE_FLOATS)) {
-        record[3] = owners[3];
+fn assert_sums(got: &[f32], want: &[f64], scale: &[f64], what: &str) {
+    for (k, ((g, w), s)) in got.iter().zip(want).zip(scale).enumerate() {
+        assert!((f64::from(*g) - w).abs() <= 1e-5 * (s + 1.0), "{what}[{k}]: {g} vs {w} (scale {s})");
     }
-    let rows = bodies();
-    let base = random_values(BODIES * 16, 0x5a13);
-    let impulses64: Vec<f64> = impulses.iter().map(|&v| f64::from(v)).collect();
-    let step = lattice_params(N, &body_params());
-    let plain = run_atom(&mut FaceImpulseToBodies::new(), &[("impulses", &impulses), ("bodies", floats(&rows))], 64 * 16, &step);
-    let want = cpu_body_sums(&impulses64, &rows, None);
-    assert!(want[..3].iter().any(|&v| v.abs() > 0.1) && want[16..19].iter().any(|&v| v.abs() > 0.1), "both bodies own faces");
-    assert!(want[24..27].iter().all(|&v| v == 0.0), "the prescribed body changes no velocity");
-    assert_close(&plain, &want, "body sums");
+}
 
-    // Base and reaction through the real output ports.
-    let mut harness = Harness::new();
-    let (i_slot, _i) = harness.array(&impulses, impulses.len());
-    let (b_slot, _b) = harness.array(floats(&rows), rows.len() * 32);
-    let (base_slot, _base) = harness.array(&base, base.len());
-    let (reaction_slot, reaction) = harness.array(&[7.0_f32; BODIES * 16], BODIES * 16);
-    let (out_slot, out) = harness.array::<f32>(&[], 64 * 16);
-    let mut errors = Vec::new();
-    let mut native = harness.device.create_encoder("body sums");
-    {
-        let mut gpu = GpuEncoder::new(&mut native, &harness.device);
-        let backend: &dyn Backend = &harness.backend;
-        step_ports(
-            &mut FaceImpulseToBodies::new(),
-            &mut gpu,
-            backend,
-            &mut errors,
-            &[("impulses", i_slot), ("bodies", b_slot), ("base", base_slot), ("reaction", reaction_slot)],
-            &[("out", out_slot), ("reaction_out", reaction_slot)],
-            &step,
-        );
+struct Scene {
+    device: crate::TestDevice,
+    open: Vec<f32>,
+    solid: Vec<f32>,
+    water: Vec<f32>,
+    rows: Vec<LiquidBody>,
+    buffers: [GpuBuffer; 4],
+    passes: BodyPasses,
+}
+
+impl Scene {
+    fn new(seed: u64) -> Self {
+        let device = crate::test_device();
+        let (open, solid) = fixture(seed);
+        let water = random_water(N.iter().product(), seed + 1);
+        let rows = bodies();
+        let buffers = [shared(&device, &water), shared(&device, &open), shared(&device, &solid), shared(&device, &rows)];
+        let mut passes = BodyPasses::default();
+        passes.prepare(&device).expect("body passes");
+        Self { device, open, solid, water, rows, buffers, passes }
     }
-    native.commit_and_wait_completed();
-    assert!(errors.is_empty(), "{errors:?}");
-    let want = cpu_body_sums(&impulses64, &rows, Some(&base));
-    assert_close(&read(&out, 64 * 16), &want, "body sums on a base");
-    assert_close(&read(&reaction, BODIES * 16), &want[..BODIES * 16], "reaction in place");
+
+    fn bodies(&self) -> Bodies<'_> {
+        Bodies {
+            lattice: N.map(|v| v as u32),
+            lattice_min: MIN,
+            cell_size: H,
+            density: DENSITY,
+            tick_seconds: TICK,
+            first: FIRST as u32,
+            count: BODIES as u32,
+            water: &self.buffers[0],
+            open: &self.buffers[1],
+            solid: &self.buffers[2],
+            bodies: &self.buffers[3],
+        }
+    }
+
+    fn sums(&self) -> Vec<f32> {
+        read(self.passes.sums().expect("sums"), BODIES * SUM_FLOATS)
+    }
 }
 
+/// Inside a solver iteration: the bodies' pressure impulse of the search
+/// direction, then their share of the operator added to s.
 #[test]
-fn gpu_flip_body_pressure_product_matches_cpu() {
-    let cells = N.iter().product();
-    let (solid, velocity) = fixture(0x9a0d);
-    let (base, water) = (random_values(cells, 0x9a0e), random_water(cells, 0x9a0f));
-    let sums = random_values(BODIES * 16, 0x9a10);
-    let rows = bodies();
-    let got = run_atom(
-        &mut BodyPressureProduct::new(),
-        &[
-            ("base", &base),
-            ("water", &water),
-            ("solid_faces", &solid),
-            ("solid_velocity", &velocity),
-            ("sums", &sums),
-            ("bodies", floats(&rows)),
-        ],
-        cells,
-        &lattice_params(N, &body_params()),
-    );
-    let want = cpu_body_product(&base, &water, &solid, &velocity, &sums, &rows);
-    let moved = want.iter().zip(&base).filter(|(w, b)| (**w - f64::from(**b)).abs() > 1e-3).count();
-    assert!(moved > 5, "water cells beside owned faces change: {moved}");
-    assert_close(&got, &want, "body pressure product");
-}
-
-// ── Fused vs unfused ───────────────────────────────────────────────────────
-
-fn body_source(chain: &mut Chain, rows: &[LiquidBody]) -> usize {
-    let id = chain.node("bodies", "test.body_source", json!({"max_capacity": {"type": "Int", "value": rows.len()}}));
-    chain.sources.push(("bodies", floats(rows).to_vec()));
-    id
-}
-
-fn float_extra(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f64)> {
-    extra.iter().map(|&(k, v)| (k, f64::from(v))).collect()
-}
-
-/// The pressure's face impulse and the friction impulse, fused side by side
-/// on the same solids (the step's shape: both read the solids' face velocity
-/// coincident), summed into one face grid by friction's faces input.
-#[test]
-fn gpu_flip_face_impulses_fuse() {
-    let cells = N.iter().product();
-    let (solid, velocity) = fixture(0xfe01);
-    let (pressure, water) = (random_values(cells, 0xfe02), random_water(cells, 0xfe03));
-    let mut chain = Chain::new();
-    let s = chain.face_source("solid", solid.clone());
-    let v = chain.face_source("velocity", velocity.clone());
-    let p = chain.source("pressure", pressure.clone());
-    let w = chain.source("water", water.clone());
-    let extra = float_extra(&[("cell_size", H), ("density", DENSITY)]);
-    let push = chain.node("push", "node.pressure_face_impulse", lattice_json(N, &extra));
-    chain.wire(p, "out", push, "pressure");
-    chain.wire(w, "out", push, "water");
-    chain.wire(s, "out", push, "solid_faces");
-    chain.wire(v, "out", push, "solid_velocity");
-    let drag = chain.node("drag", "node.friction_face_impulse", lattice_json(N, &extra));
-    chain.wire(push, "out", drag, "faces");
-    chain.wire(w, "out", drag, "water");
-    chain.wire(s, "out", drag, "solid_faces");
-    chain.wire(v, "out", drag, "solid_velocity");
-    chain.sink = "test.face_sink";
-    let got = chain.fused_matches_unfused(drag, face_grid_len(N));
-    let pushed: Vec<f32> = cpu_pressure_impulse(&pressure, &water, &solid, &velocity).iter().map(|&v| v as f32).collect();
-    assert_close(&got, &cpu_friction(&pushed, &water, &solid, &velocity), "fused impulses");
-}
-
-/// A per-cell producer fused into the bodies' share: the product reads its
-/// base coincident.
-#[test]
-fn gpu_flip_divide_into_body_product_fuses() {
+fn gpu_flip_body_operator_matches_cpu() {
+    let scene = Scene::new(0xb0d1);
     let cells: usize = N.iter().product();
-    let (solid, velocity) = fixture(0xfe11);
-    let (value, water) = (random_values(cells, 0xfe12), random_water(cells, 0xfe13));
-    let sums = random_values(BODIES * 16, 0xfe14);
-    let rows = bodies();
-    let mut chain = Chain::new();
-    let s = chain.face_source("solid", solid.clone());
-    let v = chain.face_source("velocity", velocity.clone());
-    let x = chain.source("value", value.clone());
-    let d = chain.source("divisor", vec![0.25]);
-    let w = chain.source("water", water.clone());
-    let u = chain.source("sums", sums.clone());
-    let b = body_source(&mut chain, &rows);
-    let divide = chain.node("divide", "node.divide_by_value", json!({}));
-    chain.wire(x, "out", divide, "values");
-    chain.wire(d, "out", divide, "divisor");
-    let product = chain.node("product", "node.body_pressure_product", lattice_json(N, &float_extra(&body_params())));
-    chain.wire(divide, "out", product, "base");
-    chain.wire(w, "out", product, "water");
-    chain.wire(s, "out", product, "solid_faces");
-    chain.wire(v, "out", product, "solid_velocity");
-    chain.wire(u, "out", product, "sums");
-    chain.wire(b, "out", product, "bodies");
-    let got = chain.fused_matches_unfused(product, cells);
-    let base: Vec<f32> = value.iter().map(|&v| v / 0.25).collect();
-    assert_close(&got, &cpu_body_product(&base, &water, &solid, &velocity, &sums, &rows), "fused divide into product");
+    let direction = random_values(cells, 0xb0d2);
+    let base = random_values(cells, 0xb0d3);
+    let (direction_gpu, s) = (shared(&scene.device, &direction), shared(&scene.device, &base));
+    let mut enc = scene.device.create_encoder("body operator");
+    scene.passes.apply(&mut enc, &scene.bodies(), &direction_gpu, &s).expect("apply");
+    enc.commit_and_wait_completed();
+
+    let impulses = cpu_pressure_impulse(&direction, &scene.water, &scene.open, &scene.solid);
+    let (want, scale) = cpu_body_sums(&impulses, &scene.solid, &scene.rows);
+    assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "the dynamic body owns pushed faces");
+    assert!(want[SUM_FLOATS..].iter().all(|&v| v == 0.0), "the prescribed body takes no impulse");
+    let sums = scene.sums();
+    assert_sums(&sums, &want, &scale, "pressure sums");
+
+    let product = cpu_body_product(&base, &scene.water, &scene.open, &scene.solid, &sums, &scene.rows);
+    let moved = product.iter().zip(&base).filter(|(w, b)| (**w - f64::from(**b)).abs() > 1e-3).count();
+    assert!(moved > 50, "water cells beside the dynamic body's faces change: {moved}");
+    assert_close(&read(&s, cells), &product, "body operator");
+}
+
+/// After the projection: the pressure's impulse into the reaction and its
+/// velocity change into the solid faces, then the friction against the
+/// changed solid velocity into the reaction too.
+#[test]
+fn gpu_flip_body_reaction_matches_cpu() {
+    let scene = Scene::new(0x7ea1);
+    let cells: usize = N.iter().product();
+    let pressure = random_values(cells, 0x7ea2);
+    let faces = random_values(face_grid_len(N), 0x7ea3);
+    let base = random_values(BODIES * 8, 0x7ea4);
+    let pressure_gpu = shared(&scene.device, &pressure);
+    let faces_gpu = shared(&scene.device, &faces);
+    let reaction = shared(&scene.device, &base);
+    let scratch = shared(&scene.device, &vec![0.0_f32; cells]);
+
+    // The same impulse react starts with, on its own, to read its sums.
+    let mut enc = scene.device.create_encoder("pressure sums");
+    scene.passes.apply(&mut enc, &scene.bodies(), &pressure_gpu, &scratch).expect("apply");
+    enc.commit_and_wait_completed();
+    let pushed = scene.sums();
+    let (want, scale) =
+        cpu_body_sums(&cpu_pressure_impulse(&pressure, &scene.water, &scene.open, &scene.solid), &scene.solid, &scene.rows);
+    assert_sums(&pushed, &want, &scale, "pressure sums");
+
+    let mut enc = scene.device.create_encoder("react");
+    scene.passes.react(&mut enc, &scene.bodies(), &pressure_gpu, &faces_gpu, &reaction).expect("react");
+    enc.commit_and_wait_completed();
+
+    let changed: Vec<f32> = read(&scene.buffers[2], face_grid_len(N));
+    let want_changed = cpu_velocity_change(&scene.solid, &pushed, &scene.rows);
+    let touched = want_changed.iter().zip(&scene.solid).filter(|(w, s)| (**w - f64::from(**s)).abs() > 1e-4).count();
+    assert!(touched > 50, "the dynamic body's faces gain its velocity change: {touched}");
+    assert_close(&changed, &want_changed, "velocity change");
+
+    let drag = cpu_friction(&faces, &scene.water, &scene.open, &changed);
+    let (want, scale) = cpu_body_sums(&drag, &scene.solid, &scene.rows);
+    assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "water drags the dynamic body");
+    let dragged = scene.sums();
+    assert_sums(&dragged, &want, &scale, "friction sums");
+
+    let got: Vec<f32> = read(&reaction, BODIES * 8);
+    let want: Vec<f64> = (0..BODIES * 8)
+        .map(|k| {
+            let (b, j) = (k / 8, k % 8);
+            f64::from(base[k]) + f64::from(pushed[SUM_FLOATS * b + j]) + f64::from(dragged[SUM_FLOATS * b + j])
+        })
+        .collect();
+    assert_close(&got, &want, "reaction");
 }

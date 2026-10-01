@@ -72,11 +72,13 @@ const COLLIDER_ROLE: usize = 3;
 const CUBE_SHAPE: usize = 1;
 const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 
-/// A liquid in the 4 m tank: a pool `fill_height` deep plus one box, both
+/// A liquid in a cubic tank: a pool `fill_height` deep plus one box, both
 /// in metres.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WaterScene {
     pub pressure: PressureShape,
+    /// The tank's side in metres: the domain's Domain Size.
+    pub size: f64,
     /// Water steps per tick: copies of the step subgraph in the tick region.
     pub steps: usize,
     /// The FLIP share kept per 1/60 s, the FLIP Fluids engine's 0.95 at its
@@ -139,6 +141,7 @@ impl WaterScene {
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
+            size: BOX_METRES,
             steps: STEPS_PER_TICK,
             flip: 0.95,
             fill_height: DAM_FILL_HEIGHT,
@@ -163,6 +166,12 @@ impl WaterScene {
     /// A pool 1 m deep and nothing else (I5).
     pub fn still_pool(n: usize) -> Self {
         Self { fill_height: 1.0, column: [[0.0; 2]; 3], ..Self::dam_break(n) }
+    }
+
+    /// A pool `fill` deep in a tank `size` on a side at `n` cells: the
+    /// conformance box scenes' water.
+    pub fn pool(n: usize, size: f64, fill: f64) -> Self {
+        Self { size, fill_height: fill, ..Self::still_pool(n) }
     }
 
     /// A pool 3 m deep in the 4 m tank: the coarsest multigrid level is
@@ -233,7 +242,7 @@ impl WaterScene {
     /// The tank: the domain's layout at this resolution, no domain box.
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn layout(&self) -> FluidDomainLayout {
-        domain_layout(None, BOX_METRES as f32, self.pressure.n as u32).expect("the tank's layout")
+        domain_layout(None, self.size as f32, self.pressure.n as u32).expect("the tank's layout")
     }
 
     /// The tank's lowest corner.
@@ -258,7 +267,7 @@ impl WaterScene {
         let n = self.pressure.n as f32;
         let read = |name: &str, default: f32| match name {
             "resolution" => n,
-            "domain_size" => BOX_METRES as f32,
+            "domain_size" => self.size as f32,
             "fill_height" => self.fill_height as f32,
             _ => default,
         };
@@ -343,7 +352,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         GPU_FLIP_DOMAIN_TYPE_ID,
         json!({
             "resolution": int(scene.pressure.n),
-            "domain_size": float(BOX_METRES),
+            "domain_size": float(scene.size),
             "fill_height": float(scene.fill_height),
         }),
     );
@@ -415,12 +424,14 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, state, &["ticks", "epoch"]);
     let mut particles: Port = (state, "out");
     let mut faces = particles;
+    let mut reaction = (domain, "reaction");
     for k in 0..scene.steps {
         let density = scene.spread_rate > 0.0 && (!scene.density_once || k + 1 == scene.steps);
         let step = water_step(&mut b, scene, (domain, state), k, density);
         b.wire(particles, step, "particles");
         b.wire(count, step, "count");
-        (particles, faces) = ((step, "out"), (step, "faces"));
+        b.wire(reaction, step, "reaction");
+        (particles, faces, reaction) = ((step, "out"), (step, "faces"), (step, "reaction_out"));
     }
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
@@ -673,7 +684,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }

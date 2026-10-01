@@ -105,6 +105,10 @@ impl Primitive for ShapeParticleBlobs {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if ctx.inputs.any_pending() {
+            ctx.mark_outputs_pending();
+            return;
+        }
         let [center_x, center_y, center_z] =
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let [size_x, size_y, size_z] = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));

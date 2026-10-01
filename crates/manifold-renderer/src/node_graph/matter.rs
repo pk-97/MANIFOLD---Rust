@@ -214,7 +214,7 @@ pub fn j_max(cohesion: f32) -> f32 {
 }
 
 /// Rest density of water, kg/m³ (taichi_elements `p_rho`).
-pub const WATER_DENSITY: f32 = 1000.0;
+pub use crate::node_graph::liquid::WATER_DENSITY;
 
 /// Mass unit of the accumulators: `1000 · dx³ / 8` kg (D5), so a full node of
 /// water sums to about 8 units.

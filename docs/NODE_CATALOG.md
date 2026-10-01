@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 367 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 363 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -293,14 +293,13 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (63)
+### Particles 3D (59)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
 | Advect Whitewater | `node.advect_whitewater` | Filter | Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water. |
 | Age Whitewater | `node.age_whitewater` | Filter | Counts down each whitewater particle's life, spray fastest and bubbles slowest. |
-| Body Pressure Product | `node.body_pressure_product` | Filter | Lets floating objects give way to the water's pressure inside the pressure solve, so heavy and light objects float and sink correctly. |
 | Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
 | Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
@@ -308,10 +307,8 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Emission Count | `node.emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
 | Energy Potential | `node.energy_potential` | Filter | Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray. |
 | Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
-| Face Impulse to Bodies | `node.face_impulse_to_bodies` | Map | Adds up how hard the water pushes on each floating object, and how that changes the object's motion. |
 | Face Grid Component | `node.face_sample_component` | Filter | Hands one direction of the water's velocity grid to effects that follow the water. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
-| Friction Face Impulse | `node.friction_face_impulse` | Filter | Works out how much the water drags on floating objects where they slide past it. |
 | GPU FLIP Domain | `node.gpu_flip_domain` | Source | Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed. |
 | GPU FLIP Step | `node.gpu_flip_step` | Filter | Moves the water forward one step: gravity, solids, incompressibility and the particles' motion. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
@@ -341,7 +338,6 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Preserve Foam | `node.preserve_foam` | Filter | Keeps foam alive longer where lots of it has gathered, so thick foam lingers. |
-| Pressure Face Impulse | `node.pressure_face_impulse` | Filter | Works out how hard the water's pressure pushes on floating objects through each face of the grid. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Retype Whitewater | `node.retype_whitewater` | Filter | Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved. |
@@ -589,7 +585,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 1653 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 1964 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |

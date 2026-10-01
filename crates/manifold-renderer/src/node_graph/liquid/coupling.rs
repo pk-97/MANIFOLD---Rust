@@ -40,6 +40,33 @@ pub fn takes_reaction(row: &LiquidBody) -> bool {
     row.position_inv_mass[3] > 0.0 && row.accel_shape[3] >= 0.0
 }
 
+/// Floats one body holds in a float reaction: linear impulse (N·s), then
+/// angular impulse about the centre of mass (N·m·s), each padded to four.
+pub const REACTION_FLOATS: usize = 8;
+
+/// A pending tick's float reaction as one impulse per row; rows that take no
+/// reaction are left alone. `offset` counts the rows before the first
+/// coupled body's (the Collider roles').
+pub fn decode_reaction(
+    offset: usize,
+    rows: &[LiquidBody],
+    reaction: Option<&[f32]>,
+    impulses: &mut [BodyImpulse],
+) -> Result<(), String> {
+    let reaction = reaction.ok_or("Liquid coupling: the reaction is not readable")?;
+    if reaction.len() < (offset + rows.len()) * REACTION_FLOATS {
+        return Err("Liquid coupling: the reaction array is smaller than the bodies".into());
+    }
+    for (index, (row, impulse)) in rows.iter().zip(impulses.iter_mut()).enumerate() {
+        if takes_reaction(row) {
+            let base = (offset + index) * REACTION_FLOATS;
+            impulse.linear = std::array::from_fn(|axis| reaction[base + axis]);
+            impulse.angular = std::array::from_fn(|axis| reaction[base + 4 + axis]);
+        }
+    }
+    Ok(())
+}
+
 /// A coupled domain's rigid world, stepped only by settled liquid ticks.
 pub struct LiquidRigidOwner {
     rigid: RigidSimulation,
@@ -445,5 +472,33 @@ mod tests {
             .unwrap();
         let v = owner.rows()[0].linear_velocity[1];
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
+    }
+
+    /// A float reaction of m·(1 m/s) up, read past one Collider role's row,
+    /// reaches Box3D on top of the tick's gravity; a reaction too short for
+    /// the rows is refused by name.
+    #[test]
+    fn liquid_coupled_float_reaction_decodes_to_body_impulse() {
+        let scene = scene();
+        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let mut owner = LiquidRigidOwner::new(&scene, colliders, 3, None).expect("owner");
+        let mut reaction = [0.0f32; 2 * REACTION_FLOATS];
+        reaction[REACTION_FLOATS + 1] = 32.0;
+        reaction[REACTION_FLOATS + 5] = 1.0e-9;
+        owner.set_pending(PendingTick { tick: 0, stamp: 0 });
+        owner
+            .settle(&scene, |_| true, |_, rows, impulses| {
+                decode_reaction(1, rows, Some(&reaction[..]), impulses)?;
+                assert_eq!((impulses[0].linear, impulses[0].angular), ([0.0, 32.0, 0.0], [0.0, 1.0e-9, 0.0]));
+                Ok(())
+            })
+            .unwrap();
+        let v = owner.rows()[0].linear_velocity[1];
+        assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
+        owner.set_pending(PendingTick { tick: 1, stamp: 0 });
+        let error = owner
+            .settle(&scene, |_| true, |_, rows, impulses| decode_reaction(2, rows, Some(&reaction[..]), impulses))
+            .unwrap_err();
+        assert!(error.contains("smaller than the bodies"), "{error}");
     }
 }

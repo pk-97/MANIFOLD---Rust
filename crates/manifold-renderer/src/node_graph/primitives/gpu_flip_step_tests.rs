@@ -1362,27 +1362,31 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
 }
 
 /// The velocity and spin a face sees on body `row`: as uploaded when
-/// prescribed; predicted over `SOLID_TICK` when dynamic.
-fn moving_velocity(solids: &Solids, row: usize) -> ([f64; 3], [f64; 3]) {
+/// prescribed; when dynamic, predicted over `SOLID_TICK` plus M⁻¹ times the
+/// reaction so far (8 floats per body: linear, 0, angular, 0).
+fn moving_velocity(solids: &Solids, row: usize, reaction: &[f32]) -> ([f64; 3], [f64; 3]) {
     let body = &solids.bodies[row];
     let mut v: [f64; 3] = std::array::from_fn(|a| f64::from(body.linear_velocity[a]));
     let mut w: [f64; 3] = std::array::from_fn(|a| f64::from(body.angular_velocity[a]));
     if body.position_inv_mass[3] > 0.0 {
         let t = f64::from(SOLID_TICK);
         let spin = [body.inv_inertia_x[3], body.inv_inertia_y[3], body.inv_inertia_z[3]];
+        let inertia = [body.inv_inertia_x, body.inv_inertia_y, body.inv_inertia_z];
+        let push = &reaction[8 * row..8 * row + 8];
         for a in 0..3 {
-            v[a] += f64::from(body.accel_shape[a]) * t;
-            w[a] += f64::from(spin[a]) * t;
+            v[a] += f64::from(body.accel_shape[a]) * t + f64::from(body.position_inv_mass[3]) * f64::from(push[a]);
+            let turn: f64 = (0..3).map(|c| f64::from(inertia[a][c]) * f64::from(push[4 + c])).sum();
+            w[a] += f64::from(spin[a]) * t + turn;
         }
     }
     (v, w)
 }
 
 /// The step's solid face velocity in f64: the closest body's rigid velocity
-/// at each cut inner face's centre, and the mean friction at its four
-/// corners. Also the smallest margin any query had (see `closest`) and how
-/// many faces a body moved.
-fn cpu_solid_face_velocity(open: &[f64], solids: &Solids) -> (Vec<f64>, f64, usize) {
+/// at each cut inner face's centre, the mean friction at its four corners,
+/// and the owner code Σ (body + 1)·256^axis in velocity w. Also the smallest
+/// margin any query had (see `closest`) and how many faces a body moved.
+fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (Vec<f64>, f64, usize) {
     let n = SOLID_N;
     let m = n.map(|v| v + 1);
     let h = f64::from(SOLID_H);
@@ -1403,9 +1407,10 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids) -> (Vec<f64>, f64, usi
             if let Some(row) = row {
                 let (position, _) = body_pose_at(&solids.bodies[row], SOLID_TICK);
                 let r: [f64; 3] = std::array::from_fn(|b| centre[b] - f64::from(position[b]));
-                let (v, w) = moving_velocity(solids, row);
+                let (v, w) = moving_velocity(solids, row, reaction);
                 let spin = [w[1] * r[2] - w[2] * r[1], w[2] * r[0] - w[0] * r[2], w[0] * r[1] - w[1] * r[0]];
                 out[i * FACE_FLOATS + a] = v[a] + spin[a];
+                out[i * FACE_FLOATS + 3] += (row + 1) as f64 * 256_f64.powi(a as i32);
                 moved += 1;
             }
             let (b, c) = match a {
@@ -1430,34 +1435,49 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids) -> (Vec<f64>, f64, usi
     (out, margin, moved)
 }
 
-/// The step's solid face velocity against the rigid velocity and corner
-/// friction computed here, on random cut faces under two overlapping turning
-/// bodies.
+/// The step's solid face velocity against the rigid velocity, corner
+/// friction and owner codes computed here, on random cut faces under two
+/// overlapping turning bodies, one dynamic with a reaction so far. The
+/// bodies are a second tick's rows, behind a first tick's that would move
+/// every face differently.
 #[test]
 fn gpu_flip_solid_face_velocity_matches_cpu() {
     let solids = solids();
     let open = random_open_faces(SOLID_N, 0x5fa, 0);
-    let rows = solids.bodies.len() as i32;
+    let count = solids.bodies.len();
+    let reaction: Vec<f32> = random_values(8 * count, 0x5fb).iter().map(|v| v * 0.4).collect();
+    let mut rows = solids.bodies.clone();
+    for body in &mut rows {
+        body.linear_velocity[0] += 5.0;
+        body.position_inv_mass[1] -= 0.2;
+    }
+    rows.extend(solids.bodies.iter().copied());
     let step = StepParams {
-        body_count: rows,
-        rows,
+        body_count: count as i32,
+        rows: rows.len() as i32,
         tick_seconds: SOLID_TICK,
         shapes_len: solids.shapes.len() as u32,
         ..solid_lattice()
     };
     let got: Vec<f32> = Pass::new()
         .bind(10, &open)
-        .bind(14, &solids.bodies)
+        .bind(14, &rows)
         .bind(15, &solids.shapes)
         .bind(16, &solids.atlas)
+        .bind(21, &reaction)
         .run("solid_face_velocity", &step, 4, face_grid_len(SOLID_N), solid_records());
     let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
-    let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids);
+    let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids, &reaction);
     assert!(margin > 1.0e-4, "no query sits on a lattice edge or a tie between bodies: {margin}");
     assert!(moved > 10, "the bodies reach cut faces: {moved}");
     let frictions: Vec<f64> = want.chunks(FACE_FLOATS).flat_map(|r| r[4..7].to_vec()).collect();
     assert!(frictions.iter().any(|&f| f > 0.0 && f < 0.4), "a face with corners outside every body");
     assert!(frictions.iter().any(|&f| f > 0.4), "corners reaching the second body");
+    let codes: Vec<f64> = want.chunks(FACE_FLOATS).map(|r| r[3]).collect();
+    assert!(codes.iter().any(|&c| c > 256.0), "a record owned on two axes");
+    for (record, (g, w)) in got.chunks(FACE_FLOATS).zip(want.chunks(FACE_FLOATS)).enumerate() {
+        assert_eq!(f64::from(g[3]), w[3], "owner code of record {record}");
+    }
     assert_close(&got, &want, "solid face velocity");
 }
 

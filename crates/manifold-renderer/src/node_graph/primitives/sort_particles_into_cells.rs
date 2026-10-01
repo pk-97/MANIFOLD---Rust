@@ -415,6 +415,10 @@ impl Primitive for SortParticlesIntoCells {
         let size = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         self.sorter.prepare(ctx.gpu_encoder().device);
+        if ctx.inputs.any_pending() {
+            ctx.mark_outputs_pending();
+            return;
+        }
         if ctx.scalar_or_param("enabled", 1.0) <= 0.5 {
             return;
         }

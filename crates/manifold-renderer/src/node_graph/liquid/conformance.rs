@@ -5,14 +5,18 @@
 //! in `tests/gpu_proofs/liquid_conformance.rs`; the CPU checks live here.
 
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, SerializedParamValue};
+use manifold_core::effect_graph_def::{
+    BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
+};
+use manifold_core::id::NodeId;
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID};
 
 use crate::node_graph::bundled_presets::bundled_preset_def;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::liquid::grid::{face_coords, face_len};
+use crate::node_graph::liquid::WATER_DENSITY;
 use crate::node_graph::liquid::lattice::PADDING_NODES;
-use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, STATS_WORDS, WATER_DENSITY};
+use crate::node_graph::matter::{MatterGridNode, MatterPoint, MatterTickStats, STATS_WORDS};
 use crate::node_graph::primitives::face_grid_scenes::matter_dam_break_faces;
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
@@ -234,18 +238,9 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
      ticks, and no box scene a preset can carry";
 
-const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
-     docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
-
-/// GPU FLIP's body-coupling atoms that gather instead of scattering
-/// (docs/GPU_FLIP_PRESSURE_SOLVE.md). The step's and the pressure solve's
-/// hand shaders and face_impulse_to_bodies have no codegen body; their own
-/// tests check them.
-const GPU_FLIP_ATOMIC_FREE: [&str; 3] = [
-    "node.pressure_face_impulse",
-    "node.body_pressure_product",
-    "node.friction_face_impulse",
-];
+const GPU_FLIP_CLOSED_TANK: &str = "GPU FLIP's tank is closed on every face (it has no open-face boundary \
+     yet): a box pressing on an incompressible pool in a closed tank hands its momentum to the walls at once, \
+     so body plus liquid momentum cannot balance; the collision scene needs open faces";
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     LiquidSolverRow {
@@ -384,8 +379,8 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         type_id: GPU_FLIP_DOMAIN_TYPE_ID,
         fixture: gpu_flip_fixture,
         gpu: true,
-        coupled: false,
-        atomic_free: &GPU_FLIP_ATOMIC_FREE,
+        coupled: true,
+        atomic_free: &[],
         atomic_free_shaders: &[("node.whitewater_step", WHITEWATER_STEP_SHADER)],
         refusals: &[
             RefusalCase {
@@ -438,13 +433,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             // A gather: the published faces are the solver's projected faces.
             ulps: (0, ""),
         }),
-        exempt: &[
-            (Check::CoupledWorldStepsOnce, GPU_FLIP_OWES_SOLIDS),
-            (Check::Collision, GPU_FLIP_OWES_SOLIDS),
-            (Check::FloatingDraft, GPU_FLIP_OWES_SOLIDS),
-            (Check::HydrostaticLift, GPU_FLIP_OWES_SOLIDS),
-            (Check::FreeFlight, GPU_FLIP_OWES_SOLIDS),
-        ],
+        exempt: &[(Check::Collision, GPU_FLIP_CLOSED_TANK)],
     },
 ];
 
@@ -459,15 +448,85 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
     }
 }
 
-/// GPU FLIP's scenes at the 64³ lattice its solver is built for, in the render
-/// graph the app shows. No box scene until GPU FLIP carries solids.
+/// GPU FLIP's scenes in the render graph the app shows: the pool scenes at
+/// the 64³ lattice its solver is built for, the box scenes at their own. Its
+/// tank is closed on every face, so a scene that asks for open faces keeps
+/// them closed; only the checks that end before the box reaches the liquid
+/// run on one.
 fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
         Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
         Fixture::FaceGrid => Some(render_def(WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).with_faces())),
-        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox => None,
+        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox => {
+            let scene = BoxScene::of(fixture)?;
+            let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
+            Some(scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID))
+        }
     }
+}
+
+/// The Floating Box preset whose box the GPU FLIP box scenes carry.
+const BOX_PRESET: &str = "WaterFloatingBoxMatter";
+
+/// The preset's Box3D world, the box's start, body and drawn object.
+const BOX_NODES: [&str; 6] = ["box_world", "box_start", "box_body", "box_mesh", "box_material", "box_object"];
+
+/// `def` with [`BOX_PRESET`]'s box in its render scene, which pairs the
+/// box's world with the scene's liquid, and the Speed card on the world too.
+/// The box takes the scene's next object slot past its `objects` count, as Add
+/// Object does (the editing finder is not linkable from the renderer lib).
+fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
+    let source = bundled(BOX_PRESET);
+    let next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
+    let moved: Vec<(u32, u32)> = source
+        .nodes
+        .iter()
+        .filter(|node| BOX_NODES.contains(&node.node_id.as_str()))
+        .zip(next..)
+        .map(|(node, id)| (node.id, id))
+        .collect();
+    assert_eq!(moved.len(), BOX_NODES.len(), "{BOX_PRESET} holds the box");
+    let new_id = |id: u32| moved.iter().find(|(old, _)| *old == id).map(|(_, new)| *new);
+    for node in &source.nodes {
+        if let Some(id) = new_id(node.id) {
+            def.nodes.push(EffectGraphNode { id, ..node.clone() });
+        }
+    }
+    for wire in &source.wires {
+        if let (Some(from_node), Some(to_node)) = (new_id(wire.from_node), new_id(wire.to_node)) {
+            def.wires.push(EffectGraphWire { from_node, to_node, ..wire.clone() });
+        }
+    }
+    let id_of = |def: &EffectGraphDef, name: &str| {
+        def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
+    };
+    let (object, scene) = (id_of(&def, "box_object"), id_of(&def, "scene"));
+    let slot = match def.nodes.iter().find(|node| node.id == scene).and_then(|node| node.params.get("objects")) {
+        Some(SerializedParamValue::Float { value }) => *value as u32,
+        Some(SerializedParamValue::Int { value }) => *value as u32,
+        other => panic!("{SHIPPED_PRESET}'s render scene has no object count for the box: {other:?}"),
+    };
+    let port = format!("object_{slot}");
+    assert!(
+        !def.wires.iter().any(|wire| wire.to_node == scene && wire.to_port == port),
+        "{SHIPPED_PRESET}'s render scene has no free object slot for the box: {port} is taken"
+    );
+    def.wires.push(EffectGraphWire { from_node: object, from_port: "object".into(), to_node: scene, to_port: port });
+    let render = def.nodes.iter_mut().find(|node| node.id == scene).expect("the render scene");
+    render.params.insert("objects".into(), SerializedParamValue::Float { value: (slot + 1) as f32 });
+    let metadata = def.preset_metadata.as_mut().expect("the render's cards");
+    let speed = metadata
+        .bindings
+        .iter()
+        .find(|binding| binding.id == "speed")
+        .expect("the render's Speed card")
+        .clone();
+    metadata.bindings.push(BindingDef {
+        target: BindingTarget::Node { node_id: NodeId::new("box_world"), param: "speed".into() },
+        ..speed
+    });
+    def
 }
 
 /// GPU FLIP's faces: component `axis` of the FaceSample lattice's padded cell,
@@ -603,14 +662,19 @@ impl BoxScene {
     /// its box the `box_start` transform and `box_body` body.
     pub fn apply(self, preset: &'static str, type_id: &str) -> EffectGraphDef {
         let mut def = bundled(preset);
+        for face in ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"] {
+            set_type_param(&mut def, type_id, face, SerializedParamValue::Bool { value: !self.open_faces });
+        }
+        self.set(def, type_id)
+    }
+
+    /// `def` set to this scene, but for which faces are open.
+    fn set(self, mut def: EffectGraphDef, type_id: &str) -> EffectGraphDef {
         let float = |value: f32| SerializedParamValue::Float { value };
         set_type_param(&mut def, type_id, "domain_size", float(self.domain_size));
         set_type_param(&mut def, type_id, "resolution", SerializedParamValue::Int { value: self.resolution });
         set_type_param(&mut def, type_id, "fill_height", float(self.fill));
         set_type_param(&mut def, type_id, "gravity", float(self.liquid_gravity));
-        for face in ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"] {
-            set_type_param(&mut def, type_id, face, SerializedParamValue::Bool { value: !self.open_faces });
-        }
         let scale = self.edge / CUBE_EDGE_PER_SCALE;
         for (axis, i) in [("x", 0), ("y", 1), ("z", 2)] {
             set_node_param(&mut def, "box_start", &format!("pos_{axis}"), float(self.centre[i]));

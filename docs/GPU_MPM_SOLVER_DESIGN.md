@@ -1046,7 +1046,7 @@ FLIP-only.
 | Mass is exact; grid mass matches particle mass | `matter_grid_mass_matches_particle_mass` (relative 1e-5 per substep) |
 | Momentum in free flight | `matter_momentum_conserved_free_blob` (zero gravity, no walls touched, relative change ≤ 1e-4 over 60 ticks; the fixed-point bound derived for this setup is about 5e-5; measured 4.9e-6 with D5's momentum unit) |
 | Dam-break energy never grows | `matter_dam_break_energy_bounded` (kinetic + potential + elastic ≤ 1.01 × initial at every tick) |
-| Look artefacts A1, A3, A5 | `matter_look_lattice_alignment`, `matter_look_volume_drift`, `matter_look_splash_retention` (section 7 (Look — artefacts, metrics and dials); the other look gates are withdrawn) |
+| Look artefacts A1, A3 | `matter_look_lattice_alignment`, `matter_look_volume_drift` (section 7 (Look — artefacts, metrics and dials); A5 and the other look gates are withdrawn) |
 | Determinism | `matter_deterministic_under_seed` (two runs, 120 ticks, bit-identical points); `matter_seed_changes_jitter`; `matter_block_p2g_bit_identical` (P1b) |
 | Fixed-point headroom | `matter_fixed_point_headroom` (Dam Break, max accumulator magnitude < 2^30) |
 | A non-finite tick is never published | `liquid_nonfinite_tick_not_published` (LIQUID_SOLVER_SEAM_DESIGN.md section 4 (Invariants & enforcement), every liquid row) |
