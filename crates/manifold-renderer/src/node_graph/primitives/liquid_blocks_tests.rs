@@ -215,3 +215,172 @@ fn liquid_blocks_fused_matches_unfused() {
     assert_eq!(fused_out, unfused, "fused differs from standalone");
 }
 
+// ── node.surface_crossings with the map ────────────────────────────────────
+
+use super::surface_crossings::SurfaceCrossings;
+use crate::node_graph::whitewater::SurfaceCrossing;
+
+fn crossings_params(s: u32) -> ParamValues {
+    block_params(s)
+}
+
+fn same_bits(a: &[SurfaceCrossing], b: &[SurfaceCrossing]) -> usize {
+    let bits = |c: &SurfaceCrossing| bytemuck::bytes_of(c).to_vec();
+    a.iter().zip(b).filter(|(x, y)| bits(x) != bits(y)).count()
+}
+
+/// The map changes no bit of surface_crossings' output, at every refinement,
+/// and the scene leaves blocks both with and without surface.
+#[test]
+fn surface_crossings_block_skip_is_bit_identical() {
+    let c = cells();
+    let total = c.iter().product::<u32>() as usize;
+    let blocks = block_lattice(c).iter().product::<u32>() as usize;
+    let (water, solid) = (water(), solid());
+    let mut harness = Harness::new();
+    let (water_in, solid_in) = (harness.array(&water, water.len()), harness.array(&solid, solid.len()));
+    for s in [1u32, 2, 3] {
+        let level = level(s);
+        let level_in = harness.array(&level, level.len());
+        let map: Vec<u32> = run(
+            &mut harness,
+            &mut LiquidBlocks::new(),
+            &[("water", water_in.0), ("level_set", level_in.0), ("solid", solid_in.0)],
+            blocks,
+            &block_params(s),
+        );
+        let skipped = map.iter().filter(|&&b| b & BLOCK_SURFACE == 0).count();
+        assert!(skipped > 0 && skipped < blocks, "s {s}: {skipped} of {blocks} blocks lack surface");
+        let map_in = harness.array(&map, map.len());
+        let off: Vec<SurfaceCrossing> =
+            run(&mut harness, &mut SurfaceCrossings::new(), &[("level_set", level_in.0), ("solid", solid_in.0)], total, &crossings_params(s));
+        let on: Vec<SurfaceCrossing> = run(
+            &mut harness,
+            &mut SurfaceCrossings::new(),
+            &[("level_set", level_in.0), ("solid", solid_in.0), ("blocks", map_in.0)],
+            total,
+            &crossings_params(s),
+        );
+        assert_eq!(same_bits(&on, &off), 0, "s {s}: the map changed the output");
+    }
+}
+
+/// A map shorter than the block lattice is a named refusal, never a full scan.
+#[test]
+fn surface_crossings_refuses_a_short_map() {
+    let total = cells().iter().product::<u32>() as usize;
+    let (solid, level) = (solid(), level(2));
+    let mut harness = Harness::new();
+    let solid_in = harness.array(&solid, solid.len());
+    let level_in = harness.array(&level, level.len());
+    let short = harness.array(&[0xFFFF_FFFFu32; 59], 59);
+    let out = harness.array::<SurfaceCrossing>(&[], total);
+    let (_, errors) = harness.run(
+        &mut SurfaceCrossings::new(),
+        &[("level_set", level_in.0), ("solid", solid_in.0), ("blocks", short.0)],
+        &[("out", out.0)],
+        &crossings_params(2),
+    );
+    assert!(errors.iter().any(|e| e.contains("block map holds 59 blocks")), "{errors:?}");
+}
+
+// No fused proof of surface_crossings with the map: a gather-only region
+// dispatches over the shortest gathered input, so the 60-word map caps it
+// at 60 cells. Both atoms size outputs from params and never fuse in a
+// graph; BUG-iiv4 (gather-only region count anchor) tracks the codegen gap.
+
+/// Measurement, not a gate: prints surface_crossings' GPU time per
+/// dispatch with and without the map, and the map's own cost, on a
+/// 34³- then 70³-cell grid (one size step) at refinement 2 with a ball of liquid in a corner. Asserts
+/// only that the two outputs agree.
+#[test]
+fn surface_crossings_block_skip_timing() {
+    for side in [35, 71] {
+        block_skip_timing(side);
+    }
+}
+
+fn block_skip_timing(side: u32) {
+    let side_f = side as f32;
+    let nodes = [side; 3];
+    let cells = nodes.map(|n| n - 1);
+    let s = 2;
+    let levels = cells.map(|n| n * s + 1);
+    let at = |i: usize, n: [u32; 3]| {
+        let i = i as u32;
+        [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])]
+    };
+    let ball = |p: [f32; 3]| ((0..3).map(|a| (p[a] - 0.26 * side_f).powi(2)).sum::<f32>().sqrt() - 0.17 * side_f) * H;
+    let level: Vec<f32> = (0..levels.iter().product::<u32>() as usize).map(|i| ball(at(i, levels).map(|v| v as f32 / s as f32))).collect();
+    let water: Vec<f32> =
+        (0..cells.iter().product::<u32>() as usize).map(|i| if ball(at(i, cells).map(|v| v as f32 + 0.5)) < 0.0 { 1.0 } else { 0.0 }).collect();
+    let solid: Vec<f32> = (0..nodes.iter().product::<u32>() as usize).map(|i| (at(i, nodes)[2] as f32 - 0.6) * H).collect();
+    let total = cells.iter().product::<u32>() as usize;
+    let blocks = block_lattice(cells).iter().product::<u32>() as usize;
+    let p = params(&[
+        ("nodes_x", side_f),
+        ("nodes_y", side_f),
+        ("nodes_z", side_f),
+        ("level_nodes_x", levels[0] as f32),
+        ("level_nodes_y", levels[1] as f32),
+        ("level_nodes_z", levels[2] as f32),
+    ]);
+    let mut harness = Harness::new();
+    let water_in = harness.array(&water, water.len());
+    let level_in = harness.array(&level, level.len());
+    let solid_in = harness.array(&solid, solid.len());
+    let map_out = harness.array::<u32>(&[], blocks);
+    let crossings = harness.array::<SurfaceCrossing>(&[], total);
+    let (_, e) = harness.run(&mut LiquidBlocks::new(), &[("water", water_in.0), ("level_set", level_in.0), ("solid", solid_in.0)], &[("out", map_out.0)], &p);
+    assert!(e.is_empty(), "{e:?}");
+    let map: Vec<u32> = read(&map_out.1, blocks);
+    let surface = map.iter().filter(|&&b| b & BLOCK_SURFACE != 0).count();
+    let (_, e) = harness.run(&mut SurfaceCrossings::new(), &[("level_set", level_in.0), ("solid", solid_in.0)], &[("out", crossings.0)], &p);
+    assert!(e.is_empty(), "{e:?}");
+    let off: Vec<SurfaceCrossing> = read(&crossings.1, total);
+    let (_, e) = harness.run(
+        &mut SurfaceCrossings::new(),
+        &[("level_set", level_in.0), ("solid", solid_in.0), ("blocks", map_out.0)],
+        &[("out", crossings.0)],
+        &p,
+    );
+    assert!(e.is_empty(), "{e:?}");
+    let on: Vec<SurfaceCrossing> = read(&crossings.1, total);
+    assert_eq!(same_bits(&on, &off), 0, "the map changed the output");
+
+    // GPU time: REPEAT dispatches in one command buffer, GPUEnd − GPUStart.
+    use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
+    use manifold_gpu::GpuBinding;
+    const REPEAT: u32 = 20;
+    let lattice: Vec<u32> = [side_f, side_f, side_f, levels[0] as f32, levels[1] as f32, levels[2] as f32].iter().map(|v| v.to_bits()).collect();
+    let gpu_ms = |harness: &Harness, wgsl: &str, words: &[u32], buffers: &[&manifold_gpu::GpuBuffer], count: u32| {
+        let pipeline = harness.device.create_compute_pipeline(wgsl, ENTRY, "liquid-blocks-timing");
+        let mut enc = harness.device.create_encoder("liquid-blocks-timing");
+        let (tx, rx) = std::sync::mpsc::channel();
+        enc.add_gpu_time_handler(move |seconds| {
+            let _ = tx.send(seconds);
+        });
+        let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(words) }];
+        for (i, buffer) in buffers.iter().enumerate() {
+            bindings.push(GpuBinding::Buffer { binding: i as u32 + 1, buffer, offset: 0 });
+        }
+        for _ in 0..REPEAT {
+            enc.dispatch_compute(&pipeline, &bindings, [count.div_ceil(256), 1, 1], "liquid-blocks-timing");
+        }
+        enc.commit_and_wait_completed();
+        rx.recv_timeout(std::time::Duration::from_secs(5)).expect("gpu time") * 1e3 / f64::from(REPEAT)
+    };
+    let map_words: Vec<u32> = lattice.iter().copied().chain([blocks as u32, 0]).collect();
+    let map_ms = gpu_ms(&harness, &standalone_for_spec::<LiquidBlocks>().expect("wgsl"), &map_words, &[&water_in.1, &level_in.1, &solid_in.1, &map_out.1], blocks as u32);
+    let crossings_wgsl = standalone_for_spec::<SurfaceCrossings>().expect("wgsl");
+    let off_words: Vec<u32> = lattice.iter().copied().chain([0, total as u32]).collect();
+    let on_words: Vec<u32> = lattice.iter().copied().chain([blocks as u32, total as u32]).collect();
+    let off_ms = gpu_ms(&harness, &crossings_wgsl, &off_words, &[&level_in.1, &solid_in.1, &solid_in.1, &crossings.1], total as u32);
+    let on_ms = gpu_ms(&harness, &crossings_wgsl, &on_words, &[&level_in.1, &solid_in.1, &map_out.1, &crossings.1], total as u32);
+    let after: Vec<SurfaceCrossing> = read(&crossings.1, total);
+    assert_eq!(same_bits(&after, &off), 0, "the timed dispatches changed the output");
+    eprintln!(
+        "liquid blocks timing, {cells:?} cells s {s}: {surface}/{blocks} blocks with surface; GPU ms per dispatch: map {map_ms:.3}, crossings off {off_ms:.3}, on {on_ms:.3}, saved net of map {:.3}",
+        off_ms - on_ms - map_ms
+    );
+}
