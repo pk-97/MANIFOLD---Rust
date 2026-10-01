@@ -129,12 +129,13 @@ def test_clean_landed_no_lease_is_idle(repo):
     check("clean+landed, no lease -> IDLE", cat == aw.IDLE, f"{cat}: {reason}")
 
 
-def test_clean_landed_stale_lease_is_reclaimable(repo):
+def test_clean_landed_old_lease_stays_in_use(repo):
+    """BUG-wznn: no lease age frees a slot; only `release` does."""
     wt = add_slot(repo, "slot-1", "lane/b")
-    write_lease(wt, age_h=aw.LEASE_TTL_HOURS + 1)
+    write_lease(wt, age_h=99.0)
     cat, reason, remedy = aw.slot_state(wt)
-    check("clean+landed, expired lease -> RECLAIM", cat == aw.RECLAIMABLE, f"{cat}: {reason}")
-    check("reclaim remedy is automatic", "automatic" in remedy, remedy)
+    check("clean+landed, 99h-old lease -> IN-USE", cat == aw.IN_USE, f"{cat}: {reason}")
+    check("old-lease remedy is release", "release slot-1" in remedy, remedy)
 
 
 def test_clean_landed_live_lease_is_in_use(repo):
@@ -144,22 +145,21 @@ def test_clean_landed_live_lease_is_in_use(repo):
     check("clean+landed, live lease -> IN-USE", cat == aw.IN_USE, f"{cat}: {reason}")
 
 
-def test_live_holder_past_ttl_stays_in_use(repo):
+def test_live_holder_old_lease_stays_in_use(repo):
     wt = add_slot(repo, "slot-2", "lane/live-old")
     write_lease(wt, owner="lead", task="still-working", holder_pid=os.getpid(),
-                age_h=aw.LEASE_TTL_HOURS + 1.0)
+                age_h=99.0)
     blocked, reason = aw.lease_blocks(wt)
-    check("live holder past TTL still blocks", blocked, reason)
-    check("live past-TTL reason names holder",
-          "holder pid" in reason and "alive" in reason, reason)
+    check("live holder, old lease still blocks", blocked, reason)
+    check("reason names holder", "holder pid" in reason and "alive" in reason, reason)
 
 
 def test_dirty_is_never_reclaimable(repo):
     wt = add_slot(repo, "slot-3", "lane/d")
     (wt / "f.txt").write_text("uncommitted\n")
-    write_lease(wt, holder_pid=dead_pid(), age_h=aw.LEASE_TTL_HOURS + 99)
+    write_lease(wt, holder_pid=dead_pid(), age_h=99.0)
     cat, reason, remedy = aw.slot_state(wt)
-    check("dirty + dead holder + expired lease -> HUMAN",
+    check("dirty + dead holder + old lease -> HUMAN",
           cat == aw.NEEDS_HUMAN, f"{cat}: {reason}")
     check("dirty reason counts paths", "dirty (1 paths)" in reason, reason)
     check("dirty remedy names commit-or-discard",
@@ -171,7 +171,7 @@ def test_unlanded_sole_holder_is_never_reclaimable(repo):
     (wt / "f.txt").write_text("work\n")
     sh(wt, "git", "add", "f.txt")
     sh(wt, "git", "commit", "-qm", "unlanded work")
-    write_lease(wt, holder_pid=dead_pid(), age_h=aw.LEASE_TTL_HOURS + 99)
+    write_lease(wt, holder_pid=dead_pid(), age_h=99.0)
     cat, reason, remedy = aw.slot_state(wt)
     check("clean but unlanded sole holder -> HUMAN",
           cat == aw.NEEDS_HUMAN, f"{cat}: {reason}")
@@ -189,10 +189,14 @@ def test_unlanded_duplicate_is_reclaimable(repo):
     sh(repo, "git", "worktree", "add", "-q", "--detach", str(twin), "origin/main")
     sh(twin, "git", "symbolic-ref", "HEAD", "refs/heads/lane/dup")  # duplicate holder fixture
     sh(twin, "git", "read-tree", "-m", "-u", "lane/dup")
-    write_lease(twin, age_h=aw.LEASE_TTL_HOURS + 1)
     cat, reason, _ = aw.slot_state(twin)
     check("clean duplicate of an unlanded branch -> RECLAIM",
           cat == aw.RECLAIMABLE, f"{cat}: {reason}")
+    write_lease(twin, age_h=99.0)
+    cat_l, reason_l, _ = aw.slot_state(twin)
+    check("a leased duplicate is IN-USE, not RECLAIM",
+          cat_l == aw.IN_USE, f"{cat_l}: {reason_l}")
+    (twin / aw.LEASE_NAME).unlink()
     check("duplicate reason names the other slot", "slot-5" in reason, reason)
     # Reclaim takes ONE slot per acquire, and that is what stops it taking the
     # last copy: once the twin is repointed the original is the sole holder
@@ -206,19 +210,72 @@ def test_unlanded_duplicate_is_reclaimable(repo):
           sh(wt, "git", "rev-parse", "HEAD"), "branch ref moved")
 
 
-def test_dead_holder_grace_protects_a_fresh_acquire(repo):
-    """A just-acquired slot is clean AND landed; a too-eager pid probe would hand
-    it straight back out."""
+def test_dead_holder_never_frees_a_lease(repo):
+    """The caller's shell exits after every tool call, so holder_pid always reads
+    dead between calls; that must not free a working lane's slot (BUG-wznn)."""
     wt = add_slot(repo, "slot-7", "lane/fresh")
-    write_lease(wt, holder_pid=dead_pid(), age_h=0.0)
-    cat, reason, _ = aw.slot_state(wt)
-    check("dead holder inside the grace window -> IN-USE",
-          cat == aw.IN_USE, f"{cat}: {reason}")
-    write_lease(wt, holder_pid=dead_pid(), age_h=aw.DEAD_HOLDER_GRACE_H + 0.1)
-    cat, reason, _ = aw.slot_state(wt)
-    check("dead holder past the grace window -> RECLAIM",
-          cat == aw.RECLAIMABLE, f"{cat}: {reason}")
-    check("dead-holder reason names the pid", "holder pid" in reason, reason)
+    for age in (0.0, 0.6, 99.0):
+        write_lease(wt, holder_pid=dead_pid(), age_h=age)
+        cat, reason, _ = aw.slot_state(wt)
+        check(f"dead holder, {age}h old -> IN-USE", cat == aw.IN_USE, f"{cat}: {reason}")
+    check("dead-holder reason names the pid", "holder pid" in reason and "gone" in reason, reason)
+
+
+def acquire_args(branch, name="t"):
+    return SimpleNamespace(tip=None, branch=branch, name=name, owner="lane-x", holder_pid=None)
+
+
+def acquire(branch):
+    """Run the real cmd_acquire; returns (slot name or None, output)."""
+    out = io.StringIO()
+    try:
+        with patch.object(aw, "slot_has_live_session", return_value=False), \
+                redirect_stdout(out), redirect_stderr(out):
+            aw.cmd_acquire(acquire_args(branch))
+    except SystemExit as e:
+        return None, out.getvalue() + str(e.code)
+    for line in out.getvalue().splitlines():
+        if line.startswith("SLOT:"):
+            return line.split()[1], out.getvalue()
+    return None, out.getvalue()
+
+
+def test_acquire_skips_a_leased_clean_landed_slot(repo):
+    """BUG-wznn: the lane between commits has a clean tree, a landed HEAD, no
+    process and a dead holder pid. Acquire must still leave its slot alone."""
+    leased = add_slot(repo, "slot-0", "lane/working")
+    write_lease(leased, owner="lane-a", task="work", holder_pid=dead_pid(), age_h=99.0)
+    spare = add_slot(repo, "slot-1", "lane/spare")
+    slot, text = acquire("lane/new")
+    check("acquire takes the unleased slot", slot == "slot-1", text)
+    check("leased slot keeps its branch",
+          sh(leased, "git", "branch", "--show-current") == "lane/working", text)
+    check("leased slot keeps its lease", (leased / aw.LEASE_NAME).exists(), text)
+    check("new holder got its own lease", (spare / aw.LEASE_NAME).exists(), text)
+
+    with patch.object(aw, "MAX_SLOTS", 2):
+        slot, text = acquire("lane/third")
+    check("with every slot leased the ring is full, not raided",
+          slot is None and "POOL FULL" in text, text)
+    check("full ring left both lanes in place",
+          sh(leased, "git", "branch", "--show-current") == "lane/working"
+          and sh(spare, "git", "branch", "--show-current") == "lane/new", text)
+
+
+def test_acquire_takes_a_slot_after_release(repo):
+    wt = add_slot(repo, "slot-0", "lane/done")
+    write_lease(wt, owner="lane-a", task="work", holder_pid=dead_pid(), age_h=0.0)
+    with patch.object(aw, "MAX_SLOTS", 1):
+        slot, text = acquire("lane/blocked")
+        check("leased only slot is not taken", slot is None and "POOL FULL" in text, text)
+        with patch.object(aw, "slot_has_live_session", return_value=False), \
+                redirect_stdout(io.StringIO()) as out:
+            aw.cmd_release(SimpleNamespace(slot="slot-0"))
+        check("release drops the lease", not (wt / aw.LEASE_NAME).exists(), out.getvalue())
+        slot, text = acquire("lane/after-release")
+    check("released slot is taken again", slot == "slot-0", text)
+    check("released slot now holds the new branch",
+          sh(wt, "git", "branch", "--show-current") == "lane/after-release", text)
 
 
 # ------------------------------------------------------- POOL FULL reporting
@@ -441,13 +498,15 @@ TESTS = [
     test_retire_refusals_and_failed_push,
     test_fixture_pruning_and_process_failure,
     test_clean_landed_no_lease_is_idle,
-    test_clean_landed_stale_lease_is_reclaimable,
+    test_clean_landed_old_lease_stays_in_use,
     test_clean_landed_live_lease_is_in_use,
-    test_live_holder_past_ttl_stays_in_use,
+    test_live_holder_old_lease_stays_in_use,
     test_dirty_is_never_reclaimable,
     test_unlanded_sole_holder_is_never_reclaimable,
     test_unlanded_duplicate_is_reclaimable,
-    test_dead_holder_grace_protects_a_fresh_acquire,
+    test_dead_holder_never_frees_a_lease,
+    test_acquire_skips_a_leased_clean_landed_slot,
+    test_acquire_takes_a_slot_after_release,
     test_pool_full_groups_each_slot_correctly,
     test_acquire_refuses_a_branch_held_elsewhere,
     test_acquire_allows_the_slot_that_already_holds_it,

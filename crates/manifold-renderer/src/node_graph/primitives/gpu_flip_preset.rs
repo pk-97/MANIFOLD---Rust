@@ -697,6 +697,21 @@ pub(super) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
     tests::walk(&render_def(scene), false).expect("the rendered scene covers every dispatch").scene_bytes
 }
 
+/// `def` as the app renders a generator: fused when it has regions, `None`
+/// when it has none and runs as authored. Regions that refuse to fuse fail.
+#[cfg(test)]
+pub(super) fn fused_as_rendered(
+    def: &EffectGraphDef,
+    registry: &crate::node_graph::PrimitiveRegistry,
+) -> Option<crate::node_graph::freeze::install::FusedGeneratorView> {
+    let view = crate::node_graph::freeze::install::fuse_generator_view(def, registry);
+    if view.is_none() {
+        let regions = crate::node_graph::fusion_report(def, registry).regions;
+        assert!(regions.is_empty(), "the def has {} fusable regions but does not fuse", regions.len());
+    }
+    view
+}
+
 /// CPU size proofs for every GPU FLIP graph, run before any GPU run of it: the
 /// shared liquid extent rules (`liquid::extent`) at every lattice, bare,
 /// meshed, rendered and frozen.
@@ -740,8 +755,8 @@ pub(super) mod tests {
     /// `def` walked by the liquid extent rules, frozen as the app renders it
     /// when `frozen`.
     pub(in crate::node_graph::primitives) fn walk(def: &EffectGraphDef, frozen: bool) -> Result<ExtentReport, ExtentError> {
-        let (mut graph, plan) = if frozen {
-            let view = crate::node_graph::freeze::install::fuse_generator_view(def, &registry()).expect("the def fuses");
+        let view = frozen.then(|| fused_as_rendered(def, &registry())).flatten();
+        let (mut graph, plan) = if let Some(view) = view {
             let graph = (*view.def).clone().into_graph(&registry(), &view.mesh_rules).expect("the fused def builds");
             let plan = compile(&graph).expect("the fused def compiles");
             (graph, plan)

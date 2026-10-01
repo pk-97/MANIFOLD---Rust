@@ -1,9 +1,9 @@
 # GPU Whitewater — spray, foam and bubbles for any GPU liquid, from FLIP's own lifecycle
 
-<!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
+<!-- index: Spray, foam and bubbles for GPU FLIP water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; `node.whitewater_step` advances the lifecycle on the GPU. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P6 built on `feat/gpu-whitewater`; the Whitewater group ships in the GPU FLIP Dam Break preset; O1 and O2 green · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
-**Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
+**Status:** BUILT · 2026-10-02 · Opus 5.5 · GPU emitter (P1–P6) and `node.whitewater_step` lifecycle (L1–L6) ship in the GPU FLIP Dam Break preset; O1, O2 and L5 parity green · owed: the calls in section 8 (Calls only Peter makes) — side-by-side verdict, shipping the preset past its trace gate, emission tuning.
+**Prerequisites:** none — the seam's P1 and GPU FLIP's full step are on main. This design's P1 is the seam's P10 (Grid outputs).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter, 2026-09-30, on BUG-imy3 (GPU whitewater, solver-agnostic): "move the spawn search to the GPU and reuse FLIP's own foam and bubble code."
@@ -77,7 +77,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 ## 2. Decisions
 
-**D1 — The split is at the emitter.** GPU atoms find emitters and write spawn records; the vendored `DiffuseParticleSimulation`, emission disabled, advances them. Peter's words above. Rejected: a GPU lifecycle, because it discards FLIP's tuned behaviour and is the port Peter declined. Rejected: FLIP's CPU emitter fed GPU fields, because the scan is the cost.
+**D1 — Superseded by D14 for the lifecycle. The split is at the emitter.** GPU atoms find emitters and write spawn records; the vendored `DiffuseParticleSimulation`, emission disabled, advances them. Peter's words above. Rejected: a GPU lifecycle, because it discards FLIP's tuned behaviour and is the port Peter declined. Rejected: FLIP's CPU emitter fed GPU fields, because the scan is the cost.
 
 **D2 — One whitewater grid: the frame's solid lattice cells.** At res n that is n+6 cells a side from m − 3h (70³ at 64), whose nodes are the solid lattice exactly. The level set, the solid and the faces all sit on it at integer offsets. FLIP's boundary box, where the type rule turns everything outside it to spray, sits 1.625 cells inside the grid (3 cells smaller than the domain, then grown by a quarter cell), so on this grid it lies 1.375 cells outside the tank walls. Rejected: the seam's face grid (n cells at m), because the box would turn whitewater within 10 cm of every wall to spray at 64. Rejected: FLIP's own grid (n+3 cells at m − 1.5h), because it sits half a cell off every GPU lattice. **Consequence, stated honestly:** FLIP's box sits 0.125 cells inside the walls, so FLIP sprays an 8 mm strip along each wall at 64 that ours types by depth.
 
@@ -93,7 +93,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D8 — Capacity is FLIP's budget, never an error.** Spawn slots = the lifecycle capacity C (default 100,000, FLIP's). Past C, slot j takes emission index ⌊j · total / C⌋, a uniform subset; loads are trimmed to C − live the same way. Both counts are reported as `thinned`.
 
-**D9 — Dropped:** turbulence and inside emitters (inert at 175), dust, the obstacle influence grid (uniform 1), the spray emission speed factor (1 is a no-op), the emitter generation coin (rate 1), foam preservation (off in FLIP's defaults). The emitter gap is tracked as a child of BUG-imy3 (GPU whitewater, solver-agnostic): BUG-imy3.1, so a side-by-side that misses bubbles or foam has a named cause.
+**D9 — Dropped:** turbulence and inside emitters (inert at 175), dust, the obstacle influence grid (uniform 1), the spray emission speed factor (1 is a no-op), the emitter generation coin (rate 1); foam preservation was dropped here and is ported by D14, off by default as in FLIP. The emitter gap is tracked as a child of BUG-imy3 (GPU whitewater, solver-agnostic): BUG-imy3.1, so a side-by-side that misses bubbles or foam has a named cause.
 
 **D10 — Randomness:** stateless hashes of (index, seed, epoch) on the GPU; the lifecycle's own RNG seeded with the epoch (`setRandomSeed`). There is no bit-exact oracle; the FLIP oracles are statistical over seeds (BUG-imy3 notes).
 
@@ -102,6 +102,8 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 **D12 — Ticks, epoch and gravity come from the domain.** Every GPU liquid domain exposes `ticks` and `epoch` (the `LiquidClock` frame) and its gravity; the whitewater never infers time from the particle frame. A changed epoch clears the population; T = 0 holds everything.
 
 **D13 — The chain is one node group, "Whitewater", and SWASH is its host.** SWASH is the water solver; the MPM water presets are test scenes. P1–P4 prove on the Rust SWASH scene builders (`swash_preset.rs`); from P5 the group lives in the SWASH Dam Break preset JSON, which is also P6's SWASH side, and is copied into other scenes like the Liquid Surface group. Scenes wire ports, never atoms. MPM still publishes the face grid (P1), because any producer of the seam gets whitewater.
+
+**D14 — The lifecycle moves to the GPU, superseding D1.** Peter, 2026-10-01: "Unless there is a need for this to be CPU and gives us benefits we should move it to GPU so we can handle larger particles and get it all working faster and unified in memory." Advection by type, collisions, lifetimes, foam preservation and the particle pool become GPU atoms, ported line by line from `diffuseparticlesimulation.cpp` with every deviation named; the vendored CPU lifecycle stays the read-only parity oracle. Every ported file carries a FLIP Fluids credit header (MIT, see THIRD_PARTY_NOTICES.md). D6, D8 and D11 are reopened by this and are rewritten as the port lands.
 
 ## 3. Design body
 
@@ -247,6 +249,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
   - *Recorded miss, not a loosened bound:* the 4h sphere. Re-distance: 14 of 1,426 cells over 0.1h, worst 0.162h, all 1–3 cells out, where even the nearest of all stored crossings misses (one crossing per cell leaves the nearest up to 0.9 cell to the side, and the plane then errs by about r·l²/(2R²)). Curvature: 0.255 against FLIP's 0.246. Both are held at the measured value so they can only shrink. Why it is accepted: droplets of 4 cells (25 cm at 64) are not where wavecrest emission comes from, and O2 is the binding gate; a curvature error that matters shows there.
   - The earlier criterion, ours against FLIP on the exact field (p99 ≤ 0.05), measured FLIP's reinit noise rather than our port: FLIP is off 2/r by 0.25/0.13/0.06 there, ours by 0.012/0.001/0.0001. Ours on the exact field stays asserted within 0.05 of 2/r.
 - **O2, emitter against FLIP** (`whitewater_emitter_matches_flip`): SWASH Dam Break at 64, frames 30, 60, 90 and 120. The same particles, faces, distance, curvature and solid go to FLIP's emitter (through the oracle) and to our atoms; both then take one lifecycle step. Lifetime variance 0 on both, so lifetime encodes Ie. Over 16 seeds a side: total within 5%; each type within 10% where FLIP's mean is ≥ 200; spatial histogram (8³ bins over the tank) L1 ≤ 0.15; lifetime histogram (10 bins) L1 ≤ 0.1. If the seed spread is over half a tolerance, add seeds; tolerances only tighten. FLIP's default emitter generation bounds are infinite and read as NaN, so the oracle sets them to the domain box as the engine bridge does.
+- **O2 over a scene** (`whitewater_emission_against_engine_150`, gpu-proofs): the shipped GPU FLIP Dam Break at 64 and the FLIP engine running its own Dam Break (read-only), first 150 frames, written per frame to `emission_150.csv` in the temp directory: GPU FLIP's emission and population, the engine's diffuse population. The engine publishes no emission count and counting it would edit vendored code, so its side is the population. Asserted: both emit, GPU FLIP never thins or drops a tick, its population never exceeds what it emitted. Measured 2026-10-01: GPU FLIP emitted 12,058; mean population 2,842 against the engine's 7,776 (0.365); at frame 150, 4,079 / 3,124 / 229 foam, bubbles, spray against 5,734 / 8,392 / 345. The ratio is the water, not the emitter (O2 holds the emitter on identical fields; P6's notes).
 - **Lifecycle** (CPU, manifold-fluids, `whitewater.rs`): spray dropped in a closed tank falls and rebounds at restitution 0.2; a bubble rises; foam follows the faces; lifetimes fall by 2, 0.333 and 1 per second; loaded spawns advance on the first step (the size trap).
 - **Handoff** (renderer, `gpu-proofs`, `whitewater_handoff_tests.rs`): what the node publishes equals the lifecycle run on the CPU with the same spawns and fields; pause holds; epoch change clears; four frames without completion drop the fourth frame's ticks and count them; offline runs `wait`, live never does; C overflow thins and counts; an output slot is rewritten only after its readers retired. A hand-retired fence stands in for the frame clock; every frame still commits on the device.
 - **Extents** (`whitewater_extent_tests.rs`, CPU): every atom's dispatch and array lengths at 64, and the named refusals for a misplaced face grid, a fractional refinement and `face_valid_layers` < 1, before any GPU run at that size.
@@ -254,7 +257,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 
 ### 3.8 Wrong turns, forbidden by name
 
-- A GPU lifecycle: advection, collisions or lifetimes in WGSL.
+- A GPU lifecycle designed from scratch beside FLIP's code (D14 ports it line by line instead).
 - Any edit under `flip_engine/`: `Array3d` aliasing, a `friend`, a jitter setter, `#define private public`.
 - The CPU reading a graph array in place, or `wait` on the live path.
 - A liquid field rebuilt from particles, or a solver publishing one.
@@ -265,6 +268,26 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 - FLIP's upwind reinit on the capped field.
 - Retuning FLIP's constants toward a look.
 - A whitewater renderer or screen-space foam.
+
+### 3.9 GPU lifecycle (D14)
+
+Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit, advance by type (:2250–:2398), retype (:2033), age and preserve foam (:2101, :2123), remove (:2761). Dust and the force-field grid stay dropped (D9); gravity is the domain's (D12). Every per-particle step is a barrier-free atom on the codegen path with a CPU line-for-line reference, gpu_tests against it, and a fused-vs-unfused proof.
+
+**The pool.** One fixed-capacity `Array(WhitewaterParticle)` (position, velocity, lifetime, type, id) carried frame to frame by an array feedback. Order in the pool is age order: survivors first in their old order, then this frame's spawns in emission order.
+
+**As built: one node, `node.whitewater_step`.** Emit and the whole lifecycle run inside one node with its own hand shader, replacing the GPU FLIP preset's whitewater group (the group and its 22 inner nodes). It owns the id counter and the `pool_full` count, both reseeded when the domain's epoch changes, so the first frame and a reseed frame report zeros. It reads the solver only through the seam ports and refuses by name when the lattice is missing. The shader uses no atomics: compaction and per-cell rank are ordered scans, so the pool order is the engine's. Proofs: `whitewater_step_matches_cpu_across_frames` (gpu-proofs) checks the report exactly and every particle of each population against a CPU reference over seven frames, including a reseed; `whitewater_step_reference_is_tie_free` holds the fixture away from decision ties; `whitewater_step_extents_at_64` is the CPU extent proof; the liquid conformance table checks the shader stays atomic-free. With the group gone the preset has no fusable region and renders unfused.
+
+**GPU mapping rules** (each is the engine's result, computed in parallel; a mapping that cannot reproduce the result is named, never approximated):
+
+- **Per-cell cap by ordered rank.** The engine keeps the first `_maxDiffuseParticlesPerCell` (5000) particles of a cell in pool order. On the GPU a particle's rank in its cell comes from a sort stable by pool index; atomics are forbidden here because their order is not the engine's.
+- **Stable compaction keeps the oldest.** Removal is a keep flag, a running total and a scatter that preserves pool order. The engine's final `resize(max)` keeps the oldest; so does a compaction that truncates at capacity.
+- **Recycling is compaction plus append.** Spawns append after the survivors. Spawns past capacity are not written; the node counts them on a named output (`pool_full`) and reports a full pool by name. Never a silent drop.
+- **`_nearSolidGrid` is dropped.** It only skips the collision march where no solid is near; the march over the solid field gives the same position without it. A proof shows identical advected positions with and without the early-out on the Dam Break pool.
+- **An empty slot is kind 3; a dead particle is not empty.** The engine retypes, ages and counts a particle killed this tick until removal, so the atoms skip only kind 3 and the sort bins dead particles. Removal writes kind 3.
+- **Foam density is the sort's bin.** The sort runs over the pool with the whitewater grid as its box and the cell as its bin, so a bin is FLIP's cell. `node.preserve_foam` recomputes the bin, and because fast-math rounding at a bin face can land one bin off, it confirms its own index among that bin's members (else the 26 around it), so it always counts the bin the sort used. A foam position outside the grid clamps to an edge bin, which FLIP leaves undefined; every such particle is removed the same tick.
+- **Thinning.** D8's uniform thinning belonged to the CPU handoff and leaves with it; capacity is the pool's, handled by the rules above.
+
+**Inside emission (BUG-imy3.1) is deferred** (section 7 (Deferred)): it emits nothing on the Dam Break at the engine's defaults. When it revives, a turbulence-field atom ports `F/turbulencefield.cpp` (cell-centre MAC velocity, liquid cells where the field < 0, radius √(3·(2h)²), the engine's asymmetric neighbour window i−2 … i+1, trilinear at p − h/2 with out-of-range corners 0). Inside particles (not surface per :1571) emit at `turbulence_rate · Ie · It`, It clamped to [min, max] turbulence and normalised (:1748).
 
 ## 4. Invariants & enforcement
 
@@ -376,16 +399,44 @@ Order: P1 → P2 → P3 → P4 → P5 → P6, all on `feat/gpu-whitewater`. Ever
 
 Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase above or in section 7.
 
+
+### L1 — Pool record and advection by type (D14)
+
+- **Entry state:** D14 committed; `F/diffuseparticlesimulation.cpp:2250`–`:2600` re-read.
+- **Deliverables:** `WhitewaterParticle`; an advect atom (spray with collision restitution 0.2 and friction 0, bubble buoyancy and drag, foam at advection strength, the 1.1× speed kill, the collision march and resolve); CPU reference; gpu_tests; fused proof; the `_nearSolidGrid` proof.
+- **Gate:** `scripts/gpu_proofs_gate.py` green; clippy clean.
+
+### L2 — Retype and lifetimes
+
+- **Deliverables:** pool retype (old type, the 1-cell foam-to-bubble buffer, bubble to foam or spray takes vmac) and lifetime decay per type; CPU reference, gpu_tests, fused proofs.
+
+### L3 — Foam preservation
+
+- **Deliverables:** per-cell foam count from the stable sort; `lifetime += rate · clamp((n − min)/(max − min), 0, 1) · dt`, off by default, 0.75, 20, 45; proofs.
+
+### L4 — Removal, compaction, append
+
+- **Deliverables:** keep flags (lifetime, limit behaviour, inside solid, open-boundary width, per-cell cap by rank); stable compaction; spawn append; the named `pool_full` count; proofs.
+
+### L5 — Wire and parity
+
+- **Deliverables:** CPU extent proof for the pool; the GPU lifecycle in the GPU FLIP Dam Break at 64 only; a side-by-side 150-frame per-type count against the vendored lifecycle, read-only.
+- **Notes (2026-10-01):** `whitewater_step_against_vendored_lifecycle_150` (gpu-proofs) runs the same water into the node and into the replaced group, kept as `tests/fixtures/whitewater_vendored_group.json` for this and O2. Foam, bubble and spray populations match on 142 of 150 frames and are never more than 2 particles apart; summed over the run, 290,045 / 68,968 / 67,252 against 290,048 / 68,965 / 67,253. Frame 150: 4,079 / 3,124 / 229 on both. `emitted` differs by definition: the group's counts the emitters' requests before spawn rejection, the node's the spawns it kept.
+
+### L6 — Retire the CPU lifecycle path
+
+- **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays. The preset runs `node.whitewater_step` alone, and L5 parity holds.
+
 ## 6. Decided — do not reopen
 
-1. GPU emitter, vendored FLIP lifecycle (D1; Peter, 2026-09-30).
+1. GPU emitter and GPU lifecycle, ported from FLIP's code and credited (D14, superseding D1; Peter, 2026-10-01).
 2. The whitewater grid is the solid lattice's cells (D2).
 3. The field is the surface group's level set, re-distanced to the tangent plane at the nearest crossing (D3, D4; seam D5).
 4. Emission per tick, from the last tick, normalised to 8 particles per cell (D5).
 5. Snapshot ring, fenced reads, whole-array copies; live never waits (D6).
 6. Output in the surface design's P8 shape (D7).
 7. Capacity thins and reports (D8).
-8. Turbulence, dust, influence, speed factor, generation coin and foam preservation dropped (D9).
+8. Turbulence, dust, influence, speed factor and generation coin dropped (D9); foam preservation ported, off by default as in FLIP (D14).
 9. Statistical oracles against FLIP's own code through its public API (D10).
 10. The lifecycle on its own thread, slots loaned by value, no lock (D11).
 11. Time, epoch and gravity from the domain (D12).
@@ -395,7 +446,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 | Item | Revives when |
 |---|---|
-| Turbulence and inside emitters, foam preservation (BUG-imy3.1, child of BUG-imy3 (GPU whitewater, solver-agnostic)) | the side-by-side misses bubbles or foam, or Peter wants turbulence foam; needs recalibration first |
+| Turbulence and inside emitters (BUG-imy3.1, child of BUG-imy3 (GPU whitewater, solver-agnostic)); dropped from the D14 port because they emit nothing on the Dam Break at the engine's defaults | the side-by-side misses bubbles, or Peter wants turbulence foam; the port notes are in section 3.9 (GPU lifecycle (D14)) |
 | Forces and impulses on whitewater | the seam's P8 (Forces and impulses for GPU liquids) lands |
 | Obstacle influence grid | GPU liquids get obstacle roles |
 | Presenting whitewater at display time | the side-by-side shows foam trailing the front |
@@ -406,6 +457,6 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 ## 8. Calls only Peter makes
 
-1. The side-by-side verdict (P6). Judge with it the live trail: since the lifecycle moved to its own thread (D11), whitewater trails the water by two or three frames live, one more than before, and one offline. If foam visibly lags a fast front, the fix is presenting whitewater at display time (section 7), not moving the lifecycle back.
-2. Shipping the SWASH Dam Break preset with whitewater, which follows the SWASH P4 call. The `MANIFOLD_RENDER_TRACE=1` gate runs then.
+1. The side-by-side verdict (P6), against the FLIP engine's own whitewater.
+2. Shipping the GPU FLIP Dam Break preset with whitewater past its `MANIFOLD_RENDER_TRACE=1` gate.
 3. Emission tuning (wavecrest rate, curvature window) if the look differs from FLIP's; FLIP's defaults until then.

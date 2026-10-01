@@ -2,6 +2,8 @@
 //! liquid surface from each cell's nearest crossing
 //! (`docs/GPU_WHITEWATER_DESIGN.md` D4, section 3.3). A per-element atom on
 //! the codegen path.
+//!
+//! Ported from FLIP Fluids particlelevelset.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 use std::borrow::Cow;
 

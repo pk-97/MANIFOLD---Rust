@@ -361,7 +361,19 @@ mod wavecrest_potential;
 mod emission_count;
 mod spawn_whitewater;
 mod whitewater_type;
+mod advect_whitewater;
+mod retype_whitewater;
+mod age_whitewater;
+mod preserve_foam;
+mod keep_whitewater;
+#[cfg(test)]
+mod whitewater_pool_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_pool_tests;
 pub(crate) mod whitewater_lifecycle;
+pub(crate) mod whitewater_step;
+#[cfg(test)]
+mod whitewater_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_handoff_tests;
 #[cfg(test)]

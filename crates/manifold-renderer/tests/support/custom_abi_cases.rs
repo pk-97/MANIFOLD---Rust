@@ -215,6 +215,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "whitewater_step.rs",
+        rust_struct: "HandParams",
+        shader: "shaders/whitewater_step.wgsl",
+        shader_struct: "StepParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "gpu_flip_pressure.rs",
         rust_struct: "InverseParams",
         shader: "shaders/coarse_inverse.wgsl",

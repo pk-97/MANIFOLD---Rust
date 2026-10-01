@@ -13,7 +13,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
@@ -32,6 +31,8 @@ use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
 use crate::preset_runtime::PresetRuntime;
 use crate::render_target::RenderTarget;
+
+const STEP_REPORTS: [&str; 6] = ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "pool_full"];
 
 const LIFECYCLE_REPORTS: [&str; 8] =
     ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "dropped_ticks", "lifecycle_ms", "worker_ms"];
@@ -168,13 +169,42 @@ impl Appender {
 }
 
 /// `render_def` of `scene` with its faces published, which for the Dam Break
-/// at 64 is the shipped preset with its Whitewater group. The group's reports
-/// are probed by name, the frame's particle count as `count`.
-fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
+/// at 64 is the shipped preset with its `node.whitewater_step`. The node's
+/// reports are probed by name, the frame's particle count as `count`.
+pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
     let mut g = Appender::new(render_def(scene.with_faces()));
-    let group = g.id("whitewater");
+    let node = g.id("whitewater");
+    for report in STEP_REPORTS {
+        g.probe(report, (node, report));
+    }
+    let frame = g.id("frame");
+    g.probe("count", (frame, "count_b"));
+    g.finish()
+}
+
+/// The preset's Whitewater group before `node.whitewater_step` replaced it:
+/// the GPU emitter atoms feeding the vendored lifecycle (`ww.lifecycle`). Its
+/// external ports are the node's, so it splices in at the same id. Kept for
+/// L5's side-by-side and O2, which reads the group's inner arrays.
+const VENDORED_GROUP: &str = include_str!("../../../tests/fixtures/whitewater_vendored_group.json");
+
+/// `whitewater_render_def` with the vendored group in place of the node, its
+/// lifecycle reports probed by name.
+fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
+    let mut g = Appender::new(render_def(scene.with_faces()));
+    let group: Value = serde_json::from_str(VENDORED_GROUP).expect("the vendored group parses");
+    let id = g.id("whitewater");
+    assert_eq!(group["id"].as_u64(), Some(id), "the vendored group keeps the node's id");
+    let nodes = g.def["nodes"].as_array_mut().expect("nodes");
+    *nodes.iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the whitewater node") = group;
+    let target = json!({"kind": "node", "nodeId": "ww.lifecycle", "param": "capacity"});
+    for binding in g.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
+        if binding["id"] == "whitewater_capacity" {
+            binding["target"] = target.clone();
+        }
+    }
     for report in LIFECYCLE_REPORTS {
-        g.probe(report, (group, report));
+        g.probe(report, (id, report));
     }
     let frame = g.id("frame");
     g.probe("count", (frame, "count_b"));
@@ -206,7 +236,7 @@ fn flip_def(whitewater: bool) -> EffectGraphDef {
 }
 
 /// One preset on the app's generator path, frame by frame at 60 fps.
-struct Show {
+pub(super) struct Show {
     device: crate::TestDevice,
     runtime: PresetRuntime,
     target: RenderTarget,
@@ -225,7 +255,7 @@ struct Show {
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
-struct Frame {
+pub(super) struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
     whitewater_ms: Vec<f64>,
@@ -234,15 +264,13 @@ struct Frame {
 }
 
 impl Show {
-    fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
+    pub(super) fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(ScalarProbe::new()));
-        let (def, retarget) = if frozen {
-            let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry).expect("the scene fuses");
-            ((*view.def).clone(), view.node_retarget.clone())
-        } else {
-            (def, Default::default())
+        let (def, retarget) = match frozen.then(|| super::gpu_flip_preset::fused_as_rendered(&def, &registry)).flatten() {
+            Some(view) => ((*view.def).clone(), view.node_retarget.clone()),
+            None => (def, Default::default()),
         };
         let device = crate::test_device();
         let runtime = PresetRuntime::from_def_with_device(def, &registry, device.arc(), size.0, size.1, GpuTextureFormat::Rgba16Float, None)
@@ -257,7 +285,7 @@ impl Show {
                 retarget.iter().filter(|(_, fused)| fused.as_str() == name.as_str()).map(|(member, _)| member.as_str()).collect();
             members.sort_unstable();
             let label = if members.is_empty() { name.clone() } else { members.join("+") };
-            let whitewater = label.split('+').any(|m| m.starts_with("ww."));
+            let whitewater = label.split('+').any(|m| m.starts_with("ww.") || m == "whitewater");
             step_label.push(whitewater.then(|| match labels.iter().position(|l| *l == label) {
                 Some(i) => i,
                 None => {
@@ -279,14 +307,13 @@ impl Show {
             paused: false,
             cards: ParamManifest::default(),
         };
-        let held: Vec<NodeId> = held.iter().map(|name| NodeId::from(name.as_str())).collect();
-        show.runtime.set_dump_visible(None, &held);
+        show.hold(held);
         show
     }
 
     /// One frame 1/60 s on. Metal's autoreleased objects drain per frame, as
     /// the content thread drains them.
-    fn frame(&mut self, profile: bool) -> Frame {
+    pub(super) fn frame(&mut self, profile: bool) -> Frame {
         objc2::rc::autoreleasepool(|_| self.frame_inner(profile))
     }
 
@@ -341,7 +368,7 @@ impl Show {
     /// The first frame, warm-up, then a trigger restart from the fill, as
     /// the GPU FLIP smoke runs start: the next frame is the liquid's first and
     /// counts as frame 1.
-    fn restart(&mut self) {
+    pub(super) fn restart(&mut self) {
         self.frame(false);
         let mut warmups = 0;
         while self.runtime.warmup_pending() && warmups < 600 {
@@ -369,8 +396,38 @@ impl Show {
         objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&self.device, &self.target.texture, self.size.0, self.size.1))
     }
 
-    fn errors(&self) -> Vec<String> {
+    pub(super) fn errors(&self) -> Vec<String> {
         self.runtime.errors().iter().map(|e| format!("{e:?}")).collect()
+    }
+
+    /// The id of the one node whose id ends with `suffix` (group members
+    /// carry their group's prefix).
+    pub(super) fn node_named(&self, suffix: &str) -> String {
+        let ends =
+            |id: &str| id.strip_suffix(suffix).is_some_and(|head| head.chars().last().is_none_or(|c| !c.is_alphanumeric() && c != '_'));
+        let found: Vec<&str> = self.runtime.graph.nodes().map(|n| n.node_id.as_str()).filter(|id| ends(id)).collect();
+        assert_eq!(found.len(), 1, "one node ends with {suffix}: {found:?}");
+        found[0].to_string()
+    }
+
+    /// Hold the arrays the named nodes write on the next frames, for
+    /// `dumped`; an empty list stops.
+    pub(super) fn hold(&mut self, names: &[String]) {
+        let held: Vec<manifold_core::NodeId> = names.iter().map(|name| manifold_core::NodeId::from(name.as_str())).collect();
+        self.runtime.set_dump_arrays(None, &held);
+    }
+
+    /// The first `len` records the named held node wrote on `port` this frame.
+    pub(super) fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
+        let arrays = self.runtime.dump_arrays_all();
+        let array = arrays
+            .iter()
+            .find(|a| a.name == name && a.port == port)
+            .unwrap_or_else(|| panic!("{name}.{port} is not held; held: {:?}", arrays.iter().map(|a| format!("{}.{}", a.name, a.port)).collect::<Vec<_>>()));
+        assert!(array.buffer.size() as usize >= len * std::mem::size_of::<T>(), "{name}.{port} is shorter than {len} records");
+        let ptr = array.buffer.mapped_ptr().expect("shared storage");
+        // SAFETY: the frame completed and the buffer holds `len` records.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
     }
 
     /// Bytes of the storage the named node provides on `port`; none, 0.
@@ -406,11 +463,11 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         show.frame(false);
         let faces = face_bytes([n; 3]);
         assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
-        let mut last = [0.0; 8];
+        let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();
         for _ in 0..90 {
             gpu_ms.push(show.frame(false).gpu_ms);
-            last = show.probes(LIFECYCLE_REPORTS);
+            last = show.probes(STEP_REPORTS);
         }
         let [count] = show.probes(["count"]);
         println!("Resolution {n}: {count} particles, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
@@ -422,41 +479,41 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
     assert!(errors.is_empty(), "the resize ran with errors: {errors:#?}");
 }
 
-/// The shipped GPU FLIP Dam Break with its Whitewater group, frozen as the app
+/// The shipped GPU FLIP Dam Break with its `node.whitewater_step`, as the app
 /// renders it, 90 frames: no node refuses and foam is up by 1.5 s.
 #[test]
 fn gpu_flip_whitewater_emits() {
     let scene = WaterScene::dam_break(64);
     let mut show = Show::new(whitewater_render_def(scene), (320, 180), true, &[]);
     show.restart();
-    let mut last = [0.0; 8];
+    let mut last = [0.0; 6];
     for frame in 1..=90 {
         show.frame(false);
-        last = show.probes(LIFECYCLE_REPORTS);
+        last = show.probes(STEP_REPORTS);
         if frame % 15 == 0 {
-            let [foam, bubble, spray, emitted, thinned, dropped, ms, worker] = last;
+            let [foam, bubble, spray, emitted, thinned, pool_full] = last;
             let [count] = show.probes(["count"]);
             println!(
-                "frame {frame}: {count} particles; foam {foam} bubble {bubble} spray {spray}, emitted {emitted}, thinned {thinned}, dropped ticks {dropped}, lifecycle {ms:.2} ms, worker {worker:.2} ms"
+                "frame {frame}: {count} particles; foam {foam} bubble {bubble} spray {spray}, emitted {emitted}, thinned {thinned}, pool full {pool_full}"
             );
         }
     }
     let errors = show.errors();
     assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
     assert!(last[0] > 0.0, "no foam by 1.5 s: {last:?}");
-    assert_eq!(last[5], 0.0, "offline, the lifecycle never drops a tick");
 }
 
 /// D11 at 64, live: the scene's whitewater is updated on the lifecycle's
 /// thread (the update refuses any other, so a content-thread update fails
 /// here), the population it produces reaches the outputs, and no tick drops
 /// while the GPU keeps up. The content thread's and the worker's ms are
-/// printed for the cost table, never asserted.
+/// printed for the cost table, never asserted. Runs the vendored group, the
+/// only whitewater with a lifecycle thread.
 #[test]
 fn whitewater_live_scene_updates_on_the_lifecycle_thread() {
     let scene = WaterScene::dam_break(64);
     let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
-    let mut show = Show::new(whitewater_render_def(scene), (320, 180), true, &[]);
+    let mut show = Show::new(vendored_render_def(scene), (320, 180), true, &[]);
     show.restart();
     let (mut content, mut worker) = (Vec::new(), Vec::new());
     let mut last = [0.0; 8];
@@ -490,19 +547,19 @@ fn gpu_flip_whitewater_holds_while_paused() {
     for _ in 0..60 {
         show.frame(false);
     }
-    let playing = show.probes(LIFECYCLE_REPORTS);
+    let playing = show.probes(STEP_REPORTS);
     assert!(playing[0] > 0.0, "no foam by 1 s: {playing:?}");
     show.paused = true;
     show.frame(false);
-    let (held, image) = (show.probes(LIFECYCLE_REPORTS), show.readback());
+    let (held, image) = (show.probes(STEP_REPORTS), show.readback());
     for _ in 0..3 {
         show.frame(false);
     }
-    let (still, still_image) = (show.probes(LIFECYCLE_REPORTS), show.readback());
+    let (still, still_image) = (show.probes(STEP_REPORTS), show.readback());
     let changed = image.chunks_exact(4).zip(still_image.chunks_exact(4)).filter(|(a, b)| a != b).count();
     println!("WHITEWATER pause: playing {playing:?}; paused {held:?} then {still:?}; {changed} pixels changed over 3 paused frames");
-    // The first paused frame publishes the last playing tick: the lifecycle
-    // reads a tick's snapshot a frame after the GPU wrote it (D11).
+    // The first paused frame publishes the last playing tick: the node
+    // publishes the slot written a frame before.
     assert!(held[3] >= playing[3], "the first paused frame lost emission: {held:?}");
     assert_eq!(still[..6], held[..6], "paused frames moved the whitewater");
     assert_eq!(changed, 0, "paused frames changed the picture");
@@ -510,7 +567,7 @@ fn gpu_flip_whitewater_holds_while_paused() {
     for _ in 0..15 {
         show.frame(false);
     }
-    let resumed = show.probes(LIFECYCLE_REPORTS);
+    let resumed = show.probes(STEP_REPORTS);
     assert!(resumed[3] > still[3], "no emission after play resumed: {resumed:?}");
     let errors = show.errors();
     assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
@@ -733,7 +790,7 @@ fn flip_simulation_ms(whitewater: bool) -> Vec<f64> {
 /// floor and obstacle left out, as in the race clips). Writes
 /// `side_by_side.mp4` with a phone copy, `counts.png` and `counts.csv`,
 /// stills at 1.5 s and 3 s, and prints the cost table: GPU ms per whitewater
-/// kernel, the lifecycle's CPU ms, and FLIP's whitewater cost as its
+/// kernel, and FLIP's whitewater cost as its
 /// simulation time with whitewater on minus off. The costs come from second
 /// runs that neither read back nor encode, since the encoder takes every
 /// core the lifecycle and the engine would use. No-op unless
@@ -755,21 +812,16 @@ fn whitewater_side_by_side() {
     let (flip_clip, flip_values) = record(&mut flip, "flip", &dir, FLIP_PROBES);
     drop(flip);
     let mut gpu_flip = gpu_flip_show();
-    let (gpu_flip_clip, gpu_flip_values) = record(&mut gpu_flip, "gpu_flip", &dir, LIFECYCLE_REPORTS);
+    let (gpu_flip_clip, gpu_flip_values) = record(&mut gpu_flip, "gpu_flip", &dir, STEP_REPORTS);
     let errors = gpu_flip.errors();
     drop(gpu_flip);
     assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
 
     let (flip_on_ms, flip_off_ms) = (flip_simulation_ms(true), flip_simulation_ms(false));
-    // Live, as the show runs: offline the node also waits for its worker.
+    // Live, as the show runs.
     let live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
     let mut gpu_flip = gpu_flip_show();
-    let (gpu_flip_frames, gpu_flip_lifecycle_ms): (Vec<Frame>, Vec<[f64; 2]>) = (0..DEMO_FRAMES)
-        .map(|_| {
-            let frame = gpu_flip.frame(true);
-            (frame, gpu_flip.probes(["lifecycle_ms", "worker_ms"]).map(f64::from))
-        })
-        .unzip();
+    let gpu_flip_frames: Vec<Frame> = (0..DEMO_FRAMES).map(|_| gpu_flip.frame(true)).collect();
     let labels = gpu_flip.labels.clone();
     drop(gpu_flip);
     drop(live);
@@ -785,12 +837,12 @@ fn whitewater_side_by_side() {
     let gpu_flip_counts: Vec<[f32; 3]> = gpu_flip_values.iter().map(|v| [v[0], v[1], v[2]]).collect();
     plot_counts(&dir.join("counts.png"), &flip_counts, &gpu_flip_counts);
     let mut csv = String::from(
-        "frame,flip_foam,flip_bubble,flip_spray,gpu_flip_foam,gpu_flip_bubble,gpu_flip_spray,gpu_flip_emitted,flip_simulation_ms,flip_off_simulation_ms,gpu_flip_lifecycle_ms,gpu_flip_worker_ms,gpu_flip_whitewater_gpu_ms\n",
+        "frame,flip_foam,flip_bubble,flip_spray,gpu_flip_foam,gpu_flip_bubble,gpu_flip_spray,gpu_flip_emitted,flip_simulation_ms,flip_off_simulation_ms,gpu_flip_whitewater_gpu_ms\n",
     );
     for frame in 0..DEMO_FRAMES {
         let (f, s) = (flip_values[frame], gpu_flip_values[frame]);
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3}\n",
+            "{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3}\n",
             frame + 1,
             f[0],
             f[1],
@@ -801,8 +853,6 @@ fn whitewater_side_by_side() {
             s[3],
             flip_on_ms[frame],
             flip_off_ms[frame],
-            gpu_flip_lifecycle_ms[frame][0],
-            gpu_flip_lifecycle_ms[frame][1],
             gpu_flip_frames[frame].whitewater_ms.iter().sum::<f64>()
         ));
     }
@@ -820,17 +870,13 @@ fn whitewater_side_by_side() {
         println!("WHITEWATER   GPU {label:<56} {:7.3} {:7.3}", percentile(&ms, 0.5), percentile(&ms, 0.95));
     }
     let untimed = gpu_flip_frames.iter().map(|f| f.untimed).max().unwrap_or(0);
-    let lifecycle: Vec<f64> = gpu_flip_lifecycle_ms[settled.clone()].iter().map(|ms| ms[0]).collect();
-    let worker: Vec<f64> = gpu_flip_lifecycle_ms[settled.clone()].iter().map(|ms| ms[1]).collect();
     let frame_gpu: Vec<f64> = gpu_flip_frames[settled.clone()].iter().map(|f| f.gpu_ms).collect();
     let frame_cpu: Vec<f64> = gpu_flip_frames[settled.clone()].iter().map(|f| f.cpu_ms).collect();
     let (on, off) = (&flip_on_ms[settled.clone()], &flip_off_ms[settled.clone()]);
     let delta: Vec<f64> = on.iter().zip(off).map(|(a, b)| a - b).collect();
-    let (gpu_p95, life_p95) = (percentile(&total, 0.95), percentile(&lifecycle, 0.95));
+    let gpu_p95 = percentile(&total, 0.95);
     let row = |name: &str, values: &[f64]| println!("WHITEWATER   {name:<60} {:7.3} {:7.3}", percentile(values, 0.5), percentile(values, 0.95));
     row("GPU whitewater total (target p95 <= 2)", &total);
-    row("content-thread lifecycle_ms, live (target p95 <= 3)", &lifecycle);
-    row("lifecycle thread worker_ms", &worker);
     row("GPU FLIP whole frame GPU", &frame_gpu);
     row("GPU FLIP whole frame CPU", &frame_cpu);
     row("FLIP simulation_ms, whitewater on", on);
@@ -838,15 +884,142 @@ fn whitewater_side_by_side() {
     row("FLIP whitewater cost (on minus off, frame by frame)", &delta);
     println!("WHITEWATER   untimed dispatches on the worst frame: {untimed}");
     println!(
-        "WHITEWATER verdict: GPU {} the 2 ms p95 target; the content thread {} the 3 ms p95 target",
+        "WHITEWATER verdict: GPU {} the 2 ms p95 target",
         if gpu_p95 <= 2.0 { "meets" } else { "misses" },
-        if life_p95 <= 3.0 { "meets" } else { "misses" },
     );
     for frame in DEMO_STILLS {
         let (f, s) = (flip_values[frame - 1], gpu_flip_values[frame - 1]);
         println!("WHITEWATER frame {frame}: FLIP foam {} bubble {} spray {}; GPU FLIP foam {} bubble {} spray {}", f[0], f[1], f[2], s[0], s[1], s[2]);
     }
     println!("WHITEWATER wrote {} and {}", clip.display(), dir.join("counts.png").display());
+}
+
+const EMISSION_FRAMES: usize = 150;
+
+/// O2's whole-scene companion: the Dam Break at 64 for its first 150 frames,
+/// the shipped GPU FLIP preset beside the FLIP engine running its own water
+/// and whitewater (read-only, as the race clips run it). Per frame: GPU FLIP's
+/// emission (the step in `emitted`) and population, and the engine's diffuse
+/// population. The engine publishes no emission count, and counting it would
+/// mean editing vendored code, so its side is the population. Writes
+/// `emission_150.csv` to the temp directory and prints the totals; asserts
+/// that both emit, that GPU FLIP never thins or fills its pool, and that its
+/// population is what it emitted less what died (never more).
+#[test]
+fn whitewater_emission_against_engine_150() {
+    let mut flip = Show::new(flip_def(true), (320, 180), false, &[]);
+    let flip_rows: Vec<[f32; 3]> = (0..EMISSION_FRAMES)
+        .map(|_| {
+            flip.frame(false);
+            let [foam, bubble, spray, _] = flip.probes(FLIP_PROBES);
+            [foam, bubble, spray]
+        })
+        .collect();
+    let errors = flip.errors();
+    drop(flip);
+    assert!(errors.is_empty(), "the engine ran with errors: {errors:#?}");
+
+    let mut show = Show::new(whitewater_render_def(WaterScene::dam_break(64)), (320, 180), true, &[]);
+    show.restart();
+    let gpu_rows: Vec<[f32; 6]> = (0..EMISSION_FRAMES)
+        .map(|_| {
+            show.frame(false);
+            show.probes(STEP_REPORTS)
+        })
+        .collect();
+    let errors = show.errors();
+    drop(show);
+    assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
+
+    let mut csv = String::from("frame,gpu_flip_emitted_this_frame,gpu_flip_population,engine_population,engine_foam,engine_bubble,engine_spray\n");
+    let mut previous = 0.0;
+    let (mut gpu_emitted, mut gpu_pop_sum, mut engine_pop_sum) = (0.0f64, 0.0f64, 0.0f64);
+    for (frame, (g, e)) in gpu_rows.iter().zip(&flip_rows).enumerate() {
+        let emitted = g[3] - previous;
+        previous = g[3];
+        assert!(emitted >= 0.0, "frame {}: emitted ran backwards", frame + 1);
+        let population = g[0] + g[1] + g[2];
+        assert!(population <= g[3], "frame {}: population {population} above all emitted {}", frame + 1, g[3]);
+        let engine = e[0] + e[1] + e[2];
+        gpu_emitted += f64::from(emitted);
+        gpu_pop_sum += f64::from(population);
+        engine_pop_sum += f64::from(engine);
+        csv.push_str(&format!("{},{emitted},{population},{engine},{},{},{}\n", frame + 1, e[0], e[1], e[2]));
+    }
+    let path = std::env::temp_dir().join("emission_150.csv");
+    std::fs::write(&path, csv).expect("emission csv");
+    let last = gpu_rows[EMISSION_FRAMES - 1];
+    let engine_last = flip_rows[EMISSION_FRAMES - 1];
+    println!(
+        "WHITEWATER 150 frames: GPU FLIP emitted {gpu_emitted}, mean population {:.0}, last {:?}; engine mean population {:.0}, last {engine_last:?}; population ratio {:.3}; csv {}",
+        gpu_pop_sum / EMISSION_FRAMES as f64,
+        &last[..3],
+        engine_pop_sum / EMISSION_FRAMES as f64,
+        gpu_pop_sum / engine_pop_sum.max(1.0),
+        path.display()
+    );
+    assert!(gpu_emitted > 0.0, "GPU FLIP emitted nothing in 150 frames");
+    assert!(engine_pop_sum > 0.0, "the engine made no whitewater in 150 frames");
+    assert_eq!(last[4], 0.0, "GPU FLIP thinned spawns");
+    assert_eq!(last[5], 0.0, "the pool filled at the preset's capacity");
+}
+
+/// One whitewater's foam, bubble and spray counts per frame over
+/// `EMISSION_FRAMES`, with its cumulative emission.
+fn count_rows<const N: usize>(def: EffectGraphDef, reports: [&str; N], name: &str) -> Vec<[f32; 4]> {
+    let mut show = Show::new(def, (320, 180), true, &[]);
+    show.restart();
+    let rows = (0..EMISSION_FRAMES)
+        .map(|_| {
+            show.frame(false);
+            let r = show.probes(reports);
+            [r[0], r[1], r[2], r[3]]
+        })
+        .collect();
+    let errors = show.errors();
+    assert!(errors.is_empty(), "{name} ran with errors: {errors:#?}");
+    rows
+}
+
+/// L5: the Dam Break at 64 for 150 frames, the same GPU FLIP water feeding
+/// `node.whitewater_step` and, read-only, the vendored lifecycle behind the
+/// GPU emitter group it replaced. Per frame and type, both counts. Writes
+/// `whitewater_step_vs_vendored_150.csv` to the temp directory and prints
+/// both sides every 30 frames with the per-type totals over the run. The two
+/// are compared, not held equal: the node's lifecycle is a port, so its float
+/// path is not the engine's.
+#[test]
+fn whitewater_step_against_vendored_lifecycle_150() {
+    let scene = WaterScene::dam_break(64);
+    let step = count_rows(whitewater_render_def(scene), STEP_REPORTS, "whitewater_step");
+    let vendored = count_rows(vendored_render_def(scene), LIFECYCLE_REPORTS, "the vendored lifecycle");
+
+    let mut csv = String::from("frame,step_foam,step_bubble,step_spray,step_emitted,vendored_foam,vendored_bubble,vendored_spray,vendored_emitted\n");
+    let (mut step_sum, mut vendored_sum) = ([0.0f64; 3], [0.0f64; 3]);
+    for (frame, (s, v)) in step.iter().zip(&vendored).enumerate() {
+        for kind in 0..3 {
+            step_sum[kind] += f64::from(s[kind]);
+            vendored_sum[kind] += f64::from(v[kind]);
+        }
+        csv.push_str(&format!("{},{},{},{},{},{},{},{},{}\n", frame + 1, s[0], s[1], s[2], s[3], v[0], v[1], v[2], v[3]));
+        if (frame + 1) % 30 == 0 {
+            println!(
+                "L5 frame {}: step foam {} bubble {} spray {} emitted {}; vendored foam {} bubble {} spray {} emitted {}",
+                frame + 1, s[0], s[1], s[2], s[3], v[0], v[1], v[2], v[3]
+            );
+        }
+    }
+    let path = std::env::temp_dir().join("whitewater_step_vs_vendored_150.csv");
+    std::fs::write(&path, csv).expect("parity csv");
+    let ratio: Vec<String> =
+        (0..3).map(|k| format!("{:.3}", step_sum[k] / vendored_sum[k].max(1.0))).collect();
+    println!(
+        "L5 150 frames, summed population foam/bubble/spray: step {step_sum:?}, vendored {vendored_sum:?}, step/vendored [{}]; csv {}",
+        ratio.join(", "),
+        path.display()
+    );
+    assert!(step_sum.iter().sum::<f64>() > 0.0, "whitewater_step made no whitewater in 150 frames");
+    assert!(vendored_sum.iter().sum::<f64>() > 0.0, "the vendored lifecycle made no whitewater in 150 frames");
 }
 
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
@@ -949,27 +1122,13 @@ mod emitter_oracle {
         solid: Vec<f32>,
     }
 
-    impl Show {
-        fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
-            let arrays = self.runtime.dump_arrays_all();
-            let array = arrays
-                .iter()
-                .find(|a| a.name == name && a.port == port)
-                .unwrap_or_else(|| panic!("{name}.{port} is not held; held: {:?}", arrays.iter().map(|a| format!("{}.{}", a.name, a.port)).collect::<Vec<_>>()));
-            assert!(array.buffer.size() as usize >= len * std::mem::size_of::<T>(), "{name}.{port} is shorter than {len} records");
-            let ptr = array.buffer.mapped_ptr().expect("shared storage");
-            // SAFETY: the frame completed and the buffer holds `len` records.
-            unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
-        }
-    }
-
     fn cells(grid: GridBox) -> u32 {
         grid.nodes as u32 - 1
     }
 
     fn capture(scene: WaterScene, grid: GridBox) -> Vec<Captured> {
         let held: Vec<String> = ["frame", "ww.distance", "ww.extend2", "ww.cells"].map(String::from).to_vec();
-        let mut show = Show::new(whitewater_render_def(scene), (320, 180), false, &held);
+        let mut show = Show::new(vendored_render_def(scene), (320, 180), false, &held);
         show.restart();
         let lattice = (cells(grid) as usize).pow(3);
         let face_cells = [grid.face_cells as u32; 3];

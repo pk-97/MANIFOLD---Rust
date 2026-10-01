@@ -211,7 +211,10 @@ impl Smoke {
     fn new(scene: WaterScene) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let view = crate::node_graph::freeze::install::fuse_generator_view(&render_def(scene), &registry).expect("the render graph fuses");
+        let def = render_def(scene);
+        let Some(view) = super::gpu_flip_preset::fused_as_rendered(&def, &registry) else {
+            return Self::with_def(scene, def);
+        };
         let mut smoke = Self::with_def(scene, (*view.def).clone());
         for name in &mut smoke.step_names {
             let member = view.node_retarget.iter().filter(|(_, fused)| fused.as_str() == name.as_str()).map(|(member, _)| member.as_str()).min();

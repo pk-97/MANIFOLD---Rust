@@ -25,6 +25,7 @@ use crate::node_graph::fluid_particles::{
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, ChannelElementType, std430_channel};
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::whitewater::WHITEWATER_EMPTY;
 
 const SHADER: &str = include_str!("shaders/sort_particles_into_cells.wgsl");
 const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "clear_tail", "scatter", "stabilise"];
@@ -33,6 +34,12 @@ const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "
 const LIVE_BY_RADIUS: u32 = 0;
 /// Live when the id word is non-zero and the position finite.
 const LIVE_BY_ID: u32 = 1;
+/// Live when the kind word holds a whitewater type (below
+/// [`WHITEWATER_EMPTY`]) and the position is finite: dead particles count until
+/// the tick's removal, as in FLIP.
+const LIVE_BY_KIND: u32 = 2;
+// The shader writes the empty kind as 3u.
+const _: () = assert!(WHITEWATER_EMPTY == 3);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -221,6 +228,12 @@ impl ParticleSorter {
     }
 }
 
+/// How the sort reads a whitewater pool slot.
+pub(crate) fn whitewater_record_read() -> RecordRead {
+    record_read(&ArrayType::of_known::<crate::node_graph::whitewater::WhitewaterParticle>())
+        .expect("a whitewater slot carries a position and a kind")
+}
+
 fn record_read(layout: &ArrayType) -> Option<RecordRead> {
     let stride_words = layout.item_size / 4;
     if let Some((offset, ChannelElementType::Vec4F)) = std430_channel(layout.specs, well_known::POSITION_RADIUS) {
@@ -230,6 +243,11 @@ fn record_read(layout: &ArrayType) -> Option<RecordRead> {
             live_word: offset / 4 + 3,
             live_rule: LIVE_BY_RADIUS,
         });
+    }
+    if let (Some((position, ChannelElementType::Vec4F)), Some((kind, ChannelElementType::U32))) =
+        (std430_channel(layout.specs, well_known::POSITION_LIFETIME), std430_channel(layout.specs, well_known::KIND))
+    {
+        return Some(RecordRead { stride_words, position_word: position / 4, live_word: kind / 4, live_rule: LIVE_BY_KIND });
     }
     match (std430_channel(layout.specs, well_known::POSITION), std430_channel(layout.specs, well_known::ID)) {
         (Some((position, ChannelElementType::Vec3F)), Some((id, ChannelElementType::U32))) => Some(RecordRead {

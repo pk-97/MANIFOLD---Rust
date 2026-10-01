@@ -11,6 +11,8 @@
 //   meets the surface normal below `sharpness` (a dot product);
 //   else (k − min_curvature)/(max_curvature − min_curvature).
 // 0 for a slot with radius 0, or a grid past any gathered array.
+//
+// Ported from FLIP Fluids diffuseparticlesimulation.cpp and interpolation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn wc_distance(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     if !ww_in_grid(c, cells) {

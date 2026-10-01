@@ -5,6 +5,8 @@
 // staggered stencil, a face outside the face grid reading 0, and 0 on every
 // axis outside the whitewater grid. Position, radius and id pass through; a
 // slot with radius 0 passes whole.
+//
+// Ported from FLIP Fluids macvelocityfield.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn sf_face_len(axis: u32) -> u32 {
     if axis == 0u {

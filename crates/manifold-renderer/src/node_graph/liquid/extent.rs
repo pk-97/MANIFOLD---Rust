@@ -63,6 +63,7 @@ use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use crate::node_graph::primitives::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
+use crate::node_graph::primitives::whitewater_step::{DEFAULT_CAPACITY as STEP_CAPACITY, MAX_CAPACITY as STEP_MAX_CAPACITY, StepShape};
 use crate::node_graph::transform::Transform;
 use crate::node_graph::whitewater::{
     KnownValue, SURFACE_CROSSING_BYTES, cell_total, face_offset, grid_box, grid_cells, refinement, require_extended_faces,
@@ -594,7 +595,13 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.emission_count", check: emission_count },
     ExtentRule { type_id: "node.spawn_whitewater", check: spawn_whitewater },
     ExtentRule { type_id: "node.whitewater_type", check: whitewater_type },
+    ExtentRule { type_id: "node.advect_whitewater", check: advect_whitewater },
+    ExtentRule { type_id: "node.retype_whitewater", check: retype_whitewater },
+    ExtentRule { type_id: "node.age_whitewater", check: age_whitewater },
+    ExtentRule { type_id: "node.preserve_foam", check: preserve_foam },
+    ExtentRule { type_id: "node.keep_whitewater", check: keep_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
+    ExtentRule { type_id: "node.whitewater_step", check: whitewater_step },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
 
@@ -1376,6 +1383,55 @@ fn whitewater_type(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.bytes("spawns").unwrap_or(0))
 }
 
+/// The advect reads the face grid and the solid lattice whole, and writes a
+/// record per pool slot.
+fn advect_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    x.covers("solid", cell_total(nodes) * 4)?;
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The retype reads the distance, cells and face grid whole, and writes a
+/// record per pool slot.
+fn retype_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    x.covers("distance", cell_total(cells) * 4)?;
+    x.covers("cells", cell_total(cells) * 4)?;
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The age writes a record per pool slot.
+fn age_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The preservation searches its sort's bins and writes a record per pool
+/// slot; the bins index the order and binned pool, bounded by their lengths.
+fn preserve_foam(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    searched(x)?;
+    x.covers("out", x.bytes("pool").unwrap_or(0))
+}
+
+/// The keep searches its sort's bins and reads the solid lattice whole; one
+/// flag per pool slot. Unset bins are the sort's own rule on the grid's box
+/// and cell, as the atom's run works them out.
+fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    x.covers("solid", cell_total(nodes) * 4)?;
+    let ports = ["bins_x", "bins_y", "bins_z"];
+    if ports.map(|port| x.scalar(port, 0.0)) == [0.0; 3] && ports.iter().all(|port| !x.wired(port)) {
+        let size = ["size_x", "size_y", "size_z"].map(|name| x.scalar(name, 4.375));
+        let ranges = x.bytes("cell_ranges").ok_or_else(|| x.uncovered("cell_ranges is unbound".into()))?;
+        let bins = bin_counts(size, size[0] / cells[0] as f32).map(|n| n as f32);
+        searched_bins(bins, ranges, "search").map_err(|error| x.uncovered(error))?;
+    } else {
+        searched(x)?;
+    }
+    x.covers("out", x.items("pool").unwrap_or(0) * 4)
+}
+
 /// The lifecycle's snapshot copies read the whole face grid, level and
 /// solid; it provides each population at Capacity and holds its rings.
 fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1397,6 +1453,35 @@ fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.covers(port, shape.face_bytes(axis))?;
     }
     x.covers("level", shape.level_bytes())?;
+    x.covers("solid", shape.solid_bytes())
+}
+
+/// The step's own shape, as its run builds it: every placement rule a
+/// refusal by name, each input covering what the grid reads, each
+/// population provided at Capacity, and everything else held.
+fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let capacity = x.param("capacity", STEP_CAPACITY as f32).round();
+    if !(1.0..=STEP_MAX_CAPACITY as f32).contains(&capacity) {
+        return Err(Verdict::Refused(format!("capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
+    }
+    let triple = |x: &AtomExtent<'_>, names: [&str; 3]| names.map(|name| whole(x, name, 0.0));
+    let shape = StepShape::new(
+        triple(x, ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
+        triple(x, ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"]),
+        triple(x, ["face_cells_x", "face_cells_y", "face_cells_z"]),
+        x.scalar("face_valid_layers", 0.0),
+        x.transform("grid_bounds"),
+        capacity as u32,
+    )
+    .map_err(Verdict::Refused)?;
+    for port in ["foam_particles", "bubble_particles", "spray_particles"] {
+        x.provide(port, shape.population_bytes());
+    }
+    x.hold(shape.held_bytes(x.items("particles").unwrap_or(0)));
+    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
+        x.covers(port, shape.face_bytes(axis))?;
+    }
+    x.covers("level_set", shape.level_bytes())?;
     x.covers("solid", shape.solid_bytes())
 }
 

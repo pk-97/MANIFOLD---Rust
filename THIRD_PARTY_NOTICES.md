@@ -8,6 +8,12 @@ Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored u
 
 Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
 
+- `crossing_distance`, `lattice_curvature` — from `particlelevelset.cpp`
+- `emission_count`, `energy_potential`, `jitter_particles`, `liquid_cells`, `spawn_whitewater`, `whitewater_type` — from `diffuseparticlesimulation.cpp`
+- `wavecrest_potential` — from `diffuseparticlesimulation.cpp` and `interpolation.cpp`
+- `extend_lattice` — from `gridutils.h`
+- `sample_faces_at_particles`, `shaders/liquid_faces.wgsl` — from `macvelocityfield.cpp`
+- `whitewater_cpu.rs`, `whitewater_particle_cpu.rs` (CPU references) — from the files above
 - `gpu_flip_step` (`shaders/gpu_flip_step.wgsl`; its CPU references in `gpu_flip_step_tests.rs`) — particles to faces from `velocityadvector.cpp`, the particle distance and its extension into solids from `particlelevelset.cpp`, the solid collision and removal of particles from `fluidsimulation.cpp`, the solid distance's gradient from `meshlevelset.cpp` and `interpolation.cpp`, the solid open fractions from `levelsetutils.cpp` and `meshlevelset.cpp`, the solids' face velocity and the constraint from `fluidsimulation.cpp`, divergence and the pressure subtraction from `pressuresolver.cpp`
 - `gpu_flip_pressure` (`shaders/gpu_flip_pressure.wgsl`) — the ghost-fluid free-surface rows from `pressuresolver.cpp`
 - `gpu_flip_bodies` (`shaders/gpu_flip_bodies.wgsl`; its CPU references in `gpu_flip_body_tests.rs`) — the bodies' rows in the pressure solve and their captured impulse from `rigidpressurecoupling.h`, the pressure entries and the velocity change on the solid faces from `rigidboundaryvelocity.cpp`, the order of solve, impulse, velocity change and constraint from `rigidfluidcoupling.cpp`; the dynamic bodies' predicted velocity in `gpu_flip_step.wgsl` from `rigidfluidcoupling.cpp`

@@ -289,46 +289,137 @@ fn surface_crossings_refuses_a_short_map() {
 // at 60 cells. Both atoms size outputs from params and never fuse in a
 // graph; BUG-iiv4 (gather-only region count anchor) tracks the codegen gap.
 
+/// The fields one timing reads: the solid lattice's nodes, the level set's
+/// refinement, and the water, level set and solid the map gathers.
+struct Fields {
+    nodes: [u32; 3],
+    s: u32,
+    level: Vec<f32>,
+    water: Vec<f32>,
+    solid: Vec<f32>,
+}
+
 /// Measurement, not a gate: prints surface_crossings' GPU time per
 /// dispatch with and without the map, and the map's own cost, on a
-/// 34³- then 70³-cell grid (one size step) at refinement 2 with a ball of liquid in a corner. Asserts
-/// only that the two outputs agree.
+/// 34³- then 70³-cell grid (one size step) at refinement 2 with a ball of
+/// liquid in a corner. Asserts only that the two outputs agree.
 #[test]
 fn surface_crossings_block_skip_timing() {
     for side in [35, 71] {
-        block_skip_timing(side);
+        time_block_skip(&format!("ball, {side} nodes a side"), &ball_fields(side));
     }
 }
 
-fn block_skip_timing(side: u32) {
+fn ball_fields(side: u32) -> Fields {
     let side_f = side as f32;
     let nodes = [side; 3];
     let cells = nodes.map(|n| n - 1);
     let s = 2;
     let levels = cells.map(|n| n * s + 1);
-    let at = |i: usize, n: [u32; 3]| {
-        let i = i as u32;
-        [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])]
-    };
     let ball = |p: [f32; 3]| ((0..3).map(|a| (p[a] - 0.26 * side_f).powi(2)).sum::<f32>().sqrt() - 0.17 * side_f) * H;
-    let level: Vec<f32> = (0..levels.iter().product::<u32>() as usize).map(|i| ball(at(i, levels).map(|v| v as f32 / s as f32))).collect();
-    let water: Vec<f32> =
-        (0..cells.iter().product::<u32>() as usize).map(|i| if ball(at(i, cells).map(|v| v as f32 + 0.5)) < 0.0 { 1.0 } else { 0.0 }).collect();
-    let solid: Vec<f32> = (0..nodes.iter().product::<u32>() as usize).map(|i| (at(i, nodes)[2] as f32 - 0.6) * H).collect();
+    Fields {
+        nodes,
+        s,
+        level: (0..levels.iter().product::<u32>() as usize).map(|i| ball(coords(i, levels).map(|v| v as f32 / s as f32))).collect(),
+        water: (0..cells.iter().product::<u32>() as usize)
+            .map(|i| if ball(coords(i, cells).map(|v| v as f32 + 0.5)) < 0.0 { 1.0 } else { 0.0 })
+            .collect(),
+        solid: (0..nodes.iter().product::<u32>() as usize).map(|i| (coords(i, nodes)[2] as f32 - 0.6) * H).collect(),
+    }
+}
+
+/// Measurement, not a gate: the shipped GPU FLIP Dam Break with its
+/// Whitewater group at Resolution 64 then 128 (extents proven by
+/// `liquid_block_extents_at_64_and_128` and the scene walks in
+/// `gpu_flip_preset`), unfrozen so the fields can be held. At frames 30, 90
+/// and 150 it captures the level set the Whitewater group reads, the solid
+/// lattice and the particles, marks a cell water when a particle sits in it,
+/// and times the map and surface_crossings on those fields.
+#[test]
+fn surface_crossings_block_skip_timing_on_dam_break() {
+    for n in [64, 128] {
+        for (label, fields) in dam_break_fields(n) {
+            time_block_skip(&label, &fields);
+        }
+    }
+}
+
+fn dam_break_fields(n: usize) -> Vec<(String, Fields)> {
+    use super::gpu_flip_preset::WaterScene;
+    use super::whitewater_scene_tests::{Show, whitewater_render_def};
+    use crate::node_graph::fluid_particles::FluidParticle;
+    use crate::node_graph::liquid::lattice::LiquidLattice;
+
+    const FRAMES: [usize; 3] = [30, 90, 150];
+    let scene = WaterScene::dam_break(n);
+    let lattice = LiquidLattice::from_layout(&scene.layout());
+    let nodes = lattice.nodes();
+    let cells = nodes.map(|v| v - 1);
+    let s = scene.surface_scale as u32;
+    let levels = cells.map(|c| c * s + 1);
+    let level_len = levels.iter().map(|&v| v as usize).product::<usize>();
+    let mut show = Show::new(whitewater_render_def(scene), (320, 180), false, &[]);
+    // render_def bakes the scene's surface scale into the Liquid Surface
+    // group, so the held level set is `levels` nodes a side.
+    show.restart();
+    let (frame_node, smooth) = (show.node_named("frame"), show.node_named("liquid_smooth_z"));
+    let held = [frame_node.clone(), smooth.clone()];
+    let (min, h) = (lattice.min(), lattice.cell_size());
+    let mut captured = Vec::new();
+    for frame in 1..=*FRAMES.last().expect("frames") {
+        let capture = FRAMES.contains(&frame);
+        show.hold(if capture { &held } else { &[] });
+        show.frame(false);
+        if !capture {
+            continue;
+        }
+        let particles: Vec<FluidParticle> = show.dumped(&frame_node, "particles_b", scene.particles() as usize);
+        let mut water = vec![0.0f32; cells.iter().map(|&v| v as usize).product()];
+        let mut outside = 0;
+        for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+            let at: [f32; 3] = std::array::from_fn(|a| ((p.position_radius[a] - min[a]) / h).floor());
+            if (0..3).any(|a| at[a] < 0.0 || at[a] >= cells[a] as f32) {
+                outside += 1;
+                continue;
+            }
+            water[index(at.map(|v| v as u32), cells)] = 1.0;
+        }
+        let liquid = water.iter().filter(|&&w| w > 0.0).count();
+        let label = format!("Dam Break {n} frame {frame} ({liquid} water cells, {outside} particles outside the cells)");
+        let fields = Fields {
+            nodes,
+            s,
+            level: show.dumped(&smooth, "smoothed", level_len),
+            water,
+            solid: show.dumped(&frame_node, "solid_b", nodes.iter().map(|&v| v as usize).product()),
+        };
+        captured.push((label, fields));
+    }
+    let errors = show.errors();
+    assert!(errors.is_empty(), "Resolution {n}: the scene ran with errors: {errors:#?}");
+    captured
+}
+
+fn time_block_skip(label: &str, f: &Fields) {
+    let (nodes, s) = (f.nodes, f.s);
+    let (level, water, solid) = (&f.level, &f.water, &f.solid);
+    let cells = nodes.map(|n| n - 1);
+    let levels = cells.map(|n| n * s + 1);
     let total = cells.iter().product::<u32>() as usize;
     let blocks = block_lattice(cells).iter().product::<u32>() as usize;
+    let lattice_values = [nodes[0], nodes[1], nodes[2], levels[0], levels[1], levels[2]].map(|v| v as f32);
     let p = params(&[
-        ("nodes_x", side_f),
-        ("nodes_y", side_f),
-        ("nodes_z", side_f),
-        ("level_nodes_x", levels[0] as f32),
-        ("level_nodes_y", levels[1] as f32),
-        ("level_nodes_z", levels[2] as f32),
+        ("nodes_x", lattice_values[0]),
+        ("nodes_y", lattice_values[1]),
+        ("nodes_z", lattice_values[2]),
+        ("level_nodes_x", lattice_values[3]),
+        ("level_nodes_y", lattice_values[4]),
+        ("level_nodes_z", lattice_values[5]),
     ]);
     let mut harness = Harness::new();
-    let water_in = harness.array(&water, water.len());
-    let level_in = harness.array(&level, level.len());
-    let solid_in = harness.array(&solid, solid.len());
+    let water_in = harness.array(water, water.len());
+    let level_in = harness.array(level, level.len());
+    let solid_in = harness.array(solid, solid.len());
     let map_out = harness.array::<u32>(&[], blocks);
     let crossings = harness.array::<SurfaceCrossing>(&[], total);
     let (_, e) = harness.run(&mut LiquidBlocks::new(), &[("water", water_in.0), ("level_set", level_in.0), ("solid", solid_in.0)], &[("out", map_out.0)], &p);
@@ -352,7 +443,7 @@ fn block_skip_timing(side: u32) {
     use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
     use manifold_gpu::GpuBinding;
     const REPEAT: u32 = 20;
-    let lattice: Vec<u32> = [side_f, side_f, side_f, levels[0] as f32, levels[1] as f32, levels[2] as f32].iter().map(|v| v.to_bits()).collect();
+    let lattice: Vec<u32> = lattice_values.iter().map(|v| v.to_bits()).collect();
     let gpu_ms = |harness: &Harness, wgsl: &str, words: &[u32], buffers: &[&manifold_gpu::GpuBuffer], count: u32| {
         let pipeline = harness.device.create_compute_pipeline(wgsl, ENTRY, "liquid-blocks-timing");
         let mut enc = harness.device.create_encoder("liquid-blocks-timing");
@@ -380,7 +471,7 @@ fn block_skip_timing(side: u32) {
     let after: Vec<SurfaceCrossing> = read(&crossings.1, total);
     assert_eq!(same_bits(&after, &off), 0, "the timed dispatches changed the output");
     eprintln!(
-        "liquid blocks timing, {cells:?} cells s {s}: {surface}/{blocks} blocks with surface; GPU ms per dispatch: map {map_ms:.3}, crossings off {off_ms:.3}, on {on_ms:.3}, saved net of map {:.3}",
+        "liquid blocks timing, {label}, {cells:?} cells s {s}: {surface}/{blocks} blocks with surface; GPU ms per dispatch: map {map_ms:.3}, crossings off {off_ms:.3}, on {on_ms:.3}, saved net of map {:.3}",
         off_ms - on_ms - map_ms
     );
 }

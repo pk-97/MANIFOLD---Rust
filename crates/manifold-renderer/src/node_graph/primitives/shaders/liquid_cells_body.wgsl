@@ -4,6 +4,8 @@
 // (1) when its distance is below 0, else air (0). Then FLIP's shrink
 // (:1667): a liquid cell with an air face neighbour becomes air. `distance`
 // and `solid` are gathered; a grid past either array gives air.
+//
+// Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn lc_kind(c: vec3<u32>, cells: vec3<u32>, nodes: vec3<u32>) -> u32 {
     var solid = 0.0;
