@@ -398,7 +398,6 @@ pub(crate) mod face_grid_scenes;
 mod face_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_scene_tests;
-#[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;

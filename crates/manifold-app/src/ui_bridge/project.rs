@@ -12,10 +12,35 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
-/// The one liquid Add Fluid authors. Today's FLIP scene fluid; switching
-/// solvers is this line (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 8).
+/// The one liquid Add Fluid authors: GPU FLIP. No solver picker and no
+/// fallback to another solver.
 const DEFAULT_LIQUID_TEMPLATE: fn() -> manifold_editing::commands::graph::LiquidTemplate =
-    manifold_editing::commands::graph::flip_scene_fluid_template;
+    gpu_flip_liquid_template;
+
+/// GPU FLIP's Add Fluid body, the renderer's builder output (the graph the
+/// shipped GPU FLIP preset is checked against), with its card rows.
+pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::LiquidTemplate {
+    use manifold_editing::commands::graph::{ExposureSet, LiquidTemplate, TemplateExposure};
+    let body = manifold_renderer::node_graph::gpu_flip_liquid_body();
+    let id = |name: &str| {
+        body.nodes.iter().find(|node| node.node_id.as_str() == name)
+            .unwrap_or_else(|| panic!("the GPU FLIP body has no {name}")).id
+    };
+    let exposures = vec![
+        TemplateExposure { node: id("domain"), set: ExposureSet::Fluid, section: Some("Simulation") },
+        TemplateExposure { node: id("initial_column"), set: ExposureSet::SourceTransform, section: Some("Initial Volume") },
+        TemplateExposure { node: id("water_material"), set: ExposureSet::Material, section: Some("Material") },
+        TemplateExposure { node: id("water_object"), set: ExposureSet::Object, section: None },
+    ];
+    let output_node = id(manifold_renderer::node_graph::LIQUID_BODY_OUTPUT);
+    LiquidTemplate {
+        group_id_slot: body.nodes.len(),
+        nodes: body.nodes,
+        wires: body.wires,
+        output_node,
+        exposures,
+    }
+}
 
 fn scene_object_source_identity(
     project: &Project, target: &manifold_core::GraphTarget,
@@ -2121,14 +2146,16 @@ mod tests {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
             _ => None,
         }).expect("fluid is a selectable scene object");
-        assert_eq!(row.fluid_controls.len(), 4, "surface, domain, role source, and source transform controls");
-        assert_eq!(row.fluid_domain.unwrap().size, [4.0; 3]);
+        let domain = row.liquid_domain.as_ref().unwrap().resolve(&added).expect("the domain resolves");
+        assert_eq!(domain.type_id, manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, "Add Fluid authors GPU FLIP");
+        assert_eq!(row.fluid_controls.len(), 2, "simulation and initial volume controls");
+        let layout = row.fluid_domain.unwrap();
+        assert_eq!((layout.size, layout.cells), ([4.0; 3], [64; 3]));
         let sections = crate::ui_bridge::projection::scene::sections_for_nodes(
             Some(&added), &row.fluid_controls,
         );
         assert!(sections.iter().any(|section| section.contains("Simulation")));
-        assert!(sections.iter().any(|section| section.contains("Domain")));
-        assert!(sections.iter().any(|section| section.contains("Source")));
+        assert!(sections.iter().any(|section| section.contains("Initial Volume")));
         assert!(row.transform.is_none(), "fluid has no disconnected render-only transform");
 
         let saved = serde_json::to_string(&project).unwrap();
@@ -2149,13 +2176,13 @@ mod tests {
             ("gravity_x", "Gravity X", 0.0),
             ("gravity", "Gravity Y", -9.81),
             ("gravity_z", "Gravity Z", 0.0),
-            ("liquid_density", "Liquid Density", 1000.0),
+            ("resolution", "Resolution", 64.0),
         ] {
-            let binding = if param == "liquid_density" {
+            let binding = if param == "resolution" {
                 metadata.bindings.iter().find(|binding| matches!(
                     &binding.target,
                     manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
-                        if name == param && node_id.as_str().starts_with("fluid_surface_")
+                        if name == param && node_id.as_str().starts_with("domain_")
                 ))
             } else {
                 let world_param = if param == "gravity" { "gravity_y" } else { param };
@@ -2163,14 +2190,21 @@ mod tests {
             }.expect("physical control survives reload");
             let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
             assert_eq!(spec.name, label);
-            let inspector_sections = if param == "liquid_density" { &reloaded_sections } else { &world_sections };
+            let inspector_sections = if param == "resolution" { &reloaded_sections } else { &world_sections };
             assert!(inspector_sections.contains(spec.section.as_ref().unwrap()),
-                "density belongs to Fluid; shared gravity belongs to World");
-            if param != "liquid_density" {
+                "resolution belongs to Fluid; shared gravity belongs to World");
+            if param != "resolution" {
                 assert!(!reloaded_sections.contains(spec.section.as_ref().unwrap()),
                     "shared controls must not appear as independent liquid controls");
             }
             assert_eq!(reloaded.timeline.layers[0].gen_params().unwrap().get_base_param(&binding.id), default);
+        }
+        let flat = manifold_core::flatten::flatten_groups(&reloaded_def).expect("the fluid group flattens");
+        let flat_domain = flat.nodes.iter()
+            .find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+        for port in ["gravity_x", "gravity", "gravity_z", "speed", "reset"] {
+            assert!(flat.wires.iter().any(|wire| wire.to_node == flat_domain.id && wire.to_port == port),
+                "the World drives the GPU FLIP domain's {port}");
         }
         let shared_ids: Vec<_> = ["gravity_x", "gravity_y", "gravity_z", "speed", "reset"]
             .into_iter().map(|param| format!("{}_{}", world.id, param)).collect();
@@ -2184,13 +2218,13 @@ mod tests {
             let after = migrated.preset_metadata.as_ref().unwrap().params.iter().find(|spec| &spec.id == id).unwrap();
             assert_eq!(before, after, "reload must preserve shared World control metadata");
         }
-        for (param, expected_label) in [("velocity_y", "Source"), ("rot_y", "Source Transform")] {
+        for (param, expected_label) in [("fill_height", "Simulation"), ("scale_y", "Initial Volume")] {
             let binding = metadata.bindings.iter().find(|binding| matches!(
                 &binding.target,
                 manifold_core::effect_graph_def::BindingTarget::Node { node_id, param: name }
-                    if name == param && (node_id.as_str().starts_with("fluid_role_source_")
-                        || node_id.as_str().starts_with("fluid_source_"))
-            )).expect("fluid source control survives reload");
+                    if name == param && (node_id.as_str().starts_with("domain_")
+                        || node_id.as_str().starts_with("initial_column_"))
+            )).expect("fluid control survives reload");
             let spec = metadata.params.iter().find(|spec| spec.id == binding.id).unwrap();
             let section = spec.section.as_ref().unwrap();
             assert!(section.contains(expected_label));
@@ -2200,6 +2234,37 @@ mod tests {
         assert_eq!(effective_def(&project, &layer_id), original);
         command.execute(&mut project);
         assert_eq!(effective_def(&project, &layer_id), added, "redo keeps stable graph identities");
+    }
+
+    /// The GPU FLIP body is dozens of nodes; running out of document ids part
+    /// way through leaves the project untouched.
+    #[test]
+    fn scene_physics_add_gpu_fluid_id_exhaustion_is_atomic() {
+        use manifold_renderer::node_graph::scene_exposure::metadata_for_node_type;
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        let target = manifold_core::GraphTarget::Generator(layer_id.clone());
+        let mut def = effective_def(&project, &layer_id);
+        let mut last = def.nodes[0].clone();
+        last.id = u32::MAX - 8;
+        last.node_id = manifold_core::NodeId::new("last_existing");
+        last.handle = None;
+        def.nodes.push(last);
+        project.graph_target_owner_mut(&target).unwrap().graph = Some(def.clone());
+        let before = serde_json::to_value(&project).unwrap();
+        let mut command = manifold_editing::commands::graph::AddSceneFluidCommand::new(
+            target, render_scene_id,
+            metadata_for_node_type(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID),
+            metadata_for_node_type("node.transform_3d"),
+            metadata_for_node_type("node.pbr_material"),
+            metadata_for_node_type("node.scene_object"),
+            gpu_flip_liquid_template(),
+            def,
+        )
+        .with_world_metadata(metadata_for_node_type("node.physics_world"));
+        command.execute(&mut project);
+        assert!(!command.was_applied());
+        assert_eq!(command.rejection_reason(), Some("Add Fluid document id space is exhausted"));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
     }
 
     /// LIQUID_SOLVER_SEAM_DESIGN.md P2b demo: a GPU liquid's water stays
@@ -3268,6 +3333,84 @@ mod tests {
                 case.value,
                 "{name}: effective control value updated"
             );
+        }
+    }
+
+    /// Add Fluid through the real dispatch into an empty Scene, then render
+    /// two seconds headless: the water moves while playing, stays finite, and
+    /// a paused transport holds the picture. Frames go to
+    /// `/tmp/add_fluid_gpu`.
+    #[cfg(all(feature = "journey-proofs", target_os = "macos"))]
+    #[test]
+    fn add_fluid_gpu_flip_renders_falls_and_holds_on_pause() {
+        use manifold_renderer::headless_readback::{encode_rgba8_png, linear_to_srgb8, readback_raw_halves};
+        const W: u32 = 640;
+        const H: u32 = 360;
+        let dir = std::path::PathBuf::from("/tmp/add_fluid_gpu");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mut project, layer_id, render_scene_id) = scene_layer_project();
+        project.settings.output_width = W as i32;
+        project.settings.output_height = H as i32;
+        project.timeline.layers[0]
+            .clips
+            .push(manifold_core::clip::TimelineClip::new_generator(manifold_core::Beats::ZERO, manifold_core::Beats(128.0)));
+        let (_, state, mut ui, mut selection, mut active_layer, mut prefs) = dispatch_harness();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        dispatch_project(
+            &ProjectAction::SceneSetupAddFluid(layer_id.clone(), render_scene_id),
+            &mut project, &tx, &state, &mut ui, &mut selection, &mut active_layer, &mut prefs,
+        );
+        let add = rx.try_recv().expect("Add Fluid queued a content edit");
+
+        let mut content = crate::headless_harness::headless_content_thread(project, W, H);
+        let (state_tx, _state_rx) = crossbeam_channel::unbounded();
+        content.handle_command(add);
+        crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+        let device = std::sync::Arc::clone(content.content_pipeline.native_gpu_for_tests().expect("native device"));
+        let grab = |content: &crate::content_thread::ContentThread| {
+            content.content_pipeline.wait_for_render_complete();
+            readback_raw_halves(&device, content.content_pipeline.export_output_texture(), W, H)
+        };
+        let halves = |bytes: &[u8]| -> Vec<f32> {
+            bytes.chunks_exact(2).map(|h| half::f16::from_bits(u16::from_le_bytes([h[0], h[1]])).to_f32()).collect()
+        };
+        let write = |name: &str, raw: &[u8]| {
+            let rgba: Vec<u8> = halves(raw)
+                .iter()
+                .enumerate()
+                .map(|(i, v)| if i % 4 == 3 { 255 } else { linear_to_srgb8(*v) })
+                .collect();
+            std::fs::write(dir.join(name), encode_rgba8_png(&rgba, W, H)).unwrap();
+        };
+        let differing = |a: &[u8], b: &[u8]| a.chunks_exact(8).zip(b.chunks_exact(8)).filter(|(x, y)| x != y).count();
+
+        content.handle_command(ContentCommand::Play);
+        let mut early = Vec::new();
+        for frame in 0..120 {
+            content.tick_frame(&state_tx);
+            if frame == 9 {
+                early = grab(&content);
+                write("frame010.png", &early);
+            }
+            if frame == 59 {
+                write("frame060.png", &grab(&content));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        let last = grab(&content);
+        write("frame120.png", &last);
+        assert!(halves(&last).iter().all(|v| v.is_finite()), "the water blew up: non-finite pixels");
+        let moved = differing(&early, &last);
+        println!("Add Fluid GPU: frames 10 to 120 changed {moved} of {} pixels", W * H);
+        assert!(moved > 0, "the water did not move while playing");
+
+        content.handle_command(ContentCommand::Pause);
+        content.tick_frame(&state_tx);
+        let held = grab(&content);
+        for frame in 0..3 {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            content.tick_frame(&state_tx);
+            assert_eq!(differing(&held, &grab(&content)), 0, "paused frame {} changed the picture", frame + 1);
         }
     }
 }
