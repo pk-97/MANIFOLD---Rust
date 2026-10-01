@@ -250,10 +250,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             edit: |def| set_type_param(def, "node.volume_surface_mesh", "max_capacity", SerializedParamValue::Int { value: 3 }),
             names: &["Mesh Capacity"],
         }),
-        exempt: &[(
-            Check::PauseDiscardsImpulses,
-            "owed to P8: GPU liquids refuse impulses until P8 routes them (LIQUID_SCENE_OWED)",
-        )],
+        exempt: &[],
     },
     LiquidSolverRow {
         type_id: FLIP_DOMAIN_TYPE_ID,

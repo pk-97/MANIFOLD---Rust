@@ -270,11 +270,15 @@ impl PresetRuntime {
         // A producer callback must never inherit offline history draining.
         let _scope = crate::node_graph::physics::PhysicsStepScope::for_render(false);
         self.sample_physics_history(source);
+        // No ancestry means no solver here replays held-input history: a
+        // frame-held one (the matter domain and its paired world) records its
+        // controls once per display frame, so there is no interval to close.
         let (Some(inputs), Some(steps)) = (
             self.physics_input_snapshot.as_mut(),
             self.physics_sample_steps.as_ref(),
         ) else {
-            return Err("Impulse: graph has no prepared physics ancestry".into());
+            self.last_physics_frame_time = Some(source);
+            return Ok(());
         };
         inputs.set_sample_time(source);
         self.executor.execute_physics_sample_frame(

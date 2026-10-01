@@ -2,7 +2,7 @@
 
 <!-- index: The contract FLIP, GPU MLS-MPM and SWASH meet to join scenes — particle frames, face-grid outputs, Box3D coupling, clock/pause/export, scene recognition, safety rails — and the phases that move MPM and SWASH behind it. -->
 
-**Status:** PROPOSED · 2026-09-30 · P5 and P6 shipped · P7–P10 not built · owed: Peter's calls in section 8 (Calls only Peter makes) · amends SWASH D8 and P3b (D7, D10, D12).
+**Status:** PROPOSED · 2026-10-01 · P5 and P6 shipped · P8 built on `feat/liquid-forces-impulses`, not landed, owes its L3 flow · P7, P9, P10 not built · owed: Peter's calls in section 8 (Calls only Peter makes) · amends SWASH D8 and P3b (D7, D10, D12).
 
 **Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs FFT_WATER_SOLVER_DESIGN.md P3 (the full step) on `feat/fft-water`. P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
@@ -443,6 +443,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Gesture:** map a pad to Fire on a radial impulse; the pool splashes on every hit and ignores hits while paused.
 - **Forbidden:** per-node CPU field evaluation; a liquid-only force system or trigger router; replaying a paused hit on resume.
 - **Test scope:** focused renderer, app; GPU proofs.
+- **As built (the API a second domain calls):** `LiquidImpulses` owns the queue on the liquid's clock: `observe_frame(transport, &ClockFrame)` after the clock advances, then the four impulse hooks map to `stamp`, `enqueue` (a held clock discards at once, with a receipt), `drain_applied` and `drain_discarded`. `LiquidFields::prepare` samples the scene field and the due impulse once per frame onto a coarse lattice (`FieldLattice::of`, one node per 4 cells, covering the solver lattice) and `upload` writes both lattices to the GPU; the domain publishes `forces`, `impulses` and the `FieldFrame` scalars (`field_nodes_x/y/z`, `field_spacing`, `forces_on`, `impulse_tick`). Atoms read them with `LIQUID_FIELD` (`liquid_field.wgsl`, CPU twin `FieldLattice::sample`) and `FieldBinding::read`; MPM adds the force to gravity in `node.matter_grid_update` and the impulse on the impulse tick's first substep, and `node.matter_body_reaction` repeats both. FLIP on the GPU (`gpu_flip_domain.rs`) calls the same `LiquidImpulses` and `LiquidFields`, publishes the same ports, and reads them in a fusable pointwise face atom after `particles_to_faces` and before `face_divergence`. A frame-held domain has no physics history, so firing at it observes nothing at the source (`observe_physics_at_source`).
 
 ### P9 — Add Fluid authors the default liquid template (seam brief; supersedes MPM P4b)
 

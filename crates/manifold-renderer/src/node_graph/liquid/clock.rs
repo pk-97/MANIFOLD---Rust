@@ -13,6 +13,9 @@ pub struct ClockFrame {
     /// This frame starts a new simulation (first frame, reset, setup change or
     /// backward seek); the state reseeds before any tick runs.
     pub restarted: bool,
+    /// Transport paused or Simulation Speed 0: simulated time did not move.
+    /// Impulses fired now are discarded, so resume never bursts.
+    pub held: bool,
     /// Simulated seconds at the end of this frame's ticks.
     pub simulation_time: f64,
     /// Simulated seconds this display frame reached (at most one tick past
@@ -73,6 +76,7 @@ impl LiquidClock {
             || setup_changed
             || reset_edge
             || transport < self.last_transport - 1e-9;
+        let mut held = false;
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
@@ -80,7 +84,9 @@ impl LiquidClock {
             self.ticks_done = 0;
             self.dropped_seconds = 0.0;
         } else {
-            self.target_time += (transport - self.last_transport).max(0.0) * f64::from(speed);
+            let advance = (transport - self.last_transport).max(0.0) * f64::from(speed);
+            held = advance <= 0.0;
+            self.target_time += advance;
         }
         self.last_transport = transport;
         let due = ((self.target_time / TICK + 1e-9).floor() as u64).saturating_sub(self.ticks_done);
@@ -106,6 +112,7 @@ impl LiquidClock {
             ticks: ticks as u32,
             epoch: self.epoch,
             restarted,
+            held,
             simulation_time: self.ticks_done as f64 * TICK,
             target_time: self.target_time,
             display_time: (self.target_time - TICK).max(0.0),
@@ -162,18 +169,24 @@ mod tests {
         clock.advance(0.0, TICK, 1.0, 0.0, false, false);
         let a = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
         assert_eq!(a.ticks, 1);
+        assert!(!a.held);
         // Paused transport holds.
         let held = clock.advance(TICK, 0.0, 1.0, 0.0, false, false);
         assert_eq!(held.ticks, 0);
+        assert!(held.held);
         assert_eq!(held.simulation_time, a.simulation_time);
-        // Speed 0.5 runs a tick every other frame.
-        let ticks: u32 = (2..6)
-            .map(|i| clock.advance(i as f64 * TICK, TICK, 0.5, 0.0, false, false).ticks)
-            .sum();
-        assert_eq!(ticks, 2);
+        // Speed 0 holds while transport runs.
+        assert!(clock.advance(2.0 * TICK, TICK, 0.0, 0.0, false, false).held);
+        // Speed 0.5 runs a tick every other frame and never holds.
+        let frames: Vec<_> = (3..7)
+            .map(|i| clock.advance(i as f64 * TICK, TICK, 0.5, 0.0, false, false))
+            .collect();
+        assert_eq!(frames.iter().map(|f| f.ticks).sum::<u32>(), 2);
+        assert!(frames.iter().all(|f| !f.held));
         // A changed reset counter restarts in a new epoch.
-        let reset = clock.advance(6.0 * TICK, TICK, 1.0, 1.0, false, false);
+        let reset = clock.advance(7.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!(reset.restarted);
+        assert!(!reset.held);
         assert_eq!(reset.epoch, 2);
         assert_eq!(reset.ticks, 0);
         // Seeking backwards restarts too.

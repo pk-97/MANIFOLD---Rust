@@ -1,8 +1,9 @@
 // node.matter_body_reaction — BUFFER body, atomic scatter
 // (GPU_MPM_SOLVER_DESIGN.md section 4.1 step 5). One thread per lattice node,
 // after node.matter_grid_update. It repeats grid_update's projection from the
-// node's velocity after forces (v_before + dt·g, the walls, then each body in
-// order, the same helpers in matter_walls.wgsl and liquid_collider.wgsl) and adds what each dynamic
+// node's velocity after forces (v_before + dt·(g + forces(x)), plus impulses(x)
+// on the impulse tick's first substep, the walls, then each body in order, the
+// same helpers in matter_walls.wgsl, liquid_field.wgsl and liquid_collider.wgsl) and adds what each dynamic
 // body (inv_mass > 0) removed from the node, m·(v_in − v_out), to that body's
 // 16 words of `reaction_out`:
 //   [0..3)  Σ inv_mass·m·Δv                       (velocity change, m/s)
@@ -49,6 +50,27 @@ fn reaction_add(base: u32, value: vec3<f32>, key: u32) {
     }
 }
 
+// The same reads as grid_update_forces and grid_update_impulses.
+fn body_reaction_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let w = c.index * 4u;
+        sum = sum + vec3<f32>(buf_forces[w], buf_forces[w + 1u], buf_forces[w + 2u]) * c.weight;
+    }
+    return sum;
+}
+
+fn body_reaction_impulses(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let w = c.index * 4u;
+        sum = sum + vec3<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u]) * c.weight;
+    }
+    return sum;
+}
+
 fn body(
     idx: u32,
     count: u32,
@@ -70,17 +92,34 @@ fn body(
     tick_index: i32,
     substep_in_tick: i32,
     substeps_per_tick: i32,
+    // Gated on the CPU: run() dispatches nothing when it is 0.
+    dynamic_count: i32,
+    field_nodes_x: i32,
+    field_nodes_y: i32,
+    field_nodes_z: i32,
+    field_spacing: f32,
+    forces_on: i32,
+    impulse_tick: i32,
 ) {
     let m = e_grid.velocity_mass.w;
     if !(m > 0.0) {
         return;
     }
-    var v = e_grid.velocity_before.xyz + step_dt * vec3<f32>(gravity_x, gravity, gravity_z);
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
+    let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
+    let x = origin + vec3<f32>(coord) * cell_size;
+    let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
+    var accel = vec3<f32>(gravity_x, gravity, gravity_z);
+    if forces_on != 0 {
+        accel = accel + body_reaction_forces(x, origin, field_spacing, field_dims);
+    }
+    var v = e_grid.velocity_before.xyz + step_dt * accel;
+    if tick_index == impulse_tick && substep_in_tick == 0 {
+        v = v + body_reaction_impulses(x, origin, field_spacing, field_dims);
+    }
     v = matter_wall_stop(v, coord, n, u32(closed_faces));
 
-    let x = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + vec3<f32>(coord) * cell_size;
     let counts = 16777216.0 / momentum_unit;
     let weight = f32(substep_in_tick) / f32(max(substeps_per_tick, 1));
     let key = reaction_hash(idx ^ reaction_hash(u32(tick_index) * 4096u + u32(substep_in_tick)));

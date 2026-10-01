@@ -30,6 +30,7 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
+use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
 use crate::node_graph::liquid::frame_ring::RING;
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::{
@@ -595,6 +596,12 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }
+    // The walk takes a frame with forces on and an impulse tick, so the field
+    // reads are checked.
+    let field = FieldFrame { lattice: FieldLattice::of(&geometry.setup.lattice), forces_on: true, impulse_tick: Some(0) };
+    for (name, value) in field.outputs() {
+        x.publish(name, value);
+    }
     // Body kernels clamp rows and body counts to the bodies array, so the
     // walk takes a scene without colliders; the reaction slot is sized for
     // every body a liquid holds.
@@ -604,11 +611,24 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("reaction", reaction),
+        ("forces", field.lattice.bytes()),
+        ("impulses", field.lattice.bytes()),
     ] {
         x.provide(port, bytes);
         x.hold(bytes);
     }
+    // The staging ring: both lattices per slot.
+    x.hold(FIELD_STAGING_SLOTS as u64 * 2 * field.lattice.bytes());
     Ok(())
+}
+
+/// Field reads clamp to the field lattice the scalars name, so the wired
+/// lattices must hold it.
+fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"].map(|name| whole(x, name, 2.0).max(2));
+    let bytes = nodes.iter().map(|&n| u64::from(n)).product::<u64>() * 16;
+    x.covers_if_bound("forces", bytes)?;
+    x.covers_if_bound("impulses", bytes)
 }
 
 fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -721,13 +741,15 @@ fn matter_grid_update(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice();
     let nodes = node_extent(x, &lattice)?;
     x.covers("grid", grid_bytes(lattice.nodes()))?;
-    x.covers("accum", nodes * 16)
+    x.covers("accum", nodes * 16)?;
+    field_reads(x)
 }
 
 fn matter_body_reaction(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice();
     node_extent(x, &lattice)?;
-    x.covers("grid", grid_bytes(lattice.nodes()))
+    x.covers("grid", grid_bytes(lattice.nodes()))?;
+    field_reads(x)
 }
 
 fn grid_to_matter(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {

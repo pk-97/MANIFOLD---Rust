@@ -3,7 +3,7 @@
 //! when `LIQUID_SCENE_OWED` names the phase that closes it; the list only
 //! shrinks, so an owed item that is already met fails too.
 
-use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, MATTER_DOMAIN_TYPE_ID, liquid_dial_params};
+use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, liquid_dial_params};
 use manifold_physics::input::EventStamp;
 use manifold_physics::{FieldValue, Seconds};
 
@@ -13,7 +13,6 @@ use crate::node_graph::parameters::ParamType;
 use crate::node_graph::persistence::PrimitiveRegistry;
 use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
 use crate::node_graph::ports::{PortKind, PortType};
-use crate::node_graph::primitives::matter_domain::FLUID_IMPULSES_UNSUPPORTED;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SceneItem {
@@ -35,10 +34,7 @@ const SCENE_ITEMS: [SceneItem; 6] = [
 ];
 
 /// (domain type id, missing item, the phase that closes it).
-const LIQUID_SCENE_OWED: &[(&str, SceneItem, &str)] = &[
-    (MATTER_DOMAIN_TYPE_ID, SceneItem::AccelerationField, "P8"),
-    (MATTER_DOMAIN_TYPE_ID, SceneItem::FluidImpulses, "P8"),
-];
+const LIQUID_SCENE_OWED: &[(&str, SceneItem, &str)] = &[];
 
 fn has_input(node: &dyn EffectNode, name: &str, ty: PortType) -> bool {
     node.inputs().iter().any(|port| port.kind == PortKind::Input && port.name == name && port.ty == ty)
@@ -48,9 +44,9 @@ fn has_param(node: &dyn EffectNode, name: &str, ty: ParamType) -> bool {
     node.parameters().iter().any(|param| param.name == name && param.ty == ty)
 }
 
-/// A fresh domain refuses a liquid impulse either with the trait's default
-/// ("does not accept") or with the named not-yet refusal. Any other answer,
-/// including "observe first", means the hook routes liquid impulses.
+/// A fresh domain that does not route liquid impulses answers with the
+/// trait's default ("does not accept"). Any other answer, including "the
+/// clock has not started", means the hook routes them.
 fn routes_fluid_impulses(node: &mut dyn EffectNode) -> bool {
     let stamp = EventStamp { epoch: 0, time: Seconds(0.0), sequence: 0 };
     let impulse = ResolvedNodeImpulse {
@@ -59,7 +55,7 @@ fn routes_fluid_impulses(node: &mut dyn EffectNode) -> bool {
     };
     match node.enqueue_physics_impulse(stamp, impulse) {
         Ok(_) => true,
-        Err(error) => error != FLUID_IMPULSES_UNSUPPORTED && !error.contains("does not accept physics impulses"),
+        Err(error) => !error.contains("does not accept physics impulses"),
     }
 }
 

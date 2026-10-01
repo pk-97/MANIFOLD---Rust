@@ -14,6 +14,7 @@ pub mod coupling;
 #[cfg(any(test, feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod extent;
+pub mod fields;
 pub mod frame_ring;
 pub mod lattice;
 #[cfg(test)]

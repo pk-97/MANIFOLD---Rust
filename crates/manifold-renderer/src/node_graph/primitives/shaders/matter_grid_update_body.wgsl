@@ -1,8 +1,11 @@
 // node.matter_grid_update — fusable BUFFER body (GPU_MPM_SOLVER_DESIGN.md
 // section 4.1 step 4). One thread per lattice node, x fastest:
 //   v_before = momentum / mass                       (Liveliness reads it)
-//   v = v_before + dt · g
-// then the closed walls and each collider in body order (matter_wall_stop in
+//   v = v_before + dt · (g + forces(x))              (forces while forces_on)
+//   v += impulses(x)                                 (substep 0 of impulse_tick)
+// where forces and impulses are trilinear reads of the domain's coarse field
+// lattices (liquid_field.wgsl; origin the lattice minimum, 4 floats a node).
+// Then the closed walls and each collider in body order (matter_wall_stop in
 // matter_walls.wgsl and liquid_collider_project in liquid_collider.wgsl, which
 // node.matter_body_reaction repeats to attribute each body's share).
 // Each component is then clamped to ±0.9·dx/dt; a clamped node sets
@@ -16,6 +19,26 @@
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
+}
+
+fn grid_update_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let w = c.index * 4u;
+        sum = sum + vec3<f32>(buf_forces[w], buf_forces[w + 1u], buf_forces[w + 2u]) * c.weight;
+    }
+    return sum;
+}
+
+fn grid_update_impulses(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let c = liquid_field_corner(x, origin, spacing, dims, k);
+        let w = c.index * 4u;
+        sum = sum + vec3<f32>(buf_impulses[w], buf_impulses[w + 1u], buf_impulses[w + 2u]) * c.weight;
+    }
+    return sum;
 }
 
 fn body(
@@ -36,6 +59,14 @@ fn body(
     lattice_min_y: f32,
     lattice_min_z: f32,
     body_count: i32,
+    tick_index: i32,
+    substep_in_tick: i32,
+    field_nodes_x: i32,
+    field_nodes_y: i32,
+    field_nodes_z: i32,
+    field_spacing: f32,
+    forces_on: i32,
+    impulse_tick: i32,
 ) -> Element {
     var out: Element;
     out.velocity_mass = vec4<f32>(0.0);
@@ -53,13 +84,21 @@ fn body(
         f32(buf_accum[word + 1u]),
         f32(buf_accum[word + 2u]),
     ) / m_norm * (momentum_unit * (65536.0 / 134217728.0));
-    var v = v_before + step_dt * vec3<f32>(gravity_x, gravity, gravity_z);
-
     let n = vec3<u32>(u32(nodes_x), u32(nodes_y), u32(nodes_z));
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
+    let origin = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
+    let x = origin + vec3<f32>(coord) * cell_size;
+    let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
+    var accel = vec3<f32>(gravity_x, gravity, gravity_z);
+    if forces_on != 0 {
+        accel = accel + grid_update_forces(x, origin, field_spacing, field_dims);
+    }
+    var v = v_before + step_dt * accel;
+    if tick_index == impulse_tick && substep_in_tick == 0 {
+        v = v + grid_update_impulses(x, origin, field_spacing, field_dims);
+    }
     v = matter_wall_stop(v, coord, n, u32(closed_faces));
 
-    let x = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + vec3<f32>(coord) * cell_size;
     for (var b = 0; b < body_count; b = b + 1) {
         let bd = buf_bodies[u32(b)];
         let shape_index = i32(bd.accel_shape.w);
