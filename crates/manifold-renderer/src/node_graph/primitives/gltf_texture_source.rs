@@ -1546,7 +1546,7 @@ mod gpu_tests {
             &rgba,
         );
 
-        let second_device = Arc::new(manifold_gpu::GpuDevice::new());
+        let second_device = Arc::new(manifold_gpu::GpuDevice::new_queued("gltf_texture_source tests"));
         let mut backend_scope = MetalBackend::new(Arc::clone(&second_device), w, h, format);
         let slot_scope = backend_scope.pre_bind_texture_2d(
             ResourceId(0),

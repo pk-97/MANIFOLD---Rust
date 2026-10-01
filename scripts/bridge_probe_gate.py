@@ -184,4 +184,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import gpu_queue
+
+    with gpu_queue.hold("bridge_probe_gate"):
+        sys.exit(main())

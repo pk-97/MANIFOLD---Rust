@@ -35,6 +35,7 @@ fn authored_shared_world_fixture() -> EffectGraphDef {
         crate::node_graph::scene_exposure::metadata_for_node_type("node.transform_3d"),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.pbr_material"),
         crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object"),
+        manifold_editing::commands::graph::flip_scene_fluid_template(),
         baseline,
     )
     .with_role_metadata(crate::node_graph::scene_exposure::metadata_for_node_type(

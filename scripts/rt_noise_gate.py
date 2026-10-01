@@ -98,6 +98,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import gpu_queue
+
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 BASELINE = Path("scripts/rt_noise_baseline.json")
 
@@ -624,7 +626,7 @@ def motion_leg(repo, binary, project, baseline, record, baseline_path, out_dir, 
     attempts = 0
     max_attempts = repeats + 2
     LOCK_PATH.touch()
-    with open(LOCK_PATH, "w") as lock:
+    with gpu_queue.hold("rt_noise_gate"), open(LOCK_PATH, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         while len(runs_series) < repeats and attempts < max_attempts:
             attempts += 1
@@ -888,7 +890,7 @@ def main():
                           baseline_path, out_dir, args.repeats, args.require_fixture)
 
     LOCK_PATH.touch()
-    with open(LOCK_PATH, "w") as lock:
+    with gpu_queue.hold("rt_noise_gate"), open(LOCK_PATH, "w") as lock:
         # rt_capture.rs dumps to a hardcoded /tmp path; concurrent runs would
         # interleave PNGs and corrupt both metrics.
         fcntl.flock(lock, fcntl.LOCK_EX)

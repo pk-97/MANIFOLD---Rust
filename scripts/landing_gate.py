@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import gpu_queue
+
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
 # GPU-proofs landing scope: narrow the gpu-proofs leg to the subsystem a branch
@@ -485,7 +487,10 @@ def main():
                 for s in skips:
                     cmd += ["--skip", s]
                 print(f"[gpu-proofs] scoped to filters={filters} skips={skips}")
-            exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
+            # Queue here, not inside the subprocess, so waiting behind another
+            # GPU run does not eat this leg's 2h timeout or its duration.
+            with gpu_queue.hold("landing_gate gpu-proofs"):
+                exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's

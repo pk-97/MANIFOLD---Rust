@@ -386,7 +386,7 @@ mod tests {
         ))
         .expect("read BlackHole.json");
 
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("graph_dump"));
         let registry = PrimitiveRegistry::with_builtin();
         let mut generator = PresetRuntime::from_json_str_with_device(
             &json,
@@ -503,7 +503,7 @@ mod tests {
         .unwrap();
         let base: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        let device = std::sync::Arc::new(GpuDevice::new());
+        let device = std::sync::Arc::new(GpuDevice::new_queued("graph_dump"));
         let registry = PrimitiveRegistry::with_builtin();
         let dir = std::path::PathBuf::from("/tmp/manifold-blackhole-sweep");
         let _ = std::fs::remove_dir_all(&dir);

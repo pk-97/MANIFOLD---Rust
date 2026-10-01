@@ -344,7 +344,7 @@ mod gpu_tests {
     fn onset_lanes_draw_at_their_slots_in_their_colors() {
         const COLS: u32 = 64;
         const H: u32 = 512;
-        let device = GpuDevice::new();
+        let device = GpuDevice::new_queued("spectral gpu-proofs");
         let mut spec = Spectrogram::new(
             &device,
             64,
@@ -436,7 +436,7 @@ mod gpu_tests {
     fn dim_range_darkens_outside_the_kept_band_only() {
         const COLS: u32 = 32;
         const H: u32 = 256;
-        let device = GpuDevice::new();
+        let device = GpuDevice::new_queued("spectral gpu-proofs");
         let mut spec =
             Spectrogram::new(&device, 64, COLS as usize, GpuTextureFormat::Rgba8Unorm, -59.0, 0.0, 0.0);
 

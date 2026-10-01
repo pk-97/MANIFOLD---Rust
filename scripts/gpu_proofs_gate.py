@@ -7,7 +7,8 @@ rounds. This wrapper streams output live, then parses the full captured run
 into one summary: every failed test name, every golden-mismatch detail (file +
 diff), and a per-binary pass/fail count. Every selected test binary runs to
 completion with `--no-fail-fast`. Never nextest — process-per-test
-defeats the GPU device lock.
+defeats the GPU device lock. The whole run holds the machine-wide GPU queue
+(scripts/gpu_queue.py) and waits its turn behind any other GPU run.
 
 The default runs only the `gpu_proofs` test binary. `--test NAME` can be
 repeated for an explicit set of binaries; `--full-suite` restores the broad
@@ -26,6 +27,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import gpu_queue
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
@@ -220,9 +223,12 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest_path = args.manifest_path or default_manifest_path()
-    exit_code, output = run_gate(
-        manifest_path, args.filter, args.skip, args.targets, args.full_suite
-    )
+    # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for the
+    # whole cargo run so another run cannot interleave between test binaries.
+    with gpu_queue.hold("gpu_proofs_gate"):
+        exit_code, output = run_gate(
+            manifest_path, args.filter, args.skip, args.targets, args.full_suite
+        )
     print_summary(output, exit_code)
     return exit_code
 
