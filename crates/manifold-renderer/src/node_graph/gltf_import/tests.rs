@@ -1456,10 +1456,11 @@ fn build_import_graph_ao_group_consumes_ao_mask() {
     );
 }
 
-/// BUG-221: static compound imports use one shared transform. Every mesh
-/// source is shifted by the whole asset center and the shared user-facing
-/// transform stays at the origin, preserving the old net placement while
-/// giving all material parts one rotation/scale pivot.
+/// BUG-221 inside a static compound: the shared transform stays at the
+/// origin (it pivots the whole asset about its centre), while each part keeps
+/// its own pivot — `mesh_k` is shifted by `-own_center` and
+/// `part_transform_k` sits at `own_center - center`, so the net placement is
+/// still the whole-scene recenter.
 #[test]
 fn bug221_compound_transform_uses_shared_asset_center_pivot() {
     let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
@@ -1521,29 +1522,44 @@ fn bug221_compound_transform_uses_shared_asset_center_pivot() {
         float_param(transform0, "pos_y"),
         float_param(transform0, "pos_z"),
     ];
+    let part0 = body
+        .nodes
+        .iter()
+        .find(|n| n.handle.as_deref() == Some("part_transform_0"))
+        .expect("part_transform_0 node inside the compound group");
+    let part_pos = [
+        float_param(part0, "pos_x"),
+        float_param(part0, "pos_y"),
+        float_param(part0, "pos_z"),
+    ];
+    let own_center = [5.0_f32, 1.0, -0.5];
     for i in 0..3 {
         assert!(
-            (translate[i] - (-center[i])).abs() < 1e-5,
-            "mesh_0.translate_{i} should be -scene_center[{i}]: got {translate:?}"
+            (translate[i] - (-own_center[i])).abs() < 1e-5,
+            "mesh_0.translate_{i} should be -own_center[{i}]: got {translate:?}"
         );
         assert!(
             pos[i].abs() < 1e-5,
             "shared transform_0.pos_{i} should remain at the origin: got {pos:?}"
         );
+        assert!(
+            (part_pos[i] - (own_center[i] - center[i])).abs() < 1e-5,
+            "part_transform_0.pos_{i} should be own_center - center: got {part_pos:?}"
+        );
         // The composed net offset remains the whole-scene recenter.
         assert!(
-            (translate[i] + pos[i] - (-center[i])).abs() < 1e-5,
-            "mesh_0.translate_{i} + transform_0.pos_{i} must equal -center[{i}] \
-             (net world placement unchanged): translate={translate:?} pos={pos:?} center={center:?}"
+            (translate[i] + part_pos[i] + pos[i] - (-center[i])).abs() < 1e-5,
+            "mesh_0.translate_{i} + part_transform_0.pos_{i} + transform_0.pos_{i} must equal \
+             -center[{i}] (net world placement unchanged): translate={translate:?} \
+             part={part_pos:?} pos={pos:?} center={center:?}"
         );
     }
-    assert!(pos.iter().all(|value| value.abs() < 1e-5));
 }
 
 /// BUG-303: the card slider that auto-exposes the shared `transform_0.pos_x`
-/// must default to the shared transform's origin. The mesh sources carry the
-/// whole-asset recenter, so binding defaults must not invent a per-material
-/// offset.
+/// must default to the shared transform's origin. Per-part offsets live on
+/// `part_transform_k`, so the shared transform's binding defaults must not
+/// pick one up.
 #[test]
 fn bug303_object_transform_exposure_default_matches_stamped_recenter_not_origin() {
     let mut big = full_material(0, "Big", 999); // k=0 after the largest-vertex-count-first sort
@@ -5812,6 +5828,22 @@ fn emissive_strength_test_fixture_path() -> std::path::PathBuf {
         .join("../../tests/fixtures/gltf/khronos/EmissiveStrengthTest.glb")
 }
 
+/// The transform that owns part `k`'s own placement: `part_transform_{k}`
+/// inside a static compound group (whose `transform_{k}` is the shared
+/// asset transform), else the per-object `transform_{k}`.
+#[cfg(feature = "gpu-proofs")]
+fn find_part_transform(
+    body: &manifold_core::effect_graph_def::GroupDef,
+    k: impl std::fmt::Display,
+) -> Option<&EffectGraphNode> {
+    let part = format!("part_transform_{k}");
+    let object = format!("transform_{k}");
+    body.nodes
+        .iter()
+        .find(|n| n.handle.as_deref() == Some(part.as_str()))
+        .or_else(|| body.nodes.iter().find(|n| n.handle.as_deref() == Some(object.as_str())))
+}
+
 /// Rebuild every object group's `mesh_k`/`transform_k` pair back to the
 /// PRE-BUG-221 shape: `mesh_k.translate_* = 0`, `transform_k.pos_* =
 /// (old mesh translate) + (old transform pos)`. See the module comment
@@ -5838,10 +5870,7 @@ fn reconstruct_pre_bug221_fix(def: &EffectGraphDef) -> EffectGraphDef {
             let Some(k) = mesh.handle.as_deref().and_then(|h| h.strip_prefix("mesh_")) else {
                 continue;
             };
-            let transform_handle = format!("transform_{k}");
-            let Some(transform) =
-                body.nodes.iter().find(|n| n.handle.as_deref() == Some(transform_handle.as_str()))
-            else {
+            let Some(transform) = find_part_transform(body, k) else {
                 continue;
             };
             let mut summed = [0.0f32; 3];
@@ -5981,17 +6010,13 @@ fn bug221_pivot_spins_in_place_after_fix_but_not_before() {
     let pre_def = reconstruct_pre_bug221_fix(&post_def);
 
     fn rotate_one_object_y(mut def: EffectGraphDef, k: usize, radians: f32) -> EffectGraphDef {
-        let target_handle = format!("transform_{k}");
         let node_id = def
             .nodes
             .iter()
             .filter_map(|n| n.group.as_ref())
-            .flat_map(|body| &body.nodes)
-            .find(|n| {
-                n.type_id == "node.transform_3d"
-                    && n.handle.as_deref() == Some(target_handle.as_str())
-            })
-            .unwrap_or_else(|| panic!("assembled def has no {target_handle}"))
+            .find_map(|body| find_part_transform(body, k))
+            .filter(|n| n.type_id == "node.transform_3d")
+            .unwrap_or_else(|| panic!("assembled def has no transform for part {k}"))
             .node_id
             .as_str()
             .to_string();
