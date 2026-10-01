@@ -573,51 +573,13 @@ fn gpu_flip_refined_splash() {
     dam_break(WaterScene::dam_break(128).with_surface(), "SPLASH 128³", 150);
 }
 
-/// The 128³ splash against what else could feed it: the density source (rate
-/// 0) and the step length (four steps a frame, so a fast particle crosses
-/// half as many cells per step as the two-layer face extension covers).
+/// The 128³ splash against the step length: four steps a frame, so a fast
+/// particle crosses half as many cells per step as the two-layer face
+/// extension covers.
 #[test]
 fn gpu_flip_refined_splash_causes() {
     let refined = WaterScene::dam_break(128).with_surface();
-    dam_break(WaterScene { spread_rate: 0.0, ..refined }, "SPLASH rate 0 128³", 120);
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
-}
-
-/// The crowding against the density solve's strength, share 1 and 0.5 at
-/// 64³ and 128³, two steps a frame, 300 frames.
-#[test]
-fn gpu_flip_refined_density_causes() {
-    for n in [64, 128] {
-        let scene = WaterScene::dam_break(n);
-        let per_second = 1.0 / scene.step_dt();
-        for share in [1.0, 0.5] {
-            dam_break(WaterScene { spread_rate: share * per_second, ..scene }, &format!("DENSITY share {share} {n}³"), 300);
-        }
-    }
-}
-
-/// How high the 64³ splash throws and whether it stays at the lid (BUG-h8or,
-/// splash slabs along the lid), as shipped and with the density solve left
-/// out, against `gpu_flip_engine_race`'s splash lines.
-#[test]
-fn gpu_flip_splash_causes_64() {
-    let base = WaterScene::dam_break(64);
-    dam_break(base, "LID share 1 64³", 150);
-    dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
-}
-
-/// The step's cadence levers on the meshed 64³ Dam Break: the density solve
-/// every step against once a frame (drift, packing, missing, the lid), and one
-/// water step a frame (the same plus the splash height over time and the cells
-/// a step the top speed crosses). The engine's side is
-/// `gpu_flip_engine_splash_64`.
-#[test]
-fn gpu_flip_cadence_64() {
-    let base = WaterScene::dam_break(64).with_surface();
-    dam_break(WaterScene { density_once: false, ..base }, "CADENCE density every step 64³", 300);
-    dam_break(base, "CADENCE density once 64³", 300);
-    let one_step = WaterScene { steps: 1, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0, ..base };
-    dam_break(one_step, "CADENCE one step 64³", 300);
 }
 
 /// The walls against the step count: the meshed 64³ Dam Break at two water
@@ -676,19 +638,4 @@ fn gpu_flip_transfer_kernel_refined() {
 #[test]
 fn gpu_flip_dam_break_settles() {
     dam_break(WaterScene::dam_break(64).with_surface(), "SETTLE 64³", 900);
-}
-
-/// The density solve's share of crowding removed per step (rate × step dt)
-/// and its iteration count against volume drift and particle motion, on the
-/// meshed 64³ Dam Break, with the drift curve every 30 frames. The
-/// correction moves particles only, so a share up to 2 relaxes instead of
-/// oscillating.
-#[test]
-fn gpu_flip_density_sweep() {
-    let base = WaterScene::dam_break(64).with_surface();
-    let per_second = 1.0 / base.step_dt();
-    for (share, iterations) in [(5.0 / 6.0, 3), (1.0, 3), (1.5, 3), (5.0 / 6.0, 8), (1.0, 8)] {
-        let scene = WaterScene { spread_rate: share * per_second, density_iterations: iterations, ..base };
-        dam_break(scene, &format!("SWEEP share {share:.2} iterations {iterations}"), 300);
-    }
 }
