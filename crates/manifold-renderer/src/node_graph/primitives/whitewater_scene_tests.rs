@@ -786,6 +786,76 @@ fn whitewater_side_by_side() {
     println!("WHITEWATER wrote {} and {}", clip.display(), dir.join("counts.png").display());
 }
 
+const EMISSION_FRAMES: usize = 150;
+
+/// O2's whole-scene companion: the Dam Break at 64 for its first 150 frames,
+/// the shipped GPU FLIP preset beside the FLIP engine running its own water
+/// and whitewater (read-only, as the race clips run it). Per frame: GPU FLIP's
+/// emission (the step in `emitted`) and population, and the engine's diffuse
+/// population. The engine publishes no emission count, and counting it would
+/// mean editing vendored code, so its side is the population. Writes
+/// `emission_150.csv` to the temp directory and prints the totals; asserts
+/// that both emit, that GPU FLIP never thins or drops a tick, and that its
+/// population is what it emitted less what died (never more).
+#[test]
+fn whitewater_emission_against_engine_150() {
+    let mut flip = Show::new(flip_def(true), (320, 180), false, &[]);
+    let flip_rows: Vec<[f32; 3]> = (0..EMISSION_FRAMES)
+        .map(|_| {
+            flip.frame(false);
+            let [foam, bubble, spray, _] = flip.probes(FLIP_PROBES);
+            [foam, bubble, spray]
+        })
+        .collect();
+    let errors = flip.errors();
+    drop(flip);
+    assert!(errors.is_empty(), "the engine ran with errors: {errors:#?}");
+
+    let mut show = Show::new(whitewater_render_def(WaterScene::dam_break(64)), (320, 180), true, &[]);
+    show.restart();
+    let gpu_rows: Vec<[f32; 8]> = (0..EMISSION_FRAMES)
+        .map(|_| {
+            show.frame(false);
+            show.probes(LIFECYCLE_REPORTS)
+        })
+        .collect();
+    let errors = show.errors();
+    drop(show);
+    assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
+
+    let mut csv = String::from("frame,gpu_flip_emitted_this_frame,gpu_flip_population,engine_population,engine_foam,engine_bubble,engine_spray\n");
+    let mut previous = 0.0;
+    let (mut gpu_emitted, mut gpu_pop_sum, mut engine_pop_sum) = (0.0f64, 0.0f64, 0.0f64);
+    for (frame, (g, e)) in gpu_rows.iter().zip(&flip_rows).enumerate() {
+        let emitted = g[3] - previous;
+        previous = g[3];
+        assert!(emitted >= 0.0, "frame {}: emitted ran backwards", frame + 1);
+        let population = g[0] + g[1] + g[2];
+        assert!(population <= g[3], "frame {}: population {population} above all emitted {}", frame + 1, g[3]);
+        let engine = e[0] + e[1] + e[2];
+        gpu_emitted += f64::from(emitted);
+        gpu_pop_sum += f64::from(population);
+        engine_pop_sum += f64::from(engine);
+        csv.push_str(&format!("{},{emitted},{population},{engine},{},{},{}\n", frame + 1, e[0], e[1], e[2]));
+    }
+    let path = std::env::temp_dir().join("emission_150.csv");
+    std::fs::write(&path, csv).expect("emission csv");
+    let last = gpu_rows[EMISSION_FRAMES - 1];
+    let engine_last = flip_rows[EMISSION_FRAMES - 1];
+    println!(
+        "WHITEWATER 150 frames: GPU FLIP emitted {gpu_emitted}, mean population {:.0}, last {:?}; engine mean population {:.0}, last {engine_last:?}; population ratio {:.3}; csv {}",
+        gpu_pop_sum / EMISSION_FRAMES as f64,
+        &last[..3],
+        engine_pop_sum / EMISSION_FRAMES as f64,
+        gpu_pop_sum / engine_pop_sum.max(1.0),
+        path.display()
+    );
+    assert!(gpu_emitted > 0.0, "GPU FLIP emitted nothing in 150 frames");
+    assert!(engine_pop_sum > 0.0, "the engine made no whitewater in 150 frames");
+    assert_eq!(last[4], 0.0, "GPU FLIP thinned spawns");
+    assert_eq!(last[5], 0.0, "offline, the lifecycle never drops a tick");
+}
+
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
