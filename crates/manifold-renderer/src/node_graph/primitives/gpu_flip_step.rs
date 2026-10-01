@@ -26,6 +26,7 @@ use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::WATER_DENSITY;
+use crate::node_graph::liquid::blocks::{LIQUID_BLOCKS_WGSL, block_total};
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::LiquidLattice;
@@ -75,11 +76,19 @@ fn cell_bytes(cells: [u32; 3]) -> u64 {
 
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
-/// four cell arrays, the solid corners and five face grids.
+/// four cell arrays, the solid corners, five face grids and two block maps.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
-    slots.max(1) * size_of::<FluidParticle>() as u64 + 4 * cell_bytes(cells) + corners + 5 * face_bytes(cells)
+    slots.max(1) * size_of::<FluidParticle>() as u64
+        + 4 * cell_bytes(cells)
+        + corners
+        + 5 * face_bytes(cells)
+        + 2 * block_bytes(cells)
+}
+
+fn block_bytes(cells: [u32; 3]) -> u64 {
+    block_total(cells) * 4
 }
 
 /// The shader's `Params`; field meanings are documented there.
@@ -110,6 +119,8 @@ pub(crate) struct StepParams {
     pub(crate) ghost: u32,
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
+    pub(crate) block_skip: u32,
+    pub(crate) _pad: [u32; 3],
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -120,6 +131,12 @@ pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams
     let pipeline = device.create_compute_pipeline(&step_source(), entry, "node.gpu_flip_step");
     let mut bindings = vec![uniform(params)];
     bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
+    // The gathers name the block map even with block_skip 0.
+    let no_blocks = device.create_buffer_shared(16);
+    no_blocks.zero_fill();
+    if !buffers.iter().any(|&(binding, _)| binding == 22) {
+        bindings.push(buffer(22, &no_blocks));
+    }
     let mut enc = device.create_encoder("gpu_flip.step.pass");
     enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
     enc.commit_and_wait_completed();
@@ -140,10 +157,12 @@ struct Pipelines {
     constrain: GpuComputePipeline,
     density: GpuComputePipeline,
     advect: GpuComputePipeline,
+    block_liquid: GpuComputePipeline,
+    block_dilate: GpuComputePipeline,
 }
 
 fn step_source() -> String {
-    format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{STEP_SHADER}")
+    format!("{LIQUID_BLOCKS_WGSL}\n{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{STEP_SHADER}")
 }
 
 impl Pipelines {
@@ -165,6 +184,8 @@ impl Pipelines {
             constrain: pipe("constrain_solid_faces"),
             density: pipe("density_source"),
             advect: pipe("faces_to_particles"),
+            block_liquid: pipe("block_liquid"),
+            block_dilate: pipe("block_dilate"),
         }
     }
 }
@@ -187,6 +208,10 @@ struct LatticeBuffers {
     s: GpuBuffer,
     /// The solids' face velocity and friction.
     v: GpuBuffer,
+    /// The block map of this step's water, then the same map dilated by
+    /// one block (`near`), which the particle gathers read.
+    blocks: GpuBuffer,
+    near: GpuBuffer,
 }
 
 fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
@@ -212,6 +237,8 @@ impl LatticeBuffers {
             f: allocate(device, face)?,
             s: allocate(device, face)?,
             v: allocate(device, face)?,
+            blocks: allocate(device, block_bytes(cells))?,
+            near: allocate(device, block_bytes(cells))?,
         })
     }
 }
@@ -377,25 +404,40 @@ impl StepState {
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
 
-        // The solids read the particles' φ even with the ghost rows off.
-        let solids = p.body_count > 0;
-        if step.ghost || solids {
-            enc.dispatch_compute(
-                &pipes.distance,
-                &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
-                cells_groups,
-                "gpu_flip.step.distance",
-            );
-        }
         enc.dispatch_compute(
             &pipes.classify,
             &[uniform(&base), buffer(1, ranges), buffer(5, &l.water)],
             cells_groups,
             "gpu_flip.step.classify",
         );
+        // The block map comes from this step's own water, before any pass
+        // moves a particle, so it holds for every gather of the step.
+        let block_groups = groups(block_total(cells));
+        enc.dispatch_compute(
+            &pipes.block_liquid,
+            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.blocks)],
+            block_groups,
+            "gpu_flip.step.block_liquid",
+        );
+        enc.dispatch_compute(
+            &pipes.block_dilate,
+            &[uniform(&base), buffer(22, &l.blocks), buffer(23, &l.near)],
+            block_groups,
+            "gpu_flip.step.block_dilate",
+        );
+        // The solids read the particles' φ even with the ghost rows off.
+        let solids = p.body_count > 0;
+        if step.ghost || solids {
+            enc.dispatch_compute(
+                &pipes.distance,
+                &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi), buffer(22, &l.near)],
+                cells_groups,
+                "gpu_flip.step.distance",
+            );
+        }
         enc.dispatch_compute(
             &pipes.gather,
-            &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.a)],
+            &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.a), buffer(22, &l.near)],
             face_groups,
             "gpu_flip.step.particles_to_faces",
         );
@@ -656,6 +698,24 @@ crate::primitive! {
     },
 }
 
+#[cfg(any(test, feature = "gpu-proofs"))]
+thread_local! {
+    /// Test seam: true runs the particle gathers over every cell, for the
+    /// proof that the block skip changes nothing and for its timing.
+    pub(crate) static BLOCK_SKIP_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn block_skip() -> bool {
+    #[cfg(any(test, feature = "gpu-proofs"))]
+    {
+        !BLOCK_SKIP_OFF.with(std::cell::Cell::get)
+    }
+    #[cfg(not(any(test, feature = "gpu-proofs")))]
+    {
+        true
+    }
+}
+
 fn read_iterations(value: f32, auto: u32) -> u32 {
     match value.round() {
         v if v <= 0.0 => auto,
@@ -791,6 +851,8 @@ impl Primitive for GpuFlipStep {
                 ghost: u32::from(ghost),
                 particles: out_slots,
                 shapes_len,
+                block_skip: u32::from(block_skip()),
+                _pad: [0; 3],
             },
             particles,
             out,
@@ -850,14 +912,95 @@ mod tests {
             "constrain_solid_faces",
             "density_source",
             "faces_to_particles",
+            "block_liquid",
+            "block_dilate",
         ] {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
     }
 
+    /// The CPU twin of `block_liquid` then `block_dilate`: per block, whether
+    /// it or one of its 26 neighbours holds a water cell.
+    fn near_blocks(water: &[bool], n: [u32; 3]) -> Vec<bool> {
+        let nb = crate::node_graph::liquid::blocks::block_lattice(n).map(|b| b as i64);
+        let side = i64::from(crate::node_graph::liquid::blocks::LIQUID_BLOCK_CELLS);
+        let mut liquid = vec![false; (nb[0] * nb[1] * nb[2]) as usize];
+        for (c, _) in water.iter().enumerate().filter(|(_, w)| **w) {
+            let c = c as i64;
+            let p = [c % i64::from(n[0]), (c / i64::from(n[0])) % i64::from(n[1]), c / i64::from(n[0] * n[1])];
+            liquid[(p[0] / side + nb[0] * (p[1] / side + nb[1] * (p[2] / side))) as usize] = true;
+        }
+        let mut near = vec![false; liquid.len()];
+        for (i, out) in near.iter_mut().enumerate() {
+            let i = i as i64;
+            let b = [i % nb[0], (i / nb[0]) % nb[1], i / (nb[0] * nb[1])];
+            for d in 0..27 {
+                let q = [b[0] + d % 3 - 1, b[1] + (d / 3) % 3 - 1, b[2] + d / 9 - 1];
+                if (0..3).all(|a| (0..nb[a]).contains(&q[a])) && liquid[(q[0] + nb[0] * (q[1] + nb[1] * q[2])) as usize] {
+                    *out = true;
+                }
+            }
+        }
+        near
+    }
+
+    /// The block maps the step allocates at Resolution 64 and 128 (the
+    /// lattice is the Resolution a side), edge blocks partial.
+    #[test]
+    fn step_block_map_extents() {
+        assert_eq!(block_bytes([64; 3]), 16 * 16 * 16 * 4);
+        assert_eq!(block_bytes([128; 3]), 32 * 32 * 32 * 4);
+        assert_eq!(block_bytes([70, 50, 9]), 18 * 13 * 3 * 4);
+        let without = |cells: [u32; 3]| {
+            let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
+            size_of::<FluidParticle>() as u64 * 1000 + 4 * cell_bytes(cells) + corners + 5 * face_bytes(cells)
+        };
+        for cells in [[64; 3], [128; 3], [70, 50, 9]] {
+            assert_eq!(scratch_bytes(cells, 1000) - without(cells), 2 * block_bytes(cells));
+        }
+    }
+
+    /// A cell the dilated map marks far from water has no water cell within
+    /// 4 cells on any axis (Chebyshev), past both gathers' reach of 2, at
+    /// sides that are not whole blocks.
+    #[test]
+    fn step_block_map_far_cells_have_no_water_within_reach() {
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for n in [[9, 13, 7], [17, 6, 21], [12, 12, 12]] {
+            for density in [2, 40, 400] {
+                let total = (n[0] * n[1] * n[2]) as usize;
+                let water: Vec<bool> = (0..total).map(|_| next() % 1000 < density).collect();
+                let near = near_blocks(&water, n);
+                let nb = crate::node_graph::liquid::blocks::block_lattice(n);
+                let at = |c: usize| {
+                    let c = c as u32;
+                    [c % n[0], (c / n[0]) % n[1], c / (n[0] * n[1])]
+                };
+                for c in 0..total {
+                    let p = at(c);
+                    let b = p.map(|v| v / 4);
+                    if near[(b[0] + nb[0] * (b[1] + nb[1] * b[2])) as usize] {
+                        continue;
+                    }
+                    for w in (0..total).filter(|&w| water[w]) {
+                        let q = at(w);
+                        let reach = (0..3).map(|a| p[a].abs_diff(q[a])).max().unwrap();
+                        assert!(reach > 4, "{n:?}: far cell {p:?} has water at {q:?}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn step_params_match_the_shader_uniform() {
-        assert_eq!(size_of::<StepParams>(), 128);
+        assert_eq!(size_of::<StepParams>(), 144);
     }
 
     /// The band covers ¾ of the travel plus the sample's reach, never under

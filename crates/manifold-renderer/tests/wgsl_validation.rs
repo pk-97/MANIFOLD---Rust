@@ -55,9 +55,11 @@ const PBR_BRDF: &str = include_str!("../src/node_graph/primitives/shaders/pbr_br
 const TONEMAP_COMMON: &str = include_str!("../src/effects/shaders/tonemap_common.wgsl");
 const SAMPLE_FACE_COMMON: &str =
     include_str!("../src/node_graph/primitives/shaders/sample_face_common.wgsl");
-/// `node.gpu_flip_step`'s prelude: pose, collider sampling and the force
-/// field, in its `step_source` order.
+/// `node.gpu_flip_step`'s prelude: the block map, pose, collider sampling
+/// and the force field, in its `step_source` order.
 const GPU_FLIP_STEP_PRELUDE: &str = concat!(
+    include_str!("../src/node_graph/primitives/shaders/liquid_blocks.wgsl"),
+    "\n",
     include_str!("../src/node_graph/primitives/shaders/liquid_pose.wgsl"),
     "\n",
     include_str!("../src/node_graph/primitives/shaders/liquid_collider.wgsl"),

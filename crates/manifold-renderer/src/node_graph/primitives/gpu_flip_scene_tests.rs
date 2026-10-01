@@ -147,6 +147,41 @@ impl Run {
         (by_type, profile.total_ms)
     }
 
+    /// One frame with a GPU timestamp per dispatch: milliseconds per
+    /// dispatch label, summed over the frame, and the frame's total.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn profiled_labels(&mut self) -> (Vec<(String, f64, usize)>, f64) {
+        self.entering = self.particles();
+        let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
+        let mut enc = self.device.create_encoder("gpu-flip-scene-labels");
+        enc.enable_dispatch_profiling(sampler, &self.device);
+        self.exec.set_profiling(true);
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, &self.device);
+            let time = FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(self.frames as f64 / 60.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: self.frames,
+            };
+            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.frames += 1;
+        }
+        self.exec.set_profiling(false);
+        let profile = enc.commit_and_wait_profiled(&self.device);
+        let mut by_label: Vec<(String, f64, usize)> = Vec::new();
+        for span in &profile.spans {
+            match by_label.iter_mut().find(|(l, _, _)| *l == span.label) {
+                Some(row) => {
+                    row.1 += span.millis;
+                    row.2 += 1;
+                }
+                None => by_label.push((span.label.clone(), span.millis, 1)),
+            }
+        }
+        (by_label, profile.total_ms)
+    }
+
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     pub(super) fn frame(&mut self) -> (f64, f64) {
         self.entering = self.particles();
@@ -529,6 +564,110 @@ fn gpu_flip_frame_by_node_type() {
     println!("GPU FLIP frame by type: {total:.2} ms profiled, plain {plain:?}");
     for (ty, ms) in by_type.iter().take(15) {
         println!("GPU FLIP frame by type:   {ty:32} {ms:7.2} ms");
+    }
+}
+
+/// The step's block skip changes nothing: a Dam Break round the obstacle at
+/// a side that is not whole blocks runs 300 ticks with the particle gathers
+/// skipping cells far from water and 300 reading every cell, and every
+/// tick's particles and every step's face grid match bit for bit. The water
+/// must enter blocks it did not hold the tick before, so the map is
+/// rebuilt under moving water, not only read.
+#[test]
+fn gpu_flip_block_skip_changes_nothing() {
+    use super::gpu_flip_step::BLOCK_SKIP_OFF;
+    let scene = WaterScene::dam_break(50).with_obstacle();
+    let n = scene.pressure.n;
+    let nb = n.div_ceil(4);
+    let blocks = |water: &[f32]| {
+        let mut held = vec![false; nb * nb * nb];
+        for (c, _) in water.iter().enumerate().filter(|(_, w)| **w > 0.5) {
+            let p = [c % n, (c / n) % n, c / (n * n)].map(|v| v / 4);
+            held[p[0] + nb * (p[1] + nb * p[2])] = true;
+        }
+        held
+    };
+    BLOCK_SKIP_OFF.with(|off| off.set(true));
+    let mut every = Run::new(scene);
+    BLOCK_SKIP_OFF.with(|off| off.set(false));
+    let mut skipping = Run::new(scene);
+    let bits = |faces: &[FaceSample]| bytemuck::cast_slice::<FaceSample, u32>(faces).to_vec();
+    let mut held = blocks(&skipping.water(0));
+    let (mut entered, mut empty_blocks) = (0usize, 0usize);
+    for tick in 0..300 {
+        BLOCK_SKIP_OFF.with(|off| off.set(true));
+        every.frame();
+        BLOCK_SKIP_OFF.with(|off| off.set(false));
+        skipping.frame();
+        let (a, b) = (every.particles(), skipping.particles());
+        assert!(
+            bytemuck::cast_slice::<FluidParticle, u32>(&a) == bytemuck::cast_slice::<FluidParticle, u32>(&b),
+            "tick {tick}: the particles differ with the block skip"
+        );
+        for step in 0..scene.steps {
+            assert!(bits(&every.faces(step)) == bits(&skipping.faces(step)), "tick {tick} step {step}: the faces differ");
+        }
+        let now = blocks(&skipping.water(0));
+        entered += now.iter().zip(&held).filter(|&(now, before)| *now && !*before).count();
+        empty_blocks = empty_blocks.max(now.iter().filter(|h| !**h).count());
+        held = now;
+    }
+    BLOCK_SKIP_OFF.with(|off| off.set(false));
+    println!("GPU FLIP block skip: 300 ticks bit for bit at {n}³, water entered {entered} blocks it did not hold the tick before; up to {empty_blocks} of {} blocks dry", nb.pow(3));
+    assert!(entered > 50, "the water entered only {entered} new blocks");
+}
+
+/// GPU ms per dispatch label of the Dam Break at 64 and 128, the step's
+/// block skip off and on, alternating frame by frame from the same run; the
+/// median of 6 timestamped frames each, and the plain frames' median.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_block_skip_timing() {
+    use super::gpu_flip_step::BLOCK_SKIP_OFF;
+    fn median(mut v: Vec<f64>) -> f64 {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    }
+    for n in [64, 128] {
+        let mut run = Run::new(WaterScene::dam_break(n));
+        for _ in 0..90 {
+            run.frame();
+        }
+        let mut labels: Vec<(String, [Vec<f64>; 2], usize)> = Vec::new();
+        let (mut totals, mut plain) = ([Vec::new(), Vec::new()], [Vec::new(), Vec::new()]);
+        for round in 0..12 {
+            let mode = round % 2;
+            BLOCK_SKIP_OFF.with(|off| off.set(mode == 0));
+            plain[mode].push(run.frame().0);
+            let (by_label, total) = run.profiled_labels();
+            totals[mode].push(total);
+            for (label, ms, count) in by_label {
+                match labels.iter_mut().find(|(l, _, _)| *l == label) {
+                    Some(row) => row.1[mode].push(ms),
+                    None => {
+                        let mut row = (label, [Vec::new(), Vec::new()], count);
+                        row.1[mode].push(ms);
+                        labels.push(row);
+                    }
+                }
+            }
+        }
+        BLOCK_SKIP_OFF.with(|off| off.set(false));
+        let mut rows: Vec<(String, f64, f64, usize)> = labels
+            .into_iter()
+            .map(|(l, [off, on], count)| (l, median(off), median(on), count))
+            .collect();
+        rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+        println!(
+            "BLOCK SKIP {n}: frame GPU ms timestamped off {:.2} on {:.2}; plain off {:.2} on {:.2}",
+            median(totals[0].clone()),
+            median(totals[1].clone()),
+            median(plain[0].clone()),
+            median(plain[1].clone())
+        );
+        for (label, off, on, count) in rows {
+            println!("BLOCK SKIP {n}:   {label:<40} x{count:<4} off {off:8.3} on {on:8.3}");
+        }
     }
 }
 
