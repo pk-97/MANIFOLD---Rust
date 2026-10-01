@@ -346,6 +346,9 @@ pub struct GpuComputePipeline {
     pub workgroup_size: [u32; 3],
     /// Whether this pipeline needs a sizes buffer for runtime-sized arrays.
     pub needs_sizes_buffer: bool,
+    /// Created with indirect-command-buffer support, so its dispatches can
+    /// enter an encode-replay recording.
+    pub(crate) supports_replay: bool,
 }
 
 impl Clone for GpuComputePipeline {
@@ -356,6 +359,7 @@ impl Clone for GpuComputePipeline {
             label: self.label.clone(),
             workgroup_size: self.workgroup_size,
             needs_sizes_buffer: self.needs_sizes_buffer,
+            supports_replay: self.supports_replay,
         }
     }
 }

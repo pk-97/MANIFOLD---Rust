@@ -445,6 +445,13 @@ impl Chain {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let mut graph = def.clone().into_graph(&registry, &Default::default()).expect("chain builds");
+        // The host fills the sources and reads the sink's input outside the frame.
+        let sink = super::gpu_flip_solve_tests::node_named(&graph, "sink");
+        let (into_node, into_port) = graph.wires_into(sink).map(|w| w.from).next().expect("the sink is wired");
+        for name in self.sources.iter().map(|(name, _)| name) {
+            graph.add_external_output(super::gpu_flip_solve_tests::node_named(&graph, name), "out").expect("a source port");
+        }
+        graph.add_external_output(into_node, into_port).expect("the sink's producer port");
         let plan = compile(&graph).expect("chain compiles");
         let fused = graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
         let device = crate::test_device();
@@ -461,11 +468,9 @@ impl Chain {
             // SAFETY: a shared buffer at least this long; nothing runs yet.
             unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
         }
-        let sink = super::gpu_flip_solve_tests::node_named(&graph, "sink");
         let step = plan.steps().iter().find(|s| s.node == sink).expect("sink compiled");
         let input = step.inputs.iter().find(|(name, _)| *name == "values").map(|&(_, r)| r).expect("sink input");
         let mut exec = Executor::new(Box::new(backend));
-        exec.set_dump_set(Some(std::iter::once(sink).collect()));
         let mut enc = device.create_encoder("gpu flip chain");
         {
             let mut gpu = GpuEncoder::new(&mut enc, &device);
@@ -473,8 +478,7 @@ impl Chain {
             exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut StateStore::new(), 0);
         }
         enc.commit_and_wait_completed();
-        let backend = exec.backend();
-        let buffer = backend.array_buffer(backend.slot_for(input).expect("sink input bound")).expect("sink buffer");
+        let buffer = exec.host_array_buffer(&graph, &plan, input).expect("the sink's input keeps its own storage");
         assert!(buffer.size as usize >= len * 4, "the sink reads {} bytes, not {len} values ({fused} fused regions)", buffer.size);
         (read(buffer, len), fused)
     }

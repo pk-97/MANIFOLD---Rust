@@ -48,28 +48,29 @@ impl Run {
         Self::with_graph(scene, water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds"))
     }
 
-    fn with_graph(scene: WaterScene, graph: Graph) -> Self {
+    fn with_graph(scene: WaterScene, mut graph: Graph) -> Self {
+        // Every array read after a frame keeps its own storage.
+        let mut read = vec![(node_named(&graph, "state"), "out")];
+        for k in 0..scene.steps {
+            for name in ["water", "gravity", "project"] {
+                read.push((node_named(&graph, &format!("s{k}.{name}")), "out"));
+            }
+        }
+        if scene.surface {
+            read.push((node_ending(&graph, "liquid_offsets"), "extent"));
+            read.push((node_ending(&graph, "liquid_mesh"), "vertices"));
+        }
+        if scene.faces {
+            read.extend(FACE_NODES.map(|name| (node_named(&graph, name), "out")));
+        }
+        for &(node, port) in &read {
+            graph.add_external_output(node, port).expect("a read port exists");
+        }
         let plan = compile(&graph).expect("water def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&graph, &plan, &device, &mut backend).expect("pre-allocate");
-        let mut exec = Executor::new(Box::new(backend));
-        // Everything read after a frame is held past it.
-        let last = scene.steps - 1;
-        let mut watched = vec![node_named(&graph, &format!("s{last}.move"))];
-        for k in 0..scene.steps {
-            for name in ["water", "gravity", "project"] {
-                watched.push(node_named(&graph, &format!("s{k}.{name}")));
-            }
-        }
-        if scene.surface {
-            watched.extend(["liquid_offsets", "liquid_mesh"].map(|name| node_ending(&graph, name)));
-        }
-        watched.push(node_named(&graph, "state"));
-        if scene.faces {
-            watched.extend(FACE_NODES.map(|name| node_named(&graph, name)));
-        }
-        exec.set_dump_set(Some(watched.into_iter().collect()));
+        let exec = Executor::new(Box::new(backend));
         let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0 };
         // The domain's clock restarts on its first frame and ticks none: the
         // state takes the fill. Every later frame is one tick.
@@ -124,8 +125,10 @@ impl Run {
 
     fn read_at<T: bytemuck::Pod>(&self, node: crate::node_graph::NodeInstanceId, port: &str, len: usize) -> Vec<T> {
         let resource = output_of(&self.plan, node, port);
-        let backend = self.exec.backend();
-        let buffer = backend.array_buffer(backend.slot_for(resource).expect("output bound")).expect("array output");
+        let buffer = self
+            .exec
+            .host_array_buffer(&self.graph, &self.plan, resource)
+            .unwrap_or_else(|| panic!("{node:?}.{port} is not declared as a host read in with_graph"));
         assert!(buffer.size as usize >= len * std::mem::size_of::<T>(), "{node:?}.{port} is shorter than {len} records");
         let ptr = buffer.mapped_ptr().expect("shared storage");
         // SAFETY: the frame completed and the buffer holds `len` records.

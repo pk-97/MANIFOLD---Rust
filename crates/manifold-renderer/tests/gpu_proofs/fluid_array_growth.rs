@@ -115,13 +115,11 @@ fn execute_frame(
     assert_eq!(status, FrameRenderStatus::Complete);
     native_encoder.commit_and_wait_completed();
 
+    let buffer = runtime
+        .executor
+        .host_array_buffer(&runtime.graph, &runtime.plan, runtime.output)
+        .expect("downstream output holds its own contents");
     let backend = runtime.executor.backend();
-    let output_slot = backend
-        .slot_for(runtime.output)
-        .expect("downstream output slot");
-    let buffer = backend
-        .array_buffer(output_slot)
-        .expect("downstream output buffer");
     let bytes = unsafe {
         std::slice::from_raw_parts(
             buffer.mapped_ptr().expect("shared downstream output") as *const u8,

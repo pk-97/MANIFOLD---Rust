@@ -17,7 +17,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use manifold_core::NodeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
@@ -269,15 +268,10 @@ impl Smoke {
             time: 0.0,
             critical: Vec::new(),
         };
-        // Hold what is read after each frame past it.
-        let mut watched: Vec<String> = vec!["fill".into(), "state".into()];
-        watched.extend((0..scene.steps).map(|k| format!("s{k}.water")));
-        for suffix in ["liquid_offsets", "liquid_mesh"] {
-            let found = smoke.runtime.graph.nodes().find(|n| n.node_id.as_str().ends_with(suffix)).expect("surface node");
-            watched.push(found.node_id.as_str().to_string());
-        }
-        let ids: Vec<NodeId> = watched.iter().map(|name| NodeId::from(name.as_str())).collect();
-        smoke.runtime.set_dump_visible(None, &ids);
+        // Arrays read after a frame: the runtime compiles its own plan, so the
+        // reads cannot be declared as host outputs, and the whole-graph dump
+        // copies any array whose storage a later step takes.
+        smoke.runtime.set_dump_all(true);
         smoke
     }
 

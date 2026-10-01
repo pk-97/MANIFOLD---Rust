@@ -306,6 +306,9 @@ fn caster_contract_live_rt_and_shadow_toggles() {
     );
 }
 
+/// Wall-clock, so `rt-perf-proofs` only (run with `--test-threads=1`): in
+/// the parallel correctness binary a frame time measures the other tests.
+#[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn trace_ms_2vs6_caster_delta_reported_as_number() {
     // All casters shadowing, only lights 0-1 for 2-caster case,

@@ -10,7 +10,8 @@ use objc2_foundation::NSString;
 use objc2_metal::{
     MTLAccelerationStructureCommandEncoder, MTLAccelerationStructurePassDescriptor, MTLBuffer,
     MTLBlitCommandEncoder, MTLBlitOption, MTLBlitPassDescriptor, MTLCommandBuffer,
-    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLIndexType,
+    MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor,
+    MTLComputePipelineState, MTLIndexType,
     MTLLoadAction, MTLMultisampleDepthResolveFilter, MTLOrigin, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceUsage, MTLScissorRect, MTLSize,
     MTLStoreAction, MTLTexture, MTLTextureUsage, MTLViewport,
@@ -27,6 +28,9 @@ pub(crate) enum EncoderState {
     Render(Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>),
 }
 
+/// Label prefix of the RT stages that run in their own labelled encoder.
+pub(super) const RT_STAGE_PREFIX: &str = "node.render_scene RT";
+
 /// Cached compute bind state — skips redundant Metal API calls when the same
 /// resource is already bound at a slot from a previous dispatch.
 const CACHE_SLOTS: usize = 16;
@@ -38,7 +42,7 @@ const CACHE_SLOTS: usize = 16;
 /// runtime-sized storage arrays. Raising this means the `[u32; N]` scratch
 /// grows; Metal itself allows up to 31 buffer args per stage so 32 covers
 /// the entire addressable slot space.
-const MAX_BUFFER_SLOTS: usize = 32;
+pub(super) const MAX_BUFFER_SLOTS: usize = 32;
 
 pub(super) struct ComputeBindCache {
     textures: [*const c_void; CACHE_SLOTS],
@@ -55,7 +59,7 @@ impl ComputeBindCache {
         }
     }
 
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.textures = [std::ptr::null(); CACHE_SLOTS];
         self.samplers = [std::ptr::null(); CACHE_SLOTS];
         self.buffers = [(std::ptr::null(), 0); CACHE_SLOTS];
@@ -106,6 +110,8 @@ pub struct GpuEncoder {
     /// buffer was encoding — a bare buffer label like "Generators" covers
     /// every card of the frame and can't say which one hung (BUG-84fv).
     pub(crate) scopes: Vec<String>,
+    /// The open encode-replay span, between `begin_replay` and `end_replay`.
+    pub(crate) replay: Option<super::replay::ReplaySpan>,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -261,12 +267,19 @@ impl GpuEncoder {
         &self.cmd_buf
     }
 
-    /// Ensure a compute encoder is active. Returns a retained handle.
+    /// Ensure a compute encoder is active. Returns a retained handle. Runs
+    /// any pending replayed stretch first, so direct work stays in order.
     fn ensure_compute(&mut self) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
+        self.flush_replay();
+        self.ensure_compute_raw()
+    }
+
+    /// `ensure_compute` without the replay flush: the replay execute path.
+    pub(super) fn ensure_compute_raw(&mut self) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         if let EncoderState::Compute(ref enc) = self.state {
             return enc.clone();
         }
-        self.end_current();
+        self.end_current_raw();
         let enc = self
             .cmd_buf
             .computeCommandEncoder()
@@ -275,8 +288,14 @@ impl GpuEncoder {
         enc
     }
 
-    /// End the current encoder (if any).
+    /// End the current encoder (if any), after running any pending replayed
+    /// stretch: every encoder switch, commit and signal passes through here.
     pub(super) fn end_current(&mut self) {
+        self.flush_replay();
+        self.end_current_raw();
+    }
+
+    fn end_current_raw(&mut self) {
         let state = std::mem::replace(&mut self.state, EncoderState::None);
         match state {
             EncoderState::None => {}
@@ -359,12 +378,14 @@ impl GpuEncoder {
     fn begin_profiled_compute(
         &mut self,
         label: &str,
+        pipeline: &GpuComputePipeline,
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         self.end_current();
+        let threadgroup_bytes = pipeline.state.staticThreadgroupMemoryLength() as u32;
         let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Compute))
+            .and_then(|p| p.reserve(label, GpuWorkKind::Compute, threadgroup_bytes))
         else {
             return self.ensure_compute();
         };
@@ -393,7 +414,7 @@ impl GpuEncoder {
         if let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Render))
+            .and_then(|p| p.reserve(label, GpuWorkKind::Render, 0))
         {
             unsafe {
                 let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
@@ -416,7 +437,7 @@ impl GpuEncoder {
         if let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Blit))
+            .and_then(|p| p.reserve(label, GpuWorkKind::Blit, 0))
         {
             let desc = unsafe { MTLBlitPassDescriptor::blitPassDescriptor() };
             unsafe {
@@ -446,7 +467,7 @@ impl GpuEncoder {
         if let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure))
+            .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure, 0))
         {
             let desc = MTLAccelerationStructurePassDescriptor::accelerationStructurePassDescriptor();
             unsafe {
@@ -496,7 +517,16 @@ impl GpuEncoder {
         grid: DispatchGrid,
         label: &str,
     ) {
-        let isolate_rt_stage = label.starts_with("node.render_scene RT");
+        if self.replay.is_some() {
+            let groups = match grid {
+                DispatchGrid::Groups(groups) => Some(groups),
+                DispatchGrid::Indirect { .. } => None,
+            };
+            if self.replay_dispatch(pipeline, bindings, groups, label) {
+                return;
+            }
+        }
+        let isolate_rt_stage = label.starts_with(RT_STAGE_PREFIX);
         if isolate_rt_stage && super::gpu_fault::diagnostics_enabled() {
             let groups = match grid {
                 DispatchGrid::Groups(groups) => format!("{groups:?}"),
@@ -508,7 +538,7 @@ impl GpuEncoder {
             self.end_current();
         }
         let enc = if self.profile.is_some() {
-            self.begin_profiled_compute(label)
+            self.begin_profiled_compute(label, pipeline)
         } else {
             self.ensure_compute()
         };
@@ -725,7 +755,7 @@ impl GpuEncoder {
         }
         self.end_current();
         let enc = if self.profile.is_some() {
-            self.begin_profiled_compute(label)
+            self.begin_profiled_compute(label, pipeline)
         } else {
             self.ensure_compute()
         };
@@ -883,6 +913,7 @@ impl GpuEncoder {
     /// downstream compact→consume pattern can read partially-written data.
     /// No-op when no compute encoder is active.
     pub fn compute_memory_barrier_buffers(&mut self) {
+        self.flush_replay();
         if let EncoderState::Compute(ref enc) = self.state {
             unsafe {
                 enc.memoryBarrierWithScope(objc2_metal::MTLBarrierScope::Buffers);
@@ -2251,6 +2282,9 @@ impl GpuEncoder {
             "copy_buffer_to_buffer: copy size {size} exceeds destination buffer ({} bytes)",
             dst.size,
         );
+        if self.replay_copy(src, 0, dst, 0, size) {
+            return;
+        }
         self.end_current();
         let enc = self.make_blit_encoder("copy_buffer_to_buffer");
         unsafe {
@@ -2269,6 +2303,8 @@ impl GpuEncoder {
     /// `dst_offset` via blit encoder: one row of a row-major array into
     /// another. Offsets and size are multiples of 4 (Metal's rule on macOS);
     /// both ranges are asserted in bounds, as in `copy_buffer_to_buffer`.
+    /// Inside a replaying span the copy is a word-copy dispatch instead
+    /// (docs/ENCODE_REPLAY_DESIGN.md D9).
     pub fn copy_buffer_range(
         &mut self,
         src: &GpuBuffer,
@@ -2291,6 +2327,9 @@ impl GpuEncoder {
             "copy_buffer_range: {size} bytes at {dst_offset} exceed destination buffer ({} bytes)",
             dst.size,
         );
+        if self.replay_copy(src, src_offset, dst, dst_offset, size) {
+            return;
+        }
         self.end_current();
         let enc = self.make_blit_encoder("copy_buffer_range");
         unsafe {
@@ -3431,7 +3470,7 @@ enum RenderStages {
 ///
 /// Returns `(sizes, len)`; `len` is one past the highest slot index that
 /// received a buffer, so only the populated prefix is uploaded.
-fn collect_buffer_sizes(
+pub(super) fn collect_buffer_sizes(
     slot_map: &SlotMap,
     bindings: &[GpuBinding],
 ) -> ([u32; MAX_BUFFER_SLOTS], usize) {

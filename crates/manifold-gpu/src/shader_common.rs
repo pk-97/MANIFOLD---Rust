@@ -106,8 +106,9 @@ pub(crate) fn rebind_vertex_output_as_point_size(
 }
 
 /// Generate optimised SPIR-V from a naga module:
-///   1. naga Module → SPIR-V (via `naga::back::spv`)
-///   2. SPIR-V → optimised SPIR-V (via `spirv-tools` optimiser)
+///   1. zero workgroup memory from every invocation (`workgroup_zeroing`)
+///   2. naga Module → SPIR-V (via `naga::back::spv`)
+///   3. SPIR-V → optimised SPIR-V (via `spirv-tools` optimiser)
 ///
 /// When `use_half` is true, adds `RelaxFloatOps` + `ConvertRelaxedToHalf`
 /// passes that convert f32 ALU ops to f16 in the SPIR-V IR. On Metal,
@@ -119,9 +120,15 @@ pub(crate) fn compile_to_optimized_spirv(
     label: &str,
     use_half: bool,
 ) -> Vec<u32> {
+    let zeroed = crate::workgroup_zeroing::with_workgroup_zeroing(module, label)
+        .map(|zeroed| validate_module(zeroed, label));
+    let (module, info) = zeroed.as_ref().map_or((module, info), |(m, i)| (m, i));
+    // The prologue above is the only workgroup zeroing; naga's own would
+    // redo it from one invocation.
     let spv_options = naga::back::spv::Options {
         lang_version: (1, 3),
         flags: naga::back::spv::WriterFlags::empty(),
+        zero_initialize_workgroup_memory: naga::back::spv::ZeroInitializeWorkgroupMemoryMode::None,
         ..Default::default()
     };
     let spv_words = naga::back::spv::write_vec(module, info, &spv_options, None)

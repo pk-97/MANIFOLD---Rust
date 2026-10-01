@@ -86,9 +86,11 @@ impl Bench {
     }
 
     pub(crate) fn read<T: bytemuck::Pod>(&self, port: &str) -> Vec<T> {
-        let backend = self.executor.backend();
         let res = output_of(&self.plan, self.node, port);
-        let buffer = backend.array_buffer(backend.slot_for(res).expect("bound")).expect("array");
+        let buffer = self
+            .executor
+            .host_array_buffer(&self.graph, &self.plan, res)
+            .expect("array holds its own contents");
         let ptr = buffer.mapped_ptr().expect("shared");
         let n = buffer.size as usize / std::mem::size_of::<T>();
         // SAFETY: the encoder completed; `n` whole elements fit the buffer.

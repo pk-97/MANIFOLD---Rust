@@ -343,6 +343,9 @@ fn native_mode_render_is_deterministic_across_independent_runtimes() {
 /// (native -> upscaled allocates the scratch/upscaler; upscaled -> native
 /// just stops using them) is exempted as the one-time allocation/JIT
 /// window, every frame after must stay under budget.
+///
+/// Wall-clock, so `rt-perf-proofs` only, like the region-probe gate.
+#[cfg(feature = "rt-perf-proofs")]
 #[test]
 fn temporal_upscale_toggle_never_stalls_past_20ms() {
     let h = harness::shared();

@@ -118,9 +118,14 @@ impl GpuPipelineArchive {
     }
 }
 
-/// Compute a stable hash for a compute pipeline's identity.
+/// Compute a stable hash for a compute pipeline's identity. It keys the
+/// shared on-disk MSL cache, so the namespace string changes whenever the
+/// same WGSL starts translating to different MSL (v2: workgroup zeroing
+/// spread across invocations); every checkout then reads only its own
+/// translation.
 pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u64 {
     let mut hasher = DefaultHasher::new();
+    "compute-shader-v2".hash(&mut hasher);
     wgsl_source.hash(&mut hasher);
     entry_point.hash(&mut hasher);
     use_half.hash(&mut hasher);

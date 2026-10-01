@@ -118,7 +118,11 @@ impl Solver {
     fn new(shape: PressureShape) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        let graph = pressure_def(shape).into_graph(&registry, &Default::default()).expect("pressure def builds");
+        let mut graph = pressure_def(shape).into_graph(&registry, &Default::default()).expect("pressure def builds");
+        // The host fills the sources and reads the solution outside the frame.
+        for (name, port) in [("water", "out"), ("f", "out"), ("cg", "solution")] {
+            graph.add_external_output(node_named(&graph, name), port).expect("a host port exists");
+        }
         let plan = compile(&graph).expect("pressure def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
@@ -133,8 +137,7 @@ impl Solver {
         assert!(water.size >= cells && f.size >= cells, "sources hold the lattice");
         let cg = node_named(&graph, "cg");
         let pressure = output_of(&plan, cg, "solution");
-        let mut exec = Executor::new(Box::new(backend));
-        exec.set_dump_set(Some(std::iter::once(cg).collect()));
+        let exec = Executor::new(Box::new(backend));
         Self { shape, device, graph, plan, exec, state: StateStore::new(), water, f, pressure, frames: 0 }
     }
 
@@ -142,9 +145,8 @@ impl Solver {
         let water: Vec<f32> = water.iter().map(|&w| f32::from(u8::from(w))).collect();
         assert!(water.len() == self.shape.cells() && f.len() == self.shape.cells());
         // SAFETY: shared-storage buffers sized for the lattice (checked in
-        // new); the previous frame has completed. The sources are written
-        // before every frame: the planner recycles their storage after their
-        // last reader.
+        // new); the previous frame has completed. The sources are host
+        // outputs, so no other array shares their storage.
         unsafe {
             self.water.write(0, bytemuck::cast_slice(&water));
             self.f.write(0, bytemuck::cast_slice(f));
@@ -192,8 +194,7 @@ impl Solver {
 
     fn pressure(&self) -> Vec<f32> {
         let cells = self.shape.cells();
-        let backend = self.exec.backend();
-        let buffer = backend.array_buffer(backend.slot_for(self.pressure).expect("pressure bound")).expect("pressure buffer");
+        let buffer = self.exec.host_array_buffer(&self.graph, &self.plan, self.pressure).expect("the solution keeps its own storage");
         assert!(buffer.size as usize >= cells * 4);
         let ptr = buffer.mapped_ptr().expect("shared pressure buffer");
         // SAFETY: the frame completed; the buffer holds `cells` floats.
