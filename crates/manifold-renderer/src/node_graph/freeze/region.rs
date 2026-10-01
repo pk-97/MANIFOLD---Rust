@@ -4317,10 +4317,12 @@ mod tests {
                     {"id": 3, "nodeId": "divergence", "typeId": "node.face_divergence", "params": lattice_params([8.0; 3])},
                     {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
                     {"id": 5, "nodeId": "output", "typeId": "system.final_output"},
-                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
+                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 7, "nodeId": "moving", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
                 ],
                 "wires": [
                     {"fromNode": 6, "fromPort": "out", "toNode": 3, "toPort": "solid_faces"},
+                    {"fromNode": 7, "fromPort": "out", "toNode": 3, "toPort": "solid_velocity"},
                     {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "cell_ranges"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "faces"},
                     {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},

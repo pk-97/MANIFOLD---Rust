@@ -192,9 +192,14 @@ Peter's scenes have boxes and obstacles in the water, and the Dam Break as shipp
   - A coarse face's weight is the mean of the four fine faces it covers. The engine has no multigrid, so this is ours.
   - A water cell with every face closed drops out: smooth and residual give 0 there, the coarse inverse pins it.
   - Divergence counts the box walls whole (weight 1, wall velocity), so the wall rule of section 2 is unchanged. Only solid faces are fractional.
-  - A closed face (weight 0) takes the solid's velocity and stays valid for extension. Velocity is 0 until the moving-solid step.
+  - A closed face (weight 0) keeps its velocity through the projection and stays valid for extension; `node.constrain_solid_faces` then sets it.
   - The distance lattice is sampled at the step's pose, once per step.
   - The freeze compiler's `ParamProduct` capacity gained `plus` (an `add(n, x)` term) so a face grid ((n + 1)³) fuses with its neighbours. `node.subtract_pressure` now declares it.
+- **Moving solids, as built** (`node.solid_face_velocity`, `node.constrain_solid_faces`). Divergence adds the engine's C·v_s term, (c − w)·v_s through each inner face with c the cell's open volume (`node.solid_faces` writes it in weight w, as `_getCellWeight` takes it). After the projection the step constrains both the projected and the saved faces, as the engine does: a closed face takes v_s, a cut face f·v_s + (1 − f)·u. Where it departs from the engine:
+  - v_s is the closest body's rigid velocity, v + ω × (x − c), at the face centre. The engine interpolates the nearest triangle's vertex velocities from its mesh level set. For rigid bodies the two agree at the surface.
+  - Friction f comes from the bodies only; the engine's domain-wall friction is not ported, because walls are their own rule here.
+  - The density solve's subtract is not constrained again: it moves particles through `advect` and is never kept as velocity.
+  - Fluid pockets sealed by a solid keep the solid's velocity. The engine zeroes it there (`_conditionSolidVelocityField`); porting it needs a GPU flood fill, tracked as BUG-zpoi (zero solid velocity into sealed fluid pockets).
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### Next, after landing: the surface and the transfer

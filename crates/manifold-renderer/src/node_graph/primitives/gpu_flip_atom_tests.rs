@@ -24,6 +24,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::backend::Backend;
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
 use crate::node_graph::{
@@ -843,6 +844,55 @@ fn engine_square(bl: f64, br: f64, tl: f64, tr: f64) -> (f64, (usize, bool)) {
     (fraction, (inside, diagonal && middle_inside))
 }
 
+/// FLIP Fluids' LevelsetUtils::volumeFraction for a tetrahedron, in f64,
+/// sorted by the engine's five-swap network.
+fn engine_tet(p: [f64; 4]) -> f64 {
+    let [mut a, mut b, mut c, mut d] = p;
+    for (x, y) in [(0, 1), (2, 3), (0, 2), (1, 3), (1, 2)] {
+        let mut v = [a, b, c, d];
+        if v[x] > v[y] {
+            v.swap(x, y);
+        }
+        [a, b, c, d] = v;
+    }
+    let tet = |a: f64, b: f64, c: f64, d: f64| a * a * a / ((a - b) * (a - c) * (a - d));
+    if d <= 0.0 {
+        1.0
+    } else if c <= 0.0 {
+        1.0 - tet(d, c, b, a)
+    } else if b <= 0.0 {
+        let (p, q, r, s) = (a / (a - c), a / (a - d), b / (b - d), b / (b - c));
+        p * q * (1.0 - s) + q * (1.0 - r) * s + r * s
+    } else if a <= 0.0 {
+        tet(a, b, c, d)
+    } else {
+        0.0
+    }
+}
+
+/// FLIP Fluids' MeshLevelSet::_getCellWeight: the fraction of a cell inside
+/// the solid, c[i + 2j + 4k] the distance at corner (i, j, k).
+fn engine_cube(c: [f64; 8]) -> f64 {
+    if c.iter().all(|&v| v < 0.0) {
+        return 1.0;
+    }
+    if c.iter().all(|&v| v >= 0.0) {
+        return 0.0;
+    }
+    let [p000, p100, p010, p110, p001, p101, p011, p111] = c;
+    (engine_tet([p000, p001, p101, p011])
+        + engine_tet([p000, p101, p100, p110])
+        + engine_tet([p000, p010, p011, p110])
+        + engine_tet([p101, p011, p111, p110])
+        + 2.0 * engine_tet([p000, p011, p101, p110])
+        + engine_tet([p100, p101, p001, p111])
+        + engine_tet([p100, p001, p000, p010])
+        + engine_tet([p100, p110, p111, p010])
+        + engine_tet([p001, p111, p011, p010])
+        + 2.0 * engine_tet([p100, p111, p001, p010]))
+        / 12.0
+}
+
 /// The open fraction of every face from a corner lattice, as
 /// FluidSimulation::_updateWeightGridThread takes MeshLevelSet's face
 /// weights: U from (i,j,k), (i,j+1,k), (i,j,k+1), (i,j+1,k+1); V from
@@ -857,6 +907,10 @@ fn cpu_solid_faces(phi: &[f32], n: [usize; 3], tolerance: f64) -> (Vec<f64>, Vec
         for j in 0..m[1] {
             for i in 0..m[0] {
                 let p = [i, j, k];
+                if (0..3).all(|b| p[b] < n[b]) {
+                    let corners: [f64; 8] = std::array::from_fn(|c| at(i + (c & 1), j + ((c >> 1) & 1), k + (c >> 2)));
+                    out[(i + m[0] * (j + m[1] * k)) * FACE_FLOATS + 7] = (1.0 - engine_cube(corners)).clamp(0.0, 1.0);
+                }
                 for a in 0..3 {
                     if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
                         continue;
@@ -905,6 +959,8 @@ fn gpu_flip_solid_faces_match_the_engine() {
     }
     assert!(branches.iter().any(|&(inside, middle)| inside == 2 && !middle), "an adjacent or outside-middle pair");
     assert_eq!(want[(2 + m[0] * (1 + m[1])) * FACE_FLOATS + 4], 0.5, "the planted face is on the interface");
+    let open_volume: Vec<f64> = want.chunks(FACE_FLOATS).map(|r| r[7]).collect();
+    assert!(open_volume.iter().any(|&v| v > 0.0 && v < 1.0), "a cell cut by the solid");
     assert_close(&got, &want, "solid faces");
 }
 
@@ -986,7 +1042,6 @@ fn cpu_project(faces: &[f32], open: &[f64], pressure: &[f32], water: &[f32], n: 
             below[a] -= 1;
             let (up, down) = (cell(p, n), cell(below, n));
             if open[w] <= 0.0 {
-                out[v] = open[v];
                 out[w] = 1.0;
             } else if water[up] > 0.5 || water[down] > 0.5 {
                 out[v] -= (f64::from(pressure[up]) - f64::from(pressure[down])) / h;
@@ -1012,6 +1067,42 @@ fn gpu_flip_solid_faces_into_projection_fuses() {
     assert_close(&got, &cpu_project(&faces, &weights, &pressure, &water, n, 0.3), "fused solid faces into projection");
 }
 
+/// The water step's one fused pair: the projection into the solids'
+/// constraint, on random weights and solid velocities.
+#[test]
+fn gpu_flip_projection_into_constraint_fuses() {
+    let n = SOLID_N;
+    let open = random_open_faces(n, 0x9c1, 0);
+    let moving: Vec<f32> = random_values(face_grid_len(n), 0x9c2)
+        .chunks(FACE_FLOATS)
+        .flat_map(|r| [r[0], r[1], r[2], r[3], r[4] + 0.5, r[5] + 0.5, r[6] + 0.5, r[7]])
+        .collect();
+    let cells: usize = n.iter().product();
+    let faces = random_values(face_grid_len(n), 0x9c3);
+    let (pressure, water) = (random_values(cells, 0x9c4), random_water(cells, 0x9c5));
+    let mut chain = Chain::new();
+    let o = chain.face_source("open", open.clone());
+    let v = chain.face_source("moving", moving.clone());
+    let f = chain.face_source("faces", faces.clone());
+    let p = chain.source("pressure", pressure.clone());
+    let w = chain.source("water", water.clone());
+    let project = chain.node("project", "node.subtract_pressure", lattice_json(n, &[("cell_size", 0.3)]));
+    chain.wire(f, "out", project, "faces");
+    chain.wire(p, "out", project, "pressure");
+    chain.wire(w, "out", project, "water");
+    chain.wire(o, "out", project, "solid_faces");
+    let constrain = chain.node("constrain", "node.constrain_solid_faces", lattice_json(n, &[]));
+    chain.wire(project, "out", constrain, "faces");
+    chain.wire(o, "out", constrain, "solid_faces");
+    chain.wire(v, "out", constrain, "solid_velocity");
+    chain.sink = "test.face_sink";
+    let got = chain.fused_matches_unfused(constrain, face_grid_len(n));
+    let open64: Vec<f64> = open.iter().map(|&x| f64::from(x)).collect();
+    let moving64: Vec<f64> = moving.iter().map(|&x| f64::from(x)).collect();
+    let projected: Vec<f32> = cpu_project(&faces, &open64, &pressure, &water, n, 0.3).iter().map(|&x| x as f32).collect();
+    assert_close(&got, &cpu_constrain(&projected, &open64, &moving64, n), "fused projection into constraint");
+}
+
 #[test]
 fn gpu_flip_coarsen_solid_faces_into_projection_fuses() {
     let fine = random_open_faces(FINE, 0xcf2, 0);
@@ -1022,4 +1113,293 @@ fn gpu_flip_coarsen_solid_faces_into_projection_fuses() {
     let (got, faces, pressure, water) = project_through(&mut chain, open, COARSE, 0xcf3);
     let weights = cpu_coarsen_faces(&fine, COARSE);
     assert_close(&got, &cpu_project(&faces, &weights, &pressure, &water, COARSE, 0.3), "fused coarsen into projection");
+}
+
+// ── Solids' velocity ───────────────────────────────────────────────────────
+
+/// The moving-solid lattice: 5×4×3 cells a quarter metre apart.
+const SOLID_N: [usize; 3] = [5, 4, 3];
+const SOLID_H: f32 = 0.25;
+const SOLID_MIN: [f32; 3] = [-0.6, 0.0, -0.4];
+const SOLID_TICK: f32 = 0.05;
+
+/// Two moving, turning bodies whose lattices overlap, one scaled, and a
+/// disabled row; their distance lattices as the atlas stores them (half
+/// precision) and as f32.
+struct Solids {
+    bodies: Vec<LiquidBody>,
+    shapes: Vec<LiquidShape>,
+    atlas: Vec<u32>,
+    distances: Vec<f32>,
+}
+
+fn solids() -> Solids {
+    let shapes = vec![
+        LiquidShape {
+            origin_spacing: [-0.47, -0.43, -0.41, 0.3],
+            dims_x: 4,
+            dims_y: 4,
+            dims_z: 4,
+            atlas_offset: 0,
+            scale_min: [1.0, 1.0, 1.0, 1.0],
+        },
+        LiquidShape {
+            origin_spacing: [-0.39, -0.42, -0.44, 0.4],
+            dims_x: 3,
+            dims_y: 3,
+            dims_z: 3,
+            atlas_offset: 64,
+            scale_min: [1.2, 1.0, 1.1, 1.0],
+        },
+    ];
+    let distances: Vec<f32> =
+        random_values(64 + 27, 0x50d).iter().map(|v| half::f16::from_f32(v * 0.9).to_f32()).collect();
+    let mut atlas = Vec::new();
+    pack_distance_atlas(&distances, &mut atlas);
+    let body = |position: [f32; 3], velocity: [f32; 4], angular: [f32; 3], shape: f32| LiquidBody {
+        position_inv_mass: [position[0], position[1], position[2], 0.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        linear_velocity: velocity,
+        angular_velocity: [angular[0], angular[1], angular[2], 0.0],
+        accel_shape: [0.0, 0.0, 0.0, shape],
+        ..LiquidBody::default()
+    };
+    let bodies = vec![
+        body([-0.21, 0.38, -0.02], [0.7, -0.3, 0.2, 0.4], [0.0, 0.3, 1.5], 0.0),
+        body([0.33, 0.61, 0.03], [-0.5, 0.1, 0.1, 0.9], [0.8, 0.0, -0.2], 1.0),
+        body([0.0, 0.5, 0.0], [3.0, 3.0, 3.0, 0.7], [0.0; 3], -1.0),
+    ];
+    Solids { bodies, shapes, atlas, distances }
+}
+
+fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let u = [q[0], q[1], q[2]];
+    let t = cross(u, v).map(|c| 2.0 * c);
+    let c = cross(u, t);
+    std::array::from_fn(|i| v[i] + q[3] * t[i] + c[i])
+}
+
+/// The closest enabled body at x after `SOLID_TICK` (its row and signed
+/// distance), as liquid_collider.wgsl samples a lattice; the margin by which
+/// x clears every lattice edge and the gap to the runner-up, so the fixture
+/// can show no f32 rounding decides either.
+fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
+    let mut best: Option<(usize, f64)> = None;
+    let mut margin = f64::INFINITY;
+    let mut gaps = Vec::new();
+    for (row, body) in solids.bodies.iter().enumerate() {
+        let shape_index = body.accel_shape[3];
+        if shape_index < 0.0 {
+            continue;
+        }
+        let shape = solids.shapes[shape_index as usize];
+        let (position, q) = body_pose_at(body, SOLID_TICK);
+        let inverse = [-f64::from(q[0]), -f64::from(q[1]), -f64::from(q[2]), f64::from(q[3])];
+        let local = rotate(inverse, std::array::from_fn(|i| x[i] - f64::from(position[i])));
+        let dims = [shape.dims_x, shape.dims_y, shape.dims_z].map(|d| d as usize);
+        let g: [f64; 3] = std::array::from_fn(|i| {
+            (local[i] / f64::from(shape.scale_min[i]) - f64::from(shape.origin_spacing[i])) / f64::from(shape.origin_spacing[3])
+        });
+        for i in 0..3 {
+            margin = margin.min(g[i].abs()).min((g[i] - (dims[i] - 1) as f64).abs());
+        }
+        if !(0..3).all(|i| g[i] >= 0.0 && g[i] <= (dims[i] - 1) as f64) {
+            continue;
+        }
+        let base: [usize; 3] = std::array::from_fn(|i| (g[i].floor() as usize).min(dims[i] - 2));
+        let f: [f64; 3] = std::array::from_fn(|i| g[i] - base[i] as f64);
+        let mut d = 0.0;
+        for corner in 0..8 {
+            let o = [corner & 1, (corner >> 1) & 1, corner >> 2];
+            let w: f64 = (0..3).map(|i| if o[i] == 1 { f[i] } else { 1.0 - f[i] }).product();
+            let at = shape.atlas_offset as usize + (base[0] + o[0]) + dims[0] * ((base[1] + o[1]) + dims[1] * (base[2] + o[2]));
+            d += w * f64::from(solids.distances[at]);
+        }
+        d *= f64::from(shape.scale_min[3]);
+        gaps.push(d);
+        if best.is_none_or(|(_, nearest)| d < nearest) {
+            best = Some((row, d));
+        }
+    }
+    gaps.sort_by(f64::total_cmp);
+    let gap = if gaps.len() > 1 { gaps[1] - gaps[0] } else { f64::INFINITY };
+    (best.map(|(row, _)| row), margin.min(gap))
+}
+
+/// node.solid_face_velocity in f64: the closest body's rigid velocity at
+/// each cut inner face's centre, and the mean friction at its four corners.
+/// Also the smallest margin any query had (see `closest`).
+fn cpu_solid_face_velocity(open: &[f64], solids: &Solids) -> (Vec<f64>, f64, usize) {
+    let n = SOLID_N;
+    let m = n.map(|v| v + 1);
+    let h = f64::from(SOLID_H);
+    let min = SOLID_MIN.map(f64::from);
+    let mut out = vec![0.0; face_grid_len(n)];
+    let mut margin = f64::INFINITY;
+    let mut moved = 0;
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        for a in 0..3 {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] || open[i * FACE_FLOATS + 4 + a] >= 1.0 {
+                continue;
+            }
+            let mut centre: [f64; 3] = std::array::from_fn(|b| min[b] + (p[b] as f64 + 0.5) * h);
+            centre[a] = min[a] + p[a] as f64 * h;
+            let (row, clear) = closest(solids, centre);
+            margin = margin.min(clear);
+            if let Some(row) = row {
+                let body = &solids.bodies[row];
+                let (position, _) = body_pose_at(body, SOLID_TICK);
+                let r: [f64; 3] = std::array::from_fn(|b| centre[b] - f64::from(position[b]));
+                let w = body.angular_velocity.map(f64::from);
+                let spin = [w[1] * r[2] - w[2] * r[1], w[2] * r[0] - w[0] * r[2], w[0] * r[1] - w[1] * r[0]];
+                out[i * FACE_FLOATS + a] = f64::from(body.linear_velocity[a]) + spin[a];
+                moved += 1;
+            }
+            let (b, c) = match a {
+                0 => (1, 2),
+                1 => (2, 0),
+                _ => (1, 0),
+            };
+            let mut friction = 0.0;
+            for k in 0..4 {
+                let mut q = p;
+                q[b] += k & 1;
+                q[c] += (k >> 1) & 1;
+                let (row, clear) = closest(solids, std::array::from_fn(|d| min[d] + q[d] as f64 * h));
+                margin = margin.min(clear);
+                if let Some(row) = row {
+                    friction += f64::from(solids.bodies[row].linear_velocity[3]);
+                }
+            }
+            out[i * FACE_FLOATS + 4 + a] = 0.25 * friction;
+        }
+    }
+    (out, margin, moved)
+}
+
+fn solid_velocity_params(solids: &Solids) -> Vec<(&'static str, f32)> {
+    let rows = solids.bodies.len() as f32;
+    vec![
+        ("lattice_min_x", SOLID_MIN[0]),
+        ("lattice_min_y", SOLID_MIN[1]),
+        ("lattice_min_z", SOLID_MIN[2]),
+        ("cell_size", SOLID_H),
+        ("body_count", rows),
+        ("rows", rows),
+        ("tick_seconds", SOLID_TICK),
+    ]
+}
+
+/// node.solid_face_velocity against the rigid velocity and corner friction
+/// computed here, on random cut faces under two overlapping turning bodies.
+#[test]
+fn gpu_flip_solid_face_velocity_matches_cpu() {
+    let solids = solids();
+    let open = random_open_faces(SOLID_N, 0x5fa, 0);
+    let bodies: &[f32] = bytemuck::cast_slice(&solids.bodies);
+    let shapes: &[f32] = bytemuck::cast_slice(&solids.shapes);
+    let atlas: &[f32] = bytemuck::cast_slice(&solids.atlas);
+    let got = run_atom(
+        &mut super::solid_face_velocity::SolidFaceVelocity::new(),
+        &[("solid_faces", &open), ("bodies", bodies), ("shapes", shapes), ("atlas", atlas)],
+        face_grid_len(SOLID_N),
+        &lattice_params(SOLID_N, &solid_velocity_params(&solids)),
+    );
+    let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
+    let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids);
+    assert!(margin > 1.0e-4, "no query sits on a lattice edge or a tie between bodies: {margin}");
+    assert!(moved > 10, "the bodies reach cut faces: {moved}");
+    let frictions: Vec<f64> = want.chunks(FACE_FLOATS).flat_map(|r| r[4..7].to_vec()).collect();
+    assert!(frictions.iter().any(|&f| f > 0.0 && f < 0.4), "a face with corners outside every body");
+    assert!(frictions.iter().any(|&f| f > 0.4), "corners reaching the second body");
+    assert_close(&got, &want, "solid face velocity");
+}
+
+/// node.constrain_solid_faces in f64.
+fn cpu_constrain(faces: &[f32], open: &[f64], moving: &[f64], n: [usize; 3]) -> Vec<f64> {
+    let m = n.map(|v| v + 1);
+    let mut out: Vec<f64> = faces.iter().map(|&v| f64::from(v)).collect();
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        for a in 0..3 {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
+                continue;
+            }
+            let (v, w) = (i * FACE_FLOATS + a, i * FACE_FLOATS + 4 + a);
+            let solid = moving[v];
+            if open[w] <= 0.0 {
+                out[v] = solid;
+            } else if open[w] < 1.0 {
+                out[v] = moving[w] * solid + (1.0 - moving[w]) * f64::from(faces[v]);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn gpu_flip_constrain_solid_faces_matches_cpu() {
+    let n = SOLID_N;
+    let faces = random_values(face_grid_len(n), 0xc51);
+    let open = random_open_faces(n, 0xc52, 0);
+    let moving: Vec<f32> = random_values(face_grid_len(n), 0xc53)
+        .chunks(FACE_FLOATS)
+        .flat_map(|r| [r[0], r[1], r[2], r[3], r[4] + 0.5, r[5] + 0.5, r[6] + 0.5, r[7]])
+        .collect();
+    let got = run_atom(
+        &mut super::constrain_solid_faces::ConstrainSolidFaces::new(),
+        &[("faces", &faces), ("solid_faces", &open), ("solid_velocity", &moving)],
+        face_grid_len(n),
+        &lattice_params(n, &[]),
+    );
+    let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
+    let moving64: Vec<f64> = moving.iter().map(|&v| f64::from(v)).collect();
+    let want = cpu_constrain(&faces, &open64, &moving64, n);
+    assert!(open.contains(&0.0) && open.iter().any(|&w| w > 0.0 && w < 1.0), "closed and cut faces");
+    assert_close(&got, &want, "constrain solid faces");
+}
+
+/// The solids' whole face pass fused: open fractions from a distance
+/// lattice, the bodies' velocity on them, and the constraint on random
+/// faces, against the CPU chain.
+#[test]
+fn gpu_flip_solid_velocity_into_constraint_fuses() {
+    let n = SOLID_N;
+    let m = n.map(|v| v + 1);
+    let solids = solids();
+    let phi: Vec<f32> = random_values(m.iter().product(), 0x5f7).iter().map(|v| v * 0.6).collect();
+    let faces = random_values(face_grid_len(n), 0x5f8);
+    let offset = 1.5;
+    let mut chain = Chain::new();
+    let s = chain.source("solid", phi.clone());
+    let f = chain.face_source("faces", faces.clone());
+    let typed = |chain: &mut Chain, name: &'static str, type_id: &str, records: usize, values: &[f32]| {
+        let id = chain.node(name, type_id, json!({"max_capacity": {"type": "Int", "value": records}}));
+        chain.sources.push((name, values.to_vec()));
+        id
+    };
+    let bodies = typed(&mut chain, "bodies", "test.body_source", solids.bodies.len(), bytemuck::cast_slice(&solids.bodies));
+    let shapes = typed(&mut chain, "shapes", "test.shape_source", solids.shapes.len(), bytemuck::cast_slice(&solids.shapes));
+    let atlas = typed(&mut chain, "atlas", "test.word_source", solids.atlas.len(), bytemuck::cast_slice(&solids.atlas));
+    let open = chain.node("open", "node.solid_faces", lattice_json(n, &[("cell_size", f64::from(SOLID_H)), ("box_offset", offset)]));
+    chain.wire(s, "out", open, "solid");
+    let extra: Vec<(&str, f64)> = solid_velocity_params(&solids).into_iter().map(|(k, v)| (k, f64::from(v))).collect();
+    let velocity = chain.node("velocity", "node.solid_face_velocity", lattice_json(n, &extra));
+    chain.wire(open, "out", velocity, "solid_faces");
+    chain.wire(bodies, "out", velocity, "bodies");
+    chain.wire(shapes, "out", velocity, "shapes");
+    chain.wire(atlas, "out", velocity, "atlas");
+    let constrain = chain.node("constrain", "node.constrain_solid_faces", lattice_json(n, &[]));
+    chain.wire(f, "out", constrain, "faces");
+    chain.wire(open, "out", constrain, "solid_faces");
+    chain.wire(velocity, "out", constrain, "solid_velocity");
+    chain.sink = "test.face_sink";
+    let got = chain.fused_matches_unfused(constrain, face_grid_len(n));
+    let tolerance = 8.0 * f64::from(f32::EPSILON) * (f64::from(SOLID_H) * 5.0 + offset);
+    let (open64, _) = cpu_solid_faces(&phi, n, tolerance);
+    let (moving, margin, moved) = cpu_solid_face_velocity(&open64, &solids);
+    assert!(margin > 1.0e-4 && moved > 5, "a clear fixture that moves faces: {margin} {moved}");
+    assert_close(&got, &cpu_constrain(&faces, &open64, &moving, n), "fused solids into constraint");
 }

@@ -340,6 +340,8 @@ pub(crate) mod coarsen_water;
 pub(crate) mod coarse_inverse;
 pub(crate) mod solid_faces;
 pub(crate) mod coarsen_solid_faces;
+pub(crate) mod solid_face_velocity;
+pub(crate) mod constrain_solid_faces;
 pub(crate) mod conjugate_gradient;
 pub(crate) mod zero_lattice;
 pub(crate) mod liquid_fill;

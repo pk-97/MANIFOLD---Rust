@@ -36,7 +36,7 @@ struct SolidFacesUniforms {
 crate::primitive! {
     name: SolidFaces,
     type_id: "node.solid_faces",
-    purpose: "The open fraction of every face of a face grid (node.particles_to_faces' layout, nodes_x/y/z cells) from a solid distance lattice on the cell corners (solid: (nodes + 1) per axis from the box's lowest corner, negative inside a solid). Each face's weight is 1 − the fraction of it inside the solid, from its four corners (FLIP Fluids' fractionInside; a face on the interface at all four corners, within 8 f32 epsilons of cell_size · the longest side + box_offset, is half open), clamped to 0 to 1. Box wall faces and faces past the lattice are 0. Velocity is 0.",
+    purpose: "The open fraction of every face of a face grid (node.particles_to_faces' layout, nodes_x/y/z cells) from a solid distance lattice on the cell corners (solid: (nodes + 1) per axis from the box's lowest corner, negative inside a solid). Each face's weight is 1 − the fraction of it inside the solid, from its four corners (FLIP Fluids' fractionInside; a face on the interface at all four corners, within 8 f32 epsilons of cell_size · the longest side + box_offset, is half open), clamped to 0 to 1. Box wall faces and faces past the lattice are 0. Weight w of a cell's record is the cell's open volume, 1 − the fraction of it inside the solid from its eight corners (FLIP Fluids' volumeFraction; 0 past the lattice). Velocity is 0.",
     inputs: {
         solid: Array(f32) required,
     },

@@ -575,6 +575,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.coarse_inverse", check: coarse_inverse },
     ExtentRule { type_id: "node.solid_faces", check: solid_faces },
     ExtentRule { type_id: "node.coarsen_solid_faces", check: coarsen_solid_faces },
+    ExtentRule { type_id: "node.solid_face_velocity", check: solid_face_velocity },
+    ExtentRule { type_id: "node.constrain_solid_faces", check: constrain_solid_faces },
     ExtentRule { type_id: "node.conjugate_gradient", check: conjugate_gradient },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
@@ -1159,6 +1161,7 @@ fn face_divergence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let nodes = gpu_flip_cells(x)?;
     x.covers("faces", face_count(nodes) * FACE)?;
     x.covers("solid_faces", face_count(nodes) * FACE)?;
+    x.covers("solid_velocity", face_count(nodes) * FACE)?;
     x.covers("water", cell_count(nodes) * 4)?;
     x.covers("out", cell_count(nodes) * 4)
 }
@@ -1260,6 +1263,28 @@ fn solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_count(gpu_flip_cells(x)?);
     x.covers("solid", faces * 4)?;
     x.covers("out", faces * FACE)
+}
+
+/// The solids' face velocity: a face grid in and out, and every body row the
+/// kernel reads.
+fn solid_face_velocity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let faces = face_count(gpu_flip_cells(x)?) * FACE;
+    x.covers("solid_faces", faces)?;
+    x.covers("out", faces)?;
+    let rows = x.scalar("rows", 0.0);
+    if !(rows >= 0.0 && rows.fract() == 0.0) {
+        return Err(Verdict::Refused(format!("{rows} body rows is not a whole count")));
+    }
+    x.covers("bodies", rows as u64 * size_of::<LiquidBody>() as u64)
+}
+
+/// Three face grids in, one out.
+fn constrain_solid_faces(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let faces = face_count(gpu_flip_cells(x)?) * FACE;
+    for port in ["faces", "solid_faces", "solid_velocity", "out"] {
+        x.covers(port, faces)?;
+    }
+    Ok(())
 }
 
 /// A coarse face grid from the face grid twice as long per axis.

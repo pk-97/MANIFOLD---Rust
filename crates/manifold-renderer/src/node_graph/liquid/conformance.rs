@@ -240,7 +240,7 @@ const GPU_IMPULSES_IN_P8: &str = "owed to P8: GPU liquids refuse impulses until 
 /// GPU FLIP's step atoms that gather instead of scattering, the pressure
 /// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
 /// coarse inverse has no codegen body; its own test checks it.
-const GPU_FLIP_ATOMIC_FREE: [&str; 16] = [
+const GPU_FLIP_ATOMIC_FREE: [&str; 18] = [
     "node.cells_with_particles",
     "node.particles_to_faces",
     "node.face_gravity",
@@ -252,6 +252,8 @@ const GPU_FLIP_ATOMIC_FREE: [&str; 16] = [
     "node.coarsen_water",
     "node.solid_faces",
     "node.coarsen_solid_faces",
+    "node.solid_face_velocity",
+    "node.constrain_solid_faces",
     "node.pressure_smooth",
     "node.pressure_residual",
     "node.restrict_lattice",

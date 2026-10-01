@@ -743,14 +743,20 @@ fn water_step(
     b.wire((domain, "gravity_x"), forced, "gravity_x");
     b.wire((domain, "gravity"), forced, "gravity_y");
     b.wire((domain, "gravity_z"), forced, "gravity_z");
-    let solid = solid_faces(b, scene, domain, (step + 1) as f64 * dt);
+    let (solid, solid_velocity) = solid_faces(b, scene, domain, (step + 1) as f64 * dt);
     let divergence = b.node("divergence", "node.face_divergence", Builder::lattice(n, &[("cell_size", float(h))]));
     b.wire((forced, "out"), divergence, "faces");
     b.wire(water, divergence, "water");
     b.wire(solid, divergence, "solid_faces");
+    b.wire(solid_velocity, divergence, "solid_velocity");
     let levels = levels(b, s, water, solid);
     let p = solve(b, s, &levels, (divergence, "out"));
     let projected = subtract(b, "project", (forced, "out"), p, &levels, s);
+    // The engine constrains its velocity and its saved velocity to the
+    // solids after the pressure solve, so FLIP's change is measured between
+    // two constrained fields.
+    let projected = constrain(b, "constrain", projected, solid, solid_velocity, n);
+    let old = constrain(b, "old_constrain", old, solid, solid_velocity, n);
     let new = extend(b, "new", projected, n, scene.band_layers());
     // The density solve moves particles apart through `advect` and is never
     // kept as velocity: kept, a fast splash's correction becomes speed.
@@ -800,7 +806,17 @@ fn subtract(b: &mut Builder, name: &str, faces: Port, pressure: Port, levels: &L
 /// The step's face open fractions: the domain's bodies as a solid distance on
 /// the box's corner lattice, posed `seconds` into the tick, then each face's
 /// open fraction. The box walls are the faces' own, so the lattice has none.
-fn solid_faces(b: &mut Builder, scene: WaterScene, domain: usize, seconds: f64) -> Port {
+/// `faces` with the solids' velocity on the faces they close or cut.
+fn constrain(b: &mut Builder, name: &str, faces: Port, solid: Port, solid_velocity: Port, n: [usize; 3]) -> Port {
+    let id = b.node(name, "node.constrain_solid_faces", Builder::lattice(n, &[]));
+    b.wire(faces, id, "faces");
+    b.wire(solid, id, "solid_faces");
+    b.wire(solid_velocity, id, "solid_velocity");
+    (id, "out")
+}
+
+/// The solids' open fraction per face, and their velocity and friction there.
+fn solid_faces(b: &mut Builder, scene: WaterScene, domain: usize, seconds: f64) -> (Port, Port) {
     let s = scene.pressure;
     let min = scene.min();
     let corners = s.n + 1;
@@ -828,7 +844,24 @@ fn solid_faces(b: &mut Builder, scene: WaterScene, domain: usize, seconds: f64) 
         Builder::lattice([s.n; 3], &[("cell_size", float(s.cell_size())), ("box_offset", float(reach))]),
     );
     b.wire((distance, "solid"), open, "solid");
-    (open, "out")
+    let velocity = b.node(
+        "solid_velocity",
+        "node.solid_face_velocity",
+        json!({
+            "lattice_min_x": float(min[0]),
+            "lattice_min_y": float(min[1]),
+            "lattice_min_z": float(min[2]),
+            "cell_size": float(s.cell_size()),
+            "nodes_x": int(s.n),
+            "nodes_y": int(s.n),
+            "nodes_z": int(s.n),
+            "tick_seconds": float(seconds),
+        }),
+    );
+    b.wire((open, "out"), velocity, "solid_faces");
+    b.wires(domain, velocity, &["bodies", "shapes", "atlas", "body_count"]);
+    b.wire((domain, "body_rows"), velocity, "rows");
+    ((open, "out"), (velocity, "out"))
 }
 
 /// `layers` layers of face extension into the air around the water.
@@ -1282,15 +1315,16 @@ pub(super) mod tests {
         }
     }
 
-    /// Neither the solve nor the water step fuses: every lattice a sweep
-    /// writes is gathered by the next (its neighbours) or fans out to
-    /// several readers, and a buffer region has one output. The whole step
-    /// runs unfrozen, so no fused-vs-unfrozen solve proof exists to run;
-    /// each atom's own fused kernel is proven in `gpu_flip_atom_tests`.
+    /// The solve does not fuse: every lattice a sweep writes is gathered by
+    /// the next (its neighbours) or fans out to several readers, and a
+    /// buffer region has one output. The water step fuses one pair, the
+    /// projection into the solids' constraint, whose fused kernel
+    /// `gpu_flip_atom_tests::gpu_flip_projection_into_constraint_fuses`
+    /// proves against the unfused one.
     #[test]
     fn gpu_flip_solve_and_step_do_not_fuse() {
         assert_eq!(fused_regions(&pressure_def(PressureShape::at(64))), Vec::<String>::new());
-        assert_eq!(fused_regions(&water_def(WaterScene::dam_break(64))), Vec::<String>::new());
+        assert_eq!(fused_regions(&water_def(WaterScene::dam_break(64))), vec!["s0.project + s0.constrain".to_string()]);
     }
 
     /// Nodes by id and wires sorted, so a hand edit's order does not count.
