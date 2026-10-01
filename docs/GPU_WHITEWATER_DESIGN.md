@@ -283,7 +283,7 @@ Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit,
 - **`_nearSolidGrid` is dropped.** It only skips the collision march where no solid is near; the march over the solid field gives the same position without it. A proof shows identical advected positions with and without the early-out on the Dam Break pool.
 - **Thinning.** D8's uniform thinning belonged to the CPU handoff and leaves with it; capacity is the pool's, handled by the rules above.
 
-**Inside emission (BUG-imy3.1).** A turbulence-field atom ports `F/turbulencefield.cpp` (cell-centre MAC velocity, liquid cells where the field < 0, radius √(3·(2h)²), the engine's asymmetric neighbour window i−2 … i+1, trilinear at p − h/2 with out-of-range corners 0). Inside particles (not surface per :1571) emit at `turbulence_rate · Ie · It`, It clamped to [min, max] turbulence and normalised (:1748). It measured inert at the engine's defaults on the Dam Break; it ships at the engine's defaults.
+**Inside emission (BUG-imy3.1) is deferred** (section 7 (Deferred)): it emits nothing on the Dam Break at the engine's defaults. When it revives, a turbulence-field atom ports `F/turbulencefield.cpp` (cell-centre MAC velocity, liquid cells where the field < 0, radius √(3·(2h)²), the engine's asymmetric neighbour window i−2 … i+1, trilinear at p − h/2 with out-of-range corners 0). Inside particles (not surface per :1571) emit at `turbulence_rate · Ie · It`, It clamped to [min, max] turbulence and normalised (:1748).
 
 ## 4. Invariants & enforcement
 
@@ -422,10 +422,6 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 - **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays.
 
-### L7 — Inside emission (BUG-imy3.1)
-
-- **Deliverables:** turbulence-field atom; inside emitters in `emission_count` and the spawn path; O2 extended to inside emission; proofs.
-
 ## 6. Decided — do not reopen
 
 1. GPU emitter and GPU lifecycle, ported from FLIP's code and credited (D14, superseding D1; Peter, 2026-10-01).
@@ -445,7 +441,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 | Item | Revives when |
 |---|---|
-| Turbulence and inside emitters, foam preservation (BUG-imy3.1, child of BUG-imy3 (GPU whitewater, solver-agnostic)) | the side-by-side misses bubbles or foam, or Peter wants turbulence foam; needs recalibration first |
+| Turbulence and inside emitters (BUG-imy3.1, child of BUG-imy3 (GPU whitewater, solver-agnostic)); dropped from the D14 port because they emit nothing on the Dam Break at the engine's defaults | the side-by-side misses bubbles, or Peter wants turbulence foam; the port notes are in section 3.9 (GPU lifecycle (D14)) |
 | Forces and impulses on whitewater | the seam's P8 (Forces and impulses for GPU liquids) lands |
 | Obstacle influence grid | GPU liquids get obstacle roles |
 | Presenting whitewater at display time | the side-by-side shows foam trailing the front |
