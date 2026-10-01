@@ -7,6 +7,9 @@
 //! to grow maximal same-domain pure regions and cut at the rest. Conservative
 //! by construction: an unclassified atom never fuses.
 
+use crate::node_graph::effect_node::ParamValues;
+use crate::node_graph::parameters::ParamValue;
+
 /// How a primitive participates in fusion.
 ///
 /// For v1 (texture-pointwise), the two fusable kinds carry an implied
@@ -169,6 +172,13 @@ pub enum FusedOutputCapacity {
     /// input's length is safe — a coincident pre-read at the widened `idx`
     /// would run off the end.
     MultipleOf { input: &'static str, factor: u32 },
+    /// One output per lattice node: the product of the named Float params,
+    /// each rounded (a lattice atom's `nodes_x × nodes_y × nodes_z`), however
+    /// long its array inputs are. The body guards its own gathers and
+    /// returns a value past its lattice; a coincident array external is
+    /// pre-read at `[idx]`, so the region clamps its count by that
+    /// external's length.
+    ParamProduct { params: &'static [&'static str] },
 }
 
 /// A region output's capacity expression over the ARRAY external slots,
@@ -191,6 +201,11 @@ pub enum CapacityExpr {
     Mul(u32, Box<CapacityExpr>),
     /// The live length of ARRAY external slot `usize` (`arrayLength(&src_n)`).
     Slot(usize),
+    /// A fused uniform param (`n<member>_<param>`, a Float lattice length),
+    /// rounded half to even as WGSL's `round` does, and never below 0.
+    Param(String),
+    /// The product of the children — a `ParamProduct` member's lattice.
+    Product(Vec<CapacityExpr>),
 }
 
 impl CapacityExpr {
@@ -207,6 +222,21 @@ impl CapacityExpr {
                 let first = it.next().map(CapacityExpr::to_wgsl).unwrap_or_default();
                 it.fold(first, |acc, e| format!("min({acc}, {})", e.to_wgsl()))
             }
+            CapacityExpr::Param(field) => format!("u32(max(round(params.{field}), 0.0))"),
+            CapacityExpr::Product(v) => {
+                let factors: Vec<String> = v.iter().map(CapacityExpr::to_wgsl).collect();
+                format!("({})", factors.join(" * "))
+            }
+        }
+    }
+
+    /// Whether any leaf reads a uniform param.
+    pub fn reads_params(&self) -> bool {
+        match self {
+            CapacityExpr::Slot(_) => false,
+            CapacityExpr::Param(_) => true,
+            CapacityExpr::Mul(_, x) => x.reads_params(),
+            CapacityExpr::Min(v) | CapacityExpr::Product(v) => v.iter().any(CapacityExpr::reads_params),
         }
     }
 
@@ -221,6 +251,11 @@ impl CapacityExpr {
             CapacityExpr::Min(v) => {
                 let inner: Vec<String> = v.iter().map(CapacityExpr::to_marker_payload).collect();
                 format!("min({})", inner.join(","))
+            }
+            CapacityExpr::Param(field) => format!("par({field})"),
+            CapacityExpr::Product(v) => {
+                let inner: Vec<String> = v.iter().map(CapacityExpr::to_marker_payload).collect();
+                format!("prod({})", inner.join(","))
             }
         }
     }
@@ -238,20 +273,16 @@ impl CapacityExpr {
     fn parse_payload_node(text: &str) -> Option<(CapacityExpr, &str)> {
         let text = text.trim_start();
         if let Some(rest) = text.strip_prefix("min(") {
-            let mut children = Vec::new();
-            let mut rest = rest;
-            loop {
-                let (child, after) = Self::parse_payload_node(rest)?;
-                children.push(child);
-                let after = after.trim_start();
-                if let Some(next) = after.strip_prefix(',') {
-                    rest = next;
-                } else if let Some(next) = after.strip_prefix(')') {
-                    return Some((CapacityExpr::Min(children), next));
-                } else {
-                    return None;
-                }
-            }
+            let (children, rest) = Self::parse_payload_list(rest)?;
+            Some((CapacityExpr::Min(children), rest))
+        } else if let Some(rest) = text.strip_prefix("prod(") {
+            let (children, rest) = Self::parse_payload_list(rest)?;
+            Some((CapacityExpr::Product(children), rest))
+        } else if let Some(rest) = text.strip_prefix("par(") {
+            let (field, rest) = rest.split_once(')')?;
+            let field = field.trim();
+            let identifier = !field.is_empty() && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            identifier.then(|| (CapacityExpr::Param(field.to_string()), rest))
         } else if let Some(rest) = text.strip_prefix("mul(") {
             let (f_str, rest) = rest.split_once(',')?;
             let factor: u32 = f_str.trim().parse().ok()?;
@@ -270,23 +301,52 @@ impl CapacityExpr {
         }
     }
 
+    /// A comma-separated child list up to its closing `)`.
+    fn parse_payload_list(text: &str) -> Option<(Vec<CapacityExpr>, &str)> {
+        let mut children = Vec::new();
+        let mut rest = text;
+        loop {
+            let (child, after) = Self::parse_payload_node(rest)?;
+            children.push(child);
+            let after = after.trim_start();
+            if let Some(next) = after.strip_prefix(',') {
+                rest = next;
+            } else {
+                return after.strip_prefix(')').map(|next| (children, next));
+            }
+        }
+    }
+
     /// Evaluate over named input capacities (`("src_0", cap), …` — the
     /// `array_output_capacity` convention). `None` when a referenced slot has
-    /// no wired capacity or a multiplication overflows (mirroring
-    /// `analytic_echo_instances`' own overflow → `None` contract).
+    /// no wired capacity, the expression reads a param, or a multiplication
+    /// overflows (mirroring `analytic_echo_instances`' own overflow → `None`
+    /// contract).
     pub fn eval(&self, input_capacities: &[(&str, u32)]) -> Option<u32> {
+        self.eval_with(input_capacities, &ParamValues::default())
+    }
+
+    /// [`Self::eval`] with the fused node's params for `Param` leaves.
+    /// `None` when a param is missing, not a Float, or not finite.
+    pub fn eval_with(&self, input_capacities: &[(&str, u32)], params: &ParamValues) -> Option<u32> {
+        let all = |v: &[CapacityExpr]| -> Option<Vec<u32>> {
+            v.iter().map(|e| e.eval_with(input_capacities, params)).collect()
+        };
         match self {
             CapacityExpr::Slot(n) => {
                 let name = format!("src_{n}");
                 input_capacities.iter().find(|(p, _)| *p == name).map(|(_, c)| *c)
             }
-            CapacityExpr::Mul(f, x) => x.eval(input_capacities)?.checked_mul(*f),
-            CapacityExpr::Min(v) => v
-                .iter()
-                .map(|e| e.eval(input_capacities))
-                .collect::<Option<Vec<_>>>()?
-                .into_iter()
-                .min(),
+            CapacityExpr::Mul(f, x) => x.eval_with(input_capacities, params)?.checked_mul(*f),
+            CapacityExpr::Min(v) => all(v)?.into_iter().min(),
+            CapacityExpr::Param(field) => match params.get(field.as_str()) {
+                Some(ParamValue::Float(value)) if value.is_finite() => {
+                    let rounded = value.round_ties_even().max(0.0);
+                    (rounded <= u32::MAX as f32).then_some(rounded as u32)
+                }
+                _ => None,
+            },
+            CapacityExpr::Product(v) => all(v)?.into_iter().try_fold(1u32, u32::checked_mul),
         }
     }
 }
@@ -468,6 +528,39 @@ mod tests {
     use super::FusionKind;
     use crate::node_graph::effect_node::EffectNode;
     use crate::node_graph::primitives::Gain;
+
+    /// A lattice count renders to WGSL over the fused params, round-trips the
+    /// marker grammar, and evaluates as WGSL would: rounded half to even,
+    /// clamped at 0, `None` for a missing or non-finite param or on overflow.
+    #[test]
+    fn param_product_renders_parses_and_evaluates() {
+        use super::CapacityExpr;
+        use crate::node_graph::effect_node::ParamValues;
+        use crate::node_graph::parameters::ParamValue;
+
+        let lattice = CapacityExpr::Product(["n0_nodes_x", "n0_nodes_y", "n0_nodes_z"].map(|f| CapacityExpr::Param(f.to_string())).to_vec());
+        let clamped = CapacityExpr::Min(vec![lattice.clone(), CapacityExpr::Slot(1)]);
+        assert_eq!(
+            clamped.to_wgsl(),
+            "min((u32(max(round(params.n0_nodes_x), 0.0)) * u32(max(round(params.n0_nodes_y), 0.0)) * u32(max(round(params.n0_nodes_z), 0.0))), arrayLength(&src_1))"
+        );
+        let payload = clamped.to_marker_payload();
+        assert_eq!(payload, "min(prod(par(n0_nodes_x),par(n0_nodes_y),par(n0_nodes_z)),s1)");
+        assert_eq!(CapacityExpr::parse_marker_payload(&payload), Some(clamped.clone()));
+        assert_eq!(CapacityExpr::parse_marker_payload("par(n0 x)"), None);
+        assert_eq!(CapacityExpr::parse_marker_payload("prod(par(a),"), None);
+
+        let params = |x: f32, y: f32, z: f32| -> ParamValues {
+            [("n0_nodes_x", x), ("n0_nodes_y", y), ("n0_nodes_z", z)].into_iter().map(|(k, v)| (k.into(), ParamValue::Float(v))).collect()
+        };
+        assert_eq!(lattice.eval_with(&[], &params(64.0, 32.0, 2.0)), Some(4096));
+        assert_eq!(lattice.eval_with(&[], &params(64.5, 1.0, 1.0)), Some(64), "half to even, as WGSL rounds");
+        assert_eq!(lattice.eval_with(&[], &params(-3.0, 1.0, 1.0)), Some(0));
+        assert_eq!(lattice.eval_with(&[], &params(f32::NAN, 1.0, 1.0)), None);
+        assert_eq!(lattice.eval_with(&[], &params(65536.0, 65536.0, 1.0)), None, "overflow");
+        assert_eq!(clamped.eval_with(&[("src_1", 100)], &params(64.0, 64.0, 64.0)), Some(100));
+        assert_eq!(lattice.eval(&[]), None, "no params, no lattice");
+    }
 
     /// Every registered (non-fixture) primitive is either fusable or names
     /// its `BoundaryReason` — the enforcement half of D4/D5

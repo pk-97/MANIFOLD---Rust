@@ -548,7 +548,7 @@ mod tests {
     }
 
     /// The whole scene is refused before any buffer when it needs more than
-    /// the allowance left: SWASH's rendered 256³ Dam Break at surface scale
+    /// the allowance left: GPU FLIP's rendered 256³ Dam Break at surface scale
     /// 3 (37.7 GB of arrays) on a 36 GB M4 Max (a 30.1 GB recommended
     /// working set, so a 22.6 GB allowance) with 1 GB already in use.
     #[test]

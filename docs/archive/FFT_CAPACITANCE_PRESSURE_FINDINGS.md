@@ -2,7 +2,7 @@
 
 <!-- index: Research record for a free-surface liquid pressure solve built from FFTs: capacitance unknowns on a one-cell air collar, whole-box FFT/DCT solves, and a surface-FFT |k| helper that keeps the pass count flat as the grid grows. Measured 2D/3D/GPU results, the rejected routes with their numbers (Dodd-Ferrante air split, naive masked FFT helper, warm start, edge band), the math found on the way (split ringing, waterbed law), literature status, and what is owed before engine work. -->
 
-**Status: RESEARCH · 2026-09-30 · Claude + Peter, reviewed by Astra (Codex). Beats multigrid ~1.5× on MPM's Dam Break in Python/MLX; not in the engine. Engine work: `docs/FFT_WATER_SOLVER_DESIGN.md`. Tracker: BUG-wsim (FFT pressure split research).**
+**Status: SUPERSEDED 2026-10-01 · historical record, frozen. The engine's FFT solve (`docs/archive/FFT_WATER_SOLVER_DESIGN.md`) was replaced by a multigrid-preconditioned conjugate gradient, which on the GPU ran 2.3× faster than it at 64³ to a smaller residual (`docs/GPU_FLIP_PRESSURE_SOLVE.md`). Research as of 2026-09-30: beat multigrid ~1.5× on MPM's Dam Break in Python/MLX. Tracker: BUG-wsim (FFT pressure split research).**
 
 ## The result
 
@@ -82,6 +82,7 @@ Solids inside the water: the same collar trick on the solid boundary with a no-f
 - **Warm start from last frame.** Useless (35 → 38 at 32²): cells flip between air and water each frame exactly where the hard part is. A subcell (ghost-fluid) surface would make frames resemble each other; not tried.
 - **Exact local solve on a 2-cell surface band.** Only 15–20%: the error is long-range along the surface, not local.
 - **Grid-transported water fraction for the demos.** The drop fell at a third of gravity and smeared away before landing; particles fixed it.
+- **MINRES in place of GMRES** (`minres_check.py`, the seven Dam Break problems). The collar system is symmetric once the sum constraint is scaled, so short-memory MINRES would drop the stored basis. With the constant scaled by 1/n³ it stalls near 4e-3; with the constant preconditioned by 1/(σ²·1ᵀP1) it converges but needs 1.5–2× the passes (median error at 24/32/40 passes: 9.1e-3/1.3e-3/9.9e-5, against GMRES 1.1e-3/4.1e-5/1.7e-5). The basis GMRES keeps is about 4 MB at 64³, cheap next to a box solve.
 
 ## Math found on the way
 

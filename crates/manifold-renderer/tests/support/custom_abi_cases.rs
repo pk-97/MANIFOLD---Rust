@@ -12,6 +12,27 @@ pub const CUT_MAP_TYPE_IDS: &[&str] = &["node.cut_mesh_bands", "node.cut_mesh_ce
 
 pub const CASES: &[CustomAbiCase] = &[
     CustomAbiCase {
+        source: "liquid_stats.rs",
+        rust_struct: "StatsParams",
+        shader: "shaders/liquid_stats.wgsl",
+        shader_struct: "StatsParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "liquid_frame.rs",
+        rust_struct: "FrameParams",
+        shader: "shaders/liquid_frame.wgsl",
+        shader_struct: "FrameParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "../liquid/grid.rs",
+        rust_struct: "FaceParams",
+        shader: "shaders/liquid_frame_faces.wgsl",
+        shader_struct: "FaceParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "matter_stats.rs",
         rust_struct: "StatsParams",
         shader: "shaders/matter_stats.wgsl",
@@ -170,6 +191,20 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "ScanParams",
         shader: "shaders/prefix_scan.wgsl",
         shader_struct: "ScanParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "dot_products.rs",
+        rust_struct: "DotParams",
+        shader: "shaders/dot_products.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "coarse_inverse.rs",
+        rust_struct: "InverseParams",
+        shader: "shaders/coarse_inverse.wgsl",
+        shader_struct: "Params",
         aliases: &[],
     },
     CustomAbiCase {

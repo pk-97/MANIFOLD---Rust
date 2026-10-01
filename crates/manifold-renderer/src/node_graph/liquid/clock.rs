@@ -58,6 +58,14 @@ impl LiquidClock {
         self.tick_cap = cap;
     }
 
+    /// Make the next frame a restart in a new epoch. The domain's
+    /// `clear_state` calls this: the runtime's state reset (export start,
+    /// resize, an idle chain) must reseed the liquid even when the transport
+    /// runs on, and the epoch never repeats, so the state node reseeds too.
+    pub fn restart(&mut self) {
+        self.started = false;
+    }
+
     /// Advance by one display frame. `frame_interval` is this frame's host
     /// delta in seconds; it only sets the live tick allowance.
     pub fn advance(
@@ -220,5 +228,21 @@ mod tests {
         clock.set_tick_cap(None);
         let uncapped = clock.advance(8.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
         assert_eq!(uncapped.ticks, 4);
+    }
+
+    /// A state reset restarts once in a new epoch while the transport runs on.
+    #[test]
+    fn liquid_clock_restart_starts_a_new_epoch() {
+        let mut clock = LiquidClock::default();
+        clock.advance(0.0, TICK, 1.0, 0.0, false, true);
+        let played = clock.advance(10.0 * TICK, 10.0 * TICK, 1.0, 0.0, false, true);
+        clock.restart();
+        let restarted = clock.advance(11.0 * TICK, TICK, 1.0, 0.0, false, true);
+        assert!(restarted.restarted);
+        assert_eq!(restarted.epoch, played.epoch + 1);
+        assert_eq!((restarted.ticks, restarted.simulation_time), (0, 0.0));
+        let next = clock.advance(12.0 * TICK, TICK, 1.0, 0.0, false, true);
+        assert!(!next.restarted);
+        assert_eq!((next.epoch, next.ticks), (restarted.epoch, 1));
     }
 }

@@ -209,6 +209,19 @@ pub mod well_known {
         ATLAS_OFFSET      = "atlas_offset";
         SCALE_MIN         = "scale_min";
 
+        // ─── Liquid face grid (GPU_FLIP_PRESSURE_SOLVE.md): the three face
+        // velocities a padded cell owns
+        FACE_VELOCITY = "face_velocity";
+        FACE_WEIGHT = "face_weight";
+        // GPU_WHITEWATER_DESIGN.md section 3.3: a cell's nearest surface
+        // crossing and the level at its centre; a value still to extrapolate
+        CROSSING = "crossing";
+        LEVEL = "level";
+        KNOWN = "known";
+        // GPU_WHITEWATER_DESIGN.md section 3.4: a spawn record for the lifecycle
+        POSITION_LIFETIME = "position_lifetime";
+        KIND = "kind";
+
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's
         // Array(JointMatrix) output — one skin matrix per joint, column-

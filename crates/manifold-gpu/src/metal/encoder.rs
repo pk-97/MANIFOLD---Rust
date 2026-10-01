@@ -382,18 +382,13 @@ impl GpuEncoder {
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         self.end_current();
         let threadgroup_bytes = pipeline.state.staticThreadgroupMemoryLength() as u32;
-        let Some((start, end)) = self
+        let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
             .and_then(|p| p.reserve(label, GpuWorkKind::Compute, threadgroup_bytes))
         else {
             return self.ensure_compute();
         };
-        let sample_buffer = self
-            .profile
-            .as_ref()
-            .map(|p| p.sampler.buffer.clone())
-            .expect("profile state present");
         let desc = MTLComputePassDescriptor::computePassDescriptor();
         unsafe {
             let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
@@ -416,16 +411,11 @@ impl GpuEncoder {
         desc: &MTLRenderPassDescriptor,
         label: &str,
     ) -> Retained<ProtocolObject<dyn MTLRenderCommandEncoder>> {
-        if let Some((start, end)) = self
+        if let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
             .and_then(|p| p.reserve(label, GpuWorkKind::Render, 0))
         {
-            let sample_buffer = self
-                .profile
-                .as_ref()
-                .map(|p| p.sampler.buffer.clone())
-                .expect("profile state present");
             unsafe {
                 let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
                 att.setSampleBuffer(Some(&sample_buffer));
@@ -444,16 +434,11 @@ impl GpuEncoder {
         &mut self,
         label: &str,
     ) -> Retained<ProtocolObject<dyn MTLBlitCommandEncoder>> {
-        if let Some((start, end)) = self
+        if let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
             .and_then(|p| p.reserve(label, GpuWorkKind::Blit, 0))
         {
-            let sample_buffer = self
-                .profile
-                .as_ref()
-                .map(|p| p.sampler.buffer.clone())
-                .expect("profile state present");
             let desc = unsafe { MTLBlitPassDescriptor::blitPassDescriptor() };
             unsafe {
                 let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
@@ -479,16 +464,11 @@ impl GpuEncoder {
         label: &str,
     ) -> Retained<ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>> {
         self.end_current();
-        if let Some((start, end)) = self
+        if let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()
             .and_then(|p| p.reserve(label, GpuWorkKind::AccelerationStructure, 0))
         {
-            let sample_buffer = self
-                .profile
-                .as_ref()
-                .map(|p| p.sampler.buffer.clone())
-                .expect("profile state present");
             let desc = MTLAccelerationStructurePassDescriptor::accelerationStructurePassDescriptor();
             unsafe {
                 let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
@@ -2856,6 +2836,59 @@ mod tests {
     use objc2_metal::MTLCommandBuffer;
 
     use super::*;
+
+    /// A frame with more dispatches than one sample buffer holds is timed in
+    /// full across the chain: every span resolves, in encode order, with no
+    /// overflow. Past the chain's end the rest overflow by count. The render
+    /// smoke's size (8,192 spans) holds on this device.
+    #[test]
+    fn profiling_chains_sample_buffers_past_one_buffer() {
+        let device = GpuDevice::new();
+        if !device.supports_dispatch_profiling() {
+            return;
+        }
+        let wgsl = r#"
+            @group(0) @binding(0) var<storage, read_write> out: array<u32>;
+            @compute @workgroup_size(64)
+            fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+                out[id.x] = out[id.x] + 1u;
+            }
+        "#;
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "chain test");
+        let buffer = device.create_buffer_shared(64 * 4);
+        let frame = |sampler: &GpuTimestampSampler, dispatches: usize| {
+            let mut encoder = device.create_encoder("chain test");
+            encoder.enable_dispatch_profiling(sampler.clone(), &device);
+            for _ in 0..dispatches {
+                encoder.dispatch_compute(
+                    &pipeline,
+                    &[GpuBinding::Buffer { binding: 0, buffer: &buffer, offset: 0 }],
+                    [1, 1, 1],
+                    "chain dispatch",
+                );
+            }
+            encoder.commit_and_wait_profiled(&device)
+        };
+
+        let sampler = profiling::create_sampler_capped(device.raw_device(), 200, 64)
+            .expect("timestamp sampler");
+        assert_eq!((sampler.buffers.len(), sampler.max_spans()), (4, 256));
+        let within = frame(&sampler, 150);
+        assert_eq!((within.spans.len(), within.overflow, within.invalid), (150, 0, 0));
+        assert!(within.spans.windows(2).all(|w| w[1].start_ms >= w[0].start_ms), "spans out of order");
+        let past = frame(&sampler, 300);
+        assert_eq!((past.spans.len(), past.overflow), (256, 44));
+        drop(sampler);
+
+        let large = device.create_timestamp_sampler(8_192).expect("timestamp sampler");
+        eprintln!(
+            "profiling chain: 8192 spans asked, {} held in {} buffers of {} spans",
+            large.max_spans(),
+            large.buffers.len(),
+            large.per_buffer / 2
+        );
+        assert!(large.max_spans() >= 8_192, "sampler holds {} spans", large.max_spans());
+    }
 
     /// commit_and_continue must preserve in-order execution: three chunks
     /// write successive values to the same buffer slot; the final value and

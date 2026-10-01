@@ -29,7 +29,7 @@ pub(crate) const EXTENT_GRID_OFFSET: u64 = 4;
 crate::primitive! {
     name: RunningTotal,
     type_id: "node.running_total",
-    purpose: "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late. `extent` holds the grand total on the GPU, then an indirect dispatch grid of 256-thread groups covering max(total, last frame's total) × per_item elements.",
+    purpose: "Inclusive running total of an Array<u32>: out[i] = in[0] + … + in[i] over the first `count` values (the whole array unwired). `total` is the grand total, read back to the CPU one frame late. `extent` holds the grand total on the GPU, then an indirect dispatch grid of 256-thread groups covering max(total, last frame's total) × per_item elements. With `capacity` set, a total past it is a named error every frame it lasts: the consumer that places the items holds only `capacity` of them.",
     inputs: {
         in: Array(u32) required,
         count: ScalarF32 optional,
@@ -46,6 +46,14 @@ crate::primitive! {
             ty: ParamType::Int,
             default: ParamValue::Float(1.0),
             range: Some((1.0, 64.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("capacity"),
+            label: "Consumer Capacity",
+            ty: ParamType::Int,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 16_777_216.0)),
             enum_values: &[],
         },
     ],
@@ -89,6 +97,13 @@ impl Primitive for RunningTotal {
             self.previous_total = unsafe { std::ptr::read(ptr.cast::<u32>()) } as f32;
         }
         ctx.outputs.set_scalar("total", ParamValue::Float(self.previous_total));
+        if let Some(ParamValue::Float(capacity)) = ctx.params.get("capacity")
+            && *capacity >= 1.0
+            && self.previous_total > capacity.round()
+        {
+            let (needs, holds) = (self.previous_total as u64, capacity.round() as u64);
+            ctx.error(format!("Running Total: needs {needs}, holds {holds}; {} items were dropped", needs - holds));
+        }
         // Unwired, the whole array: a numeric default would cap it at a float's
         // exact-integer range.
         let requested = match ctx.inputs.scalar("count") {
