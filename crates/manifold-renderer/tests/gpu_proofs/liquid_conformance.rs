@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire};
-use manifold_core::liquid_domain::is_liquid_domain;
+use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue};
+use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::preset_def::PresetKind;
 use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark, RetireQueue};
@@ -24,7 +24,7 @@ use manifold_renderer::node_graph::fluid_particles::FluidParticle;
 use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
 use manifold_renderer::node_graph::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_renderer::node_graph::liquid::conformance::{
-    BoxScene, Check, FIXTURE_DENSITY, Fixture, LIQUID_SOLVERS, LiquidSolverRow, LiquidTotals,
+    BoxScene, Check, FIXTURE_DENSITY, Fixture, LIQUID_SOLVERS, LiquidSolverRow, LiquidTotals, set_type_param,
 };
 use manifold_renderer::node_graph::physics::{PhysicsStepScope, native_ticks_on_this_thread};
 use manifold_renderer::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
@@ -873,6 +873,126 @@ fn liquid_hydrostatic_lift() {
             assert!(error.abs() <= 0.05, "{}: lift {force:.1} N is not within 5% of {expected:.1} N", row.type_id);
         }
     }
+}
+
+/// The pressure iterations the body push is measured at, and the count taken
+/// as converged.
+const PUSH_ITERATIONS: [u32; 5] = [4, 6, 8, 12, 16];
+const CONVERGED_ITERATIONS: u32 = 64;
+
+/// What the liquid did to a box over a run's last two seconds.
+#[derive(Clone, Copy, Debug)]
+struct Push {
+    /// Mean force and torque per tick, N and N·m.
+    force: [f64; 3],
+    torque: [f64; 3],
+    /// The visible shake: the RMS, over ticks, of how far the push moves the
+    /// box's centre and its corners off their mean motion in one tick, m.
+    shake: f64,
+    turn_shake: f64,
+}
+
+fn push_at(row: &'static LiquidSolverRow, fixture: Fixture, iterations: u32) -> Push {
+    let scene = box_scene(fixture);
+    let mass = f64::from(scene.mass);
+    // A corner's distance from the centre.
+    let corner = 0.5 * 3f64.sqrt() * f64::from(scene.edge);
+    let mut def = self::scene(row, fixture);
+    set_type_param(&mut def, "node.gpu_flip_step", "iterations", SerializedParamValue::Int { value: iterations as i32 });
+    let mut run = LiquidRun::offline(row, def, 1);
+    let settled = run.steps(180);
+    let mut previous = run.body(&settled);
+    let (mut pushes, mut spins, mut torques) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..120 {
+        let probe = run.step();
+        assert_eq!(probe.get("ticks"), 1.0, "offline coupled frames each run a tick");
+        let body = run.body(&probe);
+        pushes.push(liquid_push(&previous, &body));
+        let spin = [0, 1, 2].map(|i| v3(body.angular_velocity)[i] - v3(previous.angular_velocity)[i]);
+        let rows = [v3(body.inv_inertia_x), v3(body.inv_inertia_y), v3(body.inv_inertia_z)];
+        let torque = solve3(rows, spin).expect("the box has a finite inertia");
+        spins.push(spin);
+        torques.push(torque.map(|l| l / TICK));
+        previous = body;
+    }
+    let mean = |xs: &[[f64; 3]]| [0, 1, 2].map(|i| xs.iter().map(|x| x[i]).sum::<f64>() / xs.len() as f64);
+    let rms_off_mean = |xs: &[[f64; 3]]| {
+        let m = mean(xs);
+        (xs.iter().map(|x| [0, 1, 2].map(|i| x[i] - m[i])).map(|d| dot(d, d)).sum::<f64>() / xs.len() as f64).sqrt()
+    };
+    Push {
+        force: mean(&pushes).map(|dv| mass * dv / TICK),
+        torque: mean(&torques),
+        shake: rms_off_mean(&pushes) * TICK,
+        turn_shake: rms_off_mean(&spins) * TICK * corner,
+    }
+}
+
+fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    dot(d, d).sqrt()
+}
+
+/// GPU_FLIP_PRESSURE_SOLVE.md section 8 (Solids in the water): the net force
+/// and torque the liquid puts on a submerged and a floating box at 4, 6, 8,
+/// 12 and 16 pressure iterations and at the step's Auto, against 64 (at 32³
+/// the solve reaches the f32 floor by 16). A count is steady when its mean
+/// force and torque are within 1% of the converged run's (of the box's
+/// weight, and weight times edge), and it shakes the box no more than the
+/// converged run does plus 1% of a cell, the liquid's own visible grain. The
+/// smallest steady count is the count bodies need; Auto must be steady.
+#[test]
+fn gpu_flip_body_push_against_iterations() {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the GPU FLIP row");
+    let mut unsteady_auto = Vec::new();
+    for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
+        let scene = box_scene(fixture);
+        let weight = f64::from(scene.mass) * G;
+        let lever = weight * f64::from(scene.edge);
+        let dx = cell(&scene);
+        let converged = push_at(row, fixture, CONVERGED_ITERATIONS);
+        eprintln!(
+            "gpu_flip_body_push {fixture:?} at {CONVERGED_ITERATIONS}: force {:?} N against weight {weight:.1} N, torque {:?} N·m, \
+             shake {:.4} / turn {:.4} cells",
+            converged.force,
+            converged.torque,
+            converged.shake / dx,
+            converged.turn_shake / dx
+        );
+        let mut smallest = None;
+        // 0 is the step's Auto.
+        for iterations in PUSH_ITERATIONS.into_iter().chain([0]) {
+            let push = push_at(row, fixture, iterations);
+            let off = [
+                distance(push.force, converged.force) / weight,
+                distance(push.torque, converged.torque) / lever,
+                (push.shake - converged.shake) / dx,
+                (push.turn_shake - converged.turn_shake) / dx,
+            ];
+            let steady = off.iter().all(|x| *x <= 0.01);
+            let label = if iterations == 0 { "Auto".to_string() } else { iterations.to_string() };
+            eprintln!(
+                "gpu_flip_body_push {fixture:?} at {label}: force {:?} N, torque {:?} N·m; off converged by force {:.3}%, \
+                 torque {:.3}%; shake {:.4} / turn {:.4} cells, extra {:+.4} / {:+.4}{}",
+                push.force,
+                push.torque,
+                off[0] * 100.0,
+                off[1] * 100.0,
+                push.shake / dx,
+                push.turn_shake / dx,
+                off[2],
+                off[3],
+                if steady { ", steady" } else { "" }
+            );
+            if iterations == 0 && !steady {
+                unsteady_auto.push(fixture);
+            } else if iterations > 0 && steady && smallest.is_none() {
+                smallest = Some(iterations);
+            }
+        }
+        eprintln!("gpu_flip_body_push {fixture:?}: smallest steady count {smallest:?}");
+    }
+    assert!(unsteady_auto.is_empty(), "Auto pressure iterations do not push the box steadily in {unsteady_auto:?}");
 }
 
 /// I5: before it touches the liquid, the coupled box is drawn exactly where
