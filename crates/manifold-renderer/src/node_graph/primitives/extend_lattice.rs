@@ -1,6 +1,8 @@
 //! `node.extend_lattice` — one layer of FLIP's grid extrapolation into a
 //! whitewater grid's unknown cells (`docs/GPU_WHITEWATER_DESIGN.md` section
 //! 3.3). A per-element gather on the codegen path.
+//!
+//! Ported from FLIP Fluids gridutils.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 use std::borrow::Cow;
 

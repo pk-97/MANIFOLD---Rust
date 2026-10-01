@@ -12,6 +12,8 @@
 //   counting as solid) becomes bubble.
 // Slots with lifetime 0 pass whole. The lifecycle types every particle by
 // the same rule on each step, so the two must agree.
+//
+// Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 // FLIP's _maxFoamToSurfaceDistance and _foamLayerOffset, cells.
 const WT_FOAM_DEPTH: f32 = 1.0;

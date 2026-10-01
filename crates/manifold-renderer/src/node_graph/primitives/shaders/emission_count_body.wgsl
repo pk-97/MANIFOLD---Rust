@@ -4,6 +4,8 @@
 // rounds rate · Ie · Iwc · TICK · 8/points_per_cell to the nearest whole
 // number on its own. 0 for a slot at or past live_count, a slot with radius
 // 0, a velocity under 1e-3 m/s, Ie under 1e-6 or Iwc of 0.
+//
+// Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 const EC_TICK: f32 = 1.0 / 60.0;
 

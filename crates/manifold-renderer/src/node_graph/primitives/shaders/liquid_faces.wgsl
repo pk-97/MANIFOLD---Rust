@@ -3,6 +3,8 @@
 // cells into the whitewater grid as the lifecycle places them in FLIP's own
 // arrays, which hold zeros around them. Positions are in whitewater cells.
 // Bodies read the arrays themselves: an include never names a buffer.
+//
+// Ported from FLIP Fluids macvelocityfield.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 const LF_NONE: u32 = 0xffffffffu;
 

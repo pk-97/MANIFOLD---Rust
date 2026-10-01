@@ -17,6 +17,7 @@ use crate::node_graph::primitives::face_grid_scenes::matter_dam_break_faces;
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use crate::node_graph::primitives::gpu_flip_preset::{SHIPPED_PRESET, WaterScene, render_def};
+use crate::node_graph::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
 /// A scene the checks run on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -208,6 +209,8 @@ pub struct LiquidSolverRow {
     pub coupled: bool,
     /// Atoms whose WGSL may not use atomics.
     pub atomic_free: &'static [&'static str],
+    /// Hand shaders that may not use atomics, by the node that runs them.
+    pub atomic_free_shaders: &'static [(&'static str, &'static str)],
     pub refusals: &'static [RefusalCase],
     /// Needed by every check with [`Check::needs_totals`] the row runs.
     pub totals: Option<TotalsReadout>,
@@ -251,6 +254,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         gpu: true,
         coupled: true,
         atomic_free: &[],
+        atomic_free_shaders: &[],
         refusals: &[
             RefusalCase {
                 what: "Resolution 256 on Dam Break Matter at the default Grid Budget",
@@ -322,6 +326,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         gpu: false,
         coupled: true,
         atomic_free: &[],
+        atomic_free_shaders: &[],
         refusals: &[
             RefusalCase {
                 what: "Resolution 256 on Dam Break at the default Grid Budget",
@@ -381,6 +386,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         gpu: true,
         coupled: false,
         atomic_free: &GPU_FLIP_ATOMIC_FREE,
+        atomic_free_shaders: &[("node.whitewater_step", WHITEWATER_STEP_SHADER)],
         refusals: &[
             RefusalCase {
                 what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
@@ -750,6 +756,12 @@ mod tests {
                 let body = node.wgsl_body().unwrap_or_else(|| panic!("{}: {atom} has no codegen body to check", row.type_id));
                 let atomic = std::iter::once(body).chain(node.wgsl_includes().iter().copied()).any(|wgsl| wgsl.contains("atomic"));
                 assert!(!atomic, "{}: atomic-free atom {atom} uses an atomic", row.type_id);
+            }
+            for (node, wgsl) in row.atomic_free_shaders {
+                assert!(registry.construct(node).is_some(), "{}: {node}, which runs an atomic-free shader, is not registered", row.type_id);
+                let code = wgsl.lines().map(|line| line.split("//").next().unwrap_or_default());
+                assert!(!code.clone().any(|line| line.contains("atomic")), "{}: {node}'s hand shader uses an atomic", row.type_id);
+                assert!(code.clone().any(|line| line.contains("@compute")), "{}: {node}'s hand shader has no entry point", row.type_id);
             }
             let mut scenes: Vec<Fixture> = Vec::new();
             for check in Check::ALL {

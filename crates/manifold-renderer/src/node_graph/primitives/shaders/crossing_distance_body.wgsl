@@ -8,6 +8,8 @@
 // below 0) and whose distance is under half a cell reads −½ cell, so liquid
 // runs into walls; a distance within 0.005 cell of 0 moves out to it, keeping
 // its side. A grid past the solid array gives 4 cells.
+//
+// Ported from FLIP Fluids particlelevelset.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn body(
     idx: u32,

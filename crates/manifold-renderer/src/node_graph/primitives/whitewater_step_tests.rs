@@ -1,0 +1,467 @@
+//! Node-boundary proof for `node.whitewater_step`
+//! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9): frame after frame, what the
+//! node publishes is the CPU statements of its passes composed in the node's
+//! order — grid fields, emitter, append, then per tick advect, retype, age,
+//! remove and compact, then the split into foam, bubbles and spray. The
+//! sequence covers the first frame (nothing published yet), ticks 0 (the
+//! pool and outputs held) and a new epoch (the pool started over).
+//!
+//! The fixture is tie-free: no decision in the CPU run sits within [`TOL`]
+//! of its threshold, checked by its own CPU test, so the GPU must match the
+//! reference structurally — the same particles, in the same order, with the
+//! same counts.
+
+use manifold_fluids::WhitewaterSpawn;
+
+use super::emission_count::WAVECREST_RATE;
+use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
+use super::keep_whitewater::MAX_PER_CELL;
+use super::spawn_whitewater::{LIFETIME_VARIANCE, MAX_LIFETIME, MIN_LIFETIME};
+use super::wavecrest_potential::{MAX_CURVATURE, MIN_CURVATURE, SHARPNESS};
+use super::whitewater_cpu::{self as grid_cpu, Grid, Rng};
+use super::whitewater_particle_cpu::{self as particle_cpu, Box3, Crest, Emission, Spawn, SpawnFields};
+use super::whitewater_pool_cpu::{self as pool_cpu, Advect, Age, PoolState, empty_slot};
+use super::whitewater_step::{Report, StepShape};
+use crate::node_graph::fluid::{TICK, whitewater_fade};
+use crate::node_graph::fluid_particles::FluidParticle;
+use crate::node_graph::liquid::grid::face_len;
+use crate::node_graph::transform::Transform;
+use crate::node_graph::whitewater::{KnownValue, SPREAD_STEPS, WhitewaterParticle};
+
+/// Unequal sides, so a swapped axis shows.
+const NODES: [u32; 3] = [21, 23, 17];
+const PAD: u32 = 2;
+const H: f32 = 0.1;
+const ORIGIN: [f32; 3] = [-1.0, 0.2, -0.8];
+/// A liquid ball, in cells: curved enough to crest (2 / radius above the
+/// minimum curvature).
+const BALL_CENTRE: [f32; 3] = [9.3, 7.1, 7.7];
+const BALL_RADIUS: f32 = 3.7;
+/// Fast enough to emit, mostly upward so the ball's top crests.
+const FLOW: [f32; 3] = [0.9, 5.9, -0.7];
+const SLOTS: usize = 2000;
+/// The emitters: the slots past it never emit.
+const LIVE: u32 = SLOTS as u32 - 100;
+const CAPACITY: u32 = 300;
+const SEED: f32 = 0.37;
+const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
+/// (ticks, epoch) per frame: emit and step, step three times, hold, hold, a new
+/// epoch, step twice, hold.
+const FRAMES: [(u32, u32); 7] = [(1, 0), (3, 0), (0, 0), (0, 0), (1, 1), (2, 1), (0, 1)];
+/// The closest a CPU decision may sit to its threshold: cells for anything
+/// placed on the grid, else the quantity's own units.
+const TOL: f32 = 1e-5;
+
+fn cells() -> [u32; 3] {
+    NODES.map(|n| n - 1)
+}
+
+fn face_cells() -> [u32; 3] {
+    cells().map(|c| c - 2 * PAD)
+}
+
+fn bounds() -> Transform {
+    let size: [f32; 3] = cells().map(|c| c as f32 * H);
+    Transform { pos: std::array::from_fn(|a| ORIGIN[a] + 0.5 * size[a]), scale: size, ..Transform::default() }
+}
+
+fn shape() -> StepShape {
+    StepShape::new(NODES, NODES, face_cells(), 1.0, Some(bounds()), CAPACITY).expect("fixture shape")
+}
+
+fn box3(shape: &StepShape) -> Box3 {
+    Box3 { cells: shape.cells, center: shape.center, size: shape.size }
+}
+
+/// A tank closed on every side, its walls a cell thick: positive in the
+/// open, metres.
+fn tank() -> Vec<f32> {
+    let c = cells();
+    let mut solid = Vec::new();
+    for k in 0..NODES[2] {
+        for j in 0..NODES[1] {
+            for i in 0..NODES[0] {
+                let x = [i, j, k].map(|n| n as f32 * H);
+                solid.push((0..3).map(|a| (x[a] - H).min(c[a] as f32 * H - H - x[a])).fold(f32::INFINITY, f32::min));
+            }
+        }
+    }
+    solid
+}
+
+/// The liquid's inputs.
+struct Scene {
+    particles: Vec<FluidParticle>,
+    solid: Vec<f32>,
+    faces: [Vec<f32>; 3],
+    level: Vec<f32>,
+}
+
+impl Scene {
+    fn new() -> Self {
+        let n = NODES.map(|v| v as usize);
+        let level = (0..n[0] * n[1] * n[2])
+            .map(|i| {
+                let p = [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])].map(|v| v as f32);
+                let r = (0..3).map(|a| (p[a] - BALL_CENTRE[a]).powi(2)).sum::<f32>().sqrt();
+                (r - BALL_RADIUS) * H
+            })
+            .collect();
+        let mut rng = Rng(0x57e9_0004);
+        let particles = (0..SLOTS)
+            .map(|_| {
+                let d: [f32; 3] = std::array::from_fn(|_| 2.0 * rng.unit() - 1.0);
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+                let r = BALL_RADIUS - 1.5 * rng.unit();
+                let p: [f32; 3] = std::array::from_fn(|a| ORIGIN[a] + (BALL_CENTRE[a] + r * d[a] / l) * H);
+                FluidParticle { position_radius: [p[0], p[1], p[2], 0.05], velocity: [0.0; 3], id: 0 }
+            })
+            .collect();
+        Self {
+            particles,
+            solid: tank(),
+            faces: std::array::from_fn(|axis| vec![FLOW[axis]; face_len(face_cells(), axis) as usize]),
+            level,
+        }
+    }
+
+    fn faces(&self) -> [&[f32]; 3] {
+        self.faces.each_ref().map(Vec::as_slice)
+    }
+}
+
+/// The grid fields the emitter and the tick read.
+struct GridFields {
+    distance: Vec<f32>,
+    cells: Vec<u32>,
+    curvature: Vec<KnownValue>,
+}
+
+/// The closest decision so far, and how many fell within [`TOL`].
+#[derive(Default)]
+struct Margins {
+    closest: Option<(f32, &'static str)>,
+    near: usize,
+}
+
+impl Margins {
+    fn note(&mut self, what: &'static str, margin: f32) {
+        if self.closest.is_none_or(|(m, _)| margin < m) {
+            self.closest = Some((margin, what));
+        }
+        if margin < TOL {
+            self.near += 1;
+        }
+    }
+}
+
+fn grid_fields(scene: &Scene, h: f32, margins: &mut Margins) -> GridFields {
+    let grid = Grid::new(NODES);
+    let mut crossings: Vec<_> =
+        (0..grid.total()).map(|i| grid_cpu::surface_crossing(&grid, &scene.level, &scene.solid, 1, grid.coords(i)).0).collect();
+    for step in SPREAD_STEPS {
+        crossings = (0..grid.total()).map(|i| grid_cpu::nearest_crossing(&grid, &crossings, grid.coords(i), step)).collect();
+    }
+    let distance: Vec<f32> =
+        (0..grid.total()).map(|i| grid_cpu::crossing_distance(&grid, crossings[i], &scene.solid, h, grid.coords(i))).collect();
+    for &d in &distance {
+        margins.note("distance sign", d.abs() / h);
+        margins.note("curvature band", (d.abs() - 2.0 * h).abs() / h);
+    }
+    let cells = (0..grid.total()).map(|i| grid_cpu::liquid_cell(&grid, &distance, &scene.solid, grid.coords(i))).collect();
+    let mut curvature: Vec<KnownValue> = (0..grid.total()).map(|i| grid_cpu::lattice_curvature(&grid, &distance, h, grid.coords(i))).collect();
+    for _ in 0..3 {
+        curvature = (0..grid.total()).map(|i| grid_cpu::extend_lattice(&grid, &curvature, grid.coords(i))).collect();
+    }
+    GridFields { distance, cells, curvature }
+}
+
+/// What one published frame holds.
+#[derive(Clone, Debug, Default)]
+struct Snapshot {
+    report: Report,
+    populations: [Vec<FluidParticle>; 3],
+}
+
+/// The node's passes on the CPU, in the node's order.
+struct Model {
+    scene: Scene,
+    shape: StepShape,
+    pool: Vec<WhitewaterParticle>,
+    state: PoolState,
+    margins: Margins,
+    /// Removed by the tick, over the run.
+    removed: u32,
+}
+
+impl Model {
+    fn new() -> Self {
+        let shape = shape();
+        Self {
+            scene: Scene::new(),
+            shape,
+            pool: vec![empty_slot(); CAPACITY as usize],
+            state: PoolState::default(),
+            margins: Margins::default(),
+            removed: 0,
+        }
+    }
+
+    fn reseed(&mut self) {
+        self.pool = vec![empty_slot(); CAPACITY as usize];
+        self.state = PoolState::default();
+    }
+
+    fn frame(&mut self, ticks: u32, epoch: u32) {
+        let s = self.shape;
+        let grid = box3(&s);
+        let h = s.cell_size;
+        let fields = grid_fields(&self.scene, h, &mut self.margins);
+        let faces = self.scene.faces();
+        let epoch_f = epoch as f32;
+        let sampled: Vec<FluidParticle> = self
+            .scene
+            .particles
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| particle_cpu::sample_faces(particle_cpu::jitter(p, i as u32, h, SEED, epoch_f), faces, s.face_cells, &grid))
+            .collect();
+        let energy: Vec<f32> = sampled.iter().map(|&p| particle_cpu::energy(p, MIN_ENERGY, MAX_ENERGY)).collect();
+        let crest = Crest { min_curvature: MIN_CURVATURE, max_curvature: MAX_CURVATURE, sharpness: SHARPNESS };
+        let emission = Emission { rate: WAVECREST_RATE, points_per_cell: 8.0, ticks: ticks as f32, live_count: LIVE as f32 };
+        let mut offsets = Vec::with_capacity(LIVE as usize);
+        let mut total = 0;
+        for i in 0..LIVE as usize {
+            let (wavecrest, crest_margin) = particle_cpu::wavecrest(sampled[i], &fields.distance, &fields.curvature, &fields.cells, &grid, crest);
+            self.margins.note("wavecrest", crest_margin);
+            let (n, edge) = particle_cpu::emission_count(sampled[i], energy[i], wavecrest, i as u32, emission);
+            self.margins.note("emission", edge);
+            total += n;
+            offsets.push(total);
+        }
+        let spawn_fields =
+            SpawnFields { offsets: &offsets, particles: &sampled, energy: &energy, faces, face_cells: s.face_cells, solid: &self.scene.solid };
+        let settings = Spawn {
+            capacity: CAPACITY,
+            emitters: LIVE,
+            seed: SEED,
+            epoch: epoch_f,
+            min_lifetime: MIN_LIFETIME,
+            max_lifetime: MAX_LIFETIME,
+            variance: LIFETIME_VARIANCE,
+        };
+        let spawns: Vec<WhitewaterSpawn> = (0..CAPACITY)
+            .map(|j| {
+                let (mut spawn, margin) = particle_cpu::spawn(j, &spawn_fields, &grid, settings);
+                self.margins.note("spawn", margin);
+                let (kind, margin) = particle_cpu::kind(spawn, &fields.distance, &fields.cells, &grid);
+                self.margins.note("kind", margin);
+                spawn.kind = kind;
+                spawn
+            })
+            .collect();
+        pool_cpu::append(&mut self.pool, &spawns, total, &mut self.state);
+        let at = pool_cpu::Fields { faces, face_cells: s.face_cells, solid: &self.scene.solid };
+        let advect = Advect { gravity: GRAVITY, dt: TICK as f32, ..Advect::flip() };
+        let age = Age { dt: TICK as f32, ..Age::flip() };
+        for _ in 0..ticks {
+            let stepped: Vec<WhitewaterParticle> = self
+                .pool
+                .iter()
+                .map(|&p| {
+                    let (p, margin) = pool_cpu::advect(p, &at, &grid, advect, None);
+                    self.margins.note("advect", margin / h);
+                    let (p, margin) = pool_cpu::retype(p, &at, &fields.distance, &fields.cells, &grid);
+                    self.margins.note("retype", margin);
+                    pool_cpu::age(p, age)
+                })
+                .collect();
+            let (flags, margins) = pool_cpu::keep(&stepped, &self.scene.solid, &grid, MAX_PER_CELL as u32);
+            for margin in margins {
+                self.margins.note("keep", margin / h);
+            }
+            let live = self.state.live;
+            self.pool = pool_cpu::compact(&stepped, &flags, &mut self.state);
+            self.removed += live - self.state.live;
+        }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        let populations = [1, 0, 2].map(|kind| {
+            self.pool
+                .iter()
+                .filter(|p| p.kind == kind)
+                .map(|p| {
+                    let [x, y, z, lifetime] = p.position_lifetime;
+                    FluidParticle { position_radius: [x, y, z, whitewater_fade(lifetime)], velocity: p.velocity, id: 0 }
+                })
+                .collect::<Vec<_>>()
+        });
+        let report = Report {
+            counts: populations.each_ref().map(|p| p.len() as u32),
+            emitted: self.state.emitted,
+            thinned: self.state.thinned,
+            pool_full: self.state.pool_full,
+            live: self.state.live,
+            next_id: self.state.next_id,
+        };
+        Snapshot { report, populations }
+    }
+}
+
+/// What the node publishes after each of [`FRAMES`], offline: the snapshot
+/// of the last frame with ticks before it, zeros on the first frame and on
+/// a new epoch.
+fn expected() -> (Vec<Snapshot>, Model) {
+    let mut model = Model::new();
+    let mut published = Snapshot::default();
+    let mut pending = None;
+    let mut epoch = None;
+    let mut out = Vec::new();
+    for (ticks, e) in FRAMES {
+        if epoch != Some(e) {
+            model.reseed();
+            published = Snapshot::default();
+            pending = None;
+            epoch = Some(e);
+        }
+        if let Some(snapshot) = pending.take() {
+            published = snapshot;
+        }
+        if ticks > 0 {
+            model.frame(ticks, e);
+            pending = Some(model.snapshot());
+        }
+        out.push(published.clone());
+    }
+    (out, model)
+}
+
+/// The fixture's own soundness: no decision within [`TOL`] of its
+/// threshold, and every path the proof claims exercised.
+#[test]
+fn whitewater_step_reference_is_tie_free() {
+    let (frames, model) = expected();
+    for (k, f) in frames.iter().enumerate() {
+        println!("frame {k}: {:?}", f.report);
+    }
+    println!("closest decision {:?}, removed {}", model.margins.closest, model.removed);
+    assert_eq!(model.margins.near, 0, "{} decisions within {TOL}; closest {:?}", model.margins.near, model.margins.closest);
+    let last = |epoch: u32| frames.iter().zip(FRAMES).filter(|(_, (_, e))| *e == epoch).map(|(f, _)| f.report).next_back().expect("frame");
+    let first = frames[3].report;
+    assert!(frames[0].report == Report::default() && frames[4].report == Report::default(), "nothing published on frames 0 and 4");
+    assert_eq!(frames[2].report, frames[3].report, "ticks 0 holds");
+    assert!((0..3).all(|p| frames.iter().any(|f| f.report.counts[p] > 0)), "every population published at least once");
+    assert!(first.pool_full > 0 && first.thinned > 0, "the pool filled and the emitters were thinned: {first:?}");
+    assert!(model.removed > 0, "the tick removed particles");
+    let published = frames.iter().flat_map(|f| f.populations.iter().flatten());
+    assert!(published.clone().all(|p| p.position_radius[3] > 0.0), "only living particles are published");
+    assert!(last(1).emitted > 0 && last(1).emitted < first.emitted, "the new epoch counts from 0: {:?}", last(1));
+}
+
+#[cfg(feature = "gpu-proofs")]
+mod gpu {
+    use std::cell::Cell;
+
+    use manifold_gpu::GpuBuffer;
+
+    use super::super::liquid_surface_tests::{Harness, read};
+    use super::super::whitewater_step::{Step, StepFrame, StepInputs};
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder;
+    use crate::node_graph::whitewater_handoff::Fence;
+
+    /// A frame clock the test retires by hand; offline's wait retires.
+    #[derive(Default)]
+    struct HandFence {
+        next: Cell<u64>,
+        retired: Cell<u64>,
+    }
+
+    impl Fence for HandFence {
+        fn stamp(&self) -> u64 {
+            self.next.get()
+        }
+
+        fn is_complete(&self, stamp: u64) -> bool {
+            stamp <= self.retired.get()
+        }
+
+        fn wait(&self, stamp: u64) -> bool {
+            self.retired.set(self.retired.get().max(stamp));
+            true
+        }
+    }
+
+    fn close(a: f32, b: f32, tolerance: f32) -> bool {
+        (a - b).abs() <= tolerance * (1.0 + a.abs().max(b.abs()))
+    }
+
+    fn particle_close(got: &FluidParticle, want: &FluidParticle) -> bool {
+        (0..3).all(|a| close(got.position_radius[a], want.position_radius[a], 1e-4) && close(got.velocity[a], want.velocity[a], 1e-3))
+            && close(got.position_radius[3], want.position_radius[3], 1e-4)
+            && got.id == want.id
+    }
+
+    /// The node over [`FRAMES`], offline, against [`expected`]: the report
+    /// and each population, particle for particle, with the slots past the
+    /// count zeroed.
+    #[test]
+    fn whitewater_step_matches_cpu_across_frames() {
+        let harness = Harness::new();
+        let scene = Scene::new();
+        let shared = |bytes: &[u8]| {
+            let buffer = harness.device.create_buffer_shared(bytes.len() as u64);
+            // SAFETY: a fresh shared buffer of exactly these bytes.
+            unsafe { buffer.write(0, bytes) };
+            buffer
+        };
+        let particles = shared(bytemuck::cast_slice(&scene.particles));
+        let solid = shared(bytemuck::cast_slice(&scene.solid));
+        let level = shared(bytemuck::cast_slice(&scene.level));
+        let faces: [GpuBuffer; 3] = std::array::from_fn(|a| shared(bytemuck::cast_slice(&scene.faces[a])));
+        let inputs = StepInputs { particles: &particles, solid: &solid, faces: [&faces[0], &faces[1], &faces[2]], level_set: &level };
+        let (want, _) = expected();
+        let fence = HandFence::default();
+        let mut step = Step::default();
+        let mut compared = 0;
+        for (k, (&(ticks, epoch), want)) in FRAMES.iter().zip(&want).enumerate() {
+            fence.next.set(fence.next.get() + 1);
+            let frame = StepFrame {
+                shape: shape(),
+                count: Some(LIVE),
+                ticks,
+                epoch,
+                seed: SEED,
+                gravity: GRAVITY,
+                wavecrest_emission: WAVECREST_RATE,
+                min_energy: MIN_ENERGY,
+                max_energy: MAX_ENERGY,
+                preserve_foam: false,
+            };
+            let mut native = harness.device.create_encoder("whitewater step test");
+            let report = {
+                let mut gpu = GpuEncoder::new(&mut native, &harness.device);
+                step.advance(&mut gpu, &fence, true, &frame, &inputs)
+            };
+            native.commit_and_wait_completed();
+            let report = report.unwrap_or_else(|error| panic!("frame {k}: {error}"));
+            println!("frame {k}: {report:?}");
+            assert_eq!(report, want.report, "frame {k}");
+            let Some(slot) = step.outputs.current() else {
+                assert_eq!(want.report, Report::default(), "frame {k}: nothing published");
+                continue;
+            };
+            for (p, wanted) in want.populations.iter().enumerate() {
+                let got: Vec<FluidParticle> = read(&slot.buffers[p], CAPACITY as usize);
+                for (i, (g, w)) in got.iter().zip(wanted).enumerate() {
+                    assert!(particle_close(g, w), "frame {k} population {p} particle {i}: GPU {g:?} CPU {w:?}");
+                }
+                let zero = FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 };
+                assert!(got[wanted.len()..].iter().all(|g| bytemuck::bytes_of(g) == bytemuck::bytes_of(&zero)), "frame {k} population {p}: tail not zeroed");
+                compared += wanted.len();
+            }
+        }
+        println!("{compared} particles compared");
+    }
+}

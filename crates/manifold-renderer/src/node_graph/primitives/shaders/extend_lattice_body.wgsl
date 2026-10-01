@@ -6,6 +6,8 @@
 // (FLIP counts border cells as done and never extrapolates them). Reads
 // only the input layer, so passes chain. `values` is gathered; a grid past
 // its array gives unknown.
+//
+// Ported from FLIP Fluids gridutils.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> Element {
     let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));

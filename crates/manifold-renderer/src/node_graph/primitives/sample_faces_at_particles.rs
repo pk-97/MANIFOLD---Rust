@@ -2,6 +2,8 @@
 //! the seam's face grid, by FLIP's MAC trilinear
 //! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.3). A per-element atom on the
 //! codegen path.
+//!
+//! Ported from FLIP Fluids macvelocityfield.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 use std::borrow::Cow;
 
