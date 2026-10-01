@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · P1–P6 built on `feat/gpu-whitewater`; the Whitewater group ships in the GPU FLIP Dam Break preset; O1 and O2 green · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · reopened by D14 (GPU lifecycle); P1–P6 emitter built, O1 and O2 green · owed: D14's GPU lifecycle port with parity against the vendored lifecycle, `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 

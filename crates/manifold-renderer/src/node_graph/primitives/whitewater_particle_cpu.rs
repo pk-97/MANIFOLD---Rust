@@ -3,6 +3,8 @@
 //! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7). Each threshold test also
 //! reports how close the value came to its threshold, so a proof can allow
 //! the GPU to fall the other way on a hair's-breadth decision.
+//!
+//! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 // The GPU proofs (`whitewater_particle_tests`, feature gpu-proofs) call every
 // item here; a default test build compiles only the extent proof's face index.

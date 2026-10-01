@@ -3,6 +3,8 @@
 // uniform offset in [−j, j] on each axis, j = 0.25·(1 − 1e-3)·cell_size,
 // drawn from a stateless hash of (slot, seed, epoch). Velocity, radius and
 // id pass through; a slot with radius 0 passes whole.
+//
+// Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn body(idx: u32, count: u32, e_particles: Element, cell_size: f32, seed: f32, epoch: f32) -> Element {
     if !(e_particles.position_radius.w > 0.0) {

@@ -5,6 +5,8 @@
 // curvature of the distance by central differences, in 1/m, clamped to ±1
 // cell⁻¹ (0 where the gradient vanishes); any other cell is unknown with 0.
 // `distance` is gathered; a grid past its array gives unknown.
+//
+// Ported from FLIP Fluids particlelevelset.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 fn lk_phi(c: vec3<i32>, cells: vec3<u32>) -> f32 {
     return buf_distance[ww_cell_index(vec3<u32>(c), cells)];

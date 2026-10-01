@@ -2,6 +2,8 @@
 //! placed by FLIP's own emitter rule around the liquid particle that emits
 //! it (`docs/GPU_WHITEWATER_DESIGN.md` D8, section 3.3). A per-element atom
 //! on the codegen path.
+//!
+//! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
 use std::borrow::Cow;
 
