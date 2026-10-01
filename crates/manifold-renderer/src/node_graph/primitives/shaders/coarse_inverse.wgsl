@@ -1,7 +1,7 @@
-// node.coarse_inverse — the inverse of the masked Poisson matrix on the
-// multigrid's coarsest level, in one workgroup. A is the cells × cells matrix
-// with A[i][i] = Σ w over i's faces and A[i][j] = −w for a water neighbour j
-// across a face of open fraction w (node.solid_faces' face grid in
+// The GPU FLIP pressure solve's coarse inverse: the inverse of the masked
+// Poisson matrix on the multigrid's coarsest level, in one workgroup. A is
+// the cells × cells matrix with A[i][i] = Σ w over i's faces and A[i][j] = −w
+// for a water neighbour j across a face of open fraction w (the face grid in
 // `solid_faces`; box walls 0), on water cells only (L = −A / h²). `out` is built as A in
 // place, then swept one cell at a time (Goodnight's sweep, no pivoting: A is
 // symmetric positive definite on water that touches air), which leaves −A⁻¹;

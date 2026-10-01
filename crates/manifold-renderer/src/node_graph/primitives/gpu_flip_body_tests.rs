@@ -385,7 +385,7 @@ fn float_extra(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f64)> {
 }
 
 /// The pressure's face impulse and the friction impulse, fused side by side
-/// on the same solids (the step's shape: both read node.solid_face_velocity
+/// on the same solids (the step's shape: both read the solids' face velocity
 /// coincident), summed into one face grid by friction's faces input.
 #[test]
 fn gpu_flip_face_impulses_fuse() {
@@ -414,9 +414,10 @@ fn gpu_flip_face_impulses_fuse() {
     assert_close(&got, &cpu_friction(&pushed, &water, &solid, &velocity), "fused impulses");
 }
 
-/// −L p fused into the bodies' share, as the solve computes s.
+/// A per-cell producer fused into the bodies' share: the product reads its
+/// base coincident.
 #[test]
-fn gpu_flip_residual_into_body_product_fuses() {
+fn gpu_flip_divide_into_body_product_fuses() {
     let cells: usize = N.iter().product();
     let (solid, velocity) = fixture(0xfe11);
     let (value, water) = (random_values(cells, 0xfe12), random_water(cells, 0xfe13));
@@ -426,29 +427,21 @@ fn gpu_flip_residual_into_body_product_fuses() {
     let s = chain.face_source("solid", solid.clone());
     let v = chain.face_source("velocity", velocity.clone());
     let x = chain.source("value", value.clone());
+    let d = chain.source("divisor", vec![0.25]);
     let w = chain.source("water", water.clone());
-    let z = chain.source("zeros", vec![0.0; cells]);
     let u = chain.source("sums", sums.clone());
     let b = body_source(&mut chain, &rows);
-    let residual = chain.node("residual", "node.pressure_residual", lattice_json(N, &[("cell_size", f64::from(H))]));
-    chain.wire(w, "out", residual, "water");
-    chain.wire(z, "out", residual, "rhs");
-    chain.wire(x, "out", residual, "value");
-    chain.wire(s, "out", residual, "solid_faces");
-    chain.wire(z, "out", residual, "phi");
+    let divide = chain.node("divide", "node.divide_by_value", json!({}));
+    chain.wire(x, "out", divide, "values");
+    chain.wire(d, "out", divide, "divisor");
     let product = chain.node("product", "node.body_pressure_product", lattice_json(N, &float_extra(&body_params())));
-    chain.wire(residual, "out", product, "base");
+    chain.wire(divide, "out", product, "base");
     chain.wire(w, "out", product, "water");
     chain.wire(s, "out", product, "solid_faces");
     chain.wire(v, "out", product, "solid_velocity");
     chain.wire(u, "out", product, "sums");
     chain.wire(b, "out", product, "bodies");
     let got = chain.fused_matches_unfused(product, cells);
-    let unfused = run_atom(
-        &mut super::pressure_residual::PressureResidual::new(),
-        &[("water", &water), ("rhs", &vec![0.0; cells]), ("value", &value), ("solid_faces", &solid), ("phi", &vec![0.0; cells])],
-        cells,
-        &lattice_params(N, &[("cell_size", H)]),
-    );
-    assert_close(&got, &cpu_body_product(&unfused, &water, &solid, &velocity, &sums, &rows), "fused residual into product");
+    let base: Vec<f32> = value.iter().map(|&v| v / 0.25).collect();
+    assert_close(&got, &cpu_body_product(&base, &water, &solid, &velocity, &sums, &rows), "fused divide into product");
 }

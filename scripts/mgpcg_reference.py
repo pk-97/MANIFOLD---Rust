@@ -9,7 +9,7 @@ closed, each face weighted by its open fraction (1 without solids). One
 V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before and 2 after,
 trilinear transfers, a coarse cell is air if any child is air. A coarse
 face's weight is the mean of the four fine faces it covers
-(node.coarsen_solid_faces); a cell whose faces are all closed drops out.
+(the pressure solver's face coarsening); a cell whose faces are all closed drops out.
 By default each level halves every side, rounding up, until every side is
 4 or less, and that level is solved exactly by its inverse (the coarse
 inverse's sweep and pinning): the solver module's rule. An odd side's extra
@@ -28,7 +28,7 @@ f32 each, or zeros) and compares against that pressure's residual.
 
 --box cx,cy,cz,hx,hy,hz (fractions of the box side) puts a solid box in the
 water: face weights from its distance on the cell corners by FLIP Fluids'
-fractionInside (node.solid_faces), then per problem the gate of
+fractionInside (the GPU FLIP step's open_fractions pass), then per problem the gate of
 docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water): the
 reference against a direct sparse solve, and the iterations the box takes to
 reach the empty tank's residual at each --iterations count.
@@ -369,7 +369,7 @@ def square(bl, br, tl, tr):
 
 
 def box_faces(shape, box):
-    """node.solid_faces for a box (fractions of the side): its exact distance
+    """The step's open_fractions pass for a box (fractions of the side): its exact distance
     on the cell corners, each face 1 − fractionInside of its four corners in
     the engine's order, the box walls closed."""
     nz, ny, nx = shape
@@ -423,7 +423,7 @@ G = 9.81
 
 def box_cells(shape, box):
     """Each cell's open volume for an axis-aligned box: 1 minus the product
-    of its overlaps along the three axes. node.solid_faces takes the engine's
+    of its overlaps along the three axes. The step's open_fractions pass takes the engine's
     corner-distance volumeFraction instead; the two agree on whole cells."""
     c, half = np.array(box[:3]), np.array(box[3:])
     n = shape[0]
@@ -462,8 +462,8 @@ def body_basis(shape, box):
 
 def body_columns(water, faces, cell_open, basis):
     """G per cell, (cells..., 6): Σ over its inner faces of the outward sign ×
-    (c − w) × the face's basis, d(h · divergence)/d(V, ω) as node.face_divergence
-    takes the C·v_s term. FLIP Fluids' forcePerPressure is −h²·(this)."""
+    (c − w) × the face's basis, d(h · divergence)/d(V, ω) as the GPU FLIP step's
+    divergence pass takes the C·v_s term. FLIP Fluids' forcePerPressure is −h²·(this)."""
     g = np.zeros(water.shape + (6,))
     for ax, w in enumerate(faces):
         n = water.shape[ax]
@@ -500,7 +500,7 @@ class Body:
 
 
 def body_divergence(u, w, cell_open, vs, water, h):
-    """node.face_divergence with the C·v_s term."""
+    """The GPU FLIP step's divergence pass with the C·v_s term."""
     d = np.zeros(water.shape)
     for ax in range(3):
         inner = np.ones_like(w[ax])

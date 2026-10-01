@@ -534,13 +534,9 @@ const NON_STANDALONE: &[&str] = &[
     // a generated standalone uniform mirror for its run() path.
     "node.detect_regions",
     "node.track_regions",
-    // The pressure solve's hand shaders, barriered (their DotParams and
-    // InverseParams are reflected in uniform_layout_extended): the two-pass
-    // reduction and the coarsest level's one-workgroup inverse. And the
-    // conjugate gradient loop boundary, which only issues blits.
+    // The two-pass reduction, barriered (its DotParams are reflected in
+    // uniform_layout_extended).
     "node.dot_products",
-    "node.coarse_inverse",
-    "node.conjugate_gradient",
     // Solids' per-body impulse sums: the same barriered two-pass reduction as
     // dot_products, its SumParams reflected in uniform_layout_extended.
     "node.face_impulse_to_bodies",

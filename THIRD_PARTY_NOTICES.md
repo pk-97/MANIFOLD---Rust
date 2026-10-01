@@ -8,19 +8,12 @@ Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored u
 
 Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
 
-- `gpu_flip_step` (`shaders/gpu_flip_step.wgsl`) — particles to faces from `velocityadvector.cpp`, the particle distance from `particlelevelset.cpp`, the solid open fractions from `levelsetutils.cpp` and `meshlevelset.cpp`, the solids' face velocity and the constraint from `fluidsimulation.cpp`, divergence and the pressure subtraction from `pressuresolver.cpp`
+- `gpu_flip_step` (`shaders/gpu_flip_step.wgsl`; its CPU references in `gpu_flip_step_tests.rs`) — particles to faces from `velocityadvector.cpp`, the particle distance from `particlelevelset.cpp`, the solid open fractions from `levelsetutils.cpp` and `meshlevelset.cpp`, the solids' face velocity and the constraint from `fluidsimulation.cpp`, divergence and the pressure subtraction from `pressuresolver.cpp`
 - `gpu_flip_pressure` (`shaders/gpu_flip_pressure.wgsl`) — the ghost-fluid free-surface rows from `pressuresolver.cpp`
-- `particle_distance` — from `particlelevelset.cpp`
-- `particles_to_faces` — from `velocityadvector.cpp`
-- `pressure_residual`, `pressure_smooth`, `subtract_pressure` — from `pressuresolver.cpp` (the ghost-fluid free-surface rows)
-- `face_divergence` (the solids' term in its shader) — from `pressuresolver.cpp`
 - `body_pressure_product`, `pressure_face_impulse` — from `pressuresolver.cpp` and `rigidboundaryvelocity.cpp`
 - `face_impulse_to_bodies` — from `rigidboundaryvelocity.cpp`
-- `constrain_solid_faces` — from `fluidsimulation.cpp`
-- `solid_face_velocity` — from `fluidsimulation.cpp` and `meshlevelset.cpp`
-- `solid_faces` — from `levelsetutils.cpp` and `meshlevelset.cpp`
 
-The GPU structure (atoms, the multigrid preconditioner, the fused step) is MANIFOLD's own; the ported parts are the rules above.
+The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 
 ### License
 

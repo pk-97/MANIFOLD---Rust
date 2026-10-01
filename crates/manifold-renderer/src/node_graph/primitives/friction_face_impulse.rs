@@ -7,14 +7,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cells_with_particles::{LATTICE_PARAMS, cell_count, cell_lattice};
-use super::particles_to_faces::{face_capacity, face_count};
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::liquid::bodies::SOLID_BODY_FACES;
+use crate::node_graph::liquid::lattice::{LATTICE_PARAMS, cell_count, cell_lattice, face_capacity, face_count};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -35,7 +34,7 @@ struct FrictionImpulseUniforms {
 crate::primitive! {
     name: FrictionFaceImpulse,
     type_id: "node.friction_face_impulse",
-    purpose: "The impulse a body takes back from the water through friction, per face of a face grid (node.particles_to_faces' layout). On an inner face a body owns (solid_velocity's velocity w, node.solid_face_velocity's owner code) that is cut (open fraction o from solid_faces strictly between 0 and 1) and touches a water cell, the face's axis carries density·cell_size³·o·f·(u − v_s) in N·s: u the face velocity in faces, v_s and f the body's velocity and friction on the face from solid_velocity. That is what node.constrain_solid_faces takes from the water there. Every other face is zero; velocity w passes the owner code on.",
+    purpose: "The impulse a body takes back from the water through friction, per face of a face grid (the liquid face grid's layout). On an inner face a body owns (solid_velocity's velocity w carries the owner code; no node writes it yet, BUG-6zj3 (step body owner code)) that is cut (open fraction o from solid_faces strictly between 0 and 1) and touches a water cell, the face's axis carries density·cell_size³·o·f·(u − v_s) in N·s: u the face velocity in faces, v_s and f the body's velocity and friction on the face from solid_velocity. That is what node.gpu_flip_step's solid constraint takes from the water there. Every other face is zero; velocity w passes the owner code on.",
     inputs: {
         faces: Array(FaceSample) required,
         water: Array(f32) required,
@@ -53,7 +52,7 @@ crate::primitive! {
         float_param!("density", "Liquid Density (kg/m³)", 1000.0, 1.0e-3, 1.0e6),
     ],
     depth_rule: Terminal,
-    composition_notes: "Once per GPU FLIP water step, on the projected faces node.constrain_solid_faces is about to constrain, with the same solid_faces and solid_velocity; then node.face_impulse_to_bodies adds it to the step's body sums.",
+    composition_notes: "The GPU FLIP two-way body coupling, not yet wired into any preset (BUG-6zj3 (step body owner code)): once per water step, on the projected faces just before the step's solid constraint, with the step's open fractions and solid face velocity; then node.face_impulse_to_bodies adds it to the step's body sums.",
     examples: [],
     picker: { label: "Friction Face Impulse", category: Atom },
     summary: "Works out how much the water drags on floating objects where they slide past it.",

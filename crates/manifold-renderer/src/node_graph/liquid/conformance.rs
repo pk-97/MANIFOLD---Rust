@@ -234,33 +234,14 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
 const GPU_FLIP_OWES_SOLIDS: &str = "owed to GPU FLIP's solids (bodies join the pressure solve, \
      docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed)): until then the GPU FLIP domain refuses Collider roles and a physics world by name, so no box scene exists";
 
-/// GPU FLIP's step atoms that gather instead of scattering, the pressure
-/// solve's included (docs/GPU_FLIP_PRESSURE_SOLVE.md). The hand-shader
-/// coarse inverse and face_impulse_to_bodies have no codegen body; their own
+/// GPU FLIP's body-coupling atoms that gather instead of scattering
+/// (docs/GPU_FLIP_PRESSURE_SOLVE.md). The step's and the pressure solve's
+/// hand shaders and face_impulse_to_bodies have no codegen body; their own
 /// tests check them.
-const GPU_FLIP_ATOMIC_FREE: [&str; 22] = [
-    "node.cells_with_particles",
-    "node.particles_to_faces",
-    "node.particle_distance",
-    "node.face_gravity",
-    "node.extend_faces",
-    "node.face_divergence",
-    "node.subtract_pressure",
-    "node.density_source",
-    "node.faces_to_particles",
-    "node.coarsen_water",
-    "node.solid_faces",
-    "node.coarsen_solid_faces",
-    "node.solid_face_velocity",
-    "node.constrain_solid_faces",
+const GPU_FLIP_ATOMIC_FREE: [&str; 3] = [
     "node.pressure_face_impulse",
     "node.body_pressure_product",
     "node.friction_face_impulse",
-    "node.pressure_smooth",
-    "node.pressure_residual",
-    "node.restrict_lattice",
-    "node.prolong_lattice",
-    "node.zero_lattice",
 ];
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[

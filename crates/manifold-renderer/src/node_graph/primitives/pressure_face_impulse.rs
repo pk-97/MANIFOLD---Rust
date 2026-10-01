@@ -9,14 +9,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cells_with_particles::{LATTICE_PARAMS, cell_count, cell_lattice};
-use super::particles_to_faces::{face_capacity, face_count};
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::liquid::bodies::SOLID_BODY_FACES;
+use crate::node_graph::liquid::lattice::{LATTICE_PARAMS, cell_count, cell_lattice, face_capacity, face_count};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -37,7 +36,7 @@ struct FaceImpulseUniforms {
 crate::primitive! {
     name: PressureFaceImpulse,
     type_id: "node.pressure_face_impulse",
-    purpose: "The pressure's impulse on the bodies through each face of a face grid (node.particles_to_faces' layout). On an inner face a body owns (solid_velocity's velocity w, node.solid_face_velocity's owner code), the face's axis carries density·cell_size²·((c_lo − o)·p_lo − (c_hi − o)·p_hi) in N·s: o the face's open fraction and c each side cell's open volume from solid_faces (node.solid_faces), p the pressure of each side cell (0 outside the water) in the solve's units, dt·P/ρ. FLIP Fluids' forcePerPressure times the pressure. Every other face is zero; velocity w passes the owner code on.",
+    purpose: "The pressure's impulse on the bodies through each face of a face grid (the liquid face grid's layout). On an inner face a body owns (solid_velocity's velocity w carries the owner code, Σ over axes a of (body_a + 1)·256^a; no node writes it yet, BUG-6zj3 (step body owner code)), the face's axis carries density·cell_size²·((c_lo − o)·p_lo − (c_hi − o)·p_hi) in N·s: o the face's open fraction and c each side cell's open volume from solid_faces, p the pressure of each side cell (0 outside the water) in the solve's units, dt·P/ρ. FLIP Fluids' forcePerPressure times the pressure. Every other face is zero; velocity w passes the owner code on.",
     inputs: {
         pressure: Array(f32) required,
         water: Array(f32) required,
@@ -55,7 +54,7 @@ crate::primitive! {
         float_param!("density", "Liquid Density (kg/m³)", 1000.0, 1.0e-3, 1.0e6),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside the GPU FLIP pressure solve, on the conjugate gradient's direction (then node.face_impulse_to_bodies, then node.body_pressure_product adds the bodies' share of the operator), and once on the solved pressure for the tick's reaction. water is node.cells_with_particles; solid_faces and solid_velocity are the step's node.solid_faces and node.solid_face_velocity.",
+    composition_notes: "The GPU FLIP two-way body coupling, not yet wired into any preset (BUG-6zj3 (step body owner code)): on the pressure solve's search direction, then node.face_impulse_to_bodies, then node.body_pressure_product adds the bodies' share of the operator; and once on the solved pressure for the tick's reaction. water is the step's water mask; solid_faces and solid_velocity are the step's open fractions and solid face velocity.",
     examples: [],
     picker: { label: "Pressure Face Impulse", category: Atom },
     summary: "Works out how hard the water's pressure pushes on floating objects through each face of the grid.",

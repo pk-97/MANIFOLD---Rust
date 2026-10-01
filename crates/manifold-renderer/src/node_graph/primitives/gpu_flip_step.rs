@@ -80,33 +80,47 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
     slots.max(1) * size_of::<FluidParticle>() as u64 + 4 * cell_bytes(cells) + corners + 5 * face_bytes(cells)
 }
 
+/// The shader's `Params`; field meanings are documented there.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
-struct StepParams {
-    n: [u32; 3],
-    capacity: u32,
-    box_min: [f32; 3],
-    cell_size: f32,
-    gravity: [f32; 3],
-    step_dt: f32,
-    field_nodes: [u32; 3],
-    field_spacing: f32,
-    tick_index: i32,
-    step_in_tick: i32,
-    force_lattices: i32,
-    impulse_tick: i32,
-    first_tick: i32,
-    body_count: i32,
-    rows: i32,
-    tick_seconds: f32,
-    flip: f32,
-    max_travel: f32,
-    rest: f32,
-    rate: f32,
-    box_offset: f32,
-    ghost: u32,
-    particles: u32,
-    shapes_len: u32,
+pub(crate) struct StepParams {
+    pub(crate) n: [u32; 3],
+    pub(crate) capacity: u32,
+    pub(crate) box_min: [f32; 3],
+    pub(crate) cell_size: f32,
+    pub(crate) gravity: [f32; 3],
+    pub(crate) step_dt: f32,
+    pub(crate) field_nodes: [u32; 3],
+    pub(crate) field_spacing: f32,
+    pub(crate) tick_index: i32,
+    pub(crate) step_in_tick: i32,
+    pub(crate) force_lattices: i32,
+    pub(crate) impulse_tick: i32,
+    pub(crate) first_tick: i32,
+    pub(crate) body_count: i32,
+    pub(crate) rows: i32,
+    pub(crate) tick_seconds: f32,
+    pub(crate) flip: f32,
+    pub(crate) max_travel: f32,
+    pub(crate) rest: f32,
+    pub(crate) rate: f32,
+    pub(crate) box_offset: f32,
+    pub(crate) ghost: u32,
+    pub(crate) particles: u32,
+    pub(crate) shapes_len: u32,
+}
+
+/// One pass of the step's shader on its own, for the value proofs against
+/// the CPU references: `entry` over `threads` threads, `buffers` at their
+/// bindings, waited on.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams, buffers: &[(u32, &GpuBuffer)], threads: u64) {
+    let pipeline = device.create_compute_pipeline(&step_source(), entry, "node.gpu_flip_step");
+    let mut bindings = vec![uniform(params)];
+    bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
+    let mut enc = device.create_encoder("gpu_flip.step.pass");
+    enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
+    enc.commit_and_wait_completed();
 }
 
 struct Pipelines {

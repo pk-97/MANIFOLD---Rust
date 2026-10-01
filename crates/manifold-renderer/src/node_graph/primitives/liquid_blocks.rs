@@ -60,7 +60,7 @@ crate::primitive! {
         float_param!("level_nodes_z", "Level Nodes Z", 211.0, 2.0, 16385.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "In the Liquid Surface group: water from node.cells_with_particles over the group's sort (bins must be the domain's cells), level_set and level_nodes_x/y/z from the group's level set, solid and nodes_x/y/z from the particle frame. Feed out to node.surface_crossings' blocks.",
+    composition_notes: "In the Liquid Surface group: water from node.gpu_flip_step's water mask over the group's sort (bins must be the domain's cells), level_set and level_nodes_x/y/z from the group's level set, solid and nodes_x/y/z from the particle frame. Feed out to node.surface_crossings' blocks.",
     examples: [],
     picker: { label: "Liquid Blocks", category: Atom },
     summary: "Marks which blocks of a liquid's grid hold water, surface or walls, so later steps can skip the empty ones.",

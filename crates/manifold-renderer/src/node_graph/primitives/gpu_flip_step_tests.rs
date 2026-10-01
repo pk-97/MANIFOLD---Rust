@@ -1,30 +1,34 @@
-//! GPU value proofs for the GPU FLIP water step's particle and face atoms
-//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)) against CPU f64
-//! references.
+//! GPU value proofs for node.gpu_flip_step's particle, face and solid passes
+//! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)), each entry of the
+//! step's shader run on its own against a CPU f64 reference.
+//!
+//! The CPU references port FLIP Fluids rules (MIT, Copyright (C) 2026 Ryan L.
+//! Guy & Dennis Fassbaender; see THIRD_PARTY_NOTICES.md): velocityadvector.cpp
+//! (the Wyvill sum), particlelevelset.cpp (the particle distance),
+//! levelsetutils.cpp and meshlevelset.cpp (open fractions),
+//! fluidsimulation.cpp (solid face velocity, the constraint),
+//! pressuresolver.cpp (the pressure subtraction).
 
-use super::cells_with_particles::CellsWithParticles;
-use super::density_source::DensitySource;
-use super::extend_faces::ExtendFaces;
-use super::face_divergence::FaceDivergence;
-use super::face_gravity::FaceGravity;
-use super::faces_to_particles::{FacesToParticles, MAX_SPREAD_CELLS, WALL_MARGIN_CELLS};
+use manifold_gpu::GpuBuffer;
+
+use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values};
+use super::gpu_flip_step::{StepParams, dispatch_pass};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
-use super::particle_distance::ParticleDistance;
-use super::particles_to_faces::ParticlesToFaces;
-use super::subtract_pressure::SubtractPressure;
-use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
+use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use crate::node_graph::liquid::fields::FieldLattice;
 use crate::node_graph::liquid::lattice::PADDING_NODES;
 use crate::node_graph::parameters::ParamValue;
-use crate::node_graph::ports::KnownItem;
-use crate::node_graph::primitive::Primitive;
 
 /// A lattice with unequal sides, so a swapped axis shows.
 const N: [usize; 3] = [6, 5, 4];
 const H: f32 = 0.25;
 const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
+
+/// The move's caps in cells: the shader's MAX_SPREAD and WALL_MARGIN.
+const MAX_SPREAD_CELLS: f64 = 0.5;
+const WALL_MARGIN_CELLS: f64 = 0.2;
 
 struct Stream(u64);
 
@@ -81,31 +85,45 @@ fn face_exists(p: [usize; 3], a: usize) -> bool {
     (0..3).all(|b| b == a || p[b] < N[b])
 }
 
-fn lattice(extra: &[(&'static str, f32)]) -> ParamValues {
-    let mut all = vec![
-        ("nodes_x", N[0] as f32),
-        ("nodes_y", N[1] as f32),
-        ("nodes_z", N[2] as f32),
-        ("cell_size", H),
-        ("lattice_min_x", MIN[0]),
-        ("lattice_min_y", MIN[1]),
-        ("lattice_min_z", MIN[2]),
-    ];
-    all.extend_from_slice(extra);
-    params(&all)
+/// The step's params over this file's lattice, no impulse tick.
+fn lattice() -> StepParams {
+    StepParams { n: N.map(|n| n as u32), box_min: MIN, cell_size: H, impulse_tick: -1, ..StepParams::default() }
 }
 
-fn run_into<P: Primitive, T: KnownItem + bytemuck::Pod>(
-    harness: &mut Harness,
-    prim: &mut P,
-    inputs: &[(&'static str, crate::node_graph::bindings::Slot)],
-    len: usize,
-    step_params: &ParamValues,
-) -> Vec<T> {
-    let out = harness.array::<T>(&[], len);
-    let (_, errors) = harness.run(prim, inputs, &[("out", out.0)], step_params);
-    assert!(errors.is_empty(), "{errors:?}");
-    read(&out.1, len)
+/// One entry of the step's shader with its buffers bound by number.
+struct Pass {
+    device: crate::TestDevice,
+    bound: Vec<(u32, GpuBuffer)>,
+}
+
+impl Pass {
+    fn new() -> Self {
+        Self { device: crate::test_device(), bound: Vec::new() }
+    }
+
+    /// Binds a buffer holding `values` at `binding`.
+    fn bind<T: bytemuck::Pod>(&mut self, binding: u32, values: &[T]) -> &mut Self {
+        let buffer = self.device.create_buffer_shared((size_of_val(values) as u64).max(16));
+        buffer.zero_fill();
+        if !values.is_empty() {
+            // SAFETY: shared buffer sized for `values`; no GPU work in flight.
+            unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+        }
+        self.bound.push((binding, buffer));
+        self
+    }
+
+    /// Runs `entry` over `threads` threads and reads `len` records of
+    /// `out`: the bound buffer for a pass in place, else a zeroed one.
+    fn run<T: bytemuck::Pod>(&mut self, entry: &str, params: &StepParams, out: u32, len: usize, threads: usize) -> Vec<T> {
+        if !self.bound.iter().any(|(binding, _)| *binding == out) {
+            self.bind(out, &vec![T::zeroed(); len]);
+        }
+        let buffers: Vec<(u32, &GpuBuffer)> = self.bound.iter().map(|(binding, buffer)| (*binding, buffer)).collect();
+        dispatch_pass(&self.device, entry, params, &buffers, threads as u64);
+        let buffer = &self.bound.iter().find(|(binding, _)| *binding == out).expect("bound").1;
+        read(buffer, len)
+    }
 }
 
 fn close(got: f32, want: f64, scale: f64, what: &str) {
@@ -132,7 +150,7 @@ fn random_faces(seed: u64, valid: bool) -> Vec<FaceSample> {
         .collect()
 }
 
-/// node.solid_faces' output: inner faces open (`solid` false), or one in
+/// The open fractions pass's output: inner faces open (`solid` false), or one in
 /// four closed, one in four whole and the rest a fraction; box walls closed;
 /// each cell's open volume in weight w, whole without a solid.
 fn solid_faces(seed: u64, solid: bool) -> Vec<FaceSample> {
@@ -155,7 +173,7 @@ fn solid_faces(seed: u64, solid: bool) -> Vec<FaceSample> {
         .collect()
 }
 
-/// node.solid_face_velocity's output for `open`: a solid velocity and a
+/// The solid face velocity pass's output for `open`: a solid velocity and a
 /// friction on every inner face a solid cuts, zero elsewhere.
 fn solid_velocity(seed: u64, open: &[FaceSample]) -> Vec<FaceSample> {
     let mut rng = Stream::new(seed);
@@ -193,8 +211,7 @@ fn random_particles(seed: u64, count: usize) -> Vec<FluidParticle> {
         .collect()
 }
 
-/// Counting sort by cell, stable: the contract node.sort_particles_into_cells
-/// publishes.
+/// Counting sort by cell, stable: the contract the step's sort keeps.
 fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>) {
     let cell_of = |p: &FluidParticle| {
         let c: [usize; 3] = std::array::from_fn(|a| {
@@ -217,13 +234,11 @@ fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>)
 }
 
 #[test]
-fn gpu_flip_cells_with_particles_marks_occupied_bins() {
-    let mut harness = Harness::new();
+fn gpu_flip_classify_marks_occupied_cells() {
     let mut rng = Stream::new(0xce11);
     let ranges: Vec<CellRange> =
         (0..cell_len()).map(|c| CellRange { start: c as u32 * 3, count: u32::from(rng.unit() < 0.4) * 3 }).collect();
-    let input = harness.array(&ranges, cell_len());
-    let got: Vec<f32> = run_into(&mut harness, &mut CellsWithParticles::new(), &[("cell_ranges", input.0)], cell_len(), &lattice(&[]));
+    let got: Vec<f32> = Pass::new().bind(1, &ranges).run("classify", &lattice(), 5, cell_len(), cell_len());
     for (c, (g, r)) in got.iter().zip(&ranges).enumerate() {
         assert_eq!(*g, f32::from(u8::from(r.count > 0)), "cell {c}");
     }
@@ -231,7 +246,6 @@ fn gpu_flip_cells_with_particles_marks_occupied_bins() {
 
 #[test]
 fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
-    let mut harness = Harness::new();
     let mut rng = Stream::new(0xde45);
     // One cell in eight empty, so the draw holds both inside and surface cells.
     let ranges: Vec<CellRange> = (0..cell_len())
@@ -240,10 +254,9 @@ fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
             CellRange { start: c as u32 * 20, count: if u < 0.125 { 0 } else { 1 + (u * 16.0) as u32 } }
         })
         .collect();
-    let inputs = [("cell_ranges", harness.array(&ranges, cell_len()).0)];
     let (rest, rate) = (8.0_f32, 2.5_f32);
-    let got: Vec<f32> =
-        run_into(&mut harness, &mut DensitySource::new(), &inputs, cell_len(), &lattice(&[("rest", rest), ("rate", rate)]));
+    let step = StepParams { rest, rate, ..lattice() };
+    let got: Vec<f32> = Pass::new().bind(1, &ranges).run("density_source", &step, 5, cell_len(), cell_len());
     // Walls count as full: a neighbour past the lattice never makes a surface.
     // A neighbour under half full does: a stray particle is not water.
     let full = |p: [usize; 3], a: usize, side: i64| {
@@ -274,17 +287,14 @@ fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
 
 #[test]
 fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
-    let mut harness = Harness::new();
     // Dense covers most faces and the walls; sparse leaves faces no particle
     // reaches.
     for (name, count) in [("dense", 400), ("sparse", 12)] {
         let particles = random_particles(0x9261, count);
         let (sorted, ranges) = cpu_sort(&particles);
-        let inputs = [
-            ("sorted", harness.array(&sorted, sorted.len()).0),
-            ("cell_ranges", harness.array(&ranges, ranges.len()).0),
-        ];
-        let got: Vec<FaceSample> = run_into(&mut harness, &mut ParticlesToFaces::new(), &inputs, face_len(), &lattice(&[]));
+        let step = StepParams { capacity: sorted.len() as u32, ..lattice() };
+        let got: Vec<FaceSample> =
+            Pass::new().bind(1, &ranges).bind(2, &sorted).run("particles_to_faces", &step, 4, face_len(), face_len());
         let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
         if name == "dense" {
             assert!(checked > 200, "the fixture reaches most faces, got {checked}");
@@ -295,7 +305,7 @@ fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
     }
 }
 
-/// Checks node.particles_to_faces' output against the engine's kernel
+/// Checks the particles to faces pass against the engine's kernel
 /// (velocityadvector.cpp, in cells: r = √3/2). Returns the faces whose
 /// velocity was checked, the faces no particle reaches, and the wall faces
 /// held and kept.
@@ -364,12 +374,14 @@ fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize
 
 #[test]
 fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
-    let mut harness = Harness::new();
     let faces = random_faces(0x96a7, false);
-    let input = harness.array(&faces, face_len());
     let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
-    let step = lattice(&[("gravity_x", g[0]), ("gravity_y", g[1]), ("gravity_z", g[2]), ("step_dt", dt)]);
-    let got: Vec<FaceSample> = run_into(&mut harness, &mut FaceGravity::new(), &[("faces", input.0)], face_len(), &step);
+    let step = StepParams { gravity: g, step_dt: dt, ..lattice() };
+    let got: Vec<FaceSample> = Pass::new()
+        .bind(3, &faces)
+        .bind(12, &[0.0f32; 4])
+        .bind(13, &[0.0f32; 4])
+        .run("face_gravity", &step, 4, face_len(), face_len());
     for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
         let p = pad_coords(i);
         for a in 0..3 {
@@ -393,7 +405,6 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
 /// impulses land on step 0 of the impulse tick only.
 #[test]
 fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
-    let mut harness = Harness::new();
     let faces = random_faces(0x5ce7, false);
     let field = FieldLattice::covering(MIN, H, padded().map(|n| n as u32));
     let nodes = field.nodes();
@@ -407,27 +418,23 @@ fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
     let flat = |values: &[[f32; 4]]| values.iter().flatten().copied().collect::<Vec<f32>>();
     let (g, dt) = ([0.5f32, -9.81, 1.25], 1.0f32 / 120.0);
     for step in [0u32, 1] {
-        let inputs = [
-            ("faces", harness.array(&faces, face_len()).0),
-            ("forces", harness.array(&flat(&forces), forces.len() * 4).0),
-            ("impulses", harness.array(&flat(&impulses), impulses.len() * 4).0),
-        ];
-        let params = lattice(&[
-            ("gravity_x", g[0]),
-            ("gravity_y", g[1]),
-            ("gravity_z", g[2]),
-            ("step_dt", dt),
-            ("tick_index", 11.0),
-            ("substep_in_tick", step as f32),
-            ("field_nodes_x", nodes[0] as f32),
-            ("field_nodes_y", nodes[1] as f32),
-            ("field_nodes_z", nodes[2] as f32),
-            ("field_spacing", field.spacing()),
-            ("force_lattices", 2.0),
-            ("first_tick", 10.0),
-            ("impulse_tick", 11.0),
-        ]);
-        let got: Vec<FaceSample> = run_into(&mut harness, &mut FaceGravity::new(), &inputs, face_len(), &params);
+        let params = StepParams {
+            gravity: g,
+            step_dt: dt,
+            tick_index: 11,
+            step_in_tick: step as i32,
+            field_nodes: nodes,
+            field_spacing: field.spacing(),
+            force_lattices: 2,
+            first_tick: 10,
+            impulse_tick: 11,
+            ..lattice()
+        };
+        let got: Vec<FaceSample> = Pass::new()
+            .bind(3, &faces)
+            .bind(12, &flat(&forces))
+            .bind(13, &flat(&impulses))
+            .run("face_gravity", &params, 4, face_len(), face_len());
         for (i, (face, before)) in got.iter().zip(&faces).enumerate() {
             let p = pad_coords(i);
             for a in 0..3 {
@@ -459,19 +466,17 @@ fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
 
 #[test]
 fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
-    let mut harness = Harness::new();
     let faces = random_faces(0xd1f, false);
     let water = random_water(0x3a7e);
     for solid in [false, true] {
         let open = solid_faces(0xd2f, solid);
         let moving = solid_velocity(0xd3f, &open);
-        let inputs = [
-            ("faces", harness.array(&faces, face_len()).0),
-            ("water", harness.array(&water, cell_len()).0),
-            ("solid_faces", harness.array(&open, face_len()).0),
-            ("solid_velocity", harness.array(&moving, face_len()).0),
-        ];
-        let got: Vec<f32> = run_into(&mut harness, &mut FaceDivergence::new(), &inputs, cell_len(), &lattice(&[]));
+        let got: Vec<f32> = Pass::new()
+            .bind(3, &faces)
+            .bind(6, &water)
+            .bind(10, &open)
+            .bind(11, &moving)
+            .run("divergence", &lattice(), 5, cell_len(), cell_len());
         let mut pushed = 0;
         for (c, g) in got.iter().enumerate() {
             let p = cell_coords(c);
@@ -536,15 +541,13 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     ];
     for (solid, phi) in draws {
         let open = solid_faces(0x5c7, solid);
-        let mut harness = Harness::new();
-        let inputs = [
-            ("faces", harness.array(&faces, face_len()).0),
-            ("pressure", harness.array(&pressure, cell_len()).0),
-            ("water", harness.array(&water, cell_len()).0),
-            ("solid_faces", harness.array(&open, face_len()).0),
-            ("phi", harness.array(&phi, cell_len()).0),
-        ];
-        let got: Vec<FaceSample> = run_into(&mut harness, &mut SubtractPressure::new(), &inputs, face_len(), &lattice(&[]));
+        let got: Vec<FaceSample> = Pass::new()
+            .bind(20, &faces)
+            .bind(10, &open)
+            .bind(6, &water)
+            .bind(8, &pressure)
+            .bind(7, &phi)
+            .run("subtract_pressure", &StepParams { ghost: 1, ..lattice() }, 20, face_len(), face_len());
         let mut closed = 0;
         for (i, face) in got.iter().enumerate() {
             let p = pad_coords(i);
@@ -562,8 +565,8 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     let p_up = if wet_up { f64::from(pressure[up]) } else { ghost(up, down, &phi) };
                     let p_down = if wet_down { f64::from(pressure[down]) } else { ghost(down, up, &phi) };
                     if open[i].weight[a] <= 0.0 {
-                        // A closed face keeps its velocity for
-                        // node.constrain_solid_faces to replace.
+                        // A closed face keeps its velocity for the
+                        // constraint to replace.
                         closed += 1;
                         (u, 1.0)
                     } else {
@@ -579,7 +582,7 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
             }
         }
         // The projection leaves exactly the residual of the rows the solve
-        // inverted: div(out) = div(faces) − L p, L node.pressure_smooth's
+        // inverted: div(out) = div(faces) − L p, L the pressure solver's
         // ghost rows. A θ that differs from the matrix's (the engine's 1e-6
         // here) leaves part of the surface pressure as divergence.
         let h = f64::from(H);
@@ -684,7 +687,7 @@ fn has_near_particle(c: usize, sorted: &[FluidParticle], ranges: &[CellRange]) -
     })
 }
 
-/// node.particle_distance's own reading: the min over the 125 bins around
+/// The particle distance pass's own reading: the min over the 125 bins around
 /// each cell, from the sort's ranges, keeping a particle only when the cell
 /// is inside its box; 3h with no live particle in the 27 bins.
 fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f64> {
@@ -757,12 +760,9 @@ fn gpu_flip_particle_distance_is_the_engines_level_set() {
         if name == "corner" {
             assert!(far > 0, "the lone particle reaches cells two out, which read 3h here");
         }
-        let mut harness = Harness::new();
-        let inputs = [
-            ("sorted", harness.array(&sorted, sorted.len()).0),
-            ("cell_ranges", harness.array(&ranges, ranges.len()).0),
-        ];
-        let got: Vec<f32> = run_into(&mut harness, &mut ParticleDistance::new(), &inputs, cell_len(), &lattice(&[]));
+        let step = StepParams { capacity: sorted.len() as u32, ..lattice() };
+        let got: Vec<f32> =
+            Pass::new().bind(1, &ranges).bind(2, &sorted).run("particle_distance", &step, 5, cell_len(), cell_len());
         let empty = ranges.iter().filter(|r| r.count == 0).count();
         assert!(empty > 10 && empty < cell_len(), "{name}: the draw has empty and full cells ({empty} empty)");
         for (c, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -828,10 +828,8 @@ fn cpu_extend(faces: &[FaceSample]) -> Vec<FaceSample> {
 
 #[test]
 fn gpu_flip_extend_faces_fills_one_layer() {
-    let mut harness = Harness::new();
     let faces = random_faces(0xe7e, true);
-    let input = harness.array(&faces, face_len());
-    let got: Vec<FaceSample> = run_into(&mut harness, &mut ExtendFaces::new(), &[("faces", input.0)], face_len(), &lattice(&[]));
+    let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run("extend_faces", &lattice(), 4, face_len(), face_len());
     let want = cpu_extend(&faces);
     let mut filled = 0;
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -869,7 +867,6 @@ fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
 
 #[test]
 fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
-    let mut harness = Harness::new();
     let faces = random_faces(0xf1a5, true);
     let old = random_faces(0x01d5, false);
     // A third grid: velocity comes from `faces`, the move from `advect`.
@@ -884,14 +881,13 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     particles[3].velocity[1] = f32::INFINITY;
     // A guard short enough that some RK3 stages hit it and some don't.
     let (dt, flip, max_travel) = (0.07f32, 0.9f32, 0.45f32);
-    let inputs = [
-        ("particles", harness.array(&particles, particles.len()).0),
-        ("faces", harness.array(&faces, face_len()).0),
-        ("old", harness.array(&old, face_len()).0),
-        ("advect", harness.array(&advect, face_len()).0),
-    ];
-    let got: Vec<FluidParticle> =
-        run_into(&mut harness, &mut FacesToParticles::new(), &inputs, particles.len(), &lattice(&[("step_dt", dt), ("flip", flip), ("max_travel", max_travel)]));
+    let step = StepParams { step_dt: dt, flip, max_travel, particles: particles.len() as u32, ..lattice() };
+    let got: Vec<FluidParticle> = Pass::new()
+        .bind(2, &particles)
+        .bind(3, &faces)
+        .bind(17, &old)
+        .bind(18, &advect)
+        .run("faces_to_particles", &step, 19, particles.len(), particles.len());
     let per_cell = f64::from(dt) / f64::from(H);
     // Particles whose spread is within the cap, and past it.
     let mut spreads = [0usize; 2];
@@ -1013,4 +1009,497 @@ fn gpu_flip_liquid_fill_places_pool_then_box() {
         assert!((g.position_radius[3] - 0.31017 * H).abs() < 1e-6);
         assert_eq!((g.velocity, g.id), ([0.0; 3], i as u32 + 1), "particle {i}");
     }
+}
+
+// ── Solids ─────────────────────────────────────────────────────────────────
+
+/// The solids' lattice: 5×4×3 cells a quarter metre apart.
+const SOLID_N: [usize; 3] = [5, 4, 3];
+const SOLID_H: f32 = 0.25;
+const SOLID_MIN: [f32; 3] = [-0.6, 0.0, -0.4];
+const SOLID_TICK: f32 = 0.05;
+
+fn solid_records() -> usize {
+    SOLID_N.iter().map(|v| v + 1).product()
+}
+
+fn solid_lattice() -> StepParams {
+    StepParams { n: SOLID_N.map(|n| n as u32), box_min: SOLID_MIN, cell_size: SOLID_H, impulse_tick: -1, ..StepParams::default() }
+}
+
+/// In-box neighbours of cell `c`, each with the axis and side of the face to it.
+fn solid_neighbours(c: usize, n: [usize; 3]) -> Vec<(usize, isize)> {
+    let p = [c % n[0], (c / n[0]) % n[1], c / (n[0] * n[1])];
+    let mut out = Vec::with_capacity(6);
+    for a in 0..3 {
+        if p[a] > 0 {
+            out.push((a, -1));
+        }
+        if p[a] + 1 < n[a] {
+            out.push((a, 1));
+        }
+    }
+    out
+}
+
+/// Inner faces one in four closed, one in four whole, the rest a fraction;
+/// every face of cell `isolated` closed. Box walls closed.
+fn random_open_faces(n: [usize; 3], seed: u64, isolated: usize) -> Vec<f32> {
+    let m = n.map(|v| v + 1);
+    let mut faces = vec![0.0; face_grid_len(n)];
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        for a in 0..3 {
+            if (0..3).all(|b| b == a || p[b] < n[b]) && p[a] > 0 && p[a] < n[a] {
+                faces[i * FACE_FLOATS + 4 + a] = 1.0;
+            }
+        }
+    }
+    let draw = random_values(faces.len(), seed);
+    for (i, v) in faces.iter_mut().enumerate() {
+        if *v > 0.0 {
+            let r = draw[i] + 0.5;
+            *v = if r < 0.25 { 0.0 } else if r < 0.5 { 1.0 } else { 0.05 + 0.95 * (r - 0.5) * 2.0 };
+        }
+    }
+    for (a, d) in solid_neighbours(isolated, n) {
+        let mut p = [isolated % n[0], (isolated / n[0]) % n[1], isolated / (n[0] * n[1])];
+        if d > 0 {
+            p[a] += 1;
+        }
+        faces[(p[0] + m[0] * (p[1] + m[1] * p[2])) * FACE_FLOATS + 4 + a] = 0.0;
+    }
+    faces
+}
+
+/// FLIP Fluids' LevelsetUtils::fractionInside for a segment, in f64.
+fn engine_segment(left: f64, right: f64) -> f64 {
+    if left < 0.0 && right < 0.0 {
+        1.0
+    } else if left < 0.0 {
+        left / (left - right)
+    } else if right < 0.0 {
+        right / (right - left)
+    } else {
+        0.0
+    }
+}
+
+/// FLIP Fluids' LevelsetUtils::fractionInside for a square, in f64, with the
+/// branch it took (inside corners, and for two diagonal corners the middle's
+/// sign) so a test can show it reached every case.
+fn engine_square(bl: f64, br: f64, tl: f64, tr: f64) -> (f64, (usize, bool)) {
+    let inside = [bl, tl, br, tr].iter().filter(|&&v| v < 0.0).count();
+    let mut list = [bl, br, tr, tl];
+    let mut middle_inside = false;
+    let fraction = match inside {
+        4 => 1.0,
+        3 => {
+            while list[0] < 0.0 {
+                list.rotate_left(1);
+            }
+            let side0 = 1.0 - engine_segment(list[0], list[3]);
+            let side1 = 1.0 - engine_segment(list[0], list[1]);
+            1.0 - 0.5 * side0 * side1
+        }
+        2 => {
+            while list[0] >= 0.0 || !(list[1] < 0.0 || list[2] < 0.0) {
+                list.rotate_left(1);
+            }
+            if list[1] < 0.0 {
+                0.5 * (engine_segment(list[0], list[3]) + engine_segment(list[1], list[2]))
+            } else if 0.25 * (list[0] + list[1] + list[2] + list[3]) < 0.0 {
+                middle_inside = true;
+                let side1 = 1.0 - engine_segment(list[0], list[3]);
+                let side3 = 1.0 - engine_segment(list[2], list[3]);
+                let side2 = 1.0 - engine_segment(list[2], list[1]);
+                let side0 = 1.0 - engine_segment(list[0], list[1]);
+                1.0 - (0.5 * side1 * side3 + 0.5 * side0 * side2)
+            } else {
+                let side0 = engine_segment(list[0], list[1]);
+                let side1 = engine_segment(list[0], list[3]);
+                let side2 = engine_segment(list[2], list[1]);
+                let side3 = engine_segment(list[2], list[3]);
+                0.5 * side0 * side1 + 0.5 * side2 * side3
+            }
+        }
+        1 => {
+            while list[0] >= 0.0 {
+                list.rotate_left(1);
+            }
+            0.5 * engine_segment(list[0], list[3]) * engine_segment(list[0], list[1])
+        }
+        _ => 0.0,
+    };
+    let diagonal = inside == 2 && !((bl < 0.0) == (br < 0.0) || (bl < 0.0) == (tl < 0.0));
+    (fraction, (inside, diagonal && middle_inside))
+}
+
+/// FLIP Fluids' LevelsetUtils::volumeFraction for a tetrahedron, in f64,
+/// sorted by the engine's five-swap network.
+fn engine_tet(p: [f64; 4]) -> f64 {
+    let [mut a, mut b, mut c, mut d] = p;
+    for (x, y) in [(0, 1), (2, 3), (0, 2), (1, 3), (1, 2)] {
+        let mut v = [a, b, c, d];
+        if v[x] > v[y] {
+            v.swap(x, y);
+        }
+        [a, b, c, d] = v;
+    }
+    let tet = |a: f64, b: f64, c: f64, d: f64| a * a * a / ((a - b) * (a - c) * (a - d));
+    if d <= 0.0 {
+        1.0
+    } else if c <= 0.0 {
+        1.0 - tet(d, c, b, a)
+    } else if b <= 0.0 {
+        let (p, q, r, s) = (a / (a - c), a / (a - d), b / (b - d), b / (b - c));
+        p * q * (1.0 - s) + q * (1.0 - r) * s + r * s
+    } else if a <= 0.0 {
+        tet(a, b, c, d)
+    } else {
+        0.0
+    }
+}
+
+/// FLIP Fluids' MeshLevelSet::_getCellWeight: the fraction of a cell inside
+/// the solid, c[i + 2j + 4k] the distance at corner (i, j, k).
+fn engine_cube(c: [f64; 8]) -> f64 {
+    if c.iter().all(|&v| v < 0.0) {
+        return 1.0;
+    }
+    if c.iter().all(|&v| v >= 0.0) {
+        return 0.0;
+    }
+    let [p000, p100, p010, p110, p001, p101, p011, p111] = c;
+    (engine_tet([p000, p001, p101, p011])
+        + engine_tet([p000, p101, p100, p110])
+        + engine_tet([p000, p010, p011, p110])
+        + engine_tet([p101, p011, p111, p110])
+        + 2.0 * engine_tet([p000, p011, p101, p110])
+        + engine_tet([p100, p101, p001, p111])
+        + engine_tet([p100, p001, p000, p010])
+        + engine_tet([p100, p110, p111, p010])
+        + engine_tet([p001, p111, p011, p010])
+        + 2.0 * engine_tet([p100, p111, p001, p010]))
+        / 12.0
+}
+
+/// The open fraction of every face from a corner lattice, as
+/// FluidSimulation::_updateWeightGridThread takes MeshLevelSet's face
+/// weights: U from (i,j,k), (i,j+1,k), (i,j,k+1), (i,j+1,k+1); V from
+/// (i,j,k), (i,j,k+1), (i+1,j,k), (i+1,j,k+1); W from (i,j,k), (i,j+1,k),
+/// (i+1,j,k), (i+1,j+1,k). Box walls closed.
+fn cpu_open_fractions(phi: &[f32], n: [usize; 3], tolerance: f64) -> (Vec<f64>, Vec<(usize, bool)>) {
+    let m = n.map(|v| v + 1);
+    let at = |i: usize, j: usize, k: usize| f64::from(phi[i + m[0] * (j + m[1] * k)]);
+    let mut out = vec![0.0; m.iter().product::<usize>() * FACE_FLOATS];
+    let mut branches = Vec::new();
+    for k in 0..m[2] {
+        for j in 0..m[1] {
+            for i in 0..m[0] {
+                let p = [i, j, k];
+                if (0..3).all(|b| p[b] < n[b]) {
+                    let corners: [f64; 8] = std::array::from_fn(|c| at(i + (c & 1), j + ((c >> 1) & 1), k + (c >> 2)));
+                    out[(i + m[0] * (j + m[1] * k)) * FACE_FLOATS + 7] = (1.0 - engine_cube(corners)).clamp(0.0, 1.0);
+                }
+                for a in 0..3 {
+                    if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
+                        continue;
+                    }
+                    let corners = match a {
+                        0 => [at(i, j, k), at(i, j + 1, k), at(i, j, k + 1), at(i, j + 1, k + 1)],
+                        1 => [at(i, j, k), at(i, j, k + 1), at(i + 1, j, k), at(i + 1, j, k + 1)],
+                        _ => [at(i, j, k), at(i, j + 1, k), at(i + 1, j, k), at(i + 1, j + 1, k)],
+                    };
+                    let (mut inside, branch) = engine_square(corners[0], corners[1], corners[2], corners[3]);
+                    if corners.iter().all(|c| c.abs() <= tolerance) {
+                        inside = 0.5;
+                    }
+                    branches.push(branch);
+                    out[(i + m[0] * (j + m[1] * k)) * FACE_FLOATS + 4 + a] = (1.0 - inside).clamp(0.0, 1.0);
+                }
+            }
+        }
+    }
+    (out, branches)
+}
+
+/// The step's open fractions against FLIP Fluids' face weights ported to f64
+/// here: random corner distances reach every fractionInside case, and one
+/// face's corners all within the interface tolerance is half open.
+#[test]
+fn gpu_flip_open_fractions_match_the_engine() {
+    let n = SOLID_N;
+    let m = n.map(|v| v + 1);
+    let offset = 1.5_f32;
+    let mut phi: Vec<f32> = random_values(m.iter().product(), 0x50f).iter().map(|v| v * 0.6).collect();
+    // The U face at padded (2, 1, 1): corners (2,1,1), (2,2,1), (2,1,2), (2,2,2).
+    for (i, j, k) in [(2, 1, 1), (2, 2, 1), (2, 1, 2), (2, 2, 2)] {
+        phi[i + m[0] * (j + m[1] * k)] = 1.0e-7;
+    }
+    let tolerance = 8.0 * f64::from(f32::EPSILON) * (f64::from(SOLID_H) * 5.0 + f64::from(offset));
+    let step = StepParams { box_offset: offset, ..solid_lattice() };
+    let got: Vec<f32> = Pass::new().bind(9, &phi).run("open_fractions", &step, 4, face_grid_len(n), solid_records());
+    let (want, branches) = cpu_open_fractions(&phi, n, tolerance);
+    for case in [(0, false), (1, false), (2, false), (2, true), (3, false), (4, false)] {
+        assert!(branches.contains(&case), "the fixture reaches fractionInside case {case:?}");
+    }
+    assert!(branches.iter().any(|&(inside, middle)| inside == 2 && !middle), "an adjacent or outside-middle pair");
+    assert_eq!(want[(2 + m[0] * (1 + m[1])) * FACE_FLOATS + 4], 0.5, "the planted face is on the interface");
+    let open_volume: Vec<f64> = want.chunks(FACE_FLOATS).map(|r| r[7]).collect();
+    assert!(open_volume.iter().any(|&v| v > 0.0 && v < 1.0), "a cell cut by the solid");
+    assert_close(&got, &want, "open fractions");
+}
+
+/// Two moving, turning bodies whose lattices overlap, one scaled and one
+/// dynamic, and a disabled row; their distance lattices as the atlas stores
+/// them (half precision) and as f32.
+struct Solids {
+    bodies: Vec<LiquidBody>,
+    shapes: Vec<LiquidShape>,
+    atlas: Vec<u32>,
+    distances: Vec<f32>,
+}
+
+fn solids() -> Solids {
+    let shapes = vec![
+        LiquidShape {
+            origin_spacing: [-0.47, -0.43, -0.41, 0.3],
+            dims_x: 4,
+            dims_y: 4,
+            dims_z: 4,
+            atlas_offset: 0,
+            scale_min: [1.0, 1.0, 1.0, 1.0],
+        },
+        LiquidShape {
+            origin_spacing: [-0.39, -0.42, -0.44, 0.4],
+            dims_x: 3,
+            dims_y: 3,
+            dims_z: 3,
+            atlas_offset: 64,
+            scale_min: [1.2, 1.0, 1.1, 1.0],
+        },
+    ];
+    let distances: Vec<f32> =
+        random_values(64 + 27, 0x50d).iter().map(|v| half::f16::from_f32(v * 0.9).to_f32()).collect();
+    let mut atlas = Vec::new();
+    pack_distance_atlas(&distances, &mut atlas);
+    let body = |position: [f32; 3], velocity: [f32; 4], angular: [f32; 3], shape: f32| LiquidBody {
+        position_inv_mass: [position[0], position[1], position[2], 0.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        linear_velocity: velocity,
+        angular_velocity: [angular[0], angular[1], angular[2], 0.0],
+        accel_shape: [0.0, 0.0, 0.0, shape],
+        ..LiquidBody::default()
+    };
+    let mut bodies = vec![
+        body([-0.21, 0.38, -0.02], [0.7, -0.3, 0.2, 0.4], [0.0, 0.3, 1.5], 0.0),
+        body([0.33, 0.61, 0.03], [-0.5, 0.1, 0.1, 0.9], [0.8, 0.0, -0.2], 1.0),
+        body([0.0, 0.5, 0.0], [3.0, 3.0, 3.0, 0.7], [0.0; 3], -1.0),
+    ];
+    // The second body is dynamic: it moves at its predicted velocity.
+    bodies[1].position_inv_mass[3] = 0.5;
+    bodies[1].accel_shape = [0.4, -9.8, 0.2, 1.0];
+    bodies[1].inv_inertia_x = [0.3, 0.0, 0.0, 1.1];
+    bodies[1].inv_inertia_y = [0.0, 0.3, 0.0, -0.6];
+    bodies[1].inv_inertia_z = [0.0, 0.0, 0.3, 0.4];
+    Solids { bodies, shapes, atlas, distances }
+}
+
+fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let u = [q[0], q[1], q[2]];
+    let t = cross(u, v).map(|c| 2.0 * c);
+    let c = cross(u, t);
+    std::array::from_fn(|i| v[i] + q[3] * t[i] + c[i])
+}
+
+/// The closest enabled body at x after `SOLID_TICK` (its row and signed
+/// distance), as liquid_collider.wgsl samples a lattice; the margin by which
+/// x clears every lattice edge and the gap to the runner-up, so the fixture
+/// can show no f32 rounding decides either.
+fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
+    let mut best: Option<(usize, f64)> = None;
+    let mut margin = f64::INFINITY;
+    let mut gaps = Vec::new();
+    for (row, body) in solids.bodies.iter().enumerate() {
+        let shape_index = body.accel_shape[3];
+        if shape_index < 0.0 {
+            continue;
+        }
+        let shape = solids.shapes[shape_index as usize];
+        let (position, q) = body_pose_at(body, SOLID_TICK);
+        let inverse = [-f64::from(q[0]), -f64::from(q[1]), -f64::from(q[2]), f64::from(q[3])];
+        let local = rotate(inverse, std::array::from_fn(|i| x[i] - f64::from(position[i])));
+        let dims = [shape.dims_x, shape.dims_y, shape.dims_z].map(|d| d as usize);
+        let g: [f64; 3] = std::array::from_fn(|i| {
+            (local[i] / f64::from(shape.scale_min[i]) - f64::from(shape.origin_spacing[i])) / f64::from(shape.origin_spacing[3])
+        });
+        for i in 0..3 {
+            margin = margin.min(g[i].abs()).min((g[i] - (dims[i] - 1) as f64).abs());
+        }
+        if !(0..3).all(|i| g[i] >= 0.0 && g[i] <= (dims[i] - 1) as f64) {
+            continue;
+        }
+        let base: [usize; 3] = std::array::from_fn(|i| (g[i].floor() as usize).min(dims[i] - 2));
+        let f: [f64; 3] = std::array::from_fn(|i| g[i] - base[i] as f64);
+        let mut d = 0.0;
+        for corner in 0..8 {
+            let o = [corner & 1, (corner >> 1) & 1, corner >> 2];
+            let w: f64 = (0..3).map(|i| if o[i] == 1 { f[i] } else { 1.0 - f[i] }).product();
+            let at = shape.atlas_offset as usize + (base[0] + o[0]) + dims[0] * ((base[1] + o[1]) + dims[1] * (base[2] + o[2]));
+            d += w * f64::from(solids.distances[at]);
+        }
+        d *= f64::from(shape.scale_min[3]);
+        gaps.push(d);
+        if best.is_none_or(|(_, nearest)| d < nearest) {
+            best = Some((row, d));
+        }
+    }
+    gaps.sort_by(f64::total_cmp);
+    let gap = if gaps.len() > 1 { gaps[1] - gaps[0] } else { f64::INFINITY };
+    (best.map(|(row, _)| row), margin.min(gap))
+}
+
+/// The velocity and spin a face sees on body `row`: as uploaded when
+/// prescribed; predicted over `SOLID_TICK` when dynamic.
+fn moving_velocity(solids: &Solids, row: usize) -> ([f64; 3], [f64; 3]) {
+    let body = &solids.bodies[row];
+    let mut v: [f64; 3] = std::array::from_fn(|a| f64::from(body.linear_velocity[a]));
+    let mut w: [f64; 3] = std::array::from_fn(|a| f64::from(body.angular_velocity[a]));
+    if body.position_inv_mass[3] > 0.0 {
+        let t = f64::from(SOLID_TICK);
+        let spin = [body.inv_inertia_x[3], body.inv_inertia_y[3], body.inv_inertia_z[3]];
+        for a in 0..3 {
+            v[a] += f64::from(body.accel_shape[a]) * t;
+            w[a] += f64::from(spin[a]) * t;
+        }
+    }
+    (v, w)
+}
+
+/// The step's solid face velocity in f64: the closest body's rigid velocity
+/// at each cut inner face's centre, and the mean friction at its four
+/// corners. Also the smallest margin any query had (see `closest`) and how
+/// many faces a body moved.
+fn cpu_solid_face_velocity(open: &[f64], solids: &Solids) -> (Vec<f64>, f64, usize) {
+    let n = SOLID_N;
+    let m = n.map(|v| v + 1);
+    let h = f64::from(SOLID_H);
+    let min = SOLID_MIN.map(f64::from);
+    let mut out = vec![0.0; face_grid_len(n)];
+    let mut margin = f64::INFINITY;
+    let mut moved = 0;
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        for a in 0..3 {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] || open[i * FACE_FLOATS + 4 + a] >= 1.0 {
+                continue;
+            }
+            let mut centre: [f64; 3] = std::array::from_fn(|b| min[b] + (p[b] as f64 + 0.5) * h);
+            centre[a] = min[a] + p[a] as f64 * h;
+            let (row, clear) = closest(solids, centre);
+            margin = margin.min(clear);
+            if let Some(row) = row {
+                let (position, _) = body_pose_at(&solids.bodies[row], SOLID_TICK);
+                let r: [f64; 3] = std::array::from_fn(|b| centre[b] - f64::from(position[b]));
+                let (v, w) = moving_velocity(solids, row);
+                let spin = [w[1] * r[2] - w[2] * r[1], w[2] * r[0] - w[0] * r[2], w[0] * r[1] - w[1] * r[0]];
+                out[i * FACE_FLOATS + a] = v[a] + spin[a];
+                moved += 1;
+            }
+            let (b, c) = match a {
+                0 => (1, 2),
+                1 => (2, 0),
+                _ => (1, 0),
+            };
+            let mut friction = 0.0;
+            for k in 0..4 {
+                let mut q = p;
+                q[b] += k & 1;
+                q[c] += (k >> 1) & 1;
+                let (row, clear) = closest(solids, std::array::from_fn(|d| min[d] + q[d] as f64 * h));
+                margin = margin.min(clear);
+                if let Some(row) = row {
+                    friction += f64::from(solids.bodies[row].linear_velocity[3]);
+                }
+            }
+            out[i * FACE_FLOATS + 4 + a] = 0.25 * friction;
+        }
+    }
+    (out, margin, moved)
+}
+
+/// The step's solid face velocity against the rigid velocity and corner
+/// friction computed here, on random cut faces under two overlapping turning
+/// bodies.
+#[test]
+fn gpu_flip_solid_face_velocity_matches_cpu() {
+    let solids = solids();
+    let open = random_open_faces(SOLID_N, 0x5fa, 0);
+    let rows = solids.bodies.len() as i32;
+    let step = StepParams {
+        body_count: rows,
+        rows,
+        tick_seconds: SOLID_TICK,
+        shapes_len: solids.shapes.len() as u32,
+        ..solid_lattice()
+    };
+    let got: Vec<f32> = Pass::new()
+        .bind(10, &open)
+        .bind(14, &solids.bodies)
+        .bind(15, &solids.shapes)
+        .bind(16, &solids.atlas)
+        .run("solid_face_velocity", &step, 4, face_grid_len(SOLID_N), solid_records());
+    let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
+    let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids);
+    assert!(margin > 1.0e-4, "no query sits on a lattice edge or a tie between bodies: {margin}");
+    assert!(moved > 10, "the bodies reach cut faces: {moved}");
+    let frictions: Vec<f64> = want.chunks(FACE_FLOATS).flat_map(|r| r[4..7].to_vec()).collect();
+    assert!(frictions.iter().any(|&f| f > 0.0 && f < 0.4), "a face with corners outside every body");
+    assert!(frictions.iter().any(|&f| f > 0.4), "corners reaching the second body");
+    assert_close(&got, &want, "solid face velocity");
+}
+
+/// The step's solid constraint in f64.
+fn cpu_constrain(faces: &[f32], open: &[f64], moving: &[f64], n: [usize; 3]) -> Vec<f64> {
+    let m = n.map(|v| v + 1);
+    let mut out: Vec<f64> = faces.iter().map(|&v| f64::from(v)).collect();
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        for a in 0..3 {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
+                continue;
+            }
+            let (v, w) = (i * FACE_FLOATS + a, i * FACE_FLOATS + 4 + a);
+            let solid = moving[v];
+            if open[w] <= 0.0 {
+                out[v] = solid;
+            } else if open[w] < 1.0 {
+                out[v] = moving[w] * solid + (1.0 - moving[w]) * f64::from(faces[v]);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn gpu_flip_constrain_solid_faces_matches_cpu() {
+    let n = SOLID_N;
+    let faces = random_values(face_grid_len(n), 0xc51);
+    let open = random_open_faces(n, 0xc52, 0);
+    let moving: Vec<f32> = random_values(face_grid_len(n), 0xc53)
+        .chunks(FACE_FLOATS)
+        .flat_map(|r| [r[0], r[1], r[2], r[3], r[4] + 0.5, r[5] + 0.5, r[6] + 0.5, r[7]])
+        .collect();
+    let got: Vec<f32> = Pass::new()
+        .bind(20, &faces)
+        .bind(10, &open)
+        .bind(11, &moving)
+        .run("constrain_solid_faces", &solid_lattice(), 20, face_grid_len(n), solid_records());
+    let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
+    let moving64: Vec<f64> = moving.iter().map(|&v| f64::from(v)).collect();
+    let want = cpu_constrain(&faces, &open64, &moving64, n);
+    assert!(open.contains(&0.0) && open.iter().any(|&w| w > 0.0 && w < 1.0), "closed and cut faces");
+    assert_close(&got, &want, "constrain solid faces");
 }

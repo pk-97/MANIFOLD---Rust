@@ -1,5 +1,5 @@
 // node.friction_face_impulse — fusable BUFFER body, GATHER. One thread per
-// padded cell of the face grid. node.constrain_solid_faces drags a cut
+// padded cell of the face grid. node.gpu_flip_step's solid constraint drags a cut
 // face's velocity u toward its body's v_s by the friction f; the liquid on
 // the face (density·cell_size³ times its open fraction w) loses
 // f·(v_s − u) of velocity, so the body gains density·cell_size³·w·f·(u − v_s)

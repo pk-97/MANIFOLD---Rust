@@ -6,10 +6,6 @@
 //! step_dt) → mover_b (speed ← step_index) → boundary.in`; `boundary.out →
 //! sink → final_output` keeps the region live. Both movers are
 //! `node.move_particles_3d`, so the body fuses into one buffer kernel.
-//!
-//! Nested regions (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P6): a 3 × 4 nest
-//! equals the same movers unrolled, and fuses per level without changing a
-//! bit.
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
@@ -33,7 +29,7 @@ pub(crate) const N: usize = 1000;
 const ITERATIONS: u32 = 4;
 const FRAMES: u32 = 3;
 
-fn def() -> EffectGraphDef {
+pub(crate) fn def() -> EffectGraphDef {
     serde_json::from_value(serde_json::json!({
         "version": 3,
         "nodes": [
@@ -166,13 +162,13 @@ fn run(mut graph: Graph) -> Run {
     }
 }
 
-/// CPU reference: per frame, per iteration, `mover_a` then `mover_b`, each
-/// `position += force * speed * dt_scaled` in f32.
-fn expected() -> Vec<Particle> {
+/// CPU reference for `frames` frames: per frame, per iteration, `mover_a`
+/// then `mover_b`, each `position += force * speed * dt_scaled` in f32.
+fn expected(frames: u32) -> Vec<Particle> {
     let dt_scaled = (1.0f64 / 60.0) as f32 * 60.0;
     let forces = forces();
     let mut particles = seed_particles();
-    for _ in 0..FRAMES {
+    for _ in 0..frames {
         for i in 0..ITERATIONS {
             for speed in [particle_step_dt(i), i as f32] {
                 for (p, f) in particles.iter_mut().zip(&forces) {
@@ -195,7 +191,7 @@ fn substeps_uniforms_distinct_per_iteration() {
     let graph = def().into_graph(&registry, &Default::default()).expect("proof def builds");
     let got = run(graph);
     assert!(got.in_place, "the unfused body mutates the state buffer in place");
-    let want = expected();
+    let want = expected(FRAMES);
     let seed = seed_particles();
     let forces = forces();
     // What one shared uniform would produce: every dispatch sees the last
@@ -247,123 +243,6 @@ fn substeps_frozen_unfrozen_match() {
     );
 }
 
-// ─── Nested regions ───
-//
-// ```text
-// seed ─▶ outer (OUTER iterations)
-// outer.out ─▶ outer_a (speed ← outer.step_dt) ─▶ outer_b (speed ← outer.step_index)
-//   ─▶ inner.seed (INNER iterations, restarts from its seed every outer iteration)
-// inner.out ─▶ inner_a (speed ← inner.step_dt) ─▶ inner_b (speed ← inner.step_index) ─▶ inner.in
-// inner.out ─▶ post (speed ← outer.step_dt) ─▶ outer.in
-// outer.out ─▶ sink ─▶ final_output
-// ```
-// `outer_a`/`outer_b` fuse into one outer-body kernel and `inner_a`/`inner_b`
-// into one inner-body kernel; `post` stays alone.
-
-const OUTER: u32 = 3;
-const INNER: u32 = 4;
-
-pub(crate) fn nested_def() -> EffectGraphDef {
-    serde_json::from_value(serde_json::json!({
-        "version": 3,
-        "nodes": [
-            {"id": 0, "nodeId": "seed", "typeId": "test.particle_source",
-             "params": {"max_capacity": {"type": "Int", "value": N}}},
-            {"id": 1, "nodeId": "forces", "typeId": "test.force_source",
-             "params": {"max_capacity": {"type": "Int", "value": N}}},
-            {"id": 2, "nodeId": "outer", "typeId": "test.particle_boundary",
-             "params": {"iterations": {"type": "Int", "value": OUTER}}},
-            {"id": 3, "nodeId": "outer_a", "typeId": "node.move_particles_3d"},
-            {"id": 4, "nodeId": "outer_b", "typeId": "node.move_particles_3d"},
-            {"id": 5, "nodeId": "inner", "typeId": "test.particle_inner_boundary",
-             "params": {"iterations": {"type": "Int", "value": INNER}}},
-            {"id": 6, "nodeId": "inner_a", "typeId": "node.move_particles_3d"},
-            {"id": 7, "nodeId": "inner_b", "typeId": "node.move_particles_3d"},
-            {"id": 8, "nodeId": "post", "typeId": "node.move_particles_3d"},
-            {"id": 9, "nodeId": "sink", "typeId": "test.particle_sink"},
-            {"id": 10, "nodeId": "output", "typeId": "system.final_output"}
-        ],
-        "wires": [
-            {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "seed"},
-            {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
-            {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "forces"},
-            {"fromNode": 2, "fromPort": "step_dt", "toNode": 3, "toPort": "speed"},
-            {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"},
-            {"fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "forces"},
-            {"fromNode": 2, "fromPort": "step_index", "toNode": 4, "toPort": "speed"},
-            {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "seed"},
-            {"fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in"},
-            {"fromNode": 1, "fromPort": "out", "toNode": 6, "toPort": "forces"},
-            {"fromNode": 5, "fromPort": "step_dt", "toNode": 6, "toPort": "speed"},
-            {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in"},
-            {"fromNode": 1, "fromPort": "out", "toNode": 7, "toPort": "forces"},
-            {"fromNode": 5, "fromPort": "step_index", "toNode": 7, "toPort": "speed"},
-            {"fromNode": 7, "fromPort": "out", "toNode": 5, "toPort": "in"},
-            {"fromNode": 5, "fromPort": "out", "toNode": 8, "toPort": "in"},
-            {"fromNode": 1, "fromPort": "out", "toNode": 8, "toPort": "forces"},
-            {"fromNode": 2, "fromPort": "step_dt", "toNode": 8, "toPort": "speed"},
-            {"fromNode": 8, "fromPort": "out", "toNode": 2, "toPort": "in"},
-            {"fromNode": 2, "fromPort": "out", "toNode": 9, "toPort": "particles"},
-            {"fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in"}
-        ]
-    }))
-    .expect("nested proof def")
-}
-
-/// Mover speeds in dispatch order for one frame of the nest.
-fn nested_speeds() -> Vec<f32> {
-    let mut speeds = Vec::new();
-    for o in 0..OUTER {
-        speeds.extend([particle_step_dt(o), o as f32]);
-        for i in 0..INNER {
-            speeds.extend([particle_step_dt(i), i as f32]);
-        }
-        speeds.push(particle_step_dt(o));
-    }
-    speeds
-}
-
-/// The nest's movers unrolled into one chain with constant speeds, run as
-/// the body of a one-iteration region so the result lands in the
-/// boundary's persistent state like the nest's does.
-fn unrolled_def() -> EffectGraphDef {
-    let speeds = nested_speeds();
-    let mut nodes = vec![
-        serde_json::json!({"id": 0, "nodeId": "seed", "typeId": "test.particle_source",
-             "params": {"max_capacity": {"type": "Int", "value": N}}}),
-        serde_json::json!({"id": 1, "nodeId": "forces", "typeId": "test.force_source",
-             "params": {"max_capacity": {"type": "Int", "value": N}}}),
-        serde_json::json!({"id": 2, "nodeId": "once", "typeId": "test.particle_boundary",
-             "params": {"iterations": {"type": "Int", "value": 1}}}),
-        serde_json::json!({"id": 3, "nodeId": "sink", "typeId": "test.particle_sink"}),
-        serde_json::json!({"id": 4, "nodeId": "output", "typeId": "system.final_output"}),
-    ];
-    let mut wires = vec![
-        serde_json::json!({"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "seed"}),
-        serde_json::json!({"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "particles"}),
-        serde_json::json!({"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"}),
-    ];
-    let mut previous = 2u32;
-    for (k, speed) in speeds.iter().enumerate() {
-        let id = 10 + k as u32;
-        nodes.push(serde_json::json!({"id": id, "nodeId": format!("mover_{k}"),
-            "typeId": "node.move_particles_3d",
-            "params": {"speed": {"type": "Float", "value": speed}}}));
-        wires.push(serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": id, "toPort": "in"}));
-        wires.push(serde_json::json!({"fromNode": 1, "fromPort": "out", "toNode": id, "toPort": "forces"}));
-        previous = id;
-    }
-    wires.push(serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": 2, "toPort": "in"}));
-    serde_json::from_value(serde_json::json!({"version": 3, "nodes": nodes, "wires": wires}))
-        .expect("unrolled proof def")
-}
-
-/// Run `frames` frames and read back the persistent state of the one node of
-/// type `boundary_type`.
-fn run_state(graph: Graph, frames: u32, boundary_type: &str) -> Vec<Particle> {
-    run_nest(graph, frames, boundary_type, Storage::Planned).state
-}
-
 /// Where arrays live: where the planner puts them, or each in its own
 /// buffer, pre-bound before planning so the planner reuses nothing.
 #[derive(Clone, Copy, PartialEq)]
@@ -372,7 +251,7 @@ enum Storage {
     Dedicated,
 }
 
-struct NestRun {
+struct StorageRun {
     /// The boundary's persistent state.
     state: Vec<Particle>,
     /// What the sink read.
@@ -381,7 +260,7 @@ struct NestRun {
     buffers: usize,
 }
 
-fn run_nest(mut graph: Graph, frames: u32, boundary_type: &str, storage: Storage) -> NestRun {
+fn run_with_storage(mut graph: Graph, frames: u32, storage: Storage) -> StorageRun {
     let harness = harness::shared();
     let device = &harness.device;
     let plan = compile(&graph).expect("proof def compiles");
@@ -400,7 +279,7 @@ fn run_nest(mut graph: Graph, frames: u32, boundary_type: &str, storage: Storage
     let sink_res = resource(&plan, node_of(&graph, "test.particle_sink"), "particles", false);
     let seed_res = resource(&plan, node_of(&graph, "test.particle_source"), "out", true);
     let force_res = resource(&plan, node_of(&graph, "test.force_source"), "out", true);
-    let state_res = resource(&plan, node_of(&graph, boundary_type), "out", true);
+    let state_res = resource(&plan, node_of(&graph, "test.particle_boundary"), "out", true);
     for (res, bytes) in [
         (seed_res, bytemuck::cast_slice::<Particle, u8>(&seed_particles()).to_vec()),
         (force_res, bytemuck::cast_slice::<[f32; 3], u8>(&forces()).to_vec()),
@@ -420,7 +299,7 @@ fn run_nest(mut graph: Graph, frames: u32, boundary_type: &str, storage: Storage
             delta: Seconds(1.0 / 60.0),
             frame_count: i64::from(frame),
         };
-        let mut enc = device.create_encoder("nested-substeps-proof");
+        let mut enc = device.create_encoder("substeps-storage-proof");
         {
             let mut gpu = GpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut state, 0);
@@ -433,27 +312,7 @@ fn run_nest(mut graph: Graph, frames: u32, boundary_type: &str, storage: Storage
         // SAFETY: the encoder completed; the buffer holds at least N particles.
         unsafe { std::slice::from_raw_parts(ptr.cast::<Particle>().cast_const(), N).to_vec() }
     };
-    NestRun { state: read(state_res), sink: read(sink_res), buffers }
-}
-
-/// CPU reference for `frames` frames of the nest.
-fn nested_expected(frames: u32) -> Vec<Particle> {
-    let dt_scaled = (1.0f64 / 60.0) as f32 * 60.0;
-    let forces = forces();
-    let mut particles = seed_particles();
-    for _ in 0..frames {
-        for speed in nested_speeds() {
-            for (p, f) in particles.iter_mut().zip(&forces) {
-                if p.life <= 0.0 {
-                    continue;
-                }
-                for (position, force) in p.position.iter_mut().zip(f) {
-                    *position += force * speed * dt_scaled;
-                }
-            }
-        }
-    }
-    particles
+    StorageRun { state: read(state_res), sink: read(sink_res), buffers }
 }
 
 fn max_position_error(got: &[Particle], want: &[Particle]) -> f32 {
@@ -463,63 +322,12 @@ fn max_position_error(got: &[Particle], want: &[Particle]) -> f32 {
         .fold(0.0, f32::max)
 }
 
-#[test]
-fn nested_region_matches_unrolled() {
-    let registry = registry();
-    let nested_graph = nested_def().into_graph(&registry, &Default::default()).expect("nest builds");
-    let plan = compile(&nested_graph).expect("nest compiles");
-    let regions = plan.substep_regions();
-    assert_eq!(regions.len(), 1, "one top-level region");
-    assert_eq!(regions[0].inner.len(), 1, "one inner region");
-    let nested = run_state(nested_graph, 1, "test.particle_boundary");
-    let unrolled = run_state(
-        unrolled_def().into_graph(&registry, &Default::default()).expect("unrolled builds"),
-        1,
-        "test.particle_boundary",
-    );
-    let nested_bytes: &[u8] = bytemuck::cast_slice(&nested);
-    let unrolled_bytes: &[u8] = bytemuck::cast_slice(&unrolled);
-    assert!(nested_bytes == unrolled_bytes, "the nest diverged from the same dispatches unrolled");
-    let err = max_position_error(&nested, &nested_expected(1));
-    assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
-    // The nest moved the particles: a stale inner restart or a skipped level
-    // would leave far less motion than the reference.
-    let seed = seed_particles();
-    let moved = nested.iter().zip(&seed).filter(|(g, s)| s.life > 0.0 && (g.position[0] - s.position[0]).abs() > 1.0e-3).count();
-    assert!(moved > N / 2, "only {moved} particles moved");
-}
-
-#[test]
-fn nested_region_frozen_unfrozen_match() {
-    let registry = registry();
-    let canonical = nested_def();
-    let view = fuse_generator_view(&canonical, &registry)
-        .expect("each level's movers fuse and the fused def builds");
-    let count = |type_id: &str| view.def.nodes.iter().filter(|n| n.type_id == type_id).count();
-    assert_eq!(count("node.wgsl_compute"), 2, "one kernel per level");
-    assert_eq!(count("node.move_particles_3d"), 1, "`post` stays alone");
-    let frozen_graph = (*view.def).clone().into_graph(&registry, &view.mesh_rules).expect("fused def builds");
-    let plan = compile(&frozen_graph).expect("fused nest compiles");
-    assert_eq!(plan.substep_regions()[0].inner.len(), 1, "the fused def keeps the nest");
-    let unfused = run_state(
-        canonical.into_graph(&registry, &Default::default()).expect("builds"),
-        FRAMES,
-        "test.particle_boundary",
-    );
-    let frozen = run_state(frozen_graph, FRAMES, "test.particle_boundary");
-    let unfused_bytes: &[u8] = bytemuck::cast_slice(&unfused);
-    let frozen_bytes: &[u8] = bytemuck::cast_slice(&frozen);
-    assert!(unfused_bytes == frozen_bytes, "fused nest diverged from unfused (buffer regions are bit-exact)");
-    let err = max_position_error(&frozen, &nested_expected(FRAMES));
-    assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
-}
-
-/// [`nested_def`] with three-copy chains of same-size temporaries before the
-/// nest (`seed` into `outer.seed`), in the outer body (`outer_b` into
-/// `inner.seed`) and after it (`outer.out` into the sink). A copy changes no
-/// value, so [`nested_expected`] still holds.
-pub(crate) fn nested_copy_chains_def() -> EffectGraphDef {
-    let mut def = serde_json::to_value(nested_def()).expect("nest serialises");
+/// [`def`] with three-copy chains of same-size temporaries before the region
+/// (`seed` into `boundary.seed`), in its body (`mover_a` into `mover_b`) and
+/// after it (`boundary.out` into the sink). A copy changes no value, so
+/// [`expected`] still holds.
+pub(crate) fn copy_chains_def() -> EffectGraphDef {
+    let mut def = serde_json::to_value(def()).expect("def serialises");
     let mut chain = |ids: [u64; 3], from: u64, to: (u64, &str)| {
         let mut previous = from;
         for id in ids {
@@ -536,26 +344,26 @@ pub(crate) fn nested_copy_chains_def() -> EffectGraphDef {
         wires.push(serde_json::json!({"fromNode": previous, "fromPort": "out", "toNode": to.0, "toPort": to.1}));
     };
     chain([20, 21, 22], 0, (2, "seed"));
-    chain([25, 26, 27], 4, (5, "seed"));
-    chain([30, 31, 32], 2, (9, "particles"));
-    serde_json::from_value(def).expect("nest with copy chains")
+    chain([25, 26, 27], 3, (4, "in"));
+    chain([30, 31, 32], 2, (6, "particles"));
+    serde_json::from_value(def).expect("def with copy chains")
 }
 
-/// Temporary reuse before, inside and after a nest changes no bit: the
+/// Temporary reuse before, inside and after a region changes no bit: the
 /// planner's shared storage against every array in its own buffer.
 #[test]
-fn nested_region_shared_storage_matches_dedicated() {
+fn region_shared_storage_matches_dedicated() {
     let registry = registry();
-    let build = || nested_copy_chains_def().into_graph(&registry, &Default::default()).expect("nest with chains builds");
-    let shared = run_nest(build(), FRAMES, "test.particle_boundary", Storage::Planned);
-    let dedicated = run_nest(build(), FRAMES, "test.particle_boundary", Storage::Dedicated);
-    eprintln!("nested chains: {} buffers shared, {} dedicated", shared.buffers, dedicated.buffers);
+    let build = || copy_chains_def().into_graph(&registry, &Default::default()).expect("def with chains builds");
+    let shared = run_with_storage(build(), FRAMES, Storage::Planned);
+    let dedicated = run_with_storage(build(), FRAMES, Storage::Dedicated);
+    eprintln!("region chains: {} buffers shared, {} dedicated", shared.buffers, dedicated.buffers);
     assert!(shared.buffers + 3 <= dedicated.buffers, "the chains reuse storage");
     for (what, a, b) in [("state", &shared.state, &dedicated.state), ("sink", &shared.sink, &dedicated.sink)] {
         let (a, b): (&[u8], &[u8]) = (bytemuck::cast_slice(a), bytemuck::cast_slice(b));
         assert!(a == b, "shared storage changed the {what}");
     }
-    let err = max_position_error(&shared.state, &nested_expected(FRAMES));
+    let err = max_position_error(&shared.state, &expected(FRAMES));
     assert!(err <= 1.0e-5, "GPU vs CPU max |Δposition| = {err}");
 }
 

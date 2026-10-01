@@ -2601,13 +2601,13 @@ fn is_state_capture_wire(
     node.state_capture_input_ports().contains(&w.to_port.as_str())
 }
 
-/// The innermost substep region each node belongs to: boundary and body nodes
-/// map to that region's boundary doc id, every other node is absent. Two
-/// nodes fuse only with equal sides, so no kernel crosses an outer or an inner
-/// border. Membership is the plan compiler's own nest
-/// ([`crate::node_graph::substeps::nest_regions`]) over the same forward
-/// wires, so the finder and the executor agree on every border. A nest the
-/// compiler refuses gives every node its own side: nothing fuses.
+/// The substep region each node belongs to: boundary and body nodes map to
+/// that region's boundary doc id, every other node is absent. Two nodes fuse
+/// only with equal sides, so no kernel crosses a region border. Membership is
+/// the plan compiler's own [`crate::node_graph::substeps::region_body`] over
+/// the same forward wires, so the finder and the executor agree on every
+/// border. Regions the compiler refuses (one boundary inside another's body,
+/// or two bodies sharing a node) give every node its own side: nothing fuses.
 fn substep_sides(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
@@ -2637,21 +2637,19 @@ fn substep_sides(
         fwd.entry(from).or_default().push(to);
         rev.entry(to).or_default().push(from);
     }
-    let Ok(nest) = crate::node_graph::substeps::nest_regions(&boundaries, &fwd, &rev) else {
-        for node in &def.nodes {
-            sides.insert(node.id, node.id);
+    let is_boundary = |node: u32| boundaries.iter().any(|(b, _)| *b == node);
+    for (boundary, producers) in &boundaries {
+        let body = crate::node_graph::substeps::region_body(*boundary, producers, &fwd, &rev);
+        if body.iter().any(|&node| is_boundary(node) || sides.contains_key(&node)) {
+            sides.clear();
+            for node in &def.nodes {
+                sides.insert(node.id, node.id);
+            }
+            return sides;
         }
-        return sides;
-    };
-    // Outer regions first, so an inner region's nodes end on the inner side.
-    let outer_first = nest
-        .iter()
-        .filter(|region| region.parent.is_none())
-        .chain(nest.iter().filter(|region| region.parent.is_some()));
-    for region in outer_first {
-        sides.insert(region.boundary, region.boundary);
-        for &node in &region.body {
-            sides.insert(node, region.boundary);
+        sides.insert(*boundary, *boundary);
+        for node in body {
+            sides.insert(node, *boundary);
         }
     }
     sides
@@ -4222,31 +4220,34 @@ mod tests {
         );
         // Declared honestly (FromInput), the same shape fuses: the refusal
         // above is the probe's, not a gate the chain trips anyway.
-        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a residual into the divide fuses");
+        assert_eq!(partition_regions(&honest_chain(), &registry).len(), 1, "a body product into the divide fuses");
     }
 
-    /// The same chain with an honest producer: node.pressure_residual (its
-    /// output follows its coincident rhs, declared FromInput) into the divide.
+    /// The same chain with an honest producer: node.body_pressure_product (its
+    /// output follows its coincident base, declared FromInput) into the divide.
     fn honest_chain() -> EffectGraphDef {
         let lattice = |n: f64| serde_json::json!({"type": "Float", "value": n});
         serde_json::from_value(serde_json::json!({
             "version": 3,
             "nodes": [
                 {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
-                {"id": 1, "nodeId": "rhs", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
-                {"id": 2, "nodeId": "residual", "typeId": "node.pressure_residual", "params": {"nodes_x": lattice(8.0), "nodes_y": lattice(8.0), "nodes_z": lattice(8.0)}},
+                {"id": 1, "nodeId": "base", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 512}}},
+                {"id": 2, "nodeId": "product", "typeId": "node.body_pressure_product", "params": {"nodes_x": lattice(8.0), "nodes_y": lattice(8.0), "nodes_z": lattice(8.0)}},
                 {"id": 3, "nodeId": "divisor", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 1}}},
                 {"id": 4, "nodeId": "divide", "typeId": "node.divide_by_value"},
                 {"id": 5, "nodeId": "sink", "typeId": "test.value_sink"},
                 {"id": 6, "nodeId": "output", "typeId": "system.final_output"},
-                {"id": 7, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 729}}}
+                {"id": 7, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 729}}},
+                {"id": 8, "nodeId": "sums", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 64}}},
+                {"id": 9, "nodeId": "bodies", "typeId": "test.body_source", "params": {"max_capacity": {"type": "Int", "value": 4}}}
             ],
             "wires": [
-                {"fromNode": 7, "fromPort": "out", "toNode": 2, "toPort": "solid_faces"},
+                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "base"},
                 {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "water"},
-                {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "rhs"},
-                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "value"},
-                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "phi"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 2, "toPort": "solid_faces"},
+                {"fromNode": 7, "fromPort": "out", "toNode": 2, "toPort": "solid_velocity"},
+                {"fromNode": 8, "fromPort": "out", "toNode": 2, "toPort": "sums"},
+                {"fromNode": 9, "fromPort": "out", "toNode": 2, "toPort": "bodies"},
                 {"fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "values"},
                 {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "divisor"},
                 {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "values"},
@@ -4265,86 +4266,63 @@ mod tests {
         })
     }
 
-    fn lattice_field_product(member: usize) -> CapacityExpr {
-        CapacityExpr::Product(["nodes_x", "nodes_y", "nodes_z"].map(|p| CapacityExpr::Param(format!("n{member}_{p}"))).to_vec())
+    /// A face lattice's count, `member` the fused position: Π (n + 1).
+    fn face_lattice_product(member: usize) -> CapacityExpr {
+        CapacityExpr::Product(
+            ["nodes_x", "nodes_y", "nodes_z"]
+                .map(|p| CapacityExpr::Add(1, Box::new(CapacityExpr::Param(format!("n{member}_{p}")))))
+                .to_vec(),
+        )
     }
 
     /// BUG-u8io (fft-water-fusion-param-capacity): a lattice-sized member
     /// (`ParamProduct`) fuses with what reads it, and the region counts its
-    /// lattice from the fused uniforms: the multigrid's coarse water feeding
-    /// the restriction's mask.
+    /// lattice from the fused uniforms, clamped by every lattice that does
+    /// not provably bound it and by every array it pre-reads at `[idx]`. A
+    /// graph whose clamp would bite at its configured params refuses. The
+    /// pressure's face impulse feeds the friction impulse's faces.
     #[test]
-    fn lattice_sized_region_counts_its_lattice() {
-        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
-            "version": 3,
-            "nodes": [
-                {"id": 0, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                {"id": 1, "nodeId": "values", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                {"id": 2, "nodeId": "coarse", "typeId": "node.coarsen_water", "params": lattice_params([8.0; 3])},
-                {"id": 3, "nodeId": "restrict", "typeId": "node.restrict_lattice", "params": lattice_params([8.0; 3])},
-                {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
-                {"id": 5, "nodeId": "output", "typeId": "system.final_output"}
-            ],
-            "wires": [
-                {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "fine"},
-                {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "fine"},
-                {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},
-                {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
-                {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
-            ]
-        }))
-        .expect("multigrid fixture");
-        let mut registry = registry();
-        crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
-        let regions = partition_regions(&def, &registry);
-        assert_eq!(regions.len(), 1, "the coarse water and the restriction fuse");
-        let region = &regions[0];
-        assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
-        assert_eq!(region.output_capacity, Some(lattice_field_product(0)), "the count is the coarse water's lattice");
-    }
-
-    /// A lattice-sized region clamps its count by every lattice that does
-    /// not provably bound it and by every array it pre-reads at `[idx]`, and
-    /// refuses a graph whose clamp would bite at its configured params.
-    #[test]
-    fn lattice_sized_region_clamps_by_its_members_and_coincident_reads() {
-        let def = |water: f64| -> EffectGraphDef {
+    fn lattice_sized_region_counts_and_clamps_its_lattice() {
+        let def = |impulse_x: f64| -> EffectGraphDef {
             serde_json::from_value(serde_json::json!({
                 "version": 3,
                 "nodes": [
-                    {"id": 0, "nodeId": "ranges", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                    {"id": 1, "nodeId": "faces", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                    {"id": 2, "nodeId": "water", "typeId": "node.cells_with_particles", "params": lattice_params([water, 8.0, 8.0])},
-                    {"id": 3, "nodeId": "divergence", "typeId": "node.face_divergence", "params": lattice_params([8.0; 3])},
-                    {"id": 4, "nodeId": "sink", "typeId": "test.value_sink"},
+                    {"id": 0, "nodeId": "pressure", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 1, "nodeId": "water", "typeId": "test.value_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
+                    {"id": 2, "nodeId": "impulse", "typeId": "node.pressure_face_impulse", "params": lattice_params([impulse_x, 8.0, 8.0])},
+                    {"id": 3, "nodeId": "friction", "typeId": "node.friction_face_impulse", "params": lattice_params([8.0; 3])},
+                    {"id": 4, "nodeId": "sink", "typeId": "test.face_sink"},
                     {"id": 5, "nodeId": "output", "typeId": "system.final_output"},
-                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}},
-                    {"id": 7, "nodeId": "moving", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
+                    {"id": 6, "nodeId": "open", "typeId": "test.face_source", "params": {"max_capacity": {"type": "Int", "value": 4096}}}
                 ],
                 "wires": [
+                    {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "pressure"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "water"},
+                    {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "solid_faces"},
+                    {"fromNode": 6, "fromPort": "out", "toNode": 2, "toPort": "solid_velocity"},
+                    {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "faces"},
+                    {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "water"},
                     {"fromNode": 6, "fromPort": "out", "toNode": 3, "toPort": "solid_faces"},
-                    {"fromNode": 7, "fromPort": "out", "toNode": 3, "toPort": "solid_velocity"},
-                    {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "cell_ranges"},
-                    {"fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "faces"},
-                    {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "water"},
+                    {"fromNode": 6, "fromPort": "out", "toNode": 3, "toPort": "solid_velocity"},
                     {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "values"},
                     {"fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in"}
                 ]
             }))
-            .expect("water fixture")
+            .expect("face impulse fixture")
         };
         let mut registry = registry();
         crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
         let regions = partition_regions(&def(8.0), &registry);
-        assert_eq!(regions.len(), 1, "the water lattice and the divergence fuse");
+        assert_eq!(regions.len(), 1, "the pressure impulse and the friction impulse fuse");
         let region = &regions[0];
-        let ranges = region.externals.iter().position(|e| e.from_node == 0).expect("the ranges are an external");
+        assert_eq!(region.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(), vec![2, 3]);
+        let open = region.externals.iter().position(|e| e.from_node == 6).expect("the open faces are an external");
         assert_eq!(
             region.output_capacity,
-            Some(CapacityExpr::Min(vec![lattice_field_product(1), lattice_field_product(0), CapacityExpr::Slot(ranges)])),
-            "the divergence's lattice, clamped by the water's lattice and the ranges it pre-reads"
+            Some(CapacityExpr::Min(vec![face_lattice_product(1), face_lattice_product(0), CapacityExpr::Slot(open)])),
+            "the friction's lattice, clamped by the impulse's lattice and the faces it pre-reads"
         );
-        assert!(partition_regions(&def(6.0), &registry).is_empty(), "a water lattice smaller than the divergence's refuses");
+        assert!(partition_regions(&def(6.0), &registry).is_empty(), "an impulse lattice smaller than the friction's refuses");
     }
 
 }

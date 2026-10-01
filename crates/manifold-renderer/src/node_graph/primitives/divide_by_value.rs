@@ -1,6 +1,6 @@
 //! `node.divide_by_value` — divide every element by one value held on the
-//! GPU (the conjugate gradient's step sizes, docs/GPU_FLIP_PRESSURE_SOLVE.md).
-//! A per-element atom on the codegen path.
+//! GPU, such as a ratio of two node.dot_products sums. A per-element atom on
+//! the codegen path.
 
 use manifold_gpu::GpuBinding;
 

@@ -736,7 +736,6 @@ pub(super) mod tests {
             let (graph, plan) = built(&def);
             let regions = plan.substep_regions();
             assert_eq!(regions.len(), 1, "one tick region");
-            assert!(regions[0].inner.is_empty(), "no region inside the tick");
             let report = walked(&def, false, &format!("scene {n}³, {} steps", scene.steps));
             assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³, {} steps", report.checked, scene.steps);
             let meshed = plan.steps().iter().any(|step| {
@@ -834,7 +833,7 @@ pub(super) mod tests {
             let n = scene.pressure.n;
             let def = render_def(scene);
             let (_, plan) = built(&def);
-            assert!(plan.substep_regions()[0].inner.is_empty());
+            assert_eq!(plan.substep_regions().len(), 1, "one tick region");
             let report = walked(&def, false, &format!("rendered {n}³"));
             assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³", report.checked);
             let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).expect("the rendered scene builds");

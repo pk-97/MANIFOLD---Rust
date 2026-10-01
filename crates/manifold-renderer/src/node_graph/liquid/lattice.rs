@@ -4,8 +4,9 @@
 //! wires such a lattice produced, so a solver built on it cannot hand the
 //! surface bare, unpadded bounds.
 
-use crate::node_graph::effect_node::EffectNodeContext;
+use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::FluidDomainLayout;
+use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::transform::Transform;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
@@ -148,6 +149,34 @@ impl LiquidLattice {
         }
         out
     }
+}
+
+/// The params a lattice atom reads its cells per axis from.
+pub(crate) const LATTICE_PARAMS: [&str; 3] = ["nodes_x", "nodes_y", "nodes_z"];
+
+/// A lattice atom's cells per axis, 1 to [`MAX_LATTICE_NODES`] each (64 when
+/// unset), or `None`.
+pub(crate) fn cell_lattice(params: &ParamValues) -> Option<[u32; 3]> {
+    let nodes = LATTICE_PARAMS.map(|name| match params.get(name) {
+        Some(ParamValue::Float(n)) => n.round() as i64,
+        _ => 64,
+    });
+    nodes.iter().all(|n| (1..=i64::from(MAX_LATTICE_NODES)).contains(n)).then(|| nodes.map(|n| n as u32))
+}
+
+/// Cells in a lattice, as u64 so a bad size cannot wrap.
+pub(crate) fn cell_count(nodes: [u32; 3]) -> u64 {
+    nodes.iter().map(|&n| u64::from(n)).product()
+}
+
+/// Records of a lattice's face grid: one more than the cells per axis.
+pub(crate) fn face_count(nodes: [u32; 3]) -> u64 {
+    nodes.iter().map(|&n| u64::from(n) + 1).product()
+}
+
+/// Face-grid length for a lattice param set, for `array_output_capacity`.
+pub(crate) fn face_capacity(params: &ParamValues) -> Option<u32> {
+    cell_lattice(params).and_then(|nodes| u32::try_from(face_count(nodes)).ok())
 }
 
 #[cfg(test)]

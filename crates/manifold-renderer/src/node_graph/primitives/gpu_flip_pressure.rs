@@ -21,6 +21,9 @@ const INVERSE_SHADER: &str = include_str!("shaders/coarse_inverse.wgsl");
 /// The coarsest level's largest side: at most 4³ = 64 cells, the one
 /// workgroup the coarse inverse runs in.
 pub(crate) const COARSEST_SIDE: u32 = 4;
+/// Cells the coarse inverse takes: its shader's MAX_CELLS.
+#[cfg(test)]
+const MAX_COARSE_CELLS: u64 = 64;
 /// The longest lattice side the solver takes.
 pub(crate) const MAX_SIDE: u32 = 1024;
 /// Iterations one solve may run: the scalars buffer holds two per iteration.
@@ -83,8 +86,8 @@ pub(crate) fn lattice_refusal(lattice: [u32; 3]) -> Option<String> {
 }
 
 /// The water a solve runs on: the cell lattice, water per cell (> 0.5), the
-/// padded face grid of open fractions (node.solid_faces' layout, box walls
-/// 0), the cell size in metres, and the particles' signed distance per cell
+/// padded face grid of open fractions (the step's open_fractions pass, box
+/// walls 0), the cell size in metres, and the particles' signed distance per cell
 /// for the free surface's ghost rows (docs/GPU_FLIP_PRESSURE_SOLVE.md
 /// section 2 (the equation)). With no φ the rows are the plain ones, as the
 /// density solve runs; the coarse levels always are.
@@ -546,7 +549,7 @@ mod tests {
         for n in 1..=MAX_SIDE {
             let last = *level_lattices([n, n.div_ceil(3), 1]).last().unwrap();
             assert!(last.iter().all(|&side| side <= COARSEST_SIDE), "{n}");
-            assert!(cells(last) <= crate::node_graph::primitives::coarse_inverse::MAX_COARSE_CELLS);
+            assert!(cells(last) <= MAX_COARSE_CELLS);
         }
     }
 

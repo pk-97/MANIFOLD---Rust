@@ -11,14 +11,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-use super::cells_with_particles::cell_lattice;
-use super::particles_to_faces::face_count;
 use super::sort_particles_into_cells::float_param;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::bodies::LiquidBody;
+use crate::node_graph::liquid::lattice::{cell_lattice, face_count};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -79,7 +78,7 @@ crate::primitive! {
         float_param!("tick_seconds", "Tick (s)", TICK as f32, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP body coupling's sum. Inside the pressure solve on node.pressure_face_impulse of the conjugate gradient's direction, feeding node.body_pressure_product's sums; per water step on the solved pressure and on node.friction_face_impulse, chained through base so the tick's sums grow step by step and feed the next node.solid_face_velocity's changes. The tick's last sum takes the domain's reaction, which the domain reads back as each body's impulse. bodies, body_count and rows from the liquid's domain.",
+    composition_notes: "The GPU FLIP two-way body coupling's sum, not yet wired into any preset (BUG-6zj3 (step body owner code)). Inside the pressure solve on node.pressure_face_impulse of the search direction, feeding node.body_pressure_product's sums; per water step on the solved pressure and on node.friction_face_impulse, chained through base so the tick's sums grow step by step and feed the next step's solid face velocity. The tick's last sum takes the domain's reaction, which the domain reads back as each body's impulse. bodies, body_count and rows from the liquid's domain.",
     examples: [],
     picker: { label: "Face Impulse to Bodies", category: Atom },
     summary: "Adds up how hard the water pushes on each floating object, and how that changes the object's motion.",

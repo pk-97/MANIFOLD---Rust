@@ -9,8 +9,6 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::cells_with_particles::{cell_count, cell_lattice};
-use super::particles_to_faces::face_count;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -19,6 +17,7 @@ use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::liquid::bodies::{LiquidBody, SOLID_BODY_FACES};
+use crate::node_graph::liquid::lattice::{cell_count, cell_lattice, face_count};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -43,7 +42,7 @@ struct BodyProductUniforms {
 crate::primitive! {
     name: BodyPressureProduct,
     type_id: "node.body_pressure_product",
-    purpose: "Add the dynamic bodies' share of the pressure operator to base, per cell of a lattice (nodes_x/y/z cells from lattice_min, cell_size apart). In a water cell: base + (1/cell_size)·Σ over the cell's inner faces a body owns (solid_velocity's velocity w, node.solid_face_velocity's owner code) of ±(c − o)·(dv + dω × r) along the face's axis, + on the cell's high faces and − on its low, c the cell's open volume and o the face's open fraction from solid_faces, r from the body's centre of mass (bodies, posed tick_seconds on) to the face centre, dv and dω the body's velocity change in sums (node.face_impulse_to_bodies). Air cells keep base. As FLIP Fluids' coupled matrix adds J M⁻¹ Jᵀ.",
+    purpose: "Add the dynamic bodies' share of the pressure operator to base, per cell of a lattice (nodes_x/y/z cells from lattice_min, cell_size apart). In a water cell: base + (1/cell_size)·Σ over the cell's inner faces a body owns (solid_velocity's velocity w carries the owner code; no node writes it yet, BUG-6zj3 (step body owner code)) of ±(c − o)·(dv + dω × r) along the face's axis, + on the cell's high faces and − on its low, c the cell's open volume and o the face's open fraction from solid_faces, r from the body's centre of mass (bodies, posed tick_seconds on) to the face centre, dv and dω the body's velocity change in sums (node.face_impulse_to_bodies). Air cells keep base. As FLIP Fluids' coupled matrix adds J M⁻¹ Jᵀ.",
     inputs: {
         base: Array(f32) required,
         water: Array(f32) required,
@@ -70,7 +69,7 @@ crate::primitive! {
         float_param!("tick_seconds", "Tick (s)", TICK as f32, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside the GPU FLIP pressure solve, after node.pressure_residual's −L p on the conjugate gradient's direction (base) and node.pressure_face_impulse then node.face_impulse_to_bodies on the same direction (sums); its output is the solve's s. bodies, body_count and rows from the liquid's domain; solid_faces and solid_velocity are the step's.",
+    composition_notes: "The GPU FLIP two-way body coupling, not yet wired into any preset (BUG-6zj3 (step body owner code)): base is the fluid operator −L p on the pressure solve's search direction, sums are node.pressure_face_impulse then node.face_impulse_to_bodies on the same direction; its output is the solve's operator product. bodies, body_count and rows from the liquid's domain; solid_faces and solid_velocity are the step's.",
     examples: [],
     picker: { label: "Body Pressure Product", category: Atom },
     summary: "Lets floating objects give way to the water's pressure inside the pressure solve, so heavy and light objects float and sink correctly.",

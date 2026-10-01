@@ -1,10 +1,10 @@
 // Shared by the atoms that couple bodies into the GPU FLIP pressure solve
 // (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water)).
 //
-// A face record's three faces each name the body that owns them in
-// node.solid_face_velocity's velocity w: Σ over the axes a of
-// (b_a + 1) · 256^a, b_a the body (0 to body_count − 1) or −1 for none.
-// Exact in f32 for 64 bodies.
+// A face record's three faces each name the body that owns them in the
+// solid face velocity's w: Σ over the axes a of (b_a + 1) · 256^a, b_a the
+// body (0 to body_count − 1) or −1 for none. Exact in f32 for 64 bodies.
+// No node writes this owner code yet: BUG-6zj3 (step body owner code).
 //
 // A body's sums record (node.face_impulse_to_bodies), 16 floats per body:
 // linear impulse (N·s), angular impulse about the centre of mass (N·m·s),

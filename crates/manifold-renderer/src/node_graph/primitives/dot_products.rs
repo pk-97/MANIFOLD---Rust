@@ -1,6 +1,5 @@
 //! `node.dot_products` — dot products of a vector with the rows of a
-//! row-major matrix, all on the GPU (the conjugate gradient's r·z and p·s,
-//! docs/GPU_FLIP_PRESSURE_SOLVE.md). A barriered two-pass reduction
+//! row-major matrix, all on the GPU. A barriered two-pass reduction
 //! (docs/ADDING_PRIMITIVES.md exclusion 1): workgroup partial sums per row,
 //! then one thread per row adds its partials in a fixed order.
 
@@ -52,7 +51,7 @@ crate::primitive! {
         int_param!("root", "Square Root", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The conjugate gradient's reductions (node.conjugate_gradient): r·z and p·s are one row each (matrix = one vector, vector = the other, rows 1). Also a vector's length (the vector wired to both matrix and vector, root 1), a sum (no vector; row_length says how many leading elements) and projections on several rows at once. Pair with node.divide_by_value for a ratio of two dots, and node.combine_rows, which consumes dots as coefficients.",
+    composition_notes: "One dot of two vectors is one row (matrix = one vector, vector = the other, rows 1). Also a vector's length (the vector wired to both matrix and vector, root 1), a sum (no vector; row_length says how many leading elements) and projections on several rows at once. Pair with node.divide_by_value for a ratio of two dots.",
     examples: [],
     picker: { label: "Dot Products", category: Atom },
     summary: "Measures how much a list of numbers lines up with each row of a table, all on the GPU.",
