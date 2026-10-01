@@ -2,7 +2,7 @@
 
 <!-- index: Spray, foam and bubbles for SWASH water, and any liquid on the seam: GPU atoms find the emitters and spawn whitewater from the seam's face grid and the surface's level set; the vendored FLIP C++ lifecycle advances it through a fenced shared-memory ring. Builds the liquid seam's P10 grid outputs. -->
 
-**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · reopened by D14 (GPU lifecycle); P1–P6 emitter built, O1 and O2 green · GPU lifecycle built as `node.whitewater_step` (section 3.9 (GPU lifecycle)) · owed: L5's side-by-side count against the vendored lifecycle, `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
+**Status:** PROPOSED · 2026-10-01 · Opus 5.5 · reopened by D14 (GPU lifecycle); P1–P6 emitter built, O1 and O2 green · GPU lifecycle built as `node.whitewater_step` (section 3.9 (GPU lifecycle)), L5 parity holds (section 5 (Phasing), L5) · owed: `scripts/gpu_proofs_gate.py` on a quiet machine, Peter's side-by-side verdict, approval.
 **Prerequisites:** LIQUID_SOLVER_SEAM_DESIGN.md P1 (shared liquid module) merged into `feat/fft-water`; SWASH's full step on `feat/fft-water`. This design's P1 is the seam's P10 (Grid outputs). The seam's P7a (`node.liquid_frame`) is not built, so SWASH reaches whitewater through its render harness until it is (section 3.6 (Solver feeds)). Branch: `feat/gpu-whitewater` off `feat/fft-water`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -421,10 +421,11 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 ### L5 — Wire and parity
 
 - **Deliverables:** CPU extent proof for the pool; the GPU lifecycle in the GPU FLIP Dam Break at 64 only; a side-by-side 150-frame per-type count against the vendored lifecycle, read-only.
+- **Notes (2026-10-01):** `whitewater_step_against_vendored_lifecycle_150` (gpu-proofs) runs the same water into the node and into the replaced group, kept as `tests/fixtures/whitewater_vendored_group.json` for this and O2. Foam, bubble and spray populations match on 142 of 150 frames and are never more than 2 particles apart; summed over the run, 290,045 / 68,968 / 67,252 against 290,048 / 68,965 / 67,253. Frame 150: 4,079 / 3,124 / 229 on both. `emitted` differs by definition: the group's counts the emitters' requests before spawn rejection, the node's the spawns it kept.
 
 ### L6 — Retire the CPU lifecycle path
 
-- **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays. The preset already runs `node.whitewater_step` alone; L5's side-by-side count is still owed before this phase is called done.
+- **Deliverables:** `node.whitewater_lifecycle` leaves the GPU FLIP preset once L5 parity holds; the CPU FLIP solver's own whitewater stays. The preset runs `node.whitewater_step` alone, and L5 parity holds.
 
 ## 6. Decided — do not reopen
 
