@@ -518,9 +518,12 @@ const NON_STANDALONE: &[&str] = &[
     "node.torus_wrap_field",
     // Host-borrowed Math View boundary; it has no standalone GPU Params ABI.
     "system.mesh_input",
-    // GPU MPM state, frame ring and barriered stats reduction: cross-frame
-    // state and a multipass reduction, their custom ABIs reflected by the
-    // extended custom cases.
+    // Liquid state, frame ring and barriered stats reduction (the seam's and
+    // GPU MPM's): cross-frame state and a multipass reduction, their custom
+    // ABIs reflected by the extended custom cases.
+    "node.liquid_frame",
+    "node.liquid_state",
+    "node.liquid_stats",
     "node.matter_frame",
     "node.matter_state",
     "node.matter_stats",
@@ -531,6 +534,13 @@ const NON_STANDALONE: &[&str] = &[
     // a generated standalone uniform mirror for its run() path.
     "node.detect_regions",
     "node.track_regions",
+    // The pressure solve's hand shaders, barriered (their DotParams and
+    // InverseParams are reflected in uniform_layout_extended): the two-pass
+    // reduction and the coarsest level's one-workgroup inverse. And the
+    // conjugate gradient loop boundary, which only issues blits.
+    "node.dot_products",
+    "node.coarse_inverse",
+    "node.conjugate_gradient",
     // Custom cut-map kernels share CutMapUniforms; their shader declaration is
     // reflected by uniform_layout_extended, while the remappers below use the
     // generated four-word dispatch ABI proof above.
@@ -538,6 +548,9 @@ const NON_STANDALONE: &[&str] = &[
     "node.cut_mesh_cells",
     "node.remap_mesh_cut",
     "node.remap_cut_weights",
+    // The whitewater lifecycle runs FLIP's C++ on the CPU and writes its
+    // outputs from there: no GPU kernel of its own, only buffer copies.
+    "node.whitewater_lifecycle",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {

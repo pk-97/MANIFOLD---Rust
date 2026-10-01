@@ -2,14 +2,14 @@
 
 <!-- index: The contract FLIP, GPU MLS-MPM and SWASH meet to join scenes — particle frames, face-grid outputs, Box3D coupling, clock/pause/export, scene recognition, safety rails — and the phases that move MPM and SWASH behind it. -->
 
-**Status:** PROPOSED · 2026-09-30 · P5, P6 and P9 shipped · P7, P8 and P10 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends SWASH D8 and P3b (D7, D10, D12).
+**Status:** PROPOSED · 2026-09-30 · P5, P6 and P9 shipped · P7, P8 and P10 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
 
-**Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs FFT_WATER_SOLVER_DESIGN.md P3 (the full step) on `feat/fft-water`. P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
+**Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs GPU FLIP's full step (GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
 Peter's rule (2026-09-30, relayed by the lead): "APIs, boundaries, solvers and the physics API stay modular and safe to reuse for future solvers, algorithms, interactions and sims."
 
-Three liquid solvers exist. FLIP is the vendored CPU engine (`crates/manifold-fluids`, `node.fluid_surface`). GPU MLS-MPM is on main ([GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md), "the MPM design", `matter_*`). SWASH is the FFT-pressure water solver on `feat/fft-water` (FFT_WATER_SOLVER_DESIGN.md on that branch, "the SWASH design"). The particle-frame seam is [GPU_FLUID_SURFACE_DESIGN.md](GPU_FLUID_SURFACE_DESIGN.md) ("the surface design"). This doc is the contract all three meet, the smallest set of seams that does it, and the phases that put MPM and SWASH behind it.
+Three liquid solvers exist. FLIP is the vendored CPU engine (`crates/manifold-fluids`, `node.fluid_surface`). GPU MLS-MPM is on main ([GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md), "the MPM design", `matter_*`). GPU FLIP is the GPU water solver ([GPU_FLIP_PRESSURE_SOLVE.md](GPU_FLIP_PRESSURE_SOLVE.md), "the GPU FLIP doc"; `node.gpu_flip_domain`). Until 2026-10-01 it was SWASH, with an FFT pressure solve (`docs/archive/FFT_WATER_SOLVER_DESIGN.md`, "the SWASH design"): below, SWASH means GPU FLIP, `swash_*` files are now `gpu_flip_*`, and SWASH P3b is GPU_FLIP_PRESSURE_SOLVE.md section 8 (owed). The particle-frame seam is [GPU_FLUID_SURFACE_DESIGN.md](GPU_FLUID_SURFACE_DESIGN.md) ("the surface design"). This doc is the contract all three meet, the smallest set of seams that does it, and the phases that put MPM and SWASH behind it.
 
 Binding from outside this doc: no FLIP tuning or integration work (Peter, 2026-09-29), so FLIP conforms as built; never a GPU port of FLIP; no fallback modes and no stopgaps; before any GPU run at a new size, prove on the CPU that every buffer covers its dispatch, and step resolution up one size at a time (two forced Mac resets above res 64); SWASH stays a challenger on its branch until Peter's SWASH P4 call.
 
@@ -122,7 +122,7 @@ f32 in m/s, scene space, shared storage. Scalars: `face_cells_x/y/z` and `face_v
 
 The producer resamples; no consumer sees a native layout:
 - SWASH: `node.face_sample_component` copies one axis of its `FaceSample` lattice into the array, skipping the padding entries.
-- MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:397`, `:402`).
+- MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`).
 - FLIP: no grid (D3).
 
 The liquid distance field is not a solver output. The Liquid Surface group already builds it (`R/primitives/particle_volume.rs:54`: distance to the nearest blob, negative inside, capped at a tenth of a bin outside). The group exports it as `level_set` with `level_set_bounds` and `level_set_nodes_x/y/z`. Whitewater owns the one atom that resamples or re-distances it onto the lattice it needs.
@@ -196,8 +196,8 @@ Every solver reads collider roles and coupled bodies through the same two things
 // core/liquid_domain.rs
 pub const FLIP_DOMAIN_TYPE_ID: &str = "node.fluid_surface";
 pub const MATTER_DOMAIN_TYPE_ID: &str = "node.matter_domain";
-pub const SWASH_DOMAIN_TYPE_ID: &str = "node.swash_domain";            // P7a
-pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID]; // P7a adds SWASH
+pub const GPU_FLIP_DOMAIN_TYPE_ID: &str = "node.gpu_flip_domain";      // P7a
+pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID]; // P7a adds GPU FLIP
 pub fn is_liquid_domain(type_id: &str) -> bool;                          // LIQUID_DOMAIN_TYPE_IDS.contains
 pub fn liquid_domain_of(index: &FlatSceneIndex, object: &SceneNodeRef)
     -> Result<Option<SceneNodeRef>, SceneIndexError>;                    // body moved unchanged
@@ -303,7 +303,7 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 | I11 | Overflow is counted and reported | `liquid_overflow_is_reported` |
 | I12 | No atomics where a solver forbids them | `liquid_atomic_free_atoms` (scans each listed atom's WGSL for `atomic`) |
 | I13 | Live frames never wait on the GPU | `liquid_live_frames_never_wait` (a test-build wait counter on the frame clock stays 0 over 120 live frames) |
-| I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-renderer/src/node_graph/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,swash,liquid}_*.rs'` → zero |
+| I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-renderer/src/node_graph/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
 | I15 | Fusion never crosses a region border, nested or not | `nested_region_fusion_stays_inside` (freeze tests) |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |
 
@@ -458,7 +458,7 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 ### P10 — Grid outputs (entry: the BUG-imy3 design approved)
 
-- **Entry state:** BUG-imy3's design names the ports it reads. P7a merged to main or the SWASH half waits on the branch.
+- **Entry state:** BUG-imy3's design names the ports it reads: GPU_WHITEWATER_DESIGN.md section 3.2 (What the whitewater reads), which builds this phase as its P1 (Grid outputs). P7a merged to main or the SWASH half waits on the branch.
 - **Read-back:** section 3.2 (Grid outputs); docs/ADDING_PRIMITIVES.md (codegen path).
 - **Deliverables:** `FACE_GRID_PORTS` on `node.matter_frame` and `node.liquid_frame`; atoms `node.matter_face_component` and `node.face_sample_component` (per-element gathers on the freeze codegen path, value-level `gpu_tests` against CPU-expected, fused-vs-unfused proofs); the Liquid Surface group's `level_set` outputs; `liquid_face_grid_layout` (I16); extent rules for the new arrays.
 - **Gate:** `scripts/gpu_proofs_gate.py` green; I9 covers the new arrays.

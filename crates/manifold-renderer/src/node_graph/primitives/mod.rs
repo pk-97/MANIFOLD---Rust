@@ -329,6 +329,88 @@ mod running_total;
 mod shape_particle_blobs;
 pub(crate) mod particle_volume;
 mod smooth_lattice;
+pub(crate) mod dot_products;
+mod combine_rows;
+mod divide_by_value;
+pub(crate) mod pressure_smooth;
+pub(crate) mod pressure_residual;
+pub(crate) mod restrict_lattice;
+pub(crate) mod prolong_lattice;
+pub(crate) mod coarsen_water;
+pub(crate) mod coarse_inverse;
+pub(crate) mod conjugate_gradient;
+pub(crate) mod zero_lattice;
+pub(crate) mod liquid_fill;
+pub(crate) mod liquid_state;
+pub(crate) mod liquid_stats;
+mod liquid_frame;
+pub(crate) mod gpu_flip_domain;
+pub(crate) mod cells_with_particles;
+pub(crate) mod particles_to_faces;
+mod face_gravity;
+mod face_divergence;
+mod density_source;
+mod subtract_pressure;
+mod extend_faces;
+mod faces_to_particles;
+pub(crate) mod face_sample_component;
+pub(crate) mod matter_face_component;
+mod surface_crossings;
+mod nearest_crossing;
+mod crossing_distance;
+mod liquid_cells;
+mod lattice_curvature;
+mod extend_lattice;
+mod jitter_particles;
+mod sample_faces_at_particles;
+mod energy_potential;
+mod wavecrest_potential;
+mod emission_count;
+mod spawn_whitewater;
+mod whitewater_type;
+pub(crate) mod whitewater_lifecycle;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_handoff_tests;
+#[cfg(test)]
+mod whitewater_cpu;
+#[cfg(test)]
+mod whitewater_particle_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_particle_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_grid_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_field_tests;
+#[cfg(test)]
+mod whitewater_extent_tests;
+#[cfg(test)]
+mod face_grid_extent_tests;
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod face_grid_scenes;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod face_grid_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod face_grid_scene_tests;
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) mod gpu_flip_preset;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_atom_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_solve_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_step_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_scene_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_scene_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) mod gpu_flip_volume;
+#[cfg(all(test, feature = "water-race-probes"))]
+pub(crate) mod gpu_flip_race_tests;
+#[cfg(all(test, feature = "water-race-probes"))]
+pub(crate) mod gpu_flip_still;
+#[cfg(all(test, feature = "water-race-probes"))]
+mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
 pub(crate) mod volume_surface_mesh;

@@ -568,10 +568,11 @@ impl Primitive for MatterDomain {
         self.upload_bodies(ctx, fresh && self.rows_fresh, values[TICKS] > 0.0);
     }
 
-    /// A coupled pair restarts together with a fresh rigid owner; the
-    /// liquid's own clock handles seeks.
+    /// The liquid restarts in a new epoch, and a coupled pair together with
+    /// a fresh rigid owner.
     fn clear_state(&mut self) {
         self.coupled.reset();
+        self.clock.restart();
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {

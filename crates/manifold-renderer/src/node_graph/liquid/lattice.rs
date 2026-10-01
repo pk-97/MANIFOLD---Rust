@@ -79,6 +79,11 @@ impl LiquidLattice {
         self.nodes[0] * self.nodes[1] * self.nodes[2]
     }
 
+    /// Bytes of the solid lattice: one f32 per node.
+    pub fn solid_bytes(&self) -> u64 {
+        self.nodes.iter().map(|&n| u64::from(n)).product::<u64>() * 4
+    }
+
     /// Scene AABB of the lattice nodes (the seam's `grid_bounds`).
     pub fn bounds(&self) -> Transform {
         let size: [f32; 3] = std::array::from_fn(|i| (self.nodes[i] - 1) as f32 * self.cell_size);
@@ -230,11 +235,12 @@ mod tests {
 
     /// Every bundled Liquid Surface meshes on the lattice a solver's frame
     /// node published: its solid, node counts and box are wired straight from
-    /// one node.fluid_surface or node.matter_frame, never a hand-made
-    /// transform or value that could drop the padding.
+    /// one node.fluid_surface, node.matter_frame or node.liquid_frame, never
+    /// a hand-made transform or value that could drop the padding.
     #[test]
     fn liquid_surface_lattice_comes_from_the_frame() {
-        const FRAMES: [&str; 2] = [manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID, "node.matter_frame"];
+        const FRAMES: [&str; 3] =
+            [manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID, "node.matter_frame", "node.liquid_frame"];
         let mut checked = Vec::new();
         for (type_id, flat) in flat_bundled_hosts() {
             let source = |id: u32, port: &str| source(&type_id, &flat, id, port);

@@ -923,7 +923,42 @@ pub mod test_nodes {
         fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
     }
 
+    /// A fusable per-element sum of two f32 arrays whose output follows `a`
+    /// alone while it declares the default capacity (the min of its inputs):
+    /// the dishonest declaration the freeze compiler's capacity probe must
+    /// refuse (BUG-2efy, capacity probe admits an output that follows one
+    /// input). Never run.
+    struct FollowFirst {
+        type_id: EffectNodeType,
+        inputs: Vec<NodeInput>,
+        outputs: Vec<NodeOutput>,
+        params: Vec<ParamDef>,
+    }
+
+    impl EffectNode for FollowFirst {
+        node_basics!();
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {}
+        fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
+            crate::node_graph::freeze::classify::FusionKind::MultiInputCoincident
+        }
+        fn wgsl_body(&self) -> Option<&'static str> {
+            Some("fn body(idx: u32, count: u32, e_a: f32, e_b: f32) -> f32 {\n    return e_a + e_b;\n}\n")
+        }
+        fn array_output_capacity(&self, port: &str, _: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
+            (port == "out").then(|| inputs.iter().find(|(name, _)| *name == "a").map(|&(_, n)| n)).flatten()
+        }
+    }
+
     pub fn register_substep_test_nodes(registry: &mut PrimitiveRegistry) {
+        registry.register("test.follow_first", || {
+            let f32s = || PortType::Array(ArrayType::of_known::<f32>());
+            Box::new(FollowFirst {
+                type_id: EffectNodeType::new("test.follow_first"),
+                inputs: vec![port("a", f32s(), PortKind::Input, true), port("b", f32s(), PortKind::Input, true)],
+                outputs: vec![port("out", f32s(), PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
         registry.register("test.particle_source", || {
             Box::new(ArraySource::new(
                 "test.particle_source",
@@ -935,6 +970,62 @@ pub mod test_nodes {
                 "test.force_source",
                 ArrayType::of_known::<[f32; 3]>(),
             ))
+        });
+        registry.register("test.value_source", || {
+            Box::new(ArraySource::new("test.value_source", ArrayType::of_known::<f32>()))
+        });
+        registry.register("test.liquid_source", || {
+            Box::new(ArraySource::new(
+                "test.liquid_source",
+                ArrayType::of_known::<crate::node_graph::fluid_particles::FluidParticle>(),
+            ))
+        });
+        registry.register("test.count_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.count_sink"),
+                inputs: vec![port("values", PortType::Array(ArrayType::of_known::<u32>()), PortKind::Input, true)],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
+        registry.register("test.value_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.value_sink"),
+                inputs: vec![port(
+                    "values",
+                    PortType::Array(ArrayType::of_known::<f32>()),
+                    PortKind::Input,
+                    true,
+                )],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
+        registry.register("test.liquid_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.liquid_sink"),
+                inputs: vec![port(
+                    "particles",
+                    PortType::Array(ArrayType::of_known::<crate::node_graph::fluid_particles::FluidParticle>()),
+                    PortKind::Input,
+                    true,
+                )],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
+        });
+        registry.register("test.mesh_sink", || {
+            Box::new(ParticleSink {
+                type_id: EffectNodeType::new("test.mesh_sink"),
+                inputs: vec![port(
+                    "vertices",
+                    PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::MeshVertex>()),
+                    PortKind::Input,
+                    true,
+                )],
+                outputs: vec![port("out", PortType::Texture2D, PortKind::Output, false)],
+                params: Vec::new(),
+            })
         });
         registry.register("test.particle_boundary", || Box::new(ParticleBoundary::new()));
         registry.register("test.particle_inner_boundary", || Box::new(ParticleBoundary::inner()));
@@ -1759,6 +1850,36 @@ mod tests {
             assert_eq!(nodes, vec![b, body]);
             assert_eq!(region.steps[1], region.steps[0] + 1, "contiguous block");
         }
+    }
+
+    /// Two simulation steps per frame, each with its own solve region
+    /// (`docs/GPU_FLIP_PRESSURE_SOLVE.md` section 1 (the step)): the second region is seeded
+    /// through a node outside both regions, which is not chaining.
+    #[test]
+    fn substeps_region_two_regions_in_sequence_through_an_outside_node() {
+        let mut graph = Graph::new();
+        let b1 = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let body1 = pass(&mut graph, "body1");
+        let between = pass(&mut graph, "between");
+        let b2 = graph.add_node(Box::new(TestNode::boundary(PORTS)));
+        let body2 = pass(&mut graph, "body2");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((b1, "out"), (body1, "a")).unwrap();
+        graph.connect((body1, "out"), (b1, "in")).unwrap();
+        graph.connect((b1, "out"), (between, "a")).unwrap();
+        graph.connect((between, "out"), (b2, "seed")).unwrap();
+        graph.connect((between, "out"), (body2, "b")).unwrap();
+        graph.connect((b2, "out"), (body2, "a")).unwrap();
+        graph.connect((body2, "out"), (b2, "in")).unwrap();
+        graph.connect((b2, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).unwrap();
+        let order: Vec<NodeInstanceId> = plan.steps().iter().map(|s| s.node).collect();
+        assert_eq!(order, vec![b1, body1, between, b2, body2, consumer]);
+        let regions = plan.substep_regions();
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].steps, vec![0, 1]);
+        assert_eq!(regions[1].steps, vec![3, 4]);
     }
 
     #[test]

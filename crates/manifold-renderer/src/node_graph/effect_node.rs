@@ -1389,6 +1389,15 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Why these params leave the node unable to run on any frame, or None.
+    /// The validator refuses the graph with
+    /// [`GraphError::IllegalParams`](crate::node_graph::validation::GraphError::IllegalParams)
+    /// naming the node, so a structurally impossible node (an FFT at a
+    /// length its plan can't take) fails once at build, not every frame.
+    fn params_refusal(&self, _params: &ParamValues) -> Option<String> {
+        None
+    }
+
     /// Fusion classification for the freeze/fusion compiler (design doc section 12).
     /// Defaults to [`FusionKind::Boundary`](crate::node_graph::freeze::classify::FusionKind::Boundary)
     /// — never fused — so the region-grower only folds nodes that explicitly

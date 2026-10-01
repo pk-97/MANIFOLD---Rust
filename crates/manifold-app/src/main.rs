@@ -139,6 +139,8 @@ mod corridor_acceptance;
 mod scene_modifier_journey;
 #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
 mod rt_dynamic_export_tests;
+#[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
+mod gpu_flip_export_demo;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
 mod scene_modifier_performance;
 #[cfg(all(test, target_os = "macos", feature = "journey-proofs", feature = "perf-soak"))]
