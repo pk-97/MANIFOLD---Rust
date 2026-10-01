@@ -2035,7 +2035,8 @@
           { "fromNode": 1, "fromPort": "field_nodes_y", "toNode": 6, "toPort": "field_nodes_y" },
           { "fromNode": 1, "fromPort": "field_nodes_z", "toNode": 6, "toPort": "field_nodes_z" },
           { "fromNode": 1, "fromPort": "field_spacing", "toNode": 6, "toPort": "field_spacing" },
-          { "fromNode": 1, "fromPort": "forces_on", "toNode": 6, "toPort": "forces_on" },
+          { "fromNode": 1, "fromPort": "force_lattices", "toNode": 6, "toPort": "force_lattices" },
+          { "fromNode": 1, "fromPort": "first_tick", "toNode": 6, "toPort": "first_tick" },
           { "fromNode": 1, "fromPort": "impulse_tick", "toNode": 6, "toPort": "impulse_tick" },
           { "fromNode": 1, "fromPort": "forces", "toNode": 15, "toPort": "forces" },
           { "fromNode": 1, "fromPort": "impulses", "toNode": 15, "toPort": "impulses" },
@@ -2043,7 +2044,8 @@
           { "fromNode": 1, "fromPort": "field_nodes_y", "toNode": 15, "toPort": "field_nodes_y" },
           { "fromNode": 1, "fromPort": "field_nodes_z", "toNode": 15, "toPort": "field_nodes_z" },
           { "fromNode": 1, "fromPort": "field_spacing", "toNode": 15, "toPort": "field_spacing" },
-          { "fromNode": 1, "fromPort": "forces_on", "toNode": 15, "toPort": "forces_on" },
+          { "fromNode": 1, "fromPort": "force_lattices", "toNode": 15, "toPort": "force_lattices" },
+          { "fromNode": 1, "fromPort": "first_tick", "toNode": 15, "toPort": "first_tick" },
           { "fromNode": 1, "fromPort": "impulse_tick", "toNode": 15, "toPort": "impulse_tick" },
           { "fromNode": 3, "fromPort": "step_dt", "toNode": 15, "toPort": "step_dt" }
         ]

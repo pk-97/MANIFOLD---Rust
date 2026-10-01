@@ -43,12 +43,12 @@ struct BodyReactionUniforms {
     field_nodes_y: i32,
     field_nodes_z: i32,
     field_spacing: f32,
-    forces_on: i32,
+    force_lattices: i32,
     impulse_tick: i32,
+    first_tick: i32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 crate::primitive! {
@@ -77,8 +77,9 @@ crate::primitive! {
         dynamic_count: ScalarF32 optional,
         field_nodes_x: ScalarF32 optional, field_nodes_y: ScalarF32 optional, field_nodes_z: ScalarF32 optional,
         field_spacing: ScalarF32 optional,
-        forces_on: ScalarF32 optional,
+        force_lattices: ScalarF32 optional,
         impulse_tick: ScalarF32 optional,
+        first_tick: ScalarF32 optional,
     },
     outputs: {
         reaction_out: Array(i32),
@@ -106,8 +107,9 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("field_nodes_y"), label: "Field Nodes Y", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("field_nodes_z"), label: "Field Nodes Z", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("field_spacing"), label: "Field Spacing", ty: ParamType::Float, default: ParamValue::Float(0.25), range: Some((1.0e-4, 400.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("forces_on"), label: "Forces On", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("force_lattices"), label: "Force Lattices", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("impulse_tick"), label: "Impulse Tick", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("first_tick"), label: "First Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Live Matter group, after node.matter_grid_update (its grid_out is this grid) and before node.grid_to_matter. reaction/reaction_out alias node.matter_domain's reaction array (16 words per body, the slot the domain cleared for this tick and reads back fenced); reaction_out feeds node.grid_to_matter's reaction, whose reaction_out closes into node.matter_state's reaction_in so the region runs this node every substep; bodies from node.matter_move_bodies; shapes, atlas, the lattice, gravity, closed faces, momentum_unit, body_count, dynamic_count and substeps_per_tick from node.matter_domain; tick_index, substep_in_tick and step_dt from node.matter_state; forces, impulses and the field scalars from node.matter_domain, wired exactly as node.matter_grid_update's so both start from the same velocity. Skips its dispatch when dynamic_count is 0 or reaction is unwired.",
@@ -214,12 +216,12 @@ impl Primitive for MatterBodyReaction {
             field_nodes_y: field.nodes[1],
             field_nodes_z: field.nodes[2],
             field_spacing: field.spacing,
-            forces_on: field.forces_on,
+            force_lattices: field.force_lattices,
             impulse_tick: field.impulse_tick,
+            first_tick: field.first_tick,
             dispatch_count: nodes,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -255,7 +257,7 @@ mod tests {
         assert!(wgsl.contains("buf_reaction_out: array<atomic<i32>>"), "{wgsl}");
         assert!(wgsl.contains("    body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<BodyReactionUniforms>(), 112);
-        assert!(wgsl.contains("impulse_tick: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n}"), "{wgsl}");
+        assert!(wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n}"), "{wgsl}");
         assert!(wgsl.contains("buf_forces: array<f32>") && wgsl.contains("buf_impulses: array<f32>"), "{wgsl}");
     }
 }

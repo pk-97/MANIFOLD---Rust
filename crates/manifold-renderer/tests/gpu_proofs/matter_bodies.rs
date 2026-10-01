@@ -370,15 +370,20 @@ fn matter_grid_update_applies_field_lattices() {
     let nodes = lat.node_count() as usize;
     let accum: Vec<i32> = (0..nodes).flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw]).collect();
     let field = FieldLattice::of(&lat);
-    // Not linear, so the trilinear weights matter.
-    let forces = field_values(&lat, &field, |p| [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]);
+    // Not linear, so the trilinear weights matter. Two lattices, one per tick
+    // from tick 7, so each tick must read its own.
+    let tick_forces = [
+        field_values(&lat, &field, |p| [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]),
+        field_values(&lat, &field, |p| [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]),
+    ];
+    let forces: Vec<[f32; 4]> = tick_forces.concat();
     let impulses = field_values(&lat, &field, |p| [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]);
     let mut bench = Bench::new(
         "node.matter_grid_update",
         vec![
             ("accum", HostArray::new::<i32>(accum.len() as u32)),
             ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
-            ("forces", HostArray::new::<f32>(4 * field.node_count() as u32)),
+            ("forces", HostArray::new::<f32>(8 * field.node_count() as u32)),
             ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
         ],
         &["grid_out"],
@@ -393,16 +398,18 @@ fn matter_grid_update_applies_field_lattices() {
         ("cell_size", dx), ("step_dt", dt), ("gravity_x", gravity[0]), ("gravity", gravity[1]),
         ("gravity_z", gravity[2]), ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
         ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("impulse_tick", 7.0),
+        ("first_tick", 7.0),
     ] {
         bench.set(name, value);
     }
     set_field(&mut bench, &field);
     let n = lat.nodes();
-    // (forces on, tick, substep, impulse applied)
-    for (forces_on, tick, substep, impulse) in
-        [(true, 7, 0, true), (true, 7, 1, false), (true, 8, 0, false), (false, 7, 0, true), (false, 6, 0, false)]
+    // (force lattices, tick, substep, impulse applied): with one lattice every
+    // tick reads it; with one per tick, tick 8 reads the second.
+    for (lattices, tick, substep, impulse) in
+        [(2, 7, 0, true), (2, 7, 1, false), (2, 8, 0, false), (1, 8, 0, false), (0, 7, 0, true), (0, 6, 0, false)]
     {
-        bench.set("forces_on", f32::from(u8::from(forces_on)));
+        bench.set("force_lattices", lattices as f32);
         bench.set("tick_index", tick as f32);
         bench.set("substep_in_tick", substep as f32);
         bench.run();
@@ -412,7 +419,11 @@ fn matter_grid_update_applies_field_lattices() {
             let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
             let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
             let v_before: [f32; 3] = std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * scale);
-            let force = if forces_on { field.sample(&forces, x) } else { [0.0; 3] };
+            let force = match lattices {
+                0 => [0.0; 3],
+                1 => field.sample(&tick_forces[0], x),
+                _ => field.sample(&tick_forces[(tick - 7) as usize], x),
+            };
             let kick = if impulse { field.sample(&impulses, x) } else { [0.0; 3] };
             for a in 0..3 {
                 let want = v_before[a] + dt * (gravity[a] + force[a]) + kick[a];
@@ -420,9 +431,9 @@ fn matter_grid_update_applies_field_lattices() {
             }
         }
         eprintln!(
-            "matter_grid_update_applies_field_lattices: forces {forces_on}, tick {tick}, substep {substep}: worst {worst:e} m/s"
+            "matter_grid_update_applies_field_lattices: force lattices {lattices}, tick {tick}, substep {substep}: worst {worst:e} m/s"
         );
-        assert!(worst < 1e-5, "forces {forces_on}, tick {tick}, substep {substep}: GPU differs from CPU by {worst} m/s");
+        assert!(worst < 1e-5, "force lattices {lattices}, tick {tick}, substep {substep}: GPU differs from CPU by {worst} m/s");
     }
 }
 
@@ -485,6 +496,8 @@ fn matter_body_reaction_counts_field_velocity() {
     let field = FieldLattice::of(&lat);
     let inward = |k: f32| move |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3]) };
     let forces = field_values(&lat, &field, inward(1000.0));
+    // Tick 3 of a frame from tick 2 reads the second lattice; the first is a decoy.
+    let tick_forces: Vec<[f32; 4]> = [field_values(&lat, &field, inward(-700.0)), forces.clone()].concat();
     let impulses = field_values(&lat, &field, inward(2.0));
     let substeps = 4.0f32;
     let mut bench = Bench::new(
@@ -495,7 +508,7 @@ fn matter_body_reaction_counts_field_velocity() {
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
-            ("forces", HostArray::new::<f32>(4 * field.node_count() as u32)),
+            ("forces", HostArray::new::<f32>(8 * field.node_count() as u32)),
             ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
         ],
         &["reaction_out"],
@@ -505,7 +518,7 @@ fn matter_body_reaction_counts_field_velocity() {
     bench.fill(1, &[body]);
     bench.fill(2, &[shape]);
     bench.fill(3, &atlas);
-    bench.fill(5, &forces);
+    bench.fill(5, &tick_forces);
     bench.fill(6, &impulses);
     for (name, value) in [
         ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
@@ -513,6 +526,7 @@ fn matter_body_reaction_counts_field_velocity() {
         ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
         ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("body_count", 1.0),
         ("dynamic_count", 1.0), ("substeps_per_tick", substeps), ("impulse_tick", 3.0), ("tick_index", 3.0),
+        ("first_tick", 2.0),
     ] {
         bench.set(name, value);
     }
@@ -522,7 +536,7 @@ fn matter_body_reaction_counts_field_velocity() {
     let n = lat.nodes();
     // (case, forces on, substep): the impulse lands on substep 0 only.
     for (case, forces_on, substep) in [("still", false, 1.0f32), ("impulse", false, 0.0), ("force", true, 2.0)] {
-        bench.set("forces_on", f32::from(u8::from(forces_on)));
+        bench.set("force_lattices", if forces_on { 2.0 } else { 0.0 });
         bench.set("substep_in_tick", substep);
         bench.fill(4, &[0i32; REACTION_WORDS as usize]);
         bench.run();

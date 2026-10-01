@@ -51,12 +51,12 @@ fn reaction_add(base: u32, value: vec3<f32>, key: u32) {
 }
 
 // The same reads as grid_update_forces and grid_update_impulses.
-fn body_reaction_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>) -> vec3<f32> {
+fn body_reaction_forces(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: vec3<u32>, base: u32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var k = 0u; k < 8u; k = k + 1u) {
         let c = liquid_field_corner(x, origin, spacing, dims, k);
         let w = c.index * 4u;
-        sum = sum + vec3<f32>(buf_forces[w], buf_forces[w + 1u], buf_forces[w + 2u]) * c.weight;
+        sum = sum + vec3<f32>(buf_forces[base + w], buf_forces[base + w + 1u], buf_forces[base + w + 2u]) * c.weight;
     }
     return sum;
 }
@@ -98,8 +98,9 @@ fn body(
     field_nodes_y: i32,
     field_nodes_z: i32,
     field_spacing: f32,
-    forces_on: i32,
+    force_lattices: i32,
     impulse_tick: i32,
+    first_tick: i32,
 ) {
     let m = e_grid.velocity_mass.w;
     if !(m > 0.0) {
@@ -111,8 +112,9 @@ fn body(
     let x = origin + vec3<f32>(coord) * cell_size;
     let field_dims = vec3<u32>(u32(field_nodes_x), u32(field_nodes_y), u32(field_nodes_z));
     var accel = vec3<f32>(gravity_x, gravity, gravity_z);
-    if forces_on != 0 {
-        accel = accel + body_reaction_forces(x, origin, field_spacing, field_dims);
+    if force_lattices > 0 {
+        let base = liquid_field_force_base(tick_index, first_tick, force_lattices, field_dims);
+        accel = accel + body_reaction_forces(x, origin, field_spacing, field_dims, base);
     }
     var v = e_grid.velocity_before.xyz + step_dt * accel;
     if tick_index == impulse_tick && substep_in_tick == 0 {

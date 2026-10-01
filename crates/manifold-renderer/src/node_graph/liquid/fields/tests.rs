@@ -30,6 +30,80 @@ fn receipts(impulses: &mut LiquidImpulses) -> Vec<AppliedEvent<ResolvedNodeImpul
     out
 }
 
+/// A clock's first frame: a restart at time 0 that runs no tick.
+fn still() -> ClockFrame {
+    LiquidClock::default().advance(0.0, TICK, 1.0, 0.0, false, false)
+}
+
+/// Run a live clock at `frames_per_tick` ticks a frame under a field whose
+/// strength moves linearly with transport, and collect each tick's lattice.
+fn tick_lattices(frames_per_tick: u32, ticks: u64) -> Vec<Vec<[f32; 4]>> {
+    let lattice = lattice();
+    let mut clock = LiquidClock::default();
+    let mut fields = LiquidFields::default();
+    let impulses = LiquidImpulses::default();
+    let interval = f64::from(frames_per_tick) * TICK;
+    let mut out = Vec::new();
+    let mut transport = 0.0;
+    while (out.len() as u64) < ticks {
+        let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
+        // Dyadic values, so interpolating between frames is exact.
+        let strength = 0.25 * (transport / TICK).round() as f32;
+        let field = FieldValue::uniform([1.0, -2.0, 0.5]).unwrap().scaled(strength).unwrap();
+        let field_frame = fields.prepare(lattice, Some(&field), &frame, &impulses).unwrap();
+        if frame.ticks > 0 {
+            assert_eq!(field_frame.force_lattices, frame.ticks, "a moving field gives each tick its lattice");
+            assert_eq!(first_tick(&frame), out.len() as u64);
+            out.extend(fields.forces().chunks_exact(lattice.node_count()).map(<[_]>::to_vec));
+        }
+        transport += interval;
+    }
+    out.truncate(ticks as usize);
+    out
+}
+
+/// BUG-dzwl (per-tick force lattices): tick k reads the field at its own
+/// start, so a moving field gives identical lattices at 60 and 30 fps.
+#[test]
+fn liquid_force_lattices_match_across_frame_rates() {
+    let at_60 = tick_lattices(1, 12);
+    let at_30 = tick_lattices(2, 12);
+    for (tick, (a, b)) in at_60.iter().zip(&at_30).enumerate() {
+        assert_eq!(a, b, "tick {tick}");
+        let want = 0.25 * tick as f32;
+        assert_eq!(a[0], [want, -2.0 * want, 0.5 * want, 0.0], "tick {tick} reads the field at its start");
+    }
+}
+
+/// BUG-cykz (receipts only for ticks that ran): a frame whose fields fail
+/// never commits, so its hit is discarded with a receipt, never "applied".
+#[test]
+fn liquid_impulse_failed_frame_discards() {
+    let mut clock = LiquidClock::default();
+    let mut impulses = LiquidImpulses::default();
+    frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
+    frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
+    let stamp = impulses.stamp(TICK, 1).unwrap();
+    impulses
+        .enqueue(stamp, fluid(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()), None)
+        .unwrap();
+    let next = frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
+    assert_eq!(impulses.impulse_tick(), Some(1), "the hit's tick began");
+    let broken = FieldValue::uniform([f32::MAX, 0.0, 0.0]).unwrap().scaled(f32::MAX).unwrap();
+    let error = LiquidFields::default().prepare(lattice(), Some(&broken), &next, &impulses).unwrap_err();
+    assert!(error.contains("not finite"), "{error}");
+    // The domain never reaches commit_frame; draining is the backstop.
+    assert!(receipts(&mut impulses).is_empty());
+    let mut discarded = Vec::new();
+    impulses.drain_discarded(&mut |stamp| discarded.push(stamp));
+    assert_eq!(discarded, vec![stamp]);
+    // A later good frame neither applies nor replays it.
+    frame(&mut clock, &mut impulses, 3.0 * TICK, TICK, 1.0);
+    assert_eq!(impulses.impulse_tick(), None);
+    impulses.commit_frame();
+    assert!(receipts(&mut impulses).is_empty());
+}
+
 #[test]
 fn liquid_field_lattice_covers_the_solver_lattice() {
     let lattice = lattice();
@@ -55,8 +129,9 @@ fn liquid_force_lattice_matches_field() {
         .unwrap();
     let lattice = lattice();
     let mut fields = LiquidFields::default();
-    let frame = fields.prepare(lattice, Some(&field), &LiquidImpulses::default()).unwrap();
-    assert!(frame.forces_on);
+    let still = still();
+    let frame = fields.prepare(lattice, Some(&field), &still, &LiquidImpulses::default()).unwrap();
+    assert_eq!(frame.force_lattices, 1);
     assert_eq!(frame.impulse_tick, None);
     let [nx, ny, nz] = lattice.nodes().map(|n| n as usize);
     for z in 0..nz {
@@ -89,16 +164,18 @@ fn liquid_force_lattice_matches_field() {
     }
     // An unchanged field is not resampled; no field turns forces off.
     fields.forces_dirty = false;
-    fields.prepare(lattice, Some(&field), &LiquidImpulses::default()).unwrap();
+    fields.prepare(lattice, Some(&field), &still, &LiquidImpulses::default()).unwrap();
     assert!(!fields.forces_dirty);
-    assert!(!fields.prepare(lattice, None, &LiquidImpulses::default()).unwrap().forces_on);
+    let off = fields.prepare(lattice, None, &still, &LiquidImpulses::default()).unwrap();
+    assert_eq!(off.force_lattices, 0);
+    assert!(fields.forces().is_empty());
 }
 
 #[test]
 fn liquid_force_lattice_refuses_a_non_finite_field() {
     let field = FieldValue::uniform([f32::MAX, 0.0, 0.0]).unwrap().scaled(f32::MAX).unwrap();
     let error = LiquidFields::default()
-        .prepare(lattice(), Some(&field), &LiquidImpulses::default())
+        .prepare(lattice(), Some(&field), &still(), &LiquidImpulses::default())
         .unwrap_err();
     assert!(error.contains("not finite"), "{error}");
 }
@@ -119,7 +196,8 @@ fn liquid_impulse_once_per_tick_across_substeps() {
     assert_eq!(impulses.impulse_tick(), Some(1));
     let mut fields = LiquidFields::default();
     let lattice = lattice();
-    let field_frame = fields.prepare(lattice, None, &impulses).unwrap();
+    let field_frame = fields.prepare(lattice, None, &next, &impulses).unwrap();
+    impulses.commit_frame();
     assert_eq!(field_frame.impulse_tick, Some(1));
     assert!(fields.impulses().iter().all(|v| *v == [2.0, 0.0, 0.0, 0.0]));
     // The atoms' gate: the impulse tick's first substep, and nothing else.
@@ -134,9 +212,10 @@ fn liquid_impulse_once_per_tick_across_substeps() {
     assert_eq!(delivered[0].applied.tick, 1);
     assert_eq!(delivered[0].lateness, Seconds(0.0));
     // The following frame carries no impulse and reuses no receipt.
-    frame(&mut clock, &mut impulses, 4.0 * TICK, TICK, 1.0);
+    let after = frame(&mut clock, &mut impulses, 4.0 * TICK, TICK, 1.0);
     assert_eq!(impulses.impulse_tick(), None);
-    assert_eq!(fields.prepare(lattice, None, &impulses).unwrap().impulse_tick, None);
+    assert_eq!(fields.prepare(lattice, None, &after, &impulses).unwrap().impulse_tick, None);
+    impulses.commit_frame();
     assert!(receipts(&mut impulses).is_empty());
 }
 
@@ -154,6 +233,7 @@ fn liquid_impulse_waits_for_the_next_tick() {
     clock.set_tick_cap(Some(1));
     frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
     assert_eq!(impulses.impulse_tick(), Some(0));
+    impulses.commit_frame();
     assert_eq!(receipts(&mut impulses).len(), 1);
 }
 

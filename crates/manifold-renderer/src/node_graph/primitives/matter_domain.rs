@@ -23,7 +23,7 @@ use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::LiquidClock;
 use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
-use crate::node_graph::liquid::fields::{FieldLattice, LiquidFields, LiquidImpulses};
+use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
 use crate::node_graph::matter::{
@@ -313,7 +313,7 @@ crate::primitive! {
         dynamic_count: ScalarF32,
         field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
         field_spacing: ScalarF32,
-        forces_on: ScalarF32,
+        force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
         bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(i32),
@@ -456,7 +456,7 @@ const OUTPUTS: [&str; 52] = [
     "blocks_x", "blocks_y", "blocks_z", "block_center_x", "block_center_y", "block_center_z",
     "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
     "body_count", "body_rows", "first_tick", "dynamic_count", "field_nodes_x", "field_nodes_y",
-    "field_nodes_z", "field_spacing", "forces_on", "impulse_tick",
+    "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
 ];
 /// Wired role ports, in slot order (node.fluid_surface's names).
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
@@ -584,10 +584,20 @@ impl Primitive for MatterDomain {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         self.upload_bodies(ctx, fresh && self.rows_fresh, values[TICKS] > 0.0);
-        if let Some(gpu) = ctx.gpu.as_deref_mut()
-            && let Err(error) = self.fields.upload(gpu, offline_simulation())
-        {
-            ctx.error(error);
+        let uploaded = match ctx.gpu.as_deref_mut().map(|gpu| self.fields.upload(gpu, offline_simulation())) {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                ctx.error(error);
+                false
+            }
+            None => false,
+        };
+        // A hit is "applied" only once its tick's fields are on the GPU; a
+        // frame that held or failed discards its hits with a receipt.
+        if fresh && uploaded {
+            self.impulses.commit_frame();
+        } else {
+            self.impulses.abandon_frame();
         }
     }
 
@@ -807,7 +817,7 @@ impl MatterDomain {
         self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
         let consumed = frame.simulation_time - f64::from(frame.ticks) * TICK;
         self.bodies.observe(roles, frame.epoch, frame.target_time, consumed)?;
-        let first_tick = (consumed / TICK).round() as u64;
+        let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
         // fill seeds around the colliders' starting poses. Otherwise a frame
         // without ticks keeps the last rows as the bodies' poses.
@@ -874,7 +884,9 @@ impl MatterDomain {
             display_time = owner.completed() as f64 * TICK;
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
-        let field = self.fields.prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &self.impulses)?;
+        let field = self
+            .fields
+            .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &frame, &self.impulses)?;
 
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),

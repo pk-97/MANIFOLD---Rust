@@ -4,6 +4,14 @@
 // `corner.index * 4u + axis` and weights by `corner.weight`, so the fused
 // rename of `buf_*` reaches every read. `FieldLattice::sample` is the CPU twin.
 
+// Word offset of the force lattice tick `tick` reads: one lattice per tick
+// from `first_tick` while the field moves, one for every tick while it holds
+// still. `FieldFrame::force_lattices` is the CPU side.
+fn liquid_field_force_base(tick: i32, first_tick: i32, lattices: i32, dims: vec3<u32>) -> u32 {
+    let slot = clamp(tick - first_tick, 0, max(lattices - 1, 0));
+    return u32(slot) * dims.x * dims.y * dims.z * 4u;
+}
+
 struct LiquidFieldCorner {
     index: u32,
     weight: f32,

@@ -16478,12 +16478,17 @@
           "type": "f32"
         },
         {
-          "name": "forces_on",
+          "name": "force_lattices",
           "required": false,
           "type": "f32"
         },
         {
           "name": "impulse_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "first_tick",
           "required": false,
           "type": "f32"
         }
@@ -16719,11 +16724,11 @@
         },
         {
           "default": "0",
-          "label": "Forces On",
-          "name": "forces_on",
+          "label": "Force Lattices",
+          "name": "force_lattices",
           "range": [
             "0",
-            "1"
+            "16777216"
           ],
           "type": "int"
         },
@@ -16733,6 +16738,16 @@
           "name": "impulse_tick",
           "range": [
             "-1",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "First Tick",
+          "name": "first_tick",
+          "range": [
+            "0",
             "16777216"
           ],
           "type": "int"
@@ -17354,7 +17369,7 @@
           "type": "f32"
         },
         {
-          "name": "forces_on",
+          "name": "force_lattices",
           "type": "f32"
         },
         {
@@ -18222,12 +18237,17 @@
           "type": "f32"
         },
         {
-          "name": "forces_on",
+          "name": "force_lattices",
           "required": false,
           "type": "f32"
         },
         {
           "name": "impulse_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "first_tick",
           "required": false,
           "type": "f32"
         }
@@ -18443,11 +18463,11 @@
         },
         {
           "default": "0",
-          "label": "Forces On",
-          "name": "forces_on",
+          "label": "Force Lattices",
+          "name": "force_lattices",
           "range": [
             "0",
-            "1"
+            "16777216"
           ],
           "type": "int"
         },
@@ -18457,6 +18477,16 @@
           "name": "impulse_tick",
           "range": [
             "-1",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "First Tick",
+          "name": "first_tick",
+          "range": [
+            "0",
             "16777216"
           ],
           "type": "int"

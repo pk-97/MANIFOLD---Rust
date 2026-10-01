@@ -41,10 +41,10 @@ struct GridUpdateUniforms {
     field_nodes_y: i32,
     field_nodes_z: i32,
     field_spacing: f32,
-    forces_on: i32,
+    force_lattices: i32,
     impulse_tick: i32,
+    first_tick: i32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 crate::primitive! {
@@ -71,8 +71,9 @@ crate::primitive! {
         substep_in_tick: ScalarF32 optional,
         field_nodes_x: ScalarF32 optional, field_nodes_y: ScalarF32 optional, field_nodes_z: ScalarF32 optional,
         field_spacing: ScalarF32 optional,
-        forces_on: ScalarF32 optional,
+        force_lattices: ScalarF32 optional,
         impulse_tick: ScalarF32 optional,
+        first_tick: ScalarF32 optional,
     },
     outputs: {
         grid_out: Array(MatterGridNode),
@@ -98,11 +99,12 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("field_nodes_y"), label: "Field Nodes Y", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("field_nodes_z"), label: "Field Nodes Z", ty: ParamType::Int, default: ParamValue::Float(2.0), range: Some((2.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("field_spacing"), label: "Field Spacing", ty: ParamType::Float, default: ParamValue::Float(0.25), range: Some((1.0e-4, 400.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("forces_on"), label: "Forces On", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("force_lattices"), label: "Force Lattices", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("impulse_tick"), label: "Impulse Tick", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_216.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("first_tick"), label: "First Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces, the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt, tick_index and substep_in_tick from the substep boundary. forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, forces_on, impulse_tick) come from node.matter_domain; the field lattices start at the lattice minimum. Forces apply every substep while forces_on is 1; impulses apply once, on substep 0 of tick impulse_tick (−1: none). With bodies unwired no collider is read; with forces or impulses unwired neither is read.",
+    composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per lattice node, x fastest); accum is read as a gather (4 words per node). Gravity, closed faces, the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt, tick_index and substep_in_tick from the substep boundary. forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) come from node.matter_domain; the field lattices start at the lattice minimum. Every substep adds the force lattice of its tick: one lattice per tick from first_tick, or one for all ticks when force_lattices is 1 (0: no forces); impulses apply once, on substep 0 of tick impulse_tick (−1: none). With bodies unwired no collider is read; with forces or impulses unwired neither is read.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
     picker: { label: "Matter Grid Update", category: Atom },
     summary: "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",
@@ -120,8 +122,9 @@ crate::primitive! {
 pub(crate) struct FieldBinding<'a> {
     pub nodes: [i32; 3],
     pub spacing: f32,
-    pub forces_on: i32,
+    pub force_lattices: i32,
     pub impulse_tick: i32,
+    pub first_tick: i32,
     pub forces: Option<&'a manifold_gpu::GpuBuffer>,
     pub impulses: Option<&'a manifold_gpu::GpuBuffer>,
 }
@@ -136,21 +139,25 @@ impl<'a> FieldBinding<'a> {
         let nodes = ["field_nodes_x", "field_nodes_y", "field_nodes_z"]
             .map(|name| ctx.scalar_or_param(name, 2.0).round().max(2.0) as i32);
         let spacing = ctx.scalar_or_param("field_spacing", 0.25);
-        let forces_on = i32::from(forces.is_some() && ctx.scalar_or_param("forces_on", 0.0) >= 0.5);
+        let force_lattices =
+            if forces.is_some() { ctx.scalar_or_param("force_lattices", 0.0).round().max(0.0) as i32 } else { 0 };
         let impulse_tick = if impulses.is_some() { ctx.scalar_or_param("impulse_tick", -1.0).round().max(-1.0) as i32 } else { -1 };
+        let first_tick = ctx.scalar_or_param("first_tick", 0.0).round().max(0.0) as i32;
         let lattice_bytes = nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
-        for (name, buffer, used) in [("forces", forces, forces_on != 0), ("impulses", impulses, impulse_tick >= 0)] {
-            if used && buffer.is_some_and(|buffer| buffer.size < lattice_bytes) {
+        for (name, buffer, lattices) in
+            [("forces", forces, force_lattices.max(0) as u64), ("impulses", impulses, u64::from(impulse_tick >= 0))]
+        {
+            if lattices > 0 && buffer.is_some_and(|buffer| buffer.size < lattices * lattice_bytes) {
                 return Err(format!(
-                    "{atom}: the {name} lattice holds fewer than the {} × {} × {} field nodes; wire node.matter_domain's {name} and field scalars",
+                    "{atom}: the {name} buffer holds fewer than {lattices} lattice(s) of {} × {} × {} field nodes; wire node.matter_domain's {name} and field scalars",
                     nodes[0], nodes[1], nodes[2]
                 ));
             }
         }
-        if (forces_on != 0 || impulse_tick >= 0) && !(spacing.is_finite() && spacing > 0.0) {
+        if (force_lattices > 0 || impulse_tick >= 0) && !(spacing.is_finite() && spacing > 0.0) {
             return Err(format!("{atom}: field_spacing must be positive"));
         }
-        Ok(Self { nodes, spacing, forces_on, impulse_tick, forces, impulses })
+        Ok(Self { nodes, spacing, force_lattices, impulse_tick, first_tick, forces, impulses })
     }
 }
 
@@ -243,12 +250,12 @@ impl Primitive for MatterGridUpdate {
             field_nodes_y: field.nodes[1],
             field_nodes_z: field.nodes[2],
             field_spacing: field.spacing,
-            forces_on: field.forces_on,
+            force_lattices: field.force_lattices,
             impulse_tick: field.impulse_tick,
+            first_tick: field.first_tick,
             dispatch_count: nodes,
-            _pad0: 0,
         };
-        // An unwired lattice is never read (forces_on 0, impulse_tick −1).
+        // An unwired lattice is never read (force_lattices 0, impulse_tick −1).
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
@@ -283,7 +290,7 @@ mod tests {
         assert!(wgsl.contains("var<storage, read> buf_accum: array<i32>"), "{wgsl}");
         assert!(wgsl.contains("buf_grid_out[idx] = body(idx, params.dispatch_count, e_grid,"), "{wgsl}");
         assert_eq!(std::mem::size_of::<GridUpdateUniforms>(), 96);
-        assert!(wgsl.contains("impulse_tick: i32,\n    dispatch_count: u32,\n    _pad0: u32,"), "{wgsl}");
+        assert!(wgsl.contains("first_tick: i32,\n    dispatch_count: u32,\n}"), "{wgsl}");
         for binding in ["buf_bodies", "buf_shapes", "buf_atlas: array<u32>", "buf_forces: array<f32>", "buf_impulses: array<f32>"] {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
