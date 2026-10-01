@@ -170,7 +170,7 @@ impl Appender {
 /// `render_def` of `scene` with its faces published, which for the Dam Break
 /// at 64 is the shipped preset with its Whitewater group. The group's reports
 /// are probed by name, the frame's particle count as `count`.
-fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
+pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
     let mut g = Appender::new(render_def(scene.with_faces()));
     let group = g.id("whitewater");
     for report in LIFECYCLE_REPORTS {
@@ -206,7 +206,7 @@ fn flip_def(whitewater: bool) -> EffectGraphDef {
 }
 
 /// One preset on the app's generator path, frame by frame at 60 fps.
-struct Show {
+pub(super) struct Show {
     device: crate::TestDevice,
     runtime: PresetRuntime,
     target: RenderTarget,
@@ -225,7 +225,7 @@ struct Show {
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
-struct Frame {
+pub(super) struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
     whitewater_ms: Vec<f64>,
@@ -234,7 +234,7 @@ struct Frame {
 }
 
 impl Show {
-    fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
+    pub(super) fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(ScalarProbe::new()));
@@ -286,7 +286,7 @@ impl Show {
 
     /// One frame 1/60 s on. Metal's autoreleased objects drain per frame, as
     /// the content thread drains them.
-    fn frame(&mut self, profile: bool) -> Frame {
+    pub(super) fn frame(&mut self, profile: bool) -> Frame {
         objc2::rc::autoreleasepool(|_| self.frame_inner(profile))
     }
 
@@ -341,7 +341,7 @@ impl Show {
     /// The first frame, warm-up, then a trigger restart from the fill, as
     /// the GPU FLIP smoke runs start: the next frame is the liquid's first and
     /// counts as frame 1.
-    fn restart(&mut self) {
+    pub(super) fn restart(&mut self) {
         self.frame(false);
         let mut warmups = 0;
         while self.runtime.warmup_pending() && warmups < 600 {
@@ -369,8 +369,36 @@ impl Show {
         objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&self.device, &self.target.texture, self.size.0, self.size.1))
     }
 
-    fn errors(&self) -> Vec<String> {
+    pub(super) fn errors(&self) -> Vec<String> {
         self.runtime.errors().iter().map(|e| format!("{e:?}")).collect()
+    }
+
+    /// The id of the one node whose id ends with `suffix` (group members
+    /// carry their group's prefix).
+    pub(super) fn node_named(&self, suffix: &str) -> String {
+        let ends =
+            |id: &str| id.strip_suffix(suffix).is_some_and(|head| head.chars().last().is_none_or(|c| !c.is_alphanumeric() && c != '_'));
+        let found: Vec<&str> = self.runtime.graph.nodes().map(|n| n.node_id.as_str()).filter(|id| ends(id)).collect();
+        assert_eq!(found.len(), 1, "one node ends with {suffix}: {found:?}");
+        found[0].to_string()
+    }
+
+    /// Hold every array the next frames write, for `dumped`.
+    pub(super) fn set_dump_all(&mut self, on: bool) {
+        self.runtime.set_dump_all(on);
+    }
+
+    /// The first `len` records the named held node wrote on `port` this frame.
+    pub(super) fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
+        let arrays = self.runtime.dump_arrays_all();
+        let array = arrays
+            .iter()
+            .find(|a| a.name == name && a.port == port)
+            .unwrap_or_else(|| panic!("{name}.{port} is not held; held: {:?}", arrays.iter().map(|a| format!("{}.{}", a.name, a.port)).collect::<Vec<_>>()));
+        assert!(array.buffer.size() as usize >= len * std::mem::size_of::<T>(), "{name}.{port} is shorter than {len} records");
+        let ptr = array.buffer.mapped_ptr().expect("shared storage");
+        // SAFETY: the frame completed and the buffer holds `len` records.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
     }
 
     /// Bytes of the storage the named node provides on `port`; none, 0.
@@ -947,20 +975,6 @@ mod emitter_oracle {
         curvature: Vec<KnownValue>,
         cells: Vec<u32>,
         solid: Vec<f32>,
-    }
-
-    impl Show {
-        fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
-            let arrays = self.runtime.dump_arrays_all();
-            let array = arrays
-                .iter()
-                .find(|a| a.name == name && a.port == port)
-                .unwrap_or_else(|| panic!("{name}.{port} is not held; held: {:?}", arrays.iter().map(|a| format!("{}.{}", a.name, a.port)).collect::<Vec<_>>()));
-            assert!(array.buffer.size() as usize >= len * std::mem::size_of::<T>(), "{name}.{port} is shorter than {len} records");
-            let ptr = array.buffer.mapped_ptr().expect("shared storage");
-            // SAFETY: the frame completed and the buffer holds `len` records.
-            unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
-        }
     }
 
     fn cells(grid: GridBox) -> u32 {

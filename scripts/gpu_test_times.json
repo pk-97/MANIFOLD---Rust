@@ -7,6 +7,7 @@
     "matter_look::matter_momentum_conserved_free_blob": 173.8,
     "matter_look::matter_look_splash_retention": 156.3,
     "matter_look::matter_look_volume_drift": 117.4,
+    "node_graph::primitives::liquid_blocks_tests::surface_crossings_block_skip_timing_on_dam_break": 67.3,
     "rt_dynamic_catalog::rt_dynamic_catalog_all_stock_and_compositions": 23.5,
     "encode_replay::encode_replay_parity": 22.1,
     "cinematic_scene_tail::import_tail_is_byte_clean_passthrough_at_neutral_lens": 21.8,

@@ -144,15 +144,23 @@ mod tests {
     use crate::node_graph::whitewater::MAX_REFINEMENT;
     use crate::node_graph::primitives::particle_volume::refined_nodes;
 
-    /// At 64 the 70³ cells make 18³ blocks; the output, sized from the solid
-    /// array or the params, holds them, and every read of the last block
-    /// lands inside water, solid and the level set at every refinement.
+    /// At Resolution 64 the 70³ cells make 18³ blocks, at 128 the 134³ cells
+    /// make 34³; the output, sized from the solid array or the params, holds
+    /// them, and every read of the last block lands inside water, solid and
+    /// the level set at every refinement. Proven here before any GPU run at
+    /// either size.
     #[test]
-    fn liquid_block_extents_at_64() {
-        let nodes = LiquidLattice::from_layout(&domain_layout(None, 4.0, 64).expect("layout")).nodes();
+    fn liquid_block_extents_at_64_and_128() {
+        for (resolution, side, workgroups) in [(64, 18u64, 23), (128, 34, 154)] {
+            block_extents(resolution, side, workgroups);
+        }
+    }
+
+    fn block_extents(resolution: u32, side: u64, workgroups: u64) {
+        let nodes = LiquidLattice::from_layout(&domain_layout(None, 4.0, resolution).expect("layout")).nodes();
         let cells = grid_cells(nodes).expect("cells");
         let blocks = block_total(cells);
-        assert_eq!(blocks, 18 * 18 * 18);
+        assert_eq!(blocks, side.pow(3), "Resolution {resolution}: {cells:?} cells");
         let mut params = ParamValues::default();
         for (name, n) in ["nodes_x", "nodes_y", "nodes_z"].into_iter().zip(nodes) {
             params.insert(name.into(), ParamValue::Float(n as f32));
@@ -161,6 +169,10 @@ mod tests {
         let by_solid = LiquidBlocks::new().array_output_capacity("out", &params, &[("solid", cell_total(nodes) as u32)]).expect("capacity");
         assert_eq!(u64::from(by_params), blocks);
         assert!(u64::from(by_solid) >= blocks);
+        // The map's consumer writes one crossing a cell and reads the same
+        // solid and level-set footprints checked below.
+        let crossings = super::super::surface_crossings::SurfaceCrossings::new().array_output_capacity("out", &params, &[]).expect("crossings");
+        assert_eq!(u64::from(crossings), cell_total(cells), "Resolution {resolution}: one crossing a cell");
         // The last block's far closed corner is the lattice's last node.
         let last_cell = cells.map(|n| u64::from(n - 1));
         assert!(last_cell[0] + u64::from(cells[0]) * (last_cell[1] + u64::from(cells[1]) * last_cell[2]) < cell_total(cells));
@@ -169,8 +181,8 @@ mod tests {
             assert_eq!(refinement(nodes, level), Ok(s));
             let far = cells.map(|n| u64::from(n * s));
             let n = level.map(u64::from);
-            assert!(far[0] + n[0] * (far[1] + n[1] * far[2]) < cell_total(level), "Surface Detail {s}");
+            assert!(far[0] + n[0] * (far[1] + n[1] * far[2]) < cell_total(level), "Resolution {resolution}, Surface Detail {s}");
         }
-        assert_eq!(blocks.div_ceil(256), 23, "workgroups per map");
+        assert_eq!(blocks.div_ceil(256), workgroups, "Resolution {resolution}: workgroups per map");
     }
 }
