@@ -166,7 +166,23 @@ struct Prepared {
 }
 
 fn prepare(row: &LiquidSolverRow, def: &EffectGraphDef, registry: &PrimitiveRegistry, dry: bool) -> Prepared {
-    let mut def = manifold_core::flatten::flatten_groups(def).expect("a liquid scene flattens");
+    // Flattening refuses modifier data, so it rides around the flatten; the
+    // runtime expands it, and its refs name top-level scene nodes, which
+    // keep their ids.
+    let mut bare = def.clone();
+    let modifiers = std::mem::take(&mut bare.scene_modifiers);
+    let is_modifier = |target: &BindingTarget| matches!(target, BindingTarget::SceneModifier { .. });
+    let modifier_bindings: Vec<_> = bare.preset_metadata.as_mut().map_or_else(Vec::new, |metadata| {
+        let (modifier, node): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut metadata.bindings).into_iter().partition(|binding| is_modifier(&binding.target));
+        metadata.bindings = node;
+        modifier
+    });
+    let mut def = manifold_core::flatten::flatten_groups(&bare).expect("a liquid scene flattens");
+    def.scene_modifiers = modifiers;
+    if let Some(metadata) = def.preset_metadata.as_mut() {
+        metadata.bindings.extend(modifier_bindings);
+    }
     let outputs = |type_id: &str| -> Vec<String> {
         registry
             .construct(type_id)
@@ -933,15 +949,128 @@ fn liquid_pause_holds_frames() {
     }
 }
 
-/// Section 3.4 (Clock, pause, speed, reset, export) has pause discard
-/// impulses; no GPU check exists until P8 routes impulses to GPU liquids, so
-/// every row must name its exemption.
+/// `def` with a UniformForce impulse modifier aimed at the water, and the
+/// binding id that fires it.
+fn with_impulse(def: &EffectGraphDef) -> (EffectGraphDef, String) {
+    use manifold_core::NodeId;
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    let mut recipe: EffectGraphDef =
+        serde_json::from_str(include_str!("../../assets/scene-modifier-presets/UniformForce.json")).unwrap();
+    let metadata = recipe.preset_metadata.as_mut().unwrap();
+    for (id, value) in [("strength", 0.0), ("impulse_strength", 3.0), ("direction_x", 1.0), ("direction_y", 0.0)] {
+        metadata.params.iter_mut().find(|param| param.id == id).unwrap().default_value = value;
+        metadata.bindings.iter_mut().find(|binding| binding.id == id).unwrap().default_value = value;
+    }
+    let top = |node: &str| SceneNodeRef { scope: vec![], node: NodeId::new(node) };
+    let instance = manifold_renderer::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        def,
+        &recipe,
+        NodeId::new("impulse"),
+        top("scene"),
+        SceneTargetSelection::Explicit { objects: vec![top("water_object")] },
+    )
+    .expect("the impulse modifier targets the water");
+    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(def, 0, instance).unwrap().graph;
+    let fire = def
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| matches!(&binding.target, BindingTarget::SceneModifier { param_id, .. } if param_id == "fire"))
+        .expect("the modifier exposes Fire")
+        .id
+        .clone();
+    (def, fire)
+}
+
+impl LiquidRun {
+    /// Fire `param` at the current transport position.
+    fn fire(&mut self, param: &str, sequence: &mut u64) {
+        let seconds = f64::from(self.transport) * TICK;
+        let source = manifold_renderer::node_graph::FrameTime {
+            seconds: manifold_core::Seconds(seconds),
+            beats: manifold_core::Beats(seconds * 2.0),
+            delta: manifold_core::Seconds::ZERO,
+            frame_count: i64::from(self.frame),
+        };
+        let fired = self.runtime.fire_scene_impulse(param, source, sequence);
+        assert_eq!(fired, Ok(true), "{}: the impulse was not accepted", self.domain_type);
+    }
+
+    fn applied_receipts(&mut self) -> usize {
+        let mut count = 0;
+        self.runtime.drain_scene_impulses(|_, _| count += 1);
+        count
+    }
+
+    fn discarded_receipts(&mut self) -> usize {
+        let mut count = 0;
+        self.runtime.drain_discarded_scene_impulses(|_, _| count += 1);
+        count
+    }
+}
+
+/// I6: a hit fired while the liquid is held is discarded at once, never
+/// moves the held frame, and never lands on resume: the resumed liquid is
+/// bit-equal to a run that was never hit. The same hit fired while playing
+/// lands exactly once, so the route is live.
 #[test]
 fn liquid_pause_discards_impulses() {
-    for row in LIQUID_SOLVERS {
-        let reason = row.exemption(Check::PauseDiscardsImpulses);
-        assert!(reason.is_some(), "{}: pause-discards-impulses has no GPU check until P8", row.type_id);
-        eprintln!("PauseDiscardsImpulses: {} is exempt: {}", row.type_id, reason.unwrap_or_default());
+    for row in running(Check::PauseDiscardsImpulses) {
+        for &fixture in Check::PauseDiscardsImpulses.fixtures(row.coupled) {
+            let (def, fire) = with_impulse(&scene(row, fixture));
+            let mut hit = LiquidRun::offline(row, def.clone(), 1);
+            let mut control = LiquidRun::offline(row, def, 1);
+            let mut sequence = 0;
+            assert!(hit.steps(PLAY).get("count_b") > 0.0, "{} {fixture:?}: no liquid published", row.type_id);
+            control.steps(PLAY);
+            hit.hold();
+            control.hold();
+            let held = (hit.frame_words("particles_a"), hit.frame_words("particles_b"));
+
+            hit.fire(&fire, &mut sequence);
+            assert_eq!(hit.discarded_receipts(), 1, "{}: a held hit must be discarded at once", row.type_id);
+            for frame in 1..=HOLD {
+                hit.hold();
+                control.hold();
+                for (port, before) in [("particles_a", &held.0), ("particles_b", &held.1)] {
+                    if let Some((i, x, y)) = first_difference(&hit.frame_words(port), before) {
+                        panic!("{}: held frame {frame} after the hit changed {port} at word {i}: {x:#010x} against {y:#010x}", row.type_id);
+                    }
+                }
+            }
+            for frame in 1..=PLAY {
+                hit.step();
+                control.step();
+                assert_eq!(hit.applied_receipts(), 0, "{}: resumed frame {frame} applied a discarded hit", row.type_id);
+                assert_eq!(hit.discarded_receipts(), 0, "{}: resumed frame {frame} discarded again", row.type_id);
+                for port in ["particles_a", "particles_b"] {
+                    if let Some((i, x, y)) = first_difference(&hit.frame_words(port), &control.frame_words(port)) {
+                        panic!("{}: resumed frame {frame} differs from the unhit run at {port} word {i}: {x:#010x} against {y:#010x}", row.type_id);
+                    }
+                }
+            }
+
+            hit.fire(&fire, &mut sequence);
+            let mut applied = 0;
+            for _ in 0..4 {
+                hit.step();
+                control.step();
+                applied += hit.applied_receipts();
+            }
+            assert_eq!(applied, 1, "{}: a hit fired while playing must land exactly once", row.type_id);
+            assert_eq!(hit.discarded_receipts(), 0, "{}: a playing hit was discarded", row.type_id);
+            assert!(
+                first_difference(&hit.frame_words("particles_b"), &control.frame_words("particles_b")).is_some(),
+                "{}: a hit fired while playing did not move the liquid",
+                row.type_id
+            );
+            eprintln!(
+                "liquid_pause_discards_impulses {} {fixture:?}: held hit discarded, {PLAY} resumed frames equal the unhit run, playing hit landed once",
+                row.type_id
+            );
+        }
     }
 }
 

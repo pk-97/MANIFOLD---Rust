@@ -28,6 +28,8 @@ pub(super) struct SceneImpulses {
 pub struct SceneImpulseDiagnostics {
     pub started: u64,
     pub late: u64,
+    /// Hits fired while the simulation was held (pause, Speed 0).
+    pub discarded: u64,
 }
 
 fn invalid(id: &NodeId, detail: String) -> SceneModifierExpandError {

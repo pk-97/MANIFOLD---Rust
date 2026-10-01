@@ -19300,6 +19300,16 @@
           "type": "Array"
         },
         {
+          "name": "forces",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "impulses",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "nodes_x",
           "required": false,
           "type": "f32"
@@ -19386,6 +19396,41 @@
         },
         {
           "name": "dynamic_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_spacing",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "force_lattices",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "impulse_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "first_tick",
           "required": false,
           "type": "f32"
         }
@@ -19568,6 +19613,86 @@
             "4096"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Dynamic Bodies",
+          "name": "dynamic_count",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Field Nodes X",
+          "name": "field_nodes_x",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Field Nodes Y",
+          "name": "field_nodes_y",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Field Nodes Z",
+          "name": "field_nodes_z",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0.25",
+          "label": "Field Spacing",
+          "name": "field_spacing",
+          "range": [
+            "0.0001",
+            "400"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Force Lattices",
+          "name": "force_lattices",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Impulse Tick",
+          "name": "impulse_tick",
+          "range": [
+            "-1",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "First Tick",
+          "name": "first_tick",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
         }
       ],
       "purpose": "Add the liquid's push on each dynamic body for this substep: repeat the grid's collider projection node by node and atomically add the momentum each body took from the node (and its turning moment about the body's centre of mass) to that body's reaction words, plus the same terms weighted by the substep's place in the tick.",
@@ -19656,6 +19781,11 @@
           "name": "liveliness",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "acceleration_field",
+          "required": false,
+          "type": "VectorField"
         },
         {
           "name": "role_0",
@@ -20165,6 +20295,30 @@
           "type": "f32"
         },
         {
+          "name": "field_nodes_x",
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_y",
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_z",
+          "type": "f32"
+        },
+        {
+          "name": "field_spacing",
+          "type": "f32"
+        },
+        {
+          "name": "force_lattices",
+          "type": "f32"
+        },
+        {
+          "name": "impulse_tick",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "bodies",
           "type": "Array"
@@ -20182,6 +20336,16 @@
         {
           "capacity": "fixed:1",
           "name": "reaction",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "forces",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "impulses",
           "type": "Array"
         }
       ],
@@ -21043,6 +21207,16 @@
           "type": "Array"
         },
         {
+          "name": "forces",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "impulses",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "nodes_x",
           "required": false,
           "type": "f32"
@@ -21109,6 +21283,51 @@
         },
         {
           "name": "body_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "tick_index",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "substep_in_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_nodes_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "field_spacing",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "force_lattices",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "impulse_tick",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "first_tick",
           "required": false,
           "type": "f32"
         }
@@ -21261,9 +21480,99 @@
             "64"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Tick",
+          "name": "tick_index",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Substep in Tick",
+          "name": "substep_in_tick",
+          "range": [
+            "0",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Field Nodes X",
+          "name": "field_nodes_x",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Field Nodes Y",
+          "name": "field_nodes_y",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Field Nodes Z",
+          "name": "field_nodes_z",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0.25",
+          "label": "Field Spacing",
+          "name": "field_spacing",
+          "range": [
+            "0.0001",
+            "400"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Force Lattices",
+          "name": "force_lattices",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "-1",
+          "label": "Impulse Tick",
+          "name": "impulse_tick",
+          "range": [
+            "-1",
+            "16777216"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "First Tick",
+          "name": "first_tick",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity, stop velocity into closed domain walls on the outer three nodes, project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
+      "purpose": "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity and the scene's acceleration field (read from a coarse force lattice), add the scene's impulses once on the first substep of their tick (from a coarse impulse lattice), stop velocity into closed domain walls on the outer three nodes, project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",

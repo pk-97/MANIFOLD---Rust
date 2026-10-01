@@ -1082,6 +1082,9 @@ impl GeneratorRenderer {
                         diagnostics.late = diagnostics.late.saturating_add(1);
                     }
                 });
+                layer_state.generator.drain_discarded_scene_impulses(|_, _| {
+                    diagnostics.discarded = diagnostics.discarded.saturating_add(1);
+                });
             }
         }
 

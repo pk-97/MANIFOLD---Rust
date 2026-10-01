@@ -8,6 +8,7 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_physics::sdf::signed_distance_lattice;
 use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
 use manifold_renderer::node_graph::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use manifold_renderer::node_graph::liquid::fields::FieldLattice;
 use manifold_renderer::node_graph::liquid::lattice::LiquidLattice;
 use manifold_renderer::node_graph::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, momentum_unit};
 use manifold_renderer::node_graph::{
@@ -329,6 +330,263 @@ fn matter_grid_update_projects_colliders() {
     eprintln!("matter_grid_update_projects_colliders: {projected} nodes projected, worst {worst:e} m/s");
     assert!(projected > 50, "the box projected few nodes: {projected}");
     assert!(worst < 1e-4, "GPU and CPU projections differ by {worst} m/s");
+}
+
+/// A force or impulse lattice over `lat` holding `f` at each field node.
+fn field_values(lat: &LiquidLattice, field: &FieldLattice, f: impl Fn([f32; 3]) -> [f32; 3]) -> Vec<[f32; 4]> {
+    let [nx, ny, _] = field.nodes().map(|n| n as usize);
+    (0..field.node_count())
+        .map(|i| {
+            let coord = [i % nx, (i / nx) % ny, i / (nx * ny)];
+            let v = f(std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * field.spacing()));
+            [v[0], v[1], v[2], 0.0]
+        })
+        .collect()
+}
+
+fn set_field(bench: &mut Bench, field: &FieldLattice) {
+    for (name, value) in [
+        ("field_nodes_x", field.nodes()[0] as f32), ("field_nodes_y", field.nodes()[1] as f32),
+        ("field_nodes_z", field.nodes()[2] as f32), ("field_spacing", field.spacing()),
+    ] {
+        bench.set(name, value);
+    }
+}
+
+/// Seam P8 (Forces and impulses for GPU liquids): the grid update adds
+/// dt·(g + forces(x)) every substep and impulses(x) once, on the impulse
+/// tick's first substep, each read from the domain's coarse lattices exactly
+/// as `FieldLattice::sample` reads them on the CPU.
+#[test]
+fn matter_grid_update_applies_field_lattices() {
+    let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let dx = lat.cell_size();
+    let dt = 1.0e-3f32;
+    let unit = momentum_unit(dx, f64::from(dt));
+    let scale = unit * (65_536.0 / 134_217_728.0);
+    let v0 = [0.4f32, -0.2, 0.1];
+    let m_raw = 8 * 65_536i32;
+    let to_raw = |v: f32| (v * m_raw as f32 / scale).round() as i32;
+    let nodes = lat.node_count() as usize;
+    let accum: Vec<i32> = (0..nodes).flat_map(|_| [to_raw(v0[0]), to_raw(v0[1]), to_raw(v0[2]), m_raw]).collect();
+    let field = FieldLattice::of(&lat);
+    // Not linear, so the trilinear weights matter. Two lattices, one per tick
+    // from tick 7, so each tick must read its own.
+    let tick_forces = [
+        field_values(&lat, &field, |p| [30.0 * p[1], -20.0 + 40.0 * p[0] * p[2], 15.0 * p[0]]),
+        field_values(&lat, &field, |p| [-12.0 * p[2], 25.0 * p[0] * p[1], 8.0 - 18.0 * p[1]]),
+    ];
+    let forces: Vec<[f32; 4]> = tick_forces.concat();
+    let impulses = field_values(&lat, &field, |p| [0.5 - p[2], 2.0 * p[0] * p[1], 0.8 * p[1]]);
+    let mut bench = Bench::new(
+        "node.matter_grid_update",
+        vec![
+            ("accum", HostArray::new::<i32>(accum.len() as u32)),
+            ("grid", HostArray::new::<MatterGridNode>(nodes as u32)),
+            ("forces", HostArray::new::<f32>(8 * field.node_count() as u32)),
+            ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
+        ],
+        &["grid_out"],
+        |_, _| {},
+    );
+    bench.fill(0, &accum);
+    bench.fill(2, &forces);
+    bench.fill(3, &impulses);
+    let gravity = [0.0f32, -9.81, 0.0];
+    for (name, value) in [
+        ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
+        ("cell_size", dx), ("step_dt", dt), ("gravity_x", gravity[0]), ("gravity", gravity[1]),
+        ("gravity_z", gravity[2]), ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
+        ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("impulse_tick", 7.0),
+        ("first_tick", 7.0),
+    ] {
+        bench.set(name, value);
+    }
+    set_field(&mut bench, &field);
+    let n = lat.nodes();
+    // (force lattices, tick, substep, impulse applied): with one lattice every
+    // tick reads it; with one per tick, tick 8 reads the second.
+    for (lattices, tick, substep, impulse) in
+        [(2, 7, 0, true), (2, 7, 1, false), (2, 8, 0, false), (1, 8, 0, false), (0, 7, 0, true), (0, 6, 0, false)]
+    {
+        bench.set("force_lattices", lattices as f32);
+        bench.set("tick_index", tick as f32);
+        bench.set("substep_in_tick", substep as f32);
+        bench.run();
+        let grid: Vec<MatterGridNode> = bench.read("grid_out");
+        let mut worst = 0.0f32;
+        for idx in 0..nodes {
+            let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
+            let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
+            let v_before: [f32; 3] = std::array::from_fn(|a| accum[idx * 4 + a] as f32 / m_raw as f32 * scale);
+            let force = match lattices {
+                0 => [0.0; 3],
+                1 => field.sample(&tick_forces[0], x),
+                _ => field.sample(&tick_forces[(tick - 7) as usize], x),
+            };
+            let kick = if impulse { field.sample(&impulses, x) } else { [0.0; 3] };
+            for a in 0..3 {
+                let want = v_before[a] + dt * (gravity[a] + force[a]) + kick[a];
+                worst = worst.max((grid[idx].velocity_mass[a] - want).abs());
+            }
+        }
+        eprintln!(
+            "matter_grid_update_applies_field_lattices: force lattices {lattices}, tick {tick}, substep {substep}: worst {worst:e} m/s"
+        );
+        assert!(worst < 1e-5, "force lattices {lattices}, tick {tick}, substep {substep}: GPU differs from CPU by {worst} m/s");
+    }
+}
+
+/// Inside the box, the outward normal at `x`, as `liquid_collider_project`
+/// takes it from the atlas.
+fn collider_normal(atlas: &[u32], shape: &LiquidShape, body: &LiquidBody, x: [f32; 3]) -> Option<[f32; 3]> {
+    let p = [body.position_inv_mass[0], body.position_inv_mass[1], body.position_inv_mass[2]];
+    let q = body.rotation;
+    let rel: [f32; 3] = std::array::from_fn(|a| x[a] - p[a]);
+    let local = rotate([-q[0], -q[1], -q[2], q[3]], rel);
+    let g: [f32; 3] = std::array::from_fn(|a| (local[a] / shape.scale_min[a] - shape.origin_spacing[a]) / shape.origin_spacing[3]);
+    let dims = [shape.dims_x, shape.dims_y, shape.dims_z];
+    if !(0..3).all(|a| g[a] >= 0.0 && g[a] <= (dims[a] - 1) as f32) || lattice_at(atlas, shape, g) >= 0.0 {
+        return None;
+    }
+    let d = |a: usize, s: f32| {
+        let mut h = g;
+        h[a] += s;
+        lattice_at(atlas, shape, h)
+    };
+    let grad: [f32; 3] = std::array::from_fn(|a| (d(a, 0.5) - d(a, -0.5)) / shape.scale_min[a]);
+    let world = rotate(q, grad);
+    let len = world.iter().map(|c| c * c).sum::<f32>().sqrt();
+    // A flat spot (the box's medial point) has no normal; the GPU skips it too.
+    (len > 0.0).then(|| world.map(|c| c / len))
+}
+
+/// Seam P8 (Forces and impulses for GPU liquids): the body reaction counts
+/// the velocity the grid update gave each node from the field lattices, so a
+/// dynamic body feels what a force or an impulse pushed into it. A still,
+/// frictionless box in a still grid: the field is the only velocity, and the
+/// words match Σ inv_mass·m·(v − v_projected) computed on the CPU.
+#[test]
+fn matter_body_reaction_counts_field_velocity() {
+    let lat = LiquidLattice::from_layout(&domain_layout(None, 1.0, 16).expect("unit domain"));
+    let dx = lat.cell_size();
+    let dt = 1.0e-3f32;
+    let unit = momentum_unit(dx, f64::from(dt));
+    let lattice = signed_distance_lattice(&box_mesh([0.2, 0.15, 0.1]), 0.4 / 32.0, 0.025).expect("box lattice");
+    let mut atlas = Vec::new();
+    pack_distance_atlas(&lattice.values, &mut atlas);
+    let shape = LiquidShape {
+        origin_spacing: [lattice.origin[0], lattice.origin[1], lattice.origin[2], lattice.spacing],
+        dims_x: lattice.dims[0],
+        dims_y: lattice.dims[1],
+        dims_z: lattice.dims[2],
+        atlas_offset: 0,
+        scale_min: [1.2, 1.0, 1.5, 1.0],
+    };
+    let angle = std::f32::consts::FRAC_PI_6;
+    let centre = [0.0f32, 0.5, 0.0];
+    let body = LiquidBody {
+        position_inv_mass: [centre[0], centre[1], centre[2], 2.0],
+        rotation: [0.0, (0.5 * angle).sin(), 0.0, (0.5 * angle).cos()],
+        ..LiquidBody::default()
+    };
+    let mass = 0.01f32;
+    let nodes = lat.node_count();
+    let grid = vec![MatterGridNode { velocity_mass: [0.0, 0.0, 0.0, mass], velocity_before: [0.0; 4] }; nodes as usize];
+    let field = FieldLattice::of(&lat);
+    let inward = |k: f32| move |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| k * (centre[a] - p[a]) + 0.1 * k * p[(a + 1) % 3]) };
+    let forces = field_values(&lat, &field, inward(1000.0));
+    // Tick 3 of a frame from tick 2 reads the second lattice; the first is a decoy.
+    let tick_forces: Vec<[f32; 4]> = [field_values(&lat, &field, inward(-700.0)), forces.clone()].concat();
+    let impulses = field_values(&lat, &field, inward(2.0));
+    let substeps = 4.0f32;
+    let mut bench = Bench::new(
+        "node.matter_body_reaction",
+        vec![
+            ("grid", HostArray::new::<MatterGridNode>(nodes)),
+            ("bodies", HostArray::new::<LiquidBody>(1)),
+            ("shapes", HostArray::new::<LiquidShape>(1)),
+            ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
+            ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
+            ("forces", HostArray::new::<f32>(8 * field.node_count() as u32)),
+            ("impulses", HostArray::new::<f32>(4 * field.node_count() as u32)),
+        ],
+        &["reaction_out"],
+        |_, _| {},
+    );
+    bench.fill(0, &grid);
+    bench.fill(1, &[body]);
+    bench.fill(2, &[shape]);
+    bench.fill(3, &atlas);
+    bench.fill(5, &tick_forces);
+    bench.fill(6, &impulses);
+    for (name, value) in [
+        ("nodes_x", lat.nodes()[0] as f32), ("nodes_y", lat.nodes()[1] as f32), ("nodes_z", lat.nodes()[2] as f32),
+        ("cell_size", dx), ("step_dt", dt), ("gravity_x", 0.0), ("gravity", 0.0), ("gravity_z", 0.0),
+        ("closed_faces", 0.0), ("momentum_unit", unit), ("lattice_min_x", lat.min()[0]),
+        ("lattice_min_y", lat.min()[1]), ("lattice_min_z", lat.min()[2]), ("body_count", 1.0),
+        ("dynamic_count", 1.0), ("substeps_per_tick", substeps), ("impulse_tick", 3.0), ("tick_index", 3.0),
+        ("first_tick", 2.0),
+    ] {
+        bench.set(name, value);
+    }
+    set_field(&mut bench, &field);
+    let counts = 16_777_216.0 / f64::from(unit);
+    let inv_mass = f64::from(body.position_inv_mass[3]);
+    let n = lat.nodes();
+    // (case, forces on, substep): the impulse lands on substep 0 only.
+    for (case, forces_on, substep) in [("still", false, 1.0f32), ("impulse", false, 0.0), ("force", true, 2.0)] {
+        bench.set("force_lattices", if forces_on { 2.0 } else { 0.0 });
+        bench.set("substep_in_tick", substep);
+        bench.fill(4, &[0i32; REACTION_WORDS as usize]);
+        bench.run();
+        let words: Vec<i32> = bench.read("reaction_out");
+        let (mut dv, mut dl, mut pushed) = ([0.0f64; 3], [0.0f64; 3], 0u32);
+        for idx in 0..nodes {
+            let coord = [idx % n[0], (idx / n[0]) % n[1], idx / (n[0] * n[1])];
+            let x: [f32; 3] = std::array::from_fn(|a| lat.min()[a] + coord[a] as f32 * dx);
+            let v: [f32; 3] = match case {
+                "impulse" => field.sample(&impulses, x),
+                "force" => field.sample(&forces, x).map(|f| dt * f),
+                _ => [0.0; 3],
+            };
+            let Some(normal) = collider_normal(&atlas, &shape, &body, x) else { continue };
+            let v_n: f32 = (0..3).map(|a| v[a] * normal[a]).sum();
+            if v_n >= 0.0 {
+                continue;
+            }
+            // A still frictionless body keeps the tangential part, so the
+            // node loses v_n·n.
+            pushed += 1;
+            let impulse: [f64; 3] = std::array::from_fn(|a| f64::from(mass) * f64::from(v_n * normal[a]));
+            let arm: [f64; 3] = std::array::from_fn(|a| f64::from(x[a] - centre[a]));
+            let moment = [
+                arm[1] * impulse[2] - arm[2] * impulse[1],
+                arm[2] * impulse[0] - arm[0] * impulse[2],
+                arm[0] * impulse[1] - arm[1] * impulse[0],
+            ];
+            for a in 0..3 {
+                dv[a] += inv_mass * impulse[a] * counts;
+                dl[a] += inv_mass * moment[a] / f64::from(dx) * counts;
+            }
+        }
+        let weight = f64::from(substep / substeps);
+        let expected: Vec<f64> = [dv, dv.map(|v| weight * v), dl, dl.map(|v| weight * v)].concat();
+        let worst = expected.iter().zip(&words).map(|(e, &w)| (f64::from(w) - e).abs()).fold(0.0, f64::max);
+        let size = dv.iter().map(|v| v * v).sum::<f64>().sqrt();
+        eprintln!(
+            "matter_body_reaction_counts_field_velocity {case}: {pushed} nodes pushed, |Σ Δv| {size:.0} counts, worst word {worst:.2} counts"
+        );
+        if case == "still" {
+            assert!(words.iter().all(|&w| w == 0), "a still grid pushes nothing: {words:?}");
+            continue;
+        }
+        assert!(pushed > 50, "{case}: the field pushed few nodes into the box: {pushed}");
+        assert!(size > 1.0e4, "{case}: the field moved little momentum: {dv:?}");
+        // Each add rounds by under one count, stochastically; the f32
+        // products add well under one more per word.
+        assert!(worst < f64::from(pushed) + 1.0, "{case}: reaction words {words:?} against {expected:?}");
+    }
 }
 
 /// BUG-n97i (coupled MPM loses momentum at the collider push-out), D30: the

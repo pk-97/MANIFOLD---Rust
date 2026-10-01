@@ -500,22 +500,36 @@ fn scene_physics_add_fluid_eighth_id_exhaustion_is_atomic() {
 
 fn gpu_template() -> LiquidTemplate {
     use manifold_core::effect_graph_def::{
-        GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface,
+        GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
     };
+    let port = |name: &str| InterfacePortDef { name: name.into(), port_type: "Any".into() };
     let mut live = node(1, "live_matter", GROUP_TYPE_ID);
     live.handle = Some("Live Matter".into());
     live.group = Some(Box::new(GroupDef {
-        interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
-        nodes: vec![node(1, "matter_domain", manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID)],
-        wires: vec![],
+        interface: GroupInterface { inputs: vec![], outputs: vec![port("frame")], params: vec![] },
+        // Dam Break Matter's Live Matter already owns one input sentinel.
+        nodes: vec![
+            node(1, "matter_domain", manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID),
+            node(2, "live_input", GROUP_INPUT_TYPE_ID),
+            node(3, "live_output", GROUP_OUTPUT_TYPE_ID),
+        ],
+        wires: vec![wire(1, "frame", 3, "frame")],
         tint: None,
     }));
     let mut surface = node(2, "liquid_surface", GROUP_TYPE_ID);
     surface.handle = Some("Liquid Surface".into());
     surface.group = Some(Box::new(GroupDef {
-        interface: GroupInterface { inputs: vec![], outputs: vec![], params: vec![] },
-        nodes: vec![node(1, "surface_mesh", "node.value"), node(2, "surface_out", "node.value")],
-        wires: vec![wire(1, "out", 2, "in")],
+        interface: GroupInterface {
+            inputs: vec![port("frame")],
+            outputs: vec![port("vertices")],
+            params: vec![],
+        },
+        nodes: vec![
+            node(1, "surface_mesh", "node.value"),
+            node(2, "surface_input", GROUP_INPUT_TYPE_ID),
+            node(3, "surface_output", GROUP_OUTPUT_TYPE_ID),
+        ],
+        wires: vec![wire(2, "frame", 1, "in"), wire(1, "out", 3, "vertices")],
         tint: None,
     }));
     let mut object = node(3, "fluid_object", "node.scene_object");
@@ -528,7 +542,71 @@ fn gpu_template() -> LiquidTemplate {
         output_node: 4,
         group_id_slot: 0,
         exposures: vec![TemplateExposure { node: 3, set: ExposureSet::Object, section: None }],
-        world_control_target: None,
+    }
+}
+
+/// The GPU template's domain sits inside Live Matter, so the World controls
+/// cross two group boundaries: fluid group, then Live Matter's own sentinel.
+#[test]
+fn scene_physics_add_fluid_wires_world_controls_into_nested_gpu_domain() {
+    use manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID;
+    use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
+
+    let def = render_scene_graph(0, false);
+    let (mut project, target) = project_with_graph(def.clone());
+    let mut cmd = command(target.clone(), def.clone());
+    cmd.template = gpu_template();
+    cmd.execute(&mut project);
+    assert!(cmd.was_applied(), "{:?}", cmd.rejection_reason());
+    let result = graph(&project, &target);
+    let world = result.nodes.iter().find(|node| node.type_id == "node.physics_world").unwrap();
+    let fluid_group = result.nodes.iter().find(|node| node.handle.as_deref() == Some("Fluid 1 Graph")).unwrap();
+    let outer = fluid_group.group.as_deref().unwrap();
+    let outer_input = outer.nodes.iter().find(|node| node.type_id == GROUP_INPUT_TYPE_ID).unwrap();
+    let live = outer.nodes.iter().find(|node| node.handle.as_deref() == Some("Fluid 1 Live Matter")).unwrap();
+    let inner = live.group.as_deref().unwrap();
+    let inner_inputs: Vec<_> = inner.nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID).collect();
+    assert_eq!(inner_inputs.len(), 1, "Live Matter's own sentinel is reused");
+    let domain = inner.nodes.iter().find(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
+    for (world_param, domain_param) in [("gravity_x", "gravity_x"), ("gravity_y", "gravity"),
+        ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
+    {
+        let source = result.wires.iter().find(|wire| wire.to_node == world.id && wire.to_port == world_param).unwrap();
+        assert!(result.wires.iter().any(|wire| wire.from_node == source.from_node && wire.from_port == source.from_port
+            && wire.to_node == fluid_group.id && wire.to_port == world_param), "{world_param} enters the fluid group");
+        assert!(outer.wires.iter().any(|wire| wire.from_node == outer_input.id && wire.from_port == world_param
+            && wire.to_node == live.id && wire.to_port == world_param), "{world_param} enters Live Matter");
+        assert!(inner.interface.inputs.iter().any(|port| port.name == world_param && port.port_type == "Scalar(F32)"));
+        assert!(inner.wires.iter().any(|wire| wire.from_node == inner_inputs[0].id && wire.from_port == world_param
+            && wire.to_node == domain.id && wire.to_port == domain_param), "{world_param} reaches the domain");
+    }
+    let flat = manifold_core::flatten::flatten_groups(result).expect("nested routing flattens");
+    let flat_domain = flat.nodes.iter().find(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
+    for port in ["gravity_x", "gravity", "gravity_z", "speed", "reset"] {
+        assert!(flat.wires.iter().any(|wire| wire.to_node == flat_domain.id && wire.to_port == port),
+            "flattened graph drives the domain's {port}");
+    }
+}
+
+#[test]
+fn scene_physics_add_fluid_rejects_a_template_without_one_liquid_domain() {
+    let def = render_scene_graph(0, false);
+    for domains in [0, 2] {
+        let mut template = flip_scene_fluid_template();
+        let fluid = template.nodes.iter().position(|node| node.type_id == FLIP_DOMAIN_TYPE_ID).unwrap();
+        if domains == 0 {
+            template.nodes[fluid].type_id = "node.value".into();
+        } else {
+            let mut second = template.nodes[fluid].clone();
+            second.id = 99;
+            template.nodes.push(second);
+        }
+        let (mut project, target) = project_with_graph(def.clone());
+        let mut cmd = command(target.clone(), def.clone());
+        cmd.template = template;
+        cmd.execute(&mut project);
+        assert!(!cmd.was_applied(), "{domains} domains");
+        assert_eq!(graph(&project, &target), &def);
     }
 }
 
