@@ -141,6 +141,7 @@
                     physics_imported: false,
                     fluid_role_available: false,
                     fluid_roles: Ok(Vec::new()),
+                    lattice: None,
                 })),
                 ObjectRowVm::Custom { index: 1 },
             ],
@@ -423,6 +424,24 @@
         assert!(texts.contains(&"Fluid role objects cannot be rigid bodies"));
         assert!(panel.object_enable_physics_ids.is_empty());
         assert!(panel.object_disable_physics_ids.is_empty());
+    }
+
+    /// Water reads its lattice as one line: the grid, the cell edge in
+    /// centimetres and the cell count (BUG-ejcb readout).
+    #[test]
+    fn water_shows_its_lattice_line() {
+        let mut vm = azalea_shaped_vm();
+        let ObjectRowVm::Known(row) = &mut vm.objects[0] else { unreachable!() };
+        row.lattice = Some(LatticeReadout { cells: [64, 32, 64], cell_size_m: 0.0625 });
+
+        let mut panel = ScenePanel::new();
+        panel.open();
+        panel.configure(SceneSetupState::Live(Box::new(vm)));
+        let mut tree = UITree::new();
+        panel.build_docked(&mut tree, Rect::new(0.0, 0.0, 400.0, 800.0));
+
+        let texts: Vec<&str> = tree.nodes().iter().filter_map(|node| node.text.as_deref()).collect();
+        assert!(texts.contains(&"Lattice 64 × 32 × 64 · 6.2 cm cells · 131072 cells"), "{texts:?}");
     }
 
     #[test]

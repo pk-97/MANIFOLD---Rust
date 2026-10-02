@@ -149,7 +149,9 @@
           "nth": 1
         }
       },
-      "check": "Exists"
+      "check": {
+        "TextEquals": "-0.02"
+      }
     }
   },
   {
@@ -214,7 +216,7 @@
         }
       },
       "check": {
-        "TextEquals": "0.00"
+        "TextEquals": "-0.02"
       }
     }
   },
