@@ -95,12 +95,13 @@ mod tests {
         let mut scene = RigidSceneInputs { gravity: [0.0, -9.81, 0.0], ..RigidSceneInputs::default() };
         scene.bodies[0] = Some(RigidBody {
             transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
-            mass: 32.0,
+            density: 500.0,
             bounce: 0.0,
             ..RigidBody::default()
         });
         let colliders = RigidImpulseTargets { bodies: 1, copies: false };
-        let mut owner = LiquidRigidOwner::new(&scene, colliders, 3, None).expect("owner");
+        let open = crate::node_graph::liquid::coupling::DomainWalls::default();
+        let mut owner = LiquidRigidOwner::new(&scene, open, colliders, 3, None).expect("owner");
         let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };
         let mut words = [0i32; 16];
         words[1] = (16_777_216.0 / f64::from(scale.unit)) as i32;

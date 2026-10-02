@@ -32,10 +32,6 @@ pub(super) fn append_physics_scene_object(
         SerializedParamValue::Enum { value: 1 },
     );
     body_params.insert(
-        "mass".to_string(),
-        SerializedParamValue::Float { value: 1.0 },
-    );
-    body_params.insert(
         "friction".to_string(),
         SerializedParamValue::Float { value: 0.5 },
     );
@@ -1098,7 +1094,6 @@ pub(super) fn scene_object_physics_plan(
         );
     }
     body_params.insert("motion".to_string(), SerializedParamValue::Enum { value: 1 });
-    body_params.insert("mass".to_string(), SerializedParamValue::Float { value: 1.0 });
     body_params.insert("friction".to_string(), SerializedParamValue::Float { value: 0.5 });
     body_params.insert("bounce".to_string(), SerializedParamValue::Float { value: 0.15 });
 

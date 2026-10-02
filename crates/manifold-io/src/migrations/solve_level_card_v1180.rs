@@ -1,4 +1,4 @@
-//! v1.16.0 → v1.17.0: GPU FLIP Domain grew the Solve Level card
+//! v1.17.0 → v1.18.0: GPU FLIP Domain grew the Solve Level card
 //! (`docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md` section 11 (Solve Level)). A saved
 //! generator layer carries its own graph snapshot and that snapshot is the
 //! manifest authority, so a project saved before the card has no `solve_level`
@@ -37,7 +37,7 @@ pub(crate) fn migrate(root: &mut Value) {
     }
     if migrated > 0 {
         super::note_migration(format!(
-            "{migrated} GPU FLIP graph(s) gained the Solve Level card, binding and domain→step wire (v1.17.0)"
+            "{migrated} GPU FLIP graph(s) gained the Solve Level card, binding and domain→step wire (v1.18.0)"
         ));
     }
 }
@@ -166,9 +166,10 @@ mod tests {
         super::super::take_migration_notes();
         let graph: Value = serde_json::from_str(PETER_LAYER).unwrap();
         assert!(!graph["wires"].as_array().unwrap().iter().any(|w| w["toPort"] == PARAM));
-        let before = json!({"projectVersion": "1.16.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
+        // From 1.17.0 so only this rung runs: the density rung drops the body's mass.
+        let before = json!({"projectVersion": "1.17.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         let after = migrate_project(&before);
-        assert_eq!(after["projectVersion"], "1.17.0");
+        assert_eq!(after["projectVersion"], "1.18.0");
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         let wires = graph["wires"].as_array().unwrap();
         assert_eq!(wires.len(), 197 + 1);

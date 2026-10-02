@@ -150,13 +150,20 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.16.0".to_string());
     }
 
+    // 2026-10-02: rigid bodies take density; a stored mass was size-blind,
+    // so it is dropped along with wires and cards bound to it.
+    if is_version_less_than(&version, "1.17.0") {
+        crate::migrations::rigid_body_density_v1170::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.17.0".to_string());
+    }
+
     // GPU FLIP Domain grew the Solve Level card; stored graphs get the card,
     // the binding and the domain→step wire the bundled def ships.
-    if is_version_less_than(&version, "1.17.0") {
-        crate::migrations::solve_level_card_v1170::migrate(&mut root);
-        // Literal "1.17.0" — see the "1.11.0" rung above for why this must
+    if is_version_less_than(&version, "1.18.0") {
+        crate::migrations::solve_level_card_v1180::migrate(&mut root);
+        // Literal "1.18.0" — see the "1.11.0" rung above for why this must
         // NOT be `CURRENT_PROJECT_VERSION`.
-        root["projectVersion"] = Value::String("1.17.0".to_string());
+        root["projectVersion"] = Value::String("1.18.0".to_string());
     }
 
     serde_json::to_string_pretty(&root)

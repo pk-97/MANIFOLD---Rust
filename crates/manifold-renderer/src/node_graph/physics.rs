@@ -237,7 +237,9 @@ pub struct RigidBody {
     pub fragment_parent: Option<usize>,
     pub shape: u32,
     pub kind: u32,
-    pub mass: f32,
+    /// kg/m³. The mass is this times the installed hull's volume, so it
+    /// follows the body's size.
+    pub density: f32,
     pub friction: f32,
     pub bounce: f32,
     pub collider: Option<Arc<ColliderGeometry>>,
@@ -277,7 +279,7 @@ impl Default for RigidBody {
             fragment_parent: None,
             shape: 1,
             kind: 1,
-            mass: 1.0,
+            density: DEFAULT_DENSITY,
             friction: 0.5,
             bounce: 0.15,
             collider: None,
@@ -285,8 +287,12 @@ impl Default for RigidBody {
     }
 }
 
+/// A rigid body's density when none is set, kg/m³: wood, which floats.
+pub const DEFAULT_DENSITY: f32 = 600.0;
+
 impl RigidBody {
-    fn config(&self) -> BodyConfig {
+    /// Box3D's config for this body whose installed hulls hold `volume` m³.
+    fn config(&self, volume: f32) -> BodyConfig {
         let pose = pose_from_transform(self.transform);
         BodyConfig {
             kind: match self.kind {
@@ -296,7 +302,7 @@ impl RigidBody {
             },
             position: pose.position,
             rotation: pose.rotation,
-            mass: self.mass,
+            mass: self.density * volume,
             friction: self.friction,
             restitution: self.bounce,
         }
@@ -333,7 +339,7 @@ fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
         && left.enabled == right.enabled
         && left.shape == right.shape
         && left.kind == right.kind
-        && left.mass == right.mass
+        && left.density == right.density
         && left.friction == right.friction
         && left.bounce == right.bounce
         && same_collider(left, right)
@@ -373,18 +379,41 @@ fn scale_hulls(geometry: &ColliderGeometry, scale: [f32; 3]) -> Vec<Vec<[f32; 3]
         .collect()
 }
 
-fn add_body_geometry(world: &mut PhysicsWorld, body: &RigidBody) -> Result<BodyHandle, String> {
-    if let Some(geometry) = body.collider.as_ref() {
+/// Install `body` and give it its density times the volume of the hulls
+/// Box3D installed; returns the handle and that volume. A scale or shape
+/// change rebuilds the world, so the volume holds for the install's life.
+fn add_body_geometry(world: &mut PhysicsWorld, body: &RigidBody) -> Result<(BodyHandle, f32), String> {
+    let handle = if let Some(geometry) = body.collider.as_ref() {
         let scaled = scale_hulls(geometry, body.transform.scale);
-        world
-            .add_hulls(&scaled, body.config())
-            .map_err(|error| error.to_string())
+        world.add_hulls(&scaled, body.config(1.0))
     } else {
         let points = platonic_points(body.shape);
         let scaled = scale_platonic_points(points, body.transform.scale);
-        world
-            .add_hull(&scaled[..points.len()], body.config())
-            .map_err(|error| error.to_string())
+        world.add_hull(&scaled[..points.len()], body.config(1.0))
+    }
+    .map_err(|error| error.to_string())?;
+    let volume = installed_volume(world, handle)?;
+    world.update_body(handle, body.config(volume), false).map_err(|error| error.to_string())?;
+    Ok((handle, volume))
+}
+
+/// The signed volume of a body's installed hulls, m³: the sum over each
+/// outward-wound triangle of the tetrahedron it spans with the origin.
+pub(crate) fn installed_volume(world: &PhysicsWorld, handle: BodyHandle) -> Result<f32, String> {
+    let meshes = world.hull_meshes(handle).map_err(|error| error.to_string())?;
+    let mut volume = 0.0f64;
+    for mesh in &meshes {
+        for triangle in &mesh.triangles {
+            let [a, b, c] = triangle.map(|i| mesh.vertices[i as usize].map(f64::from));
+            volume += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]);
+        }
+    }
+    let volume = (volume / 6.0) as f32;
+    if volume.is_finite() && volume > 0.0 {
+        Ok(volume)
+    } else {
+        Err(format!("a rigid body's hulls hold no volume ({volume} m³)"))
     }
 }
 
@@ -392,6 +421,10 @@ pub struct RigidSimulation {
     world: Option<PhysicsWorld>,
     handles: [Option<BodyHandle>; MAX_BODIES],
     descriptions: [Option<RigidBody>; MAX_BODIES],
+    /// Each installed body's hull volume, m³; its mass is density times this.
+    volumes: [f32; MAX_BODIES],
+    /// Every copy's hull volume: copies share the prototype's shape and scale.
+    copy_volume: f32,
     bullet_enabled: [bool; MAX_BODIES],
     /// Paused authoring edits remain visible while older preview ticks drain.
     /// The native teleport happens only after those ticks, so the edit cannot
@@ -441,6 +474,8 @@ impl Default for RigidSimulation {
             world: None,
             handles: std::array::from_fn(|_| None),
             descriptions: std::array::from_fn(|_| None),
+            volumes: [0.0; MAX_BODIES],
+            copy_volume: 0.0,
             bullet_enabled: [false; MAX_BODIES],
             deferred_animated_edit: std::array::from_fn(|_| None),
             copy_handles: vec![None; MAX_COPIES],
@@ -877,18 +912,15 @@ impl RigidSimulation {
             let mut handles = std::array::from_fn(|_| None);
             for (i, body) in bodies.iter().enumerate() {
                 let Some(body) = body.as_ref().filter(|body| body.enabled) else { continue };
-                let handle = add_body_geometry(&mut world, body)?;
+                let (handle, volume) = add_body_geometry(&mut world, body)?;
                 if body.fragment_parent.is_some() {
                     world.set_enabled(handle, false).map_err(|e| e.to_string())?;
                 }
                 handles[i] = Some(handle);
+                self.volumes[i] = volume;
             }
             let mut copy_handles = vec![None; active_copy_count];
             if let Some(prototype) = prototype.as_ref().filter(|body| body.enabled) {
-                let scaled_geometry = prototype
-                    .collider
-                    .as_ref()
-                    .map(|geometry| scale_hulls(geometry, prototype.transform.scale));
                 for (index, handle) in copy_handles.iter_mut().enumerate() {
                     let mut copy = prototype.clone();
                     copy = copy_transform_for_layout(
@@ -900,17 +932,9 @@ impl RigidSimulation {
                         active_copy_spacing,
                         active_copy_layout,
                     );
-                    *handle = Some(if let Some(hulls) = scaled_geometry.as_deref() {
-                        world
-                            .add_hulls(hulls, copy.config())
-                            .map_err(|e| e.to_string())?
-                    } else {
-                        let points = platonic_points(copy.shape);
-                        let scaled = scale_platonic_points(points, copy.transform.scale);
-                        world
-                            .add_hull(&scaled[..points.len()], copy.config())
-                            .map_err(|e| e.to_string())?
-                    });
+                    let (installed, volume) = add_body_geometry(&mut world, &copy)?;
+                    *handle = Some(installed);
+                    self.copy_volume = volume;
                 }
             }
             self.reset_impulse_runtime(
@@ -1021,7 +1045,7 @@ impl RigidSimulation {
                     let move_pose =
                         pose_changed && (body.kind != 2 || (animated_edit && due_steps == 0));
                     world
-                        .update_body(handle, body.config(), move_pose)
+                        .update_body(handle, body.config(self.volumes[i]), move_pose)
                         .map_err(|e| e.to_string())?;
                     if body.kind == 1 && old.is_some_and(|old| old.kind != 1) {
                         world.set_bullet(handle, false).map_err(|e| e.to_string())?;
@@ -1056,7 +1080,7 @@ impl RigidSimulation {
                             self.latched_copy_layout,
                         );
                         world
-                            .update_body(handle, copy.config(), move_pose)
+                            .update_body(handle, copy.config(self.copy_volume), move_pose)
                             .map_err(|e| e.to_string())?;
                         if prototype.kind == 1 && old.is_some_and(|old| old.kind != 1) {
                             world.set_bullet(handle, false).map_err(|e| e.to_string())?;
@@ -1350,17 +1374,18 @@ impl RigidSimulation {
             .map_err(|e| e.to_string())?;
         self.fragment_parent_released[parent_index] = true;
         self.fragment_release_latched[parent_index] = release_count;
-        let child_mass = parent.mass / child_count as f32;
         for (index, body) in self.descriptions.iter().enumerate() {
             if body.as_ref().is_none_or(|body| body.fragment_parent != Some(parent_index)) {
                 continue;
             }
             let Some(handle) = self.handles[index] else { continue };
             let body = body.as_ref().expect("fragment description exists");
-            let mut config = body.config();
+            // A piece is the parent's material: its own volume at the
+            // parent's density.
+            let mut config = body.config(self.volumes[index]);
             config.position = parent_pose.position;
             config.rotation = parent_pose.rotation;
-            config.mass = child_mass;
+            config.mass = parent.density * self.volumes[index];
             config.friction = parent.friction;
             config.restitution = parent.bounce;
             world
@@ -1389,22 +1414,13 @@ impl RigidSimulation {
             let parent_properties_changed = self.descriptions[parent_index]
                 .as_ref()
                 .is_none_or(|previous| {
-                    previous.mass != parent.mass
+                    previous.density != parent.density
                         || previous.friction != parent.friction
                         || previous.bounce != parent.bounce
                 });
             if !parent_properties_changed {
                 continue;
             }
-            let child_count = bodies
-                .iter()
-                .flatten()
-                .filter(|body| body.fragment_parent == Some(parent_index))
-                .count();
-            if child_count == 0 {
-                continue;
-            }
-            let child_mass = parent.mass / child_count as f32;
             for (index, body) in bodies.iter().enumerate() {
                 let Some(body) = body.as_ref() else {
                     continue;
@@ -1415,8 +1431,8 @@ impl RigidSimulation {
                 let Some(handle) = self.handles[index] else {
                     continue;
                 };
-                let mut config = body.config();
-                config.mass = child_mass;
+                let mut config = body.config(self.volumes[index]);
+                config.mass = parent.density * self.volumes[index];
                 config.friction = parent.friction;
                 config.restitution = parent.bounce;
                 self.world
@@ -1477,7 +1493,7 @@ impl RigidSimulation {
             }
             if let Some(handle) = self.handles[index] {
                 world
-                    .update_body(handle, edit.body.config(), true)
+                    .update_body(handle, edit.body.config(self.volumes[index]), true)
                     .map_err(|e| e.to_string())?;
             }
             *edit_time = None;
@@ -1502,7 +1518,7 @@ impl RigidSimulation {
                     self.latched_copy_layout,
                 );
                 world
-                    .update_body(handle, copy.config(), true)
+                    .update_body(handle, copy.config(self.copy_volume), true)
                     .map_err(|e| e.to_string())?;
             }
             self.deferred_copy_animated_edit = None;
@@ -1718,7 +1734,7 @@ impl RigidSimulation {
                 continue;
             };
             world
-                .set_animated_target(handle, target.config(), dt)
+                .set_animated_target(handle, target.config(self.volumes[i]), dt)
                 .map_err(|e| e.to_string())?;
         }
         if let Some(prototype) = copy_target {
@@ -1736,7 +1752,7 @@ impl RigidSimulation {
                     self.latched_copy_layout,
                 );
                 world
-                    .set_animated_target(handle, target.config(), dt)
+                    .set_animated_target(handle, target.config(self.copy_volume), dt)
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -2255,6 +2271,35 @@ mod tests {
         }
     }
 
+    /// Mass follows size: Enable Physics on the Dam Break obstacle wires its
+    /// unit `cube_mesh` source into the body, so the hull is the drawn box at
+    /// scale (0.6, 1.16, 0.85): about 0.59 m³, about 354 kg at 600 kg/m³.
+    /// Box3D reports that mass back.
+    #[test]
+    fn dam_break_obstacle_mass_is_density_times_hull_volume() {
+        let scale = [0.6, 1.16, 0.85];
+        let points: Vec<_> = crate::node_graph::mesh_source::MeshSource::Cube { size: 1.0 }
+            .load_vertices()
+            .unwrap()
+            .into_iter()
+            .map(|vertex| vertex.position)
+            .collect();
+        let obstacle = RigidBody {
+            transform: Transform { scale, ..Transform::default() },
+            collider: Some(Arc::new(ColliderGeometry {
+                hulls: vec![manifold_physics::cook_hull(&points).unwrap()],
+            })),
+            ..RigidBody::default()
+        };
+        let mut world = PhysicsWorld::new(GRAVITY).unwrap();
+        let (handle, volume) = add_body_geometry(&mut world, &obstacle).unwrap();
+        let box_volume: f32 = scale.iter().product();
+        assert!((volume - box_volume).abs() < 1e-3 * box_volume, "hull {volume} m³ vs box {box_volume} m³");
+        let mass = DEFAULT_DENSITY * volume;
+        let reported = 1.0 / world.dynamics(handle).unwrap().inverse_mass;
+        assert!((reported - mass).abs() < 1e-3 * mass, "Box3D mass {reported} kg vs {mass} kg");
+    }
+
     fn one_body(position: [f32; 3]) -> [Option<RigidBody>; MAX_BODIES] {
         let mut bodies = std::array::from_fn(|_| None);
         bodies[0] = Some(body(position));
@@ -2303,10 +2348,9 @@ mod tests {
     #[test]
     fn uniform_field_is_mass_independent() {
         let field = FieldValue::uniform([0.0, -4.0, 0.0]).unwrap();
-        let mut light_body = one_body([0.0, 8.0, 0.0]);
+        let light_body = one_body([0.0, 8.0, 0.0]);
         let mut heavy_body = one_body([10.0, 8.0, 0.0]);
-        light_body[0].as_mut().unwrap().mass = 1.0;
-        heavy_body[0].as_mut().unwrap().mass = 7.0;
+        heavy_body[0].as_mut().unwrap().density *= 7.0;
         let mut light = RigidSimulation::default();
         let mut heavy = RigidSimulation::default();
         light
@@ -3456,7 +3500,7 @@ mod tests {
         let mut edited = bodies;
         let mut edited_body = edited[0].clone().unwrap();
         edited_body.friction = 0.9;
-        edited_body.mass = 2.0;
+        edited_body.density *= 2.0;
         edited_body.bounce = 0.4;
         edited[0] = Some(edited_body);
         simulation
@@ -3509,7 +3553,7 @@ mod tests {
         let mut edited = bodies.clone();
         let mut edited_body = edited[0].take().expect("body exists");
         edited_body.friction = 0.9;
-        edited_body.mass = 2.0;
+        edited_body.density *= 2.0;
         edited_body.collider = Some(geometry.clone());
         edited[0] = Some(edited_body);
         simulation
@@ -3533,7 +3577,7 @@ mod tests {
                 ..Transform::default()
             },
             kind: 0,
-            mass: 0.0,
+            density: 0.0,
             ..RigidBody::default()
         });
         for (index, x) in [-8.0, -4.0, 0.0, 4.0, 8.0].into_iter().enumerate() {

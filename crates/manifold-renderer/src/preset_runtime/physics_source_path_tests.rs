@@ -206,10 +206,10 @@ fn coupled_rigid_asset_path_relocation_does_not_change_identity() {
     omitted.nodes[4].params.remove("path");
     assert_eq!(digest(&omitted), original);
 
-    let mut mass = authored;
-    mass.nodes[4].params.insert(
-        "mass".into(),
+    let mut density = authored;
+    density.nodes[4].params.insert(
+        "density".into(),
         manifold_core::effect_graph_def::SerializedParamValue::Float { value: 4.0 },
     );
-    assert_ne!(digest(&mass), original, "rigid controls remain identity");
+    assert_ne!(digest(&density), original, "rigid controls remain identity");
 }
