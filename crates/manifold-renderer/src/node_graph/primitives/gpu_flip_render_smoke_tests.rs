@@ -421,7 +421,7 @@ impl Smoke {
     /// Cells holding a live particle after the frame: the size of the next
     /// tick's pressure solve.
     fn water_cells(&self) -> u32 {
-        let (n, h, min) = (self.scene.pressure.n, self.scene.pressure.cell_size(), self.scene.min());
+        let (n, h, min) = (self.scene.pressure.n, self.scene.cell_size(), self.scene.min());
         let mut wet = vec![false; n.pow(3)];
         for p in self.particles().iter().filter(|p| p.position_radius[3] > 0.0) {
             let c: [usize; 3] = std::array::from_fn(|a| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize);
@@ -647,7 +647,7 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
         // The closed surface caps at the walls' solid. Its wall faces sit past
         // them by at most the crossing's surface cell, plus one surface cell
         // per smoothing pass.
-        let reach = scene.pressure.cell_size() / scene.surface_scale as f64 * (1 + smoothing_passes) as f64;
+        let reach = scene.cell_size() / scene.surface_scale as f64 * (1 + smoothing_passes) as f64;
         for a in 0..3 {
             box_low[a] = box_low[a].min(low[a]);
             box_high[a] = box_high[a].max(high[a]);
