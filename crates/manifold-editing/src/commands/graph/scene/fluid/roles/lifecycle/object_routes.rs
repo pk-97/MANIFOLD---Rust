@@ -17,6 +17,85 @@ pub(in crate::commands::graph::scene) fn disconnect_scene_object_fluid_roles(
     Ok(())
 }
 
+/// The fluid roles a loose root object owns: root role sources that read the
+/// object's own transform and route to a liquid domain, directly or through
+/// typed group ports. A grouped object owns the roles inside its group; a
+/// loose object owns these, so delete and Enable Physics treat them alike.
+fn loose_scene_object_role_routes(
+    def: &EffectGraphDef,
+    object_id: u32,
+) -> Result<Vec<RoleRoute>, String> {
+    let Some(transform) = def
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == object_id && wire.to_port == "transform")
+    else {
+        return Ok(Vec::new());
+    };
+    let mut routes = Vec::new();
+    for role in def.nodes.iter().filter(|node| {
+        node.type_id == ROLE_SOURCE_TYPE_ID
+            && def.wires.iter().any(|wire| {
+                wire.to_node == node.id
+                    && wire.to_port == "transform"
+                    && wire.from_node == transform.from_node
+                    && wire.from_port == transform.from_port
+            })
+    }) {
+        let mut route = RoleRoute {
+            source_group_id: 0,
+            source_scope: Vec::new(),
+            role_id: role.id,
+            role_node_id: role.node_id.clone(),
+            export_ports: vec!["role".into()],
+            edges: Vec::new(),
+            boundary_ports: Vec::new(),
+            domains: Vec::new(),
+        };
+        trace_connections(
+            &def.nodes,
+            &def.wires,
+            &[],
+            &[],
+            role.id,
+            "role",
+            &mut route,
+            &mut HashSet::new(),
+        )?;
+        if !route.domains.is_empty() {
+            routes.push(route);
+        }
+    }
+    Ok(routes)
+}
+
+/// Whether a loose root object owns any fluid role.
+pub(in crate::commands::graph::scene) fn loose_scene_object_has_fluid_roles(
+    def: &EffectGraphDef,
+    object_id: u32,
+) -> Result<bool, String> {
+    Ok(!loose_scene_object_role_routes(def, object_id)?.is_empty())
+}
+
+/// Disconnect and remove every fluid role a loose root object owns. Returns
+/// the removed role nodes so the caller prunes their metadata with the object.
+pub(in crate::commands::graph::scene) fn remove_loose_scene_object_fluid_roles(
+    def: &mut EffectGraphDef,
+    object_id: u32,
+) -> Result<Vec<EffectGraphNode>, String> {
+    let routes = loose_scene_object_role_routes(def, object_id)?;
+    let mut removed = Vec::new();
+    for route in routes {
+        remove_route_edges(def, &route, false)?;
+        if let Some(index) = def.nodes.iter().position(|node| node.id == route.role_id) {
+            removed.push(def.nodes.remove(index));
+        }
+        def.wires
+            .retain(|wire| wire.from_node != route.role_id && wire.to_node != route.role_id);
+    }
+    Ok(removed)
+}
+
 /// Restore captured outgoing routes to their original domains atomically.
 pub fn restore_scene_object_fluid_roles(
     def: &mut EffectGraphDef,
