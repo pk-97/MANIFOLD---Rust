@@ -1127,6 +1127,31 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let mut whitewater_check = Ok(());
+    let capacity = x.count("whitewater_capacity", STEP_CAPACITY as f32)?;
+    if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {
+        return Err(Verdict::Refused(format!("whitewater capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
+    }
+    let pool = u64::from(capacity) * size_of::<crate::node_graph::whitewater::WhitewaterParticle>() as u64;
+    for (capture, output, bytes) in [
+        ("whitewater_pool_in", "whitewater_pool", pool),
+        ("whitewater_state_in", "whitewater_state", 32),
+        ("whitewater_counts_in", "whitewater_counts", 32),
+        ("foam_particles_in", "foam_particles", u64::from(capacity) * PARTICLE),
+        ("bubble_particles_in", "bubble_particles", u64::from(capacity) * PARTICLE),
+        ("spray_particles_in", "spray_particles", u64::from(capacity) * PARTICLE),
+    ] {
+        let active = x.input(capture).is_some();
+        x.provide(output, if active { bytes } else { 0 });
+        if active {
+            x.hold(bytes);
+            // Captures become bound on the second walk. Publish ALL sizes
+            // before returning an uncovered capture from the first walk.
+            whitewater_check = whitewater_check.and(x.covers(capture, bytes));
+        }
+    }
+    if x.input("whitewater_pool_in").is_some() { x.hold(pool); }
+
     // The faces are the lattice's face grid, sized before the region runs and
     // held only while something reads them. The tick's faces (written later
     // in the plan: the second pass sees them) must be exactly that grid.
@@ -1162,7 +1187,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("stats", stats)?;
     x.covers("stats_in", stats)?;
-    faces_check
+    faces_check.and(whitewater_check)
 }
 
 fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1211,6 +1236,14 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let faces = face_bytes(cells);
     x.provide("faces", faces);
+    x.provide("distance", cell_total(cells) * 4);
+    let lattice = x.lattice()?;
+    x.publish_transform("grid_bounds", lattice.bounds());
+    for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
+        .chain(["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(cells))
+        .chain([("face_valid_layers", FACE_VALID_LAYERS)]) {
+        x.publish(port, value as f32);
+    }
     let slots = x.items("particles").unwrap_or(0);
     let ranges = range_storage_bytes(cells);
     search_fits(x, cells, ranges)?;
@@ -1475,14 +1508,18 @@ fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// refusal by name, each input covering what the grid reads, each
 /// population provided at Capacity, and everything else held.
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let capacity = x.param("capacity", STEP_CAPACITY as f32).round();
+    let capacity = x.scalar("capacity", STEP_CAPACITY as f32).round();
     if !(1.0..=STEP_MAX_CAPACITY as f32).contains(&capacity) {
         return Err(Verdict::Refused(format!("capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
     }
     let triple = |x: &AtomExtent<'_>, names: [&str; 3]| names.map(|name| whole(x, name, 0.0));
     let shape = StepShape::new(
         triple(x, ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
-        triple(x, ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"]),
+        if x.input("distance").is_some() {
+            triple(x, ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"])
+        } else {
+            triple(x, ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"])
+        },
         triple(x, ["face_cells_x", "face_cells_y", "face_cells_z"]),
         x.scalar("face_valid_layers", 0.0),
         x.transform("grid_bounds"),
@@ -1496,7 +1533,16 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
         x.covers(port, shape.face_bytes(axis))?;
     }
-    x.covers("level_set", shape.level_bytes())?;
+    x.provide("pool_out", shape.pool_bytes());
+    x.provide("state_out", 32);
+    x.provide("counts_out", 32);
+    if x.input("distance").is_some() {
+        x.covers("distance", cell_total(shape.face_cells) * 4)?;
+        x.covers("pool", shape.pool_bytes())?;
+        x.covers("pool_state", 32)?;
+    } else {
+        x.covers("level_set", shape.level_bytes())?;
+    }
     x.covers("solid", shape.solid_bytes())
 }
 
