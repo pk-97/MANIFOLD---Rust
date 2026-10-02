@@ -17,9 +17,9 @@
 //! content and screen — width derives from the item count (clamped to the
 //! screen, capped at [`MAX_COLUMNS`] columns of 16:9 cells), height is
 //! content-sized under the screen as the ONLY cap, and the grid scrolls
-//! internally beyond that. Image-cell labels are centered on the thumbnail,
-//! larger, white with a faked black stroke (8 offset copies) so they read
-//! over any content. Chips are
+//! internally beyond that. In a thumbnail grid every cell is the 16:9
+//! thumbnail plus a caption block below it, word-wrapped to the cell width;
+//! the block reserves as many lines as the longest name needs. Chips are
 //! measured with the tree's font metrics and wrap instead of overflowing.
 //! Keyboard nav moves in grid geometry with scroll reveal; the wheel only
 //! scrolls the grid when it's over the grid.
@@ -71,22 +71,12 @@ const CAPTION_PAD_X: f32 = 5.0;
 const EMPTY_STATE_H: f32 = 44.0;
 const CELL_FONT: u16 = color::FONT_LABEL;
 const SEARCH_FONT: u16 = color::FONT_LABEL;
-/// Image-cell label (Peter, 2026-09-11): centered on the thumbnail, larger,
-/// white with a black stroke so it reads over any thumbnail content. The
-/// stroke is faked — 8 black offset copies under the white draw.
+/// Thumbnail-grid caption: below the 16:9 thumbnail, word-wrapped to the cell
+/// width, as many lines as the longest name needs. Centering a single line on
+/// the thumbnail spilled long names across neighbouring cells.
 const CELL_LABEL_FONT: u16 = color::FONT_TITLE;
-const CELL_LABEL_BAND_H: f32 = 22.0;
-const CELL_LABEL_STROKE: Color32 = Color32::BLACK;
-const STROKE_OFFSETS: [(f32, f32); 8] = [
-    (-1.0, -1.0),
-    (0.0, -1.0),
-    (1.0, -1.0),
-    (-1.0, 0.0),
-    (1.0, 0.0),
-    (-1.0, 1.0),
-    (0.0, 1.0),
-    (1.0, 1.0),
-];
+const CELL_LABEL_LINE_H: f32 = 22.0;
+const CAPTION_GAP: f32 = 4.0;
 
 // ── Colors ──
 
@@ -228,6 +218,9 @@ struct BrowserLayout {
     popup_y: f32,
     total_height: f32,
     grid_viewport_height: f32,
+    /// Full cell height (thumbnail plus caption block); the grid pitch is
+    /// this plus [`CELL_SPACING`].
+    cell_h: f32,
     /// Click point the popup opened at (drives the edge clamp every build).
     anchor: Vec2,
 
@@ -256,6 +249,7 @@ impl BrowserLayout {
             popup_y: 0.0,
             total_height: 0.0,
             grid_viewport_height: 0.0,
+            cell_h: CELL_H,
             anchor: Vec2::ZERO,
             backdrop_id: None,
             search_bar_id: None,
@@ -445,7 +439,15 @@ impl BrowserPopupPanel {
 
         let count = session.picker.filtered_len();
         let mode = session.mode;
-        let cell_h = if mode == BrowserPopupMode::Actions { 32.0 } else { CELL_H };
+        // Caption block height comes from the FULL item set (same reason as
+        // the width below: no row-height jitter while typing).
+        let caption_lines = if mode == BrowserPopupMode::Actions {
+            0
+        } else {
+            caption_line_count(tree.measurer(), session.picker.all_items())
+        };
+        let cell_h = grid_cell_h(mode, caption_lines);
+        session.layout.cell_h = cell_h;
         let cell_w = if mode == BrowserPopupMode::Actions { 360.0_f32.min((screen_w - SCREEN_MARGIN * 2.0).max(1.0)) } else { CELL_W };
 
         // ── Width: content-sized, screen-clamped ──
@@ -728,44 +730,30 @@ impl BrowserPopupPanel {
             // nodes paint BEFORE the button, so they never shadow its click
             // region and its hover/press tint composites on top.
             let has_image = mode != BrowserPopupMode::Actions && item.thumbnail.is_some();
+            let has_caption = caption_lines > 0;
             if let Some(path) = item.thumbnail.as_deref() {
                 let handle = crate::node::texture_handle_for_key(path);
-                tree.add_image(clip_parent, cell_x, cell_y, cell_w, cell_h, CELL_RADIUS, handle);
+                tree.add_image(clip_parent, cell_x, cell_y, cell_w, CELL_H, CELL_RADIUS, handle);
             }
 
-            if has_image {
-                // Centered stroked label: 8 black offset copies, white on top.
-                let band_y = cell_y + (cell_h - CELL_LABEL_BAND_H) * 0.5;
-                for &(dx, dy) in &STROKE_OFFSETS {
+            if has_caption {
+                let rects = caption_line_rects(cell_x, cell_y, caption_lines);
+                for (line, r) in caption_wrap(tree.measurer(), &item.label).iter().zip(rects) {
                     tree.add_label(
                         clip_parent,
-                        cell_x + dx,
-                        band_y + dy,
-                        cell_w,
-                        CELL_LABEL_BAND_H,
-                        &item.label,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        line,
                         UIStyle {
                             font_size: CELL_LABEL_FONT,
-                            text_color: CELL_LABEL_STROKE,
+                            text_color: Color32::WHITE,
                             text_align: TextAlign::Center,
                             ..UIStyle::default()
                         },
                     );
                 }
-                tree.add_label(
-                    clip_parent,
-                    cell_x,
-                    band_y,
-                    cell_w,
-                    CELL_LABEL_BAND_H,
-                    &item.label,
-                    UIStyle {
-                        font_size: CELL_LABEL_FONT,
-                        text_color: Color32::WHITE,
-                        text_align: TextAlign::Center,
-                        ..UIStyle::default()
-                    },
-                );
             }
 
             // Cell button — full height, ClipRegion handles visual clipping.
@@ -798,7 +786,7 @@ impl BrowserPopupPanel {
                     text_inset_x: CAPTION_PAD_X,
                     ..UIStyle::default()
                 },
-                if has_image { "" } else { &item.label },
+                if has_caption { "" } else { &item.label },
             );
 
             session.layout.cell_ids.push((
@@ -1003,7 +991,7 @@ impl BrowserPopupPanel {
     pub fn handle_key_nav(&mut self, key: Key) -> Option<BrowserPopupAction> {
         let session = self.session.as_mut()?;
         let mode = session.mode;
-        let cell_h = if mode == BrowserPopupMode::Actions { 32.0 } else { CELL_H };
+        let cell_h = session.layout.cell_h;
         let tab = session.tab;
         let layer_id = session.layer_id.clone();
         let spawn_pos = session.pending_spawn_graph_pos;
@@ -1077,7 +1065,7 @@ impl BrowserPopupPanel {
             return;
         };
         let columns = session.layout.columns.max(1);
-        let cell_h = if session.mode == BrowserPopupMode::Actions { 32.0 } else { CELL_H };
+        let cell_h = session.layout.cell_h;
         let rows = session.picker.filtered_len().div_ceil(columns);
         let content_h = rows as f32 * (cell_h + CELL_SPACING) - CELL_SPACING;
         session.picker.scroll.set_content_height(content_h);
@@ -1340,9 +1328,119 @@ impl Overlay for BrowserPopupPanel {
     }
 }
 
+/// A thumbnail cell's caption, wrapped to the cell's inset width.
+fn caption_wrap(measurer: &dyn crate::text::TextMeasure, label: &str) -> Vec<String> {
+    crate::text::wrap_to_width(
+        measurer,
+        label,
+        CELL_LABEL_FONT,
+        FontWeight::Regular,
+        CELL_W - CAPTION_PAD_X * 2.0,
+    )
+}
+
+/// Caption lines every row reserves: the longest wrapped thumbnail-item
+/// label. Zero when no item has a thumbnail (flat grid, label in the button).
+fn caption_line_count<'a>(
+    measurer: &dyn crate::text::TextMeasure,
+    items: impl Iterator<Item = &'a PickerItem>,
+) -> usize {
+    let mut any_thumb = false;
+    let mut lines = 0;
+    for item in items {
+        any_thumb |= item.thumbnail.is_some();
+        lines = lines.max(caption_wrap(measurer, &item.label).len());
+    }
+    if any_thumb { lines.max(1) } else { 0 }
+}
+
+fn grid_cell_h(mode: BrowserPopupMode, caption_lines: usize) -> f32 {
+    match mode {
+        BrowserPopupMode::Actions => 32.0,
+        _ if caption_lines == 0 => CELL_H,
+        _ => CELL_H + CAPTION_GAP + caption_lines as f32 * CELL_LABEL_LINE_H,
+    }
+}
+
+/// Caption line rects for a cell at (`cell_x`, `cell_y`): stacked below the
+/// thumbnail, never over it.
+fn caption_line_rects(cell_x: f32, cell_y: f32, lines: usize) -> impl Iterator<Item = Rect> {
+    (0..lines).map(move |i| {
+        Rect::new(
+            cell_x + CAPTION_PAD_X,
+            cell_y + CELL_H + CAPTION_GAP + i as f32 * CELL_LABEL_LINE_H,
+            CELL_W - CAPTION_PAD_X * 2.0,
+            CELL_LABEL_LINE_H,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The longest factory preset names (live-GPU water presets and the
+    /// em-dash variants) were the ones that spilled into neighbouring cells.
+    const LONG_NAMES: &[&str] = &[
+        "Water — Floating Box (Live GPU)",
+        "Water — Dam Break (GPU Surface)",
+        "Ordered Recon — Clip Gesture",
+        "Surface Peel - Clip Hit",
+        "Blob Track V2 — Colour",
+        "Chromatic Aberration",
+    ];
+
+    fn rects_overlap(a: Rect, b: Rect) -> bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    #[test]
+    fn thumbnail_caption_fits_below_thumbnail_and_inside_cell() {
+        let tree = UITree::new();
+        let m = tree.measurer();
+        let items: Vec<PickerItem> = LONG_NAMES
+            .iter()
+            .map(|n| PickerItem {
+                label: n.to_string(),
+                type_id: n.to_string(),
+                category: None,
+                search_text: None,
+                source: None,
+                thumbnail: Some(format!("/thumbs/{n}.png")),
+            })
+            .collect();
+        let lines = caption_line_count(m, items.iter());
+        let cell_h = grid_cell_h(BrowserPopupMode::Generator, lines);
+        let thumb = Rect::new(0.0, 0.0, CELL_W, CELL_H);
+        for item in &items {
+            let wrapped = caption_wrap(m, &item.label);
+            assert!(wrapped.len() <= lines, "{}: {} lines > reserved {lines}", item.label, wrapped.len());
+            assert_eq!(wrapped.join(" "), item.label, "wrap must keep the full name");
+            for (text, r) in wrapped.iter().zip(caption_line_rects(0.0, 0.0, lines)) {
+                assert!(!rects_overlap(r, thumb), "{}: caption over thumbnail", item.label);
+                assert!(r.y + r.height <= cell_h, "{}: caption past cell bottom", item.label);
+                let w = m.measure_text(text, CELL_LABEL_FONT, FontWeight::Regular).x;
+                assert!(w <= r.width, "{}: line {text:?} {w}px > {}px", item.label, r.width);
+                assert!(r.x >= 0.0 && r.x + r.width <= CELL_W);
+            }
+        }
+    }
+
+    #[test]
+    fn flat_grid_keeps_plain_cell_height() {
+        let tree = UITree::new();
+        let item = PickerItem {
+            label: "Blur".into(),
+            type_id: "blur".into(),
+            category: None,
+            search_text: None,
+            source: None,
+            thumbnail: None,
+        };
+        let lines = caption_line_count(tree.measurer(), std::iter::once(&item));
+        assert_eq!(lines, 0);
+        assert_eq!(grid_cell_h(BrowserPopupMode::Node, lines), CELL_H);
+    }
 
     #[test]
     fn actions_picker_returns_typed_action_after_filter_and_enter() {
