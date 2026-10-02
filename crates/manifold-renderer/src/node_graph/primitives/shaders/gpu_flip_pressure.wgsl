@@ -49,8 +49,9 @@ struct Params {
     cy: u32,
     cz: u32,
     // Bit 0: smooth starts from zero; residual has no rhs (−L value); check
-    // is the start. Bit 1 (REDUCE): the pass also folds its per-cell product
-    // into one partial per workgroup.
+    // is the start; restrict masks its fine taps to open water. Bit 1
+    // (REDUCE): the pass also folds its per-cell product into one partial
+    // per workgroup. Bit 2: restrict adds into `out`.
     mode: u32,
     cell_size: f32,
     // The conjugate gradient iteration, or the scalar a dot product writes.
@@ -216,10 +217,10 @@ fn fold_max(li: u32, slot: u32, value: f32) {
     }
 }
 
-// Partial g of the fine level, two a tile: 0 for an inactive tile, whose
-// slots the fold never wrote.
+// Partial g of the gradient's level (its flags from list_base), two a tile:
+// 0 for an inactive tile, whose slots the fold never wrote.
 fn fine_partial(g: u32) -> f32 {
-    return select(0.0, partials[g], flags[g >> 1u] != 0u);
+    return select(0.0, partials[g], flags[u.list_base + (g >> 1u)] != 0u);
 }
 
 // Thread li's strided share of the `count` partials, summed in order, then
@@ -473,10 +474,28 @@ fn half_tile_origin(gid: u32, n: vec3<i32>) -> vec3<i32> {
     return coords(tile, tile_dims(n)) * TILE + vec3<i32>(0, 0, 4 * half);
 }
 
+// Whether fine cell `at` keeps its right-hand side at the gradient's start
+// (init_main): water with an open face.
+fn open_water(at: u32, n: vec3<i32>) -> bool {
+    if !is_water(at) {
+        return false;
+    }
+    let p = coords(at, n);
+    var diagonal = 0.0;
+    for (var a = 0; a < 3; a = a + 1) {
+        diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
+    }
+    return diagonal > 0.0;
+}
+
 // One thread per coarse cell of the coarse level's active tiles: the fine
 // residual in `src` restricted by the transpose of prolongation over 8,
 // masked to coarse water. Fine cells past an odd side are the virtual
-// solid: not read. The unlisted return precedes the barrier, whole.
+// solid: not read. Mode bit 0 (RESTRICT_MASK) takes a fine tap only from
+// open water, as init takes the right-hand side, so a solve started on a
+// coarse level restricts what the fine one would have started from; bit 2
+// (RESTRICT_ADD) adds the sum to `out` instead of writing it and leaves
+// non-water cells alone. The unlisted return precedes the barrier, whole.
 @compute @workgroup_size(256, 1, 1)
 fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !listed(gid.x) {
@@ -484,13 +503,18 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = lattice();
     let c = coarse_lattice();
+    let masked = (u.mode & 1u) != 0u;
+    let adds = (u.mode & 4u) != 0u;
     let origin = half_tile_origin(gid.x, c);
     let base = 2 * origin - vec3<i32>(1);
     for (var k = gid.x & 255u; k < RESTRICT_FOOT_CELLS; k = k + 256u) {
         let q = base + coords(k, RESTRICT_FOOT);
         var v = 0.0;
         if all(q >= vec3<i32>(0)) && all(q < n) {
-            v = src[cell(q, n)];
+            let at = cell(q, n);
+            if !masked || open_water(at, n) {
+                v = src[at];
+            }
         }
         fine_patch[k] = v;
     }
@@ -500,7 +524,9 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     if !(coarse_water[idx] > 0.5) {
-        out[idx] = 0.0;
+        if !adds {
+            out[idx] = 0.0;
+        }
         return;
     }
     let p = coords(idx, c);
@@ -528,7 +554,20 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    out[idx] = sum / 8.0;
+    if adds {
+        out[idx] = out[idx] + sum / 8.0;
+    } else {
+        out[idx] = sum / 8.0;
+    }
+}
+
+// One thread per cell of the lattice: `out` to 0. The target of a
+// prolongation chain, so a prolonged vector is 0 off the water.
+@compute @workgroup_size(256, 1, 1)
+fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < u.nx * u.ny * u.nz {
+        out[gid.x] = 0.0;
+    }
 }
 
 // One thread per fine cell: in a water cell, e in `out` plus the coarse
@@ -572,11 +611,38 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out[idx] = out[idx] + sum;
 }
 
-// One thread per coarse cell: water (1) into `out` when every fine child
-// inside the fine lattice is water, else air (0); touched (1) into `out2`
-// when any child is touched in `aux` (the fine level's water, or the level
-// above's touched). A child past an odd side is the virtual solid and never
-// makes the cell air.
+// A cell's kind in `water`: 1 water, 0 air, −1 solid. The fine level's mask
+// (u.level 0) carries no solid kind: there a cell with every face closed is
+// solid (a cell inside a body or a wall), any other non-water cell air.
+const KIND_AIR: u32 = 0u;
+const KIND_WATER: u32 = 1u;
+const KIND_SOLID: u32 = 2u;
+
+fn kind(p: vec3<i32>, n: vec3<i32>) -> u32 {
+    let at = cell(p, n);
+    if water[at] > 0.5 {
+        return KIND_WATER;
+    }
+    if water[at] < -0.5 {
+        return KIND_SOLID;
+    }
+    if u.level != 0u {
+        return KIND_AIR;
+    }
+    for (var a = 0; a < 3; a = a + 1) {
+        if face_weight(p, a, -1, n) != 0.0 || face_weight(p, a, 1, n) != 0.0 {
+            return KIND_AIR;
+        }
+    }
+    return KIND_SOLID;
+}
+
+// One thread per coarse cell: the cell-type coarsening of McAdams, Sifakis
+// and Teran 2010 into `out` — air (0) when any fine child inside the fine
+// lattice is air, solid (−1) when every one is solid, else water (1); a
+// child past an odd side is the virtual solid. Touched (1) into `out2` when
+// any child is touched in `aux` (the fine level's water, or the level
+// above's touched).
 @compute @workgroup_size(256, 1, 1)
 fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();
@@ -586,21 +652,21 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = 2 * coords(idx, c);
-    var all_water = true;
+    var any_air = false;
+    var all_solid = true;
     var touched = false;
     for (var child = 0; child < 8; child = child + 1) {
         let q = p + vec3<i32>(child & 1, (child >> 1u) & 1, (child >> 2u) & 1);
         if all(q < n) {
-            let at = cell(q, n);
-            if !is_water(at) {
-                all_water = false;
-            }
-            if aux[at] > 0.5 {
+            let k = kind(q, n);
+            any_air = any_air || k == KIND_AIR;
+            all_solid = all_solid && k == KIND_SOLID;
+            if aux[cell(q, n)] > 0.5 {
                 touched = true;
             }
         }
     }
-    out[idx] = select(0.0, 1.0, all_water);
+    out[idx] = select(select(1.0, -1.0, all_solid), 0.0, any_air);
     out2[idx] = select(0.0, 1.0, touched);
 }
 
@@ -691,7 +757,7 @@ fn poison_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx != NO_CELL {
         out[idx] = nan;
     }
-    if (gid.x & 511u) == 0u && u.level == 0u {
+    if (gid.x & 511u) == 0u && u.color == 1u {
         partials[2u * tile] = nan;
         partials[2u * tile + 1u] = nan;
     }

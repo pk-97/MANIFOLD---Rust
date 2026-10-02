@@ -125,7 +125,7 @@ mod tests {
     fn mass_param_wires_and_cards_are_dropped_and_rerun_is_a_no_op() {
         super::super::take_migration_notes();
         let after: Value = serde_json::from_str(&crate::migrate::migrate_if_needed(&project().to_string()).unwrap()).unwrap();
-        assert_eq!(after["projectVersion"], "1.17.0");
+        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         assert!(graph["nodes"][1]["params"].get("mass").is_none());
         assert_eq!(graph["nodes"][1]["params"]["friction"]["value"], 0.4);

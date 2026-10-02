@@ -2265,6 +2265,20 @@
       },
       {
         "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.0,
+        "id": "solve_level",
+        "label": "Solve Level",
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "solve_level"
+        }
+      },
+      {
+        "convert": {
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
@@ -2455,6 +2469,18 @@
         "max": 512.0,
         "min": 8.0,
         "name": "Resolution",
+        "section": "Fluid",
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F0",
+        "id": "solve_level",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 4.0,
+        "min": 0.0,
+        "name": "Solve Level",
         "section": "Fluid",
         "wholeNumbers": true
       },
@@ -2959,6 +2985,12 @@
       "fromPort": "closed_faces",
       "toNode": 6,
       "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "solve_level",
+      "toNode": 6,
+      "toPort": "solve_level"
     },
     {
       "fromNode": 0,
