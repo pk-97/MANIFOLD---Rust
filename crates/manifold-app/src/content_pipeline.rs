@@ -1060,6 +1060,12 @@ pub struct ContentPipeline {
     /// `"Compositor"`. Drained by [`Self::take_gpu_profiles`].
     #[cfg(target_os = "macos")]
     last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
+    /// `frame-time` probe: GPU start and end time of every unprofiled
+    /// command buffer, chunk splits included, reported from its completion
+    /// handler as `(label, start, end)`. Profiled frames serialise the
+    /// encoders, so only the plain frames carry the number the show pays.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    gpu_time_tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>,
     /// Fence-stamped drop-retirement queue (BUG-l7t4 class fix). Drained once
     /// per frame in `render_content_native`; its `Drop` flushes at teardown.
     /// FIELD ORDER MATTERS: this must drop after resource-owning fields — sibling
@@ -1219,6 +1225,8 @@ impl ContentPipeline {
             profiling_enabled: false,
             #[cfg(target_os = "macos")]
             last_gpu_profiles: Vec::new(),
+            #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+            gpu_time_tap: None,
             #[cfg(target_os = "macos")]
             retire_queue: None,
             #[cfg(target_os = "macos")]
@@ -1269,6 +1277,29 @@ impl ContentPipeline {
     #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn take_gpu_profiles(&mut self) -> Vec<(&'static str, manifold_gpu::GpuFrameProfile)> {
         std::mem::take(&mut self.last_gpu_profiles)
+    }
+
+    /// Report every unprofiled command buffer's true GPU time
+    /// (`"Generators"` / `"Compositor"`, start, end) into `tap` from its
+    /// completion handler. Buffers complete in submission order, so the
+    /// receiver groups them into plain frames by order.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    pub fn set_gpu_time_tap(&mut self, tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>) {
+        self.gpu_time_tap = tap;
+    }
+
+    /// Report every command buffer `enc` commits (chunk splits included) to
+    /// the frame-time tap, when one is set.
+    #[cfg(target_os = "macos")]
+    fn tap_gpu_time(&self, enc: &mut manifold_gpu::GpuEncoder, label: &'static str) {
+        #[cfg(feature = "perf-soak")]
+        if let Some(tap) = self.gpu_time_tap.clone() {
+            enc.tap_gpu_time(std::sync::Arc::new(move |start, end| {
+                let _ = tap.send((label, start, end));
+            }));
+        }
+        #[cfg(not(feature = "perf-soak"))]
+        let _ = (enc, label);
     }
 
     /// Drain the compositor's owned chains' per-step CPU profiles from the
@@ -2338,6 +2369,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         {
             let mut modifier_preview_error = None;
             let mut gen_enc = native_device.create_encoder("Generators");
+            if !self.profiling_enabled {
+                self.tap_gpu_time(&mut gen_enc, "Generators");
+            }
             // PERF_BUDGET_GATE_DESIGN P2 / D6: attach the dispatch sampler to
             // this command buffer when a --profile run is active. Every
             // generator's executor was already scoped (`gen:{layer_id}`) at
@@ -2568,6 +2602,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         // ── Compositor CB (+ direct present, preview, recording) ────
         let mut native_enc = native_device.create_encoder("Compositor");
+        if !self.profiling_enabled {
+            self.tap_gpu_time(&mut native_enc, "Compositor");
+        }
         // PERF_BUDGET_GATE_DESIGN P2 / D6: same sampler, same command buffer
         // — the compositor was forced to `composite_serial` by
         // `set_profiling` so this IS the single shared compositor command

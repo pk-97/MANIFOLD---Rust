@@ -450,7 +450,7 @@ pub(crate) fn report_feel(label: &str, feel: &[Feel]) {
 /// numbers to mean anything: no GPU fault, every particle alive and finite.
 fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let mut run = Run::new(scene);
-    let (n, h, min) = (run.n(), scene.pressure.cell_size(), scene.min());
+    let (n, h, min) = (run.n(), scene.cell_size(), scene.min());
     let mut record = Record { gpu: Vec::new(), cpu: Vec::new(), volume: Vec::new(), motion: Vec::new(), feel: Vec::new() };
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut blocks_max, mut water_max) = (0.0_f64, 0.0_f64);

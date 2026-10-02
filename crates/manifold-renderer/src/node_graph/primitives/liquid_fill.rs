@@ -74,7 +74,15 @@ fn planned_particles(params: &ParamValues) -> u32 {
     };
     let Ok(lattice) = LiquidLattice::from_scalars(read) else { return 1 };
     let (pool, sites) = fill_of(read);
-    filled_sites(lattice.cells(), pool, sites).clamp(1, u64::from(EXACT_F32_COUNT)) as u32
+    pool_slots(filled_sites(lattice.cells(), pool, sites), read("particle_capacity", 0.0)).clamp(1, u64::from(EXACT_F32_COUNT))
+        as u32
+}
+
+/// Particle slots the pool holds: the fill, or `capacity` when larger (0
+/// means the fill's count). Slots past the fill start dead; sources emit
+/// into them.
+pub(crate) fn pool_slots(placed: u64, capacity: f32) -> u64 {
+    placed.max(capacity.round().max(0.0) as u64)
 }
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -99,14 +107,14 @@ struct FillUniforms {
     seed: i32,
     body_count: i32,
     epoch: i32,
+    particle_capacity: i32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 crate::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds exactly the sites covered, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -120,6 +128,7 @@ crate::primitive! {
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
+        particle_capacity: ScalarF32 optional,
     },
     outputs: {
         particles: Array(FluidParticle),
@@ -144,6 +153,7 @@ crate::primitive! {
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
         int_param!("epoch", "Epoch", 0.0, 0.0, 16_777_215.0),
+        int_param!("particle_capacity", "Particle Capacity", 0.0, 0.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Feeds node.liquid_state's seed and, through count, every atom that takes a live particle count. The pool and box sites, the padded lattice, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
@@ -159,7 +169,7 @@ crate::primitive! {
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 18], usize)> = None,
+        filled: Option<([u32; 19], usize)> = None,
     },
 }
 
@@ -193,16 +203,21 @@ impl Primitive for LiquidFill {
         let body_count = int("body_count", 0.0).min(MAX_FLUID_ROLES as u32) as i32;
         // With colliders the sites depend on their pose at the epoch's start.
         let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
-        let placed = filled_sites(nodes, pool, sites);
-        if placed > u64::from(EXACT_F32_COUNT) {
+        let requested = ctx.scalar_or_param("particle_capacity", 0.0);
+        if !requested.is_finite() || requested < 0.0 {
+            ctx.error("Liquid Fill: particle_capacity must be 0 or a positive count".to_string());
+            return;
+        }
+        let slots = pool_slots(filled_sites(nodes, pool, sites), requested);
+        if slots > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
             ctx.error(format!(
-                "Liquid Fill: the fill places {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+                "Liquid Fill: the pool holds {slots} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
             ));
             return;
         }
-        let capacity = (placed as u32).max(1);
-        ctx.outputs.set_scalar("count", ParamValue::Float(placed as f32));
+        let capacity = (slots as u32).max(1);
+        ctx.outputs.set_scalar("count", ParamValue::Float(slots as f32));
         let bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
             match ctx.gpu_encoder().device.try_create_buffer_shared(bytes) {
@@ -232,7 +247,7 @@ impl Primitive for LiquidFill {
             min[0].to_bits(), min[1].to_bits(), min[2].to_bits(), cell_size.to_bits(),
             nodes[0], nodes[1], nodes[2], pool,
             sites[0][0], sites[0][1], sites[1][0], sites[1][1], sites[2][0], sites[2][1],
-            jitter.to_bits(), seed, body_count as u32, epoch,
+            jitter.to_bits(), seed, body_count as u32, epoch, capacity,
         ];
         if self.filled == Some((key, buffer.identity_key())) {
             return;
@@ -258,8 +273,8 @@ impl Primitive for LiquidFill {
             seed: clamp(seed),
             body_count,
             epoch: clamp(epoch),
+            particle_capacity: clamp(capacity),
             dispatch_count: capacity,
-            _pad0: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
