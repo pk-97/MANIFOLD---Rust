@@ -10,8 +10,11 @@
 //!   operator on the search direction: its pressure impulse per body, then
 //!   (1/h)·G·M⁻¹·impulse added to s;
 //! - after the projection, the pressure's impulse into the reaction and its
-//!   velocity change into the solid velocity, then the constraint's friction
-//!   impulse into the reaction.
+//!   velocity change into the solid velocity.
+//!
+//! The pressure is a body's only reaction, as in the engine
+//! (rigidfluidcoupling.cpp): the constraint's friction acts on the water
+//! alone. An explicit friction reaction diverges once ρ·h·f·A_wet/m passes 2.
 //!
 //! The impulse and the body product run over the pressure solve's fine
 //! active tiles (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9): the solver's
@@ -69,10 +72,10 @@ struct Params {
     tick_seconds: f32,
     first: u32,
     body_count: u32,
-    mode: u32,
     accumulate: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 struct Pipelines {
@@ -176,7 +179,7 @@ impl BodyPasses {
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn poison(&self, enc: &mut GpuEncoder, bodies: &Bodies<'_>) {
         let (pipes, partials, _) = self.parts().expect("the body passes were prepared");
-        let params = Self::params(bodies, 0, false);
+        let params = Self::params(bodies, false);
         enc.dispatch_compute(
             &pipes.poison,
             &[GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) }, buffer(7, partials)],
@@ -185,7 +188,7 @@ impl BodyPasses {
         );
     }
 
-    fn params(bodies: &Bodies<'_>, mode: u32, accumulate: bool) -> Params {
+    fn params(bodies: &Bodies<'_>, accumulate: bool) -> Params {
         Params {
             n: bodies.lattice,
             slots: partial_slots(bodies.lattice) as u32,
@@ -195,7 +198,6 @@ impl BodyPasses {
             tick_seconds: bodies.tick_seconds,
             first: bodies.first,
             body_count: bodies.count,
-            mode,
             accumulate: u32::from(accumulate),
             ..Params::default()
         }
@@ -210,25 +212,22 @@ impl BodyPasses {
         }
     }
 
-    /// Each body's impulse into the sums: the pressure's from `pressure`
-    /// (`mode` 0) or the constraint's friction from `faces` against the solid
-    /// velocity (`mode` 1); with `reaction`, also added into it.
+    /// Each body's pressure impulse from `pressure` into the sums; with
+    /// `reaction`, also added into it.
     fn impulse(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,
         tiles: Tiles<'_>,
-        mode: u32,
-        source: &GpuBuffer,
+        pressure: &GpuBuffer,
         reaction: Option<&GpuBuffer>,
     ) -> Result<(), String> {
         let (pipes, partials, sums) = self.parts()?;
         if partials.size < partial_bytes(bodies.lattice, bodies.count) {
             return Err(format!("the body partials were prepared for fewer than {} bodies on {:?}", bodies.count, bodies.lattice));
         }
-        let params = Self::params(bodies, mode, reaction.is_some());
+        let params = Self::params(bodies, reaction.is_some());
         let data = bytemuck::bytes_of(&params);
-        let source_binding = if mode == 0 { 5 } else { 6 };
         enc.dispatch_compute(
             &pipes.partial,
             &[
@@ -237,7 +236,7 @@ impl BodyPasses {
                 buffer(2, bodies.open),
                 buffer(3, bodies.solid),
                 buffer(4, bodies.bodies),
-                buffer(source_binding, source),
+                buffer(5, pressure),
                 buffer(7, partials),
                 buffer(12, tiles[0]),
                 buffer(14, tiles[2]),
@@ -271,9 +270,9 @@ impl BodyPasses {
         direction: &GpuBuffer,
         s: &GpuBuffer,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, 0, direction, None)?;
+        self.impulse(enc, bodies, tiles, direction, None)?;
         let (pipes, _, sums) = self.parts()?;
-        let params = Self::params(bodies, 0, false);
+        let params = Self::params(bodies, false);
         enc.dispatch_compute(
             &pipes.product,
             &[
@@ -295,20 +294,18 @@ impl BodyPasses {
 
     /// After the projection, as the engine finishes its pressure stage: the
     /// pressure's impulse into `reaction` and its velocity change into the
-    /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`), then
-    /// the friction the constraint will apply to `faces` into `reaction`.
+    /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
     pub(crate) fn react(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,
         tiles: Tiles<'_>,
         pressure: &GpuBuffer,
-        faces: &GpuBuffer,
         reaction: &GpuBuffer,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, 0, pressure, Some(reaction))?;
+        self.impulse(enc, bodies, tiles, pressure, Some(reaction))?;
         let (pipes, _, sums) = self.parts()?;
-        let params = Self::params(bodies, 0, false);
+        let params = Self::params(bodies, false);
         enc.dispatch_compute(
             &pipes.velocity,
             &[
@@ -320,7 +317,7 @@ impl BodyPasses {
             groups(records(bodies.lattice)),
             "gpu_flip.bodies.velocity_change",
         );
-        self.impulse(enc, bodies, tiles, 1, faces, Some(reaction))
+        Ok(())
     }
 }
 

@@ -44,13 +44,11 @@ struct Params {
     // This tick's first body row in `bodies`.
     first: u32,
     body_count: u32,
-    // impulse_partial: 0 the pressure impulse of `x`, 1 the friction impulse
-    // of `faces` against the solid velocity.
-    mode: u32,
     // impulse_finalize: 1 adds the impulses into `reaction`.
     accumulate: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 };
 
 struct FaceSample {
@@ -75,7 +73,6 @@ struct LiquidBody {
 @group(0) @binding(3) var<storage, read> solid: array<FaceSample>;
 @group(0) @binding(4) var<storage, read> bodies: array<LiquidBody>;
 @group(0) @binding(5) var<storage, read> x: array<f32>;
-@group(0) @binding(6) var<storage, read> faces: array<FaceSample>;
 @group(0) @binding(7) var<storage, read_write> partials: array<f32>;
 @group(0) @binding(8) var<storage, read_write> sums: array<f32>;
 @group(0) @binding(9) var<storage, read_write> reaction: array<f32>;
@@ -187,34 +184,23 @@ fn wet_x(q: vec3<i32>, n: vec3<i32>) -> f32 {
     return select(0.0, x[cell], water[cell] > 0.5);
 }
 
-fn wet(q: vec3<i32>, n: vec3<i32>) -> bool {
-    return water[flatten(q, n)] > 0.5;
-}
-
-// The impulse along a through inner face a of record p, owned by a body.
-// Mode 0: the pressure's, ρh²·((c_lo − w)·x_lo − (c_hi − w)·x_hi), w the
-// face's open fraction, c each side's open volume and x each side's
-// pressure in a water cell (the engine's forcePerPressure, −h²·C·basis with
-// C = w − c, times the pressure; ours is dt·P/ρ). Mode 1: the solid
-// constraint's drag on a cut face (0 < w < 1) beside water,
-// ρh³·w·f·(u − v_s): the liquid on the face loses f·(v_s − u) of velocity,
-// the body gains it. The engine keeps no friction reaction; this is ours.
+// The pressure's impulse along a through inner face a of record p, owned by
+// a body: ρh²·((c_lo − w)·x_lo − (c_hi − w)·x_hi), w the face's open
+// fraction, c each side's open volume and x each side's pressure in a water
+// cell (the engine's forcePerPressure, −h²·C·basis with C = w − c, times the
+// pressure; ours is dt·P/ρ). The pressure is the body's only reaction, as in
+// the engine (rigidfluidcoupling.cpp): the solid constraint's friction acts
+// on the water alone. An explicit friction reaction diverges once
+// ρ·h·f·A_wet/m passes 2, which any light body does.
 fn face_impulse(p: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
     let at = flatten(p, m);
     let w = open[at].face_weight[a];
     var lo = p;
     lo[a] = p[a] - 1;
     let h = u.cell_size;
-    if u.mode == 0u {
-        let c_hi = open[at].face_weight.w;
-        let c_lo = open[flatten(lo, m)].face_weight.w;
-        return u.density * h * h * ((c_lo - w) * wet_x(lo, n) - (c_hi - w) * wet_x(p, n));
-    }
-    if !(w > 0.0 && w < 1.0) || !(wet(lo, n) || wet(p, n)) {
-        return 0.0;
-    }
-    let s = solid[at];
-    return u.density * h * h * h * w * s.face_weight[a] * (faces[at].face_velocity[a] - s.face_velocity[a]);
+    let c_hi = open[at].face_weight.w;
+    let c_lo = open[flatten(lo, m)].face_weight.w;
+    return u.density * h * h * ((c_lo - w) * wet_x(lo, n) - (c_hi - w) * wet_x(p, n));
 }
 
 // Workgroup (g, b): body b's linear and angular impulse over the three low

@@ -57,8 +57,11 @@ Physics Solids demo. The original larger design remains a roadmap.
 - Transport seconds advance fixed 1/60-second ticks with four solver substeps.
   A stationary clock or zero speed holds motion. Reset, backward time, and the
   existing runtime state-clear path restore authored starting poses. Shape, scale
-  or body membership changes rebuild the world. Mass/contact-property edits preserve
+  or body membership changes rebuild the world. Density/contact-property edits preserve
   current motion; editing a starting position/rotation repositions that body.
+- A body is authored by density (kg/m³, default 600). Mass is density times the
+  signed volume of the installed hull, derived at install, so mass follows size.
+  2026-10-02: the old `mass` param was size-blind; project load (1.17.0) drops it.
   Preview processes fixed ticks for up to one project-frame CPU interval per world,
   checked between native steps, then yields to rendering and command processing.
   Only completed ticks leave the accumulator: all unfinished ticks and fractional
@@ -89,7 +92,7 @@ Physics Solids demo. The original larger design remains a roadmap.
   accepted prefix and stops stepping with a restart/bake diagnostic until reset
   or a setup rebuild. It no longer grows without a bound. Timestamped external
   modulation capture remains P5 work in `FLUID_ENGINE_INTEGRATION_PLAN.md`.
-- The Physics Solids preset exposes each body's shape, motion, mass, friction and
+- The Physics Solids preset exposes each body's shape, motion, density, friction and
   bounce through the scene panel's existing exposure and command path. Gravity,
   simulation speed and Reset belong to World. Graph editing is optional wiring.
   Demo objects are root-scope; physics discovery through arbitrary nested groups
@@ -227,7 +230,7 @@ fragments and transfers its pose, angular velocity and velocity at each fragment
 center of mass. Other bodies keep their state. Each fragment uses one standard
 convex hull. Reset restores the intact body; another trigger releases it again.
 The old Split into 8 scene-panel action is removed.
-Existing Fixed/Moving/Animated, mass, friction, bounce, World controls and
+Existing Fixed/Moving/Animated, density, friction, bounce, World controls and
 transport reset remain the project workflow.
 
 A bounded optimized CPU measurement with the original 454,840-triangle tiger lily
