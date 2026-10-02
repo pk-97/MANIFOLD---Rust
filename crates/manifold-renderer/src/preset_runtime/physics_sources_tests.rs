@@ -422,7 +422,7 @@ fn coupled_rigid_ancestry_and_body_mask_are_part_of_identity() {
 
     let mut rigid_edit = one.clone();
     rigid_edit.nodes[4].params.insert(
-        "density".into(),
+        "mass".into(),
         manifold_core::effect_graph_def::SerializedParamValue::Float { value: 4.0 },
     );
     let edited = prepare(&rigid_edit, &rigid_edit, &[], &registry).expect("rigid edit");

@@ -95,7 +95,7 @@ mod tests {
         let mut scene = RigidSceneInputs { gravity: [0.0, -9.81, 0.0], ..RigidSceneInputs::default() };
         scene.bodies[0] = Some(RigidBody {
             transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
-            density: 500.0,
+            mass: 32.0,
             bounce: 0.0,
             ..RigidBody::default()
         });

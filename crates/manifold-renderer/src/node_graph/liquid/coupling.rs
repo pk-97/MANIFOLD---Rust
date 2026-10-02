@@ -430,8 +430,7 @@ mod tests {
         let mut scene = RigidSceneInputs { gravity: [0.0, -9.81, 0.0], ..RigidSceneInputs::default() };
         scene.bodies[0] = Some(RigidBody {
             transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
-            // 32 kg: the cube's edge is its scale times CUBE_EDGE_PER_SCALE.
-            density: 32.0 / (0.4 * crate::node_graph::liquid::conformance::CUBE_EDGE_PER_SCALE).powi(3),
+            mass: 32.0,
             bounce: 0.0,
             ..RigidBody::default()
         });

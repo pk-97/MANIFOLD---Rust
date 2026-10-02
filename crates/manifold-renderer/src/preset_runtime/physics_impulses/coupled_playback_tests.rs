@@ -174,8 +174,8 @@ fn coupled_fixture() -> EffectGraphDef {
         }
         if node.node_id.as_str() == "body_a" {
             node.params.insert(
-                "density".into(),
-                manifold_core::effect_graph_def::SerializedParamValue::Float { value: 1000.0 },
+                "mass".into(),
+                manifold_core::effect_graph_def::SerializedParamValue::Float { value: 90.0 },
             );
         }
     }

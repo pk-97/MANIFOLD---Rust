@@ -18,7 +18,7 @@
       { "id": "liveliness", "name": "Liveliness", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F2", "section": "Fluid", "cardVisible": true },
       { "id": "points_per_cell", "name": "Points per Cell", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "section": "Fluid", "cardVisible": true },
       { "id": "seed", "name": "Seed", "min": 0.0, "max": 9999.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "section": "Fluid", "cardVisible": true },
-      { "id": "box_density", "name": "Box Density", "min": 1.0, "max": 2000.0, "defaultValue": 500.0, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F0", "section": "Box", "cardVisible": true },
+      { "id": "box_mass", "name": "Box Mass", "min": 0.01, "max": 100.0, "defaultValue": 62.5, "wholeNumbers": false, "isToggle": false, "isTrigger": false, "formatString": "F1", "section": "Box", "cardVisible": true },
       { "id": "environment_mode", "name": "Environment", "min": 0.0, "max": 1.0, "defaultValue": 0.0, "wholeNumbers": true, "isToggle": false, "isTrigger": false, "formatString": "F0", "section": "Lighting", "cardVisible": true }
     ],
     "bindings": [
@@ -30,7 +30,7 @@
       { "id": "liveliness", "label": "Liveliness", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "matter_domain", "param": "liveliness" }, "convert": { "type": "Float" } },
       { "id": "points_per_cell", "label": "Points per Cell", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "matter_domain", "param": "points_per_cell" }, "convert": { "type": "EnumRound" } },
       { "id": "seed", "label": "Seed", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "matter_domain", "param": "seed" }, "convert": { "type": "IntRound" } },
-      { "id": "box_density", "label": "Box Density", "defaultValue": 500.0, "target": { "kind": "node", "nodeId": "box_body", "param": "density" }, "convert": { "type": "Float" } },
+      { "id": "box_mass", "label": "Box Mass", "defaultValue": 62.5, "target": { "kind": "node", "nodeId": "box_body", "param": "mass" }, "convert": { "type": "Float" } },
       { "id": "environment_mode", "label": "Environment", "defaultValue": 0.0, "target": { "kind": "node", "nodeId": "environment_select", "param": "selector" }, "convert": { "type": "Float" } }
     ],
     "stringParams": [
@@ -333,7 +333,7 @@
     {"id":62,"typeId":"node.scene_object","handle":"Water","nodeId":"water_object"},
     {"id":70,"typeId":"node.physics_world","handle":"Box World","nodeId":"box_world"},
     {"id":71,"typeId":"node.transform_3d","handle":"Box Start","nodeId":"box_start","params":{"pos_x":{"type":"Float","value":0.2},"pos_y":{"type":"Float","value":1.3},"pos_z":{"type":"Float","value":0.1},"rot_x":{"type":"Float","value":0.21},"rot_y":{"type":"Float","value":0.35},"rot_z":{"type":"Float","value":0.13},"scale_x":{"type":"Float","value":0.4330127},"scale_y":{"type":"Float","value":0.4330127},"scale_z":{"type":"Float","value":0.4330127}}},
-    {"id":72,"typeId":"node.rigid_body","handle":"Box Body","nodeId":"box_body","params":{"shape":{"type":"Enum","value":1},"motion":{"type":"Enum","value":1},"density":{"type":"Float","value":500.0},"friction":{"type":"Float","value":0.4},"bounce":{"type":"Float","value":0.1}}},
+    {"id":72,"typeId":"node.rigid_body","handle":"Box Body","nodeId":"box_body","params":{"shape":{"type":"Enum","value":1},"motion":{"type":"Enum","value":1},"mass":{"type":"Float","value":62.5},"friction":{"type":"Float","value":0.4},"bounce":{"type":"Float","value":0.1}}},
     {"id":73,"typeId":"node.platonic_solid_mesh","handle":"Box Mesh","nodeId":"box_mesh"},
     {"id":74,"typeId":"node.pbr_material","handle":"Box Material","nodeId":"box_material","params":{"color_r":{"type":"Float","value":0.42},"color_g":{"type":"Float","value":0.26},"color_b":{"type":"Float","value":0.12},"metallic":{"type":"Float","value":0.0},"roughness":{"type":"Float","value":0.62},"ambient":{"type":"Float","value":0.0}}},
     {"id":75,"typeId":"node.scene_object","handle":"Box","nodeId":"box_object"},

@@ -44,7 +44,7 @@ fn scene_inputs() -> (
         enabled: true,
         shape: scalar(&nodes, id, "shape") as u32,
         kind: scalar(&nodes, id, "motion") as u32,
-        density: scalar(&nodes, id, "density"),
+        mass: scalar(&nodes, id, "mass"),
         friction: scalar(&nodes, id, "friction"),
         bounce: scalar(&nodes, id, "bounce"),
         collider: None,

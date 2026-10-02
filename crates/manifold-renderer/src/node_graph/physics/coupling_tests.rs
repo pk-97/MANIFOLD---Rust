@@ -64,15 +64,13 @@ impl SubstepExchange for ProbeFrame<'_> {
     ) -> Result<Seconds, Self::Error> {
         // The real native queue must contain the same global and targeted
         // forces before EVERY offer, because Box3D clears them after stepping.
-        // Box3D stores a force, so the acceleration round-trips through the
-        // body's mass and is exact only to float rounding.
-        let queued = rigid
-            .dynamics(self.0.body)
-            .unwrap()
-            .external_linear_acceleration;
-        for (got, want) in queued.into_iter().zip([3.0, -2.0, 4.0]) {
-            assert!((got - want).abs() < 1e-5, "queued {queued:?}");
-        }
+        assert_eq!(
+            rigid
+                .dynamics(self.0.body)
+                .unwrap()
+                .external_linear_acceleration,
+            [3.0, -2.0, 4.0]
+        );
         Ok(Seconds(
             self.0
                 .invalid_duration
@@ -553,8 +551,7 @@ fn fluid_trace(times: &[f64], origin: [f32; 3]) -> (Transform, [f32; 3]) {
             pos: std::array::from_fn(|axis| origin[axis] + [1.2, 1.05, 1.2][axis]),
             ..Transform::default()
         },
-        // 90 kg in the 0.5 × 0.4 × 0.45 m box.
-        density: 1000.0,
+        mass: 90.0,
         bounce: 0.0,
         collider: Some(Arc::new(ColliderGeometry {
             hulls: vec![vertices],

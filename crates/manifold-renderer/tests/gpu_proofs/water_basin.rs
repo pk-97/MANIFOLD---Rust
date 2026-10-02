@@ -308,7 +308,7 @@ fn water_basin_paired_rigid_pose_publishes_through_fluid_worker() {
                 "enabled": {"type": "Bool", "value": true},
                 "shape": {"type": "Enum", "value": 1},
                 "motion": {"type": "Enum", "value": 1},
-                "density": {"type": "Float", "value": 1000.0},
+                "mass": {"type": "Float", "value": 200.0},
                 "friction": {"type": "Float", "value": 0.2},
                 "bounce": {"type": "Float", "value": 0.0}
             }
